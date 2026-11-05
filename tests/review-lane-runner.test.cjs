@@ -18,6 +18,7 @@ const { resolveLanePlan, resolveLaneEffort, LANE_UNAVAILABLE } = require('../gsd
 const {
   checkEgressHost,
   probeLane,
+  probeHttpLanes,
   runLane,
   writeReviewOrStub,
   handleOpencodeOutput,
@@ -203,6 +204,43 @@ describe('runner — probe (ADR-2782 D7)', () => {
     const r = await probeLane(p, deps({ httpJson: async () => ({ ok: false, status: 0, body: '', error: 'ECONNREFUSED' }) }));
     assert.equal(r.available, false);
     assert.equal(r.reason, LANE_UNAVAILABLE.HOST_UNREACHABLE);
+  });
+
+  test('http-reachable treats any HTTP response (401, 404, 302) as available', async () => {
+    for (const status of [401, 404, 302]) {
+      const r = await probeLane(plan('ollama'), deps({ httpJson: async () => ({ ok: false, status, body: '' }) }));
+      assert.equal(r.available, true, `status ${status}`);
+    }
+  });
+
+  test('http-reachable never follows redirects (probe: true)', async () => {
+    const p = plan('ollama');
+    const calls = [];
+    await probeLane(p, deps({ httpJson: async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, body: '{}' }; } }));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].opts.probe, true);
+  });
+
+  test('http-reachable probes the resolved plan.host, not a raw "null" config sentinel', async () => {
+    const p = plan('ollama', { 'review.ollama_host': 'null' });
+    const urls = [];
+    await probeLane(p, deps({
+      httpJson: async (url) => { urls.push(url); return { ok: true, status: 200, body: '{}' }; },
+    }));
+    assert.equal(urls.length, 1);
+    assert.ok(urls[0].startsWith('http://localhost:11434'), `probed ${urls[0]}, expected the descriptor default`);
+  });
+
+  test('probeHttpLanes: skips spawn lanes, honors selection, reports unresolvable lanes', async () => {
+    const lanes = [
+      { slug: 'a', transport: 'openai-http' },
+      { slug: 'b', transport: 'openai-http' },
+      { slug: 'c', transport: 'spawn' },
+    ];
+    const resolve = (lane) => (lane.slug === 'b' ? { ok: false, detail: 'bad host' } : { ok: true, plan: plan('ollama') });
+    const d = deps({ httpJson: async () => ({ ok: true, status: 200, body: '{}' }) });
+    assert.deepEqual(await probeHttpLanes(lanes, [], resolve, d), { rows: ['a:available', 'b:missing'], warnings: ['b: bad host'] });
+    assert.deepEqual((await probeHttpLanes(lanes, ['a'], resolve, d)).rows, ['a:available']);
   });
 });
 

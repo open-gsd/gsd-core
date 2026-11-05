@@ -1,0 +1,111 @@
+name: Reviewed or Maintainer
+
+# #5607: advisory check — a PR passes when its author is listed in
+# .github/MAINTAINERS, or when someone else with write access has approved the
+# current head. Not a required context on any ruleset yet; see
+# docs/branch-protection.md ("Reviewed or maintainer").
+#
+# Trust boundary. This job reads untrusted PR data (author, head sha, reviews).
+# It checks out the BASE sha only, runs only the policy script and maintainer
+# list from that trusted commit, never executes anything from the PR, and binds
+# every PR-controlled value to an env var. On `pull_request_target` the workflow
+# FILE itself is loaded from the default branch. On `pull_request_review` it is
+# loaded from the PR's merge ref (see BEFORE PROMOTING below).
+# tests/reviewed-or-maintainer-workflow.test.cjs pins the rest.
+#
+# `pull_request_review` is here so a new approval or a dismissal re-evaluates the
+# check. Whether a check run created by that event attaches to the PR head the
+# way a `pull_request_target` one does is UNVERIFIED, which is why this lands
+# advisory.
+#
+# BEFORE PROMOTING THIS TO A REQUIRED CONTEXT: on `pull_request_review` for a fork
+# PR the workflow FILE is loaded from the PR's merge ref, so a fork author can
+# edit it and emit a passing job with this name. Safe while advisory; to require
+# it, evaluate only on `pull_request_target` (re-triggered on review events from
+# a base-branch workflow), not on this event.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed]
+  # A merge queue needs every REQUIRED context to report on `merge_group`. This
+  # check is not required yet, but is wired so promoting it later does not
+  # deadlock the queue. On a merge_group event GitHub loads this workflow file
+  # from the queue's temporary merge commit (base plus the queued PRs); safety
+  # does not come from the file's origin: the job is skipped on that event.
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  # Per event type, so a late review run cannot cancel the newer run for a push.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  reviewed-or-maintainer:
+    name: Reviewed or maintainer
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # BASE sha only: the trusted policy source. Never the PR head.
+      - name: Check out policy from base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Collect reviews and reviewer permissions
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          reviews_file="$RUNNER_TEMP/reviews.json"
+          roles_file="$RUNNER_TEMP/roles.json"
+
+          # The head sha is read live: the event payload's sha is the value at
+          # event time and a re-run replays it, so a push in between would let a
+          # stale run compare an old approval with an old head.
+          head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+
+          # --paginate returns every page or exits non-zero (the step then
+          # fails): there is no silent truncation to guard against.
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" --jq '.[]' | jq -s '.' > "$reviews_file"
+
+          echo '{}' > "$roles_file"
+          while IFS= read -r login; do
+            # Logins come from the API, but validate before using one in a URL path.
+            if ! [[ "$login" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]]; then
+              # Includes [bot] logins: apps never count as approvers.
+              continue
+            fi
+            if ! role="$(gh api "repos/$REPO/collaborators/$login/permission" --jq '.role_name' 2>/dev/null)"; then
+              echo "::warning::could not read the permission of reviewer $login; treating as none"
+              role=none
+            fi
+            lc="$(printf '%s' "$login" | tr '[:upper:]' '[:lower:]')"
+            jq --arg k "$lc" --arg v "$role" '. + {($k): $v}' "$roles_file" > "$roles_file.tmp"
+            mv "$roles_file.tmp" "$roles_file"
+          done < <(jq -r '[.[] | select(.state == "APPROVED") | .user.login // empty] | unique | .[]' "$reviews_file")
+
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "reviews_file=$reviews_file" >> "$GITHUB_OUTPUT"
+          echo "roles_file=$roles_file" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate
+        env:
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ steps.collect.outputs.head_sha }}
+          REVIEWS_FILE: ${{ steps.collect.outputs.reviews_file }}
+          ROLES_FILE: ${{ steps.collect.outputs.roles_file }}
+          # gh api --paginate returns every page or the collect step has already
+          # failed, so reaching this step means the list is complete.
+          REVIEWS_COMPLETE: 'true'
+        run: node scripts/reviewed-or-maintainer-policy.cjs

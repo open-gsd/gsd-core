@@ -115,6 +115,24 @@ export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = (() => {
   }
 })();
 
+type LaneAliases = { slug: string; flags: ReadonlyArray<string> };
+
+/**
+ * #5359: map a lane flag alias (`agy` for `--agy`) to its canonical slug via the
+ * descriptor roster's declared `flags` (same source as `review-lane explicit-from-argv`).
+ * Guarded like KNOWN_REVIEWER_SLUGS: a load failure degrades to the plain error.
+ */
+function laneSlugForAlias(name: string, lanes?: ReadonlyArray<LaneAliases>): string | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const roster = lanes ?? (require('./review-lane-descriptor.cjs') as { REVIEWER_LANES: ReadonlyArray<LaneAliases> }).REVIEWER_LANES;
+    // `l.slug !== name`: an undetected canonical slug (`--codex` flag) is not an alias.
+    return roster.find((l) => l.slug !== name && l.flags.includes(`--${name}`))?.slug;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Instance names are lowercase slugs that must not shadow a built-in slug. */
 export const INSTANCE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -146,6 +164,8 @@ export interface ResolvedReviewer {
 export interface ReviewerSelectionInput {
   detected?: unknown[];
   explicitFlags?: unknown[];
+  /** Lane roster (first-party + overlays) for alias lookup; default = first-party only. */
+  lanes?: ReadonlyArray<LaneAliases>;
   allFlag?: unknown;
   configuredDefaultReviewers?: unknown;
   /** #1517: the `review.reviewer_instances` config object. */
@@ -316,7 +336,12 @@ export function resolveReviewerSelection(
     // Sorted so the error order does not depend on flag order on the command line.
     const missing = [...explicitFlags].filter((slug) => !detected.has(slug)).sort();
     for (const slug of missing) {
-      errors.push(`explicit reviewer '${slug}' is not available on this host`);
+      const canonical = laneSlugForAlias(slug, input.lanes);
+      errors.push(
+        canonical
+          ? `explicit reviewer '${slug}' is a flag alias; pass its canonical slug '${canonical}'`
+          : `explicit reviewer '${slug}' is not available on this host`,
+      );
     }
     // Guarded on the error count as it stood BEFORE this branch, so the
     // aggregate message fires under exactly the conditions it did previously.

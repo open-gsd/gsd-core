@@ -60,6 +60,7 @@ const EXPECTED_SURFACE_HOOKS = [
   'gsd-config-reload.js',
   'gsd-context-monitor.js',
   'gsd-graphify-update.sh',
+  'gsd-path-export.js',
   'gsd-phase-boundary.sh',
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',

@@ -55,7 +55,11 @@ Plans:
 Apply the `project_code` prefix (if set in `.planning/config.json`) so the backlog directory name is consistent with all other phase-creation paths:
 
 ```bash
-SLUG=$(gsd_run query generate-slug "$ARGUMENTS" --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+SLUG=$(gsd_run query generate-slug "$GSD_ARGS" --raw)
 PROJECT_CODE=$(gsd_run query config-get project_code --raw 2>/dev/null || echo "")
 PREFIX=$([ -n "$PROJECT_CODE" ] && echo "${PROJECT_CODE}-" || echo "")
 PHASE_DIR=".planning/phases/${PREFIX}${NEXT}-${SLUG}"
@@ -66,7 +70,11 @@ touch "${PHASE_DIR}/.gitkeep"
 ## Step 5: Commit
 
 ```bash
-gsd_run query commit "docs: add backlog item ${NEXT} — ${ARGUMENTS}" --files .planning/ROADMAP.md "${PHASE_DIR}/.gitkeep"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+gsd_run query commit "docs: add backlog item ${NEXT} — ${GSD_ARGS}" --files .planning/ROADMAP.md "${PHASE_DIR}/.gitkeep"
 ```
 
 ## Step 6: Report

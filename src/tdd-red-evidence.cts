@@ -8,6 +8,7 @@ export const RedEvidenceReason = {
   TargetFailed: 'target_test_failed', Green: 'unexpected_green', Empty: 'zero_tests_discovered',
   NoFailure: 'nonzero_exit_without_test_failure', LoadFailure: 'fixture_or_load_failure',
   NoTarget: 'no_target_test_failure', Invalid: 'invalid_record', Unreadable: 'unreadable_record',
+  BuildFailure: 'build_failure',
 } as const;
 export type RedEvidenceReason = (typeof RedEvidenceReason)[keyof typeof RedEvidenceReason];
 
@@ -17,7 +18,7 @@ export interface RedEvidenceInput {
   command: unknown;
   /** The command's exit code. */
   exitCode: unknown;
-  /** Unmodified TAP, JUnit XML, swift-testing console, or unittest text report produced by the actual run. */
+  /** Unmodified TAP, JUnit XML, swift-testing console, unittest text, or `go test` text report produced by the actual run. */
   output: unknown;
   /**
    * Identity of the target the plan named: the `test('...')` name for
@@ -116,16 +117,26 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
     report_errors: report.issues,
   };
   if (exitCode === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Green, evidence };
+  // A package that did not compile or load asserted nothing: refuse it as its own reason, ahead of
+  // the generic unusable-report refusal, because the fix is different (make the test compile).
+  if (report.buildFailed) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.BuildFailure, evidence };
   if (!report.valid) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Invalid, evidence };
   if (report.tests.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Empty, evidence };
   if (failures.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.NoFailure, evidence };
   const targetBase = baseOf(input?.targetFile);
-  const distinctlyNamed = failures.filter((test) => !targetBase || baseOf(test.name) !== targetBase);
+  const distinctlyNamed = failures.filter((test) => !test.loadFailure && (!targetBase || baseOf(test.name) !== targetBase));
   if (distinctlyNamed.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.LoadFailure, evidence };
   // Class targets can intentionally match multiple methods in a JUnit report.
   // Other identities must resolve uniquely, including passing/skipped siblings.
-  const exact = report.tests.filter((test) => test.identities.includes(targetTest));
-  const grouped = report.tests.filter((test) => test.groupIdentities.includes(targetTest));
+  // A load-failure entry (#5721) asserted nothing: it is never a target candidate. A target that
+  // names only such entries is refused as the load failure it is, not as a missing target.
+  const real = report.tests.filter((test) => !test.loadFailure);
+  const exact = real.filter((test) => test.identities.includes(targetTest));
+  const grouped = real.filter((test) => test.groupIdentities.includes(targetTest));
+  if (exact.length === 0 && grouped.length === 0 && report.tests.some((test) => test.loadFailure
+    && (test.identities.includes(targetTest) || test.groupIdentities.includes(targetTest)))) {
+    return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.LoadFailure, evidence };
+  }
   const targets = exact.length > 0 ? exact : grouped;
   const unambiguous = exact.length > 0 ? exact.length === 1 : new Set(grouped.map((test) => test.group)).size === 1;
   const targetFailure = distinctlyNamed.find((test) => targets.includes(test));

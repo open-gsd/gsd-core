@@ -3,7 +3,7 @@ import { Parser, type FinalResults, type Result } from './vendor/tap-parser.cjs'
 import { SaxesParser } from './vendor/saxes.cjs';
 
 export const ReportFormat = {
-  Tap: 'tap', Junit: 'junit', SwiftTesting: 'swift-testing', Unittest: 'unittest', Unknown: 'unknown',
+  Tap: 'tap', Junit: 'junit', SwiftTesting: 'swift-testing', Unittest: 'unittest', GoTest: 'go-test', Unknown: 'unknown',
 } as const;
 export type ReportFormat = (typeof ReportFormat)[keyof typeof ReportFormat];
 export const TestStatus = { Passed: 'passed', Failed: 'failed', Skipped: 'skipped', Todo: 'todo' } as const;
@@ -18,7 +18,24 @@ export interface TestReportCase {
   group: string | null;
   groupIdentities: string[];
   status: TestStatus;
+  /**
+   * True for a test FILE that crashed at load (#5721): vitest's JUnit reporter emits one case whose
+   * `name` and `classname` are both the file name, jest-junit one whose classname is
+   * `Test suite failed to run`, node:test TAP a `test failed` entry named by the file. It asserted
+   * nothing, so it can never be a RED target.
+   */
+  loadFailure?: true;
 }
+
+/**
+ * A name that is a JS/TS test source file, as opposed to a Java class or method. Limited to the
+ * extensions vitest, jest and node:test load: a wider list (`go`, `rs`, `py`, ...) would flag a
+ * Surefire class-level entry whose FQN ends in that segment (`com.acme.go`, #4724).
+ */
+const TEST_FILE_NAME = /\.[cm]?[jt]sx?$/;
+
+/** jest-junit's classNameTemplate for a suite that produced no results (utils/buildJsonResults.js). */
+const JEST_SUITE_FAILED_TO_RUN = 'Test suite failed to run';
 
 export interface TestReport {
   format: ReportFormat;
@@ -26,6 +43,13 @@ export interface TestReport {
   valid: boolean;
   tests: TestReportCase[];
   issues: string[];
+  /**
+   * True when the run never reached the tests: a package failed to compile or load (`go test`
+   * `[build failed]` / `[setup failed]`). Distinct from "no tests", because the executor's mistake
+   * is a different one (a test naming a symbol that does not exist yet), and from a failed test,
+   * because nothing asserted anything.
+   */
+  buildFailed?: boolean;
 }
 
 interface TestReportAdapter {
@@ -76,12 +100,18 @@ function parseTap(output: string): TestReport {
       skipped ||= Boolean(parent.closingTestPoint?.skip);
       todo ||= Boolean(parent.closingTestPoint?.todo);
     }
+    // node:test reports a file that exits non-zero without a failing subtest as `not ok N - <file>`
+    // with `error: 'test failed'` / `code: 'ERR_TEST_FAILURE'` (#5721): it asserted nothing.
+    const diag = result.diag as Record<string, unknown> | null;
+    const fileFailure = !result.ok && diag?.['error'] === 'test failed' && diag['code'] === 'ERR_TEST_FAILURE'
+      && TEST_FILE_NAME.test(result.name);
     report.tests.push({
       name: result.name,
       identities: [...new Set([result.name, result.fullname])],
       group: null,
       groupIdentities: [],
       status: skipped ? TestStatus.Skipped : todo ? TestStatus.Todo : result.ok ? TestStatus.Passed : TestStatus.Failed,
+      ...(fileFailure ? { loadFailure: true as const } : {}),
     });
   }
   if (!completed) report.issues.push('Incomplete TAP stream');
@@ -119,6 +149,8 @@ function parseJunit(output: string): TestReport {
         group: className || null,
         groupIdentities: className ? [className, className.split('.').at(-1)!] : [],
         status: TestStatus.Passed,
+        ...(className === JEST_SUITE_FAILED_TO_RUN || (name === className && TEST_FILE_NAME.test(name))
+          ? { loadFailure: true as const } : {}),
       };
     } else if (current && parent === 'testcase') {
       if (tag.name === 'failure' || tag.name === 'error') {
@@ -252,7 +284,60 @@ function parseUnittest(output: string): TestReport {
   return report;
 }
 
+/**
+ * `go test` text output (#5106). Plain console text, so the shape is matched by line:
+ *   --- FAIL: TestName (0.00s)          one per failed test (every test with -v; subtests indented)
+ *   FAIL\texample.com/pkg\t0.004s        one package summary per package, after that package's tests
+ *   FAIL\texample.com/pkg [build failed]   the package did not compile — nothing asserted anything
+ * A test's name carries no package, so each test is also known as `<package>.<name>`, attributed to
+ * the next package summary line. The same name failing in two packages is ambiguous until qualified.
+ * `go test -json` is not text and stays unsupported.
+ */
+const GO_TEST_RESULT = /^[ \t]*-{3} (PASS|FAIL|SKIP): (\S+) \(\d+(?:\.\d+)?s\)$/; // -{3}: not a literal fence, see frontmatter-fence-drift
+const GO_PACKAGE_LINE = /^(ok|FAIL|\?)[ \t]+(\S+)[ \t]+(?:\d+(?:\.\d+)?s\b|\(cached\)|\[([a-z ]+)\])/;
+
+function isGoTestOutput(output: string): boolean {
+  if (/^TAP version \d+/.test(output.trimStart())) return false;
+  return output.split(/\r?\n/).some((line) => GO_TEST_RESULT.test(line) || GO_PACKAGE_LINE.test(line));
+}
+
+function parseGoTest(output: string): TestReport {
+  const report: TestReport = { format: ReportFormat.GoTest, valid: true, tests: [], issues: [] };
+  let segment: TestReportCase[] = [];
+  let packages = 0;
+  for (const line of output.split(/\r?\n/)) {
+    const result = GO_TEST_RESULT.exec(line);
+    if (result) {
+      const name = result[2];
+      const status = result[1] === 'FAIL' ? TestStatus.Failed : result[1] === 'SKIP' ? TestStatus.Skipped : TestStatus.Passed;
+      if (!segment.some((test) => test.name === name && test.status === status)) {
+        segment.push({ name, identities: [name], group: null, groupIdentities: [], status });
+      }
+      continue;
+    }
+    const pkg = GO_PACKAGE_LINE.exec(line);
+    if (!pkg) continue;
+    packages++;
+    const [, outcome, importPath, bracket] = pkg;
+    if (outcome === 'FAIL' && (bracket === 'build failed' || bracket === 'setup failed')) {
+      report.buildFailed = true;
+      report.issues.push(`go test package ${importPath} ${bracket}`);
+    } else if (outcome === 'ok' && segment.some((test) => test.status === TestStatus.Failed)) {
+      report.issues.push(`go test package ${importPath} is ok but its output reports a failed test`);
+    }
+    for (const test of segment) test.identities.push(`${importPath}.${test.name}`);
+    report.tests.push(...segment);
+    segment = [];
+  }
+  if (packages === 0) report.issues.push('Missing go test package summary');
+  if (segment.length > 0) report.issues.push('go test results without a following package summary');
+  report.valid = report.issues.length === 0;
+  return report;
+}
+
 const adapters: TestReportAdapter[] = [
+  // Before TAP: a run whose first package is fine begins `ok  <TAB>pkg`, which the TAP matcher reads as a point.
+  { matches: isGoTestOutput, parse: parseGoTest },
   { matches: (output) => /^(?:TAP version \d+|(?:not )?ok\b|1\.\.\d+|#)/.test(output.trimStart()), parse: parseTap },
   { matches: (output) => output.trimStart().startsWith('<'), parse: parseJunit },
   { matches: (output) => new RegExp(SWIFT_AGGREGATE.source, 'm').test(output), parse: parseSwiftTesting },
