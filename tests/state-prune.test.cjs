@@ -823,40 +823,10 @@ describe('#5831: state prune never loses entries', () => {
     assert.ok(lockReleased(), 'the STATE.md lock is released');
   });
 
-  // ── hostile archive: a symlink, a FIFO, a file swapped in after the snapshot ──
+  // ── hostile archive: a file swapped in after the snapshot ──
+  // (the link-and-pipe archive rows live in tests/config-loader-bounded-read.platform.test.cjs)
 
-  const posixOnly = { skip: process.platform === 'win32' ? 'POSIX symlinks and FIFOs' : false };
-
-  test('a symlinked STATE-ARCHIVE.md is refused: STATE.md, the link and its target are unchanged', posixOnly, () => {
-    const linked = path.join(tmpDir, 'elsewhere-archive.md');
-    fs.writeFileSync(linked, SEED_ARCHIVE);
-    fs.symlinkSync(linked, archivePath);
-    const stateBefore = fs.readFileSync(statePath);
-
-    assert.throws(() => prune(3), /symlink|regular file/i);
-
-    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
-    assert.ok(fs.lstatSync(archivePath).isSymbolicLink(), 'the link is still a link');
-    assert.strictEqual(fs.readFileSync(linked, 'utf-8'), SEED_ARCHIVE, 'the link target is untouched');
-    assert.ok(lockReleased(), 'the STATE.md lock is released');
-  });
-
-  test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', posixOnly, () => {
-    const { spawnSync } = require('node:child_process');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    assert.strictEqual(spawnSync('mkfifo', [archivePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
-    const stateBefore = fs.readFileSync(statePath);
-    const script = `try { require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/state.cjs'))})` +
-      `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: false, silent: true }, true); console.log('RAN'); }` +
-      ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
-    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
-
-    assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
-    assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
-    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
-  });
-
-  test('a rollback does not delete a file that replaced the archive after this run created it', posixOnly, () => {
+  test('a rollback does not delete a file that replaced the archive after this run created it', () => {
     const foreign = 'FOREIGN archive, not created by this prune\n';
     let swapped = false;
     failWritesTo(statePath, 'ENOSPC', () => {

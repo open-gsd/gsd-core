@@ -2089,6 +2089,55 @@ describe('#5759 review round: direct-path O_NOFOLLOW, multiply-linked targets, p
     assert.deepStrictEqual(fs.readdirSync(`${dir}.moved`), ['f'], 'no temp file left in the original directory');
   });
 
+  test('atomic: a parent directory swapped for a symlink after the walk is refused; the attacker directory is untouched', () => {
+    const dir = at('d');
+    const victim = at('victim');
+    fs.mkdirSync(dir);
+    fs.mkdirSync(victim);
+    fs.writeFileSync(path.join(dir, 'f'), 'old');
+    fs.writeFileSync(path.join(victim, 'f'), 'VICTIM');
+
+    const err = attempt(() => platformWriteSync(path.join(dir, 'f'), 'PWNED', {
+      verbatim: true,
+      atomic: true,
+      writeSeams: { afterPathWalk: () => { fs.renameSync(dir, `${dir}.moved`); fs.symlinkSync(victim, dir); } },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.strictEqual(fs.readFileSync(path.join(victim, 'f'), 'utf8'), 'VICTIM');
+    assert.deepStrictEqual(fs.readdirSync(victim), ['f'], 'no temp file in the attacker directory');
+    assert.strictEqual(fs.readFileSync(path.join(`${dir}.moved`, 'f'), 'utf8'), 'old', 'nothing was published');
+  });
+
+  test('atomic: a parent swapped between the temp create and the rename is refused and the temp is removed', () => {
+    const dir = at('d');
+    const victim = at('victim');
+    fs.mkdirSync(dir);
+    fs.mkdirSync(victim);
+    fs.writeFileSync(path.join(dir, 'f'), 'old');
+    fs.writeFileSync(path.join(victim, 'f'), 'VICTIM');
+    const { openExclusiveTempSync } = require(SHELL_PROJECTION_PATH);
+
+    const err = attempt(() => platformWriteSync(path.join(dir, 'f'), 'PWNED', {
+      verbatim: true,
+      atomic: true,
+      writeSeams: {
+        createTemp: (base, suffix, mode) => {
+          const made = openExclusiveTempSync(base, suffix, mode);
+          fs.renameSync(dir, `${dir}.moved`);
+          fs.symlinkSync(victim, dir);
+          return made;
+        },
+      },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.deepStrictEqual(fs.readdirSync(victim), ['f'], 'nothing lands in the attacker directory');
+    assert.strictEqual(fs.readFileSync(path.join(victim, 'f'), 'utf8'), 'VICTIM');
+  });
+
   test('a symbolic link that cannot be read is refused with ENXIO', () => {
     const entry = at('link.txt');
     fs.writeFileSync(at('real.txt'), 'old');
@@ -2651,5 +2700,65 @@ describe('#5759 a directory at the config path is unusable', () => {
     assert.strictEqual(JSON.parse(r.stdout).reason, 'config_unreadable');
     assert.ok(r.stderr.includes(rootConfig));
     if (process.platform !== 'win32') assert.ok(r.stderr.includes('EISDIR'));
+  });
+});
+
+// #5831: hostile STATE-ARCHIVE.md rows, moved from tests/state-prune.test.cjs so that file
+// stays free of real-OS signals (symlinks, FIFOs, platform skips).
+describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { skip: SKIP_WIN32 }, () => {
+  const { createTempProject } = require('./helpers.cjs');
+  const STATE_LIB_PATH = path.join(LIB_DIR, 'state.cjs');
+  const SEED_ARCHIVE = '# STATE Archive\n\nSeeded by the test.\n';
+  let tmpDir;
+  let statePath;
+  let archivePath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    archivePath = path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md');
+    fs.writeFileSync(statePath, [
+      '# Session State', '', '**Current Phase:** 8', '', '## Decisions', '',
+      '- [Phase 1]: Decision one, only copy',
+      '- [Phase 2]: Decision two, only copy',
+      '- [Phase 4]: Decision four, only copy',
+      '- [Phase 7]: Recent decision', '',
+    ].join('\n'));
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function prune(keepRecent) {
+    require(STATE_LIB_PATH).cmdStatePrune(tmpDir, { keepRecent: String(keepRecent), dryRun: false, silent: true }, true);
+  }
+  function lockReleased() {
+    return !fs.existsSync(statePath + '.lock');
+  }
+
+  test('a symlinked STATE-ARCHIVE.md is refused: STATE.md, the link and its target are unchanged', () => {
+    const linked = path.join(tmpDir, 'elsewhere-archive.md');
+    fs.writeFileSync(linked, SEED_ARCHIVE);
+    fs.symlinkSync(linked, archivePath);
+    const stateBefore = fs.readFileSync(statePath);
+
+    assert.throws(() => prune(3), /symlink|regular file/i);
+
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+    assert.ok(fs.lstatSync(archivePath).isSymbolicLink(), 'the link is still a link');
+    assert.strictEqual(fs.readFileSync(linked, 'utf-8'), SEED_ARCHIVE, 'the link target is untouched');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
+  test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', () => {
+    const { spawnSync } = require('node:child_process');
+    assert.strictEqual(spawnSync('mkfifo', [archivePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    const stateBefore = fs.readFileSync(statePath);
+    const script = `try { require(${JSON.stringify(STATE_LIB_PATH)})` +
+      `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: false, silent: true }, true); console.log('RAN'); }` +
+      ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+
+    assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
+    assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
   });
 });
