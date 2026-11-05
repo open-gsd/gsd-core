@@ -114,7 +114,7 @@ const BARE_COMMAND_RE = new RegExp(
 // Each entry MUST carry a one-line reason; the test prints the allowlist on
 // failure so a reviewer can see exactly what is sanctioned.
 const PROSE_ALLOWLIST = [
-  { file: 'agents/gsd-executor.md', line: 847, reason: 'describes the SDK return envelope of `gsd-tools query commit`; not an instruction to run the bare word (#4944: shared-ID ready-ids gate and preset plan-path validation added above; #5221: the ROADMAP write moved above the STATE writes; #4670: shifted from 823; #4834: delegation @-include replaced inline preamble; #4763: decision loop gained --phase line; #4799: Step 0 gained sequential literal)' },
+  { file: 'agents/gsd-executor.md', line: 842, reason: 'describes the SDK return envelope of `gsd-tools query commit`; not an instruction to run the bare word' },
   { file: 'agents/gsd-phase-researcher.md', line: 33, reason: 'package-legitimacy provenance rule names the command as the source of an OK verdict; descriptive' },
   { file: 'agents/gsd-roadmapper.md', line: 660, reason: 'parenthetical "e.g." naming SDK queries a user *could* run; not an agent instruction (#4134 shifted it from 647: the H1 template section added above moved the line, the mention is unchanged)' },
   { file: 'agents/gsd-intel-updater.md', line: 40, reason: 'cross-platform note names the `gsd-tools intel <subcommand>` CLI surface descriptively ("CLI invocations go through..."); not an agent instruction' },
