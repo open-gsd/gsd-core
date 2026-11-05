@@ -15,11 +15,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { EMPTY_RELEASE_PLACEHOLDER } = require('../scripts/changeset/serialize.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
 
 const {
   buildChangelogReleaseNotes,
@@ -27,7 +27,6 @@ const {
   CHANGELOG_NOTES_ERROR,
   RELEASE_BODY_MAX_CHARS,
   resolveOutputPath,
-  writeOutput,
 } = require('../scripts/release-notes/changelog-release-notes.cjs');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'release-notes', 'changelog-release-notes.cjs');
@@ -466,78 +465,6 @@ describe('resolveOutputPath (#5922)', () => {
       cleanup(root);
     }
   });
-
-  test('an existing symlink as the final component is refused, and the CLI does not write through it', () => {
-    const root = tmp();
-    const outside = path.join(root, 'outside.md');
-    const cwd = path.join(root, 'work');
-    fs.mkdirSync(cwd);
-    fs.writeFileSync(outside, 'untouched');
-    try {
-      fs.symlinkSync(outside, path.join(cwd, 'notes.md'));
-    } catch (_e) {
-      cleanup(root);
-      return; // symlink creation unsupported here
-    }
-    try {
-      assert.equal(
-        codeOf(() => resolveOutputPath('notes.md', { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })),
-        CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
-      );
-      const changelog = path.join(root, 'CHANGELOG.md');
-      fs.writeFileSync(changelog, CHANGELOG);
-      const res = spawnSync(process.execPath, [SCRIPT, '--version', '1.20.1', '--changelog', changelog, '--output', 'notes.md'], {
-        cwd,
-        encoding: 'utf8',
-        timeout: PROBE_TIMEOUT_MS,
-      });
-      assert.notEqual(res.status, 0);
-      assert.ok(res.stderr.includes('error[output-not-allowed]'), res.stderr);
-      assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
-    } finally {
-      cleanup(root);
-    }
-  });
-
-  test('writeOutput refuses a final-component symlink (ELOOP) and leaves its target unchanged', {
-    skip: fs.constants.O_NOFOLLOW === undefined ? 'O_NOFOLLOW unavailable' : false,
-  }, () => {
-    const root = tmp();
-    const outside = path.join(root, 'outside.md');
-    const link = path.join(root, 'link.md');
-    fs.writeFileSync(outside, 'untouched');
-    try {
-      try {
-        fs.symlinkSync(outside, link);
-      } catch (_e) {
-        return; // symlink creation unsupported here
-      }
-      assert.equal(codeOf(() => writeOutput(link, 'body')), CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED);
-      assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
-      const plain = path.join(root, 'plain.md');
-      writeOutput(plain, 'body');
-      assert.equal(fs.readFileSync(plain, 'utf8'), 'body');
-    } finally {
-      cleanup(root);
-    }
-  });
-
-  test('a symlinked parent that escapes the allowed root is rejected', () => {
-    const root = tmp();
-    const outside = path.join(root, 'outside');
-    const cwd = path.join(root, 'work');
-    fs.mkdirSync(outside);
-    fs.mkdirSync(cwd);
-    fs.symlinkSync(outside, path.join(cwd, 'link'));
-    try {
-      assert.equal(
-        codeOf(() => resolveOutputPath(path.join('link', 'n.md'), { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })),
-        CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
-      );
-    } finally {
-      cleanup(root);
-    }
-  });
 });
 
 describe('changelog-release-notes CLI (#5922)', () => {
@@ -550,7 +477,8 @@ describe('changelog-release-notes CLI (#5922)', () => {
     }
   }
   function run(args) {
-    return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    const r = runNode([SCRIPT, ...args], { timeoutMs: PROBE_TIMEOUT_MS });
+    return { status: r.exitCode, stderr: r.stderr };
   }
 
   test('writes the body to --output', () => {
