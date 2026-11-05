@@ -335,16 +335,23 @@ describe('#4020 — run-tests temp root', () => {
 
       test('#5688: parent equals resolve(os.tmpdir()) of the same child env on this platform', (t) => {
         const { a, b, fallback } = twoDirs(t);
-        // The child reports the root; the parent removes any root that landed
-        // outside this test's own dirs, so a killed child cannot leak one.
+        // Roots under this test's own dirs (twoDirs' base) are removed by twoDirs.
+        // A root that lands elsewhere (the real system temp, e.g. %SystemRoot%\temp
+        // on win32, outside the parent's cleanup helper) is removed by the CHILD
+        // after it reports the root. A child that is killed or times out before
+        // that point can still leave its root behind.
         const ownDirs = path.dirname(a) + path.sep;
         const script = `
           const os = require('node:os');
           const path = require('node:path');
+          const fs = require('node:fs');
           const want = path.resolve(os.tmpdir());
           const runner = require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'run-tests.cjs'))});
           const root = runner.setupRunTempRoot();
           process.stdout.write(JSON.stringify({ want, root }));
+          if (!root.startsWith(process.env.GSD_5688_OWN_DIRS)) {
+            fs.rmSync(root, { recursive: true, force: true });
+          }
         `;
         const runRoot = runRootIn(a, 'parity5688');
         const inheritKey = process.platform === 'win32' ? 'TEMP' : 'TMP';
@@ -363,16 +370,13 @@ describe('#4020 — run-tests temp root', () => {
           for (const k of Object.keys(env)) {
             if (['TMPDIR', 'TEMP', 'TMP'].includes(k.toUpperCase())) delete env[k];
           }
-          Object.assign(env, combo);
+          Object.assign(env, combo, { GSD_5688_OWN_DIRS: ownDirs });
           const r = runNode(['-e', script], {
             timeoutMs: RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS,
             env,
           });
           assert.equal(r.exitCode, 0, `${JSON.stringify(combo)}: ${String(r.stderr).slice(-300)}`);
           const { want, root } = JSON.parse(r.stdout);
-          t.after(() => {
-            if (!root.startsWith(ownDirs)) cleanup(root);
-          });
           if (inherited) {
             assert.equal(root, want, `inherited root expected for ${JSON.stringify(combo)}`);
           } else {
