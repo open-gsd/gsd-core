@@ -14,15 +14,13 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const { createFixture } = require('../fixtures/index.cjs');
+const { PROBE_TIMEOUT_MS } = require('./timeouts.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SENTINEL_MODULE = path.join(REPO_ROOT, 'hooks', 'lib', 'isolation-sentinel.js');
 const GUARD_HOOK = path.join(REPO_ROOT, 'hooks', 'gsd-agent-isolation-guard.js');
 const CURSOR_HOOK = path.join(REPO_ROOT, 'hooks', 'gsd-cursor-subagent-start.js');
 
-// Kill timer for a child that should return at once. Not an assertion on elapsed time: it only
-// bounds how long a blocked child is allowed to live before it is killed and reported as such.
-const KILL_AFTER_MS = 5000;
 
 const PHASE = '03';
 const PLAN = '03-02-hardening';
@@ -63,7 +61,7 @@ function spawnBounded(args, { input, cwd }) {
     cwd,
     env: childEnv(),
     encoding: 'utf-8',
-    timeout: KILL_AFTER_MS,
+    timeout: PROBE_TIMEOUT_MS,
     killSignal: 'SIGKILL',
   });
   return { status: r.status, signal: r.signal, stdout: r.stdout || '', stderr: r.stderr || '', error: r.error };
@@ -123,7 +121,6 @@ function makeCursorProject() {
 }
 
 module.exports = {
-  KILL_AFTER_MS,
   PHASE,
   PLAN,
   LEGACY_REL,

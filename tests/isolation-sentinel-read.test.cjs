@@ -9,7 +9,7 @@
  * tests/isolation-sentinel-read.platform.test.cjs.
  */
 
-const { describe, test, before, after, afterEach } = require('node:test');
+const { describe, test, before, after, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -115,6 +115,59 @@ describe('#5758 readSentinel: regular-file bounds', () => {
   });
 
   test('an absent sentinel reads as absent', () => {
+    assert.deepEqual(readSentinel(root), { present: false });
+  });
+});
+
+describe('#5758 readSentinel: object-identity re-checks after the open', () => {
+  let root;
+  const realLstat = fs.lstatSync;
+  before(() => {
+    root = createTempDir('gsd-5758-ident-');
+    fs.mkdirSync(path.join(root, '.planning'));
+  });
+  after(() => cleanup(root));
+  afterEach(() => {
+    mock.restoreAll();
+    cleanup(path.join(root, '.gsd'));
+  });
+
+  /** Stats-shaped copy of the real lstat of `p`, with `patch` applied. */
+  function patched(p, patch) {
+    const st = realLstat.call(fs, p);
+    return Object.assign(Object.create(Object.getPrototypeOf(st)), st, patch);
+  }
+
+  /** Make the Nth and later lstat calls for `target` answer `patchFor(target)`. */
+  function swapAfter(target, calls, patch) {
+    let seen = 0;
+    mock.method(fs, 'lstatSync', (p, ...rest) => {
+      if (path.resolve(String(p)) !== target) return realLstat.call(fs, p, ...rest);
+      seen += 1;
+      return seen > calls ? patched(p, patch(realLstat.call(fs, p))) : realLstat.call(fs, p, ...rest);
+    });
+  }
+
+  test('control: with no swap the record reads as present', () => {
+    h.writeFileAt(root, h.LEGACY_REL, JSON.stringify(h.validBody()));
+    assert.equal(readSentinel(root).present, true);
+  });
+
+  test('a parent directory whose identity changes between the check and the open reads as absent', () => {
+    h.writeFileAt(root, h.LEGACY_REL, JSON.stringify(h.validBody()));
+    swapAfter(path.join(root, '.gsd'), 1, (st) => ({ ino: st.ino + 1 }));
+    assert.deepEqual(readSentinel(root), { present: false });
+  });
+
+  test('a parent directory that turns into a link after the open reads as absent', () => {
+    h.writeFileAt(root, h.LEGACY_REL, JSON.stringify(h.validBody()));
+    swapAfter(path.join(root, '.gsd'), 1, () => ({ isSymbolicLink: () => true, isDirectory: () => false }));
+    assert.deepEqual(readSentinel(root), { present: false });
+  });
+
+  test('a file that is not the object the pre-open lstat saw reads as absent', () => {
+    h.writeFileAt(root, h.LEGACY_REL, JSON.stringify(h.validBody()));
+    swapAfter(path.join(root, h.LEGACY_REL), 0, (st) => ({ ino: st.ino + 1 }));
     assert.deepEqual(readSentinel(root), { present: false });
   });
 });

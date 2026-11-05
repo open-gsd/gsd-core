@@ -55,6 +55,16 @@ const SCENARIOS = [
   { row: 4, name: 'symlink to a valid fresh record elsewhere (plan-keyed record)', plant: (root, outside) => {
     link(outsideRecord(outside, 'real.json'), path.join(root, h.KEYED_REL));
   } },
+  { row: 4, name: 'hard link to a valid fresh sentinel elsewhere (legacy slot)', plant: (root, outside) => {
+    const real = outsideRecord(outside, 'real.json');
+    fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+    fs.linkSync(real, path.join(root, h.LEGACY_REL));
+  } },
+  { row: 4, name: 'hard link to a valid fresh record elsewhere (plan-keyed record)', plant: (root, outside) => {
+    const real = outsideRecord(outside, 'real.json');
+    fs.mkdirSync(path.join(root, h.KEYED_DIR_REL), { recursive: true });
+    fs.linkSync(real, path.join(root, h.KEYED_REL));
+  } },
   { row: 7, name: '.gsd is a symlink to an outside directory holding a valid sentinel', plant: (root, outside) => {
     outsideRecord(outside, path.join('gsd', 'dispatch-isolation-sentinel.json'));
     link(path.join(outside, 'gsd'), path.join(root, '.gsd'));
