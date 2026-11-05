@@ -130,8 +130,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(blocker, 'Process must carry a BLOCKER step');
     const cases = {
       'every other question': /every other question/i,
-      'any marking, any case': /however it is marked[^:]*"Decided"[^:]*"Closed"[^:]*any case/,
-      'no resolution': /no resolution/,
+      'any marking, any case': /however it is marked, in any case/,
       'no D-NN': /no `D-NN`/,
       'a D-NN CONTEXT.md lacks': /does not contain/,
       'a D-NN outside <decisions>': /outside `<decisions>`/,
@@ -161,13 +160,13 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     for (const hint of hints) {
       assert.doesNotMatch(hint, /mark section as/i, `fix_hint still prescribes the marker: ${hint}`);
       assert.match(hint, /D-NN/);
-      assert.match(hint, /CONTEXT\.md/);
+      assert.match(hint, /<decisions>/);
       // The BLOCKER goes to the planner's revision loop. It can cite a decision already on record,
       // but never add one: the hint says so, and names who rules, what settles a factual gap, and
       // who writes the citation.
-      assert.match(hint, /If a D-NN under <decisions> already answers it, cite it/);
-      assert.match(hint, /Otherwise never add a decision to CONTEXT\.md/);
-      assert.match(hint, /a sourced answer settles a factual gap/);
+      assert.match(hint, /Cite a D-NN under <decisions> that already answers it/);
+      assert.match(hint, /Otherwise add no decision/);
+      assert.match(hint, /a source settles a factual gap/);
       assert.match(hint, /\/gsd:discuss-phase/);
       assert.match(hint, /\/gsd:plan-phase --research/);
     }

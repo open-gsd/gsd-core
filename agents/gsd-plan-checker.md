@@ -600,12 +600,12 @@ issue:
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
-`gsd-phase-researcher` writes RESEARCH.md, so any resolution it records there is the questions' own author closing them. Only the user closes an open question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
+The researcher writes RESEARCH.md, so its own resolution closes nothing. Only the user closes a question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
 
 **Process:**
 1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). A finding settled with a cited source is not one; an assumption or risk counts only if it names such a pending answer or ruling. None → PASS.
 2. A question passes only when it cites a `D-NN` that is under CONTEXT.md's `<decisions>`, answers the question asked, and was not added during this planning run.
-3. Every other question is a BLOCKER, however it is marked (`RESOLVED`, "Decided", "Closed", any case): no resolution; no `D-NN`; a `D-NN` CONTEXT.md does not contain, holds outside `<decisions>`, or that decides something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
+3. Every other question is a BLOCKER, however it is marked, in any case: no `D-NN`; a `D-NN` CONTEXT.md does not contain, holds outside `<decisions>`, or that decides something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
 4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
 **Example — unresolved questions:**
@@ -619,7 +619,7 @@ issue:
   unresolved_questions:
     - "Hash prefix — keep or change?"
     - "Cache TTL — what duration?"
-  fix_hint: "If a D-NN under <decisions> already answers it, cite it: 'RESOLVED (D-NN): <ruling>'. Otherwise never add a decision to CONTEXT.md: the user rules in /gsd:discuss-phase, or a sourced answer settles a factual gap; then /gsd:plan-phase --research re-runs the researcher"
+  fix_hint: "Cite a D-NN under <decisions> that already answers it: 'RESOLVED (D-NN): <ruling>'. Otherwise add no decision: the user rules in /gsd:discuss-phase, or a source settles a factual gap; then re-run /gsd:plan-phase --research"
 ```
 
 **Example — self-resolved, no decision on record (BLOCKER):**
