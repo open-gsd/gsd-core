@@ -655,6 +655,35 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.strictEqual(out.fifoBytes, 0, 'the FIFO reader observed no bytes');
   });
 
+  test('a file symlink through a directory symlink to /dev/fd is refused with ENXIO', () => {
+    const fifo = path.join(tmpDir, 'dir.fifo');
+    makeFifo(fifo);
+    const script = [
+      'const fs = require("node:fs"); const path = require("node:path");',
+      'const keep = fs.openSync(process.argv[2], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
+      'const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);',
+      'const dir = path.join(process.argv[3], "fddir"); fs.symlinkSync("/dev/fd", dir);',
+      'const link = path.join(process.argv[3], "link.md"); fs.symlinkSync(path.join(dir, String(fd)), link);',
+      'const out = {};',
+      'for (const opts of [{ allowSpecialTarget: true }, {}]) {',
+      '  try { require(process.argv[1]).platformWriteSync(link, "x", opts); out["r" + Object.keys(opts).length] = "ok"; }',
+      '  catch (e) { out["r" + Object.keys(opts).length] = e.code; }',
+      '}',
+      'let got = 0; try { got = fs.readSync(keep, Buffer.alloc(8), 0, 8, null); } catch (e) { got = e.code === "EAGAIN" ? 0 : -1; }',
+      'out.fifoBytes = got;',
+      'process.stdout.write(JSON.stringify(out));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, fifo, tmpDir], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.deepStrictEqual(JSON.parse(r.stdout), { r1: 'ENXIO', r0: 'ENXIO', fifoBytes: 0 });
+  });
+
   test('profile-output --output /dev/null (a user-chosen device) is written', () => {
     fs.writeFileSync(path.join(tmpDir, 'analysis.json'), JSON.stringify({ data_source: 'x', dimensions: {} }));
     const script = [
