@@ -20,6 +20,7 @@ const { runGsdTools, createTempProject, cleanup, parseFrontmatter, TOOLS_PATH, T
 const { runNode } = require('./helpers/process-seam.cjs');
 const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -1787,18 +1788,16 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     );
   }
 
-  function runExtractedExecutorBash(cwd, envOverrides = {}, scriptPrefix = '') {
+  function runExtractedExecutorBash(cwd, envOverrides = {}, scriptPrefix = '', shell = 'bash') {
     const bashSnippet = extractExecutorReadyIdsBash();
     const fullScript = [
-      '#!/usr/bin/env bash',
-      'set -e',
       `gsd_run() { node "${TOOLS_PATH}" "$@"; }`,
       scriptPrefix,
       bashSnippet,
       'echo "RESOLVED_PLAN_PATH=$PLAN_PATH"',
     ].filter(Boolean).join('\n');
 
-    return spawnSync('bash', ['-c', fullScript], {
+    return spawnSync(shell, ['-c', fullScript], {
       cwd,
       env: {
         ...process.env,
@@ -1816,7 +1815,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   }
 
   test('behavioral: extracted executor bash gates shared requirement until sibling plan finishes', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
@@ -1858,7 +1857,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: bogus preset PLAN_PATH re-resolves when directory is resolvable', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
@@ -1881,7 +1880,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: nonexistent plan path with unresolvable directory fails closed', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     // Plant plan1 without sibling summary
@@ -1902,7 +1901,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: missing jq fails closed, warns on stderr, and preserves requirements', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
@@ -1927,7 +1926,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: failing ready-ids query fails closed, warns on stderr, and preserves requirements', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
@@ -1948,7 +1947,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: empty or unset PLAN does not cause arithmetic error', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     makePhaseDir(tmpDir);
 
@@ -1970,7 +1969,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: extracted executor bash resolves nested plans layout from INIT JSON', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
     const plansDir = path.join(phaseDir, 'plans');
@@ -1997,7 +1996,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: extracted executor bash resolves flat layout with slug from INIT JSON', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2023,7 +2022,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: extracted executor bash resolves canonical on-disk shape with padded PHASE and PLAN', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2055,7 +2054,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: extracted executor bash resolves canonical on-disk shape with unpadded PHASE and PLAN', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2087,14 +2086,14 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: multi-digit sibling containing target plan digit does not hijack PLAN_PATH', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
     // Target plan is 05-02-PLAN.md (PLAN=2).
     // Sibling file 05-01-20-decoy-PLAN.md contains the target plan digit in its slug,
-    // but belongs to plan 01 and must not match target plan 2.
+    // but frontmatter declares plan: 20 (which the resolver parses and rejects for PLAN=2).
     const planTarget = path.join(phaseDir, '05-02-PLAN.md');
     const planDecoyBefore = path.join(phaseDir, '05-01-20-decoy-PLAN.md');
     fs.writeFileSync(planTarget, '---\nphase: 5\nplan: 2\nrequirements: [SHARED-01]\n---\nTarget Plan 02\n');
@@ -2122,7 +2121,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: ambiguous plan candidates fail closed and warn on stderr', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2151,7 +2150,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('negative control: unresolved directory emits diagnostic warning on stderr', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
 
     // Completely unset phase_dir, INIT, and PHASE_DIR so directory cannot be resolved
@@ -2173,7 +2172,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: plan number equal to phase tail in slug layout resolves unambiguously', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2215,7 +2214,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('boundary cases: plan padding handles limits and non-numeric PLAN without spurious digits', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
@@ -2256,7 +2255,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: slug-layout with unpadded PHASE and PLAN resolves target plan without matching prefix sibling (#4944)', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2291,7 +2290,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: bracketed requirement IDs are preserved and not dropped by shell globbing (#4944)', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const dir = makePhaseDir(tmpDir);
     const plan = path.join(dir, '05-05-01-a-PLAN.md');
@@ -2311,7 +2310,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: preset PLAN_PATH naming wrong plan is rejected and re-resolved (#4944)', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2338,7 +2337,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   });
 
   test('behavioral: parity between executor resolver and canonical plan paths across layouts (#4944)', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     const plansDir = path.join(phaseDir, 'plans');
     fs.mkdirSync(plansDir, { recursive: true });
@@ -2366,8 +2365,57 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     }
   });
 
+  test('negative control: preset PLAN_PATH with missing or empty plan frontmatter fails closed (#4944)', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const unparseablePlan = path.join(phaseDir, '05-01-notes.md');
+    fs.writeFileSync(unparseablePlan, '---\nrequirements: [ONLY1-01]\n---\nNotes without plan key\n');
+
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: unparseablePlan,
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+      PHASE: '5',
+      PLAN: '1',
+      REQ_IDS: 'ONLY1-01',
+    });
+    assert.strictEqual(res.status, 0);
+    assert.match(res.stdout, /RESOLVED_PLAN_PATH=\s*$/, 'Must reject file without plan key and fail closed');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **ONLY1-01**'), 'ONLY1-01 must not be marked complete');
+  });
+
+  test('behavioral: ready-ids gate splits requirement IDs and marks multiple complete under zsh (#4944)', (t) => {
+    const skipReason = skipUnless('zsh', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const planPath = path.join(phaseDir, '05-01-PLAN.md');
+    fs.writeFileSync(planPath, '---\nphase: 5\nplan: 1\nrequirements: [ONLY1-01, ONLY2-01]\n---\nPlan 1\n');
+    fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), 'done\n');
+
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: planPath,
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+      PHASE: '5',
+      PLAN: '1',
+      REQ_IDS: 'ONLY1-01 ONLY2-01',
+    }, '', 'zsh');
+
+    assert.strictEqual(res.status, 0, `zsh execution failed: ${res.stderr || res.stdout}`);
+    assert.match(res.stdout, /RESOLVED_PLAN_PATH=.*05-01-PLAN.md/);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **ONLY1-01**'), 'ONLY1-01 must be marked complete under zsh');
+    assert.ok(content.includes('- [x] **ONLY2-01**'), 'ONLY2-01 must be marked complete under zsh');
+  });
+
   test('property (fast-check): resolver returns plan matching frontmatter plan or fails closed (#4944)', (t) => {
-    if (!haveTools()) return t.skip('bash and jq required');
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     const fc = require('./helpers/fast-check-setup.cjs');
 
     const planGen = fc.record({
@@ -2376,10 +2424,11 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       targetPlan: fc.integer({ min: 1, max: 25 }),
       padPhase: fc.boolean(),
       padPlan: fc.boolean(),
+      includeDecoy: fc.boolean(),
     });
 
     fc.assert(
-      fc.property(planGen, ({ phaseNum, planIds, targetPlan, padPhase, padPlan }) => {
+      fc.property(planGen, ({ phaseNum, planIds, targetPlan, padPhase, padPlan, includeDecoy }) => {
         const pRoot = path.join(tmpDir, `prop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
         const padPh = String(phaseNum).padStart(2, '0');
         const phaseRelDir = path.join('.planning', 'phases', `${padPh}-prop`);
@@ -2393,6 +2442,15 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
             const filePath = path.join(pPhaseDir, `${padPh}-${padP}-step-${padP}-PLAN.md`);
             fs.writeFileSync(filePath, `---\nphase: ${phaseNum}\nplan: ${pid}\nrequirements: []\n---\nTest\n`);
             createdFiles.set(pid, filePath);
+          }
+
+          let decoyFile = null;
+          if (includeDecoy && !createdFiles.has(targetPlan + 100)) {
+            // Sibling whose filename slug contains the target plan digits (#4944 decoy shape)
+            // but frontmatter declares plan: targetPlan + 100
+            const decoyP = String(targetPlan + 100);
+            decoyFile = path.join(pPhaseDir, `${padPh}-01-${targetPlan}-decoy-PLAN.md`);
+            fs.writeFileSync(decoyFile, `---\nphase: ${phaseNum}\nplan: ${decoyP}\nrequirements: []\n---\nDecoy\n`);
           }
 
           const phaseStr = padPhase ? padPh : String(phaseNum);
@@ -2412,9 +2470,12 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
           const resolvedAbs = resolved ? path.resolve(pRoot, resolved) : '';
 
           if (createdFiles.has(targetPlan)) {
-            assert.strictEqual(resolvedAbs, createdFiles.get(targetPlan));
+            assert.strictEqual(resolvedAbs, createdFiles.get(targetPlan), 'Must resolve to true target plan, never a decoy');
           } else {
             assert.strictEqual(resolved, '', 'Target plan not on disk must fail closed with empty path');
+          }
+          if (decoyFile) {
+            assert.notStrictEqual(resolvedAbs, decoyFile, 'Resolver must never return a decoy sibling file');
           }
         } finally {
           cleanup(pRoot);
