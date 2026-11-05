@@ -488,8 +488,11 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
 
     // `HOME=.` is a misconfigured environment: `realpath('.')` is the process
     // cwd, so resolving it would make whatever directory the process runs in
-    // count as `$HOME` and stop the walk there.
-    test('a relative $HOME keeps the spelled stop, so the process cwd is not taken as $HOME', () => {
+    // count as `$HOME` and stop the walk there. Skipped on Windows, where
+    // libuv's uv_os_homedir returns ENOENT for a USERPROFILE shorter than 3
+    // bytes, so os.homedir() throws for this fixture's `.` before any
+    // comparison (on base and head alike).
+    test('a relative $HOME keeps the spelled stop, so the process cwd is not taken as $HOME', { skip: process.platform === 'win32' }, () => {
       const proj = mkDeep(tmpDir, 'proj');
       fs.mkdirSync(path.join(proj, '.planning'));
       const mid = mkDeep(proj, 'mid');
