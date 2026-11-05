@@ -336,7 +336,7 @@ const CONFIG_READ_MAX_BYTES = 1024 * 1024;
  * treats every throw as "nothing to migrate".
  */
 function readConfigBounded(filePath: string): string {
-  const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOCTTY ?? 0));
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) {

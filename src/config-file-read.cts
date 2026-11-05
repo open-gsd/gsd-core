@@ -59,12 +59,20 @@ function unboundedConfigFileReason(absPath: string): string | null {
 }
 
 /**
- * A path as printed to a terminal: C0 controls, DEL and C1 controls become `\xNN`. A directory
+ * A path as printed to a terminal: C0 controls, DEL and C1 controls become `\xNN`; zero-width and
+ * bidirectional formatting characters (U+200B-200F, U+2028-2029, U+202A-202E, U+2066-2069)
+ * become `\uNNNN`. A directory
  * name can carry ESC (or a C1 CSI), and a path written to stderr verbatim is a terminal-escape
  * injection through that name.
  */
 function printablePath(p: string): string {
-  return p.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  return p.replace(
+    new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]', 'g'),
+    (c) => {
+      const code = c.charCodeAt(0);
+      return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
+    },
+  );
 }
 
 export = {

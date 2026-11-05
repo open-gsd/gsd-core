@@ -255,7 +255,7 @@ const SETTINGS_FILE_MAX_BYTES = 1024 * 1024;
 function readSettingsFile(file) {
   let fd;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0));
     const st = fs.fstatSync(fd);
     if (!st.isFile() || st.size > SETTINGS_FILE_MAX_BYTES) return null;
     // One byte past the checked size, so growth after the check shows as a longer read.

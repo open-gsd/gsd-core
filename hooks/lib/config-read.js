@@ -24,7 +24,7 @@ function coded(message, code) {
 function readConfigFileBounded(file, options) {
   let fd;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0));
   } catch (err) {
     if (err && err.code === 'ENOENT' && !(options && options.required)) return null;
     throw err;

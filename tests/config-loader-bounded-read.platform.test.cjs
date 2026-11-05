@@ -1075,7 +1075,7 @@ describe('#5759 openExclusiveTempSync creates the temp file exclusively and neve
       process.umask(previous);
     }
     try {
-      assert.strictEqual(fs.fstatSync(made.fd).mode & 0o777, 0o600);
+      if (process.platform !== 'win32') assert.strictEqual(fs.fstatSync(made.fd).mode & 0o777, 0o600);
     } finally {
       fs.closeSync(made.fd);
     }
@@ -1091,7 +1091,7 @@ describe('#5759 openExclusiveTempSync creates the temp file exclusively and neve
       process.umask(previous);
     }
     try {
-      assert.strictEqual(fs.fstatSync(made.fd).mode & 0o777, 0o644);
+      if (process.platform !== 'win32') assert.strictEqual(fs.fstatSync(made.fd).mode & 0o777, 0o644);
     } finally {
       fs.closeSync(made.fd);
     }
@@ -1110,8 +1110,10 @@ describe('#5759 openExclusiveTempSync creates the temp file exclusively and neve
     } finally {
       process.umask(previous);
     }
-    assert.strictEqual(fs.statSync(priv).mode & 0o777, 0o600);
-    assert.strictEqual(fs.statSync(fresh).mode & 0o777, 0o644);
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.statSync(priv).mode & 0o777, 0o600);
+      assert.strictEqual(fs.statSync(fresh).mode & 0o777, 0o644);
+    }
   });
 });
 

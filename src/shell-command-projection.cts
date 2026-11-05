@@ -1484,6 +1484,8 @@ function defaultTempSuffix(): string {
  * ENAMETOOLONG (a target whose name leaves no room for the default suffix) the suffix shrinks
  * to 4 random bytes of hex, then to 2, before the error is thrown. Any
  * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
+ * `mode` is the creation mode (default 0o666, narrowed by the umask): a caller replacing a
+ * private file passes that file's mode so the temp is never briefly more readable than it.
  *
  * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
  * process killed between the create and the rename leaves one beside its target, and a later
@@ -1492,6 +1494,7 @@ function defaultTempSuffix(): string {
 export function openExclusiveTempSync(
   basePath: string,
   nextSuffix: () => string = defaultTempSuffix,
+  mode = 0o666,
 ): { fd: number; tmpPath: string } {
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
   let collision: unknown;
@@ -1500,7 +1503,7 @@ export function openExclusiveTempSync(
     const suffix = shrink === 0 ? nextSuffix() : randomBytes(shrink === 1 ? 4 : 2).toString('hex');
     const tmpPath = `${basePath}.tmp.${suffix}`;
     try {
-      return { fd: fs.openSync(tmpPath, flags, 0o666), tmpPath };
+      return { fd: fs.openSync(tmpPath, flags, mode), tmpPath };
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENAMETOOLONG' && shrink < 2) {
@@ -1593,6 +1596,22 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
         // dangling symlink (or a race), and nothing is created through it.
         if (attempt >= 1) refuse('it is a dangling symlink — refusing to create through it', 'ENXIO');
       }
+    }
+  }
+  // Defense in depth, before anything is truncated or written: on Linux the open descriptor's
+  // own /proc entry names what was really opened. A descriptor that reads back as a
+  // /dev/fd/N or /proc/.../fd/N path is a descriptor alias the path walk in platformWriteSync
+  // missed; a descriptor that is not a regular file is never written. Either is refused.
+  if (process.platform === 'linux') {
+    let opened = '';
+    try { opened = fs.readlinkSync(`/proc/self/fd/${fd}`); } catch { /* no /proc: the fstat checks above stand */ }
+    const notRegular = !fs.fstatSync(fd).isFile();
+    if (notRegular || /^(?:\/dev\/fd\/\d+|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd\/\d+)$/.test(opened)) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+      if (created) {
+        try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+      }
+      refuse('the opened descriptor is not a plain regular file; refusing', 'ENXIO');
     }
   }
   let failure: (Error & { restoreFailed?: boolean }) | undefined;
@@ -1714,8 +1733,11 @@ function descriptorAliasFd(resolvedTarget: string): number | null {
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
   // A descriptor beyond stdio names some other open file of this process (a log, a pipe, a
   // regular file): never written through its /dev/fd or /proc alias, flag or no flag.
-  // A symlink to such an alias is refused too (the realpath is checked when the target exists),
-  // and a non-canonical descriptor name (/dev/fd/01) is refused outright.
+  // A symlink to such an alias is refused too (every link hop is walked), a path reaching one
+  // through a symlinked directory is refused (the physical parent directory is resolved), and a
+  // non-canonical descriptor name (/dev/fd/01) is refused outright. Every classification is made
+  // on the PHYSICAL path: the kernel resolves `..` after following symlinks, so a lexical
+  // path.resolve/normalize would disagree with it and is never used for a decision here.
   const refuseFdAlias = (candidate: string): void => {
     const m = /^\/(?:dev|proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?)\/fd\/(\d+)$/.exec(candidate);
     if (m === null) return;
@@ -1726,37 +1748,56 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       );
     }
   };
-  refuseFdAlias(path.resolve(filePath));
-  // Only a symlink can hide an alias, so ordinary writes pay nothing. realpath is not used: on
-  // Linux it resolves /dev/fd/N through /proc to pipe:[..] or the file, losing the alias. Each hop
-  // is read and resolved against its own directory, bounded at 40 hops.
-  // A path may also reach an alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7):
-  // classify a path by its resolved parent directory.
-  const refuseViaRealDir = (p: string): void => {
-    let viaDir: string | null = null;
+  // The parent directory of a raw (un-normalised) path, resolved physically by the OS, or null
+  // when it is absent or unresolvable. `fs.realpathSync` (JS) would collapse `..` lexically first;
+  // the native form hands the whole string to realpath(3). A /proc/<own pid> prefix is folded to
+  // /proc/self so the alias patterns see one spelling.
+  const physicalDir = (rawPath: string): string | null => {
     try {
-      const realDir = fs.realpathSync(path.dirname(p));
-      if (/^(?:\/dev\/fd|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd)$/.test(realDir)) {
-        viaDir = `${realDir}/${path.basename(p)}`;
-      }
-    } catch { /* the directory is absent or unresolvable */ }
-    if (viaDir !== null) refuseFdAlias(viaDir); // outside the try: its ENXIO must propagate
+      const real = fs.realpathSync.native(path.dirname(rawPath));
+      return real.replace(/^\/proc\/(\d+)\/(?=fd$|task\/)/, (m, pid) => (Number(pid) === process.pid ? '/proc/self/' : m));
+    } catch { return null; }
   };
-  let hop = path.resolve(filePath);
+  // A path may reach an alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7), or
+  // through `..` after one (/tmp/b -> /dev/fd, then /tmp/b/../fd/7): classify a path by its
+  // physical parent directory.
+  const refuseViaRealDir = (rawPath: string): void => {
+    const realDir = physicalDir(rawPath);
+    if (realDir !== null && /^(?:\/dev\/fd|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd)$/.test(realDir)) {
+      refuseFdAlias(`${realDir}/${path.basename(rawPath)}`);
+    }
+  };
+  // The physical parent directory plus the final name, with the final component not followed
+  // (null when the parent is unresolvable).
+  const physicalPath = (rawPath: string): string | null => {
+    const realDir = physicalDir(rawPath);
+    return realDir === null ? null : `${realDir === '/' ? '' : realDir}/${path.basename(rawPath)}`;
+  };
+  refuseFdAlias(path.resolve(filePath)); // a lexical match is an alias spelled out: refuse; never used to ALLOW
+  // realpath of the target itself is not used: on Linux it resolves /dev/fd/N through /proc to
+  // pipe:[..] or the file, losing the alias. Each link hop is read and resolved against the
+  // physical directory that holds it, bounded at 40 hops.
+  let hop = filePath;
   for (let hops = 0; hops < 40; hops++) {
-    // Runs on EVERY write, not only for symlinks: one realpath of the parent directory (about one
-    // lstat per path component). It stays unconditional because the target's own lstat type cannot
-    // distinguish a descriptor alias reached through a symlinked directory (on macOS lstat of
-    // /dev/fd/N reports the underlying file's type), so skipping regular-looking targets would
-    // reopen that gap.
+    // Runs on EVERY write: one native realpath of the parent directory (about one lstat per path
+    // component), plus one lstat of the hop to see whether it is a link to follow. The realpath
+    // stays unconditional because the target's own lstat type cannot distinguish a descriptor alias
+    // reached through a symlinked directory (on macOS lstat of /dev/fd/N reports the underlying
+    // file's type), so skipping regular-looking targets would reopen that gap.
     refuseViaRealDir(hop);
     let isLink = false;
     try { isLink = fs.lstatSync(hop).isSymbolicLink(); } catch { /* absent: nothing to follow */ }
     if (!isLink) break;
     let next: string;
-    try { next = path.resolve(path.dirname(hop), fs.readlinkSync(hop)); } catch { break; }
-    refuseFdAlias(next);
-    // The link may reach the alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7).
+    try {
+      const link = fs.readlinkSync(hop);
+      const holder = physicalDir(hop);
+      if (!path.isAbsolute(link) && holder === null) break;
+      // Kept raw (joined by string, never normalised): the next iteration's native realpath
+      // resolves any `..` in it against the symlinks it crosses.
+      next = path.isAbsolute(link) ? link : `${holder === '/' ? '' : holder}/${link}`;
+    } catch { break; }
+    refuseFdAlias(path.resolve(next));
     refuseViaRealDir(next);
     hop = next;
   }
@@ -1773,7 +1814,8 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
     // (`> out.txt`) or a socket (its own stdio), which is then written in place. Any other
     // regular file takes the atomic path.
-    const resolvedTarget = path.resolve(filePath);
+    // Classified on the physical path (parent resolved by the OS, `..` after a symlink included).
+    const resolvedTarget = physicalPath(filePath) ?? path.resolve(filePath);
     const isDescriptorAlias = descriptorAliasFd(resolvedTarget) !== null;
     if (special !== null && (special.isBlockDevice() || (special.isSocket() && !isDescriptorAlias))) {
       throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
@@ -1803,25 +1845,34 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // planted symlink or FIFO is never followed or blocked on (#5759). If THIS fails, nothing
   // was published, so a direct fallback write cannot truncate a concurrent reader of an
   // existing file.
+  // An existing regular target keeps its permission bits (a 0600 config must not come back 0644
+  // after the rename): the temp file is CREATED with that mode, so it is never more permissive
+  // than the target it replaces, not even for an instant. Without one the temp is created 0600
+  // and widened to the default 0o666 & ~umask only after the bytes are written.
+  let targetMode: number | null = null;
+  try {
+    const existing = fs.lstatSync(filePath);
+    if (existing.isFile()) targetMode = existing.mode & 0o777;
+  } catch { /* no existing target, or no permission bits on this platform */ }
   let tmpPath: string;
   let tmpFd: number;
   try {
-    ({ fd: tmpFd, tmpPath } = openExclusiveTempSync(filePath));
+    ({ fd: tmpFd, tmpPath } = openExclusiveTempSync(filePath, undefined, targetMode ?? 0o600));
   } catch {
     writeTargetDirect(filePath, normalized, encoding);
     return;
   }
-  // An existing regular target keeps its permission bits (a 0600 config must not come back 0644
-  // after the rename): the temp file takes that mode BEFORE any byte is written, so it is never
-  // more permissive than the target it replaces. A new file keeps the default 0o666 & ~umask.
-  try {
-    const existing = fs.lstatSync(filePath);
-    if (existing.isFile()) fs.fchmodSync(tmpFd, existing.mode & 0o777);
-  } catch { /* no existing target, or no permission bits on this platform */ }
+  if (targetMode !== null) {
+    try { fs.fchmodSync(tmpFd, targetMode); } catch { /* no permission bits on this platform */ }
+  }
   let wrote = false;
   try {
     fs.writeFileSync(tmpFd, normalized, encoding);
     wrote = true;
+    if (targetMode === null) {
+      const umask = process.umask();
+      try { fs.fchmodSync(tmpFd, 0o666 & ~umask); } catch { /* no permission bits on this platform */ }
+    }
   } catch { /* fall back below */ }
   try { fs.closeSync(tmpFd); } catch { wrote = false; }
   if (!wrote) {
