@@ -80,6 +80,22 @@
  * mentions above — a false violation reds a correct tree; a missed
  * ambiguous mention only loses one detection channel.
  *
+ * ## Gitignored-path refinement (#3677)
+ *
+ * #3677 deleted `.gsd/phase/.../40-design.md` and `50-test-matrix.md`, files
+ * force-committed despite `.gitignore`. ~50 tracked comments cite OTHER,
+ * untracked local design docs that carry the same basenames, so the bare
+ * basename was misattributed to the deletion (51 false violations).
+ *
+ * A gitignored path was never meant to be tracked, and its basename is
+ * shared by untracked local files that tracked comments cite — so a
+ * bare-basename mention cannot be attributed to the deleted file. For each
+ * deleted path that `git check-ignore --no-index` reports as ignored,
+ * matching switches from the bare basename to the full repo-relative path,
+ * the same switch the #3907 collision rule makes, in BOTH the live-consumer
+ * and tests/ arms. A genuine full-path reference to the deleted file still
+ * fails.
+ *
  * ## Historical-record exemption (#3942)
  *
  * `docs/adr/**` and `docs/research/**` are excluded from the `docs/` scan.
@@ -187,6 +203,24 @@ function walk(dir) {
 }
 
 /**
+ * Pure: the violation reason for a basename-or-path match (#3907, #3677).
+ * @param {string} deletedFile
+ * @param {string} basename
+ * @param {boolean} collides - a surviving file shares the basename (#3907)
+ * @param {boolean} fullPathOnly - matching was by full path (collision or gitignored)
+ * @returns {string}
+ */
+function fullPathReason(deletedFile, basename, collides, fullPathOnly) {
+  if (collides) {
+    return `full path '${deletedFile}' still referenced (basename '${basename}' also belongs to a surviving file, so matched by path — #3907)`;
+  }
+  if (fullPathOnly) {
+    return `full path '${deletedFile}' still referenced (the deleted path is gitignored, so matched by path — other untracked files share basename '${basename}' — #3677)`;
+  }
+  return `basename '${basename}' still referenced`;
+}
+
+/**
  * Pure: given a list of deleted basenames and a `{ file, content }[]` corpus
  * of the post-diff tree, find every surviving reference.
  * @param {string[]} deletedFiles - repo-relative deleted paths
@@ -194,22 +228,23 @@ function walk(dir) {
  * @param {Set<string>} [survivingBasenames] - basenames still present in the
  *   post-diff tree (#3907); when a deleted file's basename is in this set,
  *   matching switches from basename to the deleted file's full path
+ * @param {Set<string>} [ignoredDeletions] - deleted paths that are gitignored
+ *   (#3677); matched by full path, same switch as a basename collision
  * @returns {{ deletedFile: string, referencedIn: string, reason: string }[]}
  */
-function findSurvivingReferences(deletedFiles, corpus, survivingBasenames = new Set()) {
+function findSurvivingReferences(deletedFiles, corpus, survivingBasenames = new Set(), ignoredDeletions = new Set()) {
   const violations = [];
   for (const deletedFile of deletedFiles) {
     const basename = path.basename(deletedFile);
     const collides = survivingBasenames.has(basename);
+    const fullPathOnly = collides || ignoredDeletions.has(deletedFile);
     for (const { file, content } of corpus) {
-      const matched = collides ? referencesPath(content, deletedFile) : referencesBasename(content, basename);
+      const matched = fullPathOnly ? referencesPath(content, deletedFile) : referencesBasename(content, basename);
       if (matched) {
         violations.push({
           deletedFile,
           referencedIn: file,
-          reason: collides
-            ? `full path '${deletedFile}' still referenced (basename '${basename}' also belongs to a surviving file, so matched by path — #3907)`
-            : `basename '${basename}' still referenced`,
+          reason: fullPathReason(deletedFile, basename, collides, fullPathOnly),
         });
       }
     }
@@ -283,18 +318,20 @@ function classifyTestReference(line, basename, matchTarget = basename) {
  *   matching switches from basename to the deleted file's full path, same
  *   refinement as {@link findSurvivingReferences} so the two scanners
  *   cannot disagree about what "a reference" means
+ * @param {Set<string>} [ignoredDeletions] - deleted paths that are gitignored
+ *   (#3677); same full-path switch, same predicate as findSurvivingReferences
  * @returns {{ deletedFile: string, referencedIn: string, reason: string }[]}
  */
-function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenames = new Set()) {
+function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenames = new Set(), ignoredDeletions = new Set()) {
   const violations = [];
   for (const deletedFile of deletedFiles) {
     const basename = path.basename(deletedFile);
-    const collides = survivingBasenames.has(basename);
-    const matchTarget = collides ? deletedFile : basename;
-    // The left-boundary class matches referencesPath's when collides
+    const fullPathOnly = survivingBasenames.has(basename) || ignoredDeletions.has(deletedFile);
+    const matchTarget = fullPathOnly ? deletedFile : basename;
+    // The left-boundary class matches referencesPath's when fullPathOnly
     // (excludes '/' so a survivor's own longer path isn't mistaken for a
     // reference to the deleted file it merely shares a basename with).
-    const refRe = collides
+    const refRe = fullPathOnly
       ? new RegExp(`(^|[^\\w./-])${escapeRegex(matchTarget)}($|[^\\w.-])`)
       : new RegExp(`(^|[^\\w.-])${escapeRegex(matchTarget)}($|[^\\w.-])`);
     for (const { file, content } of testsCorpus) {
@@ -307,7 +344,7 @@ function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenam
             referencedIn: file,
             // control-char-stripped + capped: this text is echoed into lint
             // output that AI agents read as trusted instructions
-            reason: collides
+            reason: fullPathOnly
               ? `pins-existence: test depends on deleted path '${matchTarget}' — ${sanitizeEcho(line.trim())}`
               : `pins-existence: test depends on deleted basename '${basename}' — ${sanitizeEcho(line.trim())}`,
           });
@@ -338,6 +375,37 @@ function getDeletedFiles(root, baseRef) {
     .filter(Boolean)
     .filter((line) => line.startsWith('D\t'))
     .map((line) => line.slice(2));
+}
+
+/**
+ * Which of the deleted paths are gitignored (#3677). `--no-index` makes git
+ * consult the ignore rules even though the path was once tracked.
+ * `git check-ignore` exits 1 when NO path is ignored; any other failure
+ * propagates so main() degrades the scan to a skip, like getDeletedFiles.
+ * @param {string} root
+ * @param {string[]} deletedFiles - repo-relative deleted paths
+ * @returns {Set<string>} the subset that is gitignored, forward-slash separated
+ */
+function getIgnoredDeletions(root, deletedFiles) {
+  if (deletedFiles.length === 0) return new Set();
+  let out;
+  try {
+    out = cp.execFileSync('git', ['check-ignore', '--no-index', '--stdin'], {
+      cwd: root,
+      encoding: 'utf8',
+      input: deletedFiles.join('\n'),
+      timeout: 15000,
+    });
+  } catch (e) {
+    if (e && e.status === 1) return new Set();
+    throw e;
+  }
+  return new Set(
+    out
+      .split('\n')
+      .map((l) => l.trim().replace(/\\/g, '/'))
+      .filter(Boolean),
+  );
 }
 
 /**
@@ -434,8 +502,10 @@ function scan(root, baseRef) {
     ...corpus.map((c) => c.file),
     ...testsCorpus.map((t) => t.file),
   ]);
-  const violations = findSurvivingReferences(deletedFiles, corpus, survivingBasenames);
-  violations.push(...findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenames));
+  // #3677: a gitignored deleted path is matched by full path too.
+  const ignoredDeletions = getIgnoredDeletions(root, deletedFiles);
+  const violations = findSurvivingReferences(deletedFiles, corpus, survivingBasenames, ignoredDeletions);
+  violations.push(...findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenames, ignoredDeletions));
   return violations;
 }
 
@@ -476,6 +546,7 @@ module.exports = {
   findSurvivingTestReferences,
   getDeletedFiles,
   getSurvivingFiles,
+  getIgnoredDeletions,
   buildCorpus,
   isDocsHistoricalRecord,
   scan,
