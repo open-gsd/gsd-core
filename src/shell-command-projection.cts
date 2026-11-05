@@ -1707,20 +1707,29 @@ function descriptorAliasFd(resolvedTarget: string): number | null {
   if (resolvedTarget === '/dev/stdout') return 1;
   if (resolvedTarget === '/dev/stderr') return 2;
   // Only stdin/stdout/stderr: a larger N is some other descriptor the process happens to hold.
-  const m = /^\/(?:dev|proc\/self)\/fd\/([0-2])$/.exec(resolvedTarget);
-  return m ? Number(m[1]) : null;
+  const m = /^\/(?:dev|proc\/self)\/fd\/(0|[1-9]\d*)$/.exec(resolvedTarget);
+  return m !== null && Number(m[1]) <= 2 ? Number(m[1]) : null;
 }
 
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
   // A descriptor beyond stdio names some other open file of this process (a log, a pipe, a
   // regular file): never written through its /dev/fd or /proc alias, flag or no flag.
-  const fdAlias = /^\/(?:dev|proc\/self)\/fd\/(\d+)$/.exec(path.resolve(filePath));
-  if (fdAlias !== null && Number(fdAlias[1]) > 2) {
-    throw Object.assign(
-      new Error(`ENXIO: cannot write ${filePath}: only descriptors 0-2 may be written by alias`),
-      { code: 'ENXIO' },
-    );
-  }
+  // A symlink to such an alias is refused too (the realpath is checked when the target exists),
+  // and a non-canonical descriptor name (/dev/fd/01) is refused outright.
+  const refuseFdAlias = (candidate: string): void => {
+    const m = /^\/(?:dev|proc\/self)\/fd\/(\d+)$/.exec(candidate);
+    if (m === null) return;
+    if (!/^(?:0|[1-9]\d*)$/.test(m[1]) || Number(m[1]) > 2) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: only descriptors 0-2 may be written by alias`),
+        { code: 'ENXIO' },
+      );
+    }
+  };
+  refuseFdAlias(path.resolve(filePath));
+  let realTarget: string | null = null;
+  try { realTarget = fs.realpathSync(filePath); } catch { /* absent target: nothing to resolve */ }
+  if (realTarget !== null) refuseFdAlias(realTarget);
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
   if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
