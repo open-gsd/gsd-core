@@ -19446,7 +19446,7 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
   // line that merely mentions the version: these shapes are NOT shipped milestones.
   const phaseBlock = (n, name) => `### Phase ${n}: ${name}\n**Goal:** x\n\n`;
   const FENCED_SHIPPED_EXAMPLE = `# Roadmap\n\n\`\`\`\n## v1.0 Example ✅\n\`\`\`\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
-  const OPEN_HEADING_CHECK_IN_PAREN = `# Roadmap\n\n## v2.0 Next (after v2.0 prep ✅)\n\n${phaseBlock(1, 'One')}`;
+  const OPEN_HEADING_CHECK_IN_PAREN = `# Roadmap\n\n## v2.1 Next (after v2.0 prep ✅)\n\n${phaseBlock(1, 'One')}`;
   const OPEN_FAILED_TITLE = `# Roadmap\n\n## v1.0 Failed Payment Recovery (in progress)\n\n${phaseBlock(1, 'One')}`;
   const FAILED_TITLE_NO_MARKER = `# Roadmap\n\n## v1.0 Failed Payment Recovery\n\n${phaseBlock(1, 'One')}`;
   const REOPENED = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0 Core Reopened (in progress)\n\n${phaseBlock(2, 'Two')}`;
@@ -19456,7 +19456,7 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
 
   for (const [shape, roadmap, milestone, phaseNumber] of [
     ['a fenced shipped example above the real heading', FENCED_SHIPPED_EXAMPLE, 'v1.0', 2],
-    ['an open heading with a check mark in a parenthetical about another version', OPEN_HEADING_CHECK_IN_PAREN, 'v2.0', 2],
+    ['an open heading with a check mark in a parenthetical about another version', OPEN_HEADING_CHECK_IN_PAREN, 'v2.1', 2],
     ['a milestone whose title contains "Failed" and carries an active marker', OPEN_FAILED_TITLE, 'v1.0', 2],
     ['a shipped heading followed by a reopened in-progress heading', REOPENED, 'v1.0', 3],
     ['a shipped heading inside an HTML comment', COMMENTED_SHIPPED, 'v1.0', 2],
@@ -19581,7 +19581,7 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
     const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
     assert.equal(result.success, true, result.error);
     assert.equal(JSON.parse(result.output).phase_number, 4);
-    assert.ok(!result.error.includes('---'), `error output must not contain ---: ${result.error}`);
+    assert.ok(!String(result.error ?? '').includes('---'), `error output must not contain ---: ${result.error}`);
   });
 });
 
