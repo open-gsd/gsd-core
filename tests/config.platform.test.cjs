@@ -54,6 +54,11 @@
  * - "merges nested workflow keys from defaults.json preserving unset keys" — same
  *   defaults.json read from the sandboxed home directory, resolved via USERPROFILE
  *   on Windows (windows-env-var)
+ * - #5681 "a symlinked store is written through, and the link survives" — creates
+ *   a real file symlink at defaults.json; creation needs privilege on Windows
+ *   (symlink-keyword)
+ * - #5681 "a dangling symlinked store is refused, and the link is left as it was"
+ *   — creates a real dangling file symlink (symlink-keyword)
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -568,3 +573,39 @@ describe('config-ensure-section command', () => {
   });
 });
 
+describe('#5681: a save removes the other spelling of every spelling twin', () => {
+  test('a symlinked store is written through, and the link survives', { skip: process.platform === 'win32' }, (t) => {
+    const gsdHome = createTempDir('gsd-5681-link-');
+    const dotfiles = createTempDir('gsd-5681-dotfiles-');
+    t.after(() => { cleanup(gsdHome); cleanup(dotfiles); });
+    const real = path.join(dotfiles, 'defaults.json');
+    fs.writeFileSync(real, JSON.stringify({ runtime: 'codex', model_profile: 'quality' }));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.symlinkSync(real, defaultsPath);
+
+    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
+    assert.ok(result.success, result.error);
+    assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the store must still be a symlink after a save');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(real, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' },
+      'the save must land in the link target, merged');
+  });
+
+  // Codex review: existsSync follows a link, so a dangling one read as a missing
+  // store and the write replaced the link with a regular file.
+  test('a dangling symlinked store is refused, and the link is left as it was', { skip: process.platform === 'win32' }, (t) => {
+    const gsdHome = createTempDir('gsd-5681-dangling-');
+    t.after(() => cleanup(gsdHome));
+    const missing = path.join(gsdHome, 'unmounted', 'defaults.json');
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.symlinkSync(missing, defaultsPath);
+
+    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Refusing to overwrite/);
+    assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the link must survive a refused save');
+    assert.strictEqual(fs.readlinkSync(defaultsPath), missing);
+    assert.ok(!fs.existsSync(missing), 'nothing is written at the missing target');
+  });
+});

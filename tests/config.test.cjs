@@ -4289,41 +4289,6 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     assert.ok(accepted.includes('commit_docs'), `commit_docs must be an accepted legacy spelling (accepted: ${accepted.join(', ')})`);
   });
 
-  test('a symlinked store is written through, and the link survives', { skip: process.platform === 'win32' }, (t) => {
-    const gsdHome = createTempDir('gsd-5681-link-');
-    const dotfiles = createTempDir('gsd-5681-dotfiles-');
-    t.after(() => { cleanup(gsdHome); cleanup(dotfiles); });
-    const real = path.join(dotfiles, 'defaults.json');
-    fs.writeFileSync(real, JSON.stringify({ runtime: 'codex', model_profile: 'quality' }));
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.symlinkSync(real, defaultsPath);
-
-    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
-    assert.ok(result.success, result.error);
-    assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the store must still be a symlink after a save');
-    assert.deepStrictEqual(JSON.parse(fs.readFileSync(real, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' },
-      'the save must land in the link target, merged');
-  });
-
-  // Codex review: existsSync follows a link, so a dangling one read as a missing
-  // store and the write replaced the link with a regular file.
-  test('a dangling symlinked store is refused, and the link is left as it was', { skip: process.platform === 'win32' }, (t) => {
-    const gsdHome = createTempDir('gsd-5681-dangling-');
-    t.after(() => cleanup(gsdHome));
-    const missing = path.join(gsdHome, 'unmounted', 'defaults.json');
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.symlinkSync(missing, defaultsPath);
-
-    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
-    assert.strictEqual(result.success, false);
-    assert.match(result.error, /Refusing to overwrite/);
-    assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the link must survive a refused save');
-    assert.strictEqual(fs.readlinkSync(defaultsPath), missing);
-    assert.ok(!fs.existsSync(missing), 'nothing is written at the missing target');
-  });
-
   // The installer's defaults writers hold this lock for their read-modify-write
   // (bin/install.js), so a save that holds it cannot interleave with them.
   test('a save holds the installer lock on .gsd/ while it writes, and releases it on every path', async (t) => {
