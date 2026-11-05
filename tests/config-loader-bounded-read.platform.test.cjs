@@ -589,14 +589,22 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
       'const fs = require("node:fs");',
       'const keep = fs.openSync(process.argv[2], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
       'const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);',
-      'const calls = []; const realWrite = fs.writeSync;',
-      'fs.writeSync = (f, ...rest) => { calls.push(f); return realWrite(f, ...rest); };',
-      'let code = "ok";',
-      'try { require(process.argv[1]).platformWriteSync("/dev/fd/" + fd, "x", { allowSpecialTarget: true, verbatim: true }); }',
-      'catch (e) { code = e.code; }',
-      'process.stdout.write(JSON.stringify({ code, aliasWrite: calls.includes(fd), fd, keep }));',
+      'const plain = fs.openSync(process.argv[3], fs.constants.O_RDWR);',
+      'const out = { fd, plainFd: plain };',
+      'for (const [label, opts] of [["flag", { allowSpecialTarget: true, verbatim: true }], ["noflag", { verbatim: true }]]) {',
+      '  for (const [kind, n] of [["fifo", fd], ["plain", plain]]) {',
+      '    try { require(process.argv[1]).platformWriteSync("/dev/fd/" + n, "x", opts); out[label + kind] = "ok"; }',
+      '    catch (e) { out[label + kind] = e.code; }',
+      '  }',
+      '}',
+      'const buf = Buffer.alloc(16); let got = 0;',
+      'try { got = fs.readSync(keep, buf, 0, 16, null); } catch (e) { got = e.code === "EAGAIN" ? 0 : -1; }',
+      'out.fifoBytes = got;',
+      'process.stdout.write(JSON.stringify(out));',
     ].join('\n');
-    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, fifo], {
+    const plainFile = path.join(tmpDir, 'fd-plain.txt');
+    fs.writeFileSync(plainFile, 'UNCHANGED');
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, fifo, plainFile], {
       cwd: tmpDir,
       env: installSpawnEnv({}),
       timeoutMs: PROBE_TIMEOUT_MS,
@@ -604,8 +612,12 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
 
     assertExitedByItself(r);
     const out = JSON.parse(r.stdout);
-    assert.ok(out.fd > 2, 'the test fd is beyond stdio');
-    assert.strictEqual(out.aliasWrite, false, 'a descriptor beyond stdio is never written via the alias path');
+    assert.ok(out.fd > 2 && out.plainFd > 2, 'the test descriptors are beyond stdio');
+    for (const key of ['flagfifo', 'flagplain', 'noflagfifo', 'noflagplain']) {
+      assert.strictEqual(out[key], 'ENXIO', key);
+    }
+    assert.strictEqual(out.fifoBytes, 0, 'the FIFO reader observed no bytes');
+    assert.strictEqual(fs.readFileSync(plainFile, 'utf8'), 'UNCHANGED');
   });
 
   test('profile-output --output /dev/null (a user-chosen device) is written', () => {
