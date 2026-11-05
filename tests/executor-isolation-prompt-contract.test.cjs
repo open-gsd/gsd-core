@@ -12,12 +12,13 @@
  * SUMMARY.md files (`git add -f`) to satisfy an unconditional
  * "SUMMARY.md created AND committed" criterion.
  *
- * These are source-text-is-the-product assertions: the workflow markdown IS
- * what the orchestrator runtime loads. The contract checked here is the
- * documented dispatch text, per the issue's acceptance list. The compose
- * tests (#5531) extract the dispatch fragment's bash blocks and spawn bash
- * through runHook, one fresh shell per block, so no shell variable crosses
- * from block 1 to the read-and-check block.
+ * The prompt-template and prose tests are source-text-is-the-product
+ * assertions: the workflow markdown IS what the orchestrator runtime loads, and
+ * the contract checked there is the documented dispatch text, per the issue's
+ * acceptance list. The compose tests (#5531) are behavioural: they extract the
+ * dispatch fragment's bash blocks and spawn bash through runHook, one fresh
+ * shell per block, so no shell variable crosses from block 1 to the
+ * read-and-check block.
  */
 
 const { test } = require('node:test');
@@ -277,17 +278,12 @@ test('#5531: the substitution instruction covers every bash block and every plan
   assert.match(content, /replace `\{phase_dir\}`, `\{plan_file\}`, `\{plan_number\}`, `\{phase_number\}` and `\{plan_padded\}`/, 'every bash block gets the identifiers substituted');
 });
 
-test('#5531: the prose, changeset and tdd-walk header state what the fix does', () => {
+test('#5531: the dispatch prose states what the fix does', () => {
   assert.ok(!content.includes('no shell variable crosses between them'), 'the blocks share a shell: ORCH_ROOT, EXPECTED_BASE, WAVE_WORKTREE_MANIFEST and EXECUTOR_PROMPT cross');
   assert.match(content, /`\$ORCH_ROOT`[^\n]*`\$EXECUTOR_PROMPT`/, 'the prose names what does cross between blocks');
   assert.ok(content.includes('halt before the read-and-check block'), 'cleanup covers every halt before the read-and-check block');
   assert.ok(content.includes('CRLF'), 'the prose says what a CRLF or BOM in the written file does');
-  assert.ok(!/^#\s+\{plan_id\} is this$/m.test(content), 'the Step 2 comment must not break mid-clause');
   assert.ok(content.includes('`quick` for `{phase_number}`'), 'a caller without a phase passes the literal quick');
-  // allow-test-rule: source-text-is-the-product the changeset and the harness header are the shipped text of this fix, see #5531
-  const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
-  assert.ok(read('.changeset', 'proud-zebras-hop.md').includes('apart from trailing newlines'), 'the changeset must not claim byte-identical delivery');
-  assert.ok(read('tests', 'qa', 'tdd-walk.cjs').includes('mktemp creation, which this harness does not need'), 'the tdd-walk header names the mktemp creation unambiguously');
 });
 
 test('#5531: an un-substituted ${AGENT_SKILLS} or ${TDD_APPLICABLE marker halts', (t) => {

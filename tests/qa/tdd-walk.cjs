@@ -24,9 +24,9 @@
  *     whole ISOLATION resolution (its own independent fail-closed branches),
  *     ahead of a LATER fenced block that contains the `_TDD_APPLICABLE_RAW=...`
  *     resolution, followed in the same block by the `PROMPT_FILE`
- *     mktemp creation, which this harness does not need. A standalone execution must concatenate the first block
- *     (for its `gsd_run` definition) with just the TDD resolution lines
- *     sliced out of the second.
+ *     mktemp creation, which this harness does not need. A standalone
+ *     execution must concatenate the first block (for its `gsd_run`
+ *     definition) with just the TDD resolution lines sliced out of the second.
  *
  * This module extracts each backend's real bash via `indexOf`/`slice` on the
  * fenced-code markers (NEVER a backtracking regex over the whole file — see
