@@ -59,6 +59,7 @@ function once(load) {
 const checker = once(() => read('agents/gsd-plan-checker.md'));
 const researcher = once(() => read('agents/gsd-phase-researcher.md'));
 const researchTemplate = once(() => read('gsd-core/templates/research.md'));
+const plannerRevision = once(() => read('gsd-core/references/planner-revision.md'));
 
 function span(doc, startHeading, endPattern) {
   const start = doc.indexOf(startHeading);
@@ -205,6 +206,20 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(item[0], /CONTEXT\.md `<decisions>`/);
     assert.match(item[0], /any heading/);
     assert.match(item[0], /one answering it/, 'the checklist must carry the body\'s relevance condition');
+  });
+});
+
+describe('a research_resolution blocker has a route to the user (#5438)', () => {
+  test('the planner cites a decision already on record, and otherwise returns the conflict', () => {
+    const row = splitLines(plannerRevision()).find((l) => l.startsWith('| research_resolution |'));
+    assert.ok(row, 'the revision strategy table must carry a research_resolution row');
+    assert.match(row, /Cite a `D-NN` already under CONTEXT\.md `<decisions>`/);
+    assert.match(row, /add RESEARCH\.md to the Step 6 commit/, 'Step 6 commits only PLAN.md files, so the citation would stay uncommitted');
+    assert.match(row, /return `## REVISION_CONFLICT`/, 'the planner cannot reach the property, so the loop must not spend iterations on it');
+    assert.match(row, /`\/gsd:discuss-phase`/);
+    assert.match(row, /`\/gsd:plan-phase --research`/);
+    assert.match(row, /never add a decision/);
+    assert.match(row, /never mark the question closed/);
   });
 });
 
