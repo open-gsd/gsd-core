@@ -1559,8 +1559,8 @@ function writeTargetDirect(
     throw Object.assign(new Error(`${code}: cannot write ${filePath}: ${message}`), { code });
   };
   const LINK_MESSAGE = 'a symlinked target cannot be replaced atomically, and is never written through — refusing';
-  // What an O_NOFOLLOW open of a final-component symlink fails with: ELOOP (POSIX), EMLINK (some
-  // BSDs) or EFTYPE (FreeBSD/macOS variants). All mean "that is a link": refused like the lstat.
+  // What an O_NOFOLLOW open of a final-component symlink fails with: ELOOP (Linux, macOS), EMLINK
+  // (FreeBSD) or EFTYPE (NetBSD). All mean "that is a link": refused like the lstat.
   const refuseIfLinkOpen = (err: unknown): void => {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ELOOP' || code === 'EMLINK' || code === 'EFTYPE') refuse(LINK_MESSAGE, 'ENXIO');
@@ -1949,9 +1949,10 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       walked = { dev: st.dev, ino: st.ino };
     }
   }
-  // The physical directory that holds the target entry, as the walk saw it (null when absent: it
-  // is then recorded right after mkdir below). The atomic publish creates its temp file in, and
-  // renames within, this directory, so it is re-checked against this identity before each step.
+  // The identity of the directory that holds the target entry, taken by a separate stat of
+  // dirname(filePath) right after the walk (null when absent: it is then recorded right after
+  // mkdir below). The atomic publish creates its temp file in, and renames within, this
+  // directory, so it is re-checked against this identity before each step.
   const statParent = (): { dev: number; ino: number } | null => {
     try {
       const s = fs.statSync(path.dirname(filePath));
@@ -2068,6 +2069,10 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // temp file created before such a swap stays in the directory it was created in. That temp may
   // therefore be orphaned in the old directory after a parent swap: a minor leak, never another
   // file deleted, because temp names are random and only a path this write created is unlinked.
+  // The same holds for the refusal just below: once the parent has been swapped, unlinkSync of
+  // the temp path resolves through the NEW parent, so the real temp stays orphaned in the original
+  // directory. Documented residual: a same-class race that needs write access to the parent
+  // directory; no further race machinery guards it.
   if (parentChanged()) {
     try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
     refuseParentSwap();
