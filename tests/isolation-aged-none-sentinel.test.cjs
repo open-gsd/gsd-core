@@ -280,13 +280,16 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
     assert.equal(dispatch('03-02-docs', false), 'block', 'and is still denied without it: the record did not weaken the guard');
   });
 
-  test('why the record is per dispatch: recording every plan before the first dispatch leaves the earlier plan denied', (t) => {
+  // #5682: each plan keeps its own keyed record, so recording every plan before the first
+  // dispatch no longer lets the last plan's record govern the earlier plan. The legacy single
+  // slot still holds the last plan; the earlier plan is judged by its own keyed record.
+  test('#5682 per-dispatch records: recording every plan first leaves the legacy slot on the last plan, and the earlier plan allowed by its own record', (t) => {
     const skip = harnessSkipReason();
     if (skip) { t.skip(skip); return; }
     const wave = ['03-01-api', '03-02-docs'].map((id) => decide(planJson(id, ['src/a.js']), { USE_WORKTREES: 'false', SUBMODULE_PATHS: '' }));
     for (const d of wave) record(d);
     assert.equal(recordedPlan(), '03-02-docs', 'the single slot holds the last plan');
-    assert.equal(dispatch('03-01-api', false), 'block', 'the first plan is judged against the last plan\'s record');
+    assert.equal(dispatch('03-01-api', false), 'allow', 'the first plan is governed by its own keyed record, not the last plan\'s');
   });
 
   test('re-running the extraction restores a plan\'s own PLAN_FILES and PLAN_DELETIONS after later plans overwrote them', (t) => {

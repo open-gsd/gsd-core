@@ -23,10 +23,13 @@ const {
   STATE_MD_SECTIONS,
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
+  isStatePastPhase,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const { STATE_FIELD_SCHEMA } = require('../gsd-core/bin/lib/state-md-schema.cjs');
+const { comparePhaseNum } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
 
 const fixedClock = Object.freeze({
   today: () => '2026-06-27',
@@ -5268,5 +5271,127 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
         }),
       { seed: 5619, numRuns: 200 }, // deterministic and bounded (CONTRIBUTING: property tests pin the seed)
     );
+  });
+});
+
+describe('regressions (#5787): state begin-phase plan total', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const STATE_FIXTURE = [
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 3 (x) — PLANNED',
+    'Plan: 0 of 0',
+    'Total Plans in Phase: 5',
+    'Status: Planned',
+    '',
+  ].join('\n');
+
+  // Cleanup is registered before any step that can throw, so a failing run never leaks the temp dir.
+  function beginPhaseWithPlans(plansArgs, t) {
+    const tmpDir = createTempProject('gsd-5787-');
+    t.after(() => cleanup(tmpDir));
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, STATE_FIXTURE, 'utf-8');
+    const result = runGsdTools(`state begin-phase --phase 3 --name x${plansArgs}`, tmpDir);
+    const content = fs.readFileSync(statePath, 'utf-8');
+    return {
+      result,
+      planField: stateExtractField(content, 'Plan'),
+      totalField: stateExtractField(content, 'Total Plans in Phase'),
+    };
+  }
+
+  test('--plans 0 records a plan total of 0, not the unknown placeholder', (t) => {
+    const { result, planField, totalField } = beginPhaseWithPlans(' --plans 0', t);
+    assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
+    assert.equal(planField, '1 of 0');
+    assert.equal(totalField, '0');
+  });
+
+  test('--plans 1 records a plan total of 1 (boundary: limit+1 of zero)', (t) => {
+    const { result, planField, totalField } = beginPhaseWithPlans(' --plans 1', t);
+    assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
+    assert.equal(planField, '1 of 1');
+    assert.equal(totalField, '1');
+  });
+
+  test('--plans 4 records the given plan total (positive control)', (t) => {
+    const { result, planField, totalField } = beginPhaseWithPlans(' --plans 4', t);
+    assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
+    assert.equal(planField, '1 of 4');
+    assert.equal(totalField, '4');
+  });
+
+  test('no --plans keeps the unknown placeholder and leaves the total unchanged', (t) => {
+    const { result, planField, totalField } = beginPhaseWithPlans('', t);
+    assert.equal(result.success, true, `begin-phase should succeed: ${result.error}`);
+    assert.equal(planField, '1 of ?');
+    assert.equal(totalField, '5');
+  });
+});
+
+describe('#5676: isStatePastPhase under milestone-prefixed', () => {
+  const fm = (cp) => ['---', `current_phase: ${cp}`, '---', '# State', ''].join('\n');
+  const MP = 'milestone-prefixed';
+
+  test('#5676: under milestone-prefixed a later M-NN current phase is past an earlier one', () => {
+    assert.equal(isStatePastPhase(fm('3-02'), '3-01', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-01'), '3-02', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-01'), '3-01', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-03'), '3-02', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('4-01'), '3-09', undefined, MP), true);
+    const bodyCurrent = ['---', 'status: executing', '---', '# State', '', 'Current Phase: 3-02', ''].join('\n');
+    assert.equal(isStatePastPhase(bodyCurrent, '3-01', undefined, MP), true);
+    const bodyPosition = [
+      '---', 'status: executing', '---', '# State', '',
+      '## Current Position', '', 'Phase: Phase 3-02 of 9 (X)', '',
+    ].join('\n');
+    assert.equal(isStatePastPhase(bodyPosition, '3-01', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-02.1'), '3-02', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-02'), '3-02.1', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-10'), '3-09', undefined, MP), true);
+    assert.equal(isStatePastPhase(fm('3-09'), '3-10', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('3-02A'), '3-02', undefined, MP), true);
+  });
+
+  const phaseId = fc.tuple(
+    fc.integer({ min: 1, max: 20 }), fc.integer({ min: 1, max: 30 }), fc.option(fc.integer({ min: 1, max: 5 }), { nil: undefined }),
+  ).map(([m, n, d]) => ({ m, id: `${m}-${String(n).padStart(2, '0')}${d === undefined ? '' : `.${d}`}` }));
+
+  test('#5676 property: under milestone-prefixed isStatePastPhase agrees with comparePhaseNum', () => {
+    fc.assert(
+      fc.property(phaseId, phaseId, (a, b) => {
+        assert.equal(isStatePastPhase(fm(a.id), b.id, undefined, MP), comparePhaseNum(a.id, b.id) > 0);
+      }),
+      { seed: 5676, numRuns: 500 },
+    );
+  });
+
+  test('#5676 property: with no convention the leading-integer read is unchanged', () => {
+    fc.assert(
+      fc.property(phaseId, phaseId, (a, b) => {
+        // The current phase reads as its leading integer, compared numerically with an integer phase.
+        assert.equal(isStatePastPhase(fm(a.id), String(b.m), undefined, undefined), a.m > b.m);
+      }),
+      { seed: 5676, numRuns: 300 },
+    );
+  });
+
+  test('#5676: an absent or unparseable current phase is still not past', () => {
+    const absent = ['---', 'status: x', '---', '# State', ''].join('\n');
+    assert.equal(isStatePastPhase(absent, '3-01', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm("''"), '3-01', undefined, MP), false);
+    assert.equal(isStatePastPhase(fm('TBD'), '3-01', undefined, MP), false);
+  });
+
+  test('#5676: other conventions keep the leading-integer read', () => {
+    for (const c of [undefined, null, '', 'bracket', 'sequential']) {
+      assert.equal(isStatePastPhase(fm('3-02'), '3-01', undefined, c), false);
+      assert.equal(isStatePastPhase(fm('4'), '3', undefined, c), true);
+    }
+    assert.equal(isStatePastPhase(fm('3-02'), '3-01'), false);
   });
 });

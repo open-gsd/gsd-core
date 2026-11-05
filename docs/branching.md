@@ -56,6 +56,12 @@ Three rules:
 - Branch protection: 1 approval, CI green, auto-deleted source branches.
 - Auto-back-merged from `main` whenever `main` advances (via
   `auto-backmerge.yml`) so it never falls behind.
+- The back-merge and the release → `main` merge-back must land as **merge
+  commits**, never squashed and never through the merge queue, or `main` and
+  `next` stop sharing history and the next release → `main` merge conflicts
+  (#5894). Land either one with `node scripts/merge-commit-pr.cjs <PR>` as a
+  repo admin; `release.yml` refuses to cut a release while `main` is not an
+  ancestor of `next`.
 
 ---
 

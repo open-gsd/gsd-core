@@ -221,6 +221,27 @@ Do not interrupt the session. Killing it discards in-progress subagent work.
 
 If it has been more than 10 minutes, check whether the agent task still shows as active in the Claude Code sidebar.
 
+### If plan-phase says a planner stalled while it was still working
+
+Plan-phase offers the accept-plans / retry / stop choice when a planner or plan-checker shows no completion marker and writes no `*-PLAN.md` for `planner.stall_threshold_minutes` (default 10). A slow model can stay silent that long while still making progress.
+
+1. Choose **Retry** (or **Accept plans** if the plans on disk look complete) to continue the current run.
+2. Raise the threshold for future runs:
+
+   ```bash
+   /gsd-config --advanced
+   ```
+
+   In **Planning Tuning**, keep stall detection on and enter a larger **Planner stall threshold** in whole minutes, for example `25`. The **check interval** (default 5) sets how often plan-phase looks; it does not need to change.
+
+3. Confirm the value:
+
+   ```bash
+   gsd-tools query config-get planner.stall_threshold_minutes
+   ```
+
+A value of `0`, a negative or a non-number is ignored and the default of 10 is used, so if the alarm still fires at 10 minutes, check the stored value. See [Planner Stall Watchdog](../FEATURES.md#3923-planner-stall-watchdog) and the `planner.*` rows in [Configuration](../CONFIGURATION.md).
+
 ---
 
 ## Workflow state problems
