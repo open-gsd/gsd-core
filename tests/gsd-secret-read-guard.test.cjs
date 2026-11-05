@@ -1611,13 +1611,13 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       'cat <<$\'EOF\'\n.env is only mentioned here\nEOF',
       // A `\0` span whose neither reading (bash full, zsh truncated) names a
       // secret stays allowed — the word continuing after the NUL is not itself
-      // the test (#5255 review round 2): `cat $'a\0b'c` is bash `ac`, zsh `a`.
+      // the test (#5255): `cat $'a\0b'c` is bash `ac`, zsh `a`.
       R`cat $'a\0b'c`,
       R`echo $'a\0b'$(printf c)`,
       R`echo $'a\0'<(printf b)`,
       R`cat $'x\0'.env`, // bash `x.env`, zsh `x` — neither is a secret name
       // Line continuations: bash strips `\<newline>` before tokenizing, so
-      // these are ordinary commands, not denials (#5255 review round 4).
+      // these are ordinary commands, not denials (#5255).
       'echo $\'a\\0\'\\\n; ls', // the continuation adds nothing; `echo a; ls`
     ];
     for (const cmd of cases) {
@@ -1709,7 +1709,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('a run of `$` holding line continuations reads as bash joins it (#5255 review round 6, Blocker 1)', () => {
+  describe('a run of `$` holding line continuations reads as bash joins it (#5255)', () => {
     // bash removes `\<newline>` before it tokenizes, so `cat $$\<newline> .env`
     // is `cat $$ .env`. A scanner that resumes on the continuation's newline
     // reads it as a command separator and `.env` as a bare command word.
@@ -1748,7 +1748,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('a run of `$` before `{` or `(` pairs left to right (#5255 review round 7, Major 2)', () => {
+  describe('a run of `$` before `{` or `(` pairs left to right (#5255)', () => {
     // bash 5.2 and dash read `$${` as the PID and a literal `{` and run the
     // rest of the line (`echo $${; cat .env` prints the file). Read as a `${`
     // opener whose `}` never comes, it hid the rest of the line. zsh 5.9's
@@ -1821,7 +1821,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('dash reading: a run of `$` pairs before `{` and `(`, and every quote is plain (#5255 review round 8, Major 1)', () => {
+  describe('dash reading: a run of `$` pairs before `{` and `(`, and every quote is plain (#5255)', () => {
     // dash (0.5.12 here; the maintainer's review, macOS /bin/dash) reads `$$` as
     // the PID and `{` as a literal, as bash does, but has no `$'…'`: in
     // `echo $${$'\''}'; cat .env` the `$` is a literal and `'\'` and `'}'` are
@@ -1868,7 +1868,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('a `$` run opens `$(` past a line continuation inside "…" and a heredoc body (#5255 round 8, found in review of the round)', () => {
+  describe('a `$` run opens `$(` past a line continuation inside "…" and a heredoc body (#5255)', () => {
     // bash and dash remove `\<newline>` before they read `$(` inside "…" and
     // an unquoted heredoc body, so `"$\<newline>(cat .env)"` is
     // `"$(cat .env)"`; zsh 5.9 does so in a heredoc body only. The scanners
@@ -1926,7 +1926,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('a command the scan cannot finish is denied as command-too-complex (#5255 review round 9, Major 1)', () => {
+  describe('a command the scan cannot finish is denied as command-too-complex (#5255)', () => {
     // Each `"$(` opens a level the `$( )` scanner recurses into, so 300,000 of
     // them overflow the stack at any Node stack size; a few thousand already
     // do at the default. The overflow used to reach the hook's fail-open
@@ -1972,7 +1972,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('a command that needs more than the scan budget is denied as command-too-complex (#5255 review round 9, Minor 2)', () => {
+  describe('a command that needs more than the scan budget is denied as command-too-complex (#5255)', () => {
     // Four readings, each rescanning each nested `$( )`, multiply the work: a
     // megabyte of `$$(` is tokenized about 60 times over, which took seconds
     // per Bash call. The budget is eight times the length cap, so a command
@@ -1986,7 +1986,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    // #5285 round review: each `${$(` that does not close doubled the dollar-quoting readings'
+    // Each `${$(` that does not close doubled the dollar-quoting readings'
     // work, and a few dozen outran the hook's timeout, which lets the command run; so does
     // each `${"${`. Text after each unclosed `${$(` or `${"}` (plain, a run of `$`, heredocs),
     // or a run of unclosed `$[` in a `$( )`, makes the work quadratic. The readers now charge
@@ -2012,7 +2012,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    // #5285 round review: each operand's last segment was cut with `/[\\/]+$/`, quadratic in
+    // Each operand's last segment was cut with `/[\\/]+$/`, quadratic in
     // a run of separators, and each reading checks each operand again at each `$( )` level
     // that holds dollar-quoting, so a read after two such levels around a 200,000-separator
     // operand outlasted the hook's timeout. Without the linear cut this row outlasts the spawn
@@ -2064,7 +2064,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('pinned: the shapes the header lists under "Documented gaps" stay allowed (#5255 review round 9, Minor 3)', () => {
+  describe('pinned: the shapes the header lists under "Documented gaps" stay allowed (#5255)', () => {
     // Each is allowed on `next` too. A change that closes one updates the
     // header's list with it. Plain strings, not R``: `${` would interpolate.
     const shapes = [
@@ -2195,7 +2195,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('boundaries (#5255 review round 6, Minor 5)', () => {
+  describe('boundaries (#5255)', () => {
     const LIMIT = 1024 * 1024;
     // A command of exactly `len` characters: `prefix`, a run of `$`, `suffix`.
     const sized = (prefix, suffix, len) => `${prefix}${'$'.repeat(len - prefix.length - suffix.length)}${suffix}`;
@@ -2228,7 +2228,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     }
   });
 
-  describe("a $'…' span inside ${…} (#5255 review round 6, Major 1)", () => {
+  describe("a $'…' span inside ${…} (#5255)", () => {
     // `${…}` used to end at its first `}`, which here sits inside the span, so
     // the rest of the line was read as part of the word.
     const blocks = [
@@ -2258,14 +2258,14 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
-  describe('${…} is read past its quotes, spans and substitutions (#5255 review round 10, Minor 1)', () => {
+  describe('${…} is read past its quotes, spans and substitutions (#5255)', () => {
     // The ${…} reader skipped only `$'…'` spans, so the `'` closing a plain
     // `'$'` opened a span that ran on to the next `'`, no `}` closed the ${…},
     // and the rest of the line was read as its text. Plain strings, not R``:
     // `${` would interpolate. Every blocked row read the file in a real shell
     // (2026-10-24): bash 5.2 and zsh 5.9 unless marked, dash 0.5.12 where
-    // marked. Rows marked "head blocked" were blocked before this round too;
-    // the rest were allowed.
+    // marked. Rows marked "head blocked" are blocked with the reader off too;
+    // the rest are not.
     const blocks = [
       "echo ${x#'$'}; cat $'.env'", // the review's two rows
       "echo ${x:-'$'}; cat $'.e\\x6ev'",
@@ -2362,8 +2362,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    test('the scan before this round is run again, and its verdict stands: blocks `echo ${x-\'}\'\'$\'}; ls`', () => {
-      // bash, zsh and dash all run `ls` here, but the scan before this round
+    test('the scan with the ${…} reader off is run too, and its verdict stands: blocks `echo ${x-\'}\'\'$\'}; ls`', () => {
+      // bash, zsh and dash all run `ls` here, but the scan with the reader off
       // took the `$'` as never closing and blocked it, so it stays blocked.
       const cmd = "echo ${x-'}''$'}; ls";
       assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
@@ -2371,7 +2371,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
 
     test('in process: the second look keeps its verdict when it spends its own budget', () => {
       // The readings take `${x:-\}; bash -c $'…'; echo }` as one word and
-      // finish. The scan before this round ends it at the escaped `}`,
+      // finish. That scan ends it at the escaped `}`,
       // rescans the decoded `bash -c` script, and spends the budget, so the
       // command is denied as that scan denied it.
       const { findSecretRead } = require(HOOK_PATH);
@@ -2464,7 +2464,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   });
 });
 
-describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 2)", () => {
+describe("regressions: #5255 — zsh's reading of $'…'", () => {
   // zsh is the Bash tool's shell on macOS, and it decodes `$'…'` differently
   // from bash (zsh 5.9 getkeystring): an unknown escape drops its backslash,
   // a bare `\x` / `\u` / `\U` is a NUL, `\C-` / `\M-` modify the next byte,
@@ -2496,7 +2496,7 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
     });
   }
 
-  describe("a run of `$` before `'` opens a span under zsh (review round 7, Major 1)", () => {
+  describe("a run of `$` before `'` opens a span under zsh", () => {
     // bash pairs the run left to right: `$$'x'` is the PID and a plain quote.
     // zsh opens a `$'…'` span after any run, so an escaped quote no longer
     // ends it; after an even run only `\\` and `\'` are escapes in it
@@ -2592,7 +2592,7 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
   }
 });
 
-describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, Minors 3 and 6)", () => {
+describe("decodeAnsiC against bash 5.2 and zsh 5.9", () => {
   const R = String.raw;
   const { decodeAnsiC } = require(HOOK_PATH);
   const oracle = require('./fixtures/ansi-c-decode-oracle.json');
@@ -2765,7 +2765,7 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
   });
 });
 
-describe('findSecretRead returns one result shape (#5255 review round 6, Nit 3)', () => {
+describe('findSecretRead returns one result shape (#5255)', () => {
   const { findSecretRead } = require(HOOK_PATH);
   const R = String.raw;
   for (const [cmd, want] of [

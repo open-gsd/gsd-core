@@ -708,7 +708,7 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
   return unclosed(str, read);
 }
 
-// ansiCBraceClose as it was before #5255's review round 10, for readAsBefore:
+// The simple end of a `${…}`, for readAsBefore:
 // it skips only `$'…'` spans, and a span that never closes ends at the next `}`.
 function ansiCBraceCloseBefore(str, i, shell) {
   while (i < str.length && str[i] !== '}') {
@@ -1944,7 +1944,7 @@ function findSecretRead(command, depth) {
     else failure = e;
   }
   // A parser error in the plain reading is the hook's crash (fail open, see
-  // header), but only after the scan before this round has had its say, and
+  // header), but only after the scan with the `${…}` reader off has had its say, and
   // a scan that could not finish is still denied.
   const unfinished = scanUnfinished;
   if (hit === null && readingsRan && (!unfinished || failure !== null)) hit = readAsBefore(command);
@@ -1957,22 +1957,20 @@ function findSecretRead(command, depth) {
 // Set when readEachWay ran the readings on `command` or a body it rescans.
 let readingsRan = false;
 
-// Set while readAsBefore runs: ansiCBraceClose, findParenClose,
-// doubleQuoteEnd and tokenize then read a `${…}`, a "…" and a `$( )` as they
-// did before #5255's review round 10.
+// Set while readAsBefore runs: ansiCBraceClose, findParenClose, doubleQuoteEnd
+// and tokenize then end a `${…}` the simple way, and zshMathEnd reads nothing.
 let asBefore = false;
 
-// The scan of `command` as it was before #5255's review round 10, at every
-// depth, and its verdict, whatever it is. Those rounds end a `${…}` and a
-// `$( )` where the shell does far more often, but where the shell's grammar
-// outruns them (a `#` inside a `${…}` or `$[ ]` inside a `$( )`, a `case`
-// pattern's `)`) they can end one later than the shell and miss a read the
-// scan before them found by ending it early. So nothing that scan blocked is
-// allowed: findSecretRead runs it again on a command the readings found
-// nothing in, and blocks on what it blocks. It has a budget of its own, and
-// fails closed as it did (`command-too-complex`). A command the readings
-// could not finish is denied anyway, so it is not read again; nor is one no
-// reading reached, which that scan read exactly as the plain one did.
+// The scan of `command` with the `${…}` reader off, at every depth, and its
+// verdict, whatever it is. The reader ends a `${…}` where the shell does far
+// more often, but where the shell's grammar outruns it (a `#` comment or a
+// `case` pattern's `)` in a `$( )` in a `${…}`) it can end one later than the
+// shell and miss a read the simple end found. So nothing that scan blocks is
+// allowed: findSecretRead runs it on a command the readings found nothing in,
+// and blocks on what it blocks. It has a budget of its own, and fails closed
+// (`command-too-complex`). A command the readings could not finish is denied
+// anyway, so it is not read again; nor is one no reading reached, which that
+// scan reads exactly as the plain one does.
 function readAsBefore(command) {
   asBefore = true;
   scanUnfinished = false;
