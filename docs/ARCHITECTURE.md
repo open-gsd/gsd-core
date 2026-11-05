@@ -694,9 +694,9 @@ plan-phase
     │       └── checkpoint:human-verify injected before [ASSUMED]/[SUS] installs;
     │           T-{phase}-SC STRIDE row added for install-bearing plans
     ├── Plan Checker → Verify loop (max 3x)
-    │       └── Research gate (Dimension 11): blocks until each RESEARCH.md question needing a ruling
-    │           cites only D-NNs from CONTEXT.md <decisions>, outside Claude's Discretion and recorded
-    │           before the run, one answering it; a cited source settles only a factual gap
+    │       └── Research gate (Dimension 11): blocks until each open RESEARCH.md question cites
+    │           only D-NNs from CONTEXT.md <decisions>, outside Claude's Discretion and recorded before
+    │           the planning run, one answering it; a cited source settles only a factual gap
     ├── Requirements coverage gate (REQ-IDs → plans)
     └── Decision coverage gate (CONTEXT.md `<decisions>` → plans, BLOCKING — #2492)
     │
