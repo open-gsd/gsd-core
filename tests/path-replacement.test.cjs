@@ -20,6 +20,15 @@ const os = require('os');
 
 const repoRoot = path.join(__dirname, '..');
 
+// #5923: drop gsd-core/CHANGELOG.md when byte-identical to the repo-root CHANGELOG.md (copied verbatim,
+// bin/install.js:12364-12368); its release notes quote installer bugs in prose.
+function isChangelogCopy(file, text) {
+  return path.basename(file) === 'CHANGELOG.md' && text === fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
+}
+function withoutChangelogCopy(files) {
+  return new Map([...files].filter(([file, text]) => !isChangelogCopy(file, text)));
+}
+
 // Thin adapter over the REAL _computePathPrefix (ADR-1508 Phase 2: deleted hand-copy).
 // Old signature: computePathPrefix(homedir, targetDir) assumed isGlobal=true, isOpencode=false.
 // This adapter preserves that contract so existing call-sites stay unchanged.
@@ -748,6 +757,7 @@ describe('#3544: spawned installer — gsd-core/ spec tree @-refs resolve on til
         if (entry.isDirectory()) walk(full);
         else if (entry.name.endsWith('.md')) {
           const content = fs.readFileSync(full, 'utf8');
+          if (isChangelogCopy(full, content)) continue;
           for (const line of splitLines(content)) {
             if (line.startsWith('@')) out.push({ file: full, line });
           }
@@ -1825,12 +1835,6 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
     return [...real].filter(([file, text]) => text !== model.get(file)).map(([, text]) => text).join('\n');
   }
 
-  // #5923: drop emitted files that are byte-identical to the repository source they were copied from.
-  function withoutVerbatimCopies(files) {
-    const changelog = fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8');
-    return new Map([...files].filter(([file, text]) => !(file === path.join('gsd-core', 'CHANGELOG.md') && text === changelog)));
-  }
-
   test('#5923: prefixDependent drops files identical across installs and keeps differing ones', () => {
     const repeated = 'see profiles/work/profiles/work';
     const same = prefixDependent(new Map([['a.md', repeated]]), new Map([['a.md', repeated]]));
@@ -1859,7 +1863,7 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
 
   test('#5715: copilot and antigravity includes retargeted to a config dir under their own default home emit the prefix once', () => {
     for (const [runtime, rel] of [['copilot', '.copilot/pp'], ['antigravity', '.gemini/antigravity/pp']]) {
-      const files = emitted(install(runtime, rel));
+      const files = withoutChangelogCopy(emitted(install(runtime, rel)));
       assert.ok(files.size > 20, `${runtime}: expected an emitted tree`);
       const repeated = [...files].filter(([, text]) => text.includes('/pp/pp/')).map(([file]) => file);
       assert.deepStrictEqual(repeated.slice(0, 5), [], `${runtime}: prefix repeated in ${repeated.length} files`);
@@ -1867,9 +1871,9 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
   });
 
   test('#5715: the reviewer repros (kilo, opencode, codex agents) are clean', () => {
-    const kilo = withoutVerbatimCopies(emitted(install('kilo', '.claude/profiles/work')));
+    const kilo = withoutChangelogCopy(emitted(install('kilo', '.claude/profiles/work')));
     assert.ok(![...kilo.values()].some((t) => t.includes('/profiles/work/profiles/work/')), 'kilo repeated prefix');
-    const opencode = withoutVerbatimCopies(emitted(install('opencode', REAL)));
+    const opencode = withoutChangelogCopy(emitted(install('opencode', REAL)));
     assert.ok(![...opencode.values()].some((t) => t.includes('.claude/~/.config/opencode')), 'opencode $& expansion');
     const codex = emitted(install('codex', REAL));
     const agents = [...codex].filter(([file]) => file.startsWith('agents/') && file.endsWith('.toml'));
