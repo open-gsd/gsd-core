@@ -21,6 +21,8 @@ const path = require('node:path');
 const fc = require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { spawnSync } = require('node:child_process');
 
 const RUNNER = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 
@@ -333,7 +335,40 @@ describe('#4020 — run-tests temp root', () => {
         return root;
       }
 
-      describe('linux (TMPDIR only)', () => {
+      test('#5688: parent equals resolve(os.tmpdir()) of the same child env on this platform', (t) => {
+        const { a, b, fallback } = twoDirs(t);
+        const script = `
+          const os = require('node:os');
+          const path = require('node:path');
+          const fs = require('node:fs');
+          const want = path.resolve(os.tmpdir());
+          const runner = require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'run-tests.cjs'))});
+          const root = runner.setupRunTempRoot();
+          process.stdout.write(JSON.stringify({ want, got: path.dirname(root) }));
+          fs.rmSync(root, { recursive: true, force: true });
+        `;
+        const combos = [
+          { TMPDIR: a, TMP: b, TEMP: fallback },
+          { TMPDIR: a },
+          { TMP: b, TEMP: fallback },
+          { TEMP: fallback },
+          { TMPDIR: '', TMP: '', TEMP: fallback },
+          {},
+        ];
+        for (const combo of combos) {
+          const env = { ...process.env };
+          for (const k of ['TMPDIR', 'TEMP', 'TMP']) delete env[k];
+          Object.assign(env, combo);
+          const r = spawnSync(process.execPath, ['-e', script], {
+            env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
+          });
+          assert.equal(r.status, 0, `${JSON.stringify(combo)}: ${String(r.stderr).slice(-300)}`);
+          const { want, got } = JSON.parse(r.stdout);
+          assert.equal(got, want, `parent mismatch for ${JSON.stringify(combo)}`);
+        }
+      });
+
+      describe('linux (TMPDIR, then TMP, then TEMP)', () => {
         test('#5688: TMPDIR (not a run root) is the parent, TEMP ignored', (t) => {
           const { a, b, fallback } = twoDirs(t);
           const env = { TMPDIR: a, TEMP: b };
@@ -342,16 +377,44 @@ describe('#4020 — run-tests temp root', () => {
           for (const k of ['TMPDIR', 'TEMP', 'TMP']) assert.equal(env[k], root);
         });
 
-        test('#5688: unset TMPDIR uses tmpdirFn, TEMP ignored', (t) => {
+        test('#5688: unset TMPDIR falls to TMP before TEMP', (t) => {
+          const { a, b, fallback } = twoDirs(t);
+          const root = run('linux', { TMP: a, TEMP: b }, fallback);
+          assert.equal(path.dirname(root), path.resolve(a));
+        });
+
+        test('#5688: TMPDIR and TMP unset falls to TEMP', (t) => {
           const { b, fallback } = twoDirs(t);
           const root = run('linux', { TEMP: b }, fallback);
+          assert.equal(path.dirname(root), path.resolve(b));
+        });
+
+        test('#5688: empty TMPDIR falls to TMP', (t) => {
+          const { a, b, fallback } = twoDirs(t);
+          const root = run('linux', { TMPDIR: '', TMP: a, TEMP: b }, fallback);
+          assert.equal(path.dirname(root), path.resolve(a));
+        });
+
+        test('#5688: all variables empty or unset use tmpdirFn', (t) => {
+          const { fallback } = twoDirs(t);
+          const root = run('linux', { TMPDIR: '', TMP: '', TEMP: '' }, fallback);
           assert.equal(path.dirname(root), path.resolve(fallback));
         });
 
-        test('#5688: empty TMPDIR uses tmpdirFn', (t) => {
-          const { b, fallback } = twoDirs(t);
-          const root = run('linux', { TMPDIR: '', TEMP: b, TMP: b }, fallback);
-          assert.equal(path.dirname(root), path.resolve(fallback));
+        test('#5688: a run root in TMP is inherited when TMPDIR is unset', (t) => {
+          const { a, b, fallback } = twoDirs(t);
+          const inheritedRoot = runRootIn(a, 'tmp5688');
+          const env = { TMP: inheritedRoot, TEMP: b };
+          assert.equal(run('linux', env, fallback), inheritedRoot);
+          for (const k of ['TMPDIR', 'TEMP', 'TMP']) assert.equal(env[k], inheritedRoot);
+        });
+
+        test('#5688: a run root in TEMP is inherited when TMPDIR and TMP are unset', (t) => {
+          const { a, fallback } = twoDirs(t);
+          const inheritedRoot = runRootIn(a, 'temp5688');
+          const env = { TEMP: inheritedRoot };
+          assert.equal(run('linux', env, fallback), inheritedRoot);
+          for (const k of ['TMPDIR', 'TEMP', 'TMP']) assert.equal(env[k], inheritedRoot);
         });
 
         test('#5688: TMPDIR run root is inherited', (t) => {
