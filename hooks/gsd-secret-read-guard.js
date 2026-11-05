@@ -197,7 +197,8 @@ const MAX_NESTING_DEPTH = 3;
 // here-string or a shift) that is not denied is scanned again under each of
 // #5513's two other heredoc readings (findSecretReadUnderOtherReadings), each
 // pass a full findSecretRead with these budgets of its own, so it can take up
-// to three times all of the above; the figures above are per pass.
+// to three times all of the above, or five with a brace in a heredoc tag; the
+// figures above are per pass.
 // Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
@@ -528,6 +529,7 @@ function classifyGrepGlob(glob) {
 //                                   a quote that never closes
 // So a command holding either form is scanned under all four and denied on
 // any (findSecretRead). The plain reading is the scan as it was before #5255,
+// but for a brace in a heredoc tag, which is read both ways (heredocBraceTags),
 // so nothing it denied can become allowed. Every scanner below takes `reading`:
 // false for the plain reading, or the shell whose reading it is doing —
 // 'bash' or 'zsh', which have ANSI-C quoting, or 'dash', which does not.
@@ -949,8 +951,14 @@ function quoteExcerpt(str, i) {
 //  - heredocTagsAsWords: an unquoted tag is a bash word (a CR and a substitution belong
 //    to it). false is the earlier reading, where the tag stopped at any whitespace and at
 //    `(`: kept as a reading so nothing the guard denied before is allowed now.
+//  - heredocBraceTags: a `{` or `}` where a tag is due is the tag, and a `${` there is its
+//    text to dash and the plain reading, since a tag is not expanded. false is the earlier
+//    reading, where the brace was a group and the `${` an expansion. A command that met
+//    such a tag (braceTagRead) is scanned that way too, so nothing it denied is allowed.
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
+let heredocBraceTags = true;
+let braceTagRead = false;
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
@@ -1262,15 +1270,6 @@ function tokenize(str, reading) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
-  // Set once no `}` is left: a heredoc tag's `${` goes on past a failed search,
-  // so each would otherwise search the rest of the command again.
-  let noBraceLeft = false;
-  const nextBrace = (from) => {
-    if (noBraceLeft) return -1;
-    const at = str.indexOf('}', from);
-    noBraceLeft = at === -1;
-    return at;
-  };
 
   const flush = () => {
     if (!hasWord) return;
@@ -1456,18 +1455,18 @@ function tokenize(str, reading) {
 
     if (ch === '$' && str[i + 1] === '{') {
       hasWord = true;
-      const inner = [];
-      const j = reading ? ansiCBraceClose(str, i + 2, reading, inner, false) : nextBrace(i);
-      if (j !== -1) for (const cmd of inner) nested.push(cmd);
-      const k = j === -1 && reading && !asBefore ? nextBrace(i) : j;
-      // A heredoc tag is not expanded, and dash ends one whose `${` never
-      // closes at the next metacharacter (`<<${;cat .env` runs the read), where
-      // a word with such a `${` holds the rest of the line.
-      if (k === -1 && expectTag && heredocTagsAsWords) {
+      // A heredoc tag is not expanded, so dash ends one at the next metacharacter
+      // whatever follows (`<<${;cat .env` runs the read, `<<${;cat .env #}` too).
+      if (expectTag && heredocTagsAsWords && heredocBraceTags && reading !== 'bash' && reading !== 'zsh') {
+        braceTagRead = true;
         buf += '${';
         i += 2;
         continue;
       }
+      const inner = [];
+      const j = reading ? ansiCBraceClose(str, i + 2, reading, inner, false) : str.indexOf('}', i);
+      if (j !== -1) for (const cmd of inner) nested.push(cmd);
+      const k = j === -1 && reading && !asBefore ? str.indexOf('}', i) : j;
       const e = k === -1 ? str.length - 1 : k;
       buf += str.slice(i, e + 1);
       i = e + 1;
@@ -1606,12 +1605,15 @@ function tokenize(str, reading) {
     }
     // A brace where a heredoc tag is due is the tag (`<<}; cat .env` is tag `}`,
     // then the read), never a group: every shell takes a `{` there, and bash
-    // and dash a `}`. The earlier tag reading keeps the old grouping.
-    if ((ch === '{' || ch === '}') && !hasWord && !(expectTag && heredocTagsAsWords)
-      && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
-      sep(ch);
-      i++;
-      continue;
+    // and dash a `}`.
+    if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
+      if (expectTag && heredocTagsAsWords && heredocBraceTags) {
+        braceTagRead = true;
+      } else {
+        sep(ch);
+        i++;
+        continue;
+      }
     }
 
     hasWord = true;
@@ -1875,21 +1877,37 @@ function precedingOp(s, bySeg, sepAfter) {
 // #5513: the same scan under the other readings of a heredoc: bash 3.2.57's `$( )` span
 // (bodies not skipped) and the earlier tag reading (tag ends at any whitespace). Only a
 // command that opens a heredoc can read differently, so the extra passes are skipped for
-// every other command.
+// every other command. One that met a brace tag gets both span readings with the brace
+// read the earlier way as well. The flag stays set: the hook scans one command.
 function findSecretReadUnderOtherReadings(command) {
   if (!command.includes('<<')) return null;
-  for (const [bodiesSkipped, tagsAsWords] of [[false, true], [true, false]]) {
+  const scanUnder = (bodiesSkipped, tagsAsWords, braceTags) => {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
+    heredocBraceTags = braceTags;
     try {
-      const hit = findSecretRead(command, 0);
-      if (hit) return hit;
+      return findSecretRead(command, 0);
     } finally {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
+      heredocBraceTags = true;
     }
+  };
+  const hit = scanUnder(false, true, true) || scanUnder(true, false, true);
+  if (hit || !braceTagRead) return hit;
+  return scanUnder(true, true, false) || scanUnder(false, true, false);
+}
+
+// The debugger-spawn scan, under the earlier reading of a brace tag as well.
+function findDebuggerCliSpawnEitherWay(command) {
+  const spawn = findDebuggerCliSpawn(command, 0);
+  if (spawn !== null || !braceTagRead) return spawn;
+  heredocBraceTags = false;
+  try {
+    return findDebuggerCliSpawn(command, 0);
+  } finally {
+    heredocBraceTags = true;
   }
-  return null;
 }
 
 // Returns the block as `{ code, text }` — a secret read (secretRead), or a
@@ -2545,7 +2563,7 @@ function main() {
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
       if (hit !== null) emitBlock(hit.code, tool, hit.text);
-      const spawn = findDebuggerCliSpawn(command, 0);
+      const spawn = findDebuggerCliSpawnEitherWay(command);
       if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
       allow(undefined);
     } catch (e) {
