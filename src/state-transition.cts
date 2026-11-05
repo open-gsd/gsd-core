@@ -20,11 +20,12 @@ import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stat
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
 import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { deriveProgressFromRoadmap, milestoneVersionOf, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { milestoneVersionOf } from './roadmap-progress.cjs';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { comparePhaseNum } = phaseIdMod;
+const { comparePhaseNum, parsePhaseFromProse } = phaseIdMod;
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -312,6 +313,14 @@ export const FRONTMATTER_BODY_SOURCE: Readonly<Record<string, readonly string[]>
 const SESSION_SCOPED_KEYS: ReadonlySet<string> = new Set(['stopped_at', 'paused_at']);
 
 /**
+ * #4998 review: the `## Session` fields with no frontmatter key. `state-snapshot`
+ * reads them from the session section only, with fenced blocks blanked, so
+ * `state update` / `state patch` write them there too — never a fenced example
+ * above the live line, and never an archive section's copy.
+ */
+const SESSION_BODY_FIELDS: ReadonlySet<string> = new Set(['resume file', 'last session', 'last date']);
+
+/**
  * The `(primary, fallback)` label pair for a session-scoped frontmatter KEY.
  */
 function sessionLabelsForKey(key: string): { primary: string; fallback: string | null } | null {
@@ -322,7 +331,8 @@ function sessionLabelsForKey(key: string): { primary: string; fallback: string |
 
 /**
  * The same pair, resolved from a BODY LABEL the caller named (`Stopped At`,
- * `Stopped at`, `Paused At`). `null` for anything else.
+ * `Stopped at`, `Paused At`, or a SESSION_BODY_FIELDS label as named). `null`
+ * for anything else.
  *
  * Deliberately does NOT accept a frontmatter key. An earlier cut resolved both
  * spellings through one function and used it for the write, which made
@@ -333,7 +343,13 @@ function sessionLabelsForKey(key: string): { primary: string; fallback: string |
  */
 function sessionLabelsForBodyField(field: string): { primary: string; fallback: string | null } | null {
   const key = frontmatterKeyForBodyField(field);
-  return key === null ? null : sessionLabelsForKey(key);
+  if (key !== null) return sessionLabelsForKey(key);
+  return SESSION_BODY_FIELDS.has(field.trim().toLowerCase()) ? { primary: field, fallback: null } : null;
+}
+
+/** #4998 review: whether `state update` / `state patch` write the body field `field` inside the session section. */
+export function isSessionScopedBodyField(field: string): boolean {
+  return sessionLabelsForBodyField(field) !== null;
 }
 
 /**
@@ -1451,7 +1467,7 @@ function beginPhaseCore(
       tryField('Current Phase Name', intent.phaseName);
     }
     tryField('Current Plan', String(startPlan));
-    if (intent.planCount) {
+    if (intent.planCount != null) {
       tryField('Total Plans in Phase', String(intent.planCount));
     }
 
@@ -1601,7 +1617,7 @@ function mutateCurrentPositionFirstTime(
   }
 
   // Plan line.
-  const planValue = `${intent.startPlan} of ${intent.planCount || '?'}`;
+  const planValue = `${intent.startPlan} of ${intent.planCount ?? '?'}`;
   if (/^Plan:/m.test(sectionBody)) {
     sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${planValue}`);
   } else {
@@ -2219,8 +2235,12 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
  * position; the caller combines this with "the phase is already complete in
  * ROADMAP.md" so a first-time out-of-order completion (#2028) still
  * transitions. An unparseable or absent current phase is "not past".
+ * #5676: under `milestone-prefixed` the id is the whole `M-NN` (`3-02`, not `3`); that read goes
+ * through `parsePhaseFromProse` (the #5626 grammar owner), so the two cannot drift.
  */
-export function isStatePastPhase(content: string, phaseNum: string | number, sourcePath?: string): boolean {
+export function isStatePastPhase(
+  content: string, phaseNum: string | number, sourcePath?: string, convention?: string | null,
+): boolean {
   const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
   const fromFm = fm['current_phase'];
   let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
@@ -2229,9 +2249,14 @@ export function isStatePastPhase(content: string, phaseNum: string | number, sou
     raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
   }
   // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
-  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
-  if (!m) return false;
-  return comparePhaseNum(m[1], String(phaseNum)) > 0;
+  let id: string | null = null;
+  if (raw !== null) {
+    id = convention === 'milestone-prefixed'
+      ? parsePhaseFromProse(raw, 'milestone-prefixed').phase
+      : (/^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw)?.[1] ?? null);
+  }
+  if (id === null) return false;
+  return comparePhaseNum(id, String(phaseNum)) > 0;
 }
 
 /**
@@ -2962,7 +2987,19 @@ function patchCore(
     // `^field:` pattern — e.g. `status` matching both the frontmatter key
     // and a `Status:` body line). Frontmatter is only consulted when the
     // body has no match for this key.
-    const replaced = stateReplaceField(body, field, value);
+    // #4998: a session field is written the way `state update` writes it —
+    // inside the session section, never a fenced example there — so the
+    // patch agrees with the session readers the frontmatter sync uses.
+    const sessionWriteLabels = sessionLabelsForBodyField(field);
+    let replaced: string | null;
+    if (sessionWriteLabels) {
+      const inSession = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, value);
+      // Unchanged is a miss only when the field is absent: one already holding
+      // the value matched (#4488), as stateReplaceField reports it.
+      replaced = inSession !== body || sessionSourceExists(body, sessionWriteLabels) ? inSession : null;
+    } else {
+      replaced = stateReplaceField(body, field, value);
+    }
     if (replaced !== null) {
       body = replaced;
       updated.push(field);
@@ -3037,10 +3074,10 @@ function updateCore(
   const sessionWriteLabels = sessionLabelsForBodyField(intent.field);
   let result: string | null;
   if (sessionWriteLabels) {
-    // Replace-only by contract: unchanged content means the field is not in the
-    // session section, which is a miss, not a write.
+    // Replace-only by contract: the session writer never inserts a missing field.
     const replaced = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, intent.value);
-    result = replaced === body ? null : replaced;
+    // A field already holding the value matched; unchanged with no field is the miss (#4488).
+    result = replaced !== body || sessionSourceExists(body, sessionWriteLabels) ? replaced : null;
   } else {
     result = stateReplaceField(body, intent.field, intent.value);
   }

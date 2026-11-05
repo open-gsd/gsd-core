@@ -1631,7 +1631,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const fsx = require('node:fs');
     const os = require('node:os');
     const { REVIEWER_LANES, mergeReviewerLanes } = require('./lib/review-lane-descriptor.cjs');
-    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneBudget, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
+    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneCap, refuseIfOverCap, renderPromptRefusalStub, artifactPaths, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
+    const { estimateTokens } = require('./lib/prompt-budget.cjs');
     // OpenCode 2.x argv differs from 1.x (no --variant; effort rides on the model as `#variant`;
     // ADR-5331 D5/D8). The generation is probed lazily, only when the opencode lane is resolved.
     const resolveLanePlan = (laneInput) => {
@@ -1915,11 +1916,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     };
     const effortFor = (lane) => resolveLaneEffort(lane, configGet, renderLaneEffort);
 
-    // Per-lane prompt budget: `resolveLaneBudget` (review-lane-invocation.cjs) owns the #2797
+    // Per-lane prompt cap: `resolveLaneCap` (review-lane-invocation.cjs) owns the #2797 + #4559
     // resolution semantics (shared with src/reviewer-step-dispatch.cts, #4209 R3 — was two
-    // verbatim copies). Only the budget VALUE is resolved here; assembly/trimming stay in
-    // `prompt-budget`, which the workflow calls, handing the trimmed file back via `--prompt-file`.
-    const budgetFor = (lane) => resolveLaneBudget(lane, configGet);
+    // verbatim copies). `plan` reports it; `invoke` REFUSES a lane whose prompt is over it
+    // (#4559) rather than trimming — the prompt is never edited on the way to a lane.
+    const capFor = (lane) => resolveLaneCap(lane, configGet);
 
     // #4209 (ADR-2782 seam) — the ONE interpreter route for a step that declared
     // `supportsReviewerLanes: true`. Wires `dispatchReviewerLanes` (src/reviewer-step-dispatch.cts)
@@ -2059,17 +2060,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       } catch (e) {
         return { slug, ok: false, reason: 'malformed_lane', detail: `resolver threw: ${e && e.message ? e.message : String(e)}` };
       }
-      return r.ok
-        ? {
-            slug,
-            ok: true,
-            section: lane.reviewsSection,
-            transport: r.plan.transport,
-            promptBudget: budgetFor(lane),
-            promptPath: r.plan.transport === 'spawn' ? r.plan.stdin : r.plan.promptPath,
-            plan: r.plan,
-          }
-        : { slug, ok: false, reason: r.reason, detail: r.detail };
+      if (!r.ok) return { slug, ok: false, reason: r.reason, detail: r.detail };
+      const laneCap = capFor(lane);
+      return {
+        slug,
+        ok: true,
+        section: lane.reviewsSection,
+        transport: r.plan.transport,
+        promptBudget: laneCap.cap,
+        promptCapSource: laneCap.source,
+        contextWindowTokens: laneCap.contextWindowTokens,
+        promptPath: r.plan.transport === 'spawn' ? r.plan.stdin : r.plan.promptPath,
+        plan: r.plan,
+      };
     });
 
     if (sub === 'plan') {
@@ -2178,12 +2181,59 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       ];
     }
 
-    // `--prompt-file` lets the caller substitute a budget-trimmed prompt. Applied to whichever
-    // channel this lane actually reads from (stdin, argv, an argv-embedded file reference, or the
-    // http promptPath), so one flag serves every lane (#5049).
+    // `--prompt-file` lets the caller substitute a different prompt (a section subset, say). Applied
+    // to whichever channel this lane actually reads from (stdin, argv, an argv-embedded file
+    // reference, or the http promptPath), so one flag serves every lane (#5049). It is no longer a
+    // trim hand-off: nothing in review.md trims a prompt to fit a lane since #4559.
     const promptOverride = flag('--prompt-file');
     if (promptOverride) {
       entry.plan = applyPromptOverride(entry.plan, promptOverride, repoRoot);
+    }
+
+    // #4559: refuse, never trim. Measure the prompt this lane would actually receive — the file
+    // the RESOLVED plan reads (stdin file, or the plan's prompt path for argv / argv-file-ref /
+    // http lanes; `--prompt-file` already retargeted the plan above) — against its cap BEFORE any
+    // consent lookup, probe or spawn. An unreadable file is not a refusal: the runner reports its
+    // own error for it. The decision itself lives in `refuseIfOverCap`; this only does the IO.
+    {
+      const plannedPrompt = entry.plan.transport === 'spawn' && entry.plan.stdin
+        ? entry.plan.stdin
+        : entry.plan.promptPath;
+      let promptText = null;
+      try {
+        promptText = fs.readFileSync(plannedPrompt || artifactPaths(runDir, entry.slug).promptPath, 'utf8');
+      } catch { promptText = null; }
+      if (promptText !== null) {
+        const refused = refuseIfOverCap({
+          lane: laneBySlug.get(entry.slug),
+          estimatedTokens: estimateTokens(promptText),
+          configGet,
+        });
+        if (refused) {
+          const reviewPath = entry.plan.reviewPath;
+          let stubWritten = true;
+          try {
+            fs.mkdirSync(path.dirname(reviewPath), { recursive: true });
+            fs.writeFileSync(reviewPath, renderPromptRefusalStub(entry.slug, refused.detail), 'utf8');
+          } catch (e) {
+            stubWritten = false;
+            process.stderr.write(
+              `review-lane invoke: could not write the refusal stub to ${reviewPath}: ` +
+              `${e && e.message ? e.message : String(e)}\n`,
+            );
+          }
+          output({
+            slug: entry.slug,
+            ok: false,
+            reason: refused.reason,
+            detail: refused.detail,
+            reviewPath,
+            stubWritten,
+            refusal: refused.refusal,
+          }, raw);
+          return;
+        }
+      }
     }
 
     // ADR-2782 D5 rule 4: re-resolve the consented destination at INVOCATION. `undefined` (no
@@ -2859,6 +2909,54 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   /**
+   * #5682: ALSO record a plan-scoped decision at `.gsd/dispatch-isolation/<phase>--<plan>.json`, so a
+   * second orchestrator's write to the single legacy slot cannot erase it. Same payload, same atomic
+   * tmp+rename, same symlink/containment checks as the legacy directory. Best-effort: any failure is
+   * swallowed so the legacy result is unchanged. The key rule lives in hooks/lib/isolation-sentinel.js
+   * (the reader); if that module is unreachable from this install layout, only the legacy file is written.
+   */
+  function writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock) {
+    const nodePath = require('path');
+    const nodeFs = require('fs');
+    try {
+      const {
+        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS,
+      } = require('../../hooks/lib/isolation-sentinel.js');
+      // A plan-scoped decision lands at <phase>--<plan>.json; a plan-less one (the phase-level
+      // degrade) at <phase>.json, so concurrent phase-level orchestrators keep separate records.
+      const keyedFile = payload.plan
+        ? keyedSentinelPath(cwd, payload.phase, payload.plan)
+        : phaseSentinelPath(cwd, payload.phase);
+      if (!keyedFile) return;
+      const keyedDir = nodePath.join(cwd, KEYED_SENTINEL_DIR);
+      nodeFs.mkdirSync(keyedDir, { recursive: true });
+      if (nodeFs.lstatSync(keyedDir).isSymbolicLink() ||
+          nodePath.relative(nodeFs.realpathSync(sentinelDir), nodeFs.realpathSync(keyedDir)) !== 'dispatch-isolation') {
+        return;
+      }
+      const tmpPath = `${keyedFile}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      try {
+        nodeFs.writeFileSync(tmpPath, JSON.stringify(payload), { flag: 'wx' });
+        nodeFs.renameSync(tmpPath, keyedFile);
+      } catch (writeError) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+        throw writeError;
+      }
+      // Prune records and orphaned temp files older than the longest any record can still govern
+      // (AGED_NONE_MAX_MS, #5479), measured on the injected clock.
+      const cutoff = clock.now() - AGED_NONE_MAX_MS;
+      const written = nodePath.basename(keyedFile);
+      for (const name of nodeFs.readdirSync(keyedDir)) {
+        if (name === written || !(name.endsWith('.json') || name.includes('.json.tmp-'))) continue;
+        try {
+          const file = nodePath.join(keyedDir, name);
+          if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
+        } catch (_) { /* best-effort prune */ }
+      }
+    } catch (_) { /* keyed record is best-effort; the legacy record already landed */ }
+  }
+
+  /**
    * Atomically persist the resolved dispatch-isolation decision to the
    * run-scoped sentinel both isolation guard hooks read
    * (hooks/gsd-agent-isolation-guard.js, hooks/gsd-cursor-subagent-start.js;
@@ -2868,7 +2966,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2878,77 +2976,61 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
-      written_at: Date.now(),
+      written_at: clock.now(),
     };
+    let tmpPath = null;
     try {
-      nodeFs.mkdirSync(sentinelDir, { recursive: true });
-      // Never write through a project-supplied .gsd symlink. Resolve the
-      // directory as well so an ancestor redirect cannot escape this project.
-      if (nodeFs.lstatSync(sentinelDir).isSymbolicLink() ||
-          nodePath.relative(nodeFs.realpathSync(cwd), nodeFs.realpathSync(sentinelDir)) !== '.gsd') {
-        throw new Error('sentinel directory is a symlink or resolves outside the project');
-      }
-      // User projects do not inherit gsd-core's root .gitignore. Ignore this
-      // tool-owned directory locally before writing the first sentinel. An
-      // ordinary ignore-file IO failure must not prevent recording isolation.
-      const ignorePath = nodePath.join(sentinelDir, '.gitignore');
+      // #5757: the shared tool-owned .gsd owner refuses a project-supplied
+      // symlink (or ancestor redirect) and seeds/extends .gsd/.gitignore, so
+      // this writer and the fork-probe cache apply one policy. An ordinary
+      // ignore-file IO failure must not prevent recording isolation.
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
       try {
-        nodeFs.writeFileSync(ignorePath, '*\n', { flag: 'wx' });
-      } catch (ignoreError) {
-        if (ignoreError.code === 'EEXIST') {
-          // Keep a pre-existing ignore file. A bare '*' already ignores the
-          // whole directory, including this file and the sentinel temp file.
-          // Read through an fd opened without following links where supported;
-          // replace by rename rather than append through the path, so a link
-          // swapped in after the check cannot redirect a write elsewhere.
-          let fd;
-          let ignoreTmpPath;
-          try {
-            if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            fd = nodeFs.openSync(ignorePath, nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW || 0));
-            if (!nodeFs.fstatSync(fd).isFile()) throw new Error('sentinel ignore file is not a regular file');
-            const current = nodeFs.readFileSync(fd, 'utf8');
-            nodeFs.closeSync(fd);
-            fd = undefined;
-            if (!current.includes('# gsd-core dispatch sentinel') && !/^\*\r?$/m.test(current)) {
-              const additionalRules = `${current.endsWith('\n') ? '' : '\n'}# gsd-core dispatch sentinel\n` +
-                '/dispatch-isolation-sentinel.json\n' +
-                '/dispatch-isolation-sentinel.json.tmp-*\n' +
-                '/.gitignore\n';
-              ignoreTmpPath = `${ignorePath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-              nodeFs.writeFileSync(ignoreTmpPath, current + additionalRules, { flag: 'wx' });
-              if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-                throw new Error('sentinel ignore file is a symlink');
-              }
-              nodeFs.renameSync(ignoreTmpPath, ignorePath);
-              ignoreTmpPath = null;
-            }
-          } catch (existingIgnoreError) {
-            if (existingIgnoreError.code === 'ELOOP' || existingIgnoreError.message === 'sentinel ignore file is a symlink') {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            // Ignore seeding is best-effort; the sentinel is still useful if
-            // this path cannot be read or updated.
-          } finally {
-            if (fd !== undefined) nodeFs.closeSync(fd);
-            if (ignoreTmpPath) {
-              try { nodeFs.unlinkSync(ignoreTmpPath); } catch (_) { /* best-effort cleanup */ }
-            }
-          }
+        toolDir.ensureToolOwnedGsdDir(cwd, {
+          marker: '# gsd-core dispatch sentinel',
+          rules: [
+            '/dispatch-isolation-sentinel.json',
+            '/dispatch-isolation-sentinel.json.tmp-*',
+            '/dispatch-isolation/',
+            '/.gitignore',
+          ],
+        });
+      } catch (ownerError) {
+        // The recorded `error` text is observable JSON (hyrums-law): keep the
+        // sentinel's historical wording, translating by the owner's stable code.
+        if (ownerError && ownerError.code === toolDir.GSD_DIR_UNSAFE) {
+          throw new Error('sentinel directory is a symlink or resolves outside the project');
         }
+        if (ownerError && ownerError.code === toolDir.GSD_IGNORE_SYMLINK) {
+          throw new Error('sentinel ignore file is a symlink');
+        }
+        throw ownerError;
       }
-      // Atomic write: unique temp file + rename, so a concurrent reader (a
-      // guard hook firing mid-write) never observes a partially-written
-      // sentinel. Unique per-process+time so concurrent orchestrator-worktree
-      // invocations sharing the same sentinelDir never collide on the temp name.
-      const tmpPath = `${sentinelPath}.tmp-${process.pid}-${Date.now()}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
-      nodeFs.renameSync(tmpPath, sentinelPath);
+      // Atomic write: exclusive random temp file + rename, so a concurrent
+      // reader (a guard hook firing mid-write) never observes a
+      // partially-written sentinel, concurrent invocations sharing the same
+      // sentinelDir never collide on the temp name, and a planted link at a
+      // guessed temp name is never written through.
+      // `tmpPath` is assigned only once the exclusive create succeeded, so an
+      // EEXIST never unlinks an entry this process did not create.
+      const candidateTmp = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
+      tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(payload));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
+      tmpPath = null;
+      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
       return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
     }
   }
 
@@ -4602,9 +4684,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
           if (subcommand === 'phase-status') {
             // #1956: deterministic STATE.md-vs-ROADMAP.md phase-status drift.
-            const { planningDir } = require('./lib/planning-workspace.cjs');
+            const { planningDir, resolvePhaseIdConvention } = require('./lib/planning-workspace.cjs');
             const { stateExtractField, stateCurrentPositionSlice } = require('./lib/state-document.cjs');
-            const { findRoadmapProgressTable } = require('./lib/roadmap-parser.cjs');
+            const { locateRoadmapProgress } = require('./lib/roadmap-progress.cjs');
             const { phaseKeyFromProse } = require('./lib/phase-id.cjs');
             // STATE.md's YAML frontmatter carries its own lowercase `status:`
             // scalar ahead of the body's `## Current Position` prose "Status:"
@@ -4620,6 +4702,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               : undefined;
 
             const dir = planningDir(cwd);
+            const phaseConvention = resolvePhaseIdConvention(cwd);
+            const proseKey = (value) => phaseKeyFromProse(value, undefined, phaseConvention);
             const statePath = path.join(dir, 'STATE.md');
             const roadmapPath = path.join(dir, 'ROADMAP.md');
 
@@ -4630,7 +4714,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               // missing_state below
             }
             if (stateContent === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? proseKey(phaseArg) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'missing_state',
@@ -4670,7 +4754,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // document.
             const currentPositionBody = stateCurrentPositionSlice(stateBody);
             if (currentPositionBody === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? proseKey(phaseArg) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'no_current_position',
@@ -4685,8 +4769,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Resolve the target phase: --phase if given, else whatever
             // STATE.md's Current Position reports as current.
             const phase = phaseArg !== undefined
-              ? phaseKeyFromProse(phaseArg)
-              : phaseKeyFromProse(stateExtractField(currentPositionBody, 'Phase'));
+              ? proseKey(phaseArg)
+              : proseKey(stateExtractField(currentPositionBody, 'Phase'));
 
             if (roadmapContent === null) {
               output({
@@ -4702,11 +4786,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
             const stateStatus = stateExtractField(currentPositionBody, 'Status');
 
-            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) —
-            // see findRoadmapProgressTable's doc comment (roadmap-parser.cts).
-            const table = findRoadmapProgressTable(roadmapContent);
+            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) — the
+            // Progress owner's rule (roadmap-progress.cts), shared with every reader and writer (#5762).
+            const { table } = locateRoadmapProgress(roadmapContent);
             const matchedRow = table
-              ? table.rows.find((row) => phaseKeyFromProse(row.Phase) === phase && phase !== null)
+              ? table.rows.find((row) => proseKey(row.Phase) === phase && phase !== null)
               : undefined;
 
             if (!matchedRow) {

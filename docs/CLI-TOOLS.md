@@ -137,6 +137,10 @@ node gsd-tools.cjs state signal-waiting --type TYPE --question "..." --options "
 node gsd-tools.cjs state signal-resume
 ```
 
+`state update`, `state patch` and `state record-session` take single-line values: a value containing a line break — CR, LF, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR, each of which starts a new line for the STATE.md readers — is refused with an error naming the field or flag, before anything is written.
+
+`state record-session` lists the fields it wrote under `updated`, and under `replacedRecord` any Stopped At / Resume File value the write displaced (the `None` placeholder is not a record). In the session section, a line inside a fenced code block is an example: no session writer (`record-session`, `state update`/`patch` of a session field, `phase complete`) changes it, and neither the frontmatter sync nor `state-snapshot` reads it as a field. A field whose current value continues onto the next line is left unchanged, because a single-line write would orphan the rest (a line directly below shaped `words: text` counts as a continuation unless its label is bold or one STATE.md defines, such as `Resume file` or `Status`, since a wrapped sentence can take that shape): it is listed under `skipped` as `{ "field", "reason": "wrapped_value", "continuation" }` with a warning on stderr (the continuation is echoed up to 200 characters, then `…`), and when every field to update was skipped the call reports `"recorded": false`. With no session heading, Last session, Last Date and Resume file are not written in place — `state-snapshot` reads them from a session section only — and the call appends a `## Session` section (reported as `"created": true`, which an insert into an existing section is not) holding the new Last session and Stopped at, and the passed Resume file or else the body's existing one rather than `None` (a Stopped at skipped as wrapped carries its existing value); a carried value holding U+2028/U+2029 is left out and listed as `{ "field", "reason": "line_separator" }`, and when the document ends inside an unclosed code fence nothing is appended (it would land inside the fence) and each field the call writes (Last session, and Stopped at or Resume file when passed) that was not written in place or skipped for another reason is listed with `"reason": "unclosed_fence"`. `state record-session`, `state update` and `state patch` write a session field (Stopped At, Paused At, Resume File, Last session, Last Date) inside the session section — not a fenced example there, and not a copy in another section such as `## Session Continuity Archive` — which is where the frontmatter sync and `state-snapshot` read it. `record-session` inserts a field the section lacks; `state update` and `state patch` report it updated, and a document whose session section lacks the field, or that has no session section, reports it not found and is left unchanged. `state patch`, like `state update`, reports a field that already holds the requested value as updated. `state update` and `state patch` replace a field's first line only and do not check for a wrapped value, so a continuation line below it stays in place: fold a wrapped value onto one line before updating it with them.
+
 ### State Snapshot
 
 Structured parse of the full STATE.md:
@@ -169,6 +173,7 @@ Manage phases — directories, numbering, and roadmap sync.
 node gsd-tools.cjs find-phase <phase>
 
 # Calculate next decimal phase number for insertions
+# (bracket convention: canonical two-digit sub-phase, see below)
 node gsd-tools.cjs phase next-decimal <phase>
 
 # Append new phase to roadmap + create directory
@@ -176,8 +181,13 @@ node gsd-tools.cjs phase add <description>
 
 # Insert decimal phase after existing
 node gsd-tools.cjs phase insert <after> <description> [--sibling]
+# add, add-batch and insert also write the phase's ROADMAP record (#5221): a checklist entry
+# after the active checklist, else a progress-table row, else no readable record; the output's
+# roadmap_entry says which ("checklist" | "progress_table" | "none")
 
 # Remove phase, renumber subsequent
+# (bracket convention: also reports roadmap_lines_rewritten and
+# references_left_untouched, see below)
 node gsd-tools.cjs phase remove <phase> [--force]
 
 # Mark phase complete, update state + roadmap
@@ -200,6 +210,70 @@ node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--incl
 # used by /gsd-new-milestone before roadmapping the next cycle
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
+
+### Bracket phase ids (`phase remove`, `phase next-decimal`)
+
+When `phase_id_convention` is `"bracket"` (see [CONFIGURATION.md](CONFIGURATION.md)),
+these commands work on the active milestone's `[CODE.MM] NN` identities:
+
+- `phase next-decimal <phase>` inventories every spelling the readers accept
+  for that parent, on disk and in `ROADMAP.md` (bracket and legacy directories,
+  headings, checklist rows), and returns the next sub-phase in canonical
+  two-digit form (`02.03`, not `2.3`). The legacy `999` backlog parent keeps
+  its upstream spelling.
+- `phase remove <phase>` accepts a bare number (`2`, `02`), a qualified id
+  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). A qualified
+  directory name with a slug (`CK.02-02-two`) is accepted only when the slug
+  exactly matches the selected directory. It deletes
+  the phase, renumbers the milestone's later phases and sub-phases on disk and
+  in `ROADMAP.md` from one mapping, and leaves shipped and archived history
+  byte-identical. It refuses, before anything is deleted or renamed, in the
+  cases listed below.
+
+`phase remove` refuses, with nothing changed, when:
+
+- a qualified argument carries a slug that does not exactly match the
+  directory for its phase number;
+- the target has neither a directory nor a live heading or checklist row in the
+  active milestone window, or the argument names a `.00` sub-phase;
+- the phase is outside the active milestone, has executed plans (without
+  `--force`) or live sub-phases, or resolves only to legacy-spelled artifacts;
+- a pipe-table row keyed by the removed id would survive outside the
+  milestone's own Progress tables: a shared Progress table the rewrite cannot
+  attribute, or any other phase-keyed table (for example a Requirements
+  Traceability table) under a heading of any level. A Progress-table row is
+  one whose nearest heading is a Progress-titled heading, a phase heading or
+  the milestone heading itself;
+- a phase id in the active milestone, such as `02a`, is one the bracket grammar
+  cannot represent and the removal would renumber it;
+- the `STATE.md` current phase (frontmatter `current_phase`, the
+  `Current Phase` field, or the Current Position `Phase:` line, read in that
+  order) is the removed phase or a phase the removal renumbers, that is, the
+  target is the current phase or any phase before it. Bracket `phase remove` deletes only phases after the current phase, because
+  it does not rewrite the current-phase fields. To remove such a phase, point
+  the current phase at a phase before the target, or, when there is none,
+  clear the current-phase fields, then retry. A current phase qualified with
+  another milestone (`[CK.01] 02`) does not count.
+
+Known limits of bracket `phase remove`, which it neither rewrites nor refuses:
+
+- A checklist row for the removed id outside the active milestone window (a
+  stale copy elsewhere in `ROADMAP.md`) is kept as written and is not
+  reported.
+- The dash form is matched case-sensitively: `CK.02-03` is renumbered and
+  reported, `ck.02-03` is neither.
+- Paths are recognized only with forward slashes. A plan or summary filename
+  after a backslash (`phases\CK.02-03-three\03-01-PLAN.md`) is renumbered as
+  a bare artifact reference, where the forward-slash form is left alone.
+- An on-disk `CK.MM-NNa` directory with no `ROADMAP.md` line is not checked;
+  the unrepresentable-id refusal reads `ROADMAP.md` only.
+
+The bracket `phase remove` JSON output adds two fields:
+
+| Field | Meaning |
+|---|---|
+| `roadmap_lines_rewritten` | Number of `ROADMAP.md` edits: the deleted phase section counts once, plus each deleted owned line (checklist row, Progress row) and each line whose references were renumbered. |
+| `references_left_untouched` | Line numbers, in the written `ROADMAP.md`, of live lines in the active milestone that still mention the removed id or a pre-renumber id in any spelling (for example prose such as `Phase 03`). Review these by hand. Empty when nothing was left. |
 
 ### Milestone-scoped phase listing (`phases list`)
 
@@ -481,6 +555,8 @@ no checklist entry, has no checkbox to disagree with and is never listed
 | `disk_status` | string | The disk-derived status the selectors use |
 | `plan_count` | number | Plans found for the phase |
 | `summary_count` | number | Summaries paired with a plan |
+
+`roadmap_record` (#5221) maps each phase number (leading zeros stripped per segment; under `phase_naming: custom`, also each custom id such as `AUTH`) to `true` when every recognised ROADMAP record of it — each checklist entry, under any bracket, and its progress-table Status cell — reads complete, else `false`; a phase with no checklist entry or table row is absent, and the whole field is `null` when the phase table does not parse or its `Phase`/`Status` headers are not recognised (a `Plans Complete` table headed in another case or wording). It reads the record only (whatever the disk says); `/gsd-ship` ships only a `true` phase.
 
 The selectors are unchanged: `checkbox_conflict` only reports the
 disagreement. To treat a phase as done despite its disk status, verify it

@@ -18,6 +18,7 @@ const os = require('os');
 // monkeypatching childProcess.execFileSync.
 const childProcess = require('child_process');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
+const { gitEnv } = require('./lib/git-probe.js');
 
 // This hook's build-seam outer catch (require.main guard just below) has
 // always exited 0 (fail open — the statusline renders on EVERY prompt, so a
@@ -934,7 +935,7 @@ function readGitStatus(dir) {
     // or untracked files; overflow still degrades safely to segment-absent via
     // the catch below.
     return childProcess.execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
-      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env: readOnlyGitEnv() });
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env: readOnlyGitEnv(gitEnv()) });
   } catch (e) {
     return null;
   }
@@ -1029,7 +1030,7 @@ function readStateHeadCommits(root, stamp) {
   try {
     return childProcess.execFileSync('git', // allow-index-refresh: rev-list walks the commit graph and never opens the index
       ['-C', root, 'rev-list', '--left-right', '--count', `${stamp}...HEAD`],
-      { encoding: 'utf8', timeout: STATE_FRESHNESS_GIT_TIMEOUT_MS,
+      { env: gitEnv(), encoding: 'utf8', timeout: STATE_FRESHNESS_GIT_TIMEOUT_MS,
         stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   } catch (e) {
     return null;

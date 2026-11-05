@@ -35,16 +35,37 @@
  */
 
 /**
+ * #5548: env vars that make git act on a repository other than the one `cwd`
+ * names (git sets them inside hooks; wrappers export them). This is
+ * `git rev-parse --local-env-vars` minus GIT_CONFIG, GIT_CONFIG_PARAMETERS and
+ * GIT_CONFIG_COUNT, which inject config (e.g. CI `safe.directory`) rather than
+ * select a repository. (They are not repository-neutral: `GIT_CONFIG_COUNT` with a
+ * `core.worktree` pair can still redirect git, but a caller who controls the
+ * environment can already inject `core.sshCommand` or `core.fsmonitor`.)
+ * hooks/lib/git-probe.js carries a parity-tested copy.
+ */
+export const GIT_LOCATION_ENV_VARS: readonly string[] = [
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_OBJECT_DIRECTORY', 'GIT_DIR', 'GIT_WORK_TREE',
+  'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE', 'GIT_INDEX_FILE', 'GIT_NO_REPLACE_OBJECTS',
+  'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE', 'GIT_COMMON_DIR',
+];
+
+/** Copy of `env` without the repo-location vars; case-insensitive (Windows keeps `Git_Dir` casing). */
+export function scrubGitLocationEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !GIT_LOCATION_ENV_VARS.includes(k.toUpperCase())));
+}
+
+/**
  * Build the env for a read-only git spawn.
  *
- * @param base Environment to spread, `process.env` by default. Callers that
+ * @param base Environment to spread, `process.env` minus the repo-location vars by default (#5548). Callers that
  *   layer extra git variables on top (GIT_TERMINAL_PROMPT, a caller's own
  *   overrides) pass them in `base`; callers that must let a caller-supplied
  *   override win spread the result and apply their own keys afterwards.
  * @returns A fresh object each call — never the cached `process.env`.
  */
 export function readOnlyGitEnv(
-  base: Record<string, string | undefined> = process.env,
+  base: Record<string, string | undefined> = scrubGitLocationEnv(process.env),
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
