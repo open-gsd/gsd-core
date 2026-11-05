@@ -2609,7 +2609,9 @@ describe('enhancement #72 — Business Context template section', () => {
   });
 
   test('milestone evolution reviews Business Context only when present', () => {
-    const ms = parseMilestoneContract(fs.readFileSync(COMPLETE_MILESTONE, 'utf-8'));
+    // The review lives in complete-milestone/steps/project-md-evolution-review.md (#5195), so read the workflow with its steps.
+    const { readWorkflowCombined } = require('./helpers.cjs');
+    const ms = parseMilestoneContract(readWorkflowCombined(COMPLETE_MILESTONE));
     assert.ok(ms.mentionsBusinessContext, 'complete-milestone must mention Business Context in its review');
     assert.ok(ms.hasConditionalReview, 'the Business Context milestone review must be conditional on the section being present');
   });

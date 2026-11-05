@@ -304,3 +304,80 @@ describe('renderProgressBar / progressBarFilledCells (#4294 — the render half 
     assert.equal(renderProgressBar(100, 1), '█');
   });
 });
+
+// #5165: the Progress table's Milestone column scopes the counts.
+{
+  const { normalizeMilestoneToken } = require('../gsd-core/bin/lib/roadmap-progress.cjs');
+
+  describe('#5165 deriveProgressFromRoadmap: Milestone column scoping', () => {
+    const table = (rows, withColumn = true) => [
+      '## Progress',
+      '',
+      withColumn
+        ? '| Phase | Milestone | Plans Complete | Status | Completed |'
+        : '| Phase | Plans Complete | Status | Completed |',
+      withColumn ? '|---|---|---|---|---|' : '|---|---|---|---|',
+      ...rows.map(([phase, ms, plans, status]) => (withColumn
+        ? `| ${phase} | ${ms} | ${plans} | ${status} | - |`
+        : `| ${phase} | ${plans} | ${status} | - |`)),
+      '',
+    ].join('\n');
+
+    const shipped = [['1. One', 'v1.0', '1/1', 'Complete'], ['2. Two', 'v1.0', '1/1', 'Complete']];
+
+    test('counts only the named milestone rows (R1 shape)', () => {
+      const md = table([...shipped, ['3. Three', 'v1.1', '1/1', 'Complete'], ['4. Four', 'v1.1', '0/1', 'In progress']]);
+      assert.deepEqual(deriveProgressFromRoadmap(md, 'v1.1'), { completedPhases: 1, totalPhases: 2, totalPlans: 2 });
+    });
+
+    test('without a milestone argument the whole table counts, as before', () => {
+      const md = table([...shipped, ['3. Three', 'v1.1', '1/1', 'Complete']]);
+      assert.deepEqual(deriveProgressFromRoadmap(md), { completedPhases: 3, totalPhases: 3, totalPlans: 3 });
+      assert.deepEqual(deriveProgressFromRoadmap(md, null), deriveProgressFromRoadmap(md));
+    });
+
+    test('a table without a Milestone column ignores the milestone argument', () => {
+      const md = table([['1. One', null, '1/1', 'Complete'], ['2. Two', null, '1/1', 'Complete'], ['3. Three', null, '0/1', 'In progress']], false);
+      assert.deepEqual(deriveProgressFromRoadmap(md, 'v1.1'), deriveProgressFromRoadmap(md));
+      assert.deepEqual(deriveProgressFromRoadmap(md, 'v1.1'), { completedPhases: 2, totalPhases: 3, totalPlans: 3 });
+    });
+
+    test('the milestone token matches regardless of v prefix, case and padding', () => {
+      const md = table([...shipped, ['3. Three', 'v1.1', '1/1', 'Complete']]);
+      const expected = { completedPhases: 1, totalPhases: 1, totalPlans: 1 };
+      for (const token of ['v1.1', 'V1.1', '1.1', ' v1.1 ']) {
+        assert.deepEqual(deriveProgressFromRoadmap(md, token), expected, JSON.stringify(token));
+      }
+      assert.equal(normalizeMilestoneToken(undefined), '');
+    });
+
+    test('a hand-decorated milestone cell still names its milestone', () => {
+      const expected = { completedPhases: 1, totalPhases: 1, totalPlans: 1 };
+      for (const cell of ['**v1.1**', '`v1.1`', 'v1.1 (current)', '_V1.1_', '1.1 current', '[v1.1](ROADMAP.md#v11)', 'v1.1:', 'v1.1,', '**v1.1**:']) {
+        const md = table([...shipped, ['3. Three', cell, '1/1', 'Complete']]);
+        assert.deepEqual(deriveProgressFromRoadmap(md, 'v1.1'), expected, JSON.stringify(cell));
+        assert.equal(normalizeMilestoneToken(cell), '1.1', JSON.stringify(cell));
+      }
+      // a different milestone with a similar prefix is not the same milestone
+      assert.notEqual(normalizeMilestoneToken('v1.10'), normalizeMilestoneToken('v1.1'));
+    });
+
+    test('a milestone that matches no row yields nulls, never a foreign count', () => {
+      const md = table([...shipped, ['3. Three', 'v1.1', '1/1', 'Complete']]);
+      assert.deepEqual(deriveProgressFromRoadmap(md, 'v9.9'), { completedPhases: null, totalPhases: null, totalPlans: null });
+    });
+
+    for (const current of [1, 2, 3]) {
+      test(`boundary: ${current} current-milestone row(s) beside 2 shipped rows (limit ${current === 1 ? '-1' : current === 2 ? '' : '+1'})`, () => {
+        const rows = [...shipped];
+        for (let i = 0; i < current; i++) rows.push([`${3 + i}. P${i}`, 'v1.1', '1/1', 'Complete']);
+        assert.deepEqual(deriveProgressFromRoadmap(table(rows), 'v1.1'), {
+          completedPhases: current,
+          totalPhases: current,
+          totalPlans: current,
+        });
+      });
+    }
+  });
+
+}

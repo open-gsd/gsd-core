@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "query",
+    "check.decision-coverage-plan",
+    ".planning/phases/01-decisions/ctxdir",
+    ".planning/phases/01-decisions/CONTEXT.md"
+  ],
+  "fixture": "dc",
+  "stdout": "{\n  \"passed\": false,\n  \"skipped\": false,\n  \"reason\": \"phase directory holds no plans\",\n  \"total\": null,\n  \"covered\": null,\n  \"message\": \"Decision coverage gate: the phase directory \\\".planning/phases/01-decisions/ctxdir\\\" holds no PLAN files, so no plans were scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.\"\n}",
+  "stderr": "",
+  "exitCode": 0
+}

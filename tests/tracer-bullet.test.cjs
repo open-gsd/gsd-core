@@ -40,7 +40,7 @@ const CONTEXT = read('CONTEXT.md');
 const COMMANDS_DOC = read('docs/COMMANDS.md');
 const PLAN_MD_REF = read('docs/reference/plan-md.md');
 const HOWTO = read('docs/how-to/plan-a-phase.md');
-const AGENTS_DOC = read('docs/AGENTS.md');
+const AGENTS_DOC = read('docs/reference/agents.md');
 
 // ─── contract parsers (typed views over the deployed prose) ──────────────────
 

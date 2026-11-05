@@ -50,7 +50,7 @@ Display:
 Spawn the planner in **outline-only** mode — it must write only the outline manifest, not any
 PLAN.md files:
 
-**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED`:**
+**Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`, resolved in `plan-phase/steps/stall-detection-helpers.md`):**
 - **`true` (default):** use `run_in_background=true` in the Agent() call below, then use `gsd_stall_watch` after it.
 
 ```javascript
@@ -122,8 +122,12 @@ path regardless of `CHUNKED_PARALLEL` — there is nothing to batch.
    plans are overwritten, not skipped (#2762). Unchanged from before this change, applied per entry
    before dispatch rather than immediately before each individual spawn:
    ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
    PLAN_FILE="${PHASE_DIR}/${plan_id}-PLAN.md"
-   if [[ -f "$PLAN_FILE" ]] && head -1 "$PLAN_FILE" | grep -q '^---' && [[ "$ARGUMENTS" != *"--reviews"* ]]; then
+   if [[ -f "$PLAN_FILE" ]] && head -1 "$PLAN_FILE" | grep -q '^---' && [[ "$GSD_ARGS" != *"--reviews"* ]]; then
      : # resume safety — skip this plan, remove from the batch's runnable set — NOT under --reviews (replan)
    fi
    ```
@@ -142,7 +146,7 @@ path regardless of `CHUNKED_PARALLEL` — there is nothing to batch.
 4. Spawn the planner in **single-plan** mode — it must write exactly one PLAN.md file. The prompt
    is unchanged per plan; what changes is whether the runnable set's Agent() calls are issued one
    at a time (serial) or together in one message (concurrent, every call still carrying
-   `run_in_background=true` exactly as today when `PLANNER_STALL_DETECTION_ENABLED` is `true`
+   `run_in_background=true` exactly as today when `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`) is `true`
    (default)):
    ```javascript
    Agent(

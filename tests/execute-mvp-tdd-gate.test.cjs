@@ -139,3 +139,50 @@ describe('execute-mvp-tdd.md — load condition decoupled from MVP (#4011)', () 
     assert.ok(/TDD_MODE\s*=\s*true/i.test(head), 'load condition must still name TDD_MODE');
   });
 });
+
+// ─── #5106: one definition of "a test file" for the gate ─────────────────────
+// The behavior-adding check (router) and the RED-commit pathspec (this workflow) both decide
+// what a test file is. They were two lists: the pathspec learned Go/Elixir/RSpec/pytest names in
+// #4715 and the router never did, so a task listing only `placement_test.go` was classified
+// behavior-adding and asked for a RED commit for the task that IS the RED commit.
+
+describe('#5106: test-file conventions are one definition', () => {
+  const { isBehaviorAddingTaskContent } = require('../gsd-core/bin/lib/task-command-router.cjs');
+  const { TEST_FILE_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+  const task = (...files) => `<task tdd="true"><behavior>It does the thing</behavior><files>\n${files.map(f => `- ${f}`).join('\n')}\n</files></task>`;
+  const hasSource = (...files) => isBehaviorAddingTaskContent(task(...files)).checks.has_source_files;
+
+  test('a task listing only test files is not behavior-adding, whatever the language', () => {
+    for (const file of [
+      'a.test.ts', 'a.spec.js', 'tests/helper.cjs', 'test/helper.exs', '__tests__/a.js',
+      'worker/internal/placement/placement_test.go', 'lib/thing_test.exs', 'spec/models/user_spec.rb',
+      'spec/models/user_test.rb', 'tests/test_user.py', 'pkg/test_user.py', 'pkg/user_test.py',
+    ]) {
+      assert.equal(hasSource(file), false, `${file} is a test file, not production source`);
+    }
+  });
+
+  test('production source is still behavior-adding, alone or beside its test', () => {
+    assert.equal(hasSource('worker/internal/placement/placement.go'), true);
+    assert.equal(hasSource('worker/internal/placement/placement.go', 'worker/internal/placement/placement_test.go'), true);
+    assert.equal(hasSource('lib/testing_utils.go'), true, 'a name that merely contains "test" is not a test file');
+    assert.equal(hasSource('src/contest.py'), true);
+  });
+
+  test('the router and the RED pathspec in execute-phase.md cannot diverge', () => {
+    const src = fs.readFileSync(WORKFLOW, 'utf8');
+    const line = splitLines(src).find(l => l.includes('check evaluation-scope') && l.includes('--commits-only') && l.includes('--pathspec'));
+    assert.ok(line, 'execute-phase.md has no RED-commit evaluation-scope line');
+    const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
+    assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
+      'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
+    // And every entry means the same thing to the router: a path built from the spec is a test file.
+    for (const spec of TEST_FILE_PATHSPECS) {
+      const sample = spec.endsWith('/') ? `${spec}x.js` : spec.replace(/\*/g, 'sample');
+      assert.equal(isTestFilePath(sample), true, `${spec} (as ${sample}) must be recognised as a test file`);
+    }
+    assert.equal(isTestFilePath('placement.go'), false);
+  });
+});

@@ -212,12 +212,28 @@ describe('resolveTriggerSurface — global-only runtimes', () => {
 
 describe('resolveTriggerSurface — no-artifact-surface runtimes', () => {
   test('runtimes with no artifact surface yield no triggers', () => {
-    for (const runtime of ['pi', 'vscode']) {
+    for (const runtime of ['vscode']) {
       assert.deepStrictEqual(
         resolveTriggerSurface(runtime, ['global', 'local'], { stems: ['plan-phase'] }), [],
         `${runtime}: expected no triggers`,
       );
     }
+  });
+});
+
+// #5547: pi used to be a no-artifact-surface runtime (empty layout); it now
+// installs every command as a skill, so it has a global trigger and a local one
+// that the global entry shadows — the same shape as any both-scope skills runtime.
+describe('resolveTriggerSurface — pi skills', () => {
+  test('pi registers a gsd-<stem> skill trigger in both scopes, local shadowed by global', () => {
+    const result = resolveTriggerSurface('pi', ['global', 'local'], { stems: ['plan-phase'] });
+    assertValidSurfaceArray(result, 'pi');
+    assert.deepStrictEqual(result.map((s) => [s.trigger, s.kind, s.scope]), [
+      ['gsd-plan-phase', 'skills', 'global'],
+      ['gsd-plan-phase', 'skills', 'local'],
+    ]);
+    assert.strictEqual(result[0].shadowedBy, null);
+    assert.deepStrictEqual(result[1].shadowedBy, { kind: 'skills', scope: 'global' });
   });
 });
 

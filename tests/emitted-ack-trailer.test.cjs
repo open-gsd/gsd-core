@@ -53,7 +53,7 @@ const {
   parseAckTrailers,
   renderAckTrailer,
 } = require('./helpers/emitted-diff.cjs');
-const { readAckTrailers } = require('./helpers/emitted-runtime.cjs');
+const { readAckTrailers, isReleaseMergeSubject } = require('./helpers/emitted-runtime.cjs');
 
 // Mirrors emitted-diff.cjs's (unexported) RESERVED_ACK_KEYS — 40-design.md's "Trailer
 // key is __proto__ / constructor / prototype" row is explicitly carried over verbatim
@@ -658,6 +658,135 @@ describe('real fixture reads via readAckTrailers', () => {
       );
     },
   );
+
+  // #5734: a release -> main squash re-carries every acknowledgment its squashed commits
+  // already had checked against their OWN diffs when they landed on `next`. In the
+  // main -> next back-merge range that commit is visible again, and two release commits
+  // that acknowledged one key with different reasons turned into an "ambiguous" error.
+
+  /** A release squash whose bullets acknowledge `key` with `reasonA` / `reasonB`. */
+  function releaseSquashMessage(subject, key, reasonA, reasonB) {
+    return `${subject}\n\n`
+      + '* fix(#9001): first release commit\n\n'
+      + 'Body.\n\n'
+      + `${trailerLine(ACK_TRAILER_GROWTH, key, reasonA)}\n\n`
+      + '* fix(#9002): second release commit\n\n'
+      + 'Body.\n\n'
+      + `${trailerLine(ACK_TRAILER_GROWTH, key, reasonB)}\n\n`
+      + '---------\n\n'
+      + 'Co-authored-by: real-author <real@example.com>\n';
+  }
+
+  test(
+    'a release -> main squash in the range contributes no acks, so conflicting buried reasons are not an error — #5734',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-5734-release-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      commitMessage(
+        dir,
+        releaseSquashMessage(
+          'chore: merge release v1.19.0 to main (#5729)',
+          'plan-phase.md',
+          'grew for the first release commit',
+          'grew for a different release commit',
+        ),
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.deepEqual(r.errors, [], 'acks the release already spent on next must not clash in the back-merge range');
+      assert.equal(r.growth.has('plan-phase.md'), false, 'the release squash contributes nothing');
+    },
+  );
+
+  test(
+    'a release squash does not hide an ordinary commit\'s own ack in the same range — #5734',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-5734-own-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      commitMessage(
+        dir,
+        releaseSquashMessage('chore: merge release v1.19.0 to main (#5729)', 'plan-phase.md', 'reason A', 'reason B'),
+      );
+      commitMessage(
+        dir,
+        `fix(#9003): grows a workflow\n\n${trailerLine(ACK_TRAILER_GROWTH, 'verify-work.md', 'this commit\'s own growth')}\n`,
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.deepEqual(r.errors, []);
+      assert.equal(r.growth.get('verify-work.md')?.reason, 'this commit\'s own growth');
+      assert.equal(r.growth.has('plan-phase.md'), false);
+    },
+  );
+
+  test(
+    'a squash whose subject only resembles a release merge still has its acks read — #5734 (no over-match)',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-5734-lookalike-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      commitMessage(
+        dir,
+        releaseSquashMessage('fix(#9004): merge release notes into the changelog (#1000)', 'plan-phase.md', 'reason A', 'reason B'),
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.equal(r.errors.length, 1, 'an ordinary squash with conflicting acks is still ambiguous');
+      assert.match(r.errors[0], /ambiguous|conflict/i);
+    },
+  );
+
+  test(
+    'a release merge whose own final paragraph is an ack trailer is skipped too, so it cannot clash with another commit — #5734',
+    (t) => {
+      const dir = makeTempRepo('gsd-ack-trailer-5734-tail-');
+      withCleanup(t, dir);
+      commitMessage(dir, 'base\n\nno trailer\n');
+      const baseSha = headSha(dir);
+      commitMessage(
+        dir,
+        `fix(#9005): grows a workflow\n\n${trailerLine(ACK_TRAILER_GROWTH, 'plan-phase.md', 'reason A')}\n`,
+      );
+      // A plain (non-squash) release merge: git's own trailer pass sees this final
+      // paragraph, so the skip has to hold on that pass as well as the buried one.
+      commitMessage(
+        dir,
+        `chore: merge release v1.19.0 to main (#5729)\n\n${trailerLine(ACK_TRAILER_GROWTH, 'plan-phase.md', 'reason B')}\n`,
+      );
+      const r = readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir });
+      assert.deepEqual(r.errors, []);
+      assert.equal(r.growth.get('plan-phase.md')?.reason, 'reason A', 'only the ordinary commit\'s ack survives');
+    },
+  );
+
+  describe('isReleaseMergeSubject — #5734', () => {
+    for (const subject of [
+      'chore: merge release v1.19.0 to main (#5729)',
+      'chore: merge release v1.19.0 to main',
+      'chore: merge release v1.19.1 to main (#6001)',
+      'chore: merge release v1.20.0-rc.1 to main (#6002)',
+      '  chore: merge release v1.19.0 to main (#5729)  ',
+    ]) {
+      test(`matches ${JSON.stringify(subject)}`, () => {
+        assert.equal(isReleaseMergeSubject(subject), true);
+      });
+    }
+    for (const subject of [
+      'chore: merge release v1.19 to main',
+      'chore: merge release v1.19.0 to main extra',
+      'chore: merge release v1.19.0 to main (#5729) and more',
+      'chore: merge release 1.19.0 to main',
+      'fix(#1): chore: merge release v1.19.0 to main',
+      'chore: merge release v1.19.0 to next',
+      '',
+    ]) {
+      test(`does not match ${JSON.stringify(subject)}`, () => {
+        assert.equal(isReleaseMergeSubject(subject), false);
+      });
+    }
+  });
 
   test(
     'an ordinary commit with markdown bullets but no squash suffix finds nothing — #4454 (no false positive)',

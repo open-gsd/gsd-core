@@ -122,6 +122,13 @@ const REMEDY_ACTION_METADATA = new Map([
       risk: 'None — additive only; triggered by `--backfill` flag',
     },
   ],
+  [
+    'repairVerificationStatus',
+    {
+      effect: 'Rewrite a known legacy verification `status` (`pass_with_caveats`) to `passed`, keeping the original as `legacy_status`',
+      risk: 'None — only the `status` line changes; unknown statuses are never touched',
+    },
+  ],
 ]);
 
 /** Order the Effect/Risk table renders in — matches `REMEDY_ACTION`'s own declaration order. */
@@ -132,6 +139,7 @@ const REMEDY_ACTION_ORDER = [
   'addNyquistKey',
   'addAiIntegrationPhaseKey',
   'backfillMilestones',
+  'repairVerificationStatus',
 ];
 
 /**
@@ -139,7 +147,11 @@ const REMEDY_ACTION_ORDER = [
  * whose remedy is conditional on a flag the plain `Yes`/`No` can't express
  * (mirrors the hand-written table's pre-existing `W018` row: `Yes (--backfill)`).
  */
-const REPAIRABLE_DISPLAY_OVERRIDE = new Map([['W018', 'Yes (`--backfill`)']]);
+const REPAIRABLE_DISPLAY_OVERRIDE = new Map([
+  ['W018', 'Yes (`--backfill`)'],
+  // #5291: only a known legacy status (`pass_with_caveats`) is rewritten.
+  ['W030', 'Yes (known legacy statuses only)'],
+]);
 
 const STATIC_NOT_REPAIRABLE_BULLETS = [
   'PROJECT.md, ROADMAP.md content',

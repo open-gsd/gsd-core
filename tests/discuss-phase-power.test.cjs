@@ -262,3 +262,86 @@ test('discuss-phase-assumptions answer_validation matches the parent canonical c
 });
   });
 }
+
+// #5629: every discuss mode honours a phase SPEC the same way. The default flow always did (check_spec);
+// assumptions mode and --power (dispatched past check_spec) never read it, so CONTEXT.md could lock decisions
+// that contradict it. The SPEC is now an init fact (`has_spec` / `spec_path`, one shared predicate) and each
+// flow carries the same check_spec step; this parity test fails if any mode drops it.
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+describe('discuss-phase modes honour the phase SPEC (#5629)', () => {
+  const readSrc = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+  const FLOWS = {
+    default: 'gsd-core/workflows/discuss-phase.md',
+    assumptions: 'gsd-core/workflows/discuss-phase-assumptions.md',
+    power: 'gsd-core/workflows/discuss-phase-power.md',
+  };
+  const stepBody = (src, name) => {
+    const open = `<step name="${name}">`;
+    const start = src.indexOf(open);
+    if (start === -1) return null;
+    return src.slice(start, src.indexOf('</step>', start) + '</step>'.length);
+  };
+
+  // The text where each flow decides WHAT to discuss: the HOW-only restriction must live there.
+  const howRegion = (mode, src) => {
+    if (mode === 'default') return src.slice(src.indexOf('2b. **SPEC.md awareness**'), src.indexOf('3. **Gray areas**'));
+    if (mode === 'assumptions') return src.slice(src.indexOf('Agent(subagent_type="gsd-assumptions-analyzer"'), src.indexOf('${AGENT_SKILLS_ANALYZER}\n""")'));
+    return stepBody(src, 'analyze');
+  };
+
+  test('every discuss mode carries the SPEC contract (#5629)', () => {
+    for (const [mode, rel] of Object.entries(FLOWS)) {
+      const src = readSrc(rel);
+      const step = stepBody(src, 'check_spec');
+      assert.ok(step, `${mode}: ${rel} must carry a check_spec step`);
+      assert.ok(step.includes('has_spec') && step.includes('spec_path'), `${mode}: check_spec reads the init facts has_spec / spec_path`);
+      assert.ok(step.includes('spec_loaded = true'), `${mode}: check_spec sets spec_loaded`);
+      assert.ok(/locked_requirements/.test(step), `${mode}: check_spec stores the locked requirements`);
+      assert.ok(src.includes('<spec_lock>'), `${mode}: the CONTEXT.md it writes carries <spec_lock>`);
+      assert.ok(/Locked requirements — MUST read before planning/.test(src), `${mode}: the SPEC is listed in canonical_refs`);
+      const how = howRegion(mode, src);
+      assert.ok(how && /\bHOW\b/.test(how) && /\bWHAT\b/.test(how), `${mode}: the step that picks what to discuss restricts it to HOW (WHAT is already locked)`);
+    }
+    const bodies = Object.values(FLOWS).map((rel) => stepBody(readSrc(rel), 'check_spec'));
+    assert.strictEqual(bodies[1], bodies[0], 'assumptions check_spec matches the default flow exactly (single source of truth)');
+    assert.strictEqual(bodies[2], bodies[0], 'power check_spec matches the default flow exactly (single source of truth)');
+  });
+
+  test('the power flow loads the SPEC itself, before it analyzes (#5629)', () => {
+    const src = readSrc(FLOWS.power);
+    const check = src.indexOf('<step name="check_spec">');
+    const analyze = src.indexOf('<step name="analyze">');
+    assert.ok(check !== -1 && analyze !== -1, 'power carries both check_spec and analyze');
+    assert.ok(check < analyze, 'check_spec runs before analyze: --power is dispatched past discuss-phase.md check_spec');
+  });
+
+  test('assumptions mode hands the locked requirements to the analyzer as already answered (#5629)', () => {
+    const src = readSrc(FLOWS.assumptions);
+    const check = src.indexOf('<step name="check_spec">');
+    const analysis = src.indexOf('<step name="deep_codebase_analysis">');
+    assert.ok(check !== -1 && check < analysis, 'check_spec runs before the analyzer step');
+    const prompt = src.slice(src.indexOf('Agent(subagent_type="gsd-assumptions-analyzer"'), src.indexOf('${AGENT_SKILLS_ANALYZER}\n""")'));
+    assert.ok(/Locked requirements/.test(prompt) && /{locked_requirements}/.test(prompt), 'the analyzer prompt carries the locked requirements');
+    assert.ok(/HOW/.test(prompt), 'the analyzer is told to form assumptions about HOW only');
+  });
+
+  test('no workflow globs for the phase SPEC itself (#5629)', () => {
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : (p.endsWith('.md') ? [p] : []);
+    });
+    const offenders = walk(path.join(__dirname, '..', 'gsd-core', 'workflows'))
+      .filter((p) => splitLines(fs.readFileSync(p, 'utf8')).some((line) => /\bls\b/.test(line) && line.includes('*-SPEC.md')))
+      .map((p) => path.relative(path.join(__dirname, '..'), p));
+    assert.deepStrictEqual(offenders, [], 'workflows read has_spec / spec_path from init instead of an ls over *-SPEC.md');
+  });
+
+  test('discuss-phase and plan-phase read the SPEC from init (#5629)', () => {
+    const discuss = readSrc(FLOWS.default);
+    assert.ok(!/ls \$\{phase_dir\}\/\*-SPEC\.md/.test(discuss), 'discuss-phase.md reads has_spec / spec_path from init instead of its own ls');
+    const plan = readSrc('gsd-core/workflows/plan-phase.md');
+    assert.ok(!/\*-SPEC\.md" 2>\/dev\/null \| grep/.test(plan), 'plan-phase.md does not filter SPEC names itself');
+    assert.ok(plan.includes('_gsd_field "$INIT" spec_path'), 'plan-phase.md reads spec_path from its init payload');
+  });
+});

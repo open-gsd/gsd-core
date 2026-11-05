@@ -145,7 +145,7 @@ test('data dir: 2.x beside 1.x tables keeps 1.x working, but a data dir 2.x crea
   const mkHome = () => {
     const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-data-')));
     t.after(() => cleanup(home));
-    const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: path.join(home, 'cfg'), XDG_CACHE_HOME: path.join(home, 'cache'), XDG_STATE_HOME: path.join(home, 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true' };
+    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home, XDG_DATA_HOME: path.join(home, 'data'), XDG_CONFIG_HOME: path.join(home, 'cfg'), XDG_CACHE_HOME: path.join(home, 'cache'), XDG_STATE_HOME: path.join(home, 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true' };
     return { home, env, dataDir: path.join(home, 'data', 'opencode') };
   };
   const runBin = (bin, args, { home, env }) => new Promise((resolve) => {

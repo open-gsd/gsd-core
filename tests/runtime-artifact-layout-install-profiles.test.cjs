@@ -1283,6 +1283,24 @@ describe('bug-3659: applySurface prunes ~/.claude/skills/gsd-*/ on cluster disab
       }
     });
 
+    __issueTest('#5121: an oversized installed capability SKILL.md is skipped like a missing one, cap and cap-1 still load', () => {
+      const { SKILL_FILE_MAX_BYTES } = require('../gsd-core/bin/lib/capability-ledger.cjs');
+      const gsdHome = createTempDir('gsd-5121-home-');
+      const savedHome = process.env.GSD_HOME;
+      try {
+        process.env.GSD_HOME = gsdHome;
+        const registry = __registryFor('big-cap', ['big']);
+        for (const [bytes, loads] of [[SKILL_FILE_MAX_BYTES - 1, true], [SKILL_FILE_MAX_BYTES, true], [SKILL_FILE_MAX_BYTES + 1, false]]) {
+          __installCapSkill(gsdHome, 'big-cap', 'big', 'x'.repeat(bytes));
+          const found = readInstalledCapabilitySkill('big', registry);
+          assert.strictEqual(found !== null, loads, `${bytes} bytes must ${loads ? 'load' : 'be skipped'}`);
+        }
+      } finally {
+        if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+        cleanup(gsdHome);
+      }
+    });
+
     __issueTest('two capabilities can never both claim the same stem — capabilityClusters is unambiguous by construction (no ownership tie to break)', () => {
       // capabilityClusters can only ever bind a stem to ONE capId (the
       // capability-loader registry composer rejects a candidate whose declared

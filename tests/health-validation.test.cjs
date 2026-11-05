@@ -2111,3 +2111,148 @@ describe('W024 — STATE.md commit-age freshness advisory (#2573)', () => {
     assert.strictEqual(w024.length, 0, `unknown must stay silent, got ${JSON.stringify(w024)}`);
   });
 });
+
+// #5291: one legacy out-of-set verification report blocks closing every other
+// phase, and W030 could not repair it. `validate health --repair` now rewrites a
+// KNOWN legacy status to its closed-set equivalent (`pass_with_caveats` ->
+// `passed`), preserving the original in `legacy_status`. The refusal itself stays.
+describe('W030 repairs a known legacy verification status (#5291)', () => {
+  const { createTempGitProject, readFileNormalized } = require('./helpers.cjs');
+  let dir;
+  beforeEach(() => { dir = createTempGitProject(); });
+  afterEach(() => { cleanup(dir); });
+
+  const report1 = () => path.join(dir, '.planning', 'phases', '01-alpha', '01-VERIFICATION.md');
+  const report2 = () => path.join(dir, '.planning', 'phases', '02-beta', '02-VERIFICATION.md');
+
+  /** Two phases: phase 1's report carries `phase1Report`; phase 2 is `passed`. */
+  function seed(phase1Report, { eol = '\n' } = {}) {
+    const planning = path.join(dir, '.planning');
+    fs.mkdirSync(path.join(planning, 'phases', '01-alpha'), { recursive: true });
+    fs.mkdirSync(path.join(planning, 'phases', '02-beta'), { recursive: true });
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), [
+      '# Roadmap', '', '## v1.0', '',
+      '- [x] **Phase 1: Alpha** - first', '- [ ] **Phase 2: Beta** - second', '',
+      '### Phase 1: Alpha', '**Goal**: alpha works', '**Plans:** 1/1 plans executed', '',
+      '### Phase 2: Beta', '**Goal**: beta works', '**Plans:** 1/1 plans executed', '',
+      '## Progress', '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '|-------|-----------|----------------|--------|-----------|',
+      '| 1. Alpha | v1.0 | 1/1 | Complete | 2026-10-01 |',
+      '| 2. Beta | v1.0 | 1/1 | In Progress | |', '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(planning, 'STATE.md'),
+      '---\nmilestone: v1.0\ncurrent_phase: 2\nstatus: executing\n---\n# State\n\n## Current Position\n\nPhase: 2 (Beta)\n');
+    for (const p of ['01-alpha', '02-beta']) {
+      const n = p.slice(0, 2);
+      fs.writeFileSync(path.join(planning, 'phases', p, `${n}-01-PLAN.md`), `---\nphase: ${p}\nplan: 01\n---\n# Plan\n`);
+      fs.writeFileSync(path.join(planning, 'phases', p, `${n}-01-SUMMARY.md`), `---\nphase: ${p}\nplan: 01\n---\n# Summary\n`);
+    }
+    fs.writeFileSync(report1(), phase1Report.split('\n').join(eol));
+    fs.writeFileSync(report2(), '---\nphase: 02-beta\nstatus: passed\n---\n');
+  }
+
+  const LEGACY = '---\nphase: 01-alpha\nstatus: pass_with_caveats\n---\n\nCaveat: flaky on CI.\n';
+  const healthJson = (extra = []) => {
+    const r = runGsdTools(['validate', 'health', ...extra, '--json'], dir);
+    assert.strictEqual(r.success, true, `validate health failed: ${r.error}`);
+    return JSON.parse(r.output);
+  };
+  const w030 = (data) => [...(data.warnings ?? []), ...(data.errors ?? [])].filter((w) => w.code === 'W030');
+
+  test('before the repair, closing the other phase is refused and W030 is reported', () => {
+    seed(LEGACY);
+    const closed = runGsdTools(['phase', 'complete', '2'], dir);
+    assert.strictEqual(closed.success, false);
+    assert.match(closed.error, /01-VERIFICATION\.md/);
+    assert.match(closed.error, /pass_with_caveats/);
+    assert.strictEqual(w030(healthJson()).length, 1);
+  });
+
+  test('W030 is repairable for a known legacy status', () => {
+    seed(LEGACY);
+    assert.strictEqual(w030(healthJson())[0].repairable, true);
+  });
+
+  test('health --repair clears a legacy pass_with_caveats report so another phase can close', () => {
+    seed(LEGACY);
+    healthJson(['--repair']);
+    assert.strictEqual(w030(healthJson()).length, 0, 'W030 must be gone after the repair');
+    const closed = runGsdTools(['phase', 'complete', '2'], dir);
+    assert.strictEqual(closed.success, true, `phase complete 2 still refused: ${closed.error}`);
+  });
+
+  test('the repair preserves the original value in legacy_status and changes nothing else', () => {
+    seed(LEGACY);
+    healthJson(['--repair']);
+    assert.strictEqual(
+      readFileNormalized(report1()),
+      '---\nphase: 01-alpha\nstatus: passed\nlegacy_status: pass_with_caveats\n---\n\nCaveat: flaky on CI.\n',
+    );
+  });
+
+  test('the repair preserves CRLF line endings', () => {
+    seed(LEGACY, { eol: '\r\n' });
+    healthJson(['--repair']);
+    const expectedLf = '---\nphase: 01-alpha\nstatus: passed\nlegacy_status: pass_with_caveats\n---\n\nCaveat: flaky on CI.\n';
+    assert.strictEqual(readFileNormalized(report1()), expectedLf);
+    // Every line ending is still CRLF: the file is exactly one byte longer per line than its LF form.
+    const lineCount = expectedLf.split('\n').length - 1;
+    assert.strictEqual(fs.statSync(report1()).size, Buffer.byteLength(expectedLf) + lineCount);
+  });
+
+  test('an existing legacy_status is never overwritten', () => {
+    seed('---\nphase: 01-alpha\nstatus: pass_with_caveats\nlegacy_status: earlier\n---\n');
+    healthJson(['--repair']);
+    const text = readFileNormalized(report1());
+    assert.match(text, /^status: passed$/m);
+    assert.match(text, /^legacy_status: earlier$/m);
+    assert.ok(!/legacy_status: pass_with_caveats/.test(text));
+  });
+
+  test('the closed-set reader tolerates the extra legacy_status key', () => {
+    seed(LEGACY);
+    healthJson(['--repair']);
+    const r = runGsdTools(['verification', 'status', '.planning/phases/01-alpha'], dir);
+    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(JSON.parse(r.output).status, 'passed');
+  });
+
+  test('a trailing comment on the status line is not part of the value', () => {
+    seed('---\nphase: 01-alpha\nstatus: pass_with_caveats # flaky\n---\n');
+    assert.strictEqual(w030(healthJson())[0].repairable, true);
+    healthJson(['--repair']);
+    assert.strictEqual(w030(healthJson()).length, 0, 'the repair must clear a commented status line');
+    assert.match(readFileNormalized(report1()), /^status: passed\nlegacy_status: pass_with_caveats\n/m);
+  });
+
+  test('with duplicate status keys the repair edits the one the reader refuses (the last)', () => {
+    seed('---\nphase: 01-alpha\nstatus: gaps_found\nstatus: pass_with_caveats\n---\n');
+    healthJson(['--repair']);
+    assert.strictEqual(w030(healthJson()).length, 0);
+    assert.strictEqual(
+      readFileNormalized(report1()),
+      '---\nphase: 01-alpha\nstatus: gaps_found\nstatus: passed\nlegacy_status: pass_with_caveats\n---\n',
+    );
+  });
+
+  for (const raw of ['pending', 'partial', 'something_else']) {
+    test(`an unmapped status (${raw}) stays unrepairable and still refuses`, () => {
+      seed(`---\nphase: 01-alpha\nstatus: ${raw}\n---\n`);
+      const before = readFileNormalized(report1());
+      assert.strictEqual(w030(healthJson())[0].repairable, false);
+      healthJson(['--repair']);
+      assert.strictEqual(readFileNormalized(report1()), before, 'an unmapped report must not be touched');
+      const closed = runGsdTools(['phase', 'complete', '2'], dir);
+      assert.strictEqual(closed.success, false);
+      assert.match(closed.error, /outside the closed set/);
+    });
+  }
+
+  test('a phase\'s own out-of-set report still refuses closing that phase', () => {
+    seed(LEGACY);
+    const closed = runGsdTools(['phase', 'complete', '1'], dir);
+    assert.strictEqual(closed.success, false);
+    assert.match(closed.error, /pass_with_caveats/);
+  });
+});

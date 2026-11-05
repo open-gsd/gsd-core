@@ -8,7 +8,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, cleanup, absPlanningPath } = require('./helpers.cjs');
+const { runGsdTools, cleanup, absPlanningPath, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -37,7 +37,7 @@ describe('init onboard public CLI projection', () => {
     fs.mkdirSync(path.join(tmpDir, 'docs', 'adr'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'docs', 'adr', '0001-runtime.md'), '# ADR: Runtime\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -64,7 +64,7 @@ describe('init onboard public CLI projection', () => {
     fs.mkdirSync(path.join(tmpDir, 'rfc'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'rfc', 'proposal.md'), '# Request for Comments\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -87,7 +87,7 @@ describe('init onboard public CLI projection', () => {
     fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'src', 'PRD.md'), '# Nested Product Requirements\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -104,7 +104,7 @@ describe('init onboard public CLI projection', () => {
   });
 
   test('forwards the --text flag into the public projection', () => {
-    const result = runGsdTools(['init', 'onboard', '--text', '--raw'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'onboard', '--text', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -132,7 +132,7 @@ describe('init onboard public CLI projection', () => {
     ];
     const before = new Map(trackedFiles.map(file => [file, fs.readFileSync(file, 'utf8')]));
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     for (const file of trackedFiles) {
@@ -159,7 +159,7 @@ describe('init onboard public CLI projection', () => {
     }
     fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"fixture"}\n');
 
-    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -189,7 +189,7 @@ describe('init onboard public CLI projection', () => {
     fs.mkdirSync(path.join(tmpDir, 'docs', 'adr'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'docs', 'adr', '0001-runtime.md'), '# ADR: Runtime\n');
 
-    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -203,7 +203,7 @@ describe('init onboard public CLI projection', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -221,7 +221,7 @@ describe('init onboard public CLI projection', () => {
       fs.writeFileSync(path.join(tmpDir, '.planning', `${name}.md`), `# ${name}\n`);
     }
 
-    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -243,7 +243,7 @@ describe('init onboard public CLI projection', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
 
-    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, { HOME: tmpDir });
+    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -256,7 +256,7 @@ describe('init onboard public CLI projection', () => {
   test('projects the next action for code, docs, greenfield, partial planning, and summary states', () => {
     fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'src', 'server.ts'), 'export const server = true;\n');
-    let result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    let result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
       kind: 'map-codebase',
@@ -269,7 +269,7 @@ describe('init onboard public CLI projection', () => {
     tmpDir = fs.realpathSync(createFixture({ planning: false, projectDoc: false }));
     fs.mkdirSync(path.join(tmpDir, 'docs', 'adr'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'docs', 'adr', '0001-runtime.md'), '# ADR: Runtime\n');
-    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
       kind: 'ingest-docs',
@@ -280,7 +280,7 @@ describe('init onboard public CLI projection', () => {
     cleanup(tmpDir);
     // #2376 macOS fix: see beforeEach above.
     tmpDir = fs.realpathSync(createFixture({ planning: false, projectDoc: false }));
-    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
       kind: 'new-project',
@@ -295,7 +295,7 @@ describe('init onboard public CLI projection', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
-    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     const partial = JSON.parse(result.output);
     assert.strictEqual(partial.next_action.kind, 'partial-planning');
@@ -306,7 +306,7 @@ describe('init onboard public CLI projection', () => {
       fs.writeFileSync(path.join(tmpDir, '.planning', 'codebase', `${name}.md`), `# ${name}\n`);
     }
     fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
-    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
       kind: 'write-summary',
@@ -316,7 +316,7 @@ describe('init onboard public CLI projection', () => {
 
     fs.mkdirSync(path.join(tmpDir, '.planning', 'onboarding'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.planning', 'onboarding', 'SUMMARY.md'), '# Onboarding Summary\n');
-    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
       kind: 'ready',
@@ -330,7 +330,7 @@ describe('init onboard public CLI projection', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -346,7 +346,7 @@ describe('init onboard public CLI projection', () => {
     fs.mkdirSync(path.join(tmpDir, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'dist', 'bundle.js'), 'console.log("ignored");\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -359,7 +359,7 @@ describe('init onboard public CLI projection', () => {
   test('treats package manifests as brownfield even without source files', () => {
     fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"fixture"}\n');
 
-    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init onboard --raw', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
@@ -374,7 +374,7 @@ describe('init onboard public CLI projection', () => {
     fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"fixture"}\n');
 
     const result = runGsdTools(['init', 'onboard', '--raw'], tmpDir, {
-      HOME: tmpDir,
+      ...homeSandboxEnv(tmpDir),
       GSD_RUNTIME: 'codex',
     });
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
@@ -395,8 +395,8 @@ describe('init onboard public CLI projection', () => {
   test('dotted query init.onboard matches direct init onboard', () => {
     fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"fixture"}\n');
 
-    const direct = runGsdTools(['init', 'onboard', '--raw'], tmpDir, { HOME: tmpDir });
-    const query = runGsdTools(['query', 'init.onboard', '--raw'], tmpDir, { HOME: tmpDir });
+    const direct = runGsdTools(['init', 'onboard', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
+    const query = runGsdTools(['query', 'init.onboard', '--raw'], tmpDir, homeSandboxEnv(tmpDir));
     assert.equal(direct.success, true, direct.error || direct.output);
     assert.equal(query.success, true, query.error || query.output);
     assert.deepStrictEqual(JSON.parse(query.output), JSON.parse(direct.output));
