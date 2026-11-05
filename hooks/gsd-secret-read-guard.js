@@ -112,13 +112,18 @@
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
 //   `$VAR` gap; a heredoc tag whose `${…}` holds a quoted `}`, which only
 //   the bash and zsh readings read and only with a trigger
-//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); a substitution beside a
-//   `'` in a `$(( ))`, which bash, dash and zsh run
-//   (`echo $(( ' $(cat .env >&2) ' ))`), or in a `((` that does not start a
-//   word, which bash runs (`if((' $(cat .env >&2) '));then :;fi`); zsh's
-//   arithmetic past what zshMathEnd takes, namely a `]` in the body, an odd `$`
-//   run in "…" and a `"$[` in a `${…}` (`echo $[ \] ' $(cat .env >&2) ' ]`,
-//   `echo "$$$[ " ]"; cat .env`, `echo ${x:-"$[ " ' $(cat .env >&2) ' " ]"}`);
+//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); some arithmetic the
+//   scan reads differently from the shell, given here by example with the
+//   shells that run each, not as a whole class:
+//   `echo $(( ' $(cat .env >&2) ' ))` (bash, dash, zsh),
+//   `if((' $(cat .env >&2) '));then :;fi` (bash),
+//   `{((' $(cat .env >&2) '));}` (bash, zsh),
+//   `echo $[ \[ ' $(cat .env >&2) ' ]` (bash, zsh),
+//   `echo $[ \] ' $(cat .env >&2) ' ]` (bash, zsh),
+//   `(( \( ' $(cat .env >&2) ' ))` (bash),
+//   `(( \) ' $(cat .env >&2) ' ))` (bash, zsh),
+//   `echo "$$$[ " ]"; cat .env` (zsh) and
+//   `echo ${x:-"$[ " ' $(cat .env >&2) ' " ]"}` (zsh);
 //   a `#` comment in a
 //   `$( )`, whose `(` or `)` the scan counts
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line

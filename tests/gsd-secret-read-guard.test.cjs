@@ -2040,7 +2040,11 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       ": <<${x#'}'}\n${x#'}'}\ncat .env\n",
       "echo $(( ' $(cat .env >&2) ' ))",
       "if((' $(cat .env >&2) '));then :;fi",
+      "{((' $(cat .env >&2) '));}",
+      "echo $[ \\[ ' $(cat .env >&2) ' ]",
       "echo $[ \\] ' $(cat .env >&2) ' ]",
+      "(( \\( ' $(cat .env >&2) ' ))",
+      "(( \\) ' $(cat .env >&2) ' ))",
       'echo "$$$[ " ]"; cat .env',
       'echo ${x:-"$[ " \' $(cat .env >&2) \' " ]"}',
     ];
