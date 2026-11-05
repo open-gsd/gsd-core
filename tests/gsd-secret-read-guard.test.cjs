@@ -2692,6 +2692,12 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
   });
 
+  for (const cmd of ["`echo $'a`; cat .env", "echo `echo $'a` `cat .env`"]) {
+    test(`a nested word with no value to check does not outrank a read: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
   test('a word with no value to check is still the block when no reading finds a read', () => {
     const cmd = R`echo $'x\'; ls`;
     assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });

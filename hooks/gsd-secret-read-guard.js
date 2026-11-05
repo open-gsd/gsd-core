@@ -2098,10 +2098,18 @@ function scanCommand(command, depth, reading) {
   if (scanBudget < 0) throw SCAN_BUDGET_SPENT;
   const { tokens, nested, unreadable } = tokenize(command, reading);
 
+  // A secret read stops the scan. A word with no value to check found in a nested
+  // body is held, so a read later in the command is still the block reported.
+  let held = null;
+  const isRead = (hit) => {
+    if (hit && hit.code !== 'secret-read' && held === null) held = hit;
+    return Boolean(hit) && hit.code === 'secret-read';
+  };
+
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
       const hit = findSecretRead(sub, depth + 1);
-      if (hit) return hit;
+      if (isRead(hit)) return hit;
     }
   }
 
@@ -2158,7 +2166,7 @@ function scanCommand(command, depth, reading) {
     if (base === 'eval') {
       if (depth < MAX_NESTING_DEPTH) {
         const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1);
-        if (hit) return hit;
+        if (isRead(hit)) return hit;
       }
       continue;
     }
@@ -2170,7 +2178,7 @@ function scanCommand(command, depth, reading) {
           const src = reconstructedProcsub(w.procsub, reading);
           if (src !== null) {
             const hit = findSecretRead(src, depth + 1);
-            if (hit) return hit;
+            if (isRead(hit)) return hit;
           }
         } else if (operandNamesSecret(w.text)) return secretRead(w.text);
       }
@@ -2180,21 +2188,21 @@ function scanCommand(command, depth, reading) {
     // xargs turns stdin file names into a sub-command's operands.
     if (base === 'xargs' && depth < MAX_NESTING_DEPTH) {
       const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading);
-      if (hit) return hit;
+      if (isRead(hit)) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
       // operand — fall through to the operand check below.
     }
 
     if (SHELL_INTERPRETERS.has(base) && depth < MAX_NESTING_DEPTH) {
       const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
-      if (hit) return hit;
+      if (isRead(hit)) return hit;
       // `bash .env` (file mode) is caught by the operand check below.
     }
 
     // Git -c can carry a shell script instead of a file-name operand (#5045).
     if ((base === 'git' || base === 'git.exe') && depth < MAX_NESTING_DEPTH) {
       const hit = scanGitConfig(operands, depth);
-      if (hit) return hit;
+      if (isRead(hit)) return hit;
     }
 
     if (NON_READING_COMMANDS.has(base)) continue;
@@ -2206,7 +2214,7 @@ function scanCommand(command, depth, reading) {
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
-  return unreadable;
+  return unreadable || held;
 }
 
 // ---------------------------------------------------------------------------
