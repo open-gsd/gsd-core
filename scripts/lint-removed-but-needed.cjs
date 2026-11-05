@@ -85,16 +85,35 @@
  * #3677 deleted `.gsd/phase/.../40-design.md` and `50-test-matrix.md`, files
  * force-committed despite `.gitignore`. ~50 tracked comments cite OTHER,
  * untracked local design docs that carry the same basenames, so the bare
- * basename was misattributed to the deletion (51 false violations).
+ * basename was misattributed to the deletion (40 false violations measured
+ * at the pre-fix commit 31782c1fd2 against origin/next).
  *
  * A gitignored path was never meant to be tracked, and its basename is
  * shared by untracked local files that tracked comments cite — so a
  * bare-basename mention cannot be attributed to the deleted file. For each
  * deleted path that `git check-ignore --no-index` reports as ignored,
  * matching switches from the bare basename to the full repo-relative path,
- * the same switch the #3907 collision rule makes, in BOTH the live-consumer
- * and tests/ arms. A genuine full-path reference to the deleted file still
- * fails.
+ * the same switch the #3907 collision rule makes (one shared predicate,
+ * {@link matchesByFullPath}), in BOTH the live-consumer and tests/ arms. A
+ * genuine full-path reference to the deleted file still fails.
+ *
+ * The verdict must not be steerable by the change under review or depend on
+ * the machine, so:
+ *
+ * - Only ignore rules from TRACKED `.gitignore` files count. The source of
+ *   each match (`check-ignore -v`) must be a repo-relative path whose
+ *   basename is `.gitignore` AND that `git ls-files` lists; `.git/info/exclude`,
+ *   a global `core.excludesFile`, an untracked `.gitignore` and negated (`!`)
+ *   patterns are never honored.
+ * - If the diff `<base>...HEAD` touches ANY `.gitignore` (any status), the
+ *   refinement is off entirely: the post-diff tree's ignore rules are
+ *   PR-controlled, and a PR that deleted `x.cjs` and ignored `x.cjs` in the
+ *   same diff would otherwise disable its own basename check.
+ * - Every git read of paths is NUL-delimited (`-z`), so `core.quotePath`
+ *   C-quoting of non-ASCII paths cannot break the lookups.
+ * - Degrade, never skip: any failure of the ignore query (non-repo, timeout,
+ *   signal, exit 128, output overflow) yields an empty set — the stricter
+ *   basename matching — instead of aborting the whole lint.
  *
  * ## Historical-record exemption (#3942)
  *
@@ -122,6 +141,9 @@ const ROOT = path.join(__dirname, '..');
 const SCAN_ROOTS = ['.github/workflows', 'gsd-core', 'docs'];
 const EXTRA_FILES = ['package.json'];
 const TESTS_ROOT = 'tests';
+// 16 MiB: a large PR's NUL-delimited path lists must not overflow execFileSync's
+// default 1 MiB buffer.
+const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 
 // Skip these when walking SCAN_ROOTS — binary/generated content that can
 // never carry a meaningful basename reference, and is often large.
@@ -203,6 +225,20 @@ function walk(dir) {
 }
 
 /**
+ * Pure: the ONE predicate both scanning arms use to decide whether a deleted
+ * file is matched by its full repo-relative path instead of its bare basename:
+ * a surviving file shares the basename (#3907) or the deleted path is
+ * gitignored (#3677).
+ * @param {string} deletedFile - repo-relative deleted path
+ * @param {Set<string>} survivingBasenames
+ * @param {Set<string>} ignoredDeletions
+ * @returns {boolean}
+ */
+function matchesByFullPath(deletedFile, survivingBasenames, ignoredDeletions) {
+  return survivingBasenames.has(path.basename(deletedFile)) || ignoredDeletions.has(deletedFile);
+}
+
+/**
  * Pure: the violation reason for a basename-or-path match (#3907, #3677).
  * @param {string} deletedFile
  * @param {string} basename
@@ -237,7 +273,7 @@ function findSurvivingReferences(deletedFiles, corpus, survivingBasenames = new 
   for (const deletedFile of deletedFiles) {
     const basename = path.basename(deletedFile);
     const collides = survivingBasenames.has(basename);
-    const fullPathOnly = collides || ignoredDeletions.has(deletedFile);
+    const fullPathOnly = matchesByFullPath(deletedFile, survivingBasenames, ignoredDeletions);
     for (const { file, content } of corpus) {
       const matched = fullPathOnly ? referencesPath(content, deletedFile) : referencesBasename(content, basename);
       if (matched) {
@@ -326,7 +362,7 @@ function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenam
   const violations = [];
   for (const deletedFile of deletedFiles) {
     const basename = path.basename(deletedFile);
-    const fullPathOnly = survivingBasenames.has(basename) || ignoredDeletions.has(deletedFile);
+    const fullPathOnly = matchesByFullPath(deletedFile, survivingBasenames, ignoredDeletions);
     const matchTarget = fullPathOnly ? deletedFile : basename;
     // The left-boundary class matches referencesPath's when fullPathOnly
     // (excludes '/' so a survivor's own longer path isn't mistaken for a
@@ -364,48 +400,136 @@ function getDeletedFiles(root, baseRef) {
   // matching lint-fix-has-regression-tests.cjs. There is no failure mode here
   // that should hard-exit non-zero; a real drift is only ever reported once
   // the diff succeeds and findSurvivingReferences finds a violation.
-  const out = cp.execFileSync('git', ['diff', '--name-status', `${baseRef}...HEAD`], {
-    cwd: root,
-    encoding: 'utf8',
-    timeout: 15000,
-  });
-  return out
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .filter((line) => line.startsWith('D\t'))
-    .map((line) => line.slice(2));
+  return parseNameStatusZ(gitDiffNameStatus(root, baseRef))
+    .filter((entry) => entry.status === 'D')
+    .map((entry) => entry.paths[0]);
 }
 
 /**
- * Which of the deleted paths are gitignored (#3677). `--no-index` makes git
- * consult the ignore rules even though the path was once tracked.
- * `git check-ignore` exits 1 when NO path is ignored; any other failure
- * propagates so main() degrades the scan to a skip, like getDeletedFiles.
+ * NUL-delimited `git diff --name-status` of `<baseRef>...HEAD`. `-z` keeps
+ * non-ASCII paths verbatim (no `core.quotePath` C-quoting).
+ * @param {string} root
+ * @param {string} baseRef
+ * @param {boolean} [quiet] - discard git's stderr (callers that degrade silently)
+ * @returns {string}
+ */
+function gitDiffNameStatus(root, baseRef, quiet = false) {
+  return cp.execFileSync('git', ['diff', '--name-status', '-z', `${baseRef}...HEAD`], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 15000,
+    maxBuffer: GIT_MAX_BUFFER,
+    ...(quiet ? { stdio: ['ignore', 'pipe', 'ignore'] } : {}),
+  });
+}
+
+/**
+ * Pure: parse `git diff --name-status -z` output. Records are
+ * `STATUS NUL path NUL`, except rename/copy (`R<score>`/`C<score>`) which
+ * carry TWO paths (`STATUS NUL old NUL new NUL`).
+ * @param {string} out
+ * @returns {{ status: string, paths: string[] }[]}
+ */
+function parseNameStatusZ(out) {
+  const tokens = out.split('\0');
+  const entries = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const status = tokens[i];
+    if (!status) {
+      i += 1;
+      continue;
+    }
+    const pathCount = status.startsWith('R') || status.startsWith('C') ? 2 : 1;
+    entries.push({ status, paths: tokens.slice(i + 1, i + 1 + pathCount) });
+    i += 1 + pathCount;
+  }
+  return entries;
+}
+
+/**
+ * Pure: does `source` (the ignore-rule file `git check-ignore -v` reported)
+ * look like a repo-relative `.gitignore` path? Rejects `.git/info/exclude`,
+ * absolute paths (a global `core.excludesFile`) and any other basename.
+ * @param {string} source
+ * @returns {boolean}
+ */
+function isRepoRelativeGitignore(source) {
+  if (!source || path.isAbsolute(source) || source.startsWith('/')) return false;
+  return source.split('/').pop() === '.gitignore';
+}
+
+/**
+ * Pure: parse `git check-ignore -v -z` output — records of four
+ * NUL-terminated fields `source linenum pattern pathname` — into the matches
+ * whose rule is a non-negated pattern from a repo-relative `.gitignore`.
+ * @param {string} out
+ * @returns {{ source: string, pathname: string }[]}
+ */
+function parseCheckIgnoreZ(out) {
+  const fields = out.split('\0');
+  const matches = [];
+  for (let i = 0; i + 3 < fields.length; i += 4) {
+    const [source, , pattern, pathname] = fields.slice(i, i + 4);
+    if (!isRepoRelativeGitignore(source) || pattern.startsWith('!')) continue;
+    matches.push({ source, pathname });
+  }
+  return matches;
+}
+
+/**
+ * Which of the deleted paths are gitignored (#3677). Only base-controlled
+ * rules count (see the header's "Gitignored-path refinement"):
+ *
+ * - if the diff `<baseRef>...HEAD` touches any `.gitignore`, nothing is
+ *   refined (the post-diff ignore rules are PR-controlled);
+ * - `--no-index` makes git consult the ignore rules even though the path was
+ *   once tracked; `-v` names the rule's source so `.git/info/exclude`, a
+ *   global `core.excludesFile` and negated patterns can be rejected, and the
+ *   source must be a TRACKED `.gitignore`;
+ * - `-z` throughout, so non-ASCII paths are not C-quoted.
+ *
+ * Degrades, never throws: exit 1 ("none ignored") and every other failure
+ * (non-repo, timeout, signal, 128, buffer overflow) yield an empty Set, which
+ * leaves the stricter bare-basename matching in force.
  * @param {string} root
  * @param {string[]} deletedFiles - repo-relative deleted paths
+ * @param {string} baseRef - the ref the diff is taken against
  * @returns {Set<string>} the subset that is gitignored, forward-slash separated
  */
-function getIgnoredDeletions(root, deletedFiles) {
+function getIgnoredDeletions(root, deletedFiles, baseRef) {
   if (deletedFiles.length === 0) return new Set();
-  let out;
   try {
-    out = cp.execFileSync('git', ['check-ignore', '--no-index', '--stdin'], {
+    const touchesGitignore = parseNameStatusZ(gitDiffNameStatus(root, baseRef, true))
+      .some((entry) => entry.paths.some((p) => p.split('/').pop() === '.gitignore'));
+    if (touchesGitignore) return new Set();
+    const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
       cwd: root,
       encoding: 'utf8',
-      input: deletedFiles.join('\n'),
+      input: deletedFiles.map((f) => `${f}\0`).join(''),
       timeout: 15000,
+      maxBuffer: GIT_MAX_BUFFER,
+      stdio: ['pipe', 'pipe', 'ignore'],
     });
-  } catch (e) {
-    if (e && e.status === 1) return new Set();
-    throw e;
+    const matches = parseCheckIgnoreZ(out);
+    if (matches.length === 0) return new Set();
+    const sources = [...new Set(matches.map((m) => m.source))];
+    const tracked = new Set(
+      cp.execFileSync('git', ['--literal-pathspecs', 'ls-files', '-z', '--', ...sources], {
+        cwd: root,
+        encoding: 'utf8',
+        timeout: 15000,
+        maxBuffer: GIT_MAX_BUFFER,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+        .split('\0')
+        .filter(Boolean),
+    );
+    return new Set(matches.filter((m) => tracked.has(m.source)).map((m) => m.pathname));
+  } catch {
+    // exit 1 (none ignored) and any other failure: no refinement.
+    return new Set();
   }
-  return new Set(
-    out
-      .split('\n')
-      .map((l) => l.trim().replace(/\\/g, '/'))
-      .filter(Boolean),
-  );
 }
 
 /**
@@ -418,16 +542,13 @@ function getIgnoredDeletions(root, deletedFiles) {
  * @returns {string[]} repo-relative paths, forward-slash separated
  */
 function getSurvivingFiles(root) {
-  const out = cp.execFileSync('git', ['ls-files'], {
+  const out = cp.execFileSync('git', ['ls-files', '-z'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 15000,
+    maxBuffer: GIT_MAX_BUFFER,
   });
-  return out
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map((f) => f.replace(/\\/g, '/'));
+  return out.split('\0').filter(Boolean);
 }
 
 // #3942: docs/adr/** and docs/research/** are historical records — an ADR's
@@ -503,7 +624,7 @@ function scan(root, baseRef) {
     ...testsCorpus.map((t) => t.file),
   ]);
   // #3677: a gitignored deleted path is matched by full path too.
-  const ignoredDeletions = getIgnoredDeletions(root, deletedFiles);
+  const ignoredDeletions = getIgnoredDeletions(root, deletedFiles, baseRef);
   const violations = findSurvivingReferences(deletedFiles, corpus, survivingBasenames, ignoredDeletions);
   violations.push(...findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenames, ignoredDeletions));
   return violations;
@@ -547,6 +668,10 @@ module.exports = {
   getDeletedFiles,
   getSurvivingFiles,
   getIgnoredDeletions,
+  matchesByFullPath,
+  parseNameStatusZ,
+  parseCheckIgnoreZ,
+  isRepoRelativeGitignore,
   buildCorpus,
   isDocsHistoricalRecord,
   scan,
