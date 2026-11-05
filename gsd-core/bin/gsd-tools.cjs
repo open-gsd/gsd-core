@@ -2547,9 +2547,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // plan, which the guard applies to every plan of the phase. Where the
     // harness forks from origin/HEAD, a flagged spawn on that diverged base is
     // still stopped by the spawn-time branch check (`exit 42`).
+    const forcedApplied = Boolean(forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
+    const heldDegrade = !forcedApplied
+      ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
+      : null;
     let recordedIsolation = isolation;
     let recordedHarnessFlag = harnessFlag;
-    if (recordedIsolation !== 'none' && planIdx === -1 && baseCheckDegrades(cwd, recordedIsolation)) {
+    if (recordedIsolation !== 'none' && planIdx === -1 && heldDegrade === null && baseCheckDegrades(cwd, recordedIsolation)) {
       recordedIsolation = 'none';
       recordedHarnessFlag = null;
     }
@@ -2604,21 +2608,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // purpose: this hold lapses ten minutes after `decided_at`, while the guard
     // also honours an aged `none` for its own phase for up to
     // `AGED_NONE_MAX_MS` (#5479).
-    const forcedApplied = Boolean(forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
-    const heldDegrade = !forcedApplied
-      ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
-      : null;
-
     // #4630 child 1 — ORDER CONTRACT for the two mechanisms above, which
     // arrived as separate PRs (#4232 for the re-derivation, #4620 for the
-    // hold). The #4222 re-derivation computes `recordedIsolation` FIRST;
-    // the #4561 hold then gates the write of THAT value, not of the
-    // pre-#4222 `isolation`. So a hold preserves a recorded degrade rather
-    // than the host capability. The hold is consulted on EVERY plain query,
-    // including one whose own derivation is also `none`: writing that `none`
-    // as `resolver` would re-own a caller's record, and when HEAD caught up
-    // the next plain query would record the capability over a degrade the
-    // resolver never owned. That overlap (a producer the resolver cannot
+    // hold). The hold is decided FIRST: a held query writes nothing, so the
+    // #4222 re-derivation is skipped rather than spending its bounded git
+    // spawns on a value nobody reads. A plain query that is not held then
+    // records the re-derived value. The hold is consulted on EVERY plain
+    // query, including one whose own derivation would also be `none`: writing
+    // that `none` as `resolver` would re-own a caller's record, and when HEAD
+    // caught up the next plain query would record the capability over a degrade
+    // the resolver never owned. That overlap (a producer the resolver cannot
     // reach, on a repo that is also diverged) is where #4561 would return.
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.

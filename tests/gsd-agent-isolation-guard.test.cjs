@@ -3077,6 +3077,21 @@ describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a
     assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA);
   });
 
+  test('a held query spends no git on the base check, and an unheld one does (GIT_TRACE)', (t) => {
+    const dir = createTempGitProject('gsd-4904-order-');
+    t.after(() => cleanup(dir));
+    const trace = (now, args) => {
+      const file = path.join(dir, `git-trace-${now}.log`);
+      const r = runGsdTools(['query', 'dispatch-isolation', ...args], dir, { ...env(dir, now), GIT_TRACE: file });
+      assert.equal(r.success, true, r.error);
+      return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    };
+
+    assert.match(trace(T0, ['--raw']), /origin\/HEAD/, 'positive control: an unheld plain query runs the base check');
+    force(dir, T0 + 1000, 'none', A);
+    assert.doesNotMatch(trace(T0 + 2000, ['--json', ...scope({ phase: A.phase })]), /origin\/HEAD/);
+  });
+
   test('a NEWER phase-level record cannot outrank a plan query\'s own keyed record', (t) => {
     const dir = project(t);
     force(dir, T0, 'none', A);
