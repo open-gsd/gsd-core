@@ -46,7 +46,7 @@ import { maskIfSecret } from './secrets.cjs';
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-document.cjs is an export= CommonJS module
 import planDocument = require('./plan-document.cjs');
-import { stateExtractField } from './state-document.cjs';
+import { readRecordedPlanTotal } from './state-transition.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
 import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
@@ -1250,8 +1250,7 @@ function cmdInitExecutePhase(
         const stateWarnings: string[] = [];
         if (phaseInfo?.['directory'] && fs.existsSync(path.join(cwd, phaseInfo['directory'] as string))) {
           const diskPlans = listPhasePlanFiles(path.join(cwd, phaseInfo['directory'] as string)).length;
-          const totalPlansRaw = stateExtractField(stateContent, 'Total Plans in Phase');
-          const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
+          const totalPlansInPhase = readRecordedPlanTotal(stateContent);
           if (totalPlansInPhase !== null && diskPlans !== totalPlansInPhase) {
             stateWarnings.push(
               `Plan count mismatch: STATE.md says ${totalPlansInPhase}, disk has ${diskPlans}`,
@@ -1514,8 +1513,7 @@ function cmdInitPlanPhase(
       if (stateContent !== null) {
         const stateWarnings: string[] = [];
         result['state_validation_ran'] = true;
-        const totalPlansRaw = stateExtractField(stateContent, 'Total Plans in Phase');
-        const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
+        const totalPlansInPhase = readRecordedPlanTotal(stateContent);
         if (
           totalPlansInPhase !== null &&
           phaseInfo &&
