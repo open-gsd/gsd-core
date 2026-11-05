@@ -32,7 +32,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { cleanup, TOOLS_PATH, installSpawnEnv } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const LIB_DIR = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
 const CONFIG_LOADER_PATH = path.join(LIB_DIR, 'config-loader.cjs');
@@ -325,6 +325,77 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     });
   }
 
+  test('direct fallback: a dangling symlink target is refused with ENXIO, nothing is created through it', () => {
+    const target = path.join(tmpDir, 'dangling.json');
+    const missing = path.join(tmpDir, 'not-created.txt');
+    fs.symlinkSync(missing, target);
+
+    const r = runNode(['-e', DIRECT_FALLBACK_SCRIPT, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'ENXIO');
+    assert.strictEqual(fs.existsSync(missing), false, 'the link target must not be created');
+    assert.ok(fs.lstatSync(target).isSymbolicLink(), 'the symlink itself is left in place');
+  });
+
+  // A write that fails after the file was truncated must leave the whole OLD content, not the
+  // new prefix followed by the old tail.
+  const PARTIAL_WRITE_SCRIPT = [
+    'const fs = require("node:fs");',
+    'const realOpen = fs.openSync;',
+    'fs.openSync = (p, ...rest) => {',
+    '  if (String(p).includes(".tmp.")) { const e = new Error("EACCES: no temp"); e.code = "EACCES"; throw e; }',
+    '  return realOpen(p, ...rest);',
+    '};',
+    'const realWrite = fs.writeFileSync;',
+    'fs.writeFileSync = (fd, data, ...rest) => {',
+    '  if (typeof fd === "number") { fs.writeSync(fd, "NEW"); const e = new Error("ENOSPC: injected"); e.code = "ENOSPC"; throw e; }',
+    '  return realWrite(fd, data, ...rest);',
+    '};',
+    'const { platformWriteSync } = require(process.argv[1]);',
+    'try { platformWriteSync(process.argv[2], "NEW CONTENT THAT IS LONG\\n"); process.stdout.write(JSON.stringify({ code: "ok" })); }',
+    'catch (e) { process.stdout.write(JSON.stringify({ code: e.code })); }',
+  ].join('\n');
+
+  test('direct fallback: a partial write leaves the whole old content, never new prefix plus old tail', () => {
+    const target = path.join(tmpDir, 'partial.json');
+    fs.writeFileSync(target, 'OLD CONTENT, LONGER THAN THE NEW PREFIX\n');
+
+    const r = runNode(['-e', PARTIAL_WRITE_SCRIPT, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'ENOSPC');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'OLD CONTENT, LONGER THAN THE NEW PREFIX\n');
+  });
+
+  test('a target name too long for the default temp suffix is still written atomically (shorter suffix)', () => {
+    const name = `${'n'.repeat(236)}.json`;
+    const target = path.join(tmpDir, name);
+
+    const plainWrite = [
+      'const { platformWriteSync } = require(process.argv[1]);',
+      'platformWriteSync(process.argv[2], "hello\\n");',
+      'process.stdout.write("done");',
+    ].join('\n');
+    const r = runNode(['-e', plainWrite, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(fs.readFileSync(target, 'utf8').includes('hello'));
+    assert.deepStrictEqual(fs.readdirSync(tmpDir), [name], 'no temp file is left beside the target');
+  });
+
   test('direct fallback: a device target is refused with ENXIO', () => {
     const r = runNode(['-e', DIRECT_FALLBACK_SCRIPT, SHELL_PROJECTION_PATH, '/dev/null'], {
       cwd: tmpDir,
@@ -419,6 +490,223 @@ describe('#5759 an unusable-config warning never writes a raw control character'
     assert.strictEqual(JSON.parse(r.stdout).reason, 'config_unreadable');
     assert.ok(!r.stderr.includes('\u001b'), 'no raw ESC byte reaches the terminal');
     assert.ok(r.stderr.includes('proj\\x1b[31mred'), `the ESC is shown escaped: ${JSON.stringify(r.stderr)}`);
+  });
+});
+
+// Library readers with no CLI entry of their own: a child requires the built module and calls the
+// reader against a project whose config.json is a FIFO. The child must exit by itself.
+describe('#5759 every other rerouted reader returns on a FIFO config.json', { skip: SKIP_WIN32 }, () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-lib-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    makeFifo(path.join(tmpDir, '.planning', 'config.json'));
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  // [label, module, expression over `m` (the module) and `cwd`]. Errors are swallowed in the
+  // child: only a hang matters here, the reader's own degraded result is pinned where noted.
+  const LIB_ROWS = [
+    ['gap-checker readGate', 'gap-checker', 'm.runGapAnalysis(cwd, "1")'],
+    ['graphify resolveGraphLocation (graphifyQuery)', 'graphify', 'm.graphifyQuery(cwd, "x")'],
+    ['graphify graphifyBuild', 'graphify', 'm.graphifyBuild(cwd)'],
+    ['estimate-cli readSmartZoneBudget', 'estimate-cli', 'm.readSmartZoneBudget(cwd)'],
+    ['cmdPhaseComplete auto-prune read', 'phase', 'm.cmdPhaseComplete(cwd, "1", false)'],
+    ['health-diagnostic repair (addNyquistKey)', 'health-diagnostic',
+      'm.applyRepairs(cwd, [{ code: "W005", remedy: { action: "addNyquistKey", risk: "safe" } }], true, false)'],
+    ['roadmap-upgrade computeMigrationPlan', 'roadmap-upgrade', 'm.computeMigrationPlan(cwd, {})'],
+    ['roadmap-upgrade computeBracketPlan', 'roadmap-upgrade', 'm.computeMigrationPlan(cwd, { convention: "bracket" })'],
+    ['capability-activation resolveConfigKey', 'capability-activation',
+      'm.resolveConfigKey("security_enforcement", { config: {}, cwd, registry: {} })'],
+    ['capability-writer setCapabilityState', 'capability-writer', 'm.setCapabilityState(cwd, { id: "x", enabled: true })'],
+    ['configuration migrateOnDisk', 'configuration', 'm.migrateOnDisk(cwd, undefined, require("node:path").join(cwd, ".planning", "config.json"))'],
+    ['project-root findProjectRoot', 'project-root', 'm.findProjectRoot(require("node:path").join(cwd, "sub", "dir"))'],
+    ['planning-snapshot buildConfigField', 'planning-snapshot', 'm.buildPlanningSnapshot(cwd)'],
+    ['phase-locator phaseDirectoryOptions', 'phase-locator', 'm.phaseDirectoryOptions(cwd)'],
+    ['stale-bake-guard _readRuntimeConfig (warnIfStaleBake)', 'stale-bake-guard', 'm.warnIfStaleBake(cwd)'],
+    ['install-model-override-resolver readGsdEffectiveModelOverrides', 'install-model-override-resolver',
+      'm.readGsdEffectiveModelOverrides(cwd)'],
+  ];
+
+  for (const [label, mod, expr] of LIB_ROWS) {
+    test(`${label} returns instead of blocking`, () => {
+      const script = [
+        'const path = require("node:path");',
+        'const m = require(path.join(process.argv[1], process.argv[2] + ".cjs"));',
+        'const cwd = process.argv[3];',
+        'try { void (' + expr + '); } catch (e) { /* only a hang matters */ }',
+        'process.stdout.write("done");',
+      ].join('\n');
+
+      const r = runNode(['-e', script, LIB_DIR, mod, tmpDir], {
+        cwd: tmpDir,
+        env: installSpawnEnv({ GSD_RUNTIME: 'claude', GSD_WORKSTREAM: '' }),
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+
+      assertExited(r);
+    });
+  }
+
+  test('roadmap-upgrade applyMigration throws and rolls back on a FIFO config instead of writing to it', () => {
+    // A clean working tree is a precondition of applyMigration; the FIFO is excluded from status.
+    const git = (...args) => execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
+      cwd: tmpDir, stdio: 'ignore', timeout: PROBE_TIMEOUT_MS,
+    });
+    git('init', '-q', '.');
+    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '.planning/config.json\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'line a\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    const script = [
+      'const path = require("node:path");',
+      'const m = require(path.join(process.argv[1], "roadmap-upgrade.cjs"));',
+      'const cwd = process.argv[2];',
+      'const plan = { alreadyMigrated: false, phases: [], roadmapEdits: [{ file: "ROADMAP.md", from: "a", to: "b" }], crossRefEdits: [] };',
+      'let message = "";',
+      'try { m.applyMigration(cwd, plan, { dryRun: false }); } catch (e) { message = String(e.message); }',
+      'process.stdout.write(JSON.stringify({ message }));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, LIB_DIR, tmpDir], {
+      cwd: tmpDir,
+      env: installSpawnEnv({ GSD_RUNTIME: 'claude', GSD_WORKSTREAM: '' }),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(JSON.parse(r.stdout).message.includes('ENXIO'), r.stdout);
+  });
+
+  test('the installer warning for an unusable project config prints the path with control characters escaped', () => {
+    const project = path.join(tmpDir, 'proj\u001b[31mred');
+    fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+    makeFifo(path.join(project, '.planning', 'config.json'));
+    const script = [
+      'const path = require("node:path");',
+      'const m = require(path.join(process.argv[1], "install-effort-resolver.cjs"));',
+      'm.readGsdEffectiveEffortConfig(process.argv[2]);',
+      'process.stdout.write("done");',
+    ].join('\n');
+
+    const r = runNode(['-e', script, LIB_DIR, project], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(!r.stderr.includes('\u001b'), 'no raw ESC byte reaches the terminal');
+    assert.ok(r.stderr.includes('proj\\x1b[31mred'), JSON.stringify(r.stderr));
+  });
+
+  test('migrateOnDisk on a FIFO config reports nothing to migrate', () => {
+    const script = [
+      'const path = require("node:path");',
+      'const m = require(path.join(process.argv[1], "configuration.cjs"));',
+      'process.stdout.write(JSON.stringify(m.migrateOnDisk(process.argv[2], undefined, path.join(process.argv[2], ".planning", "config.json"))));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, LIB_DIR, tmpDir], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).migrated, false);
+  });
+});
+
+// Hooks run inside the user's session on every tool call and are staged as standalone files.
+describe('#5759 hooks, the opencode plugin and the installer do not block on a FIFO config.json', {
+  skip: SKIP_WIN32,
+}, () => {
+  const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-hooks-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    makeFifo(path.join(tmpDir, '.planning', 'config.json'));
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const HOOK_ROWS = [
+    ['gsd-config-reload.js', (p) => ({ event: 'change', file_path: path.join(p, '.planning', 'config.json'), cwd: p })],
+    ['gsd-context-monitor.js', (p) => ({ session_id: 's', cwd: p })],
+    ['gsd-workflow-guard.js', (p) => ({ tool_name: 'Write', tool_input: { file_path: path.join(p, 'a.txt') }, cwd: p })],
+    ['gsd-agent-isolation-guard.js', (p) => ({
+      tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', prompt: 'x' }, cwd: p,
+    })],
+  ];
+
+  for (const [hook, payload] of HOOK_ROWS) {
+    test(`${hook} exits on its own with a FIFO project config.json`, () => {
+      const r = runNode([path.join(HOOKS_DIR, hook)], {
+        cwd: tmpDir,
+        env: installSpawnEnv({ GSD_RUNTIME: '', GSD_WORKSTREAM: '' }),
+        input: JSON.stringify(payload(tmpDir)),
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+
+      assertExited(r);
+    });
+  }
+
+  test('the hooks reader returns text, null for absent, and throws ENXIO / EFBIG / EISDIR', () => {
+    const { readConfigFileBounded, CONFIG_MAX_BYTES } = require(path.join(HOOKS_DIR, 'lib', 'config-read.js'));
+    const file = path.join(tmpDir, 'plain.json');
+    fs.writeFileSync(file, '{"a":1}');
+
+    assert.strictEqual(readConfigFileBounded(file), '{"a":1}');
+    assert.strictEqual(readConfigFileBounded(path.join(tmpDir, 'absent.json')), null);
+    assert.throws(() => readConfigFileBounded(path.join(tmpDir, 'absent.json'), { required: true }), (e) => e.code === 'ENOENT');
+    assert.throws(() => readConfigFileBounded(tmpDir), (e) => e.code === 'EISDIR');
+    fs.writeFileSync(file, ' '.repeat(CONFIG_MAX_BYTES + 1));
+    assert.throws(() => readConfigFileBounded(file), (e) => e.code === 'EFBIG');
+  });
+
+  test('the hooks reader and the built reader agree on the size cap', () => {
+    const hooksCap = require(path.join(HOOKS_DIR, 'lib', 'config-read.js')).CONFIG_MAX_BYTES;
+    assert.strictEqual(hooksCap, require(path.join(LIB_DIR, 'config-file-read.cjs')).CONFIG_MAX_BYTES);
+  });
+
+  test('the opencode plugin reader (readConfigBounded) is bounded: contextWarningsDisabled returns on a FIFO', () => {
+    // The plugin exports only its factory; the config reads sit behind its tool.execute hooks,
+    // so a child builds the plugin for the project and drives both hooks once.
+    for (const plugin of ['.opencode', '.kilo']) {
+      const pluginPath = path.join(__dirname, '..', plugin, 'plugins', 'gsd-core.js');
+      const script = [
+        '(async () => {',
+        '  const m = require(process.argv[1]);',
+        '  const hooks = await m.server({ directory: process.argv[2] });',
+        '  const call = { tool: "bash", args: { command: "git commit -m x" }, sessionID: "s" };',
+        '  for (const name of ["tool.execute.before", "tool.execute.after"]) {',
+        '    try { await hooks[name](call, { args: call.args, output: "", metadata: {} }); } catch (e) { /* only a hang matters */ }',
+        '  }',
+        '  process.stdout.write("done");',
+        '})();',
+      ].join('\n');
+
+      const r = runNode(['-e', script, pluginPath, tmpDir], {
+        cwd: tmpDir,
+        env: installSpawnEnv({ CI: '' }),
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+
+      assertExitedByItself(r);
+      assert.strictEqual(r.stdout, 'done', `${plugin} plugin hooks completed`);
+    }
+  });
+
+  test('bin/install.js completes a local install when an ancestor .planning/config.json is a FIFO', () => {
+    const r = runNode([path.join(__dirname, '..', 'bin', 'install.js'), '--claude', '--local'], {
+      cwd: tmpDir,
+      env: installSpawnEnv({ GSD_WORKSTREAM: '' }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
   });
 });
 
