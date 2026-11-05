@@ -80,7 +80,7 @@
 //   segment's names as the sub-command's read operands.
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
-// before `{` or `(`, or a `"` and zsh's arithmetic (`((`, `$[`), is scanned under
+// before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
 // bash's, zsh's and dash's reading of it, then the scan as it was before
 // #5255, and denied on any; a `$'…'` word with
 // no value to check is denied as `ansi-c-unterminated` / `ansi-c-undecodable`.
@@ -176,7 +176,7 @@ const MAX_NESTING_DEPTH = 3;
 // reading and every nested rescan (#5255). Four readings, each rescanning
 // each nested `$( )`, multiply the work: a 1 MiB run of `$$(` is tokenized
 // about 60 times over and took seconds per call. A command holding a reading
-// trigger (`$'`, `$"`, `$${`, `$$(`, or `"` with `((` or `$[`;
+// trigger (`$'`, `$"`, `$${`, `$$(`, or a quote with `((` or `$[`;
 // readsEachWay) is scanned
 // four times, and a nested body it rescans (`$( )`, backticks, `<( )`,
 // `eval`, `bash -c`, a heredoc or here-string fed to a shell) that holds one
@@ -1038,10 +1038,10 @@ function findParenClose(str, i, reading) {
 // opener is at `i` — the `[` of `$[`, or the inner `(` of `$((` or `((` — or
 // -1 when there is none, under another reading, or with the ${…} reader off.
 // zsh takes a `$[ … ]` and a `$(( … ))` as arithmetic before anything else, and
-// in arithmetic a quote is not one: `x$(($"));cat .env` and
-// `echo ${x+$[ } ' ]}; cat $'.env' #'` run the read. `$(( … ))` must end in
-// `))`, or it is a `$( )` holding a subshell, and without a `"` the two
-// readings of it agree, so only a body holding one is taken here. Called
+// in arithmetic a quote is not one: `x$(($"));cat .env`,
+// `((x' ));cat .env;''` and `echo ${x+$[ } ' ]}; cat $'.env' #'` run the read.
+// `$(( … ))` must end in `))`, or it is a `$( )` holding a subshell, and only a
+// body holding a quote can read differently, so only that is taken here. Called
 // where a caller goes on one character on -1, so each step is charged:
 // unclosed openers would otherwise each read to the end.
 function zshMathEnd(str, i, reading) {
@@ -1054,7 +1054,7 @@ function zshMathEnd(str, i, reading) {
     if (str[p] === open) depth++;
     else if (str[p] === close && --depth === 0) {
       if (bracket) return p;
-      return str[p + 1] === ')' && str.slice(i, p).includes('"') ? p + 1 : -1;
+      return str[p + 1] === ')' && /["']/.test(str.slice(i, p)) ? p + 1 : -1;
     }
   }
   return -1;
@@ -1352,6 +1352,7 @@ function tokenize(str, reading) {
       if (math !== -1) {
         hasWord = true;
         buf += str.slice(i, math + 1);
+        collectSubstitutions(str.slice(run.end + 1, math), nested, reading); // zsh expands them
         i = math + 1;
         continue;
       }
@@ -1398,6 +1399,7 @@ function tokenize(str, reading) {
         const math = c === '$' && str[i + 1] === '[' ? zshMathEnd(str, i + 1, reading) : -1;
         if (math !== -1) {
           buf += str.slice(i, math + 1);
+          collectSubstitutions(str.slice(i + 2, math), nested, reading);
           i = math + 1;
           continue;
         }
@@ -1596,7 +1598,11 @@ function tokenize(str, reading) {
     }
     if (ch === '(' && str[i + 1] === '(' && !hasWord) {
       const math = zshMathEnd(str, i + 1, reading);
-      if (math !== -1) { i = math + 1; continue; }
+      if (math !== -1) {
+        collectSubstitutions(str.slice(i + 2, math - 1), nested, reading);
+        i = math + 1;
+        continue;
+      }
     }
     if (ch === '(' || ch === ')') {
       sep(ch);
@@ -2081,8 +2087,8 @@ function readEachWay(command, depth) {
 function readsEachWay(command) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   return joined.includes("$'") || joined.includes('$"') || joined.includes('$${') || joined.includes('$$(')
-    // zsh's arithmetic holding a `"` (zshMathEnd): `$[`, `$((` and `((`.
-    || (joined.includes('"') && (joined.includes('((') || joined.includes('$[')));
+    // zsh's arithmetic holding a quote (zshMathEnd): `$[`, `$((` and `((`.
+    || ((joined.includes('"') || joined.includes("'")) && (joined.includes('((') || joined.includes('$[')));
 }
 
 // A Bash block for a read of the secret file `text` names.
