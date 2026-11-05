@@ -46,6 +46,7 @@ const {
   resolveBase,
   isReleaseMergePr,
   RELEASE_MERGE_NEXT_CANDIDATES,
+  readAckTrailers,
   resolveAttributionBase,
   resolveAttributionInputs,
   baseRefCandidates,
@@ -2993,10 +2994,51 @@ test('#5902: the "Tried:" diagnostic lists the candidates actually tried', () =>
     };
     const releaseEnv = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
     assert.equal(triedOf(releaseEnv, payloadReader(SAME_REPO)), RELEASE_MERGE_NEXT_CANDIDATES.join(', '));
+    const releaseLine = [];
+    resolveAttributionBase(releaseEnv, {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => releaseLine.push(m),
+    });
+    assert.ok(releaseLine.some((m) => m.includes('resolved base') && !m.includes('to override')),
+      'a release-merge PR ignores GSD_EMITTED_BASE, so the override hint must be absent');
     assert.deepEqual([...RELEASE_MERGE_NEXT_CANDIDATES], ['origin/next', 'upstream/next', 'next']);
 
     const ordinaryEnv = prEnv('fix/1-x', 'main', { GSD_EMITTED_BASE: mainSha });
     assert.equal(triedOf(ordinaryEnv, payloadReader(SAME_REPO)), baseRefCandidates(ordinaryEnv).join(', '));
+    const ordinaryLine = [];
+    resolveAttributionBase(ordinaryEnv, {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => ordinaryLine.push(m),
+    });
+    assert.ok(ordinaryLine.some((m) => m.includes('resolved base') && m.includes('to override')),
+      'an ordinary PR keeps the GSD_EMITTED_BASE override hint');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('#5902: CI shape — main merged into the release branch does not move the base or leak main-only trailers', () => {
+  const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+  try {
+    // A squash on main (never on next) carrying an ack trailer, as the previous release left it.
+    gitFixture(root, ['checkout', '-q', 'main']);
+    fs.writeFileSync(path.join(root, 'main-only.txt'), 'squash\n');
+    gitFixture(root, ['add', '-A']);
+    gitFixture(root, ['commit', '-q', '-m',
+      'chore: merge release v1.1.0 to main\n\nEmitted-Drift-Ack-Growth: x.md \u2014 reason']);
+    const squashSha = gitFixture(root, ['rev-parse', 'HEAD']);
+    assert.equal(gitFixture(root, ['branch', '--contains', squashSha, '--list', 'next']), '',
+      'the squash must not be reachable from next');
+
+    // CI "Rebase check": merge main into the release branch.
+    gitFixture(root, ['checkout', '-q', 'release/1.2.0']);
+    gitFixture(root, ['merge', '-q', '--no-ff', '-m', 'Merge main into release/1.2.0', 'main']);
+
+    const env = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    const base = resolveAttributionBase(env, { cwd: root, readFile: payloadReader(SAME_REPO) });
+    assert.equal(base.sha, forkSha, 'the base is still the fork point on next');
+
+    const ack = readAckTrailers({ baseRef: base.sha, cwd: root });
+    assert.equal(JSON.stringify(ack).includes('x.md'), false,
+      'no trailer of the main-only squash may reach the measured range');
   } finally {
     cleanup(root);
   }

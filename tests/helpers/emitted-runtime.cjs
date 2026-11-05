@@ -399,8 +399,13 @@ function resolveNextRef({ cwd = REPO_ROOT } = {}) {
  * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
  * baseline built at the `next` TIP attributed that merge to the release branch.
  *
- * PR lanes merge the tree onto `pull_request.base.sha` first, so there the merge-base
- * IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * Ordinary PR lanes merge the tree onto `pull_request.base.sha` first, so there the
+ * merge-base IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * A release-merge PR (`release/X.Y.0` or `hotfix/X.Y.Z` -> `main`, #5902) is the exception:
+ * its base is the fork point on `next` (`origin/next`, `upstream/next`, `next`; first that
+ * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, and that sha is not
+ * `base.sha`, so the `emitted-baseline-<base.sha>` cache key misses and the baseline is
+ * built in-job.
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
@@ -411,6 +416,8 @@ function resolveNextRef({ cwd = REPO_ROOT } = {}) {
  * @param {object} [options] resolution and reporting options.
  * @param {string} [options.cwd] repository to resolve against.
  * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
+ * @param {function} [options.readFile] `(path) => string` seam for the Actions event payload
+ *   (`GITHUB_EVENT_PATH`) read when classifying a release-merge PR; defaults to `fs.readFileSync`.
  * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
  */
 function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic, readFile } = {}) {
@@ -427,7 +434,7 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   if (diagnostic) {
     diagnostic(
       `emitted-attribution resolved base: ${resolved ? `${resolved.ref}@${resolved.sha}` : 'none'}; ` +
-      'set GSD_EMITTED_BASE=<ref|sha> to override. Tried: ' +
+      (releaseMerge ? '' : 'set GSD_EMITTED_BASE=<ref|sha> to override. ') + 'Tried: ' +
       (releaseMerge ? RELEASE_MERGE_NEXT_CANDIDATES : baseRefCandidates(env)).join(', '),
     );
   }
