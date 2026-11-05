@@ -1460,6 +1460,271 @@ describe('#5759 plugin copies honor the shared config size cap', () => {
   }
 });
 
+describe('#5759 review round: temp-file modes without touching the process umask', { skip: SKIP_WIN32 }, () => {
+  const { mock } = require('node:test');
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-mode-')); });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  function spyOpens() {
+    const calls = [];
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, flags, mode) => {
+      calls.push({ p: String(p), flags, mode });
+      return realOpen(p, flags, mode);
+    });
+    return calls;
+  }
+
+  test('platformWriteSync never calls process.umask() with no argument (it would zero the umask, DEP0139)', () => {
+    const umaskCalls = [];
+    const realUmask = process.umask;
+    mock.method(process, 'umask', (...args) => { umaskCalls.push(args.length); return realUmask.apply(process, args); });
+    platformWriteSync(path.join(tmpDir, 'fresh.json'), '{}\n');
+    assert.deepStrictEqual(umaskCalls, []);
+  });
+
+  test('the temp file of an existing 0600 target is created with mode 0600; a new file with 0666', () => {
+    const priv = path.join(tmpDir, 'private.json');
+    fs.writeFileSync(priv, '{}');
+    fs.chmodSync(priv, 0o600);
+    const fresh = path.join(tmpDir, 'fresh.json');
+    const calls = spyOpens();
+
+    platformWriteSync(priv, '{"a":1}\n');
+    platformWriteSync(fresh, '{"a":1}\n');
+
+    const tmpFor = (target) => calls.filter((c) => c.p.startsWith(`${target}.tmp.`));
+    assert.strictEqual(tmpFor(priv).length, 1);
+    assert.strictEqual(tmpFor(fresh).length, 1);
+    if (process.platform !== 'win32') {
+      assert.strictEqual(tmpFor(priv)[0].mode, 0o600);
+      assert.strictEqual(tmpFor(fresh)[0].mode, 0o666);
+      assert.strictEqual(fs.statSync(priv).mode & 0o777, 0o600);
+    }
+  });
+
+  test('a new file ends at 0666 narrowed by a umask read in a child process', () => {
+    const script = [
+      'const fs = require("node:fs");',
+      'process.umask(0o027);',
+      'require(process.argv[1]).platformWriteSync(process.argv[2], "x\\n");',
+      'process.stdout.write((fs.statSync(process.argv[2]).mode & 0o777).toString(8));',
+    ].join('\n');
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, path.join(tmpDir, 'child.json')], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    assertExitedByItself(r);
+    assert.strictEqual(r.stdout, (0o666 & ~0o027).toString(8));
+  });
+});
+
+describe('#5759 review round: another process\'s descriptors and unresolvable directories are refused', { skip: SKIP_WIN32 }, () => {
+  const { mock } = require('node:test');
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-pid-')); });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  const code = (fn) => { try { fn(); return 'ok'; } catch (e) { return e.code; } };
+
+  test('/proc/<other pid>/fd/0-2 and /proc/<other pid>/task/<tid>/fd/1 are refused with ENXIO, flag or no flag', () => {
+    const other = process.pid + 1;
+    for (const target of [`/proc/${other}/fd/0`, `/proc/${other}/fd/1`, `/proc/${other}/fd/2`, `/proc/${other}/task/${other}/fd/1`, '/proc/1/fd/1']) {
+      for (const opts of [{ allowSpecialTarget: true, verbatim: true }, { verbatim: true }]) {
+        assert.strictEqual(code(() => platformWriteSync(target, 'x', opts)), 'ENXIO', `${target} ${JSON.stringify(opts)}`);
+      }
+    }
+  });
+
+  test('this process\'s own pid and thread-self spellings beyond fd 2 are still refused', () => {
+    for (const target of [`/proc/${process.pid}/fd/7`, '/proc/thread-self/fd/7', '/proc/self/fd/3']) {
+      assert.strictEqual(code(() => platformWriteSync(target, 'x', { allowSpecialTarget: true, verbatim: true })), 'ENXIO', target);
+    }
+  });
+
+  test('a relative symlink whose holding directory cannot be resolved is refused with ENXIO', () => {
+    const target = path.join(tmpDir, 'target.txt');
+    fs.writeFileSync(target, 'UNCHANGED');
+    const link = path.join(tmpDir, 'link.txt');
+    fs.symlinkSync('target.txt', link);
+    mock.method(fs.realpathSync, 'native', () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); });
+
+    assert.strictEqual(code(() => platformWriteSync(link, 'x', { verbatim: true })), 'ENXIO');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'UNCHANGED');
+  });
+
+  test('allowSpecialTarget on an existing target whose directory cannot be resolved is refused with ENXIO', () => {
+    const target = path.join(tmpDir, 'plain.txt');
+    fs.writeFileSync(target, 'UNCHANGED');
+    mock.method(fs.realpathSync, 'native', () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); });
+
+    assert.strictEqual(code(() => platformWriteSync(target, 'x', { allowSpecialTarget: true, verbatim: true })), 'ENXIO');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'UNCHANGED');
+  });
+
+  test('a link whose target merely spells /dev/fd/5 after a non-directory is classified physically, not refused lexically', () => {
+    const link = path.join(tmpDir, 'odd.txt');
+    fs.symlinkSync('/dev/null/../fd/5', link);
+
+    assert.notStrictEqual(code(() => platformWriteSync(link, 'x', { verbatim: true })), 'ENXIO');
+  });
+
+  test('a plain path to a file this process holds open is still written (no descriptor-alias false positive)', () => {
+    const file = path.join(tmpDir, 'held.txt');
+    fs.writeFileSync(file, 'old');
+    const held = fs.openSync(file, fs.constants.O_RDWR);
+    try {
+      assert.ok(held > 2);
+      platformWriteSync(file, 'new', { verbatim: true });
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), 'new');
+    } finally {
+      fs.closeSync(held);
+    }
+  });
+});
+
+describe('#5759 review round: printablePath escapes every format, separator and surrogate character', () => {
+  const { printablePath } = require(path.join(LIB_DIR, 'config-file-read.cjs'));
+
+  const CASES = [
+    [0x061c, '\\u061c'], [0xfeff, '\\ufeff'], [0x00ad, '\\u00ad'], [0x180e, '\\u180e'],
+    [0x206a, '\\u206a'], [0xfff9, '\\ufff9'], [0xe0001, '\\u{e0001}'],
+  ];
+  for (const [cp, expected] of CASES) {
+    test(`U+${cp.toString(16)} becomes ${expected}`, () => {
+      assert.strictEqual(printablePath(`a${String.fromCodePoint(cp)}b`), `a${expected}b`);
+    });
+  }
+
+  test('a lone surrogate is escaped, a paired one is left alone', () => {
+    assert.strictEqual(printablePath(`a${String.fromCharCode(0xd800)}b`), 'a\\ud800b');
+    assert.strictEqual(printablePath(`a${String.fromCharCode(0xdc00)}b`), 'a\\udc00b');
+    const pair = String.fromCodePoint(0x1f600);
+    assert.strictEqual(printablePath(`a${pair}b`), `a${pair}b`);
+  });
+
+  test('ordinary non-ASCII is unchanged', () => {
+    const word = `caf${String.fromCharCode(0xe9)}`;
+    assert.strictEqual(printablePath(word), word);
+  });
+});
+
+describe('#5759 review round: every bounded reader and special-target writer opens with O_NOCTTY', () => {
+  const { mock } = require('node:test');
+  const noctty = fs.constants.O_NOCTTY || 0;
+  const READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | noctty;
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-ctty-')); });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  function spyOpens() {
+    const calls = [];
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, flags, ...rest) => {
+      calls.push({ p: String(p), flags });
+      return realOpen(p, flags, ...rest);
+    });
+    return calls;
+  }
+  const flagsFor = (calls, file) => calls.filter((c) => c.p === file).map((c) => c.flags);
+
+  const READERS = {
+    'src/config-file-read (readConfigFileBounded)': (file) => require(path.join(LIB_DIR, 'config-file-read.cjs')).readConfigFileBounded(file),
+    'src/capability-ledger (readSmallRegularFile)': (file) => require(path.join(LIB_DIR, 'capability-ledger.cjs')).readSmallRegularFile(file, 1024),
+    'src/capability-ledger (readSmallRegularFileBuffer)': (file) => require(path.join(LIB_DIR, 'capability-ledger.cjs')).readSmallRegularFileBuffer(file, 1024),
+    'src/configuration (migrateOnDisk)': (file) => require(path.join(LIB_DIR, 'configuration.cjs')).migrateOnDisk(tmpDir, undefined, file),
+    'hooks/lib/config-read': (file) => require(path.join(__dirname, '..', 'hooks', 'lib', 'config-read.js')).readConfigFileBounded(file),
+  };
+
+  for (const [label, read] of Object.entries(READERS)) {
+    test(`${label} opens with O_RDONLY | O_NONBLOCK | O_NOCTTY`, () => {
+      const file = path.join(tmpDir, 'config.json');
+      fs.writeFileSync(file, '{}');
+      const calls = spyOpens();
+
+      read(file);
+
+      const flags = flagsFor(calls, file);
+      assert.ok(flags.length >= 1, 'the reader opened the file');
+      for (const f of flags) assert.strictEqual(f, READ_FLAGS);
+    });
+  }
+
+  test('hooks/gsd-statusline settings reader opens with the same flag set', () => {
+    const settings = path.join(tmpDir, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settings), { recursive: true });
+    fs.writeFileSync(settings, '{}');
+    const calls = spyOpens();
+
+    require(path.join(__dirname, '..', 'hooks', 'gsd-statusline.js')).isAutoCompactDisabled(tmpDir, {});
+
+    const flags = flagsFor(calls, settings);
+    assert.ok(flags.length >= 1, 'the settings file was opened');
+    for (const f of flags) assert.strictEqual(f, READ_FLAGS);
+  });
+
+  for (const plugin of ['.opencode', '.kilo']) {
+    test(`${plugin} plugin config reader opens with the same flag set`, async () => {
+      const root = path.join(tmpDir, plugin.slice(1));
+      fs.mkdirSync(path.join(root, 'plugins'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'hooks'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'gsd-core'), { recursive: true });
+      const copy = path.join(root, 'plugins', 'gsd-core.js');
+      fs.copyFileSync(path.join(__dirname, '..', plugin, 'plugins', 'gsd-core.js'), copy);
+      const project = path.join(root, 'proj');
+      fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+      const config = path.join(project, '.planning', 'config.json');
+      fs.writeFileSync(config, JSON.stringify({ hooks: { context_warnings: false } }));
+      const calls = spyOpens();
+
+      const hooks = await require(copy).server({ directory: project });
+      const call = { tool: 'bash', args: { command: 'ls' }, sessionID: 's1' };
+      try { await hooks['tool.execute.after'](call, { args: call.args, output: '', metadata: {} }); } catch { /* only the open matters */ }
+
+      const flags = calls.filter((c) => c.p.endsWith(path.join('.planning', 'config.json'))).map((c) => c.flags);
+      assert.ok(flags.length >= 1, 'the plugin opened the config');
+      for (const f of flags) assert.strictEqual(f, READ_FLAGS);
+    });
+  }
+
+  test('the prior-Markdown read of platformWriteSync opens with O_NOCTTY', () => {
+    const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+    const file = path.join(tmpDir, 'doc.md');
+    fs.writeFileSync(file, '# old\n');
+    const calls = spyOpens();
+
+    platformWriteSync(file, '# new\n');
+
+    const flags = flagsFor(calls, file);
+    assert.ok(flags.length >= 1, 'the prior document was opened');
+    for (const f of flags) assert.strictEqual(f & noctty, noctty);
+  });
+
+  test('the special-target writers open a character device and a FIFO with O_NOCTTY', { skip: SKIP_WIN32 }, () => {
+    const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+    const fifo = path.join(tmpDir, 'out.fifo');
+    makeFifo(fifo);
+    const reader = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    const calls = spyOpens();
+    try {
+      platformWriteSync('/dev/null', 'x', { allowSpecialTarget: true, verbatim: true });
+      platformWriteSync(fifo, 'x', { allowSpecialTarget: true, verbatim: true });
+    } finally {
+      fs.closeSync(reader);
+    }
+
+    for (const target of ['/dev/null', fifo]) {
+      const writes = calls.filter((c) => c.p === target && (c.flags & 3) === fs.constants.O_WRONLY);
+      assert.ok(writes.length >= 1, `${target} was opened for write`);
+      for (const w of writes) assert.strictEqual(w.flags & noctty, noctty, target);
+    }
+  });
+});
+
 // Windows only: NUL is a character device and is written in place (no temp file beside it).
 describe('#5759 allowSpecialTarget on Windows device names', {
   skip: process.platform === 'win32' ? false : 'NUL and CON exist only on Windows',
