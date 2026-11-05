@@ -279,4 +279,4 @@ function frontmatterCalls(content) {
   });
 }
 
-module.exports = { queryCalls, queryNames, frontmatterCalls };
+module.exports = { shellTokens, queryCalls, queryNames, frontmatterCalls };

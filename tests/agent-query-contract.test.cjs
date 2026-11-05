@@ -17,7 +17,15 @@ const DOCUMENTED_ROOTS = [
   'agents', path.join('gsd-core', 'workflows'), 'commands',
   'skills', path.join('pi', 'package-skills'), path.join('pi', 'package-agents'),
 ];
-const { queryNames, frontmatterCalls } = require('./helpers/agent-query-parser.cjs');
+const { queryNames, frontmatterCalls, shellTokens } = require('./helpers/agent-query-parser.cjs');
+
+// Shell-quote one word three ways bash accepts; each must read back as exactly that word.
+const SHELL_QUOTERS = {
+  single: (word) => `'${word.replace(/'/g, `'\\''`)}'`,
+  double: (word) => `"${word.replace(/[$`"\\]/g, (ch) => `\\${ch}`)}"`,
+  backslash: (word) => (word === '' || word.includes('\n') ? SHELL_QUOTERS.single(word) : word.replace(/./g, (ch) => `\\${ch}`)),
+};
+const shellWord = fc.string({ unit: fc.constantFrom(...'aZ09 -_./~=:,@%+\t\n\'"\\$`;|&()<>#*?[]{}!^'), maxLength: 12 });
 
 function markdownFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -26,6 +34,37 @@ function markdownFiles(dir) {
     return entry.isFile() && entry.name.endsWith('.md') ? [fullPath] : [];
   });
 }
+
+test('shellTokens reads a shell-quoted generated argv back as the same words', () => {
+  fc.assert(fc.property(
+    fc.array(fc.tuple(shellWord, fc.constantFrom(...Object.keys(SHELL_QUOTERS))), { minLength: 1, maxLength: 6 }),
+    fc.constantFrom(' ', '  ', '\t', ' \\\n '),
+    (words, separator) => {
+      const tokens = shellTokens(words.map(([word, how]) => SHELL_QUOTERS[how](word)).join(separator));
+      assert.deepEqual(tokens.map((token) => token.type), words.map(() => 'word'));
+      assert.deepEqual(tokens.map((token) => token.value), words.map(([word]) => word));
+    },
+  ));
+});
+
+test('frontmatterCalls recovers the plan expression and field from every generated argument form', () => {
+  // A plan path is one shell word not starting with "-" (a leading dash reads as a flag);
+  // no backtick or newline, which would alter the Markdown fence around the call.
+  const planPath = shellWord.filter((word) => word !== '' && !word.startsWith('-') && !/[`\n]/.test(word));
+  const field = fc.stringMatching(/^[a-z_][a-z0-9_.-]{0,10}$/);
+  const fieldForm = fc.constantFrom((f) => [f], (f) => ['--field', f], (f) => [`--field=${f}`], (f) => ['--raw', '--field', f], (f) => ['--field', f, '--raw']);
+  const queryForm = fc.constantFrom(['frontmatter.get'], ['frontmatter', 'get']);
+  const invoker = fc.constantFrom('gsd_run', 'gsd_run --raw', 'node "$GSD_TOOLS"', 'gsd_run --cwd "path with spaces"');
+  fc.assert(fc.property(planPath, fc.constantFrom(...Object.keys(SHELL_QUOTERS)), field, fieldForm, queryForm, invoker,
+    (plan, how, name, form, query, command) => {
+      const call = [command, 'query', ...query, SHELL_QUOTERS[how](plan), ...form(name)].join(' ');
+      const calls = frontmatterCalls(`\`\`\`bash\n${call}\n\`\`\`\n`);
+      assert.equal(calls.length, 1, call);
+      assert.equal(calls[0].planExpression, plan, call);
+      assert.equal(calls[0].field, name, call);
+    },
+  ));
+});
 
 test('queryNames finds every generated executable call and skips prose mentions', () => {
   const name = fc.tuple(
