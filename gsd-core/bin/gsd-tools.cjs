@@ -2636,7 +2636,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // answer the site acted on, never from the file at write time: by then the
     // file can hold another plan's record, whose time is not this hold's.
     // Honoured only for a caller-owned forced `none` and a non-negative
-    // integer; anything else is a fresh decision. The writer clamps it to the
+    // integer; anything else is a fresh decision. The reader clamps it to the
     // write time, so it can shorten a hold but never extend one.
     const renewIdx = args.indexOf('--renew-held');
     const renewArg = renewIdx !== -1 ? args[renewIdx + 1] : undefined;

@@ -3077,6 +3077,53 @@ describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a
     assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA);
   });
 
+  // The two below decide through the real guard: a reader-level read could not tell a
+  // blocked dispatch from one the hook stopped blocking.
+  const guardProject = (t) => {
+    // Not a git project: in a fresh one, with no fork base to resolve, #4232's base check
+    // degrades the unscoped forced write to `none`.
+    const dir = project(t);
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: true } }));
+    const savedRuntime = process.env.GSD_RUNTIME;
+    process.env.GSD_RUNTIME = 'claude';
+    t.after(() => { if (savedRuntime === undefined) delete process.env.GSD_RUNTIME; else process.env.GSD_RUNTIME = savedRuntime; });
+    return dir;
+  };
+  const dispatch = (dir, now, extra = {}) => require('../hooks/gsd-agent-isolation-guard.js').evaluateDispatch({
+    tool_name: 'Agent', cwd: dir,
+    tool_input: { subagent_type: 'gsd-executor', prompt: `[gsd:dispatch phase="${A.phase}" plan="${A.plan}"] do the work`, ...extra },
+  }, { clock: { now: () => now } });
+
+  test('a newer unscoped write makes the guard demand the flag of a held plan, and only the sequential gate\'s forced re-record hands the plan back', (t) => {
+    const dir = guardProject(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', {});
+
+    const answer = plain(dir, T0 + 2000, A);
+
+    assert.equal(answer.held, true, 'the query reads by scope');
+    assert.equal(dispatch(dir, T0 + 2000).reasonCode, 'harness_flag_missing', 'the guard reads by recency');
+    assert.equal(dispatch(dir, T0 + 2000, { isolation: 'worktree' }).action, 'allow', 'a plan stored as `true` dispatches with the flag');
+    force(dir, T0 + 3000, 'none', A, ['--renew-held', String(answer.decidedAt)]);
+    assert.equal(dispatch(dir, T0 + 3000).action, 'allow', 'the forced re-record makes the plan\'s record the newest again');
+  });
+
+  test('a plan that decides `true` inside its own ten minutes stays held, so the guard allows a flag-less dispatch until a forced record replaces it', (t) => {
+    const dir = guardProject(t);
+    force(dir, T0, 'none', A);
+    const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
+
+    // The per-plan gate's `true` branch: a plain query, scoped to the plan.
+    const answer = plain(dir, T0 + 1000, A);
+
+    assert.equal(answer.held, true);
+    assert.equal(answer.isolation, 'none');
+    assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA, 'the record keeps the earlier decision');
+    assert.equal(dispatch(dir, T0 + 1000).action, 'allow');
+    force(dir, T0 + 2000, 'harness-worktree', A);
+    assert.equal(dispatch(dir, T0 + 2000).reasonCode, 'harness_flag_missing', 'a forced record at the plan\'s scope replaces it');
+  });
+
   test('a held query spends no git on the base check, and an unheld one does (GIT_TRACE)', (t) => {
     const dir = createTempGitProject('gsd-4904-order-');
     t.after(() => cleanup(dir));
