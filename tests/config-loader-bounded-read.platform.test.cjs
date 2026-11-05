@@ -570,6 +570,18 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.ok(r.stdout.includes('via-dev-stdout'), r.stdout);
   });
 
+  test('/dev/fd/1 (an inherited pipe or socket descriptor) is written through the descriptor', () => {
+    const script = 'require(process.argv[1]).platformWriteSync("/dev/fd/1", "via-fd-1\\n", { allowSpecialTarget: true });';
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.ok(r.stdout.includes('via-fd-1'), r.stdout);
+  });
+
   test('profile-output --output /dev/null (a user-chosen device) is written', () => {
     fs.writeFileSync(path.join(tmpDir, 'analysis.json'), JSON.stringify({ data_source: 'x', dimensions: {} }));
     const script = [
@@ -665,11 +677,15 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
       'const real = fs.statSync;',
       'const sock = { isBlockDevice: () => false, isSocket: () => true, isCharacterDevice: () => false, isFIFO: () => false, isFile: () => false };',
       'fs.statSync = (p, ...rest) => (String(p).endsWith("fake-sock") || String(p) === "/dev/stdout" ? sock : real(p, ...rest));',
-      'const out = {};',
+      'const out = {}; const fdWrites = [];',
+      'const realWriteSync = fs.writeSync; const realOpen = fs.openSync;',
+      'fs.writeSync = (fd, ...rest) => { fdWrites.push(fd); return rest[0].length; };',
+      'fs.openSync = (p, ...rest) => { out.reopened = true; return realOpen(p, ...rest); };',
       'for (const target of ["/dev/stdout", process.argv[2]]) {',
-      '  try { require(process.argv[1]).platformWriteSync(target, "", { allowSpecialTarget: true, verbatim: true }); out[target.slice(-9)] = "ok"; }',
+      '  try { require(process.argv[1]).platformWriteSync(target, "z", { allowSpecialTarget: true, verbatim: true }); out[target.slice(-9)] = "ok"; }',
       '  catch (e) { out[target.slice(-9)] = e.code; }',
       '}',
+      'out.fdWrites = fdWrites; fs.writeSync = realWriteSync;',
       'process.stderr.write(JSON.stringify(out));',
     ].join('\n');
     const r = runNode(['-e', script, SHELL_PROJECTION_PATH, path.join(tmpDir, 'fake-sock')], {
@@ -681,6 +697,8 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assertExitedByItself(r);
     const out = JSON.parse(r.stderr);
     assert.strictEqual(out['fake-sock'], 'ENXIO');
+    assert.deepStrictEqual(out.fdWrites, [1], 'the alias is written through descriptor 1, never reopened by path');
+    assert.strictEqual(out.reopened, undefined);
     assert.strictEqual(out['/dev/stdout'.slice(-9)], 'ok');
   });
 
