@@ -2878,6 +2878,9 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       const { writeSurface } = require('../gsd-core/bin/lib/surface.cjs');
       const USER_KEYS = 'model = "gpt-5"\n';
       const withUserKeys = (gsdOnly) => `${USER_KEYS}\n${gsdOnly}`;
+      // The error a symlinked config.toml is refused with, so an unrelated earlier throw in
+      // the install or uninstall cannot pass for the refusal.
+      const LINK_REFUSAL = { message: /is a symlink, refusing to change it/ };
 
       // Replaces the regular config.toml with a link to a file holding `content`.
       function linkConfigToml(content) {
@@ -2959,7 +2962,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         const realConfig = linkConfigToml(installGsdOnlyConfig());
         const before = fs.readFileSync(realConfig, 'utf8');
 
-        assert.throws(() => runCodexUninstall(codexHome));
+        assert.throws(() => runCodexUninstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), before);
@@ -2969,7 +2972,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         const realConfig = linkConfigToml(withUserKeys(installGsdOnlyConfig()));
         const before = fs.readFileSync(realConfig, 'utf8');
 
-        assert.throws(() => runCodexUninstall(codexHome));
+        assert.throws(() => runCodexUninstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), before);
@@ -3030,7 +3033,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         const { content } = prepareAgentlessCoreInstall((gsdOnly) => gsdOnly);
         const realConfig = linkConfigToml(content);
 
-        assert.throws(() => runCodexInstall(codexHome));
+        assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
@@ -3040,7 +3043,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         const { content } = prepareAgentlessCoreInstall(withUserKeys);
         const realConfig = linkConfigToml(content);
 
-        assert.throws(() => runCodexInstall(codexHome));
+        assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
@@ -3052,7 +3055,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         const { content } = prepareAgentlessCoreInstall(userKeysOnly);
         const realConfig = linkConfigToml(content);
 
-        assert.throws(() => runCodexInstall(codexHome));
+        assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
