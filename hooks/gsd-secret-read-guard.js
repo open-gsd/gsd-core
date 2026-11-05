@@ -466,6 +466,17 @@ function globAltSelectsSecret(alt) {
   return GLOB_PROBES.some((probe) => re.test(probe));
 }
 
+// classifyGrepGlob, with a glob of so many brace groups that expanding them
+// overflows the stack denied as `glob-too-complex`.
+function grepGlobVerdict(glob) {
+  try {
+    return classifyGrepGlob(glob);
+  } catch (e) {
+    if (e instanceof RangeError) return 'glob-too-complex';
+    throw e;
+  }
+}
+
 // Returns null (allowed), 'secret-read', or 'glob-too-complex'.
 function classifyGrepGlob(glob) {
   // Segment via the SAME `lastSegment` helper Read/Bash use (namesSecret),
@@ -2507,7 +2518,6 @@ function main() {
   process.stdin.on('end', () => {
     clearTimeout(stdinTimeout);
     let tool = '';
-    let glob = '';
     try {
       const data = normalizeKimiPayload(JSON.parse(input));
 
@@ -2537,9 +2547,9 @@ function main() {
         const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
           : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
         if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
-        glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
+        const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
         if (glob !== '') {
-          const verdict = classifyGrepGlob(glob);
+          const verdict = grepGlobVerdict(glob);
           if (verdict) emitBlock(verdict, tool, glob);
         }
         allow(undefined);
@@ -2559,11 +2569,9 @@ function main() {
       // read the check had not reached. findSecretRead turns its own into
       // `command-too-complex`; the debugger-spawn scan unwraps `timeout`,
       // which the secret scan does not, so its tokenizer can overflow on a
-      // body the secret scan never read, and a Grep glob with enough brace
-      // groups overflows the brace expansion. Any other error fails open — never
+      // body the secret scan never read. Any other error fails open — never
       // block valid tool calls due to hook errors.
       if (e instanceof RangeError && tool === 'Bash') emitBlock('command-too-complex', tool, '');
-      if (e instanceof RangeError && tool === 'Grep') emitBlock('glob-too-complex', tool, glob);
       // ON_CRASH is declared ALLOW at module top (#3911).
       crash(ON_CRASH, undefined);
     }
