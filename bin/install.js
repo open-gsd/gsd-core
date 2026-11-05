@@ -6548,8 +6548,9 @@ function resolveSymlinkWriteTarget(filePath) {
 
 /**
  * #5716: refuse a symlinked Codex config.toml unless GSD_ALLOW_SYMLINKED_DEST is set, as
- * installCodexConfig and the hooks.json writer refuse it. Callers run this only when they
- * are about to write config.toml, so a link GSD would leave alone is never refused.
+ * installCodexConfig and the hooks.json writer refuse it. Callers run this only for a run
+ * that will write config.toml, so a link GSD would leave alone is never refused, and run
+ * it before that run changes anything else, so a refused run leaves the install whole.
  * Returns whether config.toml is a symlink, so a caller that goes on to write it acts on
  * the same observation the check made.
  */
@@ -8637,6 +8638,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   let removedCount = 0;
+
+  // #5716: the config.toml strip further down refuses a symlinked config.toml it would
+  // change unless GSD_ALLOW_SYMLINKED_DEST is set. Refuse here, before anything is
+  // removed, so a refused uninstall leaves the install whole instead of deleting the
+  // skills, agent files and hooks while config.toml still registers them. A link the
+  // strip would leave unchanged is not refused.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (fs.existsSync(codexConfigPath)) {
+      const content = fs.readFileSync(codexConfigPath, 'utf8');
+      if (stripGsdFromCodexConfig(content) !== content) assertCodexConfigLinkAllowed(codexConfigPath);
+    }
+  }
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR uninstall run that died between staging and
@@ -11263,8 +11277,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
   // #5503: Codex registers agent roles in config.toml. That used to be gated on "minimal mode"
   // because minimal staged no agents; gate it on whether the resolved profile stages any.
-  const _codexAgentRolesEnabled = () =>
-    !isMinimalMode(_effectiveInstallMode) || (_resolvedProfile.agents instanceof Set && _resolvedProfile.agents.size > 0);
+  const _codexAgentRolesEnabled = (profile = _resolvedProfile) =>
+    !isMinimalMode(_effectiveInstallMode) || (profile.agents instanceof Set && profile.agents.size > 0);
   const persistActiveProfileMarker = () => {
     try {
       writeActiveProfile(targetDir, _activeProfileName);
@@ -11305,6 +11319,52 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     installerMigrationResult = null;
     rollback();
   };
+
+  // Whether this runtime takes the layout-driven skills path below (see the
+  // artifact install dispatcher comment there for what that path covers).
+  const _isSkillsRuntime = (() => {
+    if (hostBehaviorsFor(runtime).localInstallStyle === 'legacy-flat' && !isGlobal) return false;  // legacy flat local path (descriptor-driven; #2086)
+    // #2875 Part 2 defect fix: a runtime whose LOCAL commands are embedded in a
+    // rules file rather than materialized as files (hostBehaviors.localCommandsViaRules
+    // — cline is the only declarant, capabilities/cline/capability.json) must not
+    // flip into this skills/commands-reporting branch merely because its local
+    // artifactLayout now also declares an `agents` kind (#2875 Part 2 cline-local
+    // agents regression fix). That branch's own verification reporting expects a
+    // skills/ or commands/ directory this runtime never writes locally and would
+    // spuriously fail; the `localCommandsViaRules` branch below (unchanged
+    // messaging) and the unconditional agents-materialization block further down
+    // (installAgentsKindStandalone) already cover this runtime/scope correctly.
+    if (!isGlobal && hostBehaviorsFor(runtime).localCommandsViaRules) return false;
+    const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
+    const layout = cap && cap.runtime && cap.runtime.artifactLayout;
+    if (!layout) return false;
+    const scopeLayout = isGlobal ? layout.global : layout.local;
+    return Array.isArray(scopeLayout) && scopeLayout.length > 0;
+  })();
+
+  // An upgrade of a skills runtime installs exactly the committed Runtime Surface selection
+  // instead of widening it to the base profile: the profile that selection resolves to, or
+  // null when none is committed. Resolved once, before the first write, so the config.toml
+  // check below and the skills path act on the same reading.
+  const _committedSurface = _isSkillsRuntime ? readSurface(targetDir) : null;
+  const _surfaceProfile = _committedSurface
+    ? resolveSurface(targetDir, loadSkillsManifest(_commandsDir), undefined, _installedCapabilityRegistry, _committedSurface)
+    : null;
+
+  // #5716: when the profile registers no Codex agent roles, this install strips GSD content
+  // from config.toml and the validated rewrite after it always writes the file, so without
+  // GSD_ALLOW_SYMLINKED_DEST a symlinked config.toml is refused even when the strip has
+  // nothing to change. Refuse here, before the install's first write, so a refused run
+  // changes nothing instead of depending on the best-effort pre-config rollback, which
+  // leaves saveLocalPatches's gsd-local-patches/ backup behind. The roles follow the
+  // profile the skills path resolves from a committed Runtime Surface. A dangling link is
+  // skipped, as the strip skips it.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (!_codexAgentRolesEnabled(_surfaceProfile || _resolvedProfile) && fs.existsSync(codexConfigPath)) {
+      assertCodexConfigLinkAllowed(codexConfigPath);
+    }
+  }
 
   // Save any locally modified GSD files before they get wiped.
   // The pristine context lets saveLocalPatches populate gsd-pristine/ via
@@ -11839,26 +11899,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // installOpencodeFamilyArtifacts for the combined commands+skills+native-plugin
   // install (ADR-1239 / #2087), replacing the bespoke inline block this comment
   // used to describe. Claude-local remains the one special-cased path
-  // (copyWithPathReplacement + stale-skills cleanup).
-  const _isSkillsRuntime = (() => {
-    if (hostBehaviorsFor(runtime).localInstallStyle === 'legacy-flat' && !isGlobal) return false;  // legacy flat local path (descriptor-driven; #2086)
-    // #2875 Part 2 defect fix: a runtime whose LOCAL commands are embedded in a
-    // rules file rather than materialized as files (hostBehaviors.localCommandsViaRules
-    // — cline is the only declarant, capabilities/cline/capability.json) must not
-    // flip into this skills/commands-reporting branch merely because its local
-    // artifactLayout now also declares an `agents` kind (#2875 Part 2 cline-local
-    // agents regression fix). That branch's own verification reporting expects a
-    // skills/ or commands/ directory this runtime never writes locally and would
-    // spuriously fail; the `localCommandsViaRules` branch below (unchanged
-    // messaging) and the unconditional agents-materialization block further down
-    // (installAgentsKindStandalone) already cover this runtime/scope correctly.
-    if (!isGlobal && hostBehaviorsFor(runtime).localCommandsViaRules) return false;
-    const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
-    const layout = cap && cap.runtime && cap.runtime.artifactLayout;
-    if (!layout) return false;
-    const scopeLayout = isGlobal ? layout.global : layout.local;
-    return Array.isArray(scopeLayout) && scopeLayout.length > 0;
-  })();
+  // (copyWithPathReplacement + stale-skills cleanup). `_isSkillsRuntime` is
+  // decided before the install's first write (#5716), with the config.toml
+  // link check that needs it.
 
   // Install the distribution-owned gsd-core tree before layout materialization.
   // installRuntimeArtifacts then provisions the durable Runtime Surface corpus
@@ -11930,15 +11973,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // Preserve an existing Runtime Surface selection during upgrades. The
     // installer refreshes the source corpus first, then emits exactly the
     // already-committed selection instead of widening it to the base profile.
-    const _committedSurface = readSurface(targetDir);
-    if (_committedSurface) {
-      _resolvedProfile = resolveSurface(
-        targetDir,
-        loadSkillsManifest(_commandsDir),
-        undefined,
-        _installedCapabilityRegistry,
-        _committedSurface,
-      );
+    // _surfaceProfile was resolved before the first write, with the config.toml check.
+    if (_surfaceProfile) {
+      _resolvedProfile = _surfaceProfile;
     }
     // ADR-1239 upgrade 3 / #2088: a kind may declare an alternate install `home`
     // (e.g. Codex skills -> $HOME/.agents/skills) instead of the runtime's normal
@@ -12383,10 +12420,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // resolvedProfile. Reuse the same helper that powers `--uninstall`.
   if (!_codexAgentRolesEnabled() && hostBehaviorsFor(runtime).tomlConfigInstall) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
+    // #5716: a symlinked config.toml without GSD_ALLOW_SYMLINKED_DEST was already refused
+    // before the install's first write (writeStrippedCodexConfig still checks at the write).
     if (fs.existsSync(codexConfigPath)) {
-      // #5716: the validated config.toml rewrite later in this install always writes
-      // this file, so a symlink is refused here even when the strip changes nothing.
-      assertCodexConfigLinkAllowed(codexConfigPath);
       const existing = fs.readFileSync(codexConfigPath, 'utf8');
       const cleaned = stripGsdFromCodexConfig(existing);
       if (cleaned !== existing) {
