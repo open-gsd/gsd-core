@@ -1548,7 +1548,11 @@ function writeTargetDirect(
   encoding: BufferEncoding,
   walked: WalkedTarget,
   afterLstat?: () => void,
+  checkParent: () => void = () => {},
 ): void {
+  // The walked parent is re-checked at the top and again right before each open that can create
+  // or modify the target; a swap refuses with ENXIO before anything is created or written.
+  checkParent();
   const nonBlock = (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0);
   const noFollow = fs.constants.O_NOFOLLOW ?? 0;
   const refuse = (message: string, code: string): never => {
@@ -1612,6 +1616,7 @@ function writeTargetDirect(
   let created = false;
   let fd: number;
   let prior: Buffer | null = null;
+  checkParent();
   const existing = probe();
   if (existing !== null) {
     // The path walk recorded what sat at the final physical target when it approved the path. A
@@ -1621,6 +1626,7 @@ function writeTargetDirect(
     if (existing.dev !== walked.dev || existing.ino !== walked.ino) {
       refuse('the target is not the file the path check approved', 'ENXIO');
     }
+    checkParent();
     try {
       fd = fs.openSync(filePath, fs.constants.O_WRONLY | noFollow | nonBlock);
     } catch (err) {
@@ -1642,6 +1648,7 @@ function writeTargetDirect(
     // Create exclusively and without following a link: anything at the path now (a symlink
     // planted since the probe, a dangling one, a descriptor alias reached through a swapped
     // directory) makes this EEXIST, never a file created through it or written to.
+    checkParent();
     try {
       fd = fs.openSync(
         filePath,
@@ -1693,10 +1700,25 @@ function writeTargetDirect(
   } catch (err) {
     failure = err instanceof Error ? err : new Error(String(err));
   }
+  // The identity of the descriptor this write created, taken before it is closed: the cleanup
+  // unlinks the PATH only if it still names that same file, so a parent swapped after the create
+  // can never make it delete a same-named file elsewhere.
+  let createdIdentity: { dev: number; ino: number } | null = null;
+  if (failure !== undefined && created) {
+    try {
+      const st = fs.fstatSync(fd);
+      if (st.isFile()) createdIdentity = { dev: st.dev, ino: st.ino };
+    } catch { /* identity unknown: the file is left in place */ }
+  }
   try { fs.closeSync(fd); } catch { /* already closed */ }
   if (failure !== undefined) {
-    if (created) {
-      try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+    if (created && createdIdentity !== null) {
+      try {
+        const now = fs.lstatSync(filePath);
+        if (now.isFile() && now.dev === createdIdentity.dev && now.ino === createdIdentity.ino) {
+          fs.unlinkSync(filePath);
+        }
+      } catch { /* already gone */ }
     }
     throw failure;
   }
@@ -1950,6 +1972,8 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       { code: 'ENXIO' },
     );
   };
+  // Handed to the direct fallbacks, which re-run it before each open that can create or modify.
+  const checkParent = (): void => { if (parentChanged()) refuseParentSwap(); };
   opts.writeSeams?.afterPathWalk?.();
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
@@ -2019,7 +2043,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   try {
     ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(filePath, undefined, targetMode ?? 0o666));
   } catch {
-    writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat);
+    writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
     return;
   }
   if (targetMode !== null) {
@@ -2033,7 +2057,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   try { fs.closeSync(tmpFd); } catch { wrote = false; }
   if (!wrote) {
     try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
-    writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat);
+    writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
     return;
   }
 
@@ -2041,7 +2065,9 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // the walked identity immediately before the rename: a parent swapped for a symlink to another
   // directory would otherwise receive the rename. Remaining race: the stat and the rename are
   // separate syscalls, so a swap landing between them (or during a retry) is not observed, and a
-  // temp file created before such a swap stays in the directory it was created in.
+  // temp file created before such a swap stays in the directory it was created in. That temp may
+  // therefore be orphaned in the old directory after a parent swap: a minor leak, never another
+  // file deleted, because temp names are random and only a path this write created is unlinked.
   if (parentChanged()) {
     try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
     refuseParentSwap();
@@ -2058,7 +2084,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
   // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
   // fall back to a direct write to preserve write availability.
-  writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat);
+  writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
 }
 
 export function platformReadSync(filePath: string, opts: { encoding?: BufferEncoding; required?: boolean } = {}): string | null {
