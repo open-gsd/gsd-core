@@ -584,8 +584,25 @@ describe('contract-drift: typed surface', () => {
     }
   });
 
+  test('sanitizeEcho strips by Unicode category: tags, variation selectors, fillers, private-use, unassigned, lone surrogates', () => {
+    const points = [
+      0xe0001, 0xe0041, 0xe007f, // tag characters (Cf)
+      0xfe00, 0xfe0f, 0xe0100, 0xe01ef, // variation selectors
+      0xfff9, 0xfffa, 0xfffb, // interlinear annotation (Cf)
+      0x1d173, 0x1d17a, // musical format controls (Cf)
+      0x206a, 0x206f, // deprecated format controls (Cf; previously kept)
+      0x034f, 0x115f, 0x1160, 0x3164, 0xffa0, 0x17b4, 0x17b5, 0x2800, // fillers
+      0xe000, 0xf8ff, // private use (Co)
+      0x0378, 0x2065, // unassigned (Cn; U+2065 previously kept)
+      0xd800, 0xdfff, // lone surrogates (Cs)
+    ];
+    for (const c of points) {
+      assert.equal(sanitizeEcho(`a${String.fromCodePoint(c)}b`), 'ab', `U+${c.toString(16)} must be stripped`);
+    }
+  });
+
   test('sanitizeEcho keeps the neighbours of the stripped ranges and ordinary non-ASCII text', () => {
-    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe, 0x061b, 0x061d, 0x205f, 0x180d, 0x180f, 0xac, 0xae]) {
+    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x061b, 0x205f, 0x180d, 0xac, 0xae, 0x4e2d, 0x1f600]) {
       const s = `a${String.fromCodePoint(c)}b`;
       assert.equal(sanitizeEcho(s), s, `U+${c.toString(16)} must be kept`);
     }

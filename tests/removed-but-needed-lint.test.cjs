@@ -1200,6 +1200,7 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
       '', '/abs/.gitignore', 'a//.gitignore', './.gitignore', 'a/./.gitignore', '../.gitignore', 'a/../.gitignore',
       'a\\b/.gitignore', 'C:/x/.gitignore', 'a:b/.gitignore', '.git/.gitignore', 'a/.GIT/.gitignore', '.Git/hooks/.gitignore',
       'a/.gitignore/',
+      '.git.', '.git ', '.git. .', 'a/.GIT../.gitignore', 'git~1/.gitignore', 'a/GIT~1/x', 'Git~2/.gitignore',
     ]) {
       assert.equal(isSafeRepoPath(bad), false, JSON.stringify(bad));
     }
@@ -1226,13 +1227,18 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
   test('isolatedGitEnv removes every variable that could redirect git', () => {
     const keys = [
       'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
-      'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_TEMPLATE_DIR',
+      'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_COUNT', 'GIT_TEMPLATE_DIR',
+      'GIT_EXEC_PATH', 'GIT_ATTR_SOURCE', 'GIT_ATTR_NOSYSTEM',
     ];
-    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    for (const k of keys) process.env[k] = '/somewhere';
+    const saved = Object.fromEntries([...keys, 'GIT_CONFIG_GLOBAL'].map((k) => [k, process.env[k]]));
+    for (const k of [...keys, 'GIT_CONFIG_GLOBAL']) process.env[k] = '/somewhere';
     try {
-      const env = isolatedGitEnv();
+      const env = isolatedGitEnv('/scratch-dir');
       for (const k of keys) assert.equal(k in env, false, `${k} must be removed`);
+      assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+      assert.equal(env.GIT_CONFIG_GLOBAL, os.devNull);
+      assert.equal(env.HOME, '/scratch-dir');
+      assert.equal(env.XDG_CONFIG_HOME, '/scratch-dir');
       assert.equal(env.PATH, process.env.PATH, 'unrelated variables are kept');
     } finally {
       for (const [k, v] of Object.entries(saved)) {
@@ -1274,7 +1280,10 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     fs.mkdirSync(path.join(tpl, 'info'), { recursive: true });
     fs.writeFileSync(path.join(tpl, 'info', 'exclude'), 'src/\n');
     fs.writeFileSync(path.join(home, '.gitconfig'), `[init]\n\ttemplateDir = ${tpl.replace(/\\/g, '/')}\n`);
-    const env = { ...isolatedGitEnv(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
+    // Deliberately NOT isolatedGitEnv(): that env disables global config, which
+    // is exactly what would hide the positive control below.
+    const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
+    for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_TEMPLATE_DIR', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[k];
     // Positive control: a plain `git init` DOES pick the template up here.
     const plain = cp.spawnSync('git', ['init', '-q', control], { env, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
     assert.equal(plain.status, 0, plain.stderr);
@@ -1382,6 +1391,26 @@ describe('removed-but-needed lint: base branch selection (resolveBaseBranch)', (
     ]) {
       assert.equal(resolveBaseBranch({ GITHUB_EVENT_NAME: 'merge_group', GITHUB_REF: ref }), 'next', ref);
     }
+  });
+
+  test('an unsafe GSD_REMOVED_BUT_NEEDED_BASE or GITHUB_BASE_REF is a hard failure with a sanitized message', () => {
+    for (const bad of ['a b', 'x;y', '..', 'a/../b', 'a..b', '-rf', 'a//b', 'a/', '$(x)', 'bad\u001bname']) {
+      for (const key of ['GSD_REMOVED_BUT_NEEDED_BASE', 'GITHUB_BASE_REF']) {
+        assert.throws(
+          () => resolveBaseBranch({ [key]: bad }),
+          (e) => {
+            assert.ok(![...e.message].some((ch) => ch.codePointAt(0) < 0x20), 'no raw control characters in message');
+            return /invalid base branch/.test(e.message);
+          },
+          `${key}=${JSON.stringify(bad)}`,
+        );
+      }
+    }
+  });
+
+  test('ordinary and slashed branch names are accepted from the env too', () => {
+    assert.equal(resolveBaseBranch({ GITHUB_BASE_REF: 'release/1.20' }), 'release/1.20');
+    assert.equal(resolveBaseBranch({ GSD_REMOVED_BUT_NEEDED_BASE: 'feat_x-1.2' }), 'feat_x-1.2');
   });
 
   test('a non-merge_group event ignores a queue-shaped GITHUB_REF', () => {
