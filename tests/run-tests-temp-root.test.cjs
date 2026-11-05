@@ -349,7 +349,8 @@ describe('#4020 — run-tests temp root', () => {
           const runner = require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'run-tests.cjs'))});
           const root = runner.setupRunTempRoot();
           process.stdout.write(JSON.stringify({ want, root }));
-          if (!root.startsWith(process.env.GSD_5688_OWN_DIRS)) {
+          if (!root.startsWith(process.env.GSD_5688_OWN_DIRS) &&
+              path.basename(root).startsWith('gsd-test-run-')) {
             fs.rmSync(root, { recursive: true, force: true });
           }
         `;
