@@ -372,9 +372,13 @@ When hitting checkpoint or auth gate, return this structure:
 ### Awaiting
 
 [What user needs to do/provide]
+
+<worktree_metadata>
+{"agent_id":"{phase}-{plan}","worktree_path":"${GSD_WORKTREE_PATH:-}","branch":"${GSD_WORKTREE_BRANCH:-}","expected_base":"${GSD_WORKTREE_EXPECTED_BASE:-}"}
+</worktree_metadata>
 ```
 
-Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point.
+Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point. The worktree block gives the orchestrator the cwd that owns continuation metadata; an empty path means this executor is already in the main checkout.
 </checkpoint_return_format>
 
 <continuation_handling>
