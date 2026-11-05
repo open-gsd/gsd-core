@@ -1911,9 +1911,9 @@ advertised set:
 | `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `gpt-6-astra` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `gpt-6-sol` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-6-astra` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
 | any other / unknown id | `low`, `medium`, `high`, `xhigh`, `max` (family baseline) |
 
@@ -2240,7 +2240,7 @@ For Codex model selection and per-agent pinning, see [Choosing or pinning a Code
 
 On the Claude runtime, tier resolution stays on Claude Code's adaptive tier aliases (`opus` / `sonnet` / `haiku`) unless you override a tier. An override value that names the current tier default collapses back to its alias (the same model in the always-accepted form); any other value — a pinned older generation such as `claude-opus-4-7`, a bare alias repointing the tier, or a non-Anthropic model id — is resolved verbatim, so `resolve-model` reports exactly what the profile pins. Setting `runtime: "claude"` alone (no overrides) changes nothing: aliases resolve exactly as they do with the key absent. `resolve_model_ids: true` remains the global switch for materializing full IDs on every agent.
 
-For a Codex model override example, see [Configure model profiles](how-to/configure-model-profiles.md#pin-a-codex-model).
+For a Codex model override example, see [Configure model profiles](how-to/configure-model-profiles.md#choosing-or-pinning-a-codex-model).
 
 **Per-runtime overrides** — replace one or more tier defaults:
 
