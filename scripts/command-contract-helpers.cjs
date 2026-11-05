@@ -939,32 +939,48 @@ const REMEDIES = Object.freeze({
  *
  * File-derived strings (registry cells, marker tokens, workflow text) are
  * echoed into lint output that AI agents read as trusted instructions —
- * every interpolated field is control-char-stripped and length-capped
- * before it is written, so a malicious repo file cannot make the lint emit
- * instruction-shaped text. Implemented as a code-point filter rather than a
- * regex so no control-character regex literal exists to lint.
+ * every interpolated field has its hostile code points ESCAPED and is
+ * length-capped before it is written, so a malicious repo file cannot make
+ * the lint emit instruction-shaped text, and the reader can still trace the
+ * spelling as written (a dropped character would show text that does not
+ * occur in the file).
+ *
+ * Escape format: each hostile code point (see isEchoHostile) is rendered as
+ * `\u{X}` with UPPERCASE hex and no padding, e.g. U+0085 -> `\u{85}`,
+ * U+200B -> `\u{200B}`, U+1F600-range tags -> `\u{E0041}`. The output is
+ * therefore free of every hostile character.
+ *
+ * Cap: 200 code points of OUTPUT (an escape counts as its own length, never
+ * split), so the result is bounded however hostile the input; scanning stops
+ * as soon as the next unit would exceed the cap, costing O(200) matches on a
+ * huge input. A surrogate pair is never split.
+ *
+ * Implemented as a code-point filter rather than a regex so no
+ * control-character regex literal exists to lint.
  */
 function sanitizeEcho(text) {
+  const CAP = 200;
   let out = '';
-  let kept = 0;
-  // Cap by code point (a surrogate pair is never split) and stop scanning as
-  // soon as 200 code points are kept, so a huge input costs O(200) matches.
+  let used = 0;
   for (const ch of String(text)) {
-    if (isEchoHostile(ch.codePointAt(0))) continue;
-    out += ch;
-    kept += 1;
-    if (kept === 200) break;
+    const code = ch.codePointAt(0);
+    const hostile = isEchoHostile(code);
+    const unit = hostile ? `\\u{${code.toString(16).toUpperCase()}}` : ch;
+    const len = hostile ? unit.length : 1; // escapes are ASCII: one code point per char
+    if (used + len > CAP) break;
+    out += unit;
+    used += len;
   }
   return out;
 }
 
 /**
- * Code points sanitizeEcho drops: C0 + DEL, C1 (incl. 8-bit CSI U+009B),
+ * Code points sanitizeEcho escapes: C0 + DEL, C1 (incl. 8-bit CSI U+009B),
  * line/paragraph separators, zero-width + LRM/RLM, bidi embeddings/overrides
  * and isolates, the Arabic letter mark, word joiner/invisible operators, the
  * Mongolian vowel separator, the soft hyphen and the BOM; all able to forge
- * or hide output a reader (human or agent) trusts. Stripping U+200D breaks
- * joined emoji sequences, which is acceptable for echoed paths.
+ * or hide output a reader (human or agent) trusts. Escaping U+200D makes
+ * joined emoji sequences visible as `\u{200D}`, which is acceptable for echoed paths.
  * @param {number} code
  * @returns {boolean}
  */
