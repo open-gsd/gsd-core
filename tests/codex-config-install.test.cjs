@@ -2981,6 +2981,35 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), '');
       });
 
+      // Uninstall logs what it did but returns nothing, so "no work" is read off the target:
+      // a rewrite would move its mtime off the fixed past value set below.
+      test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 run again over an emptied link target does not rewrite it', () => {
+        const realConfig = linkConfigToml(installGsdOnlyConfig());
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+        runCodexUninstall(codexHome);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), '', 'fixture: the first uninstall emptied the target');
+        const past = new Date('2001-01-01T00:00:00Z');
+        fs.utimesSync(realConfig, past, past);
+
+        assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+        assertLinkedTo(realConfig);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), '');
+        assert.strictEqual(fs.statSync(realConfig).mtimeMs, past.getTime(), 'the emptied target must not be written again');
+      });
+
+      test('uninstall without the opt-in does not refuse a link whose target an earlier uninstall emptied', () => {
+        const realConfig = linkConfigToml(installGsdOnlyConfig());
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+        runCodexUninstall(codexHome);
+        delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+
+        assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+        assertLinkedTo(realConfig);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), '');
+      });
+
       test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 leaves exactly the user keys in the target of a link that also holds them', () => {
         const realConfig = linkConfigToml(withUserKeys(installGsdOnlyConfig()));
         process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
