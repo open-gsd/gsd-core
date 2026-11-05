@@ -21,8 +21,6 @@ const path = require('node:path');
 const fc = require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { spawnSync } = require('node:child_process');
 
 const RUNNER = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 
@@ -337,34 +335,49 @@ describe('#4020 — run-tests temp root', () => {
 
       test('#5688: parent equals resolve(os.tmpdir()) of the same child env on this platform', (t) => {
         const { a, b, fallback } = twoDirs(t);
+        // The child reports the root; the parent removes any root that landed
+        // outside this test's own dirs, so a killed child cannot leak one.
+        const ownDirs = path.dirname(a) + path.sep;
         const script = `
           const os = require('node:os');
           const path = require('node:path');
-          const fs = require('node:fs');
           const want = path.resolve(os.tmpdir());
           const runner = require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'run-tests.cjs'))});
           const root = runner.setupRunTempRoot();
-          process.stdout.write(JSON.stringify({ want, got: path.dirname(root) }));
-          fs.rmSync(root, { recursive: true, force: true });
+          process.stdout.write(JSON.stringify({ want, root }));
         `;
+        const runRoot = runRootIn(a, 'parity5688');
+        const inheritKey = process.platform === 'win32' ? 'TEMP' : 'TMP';
         const combos = [
-          { TMPDIR: a, TMP: b, TEMP: fallback },
-          { TMPDIR: a },
-          { TMP: b, TEMP: fallback },
-          { TEMP: fallback },
-          { TMPDIR: '', TMP: '', TEMP: fallback },
-          {},
+          { env: { TMPDIR: a, TMP: b, TEMP: fallback } },
+          { env: { TMPDIR: a } },
+          { env: { TMP: b, TEMP: fallback } },
+          { env: { TEMP: fallback } },
+          { env: { TMPDIR: '', TMP: '', TEMP: fallback } },
+          { env: {} },
+          // The highest-precedence set variable is a run root: inherited, not a parent.
+          { env: { [inheritKey]: runRoot }, inherited: true },
         ];
-        for (const combo of combos) {
+        for (const { env: combo, inherited } of combos) {
           const env = { ...process.env };
-          for (const k of ['TMPDIR', 'TEMP', 'TMP']) delete env[k];
+          for (const k of Object.keys(env)) {
+            if (['TMPDIR', 'TEMP', 'TMP'].includes(k.toUpperCase())) delete env[k];
+          }
           Object.assign(env, combo);
-          const r = spawnSync(process.execPath, ['-e', script], {
-            env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS,
+          const r = runNode(['-e', script], {
+            timeoutMs: RUN_TESTS_ISOLATED_PROBE_TIMEOUT_MS,
+            env,
           });
-          assert.equal(r.status, 0, `${JSON.stringify(combo)}: ${String(r.stderr).slice(-300)}`);
-          const { want, got } = JSON.parse(r.stdout);
-          assert.equal(got, want, `parent mismatch for ${JSON.stringify(combo)}`);
+          assert.equal(r.exitCode, 0, `${JSON.stringify(combo)}: ${String(r.stderr).slice(-300)}`);
+          const { want, root } = JSON.parse(r.stdout);
+          t.after(() => {
+            if (!root.startsWith(ownDirs)) cleanup(root);
+          });
+          if (inherited) {
+            assert.equal(root, want, `inherited root expected for ${JSON.stringify(combo)}`);
+          } else {
+            assert.equal(path.dirname(root), want, `parent mismatch for ${JSON.stringify(combo)}`);
+          }
         }
       });
 
