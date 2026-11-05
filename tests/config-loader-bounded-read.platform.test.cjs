@@ -1585,6 +1585,156 @@ describe('#5759 review round: another process\'s descriptors and unresolvable di
       fs.closeSync(held);
     }
   });
+
+  test('the same plain path is still written when the temp create fails and the DIRECT write runs', () => {
+    const file = path.join(tmpDir, 'held-direct.txt');
+    fs.writeFileSync(file, 'old');
+    const held = fs.openSync(file, fs.constants.O_RDWR);
+    let tempAttempts = 0;
+    try {
+      assert.ok(held > 2);
+      platformWriteSync(file, 'new', {
+        verbatim: true,
+        writeSeams: {
+          createTemp: () => { tempAttempts += 1; throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); },
+        },
+      });
+      assert.strictEqual(tempAttempts, 1, 'the temp create was refused, so the direct path ran');
+      assert.strictEqual(fs.readFileSync(file, 'utf8'), 'new');
+    } finally {
+      fs.closeSync(held);
+    }
+  });
+});
+
+describe('#5759 review round 15: the direct write is tied to the identity the path walk approved', { skip: SKIP_WIN32 }, () => {
+  const { mock } = require('node:test');
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-walk-')); });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  const code = (fn) => { try { fn(); return 'ok'; } catch (e) { return e.code; } };
+  const deniedTemp = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
+
+  // After the path walk approved `<dir>/<N>`, an attacker owning the parent swaps it for a
+  // symlink to /dev/fd. The temp create inside it fails, so the direct write runs and both its
+  // probe and its write open reopen fd N's regular file: dev/ino agree with each other, but not
+  // with what the walk approved.
+  for (const [label, seedDecoy] of [['an absent target', false], ['a different regular file', true]]) {
+    test(`a parent swapped for a symlink to /dev/fd after the walk saw ${label} is refused and the victim is untouched`, () => {
+      const victim = path.join(tmpDir, 'victim.txt');
+      fs.writeFileSync(victim, 'VICTIM');
+      const held = fs.openSync(victim, fs.constants.O_RDWR);
+      try {
+        assert.ok(held > 2);
+        const dir = path.join(tmpDir, 'd');
+        fs.mkdirSync(dir);
+        const target = path.join(dir, String(held));
+        if (seedDecoy) fs.writeFileSync(target, 'DECOY');
+
+        const result = code(() => platformWriteSync(target, 'PWNED', {
+          verbatim: true,
+          writeSeams: {
+            afterPathWalk: () => { fs.renameSync(dir, `${dir}.moved`); fs.symlinkSync('/dev/fd', dir); },
+            createTemp: deniedTemp,
+          },
+        }));
+
+        assert.strictEqual(result, 'ENXIO');
+        assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'VICTIM');
+        if (seedDecoy) assert.strictEqual(fs.readFileSync(`${dir}.moved/${held}`, 'utf8'), 'DECOY');
+      } finally {
+        fs.closeSync(held);
+      }
+    });
+  }
+
+  test('a target replaced by a different file after the walk approved it is refused, not truncated', () => {
+    const target = path.join(tmpDir, 'swap.txt');
+    const other = path.join(tmpDir, 'other.txt');
+    fs.writeFileSync(target, 'APPROVED');
+    fs.writeFileSync(other, 'OTHER');
+
+    const result = code(() => platformWriteSync(target, 'PWNED', {
+      verbatim: true,
+      writeSeams: {
+        afterPathWalk: () => { fs.renameSync(other, target); },
+        createTemp: deniedTemp,
+      },
+    }));
+
+    assert.strictEqual(result, 'ENXIO');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'OTHER');
+  });
+
+  test('a target that appears after the walk saw none is refused, not truncated', () => {
+    const target = path.join(tmpDir, 'appears.txt');
+
+    const result = code(() => platformWriteSync(target, 'PWNED', {
+      verbatim: true,
+      writeSeams: {
+        afterPathWalk: () => { fs.writeFileSync(target, 'APPEARED'); },
+        createTemp: deniedTemp,
+      },
+    }));
+
+    assert.strictEqual(result, 'ENXIO');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'APPEARED');
+  });
+
+  test('an unchanged target is still written directly when the temp create fails', () => {
+    const target = path.join(tmpDir, 'plain.txt');
+    fs.writeFileSync(target, 'old');
+
+    platformWriteSync(target, 'new', { verbatim: true, writeSeams: { createTemp: deniedTemp } });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'new');
+  });
+
+  test('a parent directory that does not exist yet is still created and written', () => {
+    const target = path.join(tmpDir, 'a', 'b', 'new.txt');
+
+    platformWriteSync(target, 'fresh', { verbatim: true });
+
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'fresh');
+  });
+
+  for (const errCode of ['EACCES', 'ELOOP', 'ENAMETOOLONG']) {
+    test(`a parent whose resolution fails with ${errCode} is refused with ENXIO and nothing is created`, () => {
+      const target = path.join(tmpDir, 'new.txt');
+      mock.method(fs.realpathSync, 'native', () => { throw Object.assign(new Error(errCode), { code: errCode }); });
+
+      assert.strictEqual(code(() => platformWriteSync(target, 'x', { verbatim: true })), 'ENXIO');
+
+      mock.restoreAll();
+      assert.strictEqual(fs.existsSync(target), false);
+    });
+  }
+
+  test('a parent that is a symlink loop is refused with ENXIO', () => {
+    fs.symlinkSync('loop', path.join(tmpDir, 'loop'));
+
+    assert.strictEqual(code(() => platformWriteSync(path.join(tmpDir, 'loop', 'x.txt'), 'x', { verbatim: true })), 'ENXIO');
+  });
+
+  test('a link whose holding directory fails to resolve with EACCES is refused with ENXIO', () => {
+    const target = path.join(tmpDir, 'target.txt');
+    fs.writeFileSync(target, 'UNCHANGED');
+    const link = path.join(tmpDir, 'link.txt');
+    fs.symlinkSync('target.txt', link);
+    let calls = 0;
+    const real = fs.realpathSync.native;
+    mock.method(fs.realpathSync, 'native', (p, ...rest) => {
+      calls += 1;
+      if (calls >= 2) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return real(p, ...rest);
+    });
+
+    assert.strictEqual(code(() => platformWriteSync(link, 'x', { verbatim: true })), 'ENXIO');
+    mock.restoreAll();
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'UNCHANGED');
+  });
 });
 
 describe('#5759 review round: printablePath escapes every format, separator and surrogate character', () => {
@@ -1691,7 +1841,9 @@ describe('#5759 review round: every bounded reader and special-target writer ope
     });
   }
 
-  test('the prior-Markdown read of platformWriteSync opens with O_NOCTTY', () => {
+  test('the prior-Markdown read of platformWriteSync opens with O_NOCTTY', {
+    skip: process.platform === 'win32' ? 'O_NOCTTY is not defined on Windows, so the assertion is vacuous there' : false,
+  }, () => {
     const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
     const file = path.join(tmpDir, 'doc.md');
     fs.writeFileSync(file, '# old\n');
