@@ -42,9 +42,23 @@ const { stripFencedCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cj
 const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\n');
 
-const checker = read('agents/gsd-plan-checker.md');
-const researcher = read('agents/gsd-phase-researcher.md');
-const researchTemplate = read('gsd-core/templates/research.md');
+// Subjects load on first use, inside a test: a missing file or heading then fails that test by
+// name instead of throwing before any test registers (RULESET.TESTS.guard-toplevel-readFileSync).
+function once(load) {
+  let loaded = false;
+  let value;
+  return () => {
+    if (!loaded) {
+      value = load();
+      loaded = true;
+    }
+    return value;
+  };
+}
+
+const checker = once(() => read('agents/gsd-plan-checker.md'));
+const researcher = once(() => read('agents/gsd-phase-researcher.md'));
+const researchTemplate = once(() => read('gsd-core/templates/research.md'));
 
 function span(doc, startHeading, endPattern) {
   const start = doc.indexOf(startHeading);
@@ -54,38 +68,42 @@ function span(doc, startHeading, endPattern) {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
-const dim11 = span(checker, '## Dimension 11: Research Resolution', /\n## Dimension 12\b/);
+const dim11 = once(() => span(checker(), '## Dimension 11: Research Resolution', /\n## Dimension 12\b/));
 // The numbered Process steps, from **Process:** to the first worked example, each with its
 // whitespace collapsed so a wrap cannot split one step. Assertions below match invariant
 // tokens within a step, never whole sentences.
-const steps = span(dim11, '**Process:**', /\n\*\*Example\b/)
-  .split(/\n(?=\d+\.\s)/)
-  .filter((s) => /^\d+\.\s/.test(s))
-  .map((s) => s.replace(/\s+/g, ' ').trim());
+const steps = once(() =>
+  span(dim11(), '**Process:**', /\n\*\*Example\b/)
+    .split(/\n(?=\d+\.\s)/)
+    .filter((s) => /^\d+\.\s/.test(s))
+    .map((s) => s.replace(/\s+/g, ' ').trim()),
+);
 // The dimension as a model reads its rules: everything but the fenced examples and their labels.
-const rules = splitLines(stripFencedCode(dim11).text)
-  .filter((l) => !/^\*\*Example\b/.test(l))
-  .join('\n');
+const rules = once(() =>
+  splitLines(stripFencedCode(dim11()).text)
+    .filter((l) => !/^\*\*Example\b/.test(l))
+    .join('\n'),
+);
 
 describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', () => {
   test('PASS is reached only when there are no questions, and the suffix is never evidence', () => {
-    const passSteps = steps.filter((s) => /\bPASS\b/.test(s));
+    const passSteps = steps().filter((s) => /\bPASS\b/.test(s));
     assert.equal(passSteps.length, 1, 'exactly one Process step may grant PASS');
     assert.match(passSteps[0], /\b(no questions|none)\b/i, `PASS granted other than for no questions: ${passSteps[0]}`);
     assert.doesNotMatch(passSteps[0], /RESOLVED/, `PASS granted on the marker: ${passSteps[0]}`);
     assert.equal(
-      (rules.match(/\bPASS\b/g) || []).length,
+      (rules().match(/\bPASS\b/g) || []).length,
       (passSteps[0].match(/\bPASS\b/g) || []).length,
       'the dimension grants PASS outside its no-questions step',
     );
     assert.ok(
-      steps.some((s) => s.includes('`(RESOLVED)`') && /never evidence/.test(s)),
+      steps().some((s) => s.includes('`(RESOLVED)`') && /never evidence/.test(s)),
       'a step must say the (RESOLVED) heading suffix is never evidence',
     );
   });
 
   test('every question still needing a ruling is collected, whatever its heading, form or claimed status', () => {
-    const collect = steps[0];
+    const collect = steps()[0];
     assert.match(collect, /needing an answer or a user ruling/);
     assert.match(collect, /any heading/, 'step 1 must not key on one literal heading');
     assert.match(collect, /\bprose\b/, 'step 1 must collect questions written as prose');
@@ -95,8 +113,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 
   test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it and predates this run', () => {
-    assert.match(dim11, /only\s+the\s+user\s+closes/i);
-    const pass = steps.find((l) => /\bpasses only\b/.test(l));
+    assert.match(dim11(), /only\s+the\s+user\s+closes/i);
+    const pass = steps().find((l) => /\bpasses only\b/.test(l));
     assert.ok(pass, 'a step must state the one way a question passes');
     assert.ok(pass.includes('`D-NN`') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions>: ${pass}`);
     assert.match(pass, /\banswers\b/);
@@ -104,11 +122,11 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 
   test('no CONTEXT.md leaves every question a BLOCKER', () => {
-    assert.ok(steps.some((s) => /No CONTEXT\.md: every question is a BLOCKER/.test(s)), 'Process must say what happens without CONTEXT.md');
+    assert.ok(steps().some((s) => /No CONTEXT\.md: every question is a BLOCKER/.test(s)), 'Process must say what happens without CONTEXT.md');
   });
 
   test('the BLOCKER step covers every other question, and names the cases: uncited, dangling, misplaced, irrelevant, non-user authority', () => {
-    const blocker = steps.find((l) => /\bBLOCKER\b/.test(l));
+    const blocker = steps().find((l) => /\bBLOCKER\b/.test(l));
     assert.ok(blocker, 'Process must carry a BLOCKER step');
     const cases = {
       'every other question': /every other question/i,
@@ -127,7 +145,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 
   test('the binding required_property carries the relevance condition', () => {
-    const props = [...dim11.matchAll(/required_property:\s*"([^"]*)"/g)].map((m) => m[1]);
+    const props = [...dim11().matchAll(/required_property:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
     for (const prop of props) {
       assert.match(prop, /D-NN/);
@@ -138,7 +156,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   });
 
   test('fix_hint routes to a decision on record, else a user ruling and a research re-run, never to the planner adding one', () => {
-    const hints = [...dim11.matchAll(/fix_hint:\s*"([^"]*)"/g)].map((m) => m[1]);
+    const hints = [...dim11().matchAll(/fix_hint:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(hints.length >= 1, 'Dimension 11 must carry a fix_hint example');
     for (const hint of hints) {
       assert.doesNotMatch(hint, /mark section as/i, `fix_hint still prescribes the marker: ${hint}`);
@@ -158,7 +176,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
   test('the PASS example cites D-NN on every question; the self-resolved shape is a BLOCKER example', () => {
     // Every PASS example, located by its label's tokens (an **Example label that says PASS
     // and not BLOCKER), not its wording.
-    const lines = splitLines(dim11);
+    const lines = splitLines(dim11());
     const labels = lines.flatMap((l, i) => (/^\*\*Example\b/.test(l) && /\bPASS\b/.test(l) && !/\bBLOCKER\b/.test(l) ? [i] : []));
     assert.ok(labels.length >= 1, 'Dimension 11 must carry a PASS example');
     for (const at of labels) {
@@ -173,11 +191,11 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
       for (const item of items) assert.match(item, /RESOLVED \(D-\d{2}\):/, `uncited PASS item: ${item}`);
     }
 
-    assert.match(dim11, /^\*\*Example\b[^\n]*self-resolved[^\n]*\bBLOCKER\b/im);
+    assert.match(dim11(), /^\*\*Example\b[^\n]*self-resolved[^\n]*\bBLOCKER\b/im);
   });
 
   test('success_criteria includes the research resolution check', () => {
-    const criteria = span(checker, '<success_criteria>', /<\/success_criteria>/);
+    const criteria = span(checker(), '<success_criteria>', /<\/success_criteria>/);
     const item = criteria.match(/- \[ \] Research resolution checked[^\n]*\n[^\n]*/);
     assert.ok(item, 'success_criteria must list the research resolution check');
     assert.match(item[0], /`D-NN`/);
@@ -209,15 +227,15 @@ function researchTemplateFence(doc) {
 }
 
 describe('researcher never resolves its own questions (#5438)', () => {
-  const fence = researchTemplateFence(researcher);
+  const fence = once(() => researchTemplateFence(researcher()));
 
   test('no part of the RESEARCH.md template carries a gate token a model could copy', () => {
-    assert.match(fence.body, /\n## Open Questions\n/, 'the template must keep its Open Questions section');
-    assert.doesNotMatch(fence.body, GATE_TOKEN);
+    assert.match(fence().body, /\n## Open Questions\n/, 'the template must keep its Open Questions section');
+    assert.doesNotMatch(fence().body, GATE_TOKEN);
   });
 
   test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
-    const rule = fence.after;
+    const rule = fence().after;
     assert.match(rule, /never\s+mark\s+a\s+question\s+resolved/i);
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
@@ -229,19 +247,19 @@ describe('researcher never resolves its own questions (#5438)', () => {
   });
 
   test('the return template leaves open questions to a user ruling', () => {
-    const ret = span(researcher, '\n### Open Questions\n', /\n### /);
+    const ret = span(researcher(), '\n### Open Questions\n', /\n### /);
     assert.doesNotMatch(ret, GATE_TOKEN);
     assert.match(ret, /user ruling/);
     assert.match(ret, /never marked resolved/i);
   });
 
   test('gsd-core/templates/research.md keeps the rule in Guidelines, outside the template', () => {
-    const guidelinesAt = researchTemplate.indexOf('\n## Guidelines\n');
+    const guidelinesAt = researchTemplate().indexOf('\n## Guidelines\n');
     assert.notEqual(guidelinesAt, -1, 'missing ## Guidelines');
     // Everything above Guidelines is the file template and its worked example.
-    assert.match(researchTemplate.slice(0, guidelinesAt), /\n## Open Questions\n/);
-    assert.doesNotMatch(researchTemplate.slice(0, guidelinesAt), GATE_TOKEN);
-    const guide = span(researchTemplate.slice(guidelinesAt), '\n**Open Questions:**\n', /\n\n/);
+    assert.match(researchTemplate().slice(0, guidelinesAt), /\n## Open Questions\n/);
+    assert.doesNotMatch(researchTemplate().slice(0, guidelinesAt), GATE_TOKEN);
+    const guide = span(researchTemplate().slice(guidelinesAt), '\n**Open Questions:**\n', /\n\n/);
     assert.match(guide, /never\s+mark\s+a\s+question\s+resolved/i);
     assert.match(guide, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+`## Open Questions`\s+section\s+heading/);
     assert.match(guide, /`D-NN`/);
