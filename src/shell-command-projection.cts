@@ -1326,10 +1326,13 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * the descriptor aliases /dev/stdout, /dev/stderr, /dev/fd/N, /proc/self/fd/N; any other
    * regular file takes the atomic path, and block devices and sockets are always refused (ENXIO).
    * A FIFO needs a reader (ENXIO otherwise). Caveats: a shell append redirect (`>> file`) is
-   * truncated by the in-place write of /dev/stdout exactly as the previous plain write did, and
-   * on Windows the NUL / CON names are not recognised here (they take the ordinary path).
+   * truncated by the in-place write of /dev/stdout exactly as the previous plain write did. On
+   * Windows the /dev/* and /proc aliases do not exist; NUL and CON are character devices and are
+   * written in place like any other character device.
    */
   allowSpecialTarget?: boolean;
+  /** Test seam for a FIFO target under `allowSpecialTarget`: the back-off sleep and its total bound. */
+  specialTargetWait?: { sleep?: (ms: number) => void; maxWaitMs?: number };
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -1633,6 +1636,62 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
  * whatever sits at the target by rename and is unaffected. A crash between the temp create
  * and the rename leaves `<file>.tmp.<pid>.<hex>` behind; such files are not reaped.
  */
+/** Longest total back-off, in milliseconds, a FIFO write waits for a slow reader to drain. */
+const FIFO_MAX_WAIT_MS = 30_000;
+
+function defaultSleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Write `data` to a FIFO that has a reader, through ONE non-blocking descriptor — never a
+ * reopen, so a reader that leaves cannot turn into a blocked open. The non-blocking open is the
+ * reader probe (ENXIO = no reader). A full pipe (EAGAIN) backs off 1, 2, 4 … 50 ms through
+ * `sleep` (Atomics.wait, no busy spin) until the summed back-off passes `maxWaitMs`, then throws
+ * ETIMEDOUT; a reader that went away (EPIPE — Node ignores SIGPIPE, so it surfaces as an error)
+ * is rethrown with a clear message. Both seams are for tests.
+ */
+function writeFifoNonBlocking(
+  filePath: string,
+  data: Buffer,
+  wait: { sleep?: (ms: number) => void; maxWaitMs?: number } = {},
+): void {
+  const sleep = wait.sleep ?? defaultSleep;
+  const maxWaitMs = wait.maxWaitMs ?? FIFO_MAX_WAIT_MS;
+  const fd = fs.openSync(filePath, fs.constants.O_WRONLY | (fs.constants.O_NONBLOCK ?? 0));
+  try {
+    let off = 0;
+    let waited = 0;
+    let delay = 1;
+    while (off < data.length) {
+      try {
+        off += fs.writeSync(fd, data, off, data.length - off);
+        delay = 1;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EAGAIN') {
+          if (waited >= maxWaitMs) {
+            throw Object.assign(
+              new Error(`ETIMEDOUT: ${filePath}: the reader did not drain the pipe within ${maxWaitMs} ms`),
+              { code: 'ETIMEDOUT' },
+            );
+          }
+          sleep(delay);
+          waited += delay;
+          delay = Math.min(delay * 2, 50);
+          continue;
+        }
+        if (code === 'EPIPE') {
+          throw Object.assign(new Error(`EPIPE: ${filePath}: the reader went away mid-write`), { code: 'EPIPE' });
+        }
+        throw err;
+      }
+    }
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+  }
+}
+
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
@@ -1653,21 +1712,15 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     const isDescriptorAlias = /^\/dev\/(stdout|stderr|fd\/\d+)$/.test(resolvedTarget)
       || /^\/proc\/self\/fd\/\d+$/.test(resolvedTarget);
     if (special !== null && (special.isCharacterDevice() || special.isFIFO() || isDescriptorAlias)) {
-      const nonBlock = fs.constants.O_NONBLOCK ?? 0;
-      let probeFd: number | undefined;
       if (special.isFIFO()) {
-        // The non-blocking open is only the reader probe (ENXIO = no reader = the refusal); the
-        // probe stays open while the real, blocking descriptor is opened so a slow reader can
-        // never make a write fail with EAGAIN.
-        probeFd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
+        writeFifoNonBlocking(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
+        return;
       }
-      let fd: number | undefined;
+      const fd = fs.openSync(filePath, fs.constants.O_WRONLY | (special.isFile() ? fs.constants.O_TRUNC : 0));
       try {
-        fd = fs.openSync(filePath, fs.constants.O_WRONLY | (special.isFile() ? fs.constants.O_TRUNC : 0));
         fs.writeFileSync(fd, normalized, encoding);
       } finally {
-        if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
-        if (probeFd !== undefined) { try { fs.closeSync(probeFd); } catch { /* already closed */ } }
+        try { fs.closeSync(fd); } catch { /* already closed */ }
       }
       return;
     }
