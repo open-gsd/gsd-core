@@ -277,13 +277,17 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
 });
 
 // Environment variables git reads in place of a config key, and that key
-// (git-var(1), git(1) ENVIRONMENT; checked live on git 2.43). git's own
-// precedence among them does not matter: every one of them is scanned.
+// (checked live on git 2.43). git's own precedence among them does not
+// matter: every one of them is scanned. Sources are git v2.56.0's
+// Documentation/ files.
 const TWINS = [
-  ['GIT_EDITOR', 'core.editor'], ['VISUAL', 'core.editor'], ['EDITOR', 'core.editor'],
-  ['GIT_SEQUENCE_EDITOR', 'sequence.editor'], ['GIT_SSH_COMMAND', 'core.sshcommand'], ['GIT_SSH', 'core.sshcommand'],
-  ['GIT_EXTERNAL_DIFF', 'diff.external'], ['GIT_ASKPASS', 'core.askpass'], ['SSH_ASKPASS', 'core.askpass'],
-  ['GIT_PROXY_COMMAND', 'core.gitproxy'], ['GIT_PAGER', 'core.pager'], ['PAGER', 'core.pager'],
+  ['GIT_EDITOR', 'core.editor'], ['VISUAL', 'core.editor'], ['EDITOR', 'core.editor'], // git-var.adoc GIT_EDITOR
+  ['GIT_SEQUENCE_EDITOR', 'sequence.editor'], // git-var.adoc
+  ['GIT_SSH_COMMAND', 'core.sshcommand'], ['GIT_SSH', 'core.sshcommand'], // git.adoc ENVIRONMENT, config/core.adoc
+  ['GIT_EXTERNAL_DIFF', 'diff.external'], // git.adoc ENVIRONMENT
+  ['GIT_ASKPASS', 'core.askpass'], ['SSH_ASKPASS', 'core.askpass'], // config/core.adoc, gitcredentials.adoc
+  ['GIT_PROXY_COMMAND', 'core.gitproxy'], // config/core.adoc core.gitProxy
+  ['GIT_PAGER', 'core.pager'], ['PAGER', 'core.pager'], // git-var.adoc GIT_PAGER
 ];
 
 describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492)', () => {
@@ -300,30 +304,37 @@ describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492
   // core.askPass, core.gitProxy and sendemail.smtpServer exec a program
   // rather than a shell; they are scanned conservatively anyway. alias.* is
   // #5045's own branch, not a shape, so it stays out.
+  // Each row cites where git v2.56.0 documents the key (Documentation/).
   const ROWS = [
-    ['diff', false, 'external', false], ['sequence', false, 'editor', false],
-    ['core', false, 'editor', false], ['core', false, 'sshcommand', false], ['core', false, 'fsmonitor', false],
-    ['gpg', false, 'program', false], ['gpg', true, 'program', false],
-    ['diff', true, 'textconv', false], ['diff', true, 'command', false],
-    ['filter', true, 'clean', false], ['filter', true, 'smudge', false], ['filter', true, 'process', false],
-    ['merge', true, 'driver', false],
-    ['credential', false, 'helper', true], ['credential', true, 'helper', true],
-    ['core', false, 'askpass', false], ['core', false, 'gitproxy', false],
-    ['core', false, 'alternaterefscommand', false], ['uploadpack', false, 'packobjectshook', false],
-    ['gc', false, 'recentobjectshook', false], ['interactive', false, 'difffilter', false],
-    ['imap', false, 'tunnel', false], ['instaweb', false, 'httpd', false],
-    ['difftool', true, 'cmd', false], ['mergetool', true, 'cmd', false], ['browser', true, 'cmd', false],
-    ['man', true, 'cmd', false], ['guitool', true, 'cmd', false],
-    ['trailer', true, 'cmd', false], ['trailer', true, 'command', false],
-    ['gpg', true, 'defaultkeycommand', false], ['tar', true, 'command', false],
-    ['remote', true, 'uploadpack', false], ['remote', true, 'receivepack', false],
-    ['sendemail', false, 'smtpserver', false], ['sendemail', true, 'smtpserver', false],
-    ['sendemail', false, 'sendmailcmd', false], ['sendemail', true, 'sendmailcmd', false],
-    ['sendemail', false, 'tocmd', false], ['sendemail', true, 'tocmd', false],
-    ['sendemail', false, 'cccmd', false], ['sendemail', true, 'cccmd', false],
-    ['sendemail', false, 'headercmd', false], ['sendemail', true, 'headercmd', false],
-    ['submodule', true, 'update', true],
-    ['hook', true, 'command', false],
+    ['diff', false, 'external', false], // config/diff.adoc
+    ['sequence', false, 'editor', false], // config/sequencer.adoc
+    ['core', false, 'editor', false], ['core', false, 'sshcommand', false], ['core', false, 'fsmonitor', false], // config/core.adoc
+    ['gpg', false, 'program', false], ['gpg', true, 'program', false], // config/gpg.adoc
+    ['diff', true, 'textconv', false], ['diff', true, 'command', false], // config/diff.adoc
+    ['filter', true, 'clean', false], ['filter', true, 'smudge', false], // config/filter.adoc
+    ['filter', true, 'process', false], // gitattributes.adoc "Long Running Filter Process"
+    ['merge', true, 'driver', false], // config/merge.adoc
+    ['credential', false, 'helper', true], ['credential', true, 'helper', true], // config/credential.adoc
+    ['core', false, 'askpass', false], ['core', false, 'gitproxy', false], // config/core.adoc
+    ['core', false, 'alternaterefscommand', false], // config/core.adoc
+    ['uploadpack', false, 'packobjectshook', false], // config/uploadpack.adoc
+    ['gc', false, 'recentobjectshook', false], // config/gc.adoc
+    ['interactive', false, 'difffilter', false], // config/interactive.adoc
+    ['imap', false, 'tunnel', false], // config/imap.adoc
+    ['instaweb', false, 'httpd', false], // config/instaweb.adoc
+    ['difftool', true, 'cmd', false], ['mergetool', true, 'cmd', false], // config/difftool.adoc, config/mergetool.adoc
+    ['browser', true, 'cmd', false], ['man', true, 'cmd', false], ['guitool', true, 'cmd', false], // config/browser.adoc, man.adoc, guitool.adoc
+    ['trailer', true, 'cmd', false], ['trailer', true, 'command', false], // config/trailer.adoc
+    ['gpg', true, 'defaultkeycommand', false], // config/gpg.adoc gpg.ssh.defaultKeyCommand
+    ['tar', true, 'command', false], // git-archive.adoc CONFIGURATION
+    ['remote', true, 'uploadpack', false], ['remote', true, 'receivepack', false], // config/remote.adoc
+    ['sendemail', false, 'smtpserver', false], ['sendemail', true, 'smtpserver', false], // config/sendemail.adoc
+    ['sendemail', false, 'sendmailcmd', false], ['sendemail', true, 'sendmailcmd', false], // git-send-email.adoc --sendmail-cmd
+    ['sendemail', false, 'tocmd', false], ['sendemail', true, 'tocmd', false], // config/sendemail.adoc
+    ['sendemail', false, 'cccmd', false], ['sendemail', true, 'cccmd', false], // config/sendemail.adoc
+    ['sendemail', false, 'headercmd', false], ['sendemail', true, 'headercmd', false], // config/sendemail.adoc
+    ['submodule', true, 'update', true], // config/submodule.adoc
+    ['hook', true, 'command', false], // config/hook.adoc
   ];
   const blocks = [
     ["git -c sequence.editor='cat .env; true' rebase -i --root", '.env'],
