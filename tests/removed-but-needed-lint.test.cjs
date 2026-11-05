@@ -954,6 +954,16 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     assert.equal(result.size, 0);
   });
 
+  test('an untracked nested "*" .gitignore does not hide a deletion a TRACKED rule ignores', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-mask-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.gsd', 'x'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.gsd', 'x', '.gitignore'), '*\n');
+    const result = getIgnoredDeletions(tmpDir, ['.gsd/x/b.md'], BASE_REF);
+    assert.deepEqual([...result], ['.gsd/x/b.md']);
+  });
+
   test('a local uncommitted edit to a tracked .gitignore disables the refinement', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-dirty-'));
     t.after(() => cleanup(tmpDir));
@@ -1160,6 +1170,22 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     git('add', 'sub/.gitignore');
     git('commit', '-q', '-m', 'ignore md');
     assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['sub/a.md']);
+  });
+
+  test('an untracked nested "*" .gitignore cannot mask a file a TRACKED root rule ignores', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-mask-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
+    fs.writeFileSync(path.join(tmpDir, '.gsd', 'x', '.gitignore'), '*\n');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['.gsd/x/a.md']);
+  });
+
+  test('a locally edited tracked .gitignore is evaluated at its HEAD version', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-head-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '# rule removed locally\n');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['.gsd/x/a.md']);
   });
 
   test('getTrackedIgnoredFiles is empty for a clean repo', (t) => {
