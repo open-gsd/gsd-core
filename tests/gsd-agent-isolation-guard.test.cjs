@@ -3329,11 +3329,11 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
     });
   }
 
-  test('a --renew-held time later than the write is clamped to the write, so it cannot extend a hold', (t) => {
+  test('a --renew-held time later than the write reads as the write, so it cannot extend a hold', (t) => {
     const dir = createTempProject('gsd-4904-renew-');
     t.after(() => cleanup(dir));
     query(dir, T0, ['--raw', '--force-isolation', 'none', '--renew-held', String(T0 + 5 * SENTINEL_STALE_MS)]);
-    assert.equal(readSentinelRaw(dir).decided_at, T0);
+    assert.equal(JSON.parse(query(dir, T0 + 1, ['--json']).output).decidedAt, T0);
   });
 
   test('--renew-held beside a forced capability is ignored — only a forced none renews a hold', (t) => {
