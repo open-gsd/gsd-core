@@ -58,7 +58,7 @@ const { planningDir, planningRoot, resolveEnvWorkstream, resolvePhaseIdConventio
 // Naming readers and writers share the loader's scoped-key precedence and defaults.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue, loadConfig } = configLoaderModule;
+const { CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue, loadConfig, readConfigFileBounded } = configLoaderModule;
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterModule = require('./frontmatter.cjs');
@@ -349,7 +349,11 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   if (naming === undefined) {
     const readConfig = (file: string): Record<string, unknown> | null => {
       try {
-        const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+        // Bounded read (#5759): null is an absent file (no configError); a FIFO/device/oversized
+        // file throws and is reported through configError like any other unreadable config.
+        const raw = readConfigFileBounded(file);
+        if (raw === null) return null;
+        const value: unknown = JSON.parse(raw);
         if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
         configError = {path: file, message: 'configuration must be a JSON object'};
         return null;

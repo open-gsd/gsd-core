@@ -8042,8 +8042,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   let autoPruned = false;
   try {
     const configPath = path.join(planningDir(cwd), 'config.json');
-    if (fs.existsSync(configPath)) {
-      const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
+    // best-effort catch below.
+    const rawConfigText = configLoaderMod.readConfigFileBounded(configPath);
+    if (rawConfigText !== null) {
+      const rawConfig = JSON.parse(rawConfigText) as Record<string, unknown>;
       const workflow = rawConfig['workflow'] as Record<string, unknown> | undefined;
       const autoPruneEnabled = workflow && workflow['auto_prune_state'] === true;
       if (autoPruneEnabled && fs.existsSync(statePath)) {

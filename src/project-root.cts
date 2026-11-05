@@ -16,6 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 
 const FIND_PROJECT_ROOT_MAX_DEPTH = 10;
 
@@ -140,7 +143,9 @@ export function findProjectRoot(startDir: string): string {
       const configPath = parentPlanning + path.sep + 'config.json';
       let matched = false;
       try {
-        const raw = fs.readFileSync(configPath, 'utf-8');
+        // Bounded read (#5759): a FIFO/device/oversized config throws and is skipped like a
+        // missing one. An absent file (null) becomes '' so JSON.parse throws into the same catch.
+        const raw = readConfigFileBounded(configPath) ?? '';
         const config: unknown = JSON.parse(raw);
         if (config && typeof config === 'object') {
           const cfg = config as Record<string, unknown>;
@@ -190,7 +195,7 @@ export function findProjectRoot(startDir: string): string {
           try {
             if (fs.existsSync(ancestorPlanning) && fs.statSync(ancestorPlanning).isDirectory()) {
               const ancestorConfig = ancestor + path.sep + '.planning' + path.sep + 'config.json';
-              const rawA = fs.readFileSync(ancestorConfig, 'utf-8');
+              const rawA = readConfigFileBounded(ancestorConfig) ?? ''; // #5759: bounded; '' makes JSON.parse throw into the catch
               const cfgA = JSON.parse(rawA) as Record<string, unknown>;
               const subReposValueA =
                 cfgA['sub_repos'] ??

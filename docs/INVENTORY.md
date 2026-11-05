@@ -556,6 +556,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `command-routing-hub.cjs` | Pure-result dispatch hub that centralizes mode decision (SDK vs CJS), error taxonomy, and no-throw contract for all command-family routers (#3788) |
 | `commands.cjs` | Misc CLI commands (slug, timestamp, todos, scaffolding, stats) |
 | `complexity-trigger.cjs` | Pure leaf for the complexity-triggered refactor capability — analyzer, evaluator, and baseline persistence; wrapped by `refactor-trigger-command-router.cjs` (#1953) |
+| `config-file-read.cjs` | Bounded reader for a project or workstream `config.json` (#5759) — `CONFIG_MAX_BYTES` (1 MiB) and `readConfigFileBounded`: non-blocking open, `fstat` regular-file check, size cap; returns `null` for an absent file and throws a coded error (`ENXIO` FIFO/device, `EISDIR`, `EFBIG`) otherwise, so a planted named pipe cannot hang a command. Leaf module shared by every `config.json` reader |
 | `config-loader.cjs` | Project config loading — defaults merge, legacy-key migration, workstream overlay, unknown-key/profile-override validation (extracted from `core.cjs`, ADR-857) |
 | `config-schema.cjs` | Single source of truth for `VALID_CONFIG_KEYS` and dynamic key patterns; imported by both the validator and the config-schema-docs parity test |
 | `config-types.cjs` | TypeScript type definitions for the `model_policy` config block — `ModelPolicyConfig`, `TierEntry`, `RuntimeTiers`; compiled from `src/config-types.cts` at publish time (ADR-457) |

@@ -17,6 +17,7 @@ import fs from 'node:fs';
 // can intercept calls from this seam — destructured imports capture references
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { escapeRegex } from './pattern.cjs';
 import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
@@ -1446,6 +1447,84 @@ function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string |
   }
 }
 
+/** Collisions tolerated while creating a temp file before giving up (#5759). */
+const EXCLUSIVE_TEMP_ATTEMPTS = 5;
+
+/** Default temp-name suffix: pid plus 48 random bits, so a name cannot be predicted and planted. */
+function defaultTempSuffix(): string {
+  return `${process.pid}.${randomBytes(6).toString('hex')}`;
+}
+
+/**
+ * Create `<basePath>.tmp.<suffix>` exclusively and return its open write descriptor (#5759).
+ * `O_CREAT|O_EXCL` fails with EEXIST on ANY existing entry — a regular file, a FIFO, or a
+ * symlink (dangling or not) — so a planted entry is never opened, written through or blocked
+ * on; `O_NOFOLLOW` is added where the platform has it (absent on Windows). On EEXIST a new
+ * suffix is drawn, up to EXCLUSIVE_TEMP_ATTEMPTS times, then the EEXIST is thrown. Any other
+ * error is thrown at once. `nextSuffix` is a seam for tests.
+ */
+export function openExclusiveTempSync(
+  basePath: string,
+  nextSuffix: () => string = defaultTempSuffix,
+): { fd: number; tmpPath: string } {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
+  let collision: unknown;
+  for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
+    const tmpPath = `${basePath}.tmp.${nextSuffix()}`;
+    try {
+      return { fd: fs.openSync(tmpPath, flags, 0o666), tmpPath };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      collision = err;
+    }
+  }
+  throw collision;
+}
+
+/**
+ * Write `normalized` to the target path itself (the non-atomic fallback). Opens non-blocking
+ * and fstats the descriptor, so a FIFO or device at the target can neither block the open
+ * (a FIFO with no reader fails ENXIO) nor be written to: anything but a regular file is
+ * refused with code ENXIO.
+ */
+function writeTargetDirect(filePath: string, normalized: string, encoding: BufferEncoding): void {
+  const nonBlock = fs.constants.O_NONBLOCK ?? 0;
+  // Open an existing target WITHOUT truncating, so nothing is destroyed before the
+  // regular-file check; create it only when it is absent (a link is followed, as a plain
+  // write would). `created` lets a failed write remove the empty file it just made.
+  let created = false;
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | nonBlock, 0o666);
+    created = true;
+  }
+  let failure: Error | undefined;
+  try {
+    if (!fs.fstatSync(fd).isFile()) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: not a regular file (FIFO/device) — refusing`),
+        { code: 'ENXIO' },
+      );
+    }
+    // Write first, then cut to the new length: a write that fails before any byte lands leaves
+    // an existing file intact, as a failed path write did before the open became explicit.
+    fs.writeFileSync(fd, normalized, encoding);
+    fs.ftruncateSync(fd, Buffer.byteLength(normalized, encoding));
+  } catch (err) {
+    failure = err instanceof Error ? err : new Error(String(err));
+  }
+  try { fs.closeSync(fd); } catch { /* already closed */ }
+  if (failure !== undefined) {
+    if (created) {
+      try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+    }
+    throw failure;
+  }
+}
+
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
@@ -1454,15 +1533,28 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
   const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = filePath + '.tmp.' + process.pid;
 
-  // Step 1: write the sibling tmp file. If THIS fails, nothing was published, so a
-  // direct fallback write cannot truncate a concurrent reader of an existing file.
+  // Step 1: write the sibling tmp file, created exclusively under an unpredictable name so a
+  // planted symlink or FIFO is never followed or blocked on (#5759). If THIS fails, nothing
+  // was published, so a direct fallback write cannot truncate a concurrent reader of an
+  // existing file.
+  let tmpPath: string;
+  let tmpFd: number;
   try {
-    fs.writeFileSync(tmpPath, normalized, encoding);
+    ({ fd: tmpFd, tmpPath } = openExclusiveTempSync(filePath));
   } catch {
+    writeTargetDirect(filePath, normalized, encoding);
+    return;
+  }
+  let wrote = false;
+  try {
+    fs.writeFileSync(tmpFd, normalized, encoding);
+    wrote = true;
+  } catch { /* fall back below */ }
+  try { fs.closeSync(tmpFd); } catch { wrote = false; }
+  if (!wrote) {
     try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
-    fs.writeFileSync(filePath, normalized, encoding);
+    writeTargetDirect(filePath, normalized, encoding);
     return;
   }
 
@@ -1479,7 +1571,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
   // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
   // fall back to a direct write to preserve write availability.
-  fs.writeFileSync(filePath, normalized, encoding);
+  writeTargetDirect(filePath, normalized, encoding);
 }
 
 export function platformReadSync(filePath: string, opts: { encoding?: BufferEncoding; required?: boolean } = {}): string | null {

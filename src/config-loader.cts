@@ -17,7 +17,7 @@
  *   - ./config-schema.cjs    (VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS)
  *   - ./planning-workspace.cjs (planningDir, planningRoot)
  *   - ./shell-command-projection.cjs (execGit, platformWriteSync)
- *   - ./capability-ledger.cjs (readSmallRegularFile — bounded regular-file read, #5759)
+ *   - ./config-file-read.cjs (CONFIG_MAX_BYTES, readConfigFileBounded — bounded regular-file read, #5759)
  *   - ./core-utils.cjs       (detectSubRepos)
  *   - ./model-catalog.cjs    (KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES)
  */
@@ -26,8 +26,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import capabilityLedgerMod = require('./capability-ledger.cjs');
-const { readSmallRegularFile } = capabilityLedgerMod;
+import configFileReadMod = require('./config-file-read.cjs');
+const { CONFIG_MAX_BYTES, readConfigFileBounded } = configFileReadMod;
 // #4717: runtime-identity fill — env rung + per-install marker rung.
 import { readInstallRuntimeMarker } from './runtime-slash.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -602,24 +602,8 @@ interface ConfigResolution {
   reason: ConfigReason;
 }
 
-/**
- * Largest config.json the loader will read (#5759). Real configs are a few KB; 1 MiB
- * is generous enough that no legitimate config is refused. A larger file is reported
- * unusable (EFBIG) rather than read whole.
- */
-const CONFIG_MAX_BYTES = 1024 * 1024;
-
-/**
- * Read a config.json as a bounded regular file (#5759): the single reader shared by the
- * loader and the resolve-model omit check, so the two cannot diverge. Opens non-blocking
- * and fstats the fd, so a FIFO or device with no writer is refused instead of blocking
- * open(2) forever. Returns the UTF-8 text, or null when the file is absent (ENOENT);
- * throws a LedgerIOError carrying `.code` (ENXIO FIFO/device, EISDIR directory, EFBIG
- * over CONFIG_MAX_BYTES, or the errno) for every other condition.
- */
-function readConfigFileBounded(filePath: string): string | null {
-  return readSmallRegularFile(filePath, CONFIG_MAX_BYTES);
-}
+// CONFIG_MAX_BYTES and readConfigFileBounded live in ./config-file-read.cjs (#5759), the leaf
+// every config.json reader shares; they are re-exported below for existing importers.
 
 /**
  * Read + JSON-parse a config file, keeping *absent* distinguishable from
@@ -672,7 +656,25 @@ const _warnedUnusableConfig = new Set<string>();
  * is unreachable to almost every consumer, and the user whose config was
  * silently discarded still gets no signal. That was the whole defect in #1880.
  */
-function _warnUnusableConfig(fault: ConfigFault): void {
+/**
+ * Printable form of a path for a terminal: C0 controls, DEL and C1 controls become `\xNN`.
+ * A project directory name can carry ESC (or a C1 CSI), and the path is written to stderr
+ * verbatim otherwise — a terminal-escape injection through a directory name.
+ */
+function _printablePath(p: string): string {
+  return p.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
+/**
+ * What the caller falls back to when `fault.path` is unusable:
+ *   'defaults' — nothing else supplies the settings, so built-in defaults apply;
+ *   'root'     — a workstream config is unusable and the root config is applied instead;
+ *   null       — unknown at report time (the root config of a workstream resolution), so no
+ *                replacement is claimed.
+ */
+type ConfigFallback = 'defaults' | 'root' | null;
+
+function _warnUnusableConfig(fault: ConfigFault, fallback: ConfigFallback = 'defaults'): void {
   // The NUL separators are load-bearing: without them `path`+`reason`+`code` is bare
   // concatenation and two distinct faults can key alike. They are written as escapes rather
   // than literal 0x00 bytes because a literal NUL makes the whole file binary to file(1) and
@@ -685,8 +687,11 @@ function _warnUnusableConfig(fault: ConfigFault): void {
   const what = fault.reason === CONFIG_REASON.CONFIG_UNPARSEABLE
     ? 'is not valid JSON'
     : `could not be read (${fault.code})`;
+  const instead = fallback === 'root' ? '; using the root config instead'
+    : fallback === 'defaults' ? '; using defaults instead'
+      : '';
   process.stderr.write(
-    `gsd-tools: warning: ${fault.path} ${what} — its settings were NOT applied; using defaults instead\n`,
+    `gsd-tools: warning: ${_printablePath(fault.path)} ${what} — its settings were NOT applied${instead}\n`,
   );
 }
 
@@ -773,7 +778,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       const rootRead = _readConfigFile(rootConfigPath);
       if (rootRead.kind === 'fault') {
         configFault = rootRead.fault;
-        _warnUnusableConfig(rootRead.fault);
+        // The workstream config below may still apply, so no replacement is claimed.
+        _warnUnusableConfig(rootRead.fault, null);
       }
       if (rootRead.kind !== 'ok') throw new Error('root config absent or unusable');
       rootParsed = rootRead.data;
@@ -822,7 +828,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // The workstream/root config that ACTUALLY governs this resolution is
       // unusable. This outranks any earlier root-config fault for reporting.
       configFault = read.fault;
-      _warnUnusableConfig(read.fault);
+      // With a workstream active and a usable root config, the root config is what applies.
+      _warnUnusableConfig(read.fault, ws && rootParsed ? 'root' : 'defaults');
     }
     if (read.kind !== 'ok') throw new Error('config absent or unusable');
     const fileData: ParsedConfig = read.data;
