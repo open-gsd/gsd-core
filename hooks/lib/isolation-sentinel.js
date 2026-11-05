@@ -251,26 +251,43 @@ function latestWritten(candidates) {
   return candidates.reduce((best, c) => (c.writtenAt > best.writtenAt ? c : best));
 }
 
-/** True when `dir` is a real directory, not a link (lstat does not follow). Never throws. */
-function isRealDirectory(dir) {
+/**
+ * lstat of `dir` when it is a real directory, not a link (lstat does not follow); otherwise null.
+ * Never throws.
+ */
+function lstatRealDirectory(dir) {
   try {
     const st = fs.lstatSync(dir);
-    return st.isDirectory() && !st.isSymbolicLink();
+    return st.isDirectory() && !st.isSymbolicLink() ? st : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Same filesystem object: equal dev and ino. A zero ino (some Windows volumes) cannot be compared. */
+function sameObject(a, b) {
+  return a.ino === 0 || b.ino === 0 || (a.dev === b.dev && a.ino === b.ino);
 }
 
 /**
  * #5758: read one sentinel file as a bounded, non-blocking, link-refusing read of a regular file.
  * Returns the text, or null for EVERY refusal (missing, link, FIFO, device, directory, oversized,
- * short read, a parent directory that is a link), so a hostile record is exactly as absent as a
- * missing one. `readFileSync` would block forever on a FIFO with no writer, follow a link to an
- * endless device or to a file outside the project, and read without bound.
+ * short read, a hard link to another file, a parent directory that is a link), so a hostile record
+ * is exactly as absent as a missing one. `readFileSync` would block forever on a FIFO with no
+ * writer, follow a link to an endless device or to a file outside the project, and read without
+ * bound. The writers only ever produce a fresh temp file renamed into place (link count 1).
+ *
+ * Parent directories are lstat-checked before the open and re-checked (same dev/ino, still a real
+ * directory) after it, and the opened file must be the object the pre-open lstat saw. Node has no
+ * openat, so this NARROWS the window for a parent swapped to a link between check and open; it does
+ * not close it.
  */
 function readSentinelText(file, parentDirs) {
+  const parents = [];
   for (const dir of parentDirs) {
-    if (!isRealDirectory(dir)) return null;
+    const st = lstatRealDirectory(dir);
+    if (!st) return null;
+    parents.push({ dir, st });
   }
   let fd;
   try {
@@ -280,7 +297,12 @@ function readSentinelText(file, parentDirs) {
     // refuses a link swapped in. Windows lacks both flags (`|| 0`); lstat/fstat still guard.
     fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
     const st = fs.fstatSync(fd);
-    if (!st.isFile() || st.size > SENTINEL_MAX_BYTES) return null;
+    if (!st.isFile() || st.nlink !== 1 || st.size > SENTINEL_MAX_BYTES) return null;
+    if (!sameObject(before, st)) return null;
+    for (const p of parents) {
+      const after = lstatRealDirectory(p.dir);
+      if (!after || !sameObject(p.st, after)) return null;
+    }
     const buf = Buffer.alloc(st.size);
     let offset = 0;
     while (offset < st.size) {
