@@ -2106,9 +2106,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   });
 
   describe("zsh's arithmetic: a quote in `$(( ))`, `(( ))` or `$[ ]` is not a quote", () => {
-    // Each read the file in zsh 5.9 only (Alpine 3, 2026-11-05); bash and dash
-    // fail the line. A `'` in the same place reads only inside a ${…} that is
-    // not expanded: anywhere else zsh's arithmetic stops the line on it.
+    // Each read the file in zsh 5.9 (Alpine 3, 2026-11-05), the `$((')` row in dash
+    // too; bash fails each line.
     const blocks = [
       'x$(($"));cat .env',
       '$((")); cat .env #',
@@ -2119,6 +2118,9 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo ${x+$[ } ' ]}; cat $'.env' #'",
       "echo ${x+$[ } \" ]}; cat $'.env' #\"",
       "echo ${x+$$[ } ' ]}; cat $'.env' #'",
+      "((x' ));cat .env;''",
+      "echo $(('))|cat .env",
+      'echo "a" $[ \' $(cat .env >&2) ]', // zsh runs a substitution in the skipped body
     ];
     for (const cmd of blocks) {
       test(`blocks ${JSON.stringify(cmd)}`, () => {
