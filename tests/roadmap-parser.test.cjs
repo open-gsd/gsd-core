@@ -4713,6 +4713,17 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     ['v2.1 Next (after v2.0 prep ✅)', false],
     ['v2.1 Next (after v2.0 prep \u{1f5c4})', false],
     ['v2.1 Next ✅ (after v2.0 prep)', true],
+    // The exemption needs a balanced parenthetical naming a DIFFERENT version.
+    ['v2.0 (v2.0 \u{2705})', true],
+    ['v2.0 (v1.9 \u{2705}))', true],
+    ['v2.0 ((v1.9 \u{2705})', true],
+    ['v2.0 (V1.9 \u{2705})', true],
+    ['v2.0 (a (v1.9 \u{2705}))', true],
+    ['v2.0 (v1.9 \u{2705})', false],
+    ['v2.1 Next (after v2.0 prep \u{2705})', false],
+    // Check mark followed by the emoji variation selector.
+    ['v1.0 \u{1f5c4}\u{fe0f}', true],
+    ['v2.1 Next (after v2.0 prep \u{1f5c4}\u{fe0f})', false],
     // An active marker is never closed.
     ['v1.1 Active MVP shipped', false],
     ['v1.1 WIP ✅ done', false],
@@ -4744,6 +4755,29 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     fc.assert(fc.property(HEADING, (h) => {
       assert.strictEqual(isClosedMilestoneHeading(h), nextPredicate(h), JSON.stringify(h));
     }), { numRuns: 1000 });
+  });
+
+  test('property: same-version, unbalanced, nested and wrong-case parentheticals read exactly as origin/next', () => {
+    const SHAPE = fc.constantFrom(
+      'v2.0 (v2.0 \u{2705})', 'v2.0 (v1.9 \u{2705}))', 'v2.0 ((v1.9 \u{2705})', 'v2.0 (V1.9 \u{2705})',
+      'v2.0 (a (v1.9 \u{2705}))', 'v2.0 (v2.0 \u{1f5c4}\u{fe0f})', 'v2.0 )v1.9 \u{2705}(',
+    );
+    const WORDS = fc.array(fc.constantFrom('Next', 'Payment', 'Beta', 'MVP', 'WIP', 'Shipped'), { maxLength: 3 }).map((t) => t.join(' '));
+    fc.assert(fc.property(SHAPE, WORDS, (s, w) => {
+      const h = `${s} ${w}`;
+      assert.strictEqual(isClosedMilestoneHeading(h), nextPredicate(h), JSON.stringify(h));
+    }), { numRuns: 300 });
+  });
+
+  // Linear-time guard without a clock: the old `\([^)]*\bv\d[^)]*\)` rescanned the rest of
+  // the heading from every `(`, so 60000 of them took seconds. The behavioural assertions
+  // below pin the result at that size; a quadratic regression makes the suite time out
+  // instead of finishing. Elapsed time itself is never asserted.
+  test('60000 unmatched open parentheses read as next does and finish', () => {
+    const heading = `\u{2705} ${'('.repeat(60000)}`;
+    assert.strictEqual(isClosedMilestoneHeading(heading), true);
+    assert.strictEqual(isClosedMilestoneHeading(`${heading} v1.0 WIP`), false);
+    assert.strictEqual(isClosedMilestoneHeading(`${'('.repeat(60000)} v1.0`), false);
   });
 
   test('property: an other-version parenthetical check mark alone never closes, anywhere in the heading', () => {
