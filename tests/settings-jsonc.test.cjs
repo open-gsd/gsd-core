@@ -276,6 +276,31 @@ describe('readSettings: JSON null coalesced to empty, malformed warns (#1191)', 
     assert.deepStrictEqual(result, {}, 'absent file must return {}');
     assert.strictEqual(warnCalls.length, 0, 'no warning expected for absent file');
   });
+
+  // Uninstall reads settings.json once ahead of step 6 with `quiet`, so an
+  // unparseable file is warned about once, by step 6's own read (#5037).
+  test('quiet suppresses the malformed-file warning, which an unquiet read of the same file still gives (real function)', () => {
+    const tmpFile = path.join(os.tmpdir(), `gsd-settings-test-quiet-${process.pid}.json`);
+    fs.writeFileSync(tmpFile, '{ not json');
+    let warnCount = 0;
+    const origWarn = console.warn;
+    console.warn = () => { warnCount++; };
+    let quietResult;
+    let quietWarnCount;
+    let loudResult;
+    try {
+      quietResult = readSettings(tmpFile, { quiet: true });
+      quietWarnCount = warnCount;
+      loudResult = readSettings(tmpFile);
+    } finally {
+      console.warn = origWarn;
+      fs.unlinkSync(tmpFile);
+    }
+    assert.strictEqual(quietResult, null, 'a quiet read of malformed JSON must still return null');
+    assert.strictEqual(quietWarnCount, 0, 'a quiet read must not warn');
+    assert.strictEqual(loudResult, null, 'malformed JSON must return null');
+    assert.strictEqual(warnCount, 1, 'the unquiet read must warn exactly once');
+  });
 });
 
 // ─── writeSettings durability (#1874 F5) ─────────────────────────────────────
