@@ -10087,8 +10087,8 @@ const MANIFEST_NAME = 'gsd-file-manifest.json';
  * Compute SHA256 hash of file contents
  */
 function fileHash(filePath) {
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex');
+  // #5683: single owner of the per-file hash, shared with `effort sync`.
+  return require('../gsd-core/bin/lib/install-manifest-record.cjs').fileHash(filePath);
 }
 
 /**

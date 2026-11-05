@@ -342,6 +342,7 @@ build/
 /gsd-core/bin/lib/profile-output.cjs
 /gsd-core/bin/lib/template.cjs
 /gsd-core/bin/lib/commands.cjs
+/gsd-core/bin/lib/install-manifest-record.cjs
 /gsd-core/bin/lib/state.cjs
 /gsd-core/bin/lib/milestone.cjs
 /gsd-core/bin/lib/milestone-release-tags.cjs

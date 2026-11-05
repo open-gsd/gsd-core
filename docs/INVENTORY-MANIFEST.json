@@ -476,6 +476,7 @@
       "install-effort-resolver.cjs",
       "install-engine.cjs",
       "install-fs-adapter.cjs",
+      "install-manifest-record.cjs",
       "install-model-override-resolver.cjs",
       "install-profiles.cjs",
       "install-scope.cjs",
