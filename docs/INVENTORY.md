@@ -492,6 +492,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 
 | Module | Responsibility |
 |--------|----------------|
+| `install-manifest-record.cjs` | Install manifest per-file hash ownership (#5683): `fileHash` (sha256 of file bytes, shared with `bin/install.js`) and `recordManifestFileHashes` (after `effort sync --apply`, updates only the entries of files that were GSD-owned before the rewrite: pre-sync hash equal to the manifest entry) |
 | `installer-migrations/000-first-time-baseline.cjs` | Installer migration: records the first-time installer migration baseline scan — walks per-runtime install surfaces so pre-existing files are classified before any later migration runs |
 | `installer-migrations/001-legacy-orphan-files.cjs` | Installer migration: removes manifest-managed legacy orphan hook files (`hooks/gsd-notify.sh`, `hooks/statusline.js`) |
 | `installer-migrations/002-codex-legacy-hooks-json.cjs` | Installer migration: removes legacy Codex `hooks.json` GSD hook registrations |
