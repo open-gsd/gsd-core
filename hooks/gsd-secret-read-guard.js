@@ -112,9 +112,14 @@
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
 //   `$VAR` gap; a heredoc tag whose `${…}` holds a quoted `}`, which only
 //   the bash and zsh readings read and only with a trigger
-//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); a substitution in a
-//   `$(( ))` beside a `'`, which reads as a quote until zsh's arithmetic is
-//   applied (`echo $(( ' $(cat .env >&2) ' ))`); a `#` comment in a
+//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); a substitution beside a
+//   `'` in a `$(( ))`, which bash, dash and zsh run
+//   (`echo $(( ' $(cat .env >&2) ' ))`), or in a `((` that does not start a
+//   word, which bash runs (`if((' $(cat .env >&2) '));then :;fi`); zsh's
+//   arithmetic past what zshMathEnd takes, namely a `]` in the body, an odd `$`
+//   run in "…" and a `"$[` in a `${…}` (`echo $[ \] ' $(cat .env >&2) ' ]`,
+//   `echo "$$$[ " ]"; cat .env`, `echo ${x:-"$[ " ' $(cat .env >&2) ' " ]"}`);
+//   a `#` comment in a
 //   `$( )`, whose `(` or `)` the scan counts
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
 //   continuation that opens a `$(` inside "…" or a heredoc body
@@ -200,10 +205,11 @@ const MAX_NESTING_DEPTH = 3;
 // command the readings finished has a budget of its own, and is denied
 // the same way when it spends it. A command holding `<<` (a heredoc, or a
 // here-string or a shift) that is not denied is scanned again under each of
-// #5513's two other heredoc readings (findSecretReadUnderOtherReadings), each
-// pass a full findSecretRead with these budgets of its own, so it can take up
-// to three times all of the above, or five with a brace in a heredoc tag; the
-// figures above are per pass.
+// #5513's two other heredoc readings, and one that met a brace in a heredoc
+// tag, at any depth, under the two that read it the earlier way
+// (findSecretReadUnderOtherReadings). Each pass is a full findSecretRead with
+// these budgets of its own, so it can take up to three times all of the above,
+// or five with both; the figures above are per pass.
 // Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
@@ -2070,9 +2076,10 @@ function unfinishedBy(e) {
 let readingBug = null;
 
 // A word with no value to check found in a body the scan rescans, held so that
-// a read anywhere later in the command is the block reported. Nested bodies
-// are reached from several scanners, and each stops at the first hit, so it is
-// held here, the one way into them, and each gets null.
+// a read later in the same pass is the block reported. Nested bodies are
+// reached from several scanners, and each stops at the first hit, so it is
+// held here, the one way into them, and each gets null. It denies the command
+// either way, so what it costs is the name of a read only a later pass sees.
 let heldNested = null;
 
 // The readings of `command`, then the plain scan, as described above.
