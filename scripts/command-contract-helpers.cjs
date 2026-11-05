@@ -947,11 +947,30 @@ const REMEDIES = Object.freeze({
 function sanitizeEcho(text) {
   let out = '';
   for (const ch of String(text)) {
-    const code = ch.codePointAt(0);
-    if (code <= 0x1f || code === 0x7f) continue;
+    if (isEchoHostile(ch.codePointAt(0))) continue;
     out += ch;
   }
   return out.length > 200 ? out.slice(0, 200) : out;
+}
+
+/**
+ * Code points sanitizeEcho drops: C0 + DEL, C1 (incl. 8-bit CSI U+009B),
+ * line/paragraph separators, zero-width + LRM/RLM, bidi embeddings/overrides
+ * and isolates, and the BOM — all able to forge or hide output a reader
+ * (human or agent) trusts.
+ * @param {number} code
+ * @returns {boolean}
+ */
+function isEchoHostile(code) {
+  return (
+    code <= 0x1f
+    || (code >= 0x7f && code <= 0x9f)
+    || code === 0x2028 || code === 0x2029
+    || (code >= 0x200b && code <= 0x200f)
+    || (code >= 0x202a && code <= 0x202e)
+    || (code >= 0x2066 && code <= 0x2069)
+    || code === 0xfeff
+  );
 }
 
 module.exports = {

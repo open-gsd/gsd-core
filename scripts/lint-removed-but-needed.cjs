@@ -127,7 +127,9 @@
  * - The deleted-file check is skipped ONLY when the base ref (or its merge
  *   base) is unresolvable. Any other git failure (timeout, signal, output
  *   overflow) exits non-zero. `--no-renames` keeps a deletion paired with a
- *   near-copy a `D`, whatever `diff.renames` says.
+ *   near-copy a `D`, whatever `diff.renames` says. Under CI (`CI` or
+ *   `GITHUB_ACTIONS` non-empty and not "false"/"0") an unresolvable base is a
+ *   failure, not a skip — otherwise a shallow checkout would silently pass.
  * - Every path echoed into lint output goes through `sanitizeEcho`, since
  *   `-z` lets a path carry newlines and escape sequences.
  *
@@ -717,6 +719,18 @@ function isBaseResolvable(root, baseRef) {
   return mergeBase.status === 0;
 }
 
+/**
+ * Is this a CI run? `CI` or `GITHUB_ACTIONS` set to a non-empty value other
+ * than "false"/"0".
+ * @returns {boolean}
+ */
+function isCiEnvironment() {
+  return ['CI', 'GITHUB_ACTIONS'].some((k) => {
+    const v = (process.env[k] || '').trim().toLowerCase();
+    return v !== '' && v !== 'false' && v !== '0';
+  });
+}
+
 function main() {
   const baseRef = `origin/${process.env.GSD_REMOVED_BUT_NEEDED_BASE || process.env.GITHUB_BASE_REF || 'next'}`;
   const failures = [];
@@ -735,10 +749,19 @@ function main() {
       `lint-removed-but-needed: git failed, so the check could not run (${sanitizeEcho(e.message)})`,
     );
   }
+  if (skipped && isCiEnvironment()) {
+    // In CI a silent skip is a silent pass: the gate would never run on a
+    // shallow checkout. Fail loudly so the workflow fetches the base.
+    throw new ExitError(
+      1,
+      `lint-removed-but-needed: could not resolve ${baseRef} in CI, so the deleted-file check cannot run `
+        + '(fetch the base ref, e.g. a checkout with fetch-depth 0 or an explicit `git fetch origin <base>`)',
+    );
+  }
   if (skipped) {
-    // origin/<base> unreachable in this environment (e.g. a shallow local
-    // clone with no matching remote-tracking ref) — skip the deleted-file
-    // check rather than fail it, matching lint-fix-has-regression-tests.cjs.
+    // origin/<base> unreachable on a local machine (e.g. a shallow clone with
+    // no matching remote-tracking ref) — skip the deleted-file check rather
+    // than fail it, matching lint-fix-has-regression-tests.cjs.
     console.log(`lint-removed-but-needed: could not resolve ${baseRef}, skipping the deleted-file check`);
   }
   if (violations.length > 0) {
