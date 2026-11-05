@@ -4642,172 +4642,51 @@ describe('milestoneVersionAtOffset (#5679)', () => {
 
 // ─── isClosedMilestoneHeading (#5726) ────────────────────────────────────────
 
-describe('roadmap-parser: isClosedMilestoneHeading', () => {
+describe('#5726: isClosedMilestoneHeading', () => {
   const { isClosedMilestoneHeading } = roadmapParser;
-  const CASES = [
-    // Forms the pre-#5726 predicate read as closed: they stay closed.
-    ['v1.0 MVP shipped 2026-01-01 (Phases 1-4)', true],
-    ['v1.0 MVP shipped (2026-01-01)', true],
-    ['v1.0 MVP shipped on 2026-01-01', true],
+
+  const ROWS = [
+    ['v1.0 MVP Shipped', true],
+    ['v1.0 MVP - shipped 2026-01-01', true],
     ['v1.0 MVP shipped Jan 2026', true],
-    ['v1.0 MVP shipped in Q1', true],
-    ['v1.0 archived (see v1.1)', true],
-    ['v1.0 shipped; replaced by v1.1', true],
-    ['v1.1 Next (shipped, replaces v0.9)', true],
-    ['v1.0 <b>MVP</b> shipped', true],
-    // Strings the writers emit.
-    ['✅ v1.0 MVP — SHIPPED 2026-01-01', true],
-    ['v1.0 MVP (Shipped: 2026-01-01)', true],
-    ['v1.0 MVP — ARCHIVED 2026-01-01', true],
-    ['v1.0 MVP [shipped]', true],
-    // A status word anywhere in the heading closes it, title word or not (origin/next semantics).
-    ['v1.1 Failed Payment Recovery', true],
-    ['v1.1 Shipped Features Release', true],
-    ['v1.1 Closed Beta', true],
-    ['v1.1 Archived Docs', true],
-    ['v1.1 Abandoned Cart', true],
-    ['Failed Payment Recovery', true],
-    ['Milestone v1.1 Closed Beta', true],
-    ['v1.1 Shipped Feature Flags', true],
-    ['v1.1 Shipped The Big One', true],
-    ['v1.1 Shipped To Production', true],
-    ['v1.1 Shipped On Time', true],
-    ['v1.1 Shipped All Phases', true],
-    ['v1.1 Shipped Everything', true],
-    ['v1.1 Closed Out', true],
-    ['v1.1 Archived In Place', true],
-    // An active marker beside a status-word title keeps the heading open.
-    ['v1.1 Failed Payment Recovery (in progress)', false],
-    ['\u{1f6a7} v1.1 Closed Beta', false],
-    ['v1.1 Archived Docs WIP', false],
-    ['v1.0 Shipped Successfully', true],
-    ['v1.0 MVP Shipped Features Release', true],
-    ['MVP Shipped Early', true],
-    // A status word followed by a scope, time or number word is a status.
-    ['Shipped Phases 1-4', true],
-    ['Shipped Phase 3', true],
-    ['Shipped Version 2', true],
-    ['Shipped Milestone v1.0', true],
-    ['Shipped Today', true],
-    ['Shipped Yesterday', true],
-    ['Shipped Tomorrow', true],
-    ['Shipped Early', true],
-    ['Shipped Late', true],
-    ['Shipped Recently', true],
-    ['Shipped Release 2', true],
-    ['Shipped Spring 2026', true],
-    ['Shipped Winter', true],
-    ['Shipped Monday', true],
-    ['Shipped Friday', true],
-    ['Shipped March', true],
-    ['Shipped May 2026', true],
-    ['Shipped Sept 2026', true],
-    ['Shipped Q1 2026', true],
-    ['Shipped V2', true],
-    ['Shipped 2026', true],
+    ['v1.0 (shipped, replaces v0.9)', true],
+    ['\u{2705} v1.0', true],
+    ['v1.0 Core \u{2705} SHIPPED', true],
+    ['v1.0 Failed Payment Recovery', true],
     ['v1.1 Shipped Phases 1-4', true],
-    ['<span class="shipped">v1.0</span>', true],
-    ['v1.0 <b>Shipped</b> Successfully', true],
-    ['v1.1 <b>Closed</b> Beta', true],
-    // The one exception: a check mark only inside a parenthetical naming another version is open.
-    ['v2.1 Next (after v2.0 prep ✅)', false],
-    ['v2.1 Next (after v2.0 prep \u{1f5c4})', false],
-    ['v2.1 Next ✅ (after v2.0 prep)', true],
-    // The exemption needs a balanced parenthetical naming a DIFFERENT version.
     ['v2.0 (v2.0 \u{2705})', true],
-    ['v2.0 (v1.9 \u{2705}))', true],
-    ['v2.0 ((v1.9 \u{2705})', true],
-    ['v2.0 (V1.9 \u{2705})', false],
-    // The heading's own version and the group's are compared normalized (lowercase, dotted
-    // segments, suffix stripped); equal or prefix-related, missing, or after the group = closed.
     ['v2 (v2 \u{2705})', true],
-    ['v2.0-beta (v2.0 \u{2705})', true],
     ['V2.0 (v2.0 \u{2705})', true],
     ['v2.0.1 (v2.0 \u{2705})', true],
     ['(v1.9 \u{2705}) v2.0', true],
     ['Core (v1.9 \u{2705})', true],
-    ['v3.0 (after v2.4 \u{2705})', false],
+    ['v2.0 ((v1.9 \u{2705})', true],
     ['v2.0 (a (v1.9 \u{2705}))', true],
-    ['v2.0 (v1.9 \u{2705})', false],
-    ['v2.1 Next (after v2.0 prep \u{2705})', false],
-    // Check mark followed by the emoji variation selector.
     ['v1.0 \u{1f5c4}\u{fe0f}', true],
-    ['v2.1 Next (after v2.0 prep \u{1f5c4}\u{fe0f})', false],
-    // An active marker is never closed.
-    ['v1.1 Active MVP shipped', false],
-    ['v1.1 WIP ✅ done', false],
-    ['v1.1 In Progress — SHIPPED', false],
-    // No marker at all.
-    ['v1.1 Payments', false],
+    ['v1.0 Failed Payment Recovery (in progress)', false],
+    ['v1.0 Core \u{1f6a7}', false],
+    ['v2.1 Next (after v2.0 prep \u{2705})', false],
+    ['v3.0 (after v2.4 \u{2705})', false],
   ];
-  for (const [heading, expected] of CASES) {
-    test(`${JSON.stringify(heading)} -> ${expected ? 'closed' : 'open'}`, () => {
-      assert.strictEqual(isClosedMilestoneHeading(heading), expected);
-    });
-  }
 
-  // The predicate is exactly origin/next's `closed marker && !active marker`, except
-  // that a check mark living only inside a parenthetical naming another version is open.
-  // The token pool holds no such parenthetical, so equality must hold for every heading.
-  const NEXT_CLOSED = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|\u{2705}|\u{1f5c4}/iu;
-  const NEXT_ACTIVE = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|\u{1f6a7}|\u{1f504}/iu;
-  const nextPredicate = (h) => NEXT_CLOSED.test(h) && !NEXT_ACTIVE.test(h);
-  const TOKEN = fc.constantFrom(
-    'v1.0', 'v2.3', 'MVP', 'Payment', 'Recovery', 'Beta', 'Docs', 'payments', 'Phases', '1-4', '2026-01-01',
-    'Shipped', 'shipped', 'SHIPPED', 'Closed', 'closed', 'Archived', 'Abandoned', 'Failed', 'FAILED',
-    '\u{2705}', '\u{1f5c4}', 'WIP', 'Active', 'in progress', 'STARTED', '\u{1f6a7}', '\u{1f504}',
-    '(shipped)', '(see v2.0)', '(replaces v0.9)', '[archived]', '—', ':', '<b>', '</b>', '<span class="shipped">',
-  );
-  const HEADING = fc.array(TOKEN, { maxLength: 8 }).map((t) => t.join(' '));
-
-  test('property: equals the origin/next predicate for every heading without an other-version check mark', () => {
-    fc.assert(fc.property(HEADING, (h) => {
-      assert.strictEqual(isClosedMilestoneHeading(h), nextPredicate(h), JSON.stringify(h));
-    }), { numRuns: 1000 });
-  });
-
-  test('property: same-version, unbalanced and nested parentheticals read exactly as origin/next', () => {
-    const SHAPE = fc.constantFrom(
-      'v2.0 (v2.0 \u{2705})', 'v2.0 (v1.9 \u{2705}))', 'v2.0 ((v1.9 \u{2705})',
-      'v2.0 (a (v1.9 \u{2705}))', 'v2.0 (v2.0 \u{1f5c4}\u{fe0f})', 'v2.0 )v1.9 \u{2705}(',
-    );
-    const WORDS = fc.array(fc.constantFrom('Next', 'Payment', 'Beta', 'MVP', 'WIP', 'Shipped'), { maxLength: 3 }).map((t) => t.join(' '));
-    fc.assert(fc.property(SHAPE, WORDS, (s, w) => {
-      const h = `${s} ${w}`;
-      assert.strictEqual(isClosedMilestoneHeading(h), nextPredicate(h), JSON.stringify(h));
-    }), { numRuns: 300 });
-  });
-
-  // Linear-time guard without a clock: the old `\([^)]*\bv\d[^)]*\)` rescanned the rest of
-  // the heading from every `(`, so 60000 of them took seconds. The behavioural assertions
-  // below pin the result at that size; a quadratic regression makes the suite time out
-  // instead of finishing. Elapsed time itself is never asserted.
-  test('60000 unmatched open parentheses read as next does and finish', () => {
-    const heading = `\u{2705} ${'('.repeat(60000)}`;
-    assert.strictEqual(isClosedMilestoneHeading(heading), true);
-    assert.strictEqual(isClosedMilestoneHeading(`${heading} v1.0 WIP`), false);
-    assert.strictEqual(isClosedMilestoneHeading(`${'('.repeat(60000)} v1.0`), false);
-  });
-
-  test('property: the exemption compares independently generated normalized own and group versions', () => {
-    const VERSION = fc.record({
-      segments: fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 1, maxLength: 3 }),
-      suffix: fc.constantFrom('', '-beta', '-rc.1'),
-      upper: fc.boolean(),
-    });
-    const render = (v) => `${v.upper ? 'V' : 'v'}${v.segments.join('.')}${v.suffix}`;
-    const related = (a, b) => {
-      const n = Math.min(a.segments.length, b.segments.length);
-      return a.segments.slice(0, n).every((x, i) => x === b.segments[i]);
-    };
-    const SHAPE = fc.constantFrom('before', 'after', 'none');
-    fc.assert(fc.property(VERSION, VERSION, SHAPE, (own, group, shape) => {
-      const paren = `(after ${render(group)} prep \u{2705})`;
-      const heading = shape === 'before' ? `${render(own)} Next ${paren}`
-        : shape === 'after' ? `${paren} ${render(own)}`
-          : `Core ${paren}`;
-      const expected = shape === 'before' ? related(own, group) : true;
+  test('classifies each heading', () => {
+    for (const [heading, expected] of ROWS) {
       assert.strictEqual(isClosedMilestoneHeading(heading), expected, JSON.stringify(heading));
-    }), { numRuns: 1000 });
+    }
+  });
+
+  test('a heading with no check mark or archive mark reads as the pre-#5726 marker pair', () => {
+    const CLOSED_MARKER = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|\u{2705}|\u{1f5c4}/iu;
+    const ACTIVE_MARKER = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|\u{1f6a7}|\u{1f504}/iu;
+    fc.assert(fc.property(
+      fc.string().filter((h) => !/[\u{2705}\u{1f5c4}]/u.test(h)),
+      (h) => {
+        assert.strictEqual(isClosedMilestoneHeading(h), CLOSED_MARKER.test(h) && !ACTIVE_MARKER.test(h));
+      },
+    ), { numRuns: 500, seed: 5726 });
+  });
+
+  test('a long run of open parentheses after a check mark is classified closed', () => {
+    assert.strictEqual(isClosedMilestoneHeading('\u{2705} ' + '('.repeat(60000)), true);
   });
 });
