@@ -701,7 +701,9 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         const stateRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
         if (stateRaw) {
           const milestoneMatch = stateRaw.match(/^milestone:[ \t]*(\S.*)/m);
-          if (milestoneMatch && !/^(?:---|\.\.\.)\s*$/.test(milestoneMatch[1])) stateVersion = milestoneMatch[1].trim();
+          // `[ \t]*(\S.*)` cannot cross a newline, so an empty value never borrows the
+          // closing frontmatter fence from the next line.
+          if (milestoneMatch) stateVersion = milestoneMatch[1].trim();
         }
       } catch {
         /* skip — stateVersion stays null, scan still runs */

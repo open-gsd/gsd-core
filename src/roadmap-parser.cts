@@ -1391,10 +1391,10 @@ function readStateMilestoneScalar(stateRaw: string): string | null {
     // A non-string value keeps the pre-#4998 line read, which finds this
     // frontmatter line first.
   }
-  // `[ \t]*(\S.*)`: an empty value must not borrow the next line (`---` closing the
-  // frontmatter), and a value that is itself a frontmatter delimiter names nothing.
+  // `[ \t]*(\S.*)` cannot cross a newline: an empty value must not borrow the next
+  // line (the `---` closing the frontmatter), so it reads as absent.
   const m = stateRaw.match(/^milestone:[ \t]*(\S.*)/m);
-  if (!m || /^(?:---|\.\.\.)\s*$/.test(m[1])) return null;
+  if (!m) return null;
   return m[1];
 }
 
