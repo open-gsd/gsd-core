@@ -2242,6 +2242,8 @@ function publishViaTempFile(
     const renameErr = atomicRenameWithRetry(tmpPath, filePath);
     if (renameErr !== null) throw renameErr;
   } catch (err) {
+    // After a parent swap this path resolves through the swapped parent, so the real temp may be
+    // orphaned in the original directory (accepted residual); nothing is ever published or left in the attacker's.
     try { fs.unlinkSync(tmpPath); } catch { /* never created, or already gone */ }
     throw err;
   }

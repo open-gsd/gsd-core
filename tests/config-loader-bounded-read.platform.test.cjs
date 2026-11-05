@@ -2110,7 +2110,7 @@ describe('#5759 review round: direct-path O_NOFOLLOW, multiply-linked targets, p
     assert.strictEqual(fs.readFileSync(path.join(`${dir}.moved`, 'f'), 'utf8'), 'old', 'nothing was published');
   });
 
-  test('atomic: a parent swapped between the temp create and the rename is refused and the temp is removed', () => {
+  test('atomic: a parent swapped between the temp create and the rename is refused with ENXIO; nothing lands in the attacker directory and the temp may be orphaned in the original directory', () => {
     const dir = at('d');
     const victim = at('victim');
     fs.mkdirSync(dir);
@@ -2136,6 +2136,13 @@ describe('#5759 review round: direct-path O_NOFOLLOW, multiply-linked targets, p
     assert.strictEqual(err.code, 'ENXIO');
     assert.deepStrictEqual(fs.readdirSync(victim), ['f'], 'nothing lands in the attacker directory');
     assert.strictEqual(fs.readFileSync(path.join(victim, 'f'), 'utf8'), 'VICTIM');
+    // Documented residual: the cleanup unlink resolves through the swapped parent, so this
+    // write's temp may stay in the original (moved) directory. It is never another file.
+    const leftovers = fs.readdirSync(`${dir}.moved`).filter((n) => n !== 'f');
+    for (const n of leftovers) {
+      assert.match(n, /^f\..+\.\d+\..+$/, 'only this write\'s temp may remain in the original directory');
+    }
+    assert.strictEqual(fs.readFileSync(path.join(`${dir}.moved`, 'f'), 'utf8'), 'old', 'the target was not published');
   });
 
   test('a symbolic link that cannot be read is refused with ENXIO', () => {
