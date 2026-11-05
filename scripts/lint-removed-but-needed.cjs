@@ -117,6 +117,20 @@
  *   signal, exit 128, output overflow) yields an empty set — the stricter
  *   basename matching — instead of aborting the whole lint.
  *
+ * ## Tracked-but-gitignored files, base resolution, echo hygiene (#3677)
+ *
+ * - Force-adding a file despite `.gitignore` is what created #3677, so the
+ *   lint also fails when any tracked file is ignored by a tracked
+ *   `.gitignore` (`git ls-files -z -ci --exclude-per-directory=.gitignore`;
+ *   deliberately NOT `--exclude-standard`, which would read `.git/info/exclude`
+ *   and the global excludes file). A failure of that query is a hard failure.
+ * - The deleted-file check is skipped ONLY when the base ref (or its merge
+ *   base) is unresolvable. Any other git failure (timeout, signal, output
+ *   overflow) exits non-zero. `--no-renames` keeps a deletion paired with a
+ *   near-copy a `D`, whatever `diff.renames` says.
+ * - Every path echoed into lint output goes through `sanitizeEcho`, since
+ *   `-z` lets a path carry newlines and escape sequences.
+ *
  * ## Historical-record exemption (#3942)
  *
  * `docs/adr/**` and `docs/research/**` are excluded from the `docs/` scan.
@@ -145,7 +159,17 @@ const EXTRA_FILES = ['package.json'];
 const TESTS_ROOT = 'tests';
 // 16 MiB: a large PR's NUL-delimited path lists must not overflow execFileSync's
 // default 1 MiB buffer.
-const GIT_MAX_BUFFER = 16 * 1024 * 1024;
+const DEFAULT_GIT_MAX_BUFFER = 16 * 1024 * 1024;
+
+/**
+ * The git output buffer cap. `GSD_REMOVED_BUT_NEEDED_GIT_MAX_BUFFER` (bytes)
+ * is a test seam that lets a test provoke a real ENOBUFS on a RESOLVABLE base.
+ * @returns {number}
+ */
+function gitMaxBuffer() {
+  const n = Number.parseInt(process.env.GSD_REMOVED_BUT_NEEDED_GIT_MAX_BUFFER || '', 10);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_GIT_MAX_BUFFER;
+}
 
 // Skip these when walking SCAN_ROOTS — binary/generated content that can
 // never carry a meaningful basename reference, and is often large.
@@ -249,13 +273,17 @@ function matchesByFullPath(deletedFile, survivingBasenames, ignoredDeletions) {
  * @returns {string}
  */
 function fullPathReason(deletedFile, basename, collides, fullPathOnly) {
+  // Paths come from NUL-delimited git output and may hold control characters;
+  // this text is echoed into lint output that AI agents read as trusted.
+  const file = sanitizeEcho(deletedFile);
+  const base = sanitizeEcho(basename);
   if (collides) {
-    return `full path '${deletedFile}' still referenced (basename '${basename}' also belongs to a surviving file, so matched by path — #3907)`;
+    return `full path '${file}' still referenced (basename '${base}' also belongs to a surviving file, so matched by path — #3907)`;
   }
   if (fullPathOnly) {
-    return `full path '${deletedFile}' still referenced (the deleted path is gitignored, so matched by path — other untracked files share basename '${basename}' — #3677)`;
+    return `full path '${file}' still referenced (the deleted path is gitignored, so matched by path — other untracked files share basename '${base}' — #3677)`;
   }
-  return `basename '${basename}' still referenced`;
+  return `basename '${base}' still referenced`;
 }
 
 /**
@@ -383,8 +411,8 @@ function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenam
             // control-char-stripped + capped: this text is echoed into lint
             // output that AI agents read as trusted instructions
             reason: fullPathOnly
-              ? `pins-existence: test depends on deleted path '${matchTarget}' — ${sanitizeEcho(line.trim())}`
-              : `pins-existence: test depends on deleted basename '${basename}' — ${sanitizeEcho(line.trim())}`,
+              ? `pins-existence: test depends on deleted path '${sanitizeEcho(matchTarget)}' — ${sanitizeEcho(line.trim())}`
+              : `pins-existence: test depends on deleted basename '${sanitizeEcho(basename)}' — ${sanitizeEcho(line.trim())}`,
           });
         }
         // 'asserts-absence' is correct post-deletion state; null is a
@@ -396,12 +424,9 @@ function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenam
 }
 
 function getDeletedFiles(root, baseRef, entries = null) {
-  // Deliberately let a git failure (unresolvable ref, no merge base, etc.)
-  // propagate as a plain Error — main() treats ANY scan() failure as "cannot
-  // resolve this base ref in this environment" and degrades to a skip,
-  // matching lint-fix-has-regression-tests.cjs. There is no failure mode here
-  // that should hard-exit non-zero; a real drift is only ever reported once
-  // the diff succeeds and findSurvivingReferences finds a violation.
+  // A git failure propagates as a plain Error. main() has already skipped an
+  // UNRESOLVABLE base (isBaseResolvable), so anything thrown here — timeout,
+  // signal, output overflow — is a hard failure, never a silent pass.
   return (entries || getDiffEntries(root, baseRef))
     .filter((entry) => entry.status === 'D')
     .map((entry) => entry.paths[0]);
@@ -416,11 +441,11 @@ function getDeletedFiles(root, baseRef, entries = null) {
  * @returns {string}
  */
 function gitDiffNameStatus(root, baseRef, quiet = false) {
-  return cp.execFileSync('git', ['diff', '--name-status', '-z', `${baseRef}...HEAD`], {
+  return cp.execFileSync('git', ['diff', '--name-status', '-z', '--no-renames', `${baseRef}...HEAD`], {
     cwd: root,
     encoding: 'utf8',
     timeout: 15000,
-    maxBuffer: GIT_MAX_BUFFER,
+    maxBuffer: gitMaxBuffer(),
     ...(quiet ? { stdio: ['ignore', 'pipe', 'ignore'] } : {}),
   });
 }
@@ -523,7 +548,7 @@ function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
     const dirtyGitignores = cp.execFileSync(
       'git',
       ['diff', '--name-only', '-z', 'HEAD', '--', ':(glob)**/.gitignore'],
-      { cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] },
+      { cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: gitMaxBuffer(), stdio: ['ignore', 'pipe', 'ignore'] },
     ).split('\0').filter(Boolean);
     if (dirtyGitignores.length > 0) return new Set();
     const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
@@ -531,7 +556,7 @@ function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
       encoding: 'utf8',
       input: deletedFiles.map((f) => `${f}\0`).join(''),
       timeout: 15000,
-      maxBuffer: GIT_MAX_BUFFER,
+      maxBuffer: gitMaxBuffer(),
       stdio: ['pipe', 'pipe', 'ignore'],
     });
     const matches = parseCheckIgnoreZ(out);
@@ -542,7 +567,7 @@ function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
         cwd: root,
         encoding: 'utf8',
         timeout: 15000,
-        maxBuffer: GIT_MAX_BUFFER,
+        maxBuffer: gitMaxBuffer(),
         stdio: ['ignore', 'pipe', 'ignore'],
       })
         .split('\0')
@@ -569,7 +594,7 @@ function getSurvivingFiles(root) {
     cwd: root,
     encoding: 'utf8',
     timeout: 15000,
-    maxBuffer: GIT_MAX_BUFFER,
+    maxBuffer: gitMaxBuffer(),
   });
   return out.split('\0').filter(Boolean);
 }
@@ -655,31 +680,87 @@ function scan(root, baseRef) {
   return violations;
 }
 
+/**
+ * Tracked files that a tracked `.gitignore` ignores — force-added despite the
+ * ignore rule (#3677). `--exclude-per-directory=.gitignore` reads ONLY the
+ * per-directory `.gitignore` files; `--exclude-standard` would also read
+ * `.git/info/exclude` and the global excludes file, a machine-dependent verdict.
+ * A failure of the query throws (a hard failure, never a silent pass).
+ * @param {string} root
+ * @returns {string[]} repo-relative paths
+ */
+function getTrackedIgnoredFiles(root) {
+  const out = cp.execFileSync('git', ['ls-files', '-z', '-c', '-i', '--exclude-per-directory=.gitignore'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 15000,
+    maxBuffer: gitMaxBuffer(),
+  });
+  return out.split('\0').filter(Boolean);
+}
+
+/**
+ * Can `baseRef` be diffed against HEAD here? Unresolvable (no such ref, or no
+ * merge base — e.g. a shallow clone) is the ONLY condition the lint skips on;
+ * a timeout/signal/spawn error is thrown so it can never read as a pass.
+ * @param {string} root
+ * @param {string} baseRef
+ * @returns {boolean}
+ */
+function isBaseResolvable(root, baseRef) {
+  const run = (args) => cp.spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 15000 });
+  const verify = run(['rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`]);
+  if (verify.error || verify.signal) throw verify.error || new Error(`git rev-parse killed by ${verify.signal}`);
+  if (verify.status !== 0) return false;
+  const mergeBase = run(['merge-base', baseRef, 'HEAD']);
+  if (mergeBase.error || mergeBase.signal) throw mergeBase.error || new Error(`git merge-base killed by ${mergeBase.signal}`);
+  return mergeBase.status === 0;
+}
+
 function main() {
   const baseRef = `origin/${process.env.GSD_REMOVED_BUT_NEEDED_BASE || process.env.GITHUB_BASE_REF || 'next'}`;
-  let violations;
+  const failures = [];
+  let trackedIgnored;
+  let violations = [];
+  let skipped = false;
   try {
-    violations = scan(ROOT, baseRef);
+    trackedIgnored = getTrackedIgnoredFiles(ROOT);
+    if (isBaseResolvable(ROOT, baseRef)) violations = scan(ROOT, baseRef);
+    else skipped = true;
   } catch (e) {
+    // A git failure on a resolvable base is NOT "base unreachable": exiting 0
+    // here would let a timeout or output overflow pass the whole lint.
+    throw new ExitError(
+      1,
+      `lint-removed-but-needed: git failed, so the check could not run (${sanitizeEcho(e.message)})`,
+    );
+  }
+  if (skipped) {
     // origin/<base> unreachable in this environment (e.g. a shallow local
-    // clone with no matching remote-tracking ref) — degrade to a skip rather
-    // than a false failure, matching lint-fix-has-regression-tests.cjs.
-    console.log(`lint-removed-but-needed: could not resolve ${baseRef}, skipping (${e.message})`);
-    return;
+    // clone with no matching remote-tracking ref) — skip the deleted-file
+    // check rather than fail it, matching lint-fix-has-regression-tests.cjs.
+    console.log(`lint-removed-but-needed: could not resolve ${baseRef}, skipping the deleted-file check`);
   }
   if (violations.length > 0) {
     const detail = violations
-      .map((v) => `  ${v.deletedFile} deleted, but still referenced in ${v.referencedIn}: ${v.reason}`)
+      .map((v) => `  ${sanitizeEcho(v.deletedFile)} deleted, but still referenced in ${sanitizeEcho(v.referencedIn)}: ${v.reason}`)
       .join('\n');
-    throw new ExitError(
-      1,
+    failures.push(
       'lint-removed-but-needed: a deleted file is still referenced by a live consumer\n'
         + '(DEFECT.REMOVED-BUT-NEEDED). Either restore the file or update every consumer in the\n'
         + 'same commit — do not paper over with a workaround that loses reproducibility:\n'
         + detail,
     );
   }
-  console.log('ok lint-removed-but-needed: no deleted file has a surviving reference');
+  if (trackedIgnored.length > 0) {
+    failures.push(
+      'lint-removed-but-needed: tracked file(s) are gitignored by a tracked .gitignore (#3677) —\n'
+        + 'force-added despite the ignore rule. `git rm --cached` them (or drop the ignore rule):\n'
+        + trackedIgnored.map((f) => `  ${sanitizeEcho(f)} is tracked but gitignored`).join('\n'),
+    );
+  }
+  if (failures.length > 0) throw new ExitError(1, failures.join('\n'));
+  if (!skipped) console.log('ok lint-removed-but-needed: no deleted file has a surviving reference');
 }
 
 module.exports = {
@@ -694,6 +775,8 @@ module.exports = {
   getSurvivingFiles,
   getIgnoredDeletions,
   matchesByFullPath,
+  getTrackedIgnoredFiles,
+  isBaseResolvable,
   parseNameStatusZ,
   parseCheckIgnoreZ,
   isRepoRelativeGitignore,
