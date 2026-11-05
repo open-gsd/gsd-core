@@ -139,24 +139,40 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
     assert.deepStrictEqual(statusLines, []);
   });
 
-  test('sentinel temp write is exclusive: a planted temp-name link is untouched and only expected entries remain', (t) => {
+  test('sentinel temp write is exclusive: a link planted at the exact temp name is not written through, not unlinked, and recorded:false', (t) => {
     const root = freshRepo();
     const outside = tmp('gsd-5757-outside-');
+    const preloadDir = tmp('gsd-5757-preload-');
     t.after(() => cleanup(root));
     t.after(() => cleanup(outside));
-    // The temp suffix is random, so a decoy cannot be planted at the exact
-    // name; plant one at a legacy-style name and assert it is never written
-    // through and that no temp file is left behind.
+    t.after(() => cleanup(preloadDir));
+    // The writer runs in a child process, so its temp name is made
+    // deterministic by a preload that pins pid, Date.now and randomBytes to
+    // values that spell the SAME name for the legacy (pid-Date.now) and the
+    // current (pid-randomhex) schemes: 123456789012 == hex of bytes 12 34 56 78 90 12.
+    const preload = path.join(preloadDir, 'pin-tmp-name.cjs');
+    fs.writeFileSync(preload, [
+      "Object.defineProperty(process, 'pid', { value: 4242 });",
+      'Date.now = () => 123456789012;',
+      "const crypto = require('node:crypto');",
+      "crypto.randomBytes = () => Buffer.from('123456789012', 'hex');",
+      '',
+    ].join('\n'));
     const victim = path.join(outside, 'victim.txt');
     fs.writeFileSync(victim, 'original');
+    const planted = path.join(root, '.gsd', 'dispatch-isolation-sentinel.json.tmp-4242-123456789012');
     fs.mkdirSync(path.join(root, '.gsd'));
-    fs.symlinkSync(victim, path.join(root, '.gsd', 'dispatch-isolation-sentinel.json.tmp-1-1'));
-    assert.strictEqual(sentinel(root).recorded, true);
+    fs.symlinkSync(victim, planted);
+    const result = runGsdTools(
+      ['record-dispatch-isolation', '--isolation', 'none'],
+      root,
+      { NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+    );
+    assert.strictEqual(JSON.parse(result.output).recorded, false);
     assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'original');
-    const sentinelFile = path.join(root, '.gsd', 'dispatch-isolation-sentinel.json');
-    assert.strictEqual(fs.lstatSync(sentinelFile).isFile(), true);
+    assert.strictEqual(fs.lstatSync(planted).isSymbolicLink(), true, 'a link this process did not create is left alone');
     const leftovers = fs.readdirSync(path.join(root, '.gsd'))
-      .filter((n) => n.startsWith('dispatch-isolation-sentinel.json.tmp-') && n !== 'dispatch-isolation-sentinel.json.tmp-1-1');
+      .filter((n) => n.startsWith('dispatch-isolation-sentinel.json.tmp-') && path.join(root, '.gsd', n) !== planted);
     assert.deepStrictEqual(leftovers, []);
   });
 
