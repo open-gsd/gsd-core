@@ -819,6 +819,17 @@ describe('roadmap-parser: maskArchivedDetails', () => {
     assert.ok(visible.includes('new'));
   });
 
+  // A collapsed block of the active range that holds the Progress table stays editable. A level-1
+  // `# Progress` heading always counted, so epic #5692's single Progress owner must keep it (and
+  // keep ### Progress, which never did, masked).
+  for (const [heading, kept] of [['# Progress', true], ['## Progress', true], ['### Progress', false]]) {
+    test(`a collapsed block of the active range holding "${heading}" is ${kept ? 'kept visible' : 'masked'}`, () => {
+      const block = `<details>\n<summary>Tracking</summary>\n\n${heading}\n\n| Phase | Plans Complete | Status | Completed |\n| --- | --- | --- | --- |\n| 1. Row | 0/1 | Planned | - |\n</details>\n`;
+      const { visible } = maskArchivedDetails(`${ACTIVE}\n${block}`, tmpDir);
+      assert.strictEqual(visible.includes('1. Row'), kept);
+    });
+  }
+
   test('an unclosed fence is bounded at the next heading, so a later archive is still masked', () => {
     const { visible } = maskArchivedDetails(`# Roadmap\n\n\`\`\`\nstray\n\n## Notes\n\n${ARCHIVE}\n\n${ACTIVE}`, tmpDir);
     assert.ok(!visible.includes('old'), 'archive after the unclosed fence hidden');
@@ -4592,5 +4603,39 @@ describe('#5483 scoping properties', () => {
         assert.ok(line.trim() !== '' && !/Phase/.test(line), `unexpected extent line ${JSON.stringify(line)}`);
       }
     }), { numRuns: 100 });
+  });
+});
+
+describe('milestoneVersionAtOffset (#5679)', () => {
+  test('property: every phase row resolves to the version of the milestone block that holds it', () => {
+    const { milestoneVersionAtOffset } = roadmapParser;
+    const spec = fc.record({
+      k: fc.integer({ min: 1, max: 5 }),
+      details: fc.array(fc.boolean(), { minLength: 5, maxLength: 5 }),
+      counts: fc.array(fc.integer({ min: 1, max: 3 }), { minLength: 5, maxLength: 5 }),
+    });
+    fc.assert(fc.property(spec, ({ k, details, counts }) => {
+      const lines = ['# Roadmap', ''];
+      const rows = [];
+      let phaseNum = 0;
+      for (let i = 1; i <= k; i++) {
+        const version = `v1.${i}`;
+        const milestoneRows = [];
+        for (let r = 0; r < counts[i - 1]; r++) {
+          phaseNum += 1;
+          milestoneRows.push(`- [x] **Phase ${phaseNum}: P${phaseNum}**`);
+          rows.push({ row: milestoneRows[r], version });
+        }
+        if (details[i - 1]) {
+          lines.push('<details>', `<summary>✅ ${version} Name${i}</summary>`, '', ...milestoneRows, '', '</details>', '');
+        } else {
+          lines.push(`### ✅ ${version}: Name${i}`, '', ...milestoneRows, '');
+        }
+      }
+      const doc = lines.join('\n');
+      for (const { row, version } of rows) {
+        assert.strictEqual(milestoneVersionAtOffset(doc, doc.indexOf(row)), version, `row ${row} in\n${doc}`);
+      }
+    }), { numRuns: 200, seed: 5679 });
   });
 });
