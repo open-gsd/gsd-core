@@ -612,15 +612,17 @@ function skipQuoted(str, i, ctx) {
 // unterminated. The first unquoted `}` closes it; a nested `${` or `$(` is
 // skipped whole.
 function findBraceClose(str, i, ctx) {
+  descend(ctx);
   while (i < str.length) {
     const q = skipQuoted(str, i, ctx);
     if (q !== -1) { i = q; continue; }
     if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
     if (str[i] === '$' && str[i + 1] === '{') { i = findBraceClose(str, i + 2, ctx) + 1; continue; }
-    if (str[i] === '}') return i;
+    if (str[i] === '}') break;
     i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
   }
-  return str.length;
+  ctx.depth--;
+  return Math.min(i, str.length);
 }
 
 // Index of the `)` matching a `(` opened just before `i` by counting parens
@@ -699,6 +701,21 @@ const PLAIN_RESERVED = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'while'
 // what an earlier one left: one hook run makes several.
 let probeBudget = MAX_COMMAND_LENGTH;
 
+// The readers recurse once per nested `$( )`, `<( )` or `${ }`. Past this many
+// levels of one context they stop, and readSpanClose closes by count. A heredoc tag
+// starts a new context, so the limit does not run across tags, and a run of tags is
+// stopped by the stack. On a nest of spans the limit sits well below where Node's
+// stack runs out (about 1,600 levels on the costliest shape), so there the fallback
+// does not depend on the runtime's stack size.
+const MAX_READER_DEPTH = 1000;
+
+// One level deeper into the readers' recursion; past MAX_READER_DEPTH, the
+// same RangeError a stack overflow throws. The caller steps back up with
+// `ctx.depth--` when it returns.
+function descend(ctx) {
+  if (++ctx.depth > MAX_READER_DEPTH) throw new RangeError(`spans nested over ${MAX_READER_DEPTH} deep`);
+}
+
 // Which bash runs the command decides where a span closes, and the hook
 // cannot know which one will. bash 3.2, still the /bin/bash macOS ships, counts
 // parens: it ends `"$(case x in y)"; cat .env` at the pattern and runs the `cat`,
@@ -714,16 +731,17 @@ let spanSeen = false;
 
 // Closes a span by bash 5's grammar, for scanByGrammar: to it a `)` is not the
 // close when it sits in a quoted string, a heredoc body, a comment, a `${ }`, or
-// ends a `case` pattern. The readers recurse once per nested span, so a command
-// that nests thousands deep exhausts the stack. The span that overflowed and every
-// span the scan starts after it are then closed by count: the counter can end such
-// a span early and leave the next `$(` to start the same climb, once per level,
-// which is quadratic. A reader already running around a heredoc tag that overflowed
-// reads on by the grammar, which errs toward a deny. If the counter overflows too,
-// the throw is scanByGrammar's to catch.
+// ends a `case` pattern. The readers recurse once per nested span, so past
+// MAX_READER_DEPTH levels of one context they stop, and a stack overflow from a
+// deeper caller lands here too. The span that overflowed and every span the scan
+// starts after it are then closed by count: the counter can end such a span early
+// and leave the next `$(` to start the same climb, once per level, which is
+// quadratic. A reader already running around a heredoc tag that overflowed reads on
+// by the grammar, which errs toward a deny. If the counter overflows too, the throw
+// is scanByGrammar's to catch.
 function readSpanClose(str, i) {
   try {
-    return readParenClose(str, i, { orphans: [] });
+    return readParenClose(str, i, { orphans: [], depth: 0 });
   } catch (err) {
     if (!(err instanceof RangeError)) throw err;
     closeByCount = true;
@@ -732,10 +750,12 @@ function readSpanClose(str, i) {
 }
 
 function readParenClose(str, i, ctx) {
+  descend(ctx);
   // `$((` / `<((`: bash finds this close by counting parens alone, whether the
   // text turns out to be arithmetic or a subshell.
-  if (str[i] === '(') return findPlainParenClose(str, i, false, ctx);
-  return scanCommandParenClose(str, i, ctx);
+  const at = str[i] === '(' ? findPlainParenClose(str, i, false, ctx) : scanCommandParenClose(str, i, ctx);
+  ctx.depth--;
+  return at;
 }
 
 // The close paren counting finds, from inside a reader.
@@ -1064,7 +1084,7 @@ function scanCommandParenClose(str, i, ctx) {
         // it; otherwise its appends are dropped and the text is read again.
         const orphans = ctx.orphans;
         const waiting = orphans.length;
-        const probe = { orphans };
+        const probe = { orphans, depth: ctx.depth };
         const budget = probeBudget;
         probeBudget = 0; // none inside this one: each would re-read its text
         const e = findPlainParenClose(str, next + 1, false, probe);
@@ -2125,74 +2145,90 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
-let input = '';
-const stdinTimeout = setTimeout(() => allow(undefined), 3000);
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => input += chunk);
-process.stdin.on('end', () => {
-  clearTimeout(stdinTimeout);
-  try {
-    const data = normalizeKimiPayload(JSON.parse(input));
+// The Bash leg's verdict: the first deny as { code, hit }, or null to allow.
+function checkBashCommand(command) {
+  if (command.length > MAX_COMMAND_LENGTH) return { code: 'command-too-large', hit: '' };
+  spanSeen = false;
+  const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+  if (hit !== null) return { code: 'secret-read', hit };
+  const spawn = findDebuggerCliSpawn(command, 0);
+  if (spawn !== null) return { code: 'debugger-cli-spawn', hit: spawn };
+  if (!spanSeen) return null;
+  const grammarHit = scanByGrammar(findSecretRead, command);
+  if (grammarHit !== null) return { code: 'secret-read', hit: grammarHit };
+  const grammarSpawn = scanByGrammar(findDebuggerCliSpawn, command);
+  if (grammarSpawn !== null) return { code: 'debugger-cli-spawn', hit: grammarSpawn };
+  return null;
+}
 
-    // A null/primitive payload has nothing to guard — exit deliberately
-    // rather than throwing into the fail-open catch below (#2595 class).
-    if (data === null || typeof data !== 'object') {
-      allow(undefined);
-    }
+function main() {
+  let input = '';
+  const stdinTimeout = setTimeout(() => allow(undefined), 3000);
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => input += chunk);
+  process.stdin.on('end', () => {
+    clearTimeout(stdinTimeout);
+    try {
+      const data = normalizeKimiPayload(JSON.parse(input));
 
-    const tool = bareToolName(data.tool_name);
-    if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
-      allow(undefined);
-    }
-    if (!data.tool_input || typeof data.tool_input !== 'object') {
-      allow(undefined);
-    }
-
-    // #4432: exemptions resolve against the payload cwd (as the context
-    // monitor does), else the process cwd. Bash honors absolute paths only: a
-    // relative word there is re-anchored by cd/find/xargs/git -C.
-    exemption.root = typeof data.cwd === 'string' && data.cwd !== '' ? data.cwd : process.cwd();
-    exemption.allowRelative = tool === 'Read' || tool === 'Grep';
-
-    // Every payload field is read TYPED in a single statement (#2547 class):
-    // `[]`/`{}` are truthy and a non-string degrades to '' here.
-    if (tool === 'Read') {
-      const filePath = typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '';
-      if (namesSecret(filePath)) emitBlock('secret-read', tool, filePath);
-      allow(undefined);
-    }
-
-    if (tool === 'Grep') {
-      const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
-        : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
-      if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
-      const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
-      if (glob !== '') {
-        const verdict = classifyGrepGlob(glob);
-        if (verdict) emitBlock(verdict, tool, glob);
+      // A null/primitive payload has nothing to guard — exit deliberately
+      // rather than throwing into the fail-open catch below (#2595 class).
+      if (data === null || typeof data !== 'object') {
+        allow(undefined);
       }
-      allow(undefined);
-    }
 
-    // Bash
-    const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
-    if (command === '') allow(undefined);
-    if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    exemption.bashLine = command;
-    const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-    if (hit !== null) emitBlock('secret-read', tool, hit);
-    const spawn = findDebuggerCliSpawn(command, 0);
-    if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
-    if (spanSeen) {
-      const grammarHit = scanByGrammar(findSecretRead, command);
-      if (grammarHit !== null) emitBlock('secret-read', tool, grammarHit);
-      const grammarSpawn = scanByGrammar(findDebuggerCliSpawn, command);
-      if (grammarSpawn !== null) emitBlock('debugger-cli-spawn', tool, grammarSpawn);
+      const tool = bareToolName(data.tool_name);
+      if (tool !== 'Read' && tool !== 'Grep' && tool !== 'Bash') {
+        allow(undefined);
+      }
+      if (!data.tool_input || typeof data.tool_input !== 'object') {
+        allow(undefined);
+      }
+
+      // #4432: exemptions resolve against the payload cwd (as the context
+      // monitor does), else the process cwd. Bash honors absolute paths only: a
+      // relative word there is re-anchored by cd/find/xargs/git -C.
+      exemption.root = typeof data.cwd === 'string' && data.cwd !== '' ? data.cwd : process.cwd();
+      exemption.allowRelative = tool === 'Read' || tool === 'Grep';
+
+      // Every payload field is read TYPED in a single statement (#2547 class):
+      // `[]`/`{}` are truthy and a non-string degrades to '' here.
+      if (tool === 'Read') {
+        const filePath = typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '';
+        if (namesSecret(filePath)) emitBlock('secret-read', tool, filePath);
+        allow(undefined);
+      }
+
+      if (tool === 'Grep') {
+        const grepPath = typeof data.tool_input.path === 'string' ? data.tool_input.path
+          : (typeof data.tool_input.file_path === 'string' ? data.tool_input.file_path : '');
+        if (namesSecret(grepPath)) emitBlock('secret-read', tool, grepPath);
+        const glob = typeof data.tool_input.glob === 'string' ? data.tool_input.glob : '';
+        if (glob !== '') {
+          const verdict = classifyGrepGlob(glob);
+          if (verdict) emitBlock(verdict, tool, glob);
+        }
+        allow(undefined);
+      }
+
+      // Bash
+      const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
+      if (command === '') allow(undefined);
+      exemption.bashLine = command;
+      const verdict = checkBashCommand(command);
+      if (verdict !== null) emitBlock(verdict.code, tool, verdict.hit);
+      allow(undefined);
+    } catch {
+      // Fail open — never block valid tool calls due to hook errors.
+      // ON_CRASH is declared ALLOW at module top (#3911).
+      crash(ON_CRASH, undefined);
     }
-    allow(undefined);
-  } catch {
-    // Fail open — never block valid tool calls due to hook errors.
-    // ON_CRASH is declared ALLOW at module top (#3911).
-    crash(ON_CRASH, undefined);
-  }
-});
+  });
+}
+
+if (require.main === module) {
+  main();
+}
+
+// For in-process tests; the hook itself runs only as the entry script.
+module.exports = { checkBashCommand, MAX_COMMAND_LENGTH, MAX_READER_DEPTH };
