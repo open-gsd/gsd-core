@@ -164,7 +164,10 @@ You can also query the active hook set for the `plan:pre` point:
 gsd loop render-hooks plan:pre --raw
 ```
 
-The envelope is `{ point, activeHooks, rendered }`. Your contribution appears in `activeHooks` (alongside any first-party hooks active at this point):
+The envelope is `{ point, activeHooks, rendered }`, plus an additive `context: { phase,
+phaseDir }` when the caller passed `--phase <token>` and it resolved to exactly one phase
+directory (see `gsd-core/references/loop-hook-dispatch.md`). Your contribution appears in
+`activeHooks` (alongside any first-party hooks active at this point):
 
 ```json
 {

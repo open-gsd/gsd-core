@@ -21,14 +21,15 @@ const UI_DESIGN_CONTRACT_REF_PATH = path.join(
  * gsd-core/references/autonomous-ui-design-contract.md, leaving an
  * unconditional `Read and execute:` pointer in the host. Splice the
  * reference file's content back in at the pointer's position so §3a.5
- * slicing/ordering assertions still see the real step body.
+ * slicing/ordering assertions still see the real step body. The replacer is a
+ * function so `$'` in the reference's shell fence is not read as a replace pattern.
  */
 function readAutonomousCombined() {
   const raw = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
   const pointerRe = /Read and execute: `\$HOME\/\.claude\/gsd-core\/references\/autonomous-ui-design-contract\.md`/;
   assert.ok(pointerRe.test(raw), 'autonomous.md must still contain the §3a.5 reference pointer');
   const refContent = fs.readFileSync(UI_DESIGN_CONTRACT_REF_PATH, 'utf-8');
-  return raw.replace(pointerRe, refContent);
+  return raw.replace(pointerRe, () => refContent);
 }
 
 describe('autonomous workflow ui-phase and ui-review integration (#1375)', () => {

@@ -199,6 +199,8 @@ In installed workflow prose, the same resolver surface appears as `gsd-tools loo
 
 The rendered JSON should include the active hook, the declared `ref`, and the materialised `fragment.inline`.
 
+For a phase-scoped point (`plan:pre`, `execute:wave:pre`, `verify:post`, ...), add `--phase <token>` to receive `context: {phase, phaseDir}`. A hook handler must use that phase, not `STATE.current_phase`. See `docs/COMMANDS.md`.
+
 To verify a runtime-specific surface, pass the same config directory that the runtime installation uses:
 
 ```bash
