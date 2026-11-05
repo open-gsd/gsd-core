@@ -21,6 +21,9 @@ const { CONFIG_DEFAULTS, LEGACY_FLAT_KEYS, resolvePlannerStallDetectionEnabled }
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import installerMigrations = require('./installer-migrations.cjs');
+const { acquireInstallMigrationLock } = installerMigrations;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -824,9 +827,8 @@ function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<st
  * since this store seeds every new project; a null clears its key. A saved
  * setting removes its other spelling (SPELLING_TWINS). A missing file is
  * created; an unreadable or non-object one is refused rather than overwritten.
- * A symlinked store is written through, so the link survives. Saves are not
- * serialized: the store has other unlocked writers (the installer, the
- * `depth` migration), so concurrent writes are documented as unsupported.
+ * A symlinked store is written through, so the link survives; a dangling link
+ * is refused. The read-modify-write holds the installer's lock on `.gsd/`.
  */
 function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, raw: boolean): void {
   let settings: unknown;
@@ -842,34 +844,51 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   for (const { key } of DETECTED_SEARCH_INTEGRATIONS) delete unchecked[key];
   const patch = validateNewProjectChoices(cwd, unchecked, '', true);
 
-  const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
-  let existing: Record<string, unknown> = {};
-  const created = !fs.existsSync(defaultsPath);
-  // A store kept as a symlink (into a dotfiles repo) is read and written at its
-  // target: the atomic write renames over its path, which would replace the link.
-  let storePath = defaultsPath;
-  if (!created) {
-    try {
-      storePath = fs.realpathSync(defaultsPath);
-    } catch (err) {
-      error(`Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`);
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
-    } catch (err) {
-      error(`Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`);
-    }
-    if (!isPlainObject(parsed)) {
-      error(`Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`);
-    }
-    existing = parsed as Record<string, unknown>;
-  }
-
+  const gsdDir = path.join(resolveGsdHome(), '.gsd');
+  const defaultsPath = path.join(gsdDir, 'defaults.json');
+  // The installer's defaults writers take this lock for their read-modify-write
+  // (bin/install.js); holding it too serializes a save with them and with
+  // another save, so none of them drops a key the other wrote.
+  const release = acquireInstallMigrationLock(gsdDir);
+  let created: boolean;
   try {
-    platformWriteSync(storePath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
-  } catch (err) {
-    error('Failed to write defaults.json: ' + (err as Error).message);
+    // A dangling link is not a missing store: writing would replace the link.
+    let isLink = false;
+    try {
+      isLink = fs.lstatSync(defaultsPath).isSymbolicLink();
+    } catch {
+      // absent
+    }
+    created = !isLink && !fs.existsSync(defaultsPath);
+    let existing: Record<string, unknown> = {};
+    // A store kept as a symlink (into a dotfiles repo) is read and written at its
+    // target: the atomic write renames over its path, which would replace the link.
+    let storePath = defaultsPath;
+    if (!created) {
+      try {
+        storePath = fs.realpathSync(defaultsPath);
+      } catch (err) {
+        error(`Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+      } catch (err) {
+        error(`Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`);
+      }
+      if (!isPlainObject(parsed)) {
+        error(`Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`);
+      }
+      existing = parsed as Record<string, unknown>;
+    }
+
+    try {
+      platformWriteSync(storePath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
+    } catch (err) {
+      error('Failed to write defaults.json: ' + (err as Error).message);
+    }
+  } finally {
+    release();
   }
   output({ saved: true, created, path: defaultsPath }, raw, 'saved');
 }

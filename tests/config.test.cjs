@@ -4305,6 +4305,56 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(real, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' },
       'the save must land in the link target, merged');
   });
+
+  // Codex review: existsSync follows a link, so a dangling one read as a missing
+  // store and the write replaced the link with a regular file.
+  test('a dangling symlinked store is refused, and the link is left as it was', { skip: process.platform === 'win32' }, (t) => {
+    const gsdHome = createTempDir('gsd-5681-dangling-');
+    t.after(() => cleanup(gsdHome));
+    const missing = path.join(gsdHome, 'unmounted', 'defaults.json');
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.symlinkSync(missing, defaultsPath);
+
+    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Refusing to overwrite/);
+    assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the link must survive a refused save');
+    assert.strictEqual(fs.readlinkSync(defaultsPath), missing);
+    assert.ok(!fs.existsSync(missing), 'nothing is written at the missing target');
+  });
+
+  // The installer's defaults writers hold this lock for their read-modify-write
+  // (bin/install.js), so a save that holds it cannot interleave with them.
+  test('a save holds the installer lock on .gsd/ while it writes, and releases it on every path', async (t) => {
+    const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+    const gsdHome = createTempDir('gsd-5681-lock-');
+    const lockPath = path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME);
+    const savedHome = process.env.GSD_HOME;
+    const realRename = fs.renameSync;
+    t.after(() => {
+      fs.renameSync = realRename;
+      if (savedHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedHome;
+      cleanup(gsdHome);
+    });
+    process.env.GSD_HOME = gsdHome;
+    const heldAtWrite = [];
+    fs.renameSync = function (from, to) {
+      if (path.basename(String(to)) === 'defaults.json') heldAtWrite.push(fs.existsSync(lockPath));
+      return realRename.apply(this, arguments);
+    };
+
+    const saved = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
+    assert.ok(saved.ok, saved.err);
+    assert.deepStrictEqual(heldAtWrite, [true], 'the store must be written while the lock is held');
+    assert.ok(!fs.existsSync(lockPath), 'the lock must be released after a save');
+
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{"mode":');
+    const refused = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
+    assert.strictEqual(refused.ok, false);
+    assert.ok(!fs.existsSync(lockPath), 'the lock must be released when the save is refused');
+  });
 });
 
 describe('#5681: config-save-defaults holds the settings to the config-set rules', () => {

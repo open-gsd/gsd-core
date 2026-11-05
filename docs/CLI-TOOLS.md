@@ -743,13 +743,15 @@ spelled the way `config-set` accepts it: `git.branching_strategy`, not `branchin
 setting removes the other from the store (`research` for `workflow.research`,
 `planning.commit_docs` for `commit_docs`, `depth` for `granularity`), so a stale value cannot
 keep winning or be copied into new projects. A missing file is created, and a store kept as a
-symlink is written through to its target, so the link survives. The search flags that new
+symlink is written through to its target, so the link survives; a link whose target is missing
+is refused. The search flags that new
 projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
 `tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. A store that is not
 valid JSON, or not a JSON object, is refused and left as it was.
 
-Saves are not serialized. Two saves at the same time, or a save while the installer updates
-the store, can lose one writer's keys, so run them one at a time.
+A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
+so two saves, or a save and an install, run one after the other and neither loses the other's
+keys.
 
 ---
 
