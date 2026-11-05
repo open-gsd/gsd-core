@@ -402,22 +402,22 @@ const RESERVED_TEMP_PREFIXES = ['gsd-test-home-', 'gsd-run-tests-events-'];
 /** True when THIS process created the active run temp root (see setupRunTempRoot). */
 let createdRunTempRoot = false;
 
-function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir } = {}) {
+function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir, platform = process.platform } = {}) {
   // Ownership (a nested run-tests spawn REUSES an inherited root and must never
   // remove it on ITS exit — that would delete the outer run's root mid-suite,
-  // mass-ENOENTing every later fixture). PRECEDENCE: the FIRST SET var in
-  // TMPDIR > TEMP > TMP order decides — a set-but-not-a-run-root TMPDIR is an
-  // operator redirect (or a test sandboxing a child) and must WIN over leftover
-  // inherited TEMP/TMP, never be overridden by them (a CI-observed failure: the
-  // child redirected TMPDIR but inherited TEMP=<outer root>, and the any-of-three
-  // reuse check silently preferred the inherited root).
-  // #5688: the SAME first-set variable that decides inheritance also decides the
-  // parent of a fresh root, on every platform (os.tmpdir() reads TEMP/TMP on
-  // win32 and would ignore a TMPDIR redirect). tmpdirFn is the fallback only
-  // when none of the three is set.
+  // mass-ENOENTing every later fixture). RULE (#5688): follow os.tmpdir(). The
+  // variables consulted are exactly the ones os.tmpdir() reads on this platform —
+  // POSIX: TMPDIR only; win32: TEMP, then TMP — as ONE ordered list. The FIRST
+  // non-empty variable in that list decides BOTH whether a run root is inherited
+  // (its basename carries the run-root prefix) AND the parent of a fresh root
+  // (resolve()d). A set-but-not-a-run-root value is an operator redirect (or a
+  // test sandboxing a child) and wins over any later variable. tmpdirFn() is the
+  // parent only when none of the listed variables is set. The resulting absolute
+  // root is exported to all three variables so every child agrees.
   let inherited = '';
   let parent = '';
-  for (const key of ['TMPDIR', 'TEMP', 'TMP']) {
+  const readKeys = platform === 'win32' ? ['TEMP', 'TMP'] : ['TMPDIR'];
+  for (const key of readKeys) {
     const v = env[key] || '';
     if (!v) continue;
     // Resolve against THIS process's cwd now; a relative value would be
