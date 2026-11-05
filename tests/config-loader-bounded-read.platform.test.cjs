@@ -1720,6 +1720,117 @@ describe('#5759 review round 15: the direct write is tied to the identity the pa
   });
 });
 
+describe('#5759 the walked parent is re-checked on every direct fallback, and a failed write unlinks only its own file', { skip: SKIP_WIN32 }, () => {
+  const { mock } = require('node:test');
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  let tmpDir;
+  let parent;
+  let evil;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-parent-'));
+    parent = path.join(tmpDir, 'p');
+    evil = path.join(tmpDir, 'evil');
+    fs.mkdirSync(parent);
+    fs.mkdirSync(evil);
+  });
+  afterEach(() => { mock.restoreAll(); cleanup(tmpDir); });
+
+  const code = (fn) => { try { fn(); return 'ok'; } catch (e) { return e.code; } };
+  const swapParent = () => { fs.renameSync(parent, `${parent}.moved`); fs.symlinkSync(evil, parent); };
+
+  test('the temp create fails after the parent was swapped: the direct fallback is refused, nothing lands in the other directory', () => {
+    const result = code(() => platformWriteSync(path.join(parent, 'cfg.json'), 'SECRET', {
+      verbatim: true,
+      writeSeams: {
+        createTemp: () => { swapParent(); throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); },
+      },
+    }));
+
+    assert.strictEqual(result, 'ENXIO');
+    assert.deepStrictEqual(fs.readdirSync(evil), []);
+    assert.deepStrictEqual(fs.readdirSync(`${parent}.moved`), []);
+  });
+
+  test('a non-retryable rename error after the parent was swapped: the direct fallback is refused, nothing lands in the other directory', () => {
+    const realRename = fs.renameSync;
+    let swapped = false;
+    mock.method(fs, 'renameSync', (from, to) => {
+      if (!swapped && path.basename(String(to)) === 'cfg.json') {
+        swapped = true;
+        swapParent();
+        throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+      }
+      return realRename(from, to);
+    });
+
+    const result = code(() => platformWriteSync(path.join(parent, 'cfg.json'), 'SECRET', { verbatim: true }));
+    mock.restoreAll();
+
+    assert.strictEqual(swapped, true);
+    assert.strictEqual(result, 'ENXIO');
+    assert.deepStrictEqual(fs.readdirSync(evil), []);
+  });
+
+  test('the parent swapped between the symlink check and the open of the direct write: refused before the create', () => {
+    const result = code(() => platformWriteSync(path.join(parent, 'cfg.json'), 'SECRET', {
+      verbatim: true,
+      writeSeams: {
+        createTemp: () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); },
+        afterDirectLstat: swapParent,
+      },
+    }));
+
+    assert.strictEqual(result, 'ENXIO');
+    assert.deepStrictEqual(fs.readdirSync(evil), []);
+  });
+
+  test('a write that fails after the parent was swapped leaves a same-named file in the other directory alone', () => {
+    const attackerFile = path.join(evil, 'cfg.json');
+    fs.writeFileSync(attackerFile, 'ATTACKER');
+    const realWrite = fs.writeFileSync;
+    let failed = false;
+    mock.method(fs, 'writeFileSync', (target, ...rest) => {
+      if (!failed && typeof target === 'number') {
+        failed = true;
+        swapParent();
+        throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      }
+      return realWrite(target, ...rest);
+    });
+
+    const result = code(() => platformWriteSync(path.join(parent, 'cfg.json'), 'SECRET', {
+      verbatim: true,
+      writeSeams: { createTemp: () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); } },
+    }));
+    mock.restoreAll();
+
+    assert.strictEqual(failed, true);
+    assert.strictEqual(result, 'ENOSPC');
+    assert.strictEqual(fs.readFileSync(attackerFile, 'utf8'), 'ATTACKER');
+  });
+
+  test('a write that fails with the parent unchanged still removes the file it created', () => {
+    const realWrite = fs.writeFileSync;
+    let failed = false;
+    mock.method(fs, 'writeFileSync', (target, ...rest) => {
+      if (!failed && typeof target === 'number') {
+        failed = true;
+        throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      }
+      return realWrite(target, ...rest);
+    });
+
+    const result = code(() => platformWriteSync(path.join(parent, 'cfg.json'), 'SECRET', {
+      verbatim: true,
+      writeSeams: { createTemp: () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); } },
+    }));
+    mock.restoreAll();
+
+    assert.strictEqual(result, 'ENOSPC');
+    assert.deepStrictEqual(fs.readdirSync(parent), []);
+  });
+});
+
 // Runs on every platform, win32 included: the walk's {dev, ino} tie must not break a legitimate write.
 describe('#5759 legitimate writes pass the walk identity tie on every platform', () => {
   const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
