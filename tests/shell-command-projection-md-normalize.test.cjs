@@ -803,11 +803,12 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
 
   test('a byte read of a FIFO fails with ENXIO instead of blocking', posixOnly, () => {
     const { spawnSync } = require('node:child_process');
-    assert.strictEqual(spawnSync('mkfifo', [target]).status, 0, 'mkfifo');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    assert.strictEqual(spawnSync('mkfifo', [target], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
     const lib = require.resolve('../gsd-core/bin/lib/shell-command-projection.cjs');
     const script = `try { require(${JSON.stringify(lib)}).platformReadBytesSync(${JSON.stringify(target)}); console.log('READ'); }` +
       ` catch (e) { console.log('THREW ' + e.code); }`;
-    const child = spawnSync(process.execPath, ['-e', script], { timeout: 15000, encoding: 'utf-8' });
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
     assert.strictEqual(child.error, undefined, `the read must not block (${child.error && child.error.code})`);
     assert.strictEqual(child.stdout.trim(), 'THREW ENXIO');
   });

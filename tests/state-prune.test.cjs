@@ -843,12 +843,13 @@ describe('#5831: state prune never loses entries', () => {
 
   test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', posixOnly, () => {
     const { spawnSync } = require('node:child_process');
-    assert.strictEqual(spawnSync('mkfifo', [archivePath]).status, 0, 'mkfifo');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    assert.strictEqual(spawnSync('mkfifo', [archivePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
     const stateBefore = fs.readFileSync(statePath);
     const script = `try { require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/state.cjs'))})` +
       `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: false, silent: true }, true); console.log('RAN'); }` +
       ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
-    const child = spawnSync(process.execPath, ['-e', script], { timeout: 15000, encoding: 'utf-8' });
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
 
     assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
     assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');

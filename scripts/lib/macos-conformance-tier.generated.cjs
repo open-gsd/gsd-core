@@ -244,6 +244,7 @@ module.exports = {
   "tests/smart-entry.unit.test.cjs",
   "tests/spawn-liveness-banner.test.cjs",
   "tests/state-document.test.cjs",
+  "tests/state-prune.test.cjs",
   "tests/state-transition.test.cjs",
   "tests/state.platform.test.cjs",
   "tests/state.test.cjs",
