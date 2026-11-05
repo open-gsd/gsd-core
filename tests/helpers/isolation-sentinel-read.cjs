@@ -21,7 +21,6 @@ const SENTINEL_MODULE = path.join(REPO_ROOT, 'hooks', 'lib', 'isolation-sentinel
 const GUARD_HOOK = path.join(REPO_ROOT, 'hooks', 'gsd-agent-isolation-guard.js');
 const CURSOR_HOOK = path.join(REPO_ROOT, 'hooks', 'gsd-cursor-subagent-start.js');
 
-
 const PHASE = '03';
 const PLAN = '03-02-hardening';
 const MARKER = `[gsd:dispatch phase="${PHASE}" plan="${PLAN}"] Execute the plan.`;

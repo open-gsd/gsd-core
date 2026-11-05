@@ -275,7 +275,9 @@ function sameObject(a, b) {
  * short read, a hard link to another file, a parent directory that is a link), so a hostile record
  * is exactly as absent as a missing one. `readFileSync` would block forever on a FIFO with no
  * writer, follow a link to an endless device or to a file outside the project, and read without
- * bound. The writers only ever produce a fresh temp file renamed into place (link count 1).
+ * bound. The writers only ever produce a fresh temp file renamed into place (link count 1). A
+ * sentinel renamed over between the open and the fstat reads as nlink 0 and is refused for that one
+ * dispatch, which is the conservative no-sentinel decision.
  *
  * Parent directories are lstat-checked before the open and re-checked (same dev/ino, still a real
  * directory) after it, and the opened file must be the object the pre-open lstat saw. Node has no
