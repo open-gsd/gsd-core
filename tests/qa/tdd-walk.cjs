@@ -23,8 +23,8 @@
  *     the file's FIRST fenced block, which is not just the shim: it is the
  *     whole ISOLATION resolution (its own independent fail-closed branches),
  *     ahead of a LATER fenced block that contains the `_TDD_APPLICABLE_RAW=...`
- *     resolution, in the same block as the `PROMPT_FILE` mktemp creation this harness
- *     does not need. A standalone execution must concatenate the first block
+ *     resolution, followed in the same block by the `PROMPT_FILE`
+ *     mktemp creation, which this harness does not need. A standalone execution must concatenate the first block
  *     (for its `gsd_run` definition) with just the TDD resolution lines
  *     sliced out of the second.
  *
