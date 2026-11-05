@@ -831,6 +831,59 @@ describe('#5759 hooks, the opencode plugin and the installer do not block on a F
   });
 });
 
+// The plugin copies carry their own inlined cap; the observable is whether the context-monitor
+// hook is spawned. A config of exactly CONFIG_MAX_BYTES setting hooks.context_warnings:false is
+// honored (no spawn); one byte more is unreadable, so the default (warnings on) spawns it.
+describe('#5759 plugin copies honor the shared config size cap', () => {
+  const { CONFIG_MAX_BYTES } = require(path.join(LIB_DIR, 'config-file-read.cjs'));
+  let root;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-plug-')); });
+  afterEach(() => { cleanup(root); });
+
+  const DRIVE_SCRIPT = [
+    '(async () => {',
+    '  const m = require(process.argv[1]);',
+    '  const cwd = process.argv[2];',
+    '  const hooks = await m.server({ directory: cwd });',
+    '  await hooks.event({ event: { type: "session.created", properties: { info: { id: "s1", directory: cwd } }, sessionID: "s1" } });',
+    '  const call = { tool: "bash", args: { command: "ls" }, sessionID: "s1" };',
+    '  try { await hooks["tool.execute.after"](call, { args: call.args, output: "", metadata: {} }); } catch (e) { /* only the spawn matters */ }',
+    '  process.stdout.write("done");',
+    '})();',
+  ].join('\n');
+
+  for (const plugin of ['.opencode', '.kilo']) {
+    for (const [label, delta, spawned] of [['exactly the cap', 0, false], ['one byte over the cap', 1, true]]) {
+      test(`${plugin} plugin: a config of ${label} ${spawned ? 'is unreadable (context monitor still runs)' : 'is honored (context monitor skipped)'}`, () => {
+        // The plugin locates hooks/ and gsd-core/ by walking up from its own file.
+        fs.mkdirSync(path.join(root, 'plugins'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'hooks'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'gsd-core'), { recursive: true });
+        const copy = path.join(root, 'plugins', 'gsd-core.js');
+        fs.copyFileSync(path.join(__dirname, '..', plugin, 'plugins', 'gsd-core.js'), copy);
+        const marker = path.join(root, 'marker');
+        fs.writeFileSync(
+          path.join(root, 'hooks', 'gsd-context-monitor.js'),
+          'require("node:fs").writeFileSync(process.env.GSD_5759_MARKER, "ran"); process.stdin.resume(); process.stdin.on("end", () => process.exit(0));',
+        );
+        const project = path.join(root, 'proj');
+        fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+        const body = JSON.stringify({ hooks: { context_warnings: false } });
+        fs.writeFileSync(path.join(project, '.planning', 'config.json'), body + ' '.repeat(CONFIG_MAX_BYTES + delta - body.length));
+
+        const r = runNode(['-e', DRIVE_SCRIPT, copy, project], {
+          cwd: root,
+          env: installSpawnEnv({ GSD_5759_MARKER: marker, CI: '' }),
+          timeoutMs: PROBE_TIMEOUT_MS,
+        });
+
+        assertExitedByItself(r);
+        assert.strictEqual(fs.existsSync(marker), spawned);
+      });
+    }
+  }
+});
+
 // Runs on every OS: a directory at the config path is unusable everywhere. POSIX reports
 // EISDIR; Windows reports whatever errno its open(2) gives, so only the reason and the path
 // are pinned there.
