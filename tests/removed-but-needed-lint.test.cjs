@@ -37,6 +37,8 @@ const {
   parseNameStatusZ,
   parseCheckIgnoreZ,
   getTrackedIgnoredFiles,
+  ignoredByTrackedRules,
+  isSafeRepoPath,
   resolveBaseBranch,
   scan,
 } = require(LINT_SCRIPT);
@@ -1186,6 +1188,56 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), '# rule removed locally\n');
     assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['.gsd/x/a.md']);
+  });
+
+  test('isSafeRepoPath accepts ordinary paths and rejects every unsafe segment shape', () => {
+    for (const ok of ['.gitignore', 'a/.gitignore', 'a/b.c/.gitignore', '.gsd/x/.gitignore', '.github/.gitignore', '.gitmodules/x']) {
+      assert.equal(isSafeRepoPath(ok), true, ok);
+    }
+    for (const bad of [
+      '', '/abs/.gitignore', 'a//.gitignore', './.gitignore', 'a/./.gitignore', '../.gitignore', 'a/../.gitignore',
+      'a\\b/.gitignore', 'C:/x/.gitignore', 'a:b/.gitignore', '.git/.gitignore', 'a/.GIT/.gitignore', '.Git/hooks/.gitignore',
+      'a/.gitignore/',
+    ]) {
+      assert.equal(isSafeRepoPath(bad), false, JSON.stringify(bad));
+    }
+  });
+
+  test('an unsafe tracked .gitignore path is a hard failure here and disables the refinement for deletions', { skip: process.platform === 'win32' }, (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-unsafe-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { 'we\\ird/.gitignore': '*.md\n', 'src/a.md': 'x\n' });
+    assert.throws(() => getTrackedIgnoredFiles(tmpDir));
+    assert.equal(getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF).size, 0);
+  });
+
+  test('a committed SYMLINK named .gitignore is not a rule file', { skip: process.platform === 'win32' }, (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-symlink-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir, { 'sub/a.md': 'x\n' });
+    fs.symlinkSync('*.md', path.join(tmpDir, 'sub', '.gitignore'));
+    git('add', '-f', 'sub/.gitignore');
+    git('commit', '-q', '-m', 'symlinked gitignore');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), []);
+  });
+
+  test('ambient GIT_DIR / GIT_WORK_TREE cannot redirect the isolated evaluation', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-env-'));
+    const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-env-decoy-'));
+    t.after(() => { cleanup(tmpDir); cleanup(decoy); });
+    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
+    const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+    process.env.GIT_DIR = path.join(tmpDir, '.git');
+    process.env.GIT_WORK_TREE = decoy;
+    try {
+      assert.deepEqual([...ignoredByTrackedRules(tmpDir, ['.gsd/x/a.md', 'src/ok.cts'])], ['.gsd/x/a.md']);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    assert.deepEqual(fs.readdirSync(decoy), [], 'decoy work tree untouched');
   });
 
   test('getTrackedIgnoredFiles is empty for a clean repo', (t) => {
