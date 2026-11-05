@@ -1730,8 +1730,21 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // Only a symlink can hide an alias, so ordinary writes pay nothing. realpath is not used: on
   // Linux it resolves /dev/fd/N through /proc to pipe:[..] or the file, losing the alias. Each hop
   // is read and resolved against its own directory, bounded at 40 hops.
+  // A path may also reach an alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7):
+  // classify a path by its resolved parent directory.
+  const refuseViaRealDir = (p: string): void => {
+    let viaDir: string | null = null;
+    try {
+      const realDir = fs.realpathSync(path.dirname(p));
+      if (/^(?:\/dev\/fd|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd)$/.test(realDir)) {
+        viaDir = `${realDir}/${path.basename(p)}`;
+      }
+    } catch { /* the directory is absent or unresolvable */ }
+    if (viaDir !== null) refuseFdAlias(viaDir); // outside the try: its ENXIO must propagate
+  };
   let hop = path.resolve(filePath);
   for (let hops = 0; hops < 40; hops++) {
+    refuseViaRealDir(hop);
     let isLink = false;
     try { isLink = fs.lstatSync(hop).isSymbolicLink(); } catch { /* absent: nothing to follow */ }
     if (!isLink) break;
@@ -1739,14 +1752,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     try { next = path.resolve(path.dirname(hop), fs.readlinkSync(hop)); } catch { break; }
     refuseFdAlias(next);
     // The link may reach the alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7).
-    let viaDir: string | null = null;
-    try {
-      const realDir = fs.realpathSync(path.dirname(next));
-      if (/^(?:\/dev\/fd|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd)$/.test(realDir)) {
-        viaDir = `${realDir}/${path.basename(next)}`;
-      }
-    } catch { /* the directory is absent or unresolvable */ }
-    if (viaDir !== null) refuseFdAlias(viaDir); // outside the try: its ENXIO must propagate
+    refuseViaRealDir(next);
     hop = next;
   }
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
