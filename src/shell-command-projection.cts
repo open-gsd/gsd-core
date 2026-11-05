@@ -1326,7 +1326,9 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * the descriptor aliases /dev/stdout, /dev/stderr, /dev/fd/0-2, /proc/self/fd/0-2; any other
    * regular file takes the atomic path. Block devices and named sockets are refused (ENXIO); a
    * socket reached through a descriptor alias is written. A descriptor alias is never reopened by
-   * path: the bytes go to the descriptor number it names (0, 1 or 2) with fs.writeSync, backing off on EAGAIN (an inherited O_NONBLOCK) and coding EPIPE;
+   * path: the bytes go to the descriptor number it names (0, 1 or 2) with fs.writeSync,
+   * backing off on EAGAIN (an inherited O_NONBLOCK) and coding EPIPE. /dev/fd/N and
+   * /proc/self/fd/N with N > 2 are refused with ENXIO, with or without this flag;
    * this works where reopening fails (a Node child's stdio is a socketpair on Linux).
    * A FIFO needs a reader (ENXIO otherwise). Redirects: `>>` appends (O_APPEND is kept, since the
    * descriptor is not reopened) and `>` writes at the offset the shell already truncated to. On
@@ -1710,6 +1712,15 @@ function descriptorAliasFd(resolvedTarget: string): number | null {
 }
 
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
+  // A descriptor beyond stdio names some other open file of this process (a log, a pipe, a
+  // regular file): never written through its /dev/fd or /proc alias, flag or no flag.
+  const fdAlias = /^\/(?:dev|proc\/self)\/fd\/(\d+)$/.exec(path.resolve(filePath));
+  if (fdAlias !== null && Number(fdAlias[1]) > 2) {
+    throw Object.assign(
+      new Error(`ENXIO: cannot write ${filePath}: only descriptors 0-2 may be written by alias`),
+      { code: 'ENXIO' },
+    );
+  }
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
   if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
