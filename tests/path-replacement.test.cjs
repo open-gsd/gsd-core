@@ -1819,6 +1819,26 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
     for (const dir of created) cleanup(dir);
   });
 
+  // #5923: verbatim-copied files (gsd-core/CHANGELOG.md) quote the #5715 bug in prose; only files
+  // whose text depends on the config dir (differ between real and placeholder installs) can show it.
+  function prefixDependent(real, model) {
+    return [...real].filter(([file, text]) => text !== model.get(file)).map(([, text]) => text).join('\n');
+  }
+
+  // #5923: drop emitted files that are byte-identical to the repository source they were copied from.
+  function withoutVerbatimCopies(files) {
+    const changelog = fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8');
+    return new Map([...files].filter(([file, text]) => !(file === path.join('gsd-core', 'CHANGELOG.md') && text === changelog)));
+  }
+
+  test('#5923: prefixDependent drops files identical across installs and keeps differing ones', () => {
+    const repeated = 'see profiles/work/profiles/work';
+    const same = prefixDependent(new Map([['a.md', repeated]]), new Map([['a.md', repeated]]));
+    assert.ok(!same.includes('profiles/work/profiles/work'));
+    const differing = prefixDependent(new Map([['b.md', repeated]]), new Map([['b.md', 'other']]));
+    assert.ok(differing.includes('profiles/work/profiles/work'));
+  });
+
   for (const runtime of RUNTIMES) {
     test(`#5715: ${runtime} emits the prefix once, literally, exactly as for a config dir with no source form in its name`, () => {
       const real = emitted(install(runtime, REAL));
@@ -1830,7 +1850,7 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
         if (text !== model.get(file).split(PLACEHOLDER).join(REAL)) wrong.push(file);
       }
       assert.deepStrictEqual(wrong.slice(0, 5), [], `${runtime}: ${wrong.length} files differ from the model`);
-      const all = [...real.values()].join('\n');
+      const all = prefixDependent(real, model);
       assert.ok(!all.includes('profiles/work/profiles/work'), `${runtime}: prefix repeated`);
       assert.ok(!all.includes('.claude/~/'), `${runtime}: $& expanded to a tilde path`);
       assert.ok(!all.includes('@GSD core/x'), `${runtime}: $& expanded in the Kimi include`);
@@ -1847,9 +1867,9 @@ describe('#5715: --config-dir containing .claude/ and $& on every runtime with a
   });
 
   test('#5715: the reviewer repros (kilo, opencode, codex agents) are clean', () => {
-    const kilo = emitted(install('kilo', '.claude/profiles/work'));
+    const kilo = withoutVerbatimCopies(emitted(install('kilo', '.claude/profiles/work')));
     assert.ok(![...kilo.values()].some((t) => t.includes('/profiles/work/profiles/work/')), 'kilo repeated prefix');
-    const opencode = emitted(install('opencode', REAL));
+    const opencode = withoutVerbatimCopies(emitted(install('opencode', REAL)));
     assert.ok(![...opencode.values()].some((t) => t.includes('.claude/~/.config/opencode')), 'opencode $& expansion');
     const codex = emitted(install('codex', REAL));
     const agents = [...codex].filter(([file]) => file.startsWith('agents/') && file.endsWith('.toml'));
