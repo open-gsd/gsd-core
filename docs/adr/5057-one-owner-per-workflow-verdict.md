@@ -52,7 +52,7 @@ The comments on #4631 add #4686 (a correct verdict whose exit code is 0), #4869 
 | `src/roadmap-upgrade.cts:2315`–`2328` | `content.split(from).join(to)` → `fs.writeFileSync` | STATE.md, PROJECT.md |
 | `src/phase.cts:4131` | `b.replace(planCheckboxPattern, '$1x$2')`, next to a sibling at `:4090` that uses `updateBullet` | ROADMAP.md |
 
-`local/no-adhoc-markdown-parsing`'s detectors key on table, section and bold-label-field regexes, so none of these shapes is visible to them, and `lint:ci` is green. The `:2315`–`:2328` loop is not specific to one file: it iterates `crossRefsByFile` and writes whichever of STATE.md and PROJECT.md it holds edits for. Its STATE.md write is also invisible to #4629's terminal guard. `scripts/lint-state-write-path-drift.cjs`'s `targetsStatePath` (`:612`) matches only a `statePath` identifier or a `STATE.md` literal, and this call's target is `filePath`.
+`local/no-adhoc-markdown-parsing`'s detectors key on table, section and bold-label-field regexes, so none of these shapes is visible to them, and `lint:ci` is green. The `:2315`–`:2328` loop is not specific to one file: it iterates `crossRefsByFile` and writes whichever of STATE.md and PROJECT.md it holds edits for. Its STATE.md write is also invisible to #4629's terminal guard. `scripts/lint-state-write-path-drift.cjs`'s `targetsStatePath` matches only a `statePath` identifier or a `STATE.md` literal, and this call's target is `filePath`.
 
 ### Why a design lock, before any code phase
 
