@@ -3020,6 +3020,43 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS);
       });
 
+      // A dotfiles layout often links config.toml relatively. The `..` must be resolved from
+      // the link's own directory, not from the uninstall's working directory (the repo root).
+      test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 writes through a relative link and keeps it', () => {
+        const content = withUserKeys(installGsdOnlyConfig());
+        const realConfig = path.join(codexHome, 'dotfiles', 'codex.toml');
+        fs.mkdirSync(path.dirname(realConfig), { recursive: true });
+        fs.writeFileSync(realConfig, content);
+        const relativeTarget = path.join('..', path.basename(codexHome), 'dotfiles', 'codex.toml');
+        fs.unlinkSync(configTomlPath());
+        fs.symlinkSync(relativeTarget, configTomlPath());
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+
+        assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+        assert.strictEqual(fs.readlinkSync(configTomlPath()), relativeTarget, 'config.toml must still be the same relative link');
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS, 'the file the link resolves to is the one stripped');
+      });
+
+      test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 writes through a chain of links to the last file and keeps every link', () => {
+        const content = withUserKeys(installGsdOnlyConfig());
+        const realConfig = path.join(codexHome, 'dotfiles-store', 'codex.toml');
+        const middleLink = path.join(codexHome, 'dotfiles', 'codex.toml');
+        fs.mkdirSync(path.dirname(realConfig), { recursive: true });
+        fs.mkdirSync(path.dirname(middleLink), { recursive: true });
+        fs.writeFileSync(realConfig, content);
+        fs.symlinkSync(realConfig, middleLink);
+        fs.unlinkSync(configTomlPath());
+        fs.symlinkSync(middleLink, configTomlPath());
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+
+        assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+        assert.strictEqual(fs.readlinkSync(configTomlPath()), middleLink, 'config.toml must still link to the middle link');
+        assert.strictEqual(fs.readlinkSync(middleLink), realConfig, 'the middle link must still link to the file');
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS, 'the last file in the chain is the one stripped');
+      });
+
       test('uninstall without the opt-in refuses a GSD-only link before it removes anything', () => {
         const realConfig = linkConfigToml(installGsdOnlyConfig());
         assertUninstallSurfacesPresent();
