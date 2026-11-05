@@ -47,6 +47,7 @@ const {
 } = require('./install-shared.cjs');
 const { ACK_TRAILER_HASH, ACK_TRAILER_GROWTH, parseAckTrailers } = require('./emitted-diff.cjs');
 const { runGit, OUTCOME } = require('./process-seam.cjs');
+const { releasePipelinePrKind, RELEASE_PIPELINE_PR_KIND } = require('../../scripts/release-pipeline-pr.cjs');
 const { escapeRegex } = require('../../gsd-core/bin/lib/pattern.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
@@ -341,6 +342,49 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
+ * True iff the running pull request is a release-merge PR (`release/X.Y.0` or
+ * `hotfix/X.Y.Z` -> `main`, same repository), classified by `releasePipelinePrKind` from
+ * the Actions environment (#5902).
+ *
+ * `sameRepo` comes from the event payload's `pull_request.head.repo.full_name` compared
+ * case-insensitively with `GITHUB_REPOSITORY`; a missing, unreadable or malformed payload
+ * is `false`, so the PR is never classified as a release-merge PR on guesswork.
+ *
+ * @param {object} [env] Actions environment.
+ * @param {object} [options]
+ * @param {function} [options.readFile] `(path) => string` seam for the event payload.
+ * @returns {boolean}
+ */
+function isReleaseMergePr(env = process.env, { readFile = (p) => fs.readFileSync(p, 'utf8') } = {}) {
+  let sameRepo = false;
+  try {
+    if (env.GITHUB_EVENT_PATH && env.GITHUB_REPOSITORY) {
+      const payload = JSON.parse(readFile(env.GITHUB_EVENT_PATH));
+      const headRepo = payload && payload.pull_request && payload.pull_request.head
+        && payload.pull_request.head.repo && payload.pull_request.head.repo.full_name;
+      sameRepo = typeof headRepo === 'string'
+        && headRepo.toLowerCase() === String(env.GITHUB_REPOSITORY).toLowerCase();
+    }
+  } catch { sameRepo = false; }
+  return releasePipelinePrKind({
+    headRef: env.GITHUB_HEAD_REF,
+    baseRef: env.GITHUB_BASE_REF,
+    sameRepo,
+  }) === RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE;
+}
+
+/** First of `origin/next`, `upstream/next`, `next` that resolves, or null. */
+function resolveNextRef({ cwd = REPO_ROOT } = {}) {
+  for (const candidate of ['origin/next', 'upstream/next', 'next']) {
+    try {
+      const sha = git(['rev-parse', '--verify', `${candidate}^{commit}`], { cwd }).trim();
+      if (/^[0-9a-f]{40}$/.test(sha)) return { ref: candidate, sha };
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
+/**
  * The commit the differential gate measures FROM: the merge-base of the resolved base
  * ref and HEAD, alongside the base tip it was derived from.
  *
@@ -366,8 +410,17 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
  * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
  */
-function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic } = {}) {
-  const resolved = resolveBase(env, { cwd });
+function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic, readFile } = {}) {
+  // #5902: a release-merge PR targets `main`, whose base would span the whole release
+  // cycle already checked on `next`. Measure from the release's fork point on `next`.
+  const releaseMerge = isReleaseMergePr(env, { readFile });
+  const resolved = releaseMerge ? resolveNextRef({ cwd }) : resolveBase(env, { cwd });
+  if (releaseMerge && diagnostic) {
+    diagnostic(
+      `emitted-attribution base chosen from next (${resolved ? resolved.ref : 'none'}) because this is a ` +
+      'release-merge PR (release/X.Y.0 or hotfix/X.Y.Z -> main); GSD_EMITTED_BASE is ignored.',
+    );
+  }
   if (diagnostic) {
     diagnostic(
       `emitted-attribution resolved base: ${resolved ? `${resolved.ref}@${resolved.sha}` : 'none'}; ` +
@@ -1100,6 +1153,7 @@ module.exports = {
   resolveBaseSha,
   baseRefCandidates,
   resolveBase,
+  isReleaseMergePr,
   resolveAttributionBase,
   resolveAttributionInputs,
   baselineFamilyNamesAtRef,
