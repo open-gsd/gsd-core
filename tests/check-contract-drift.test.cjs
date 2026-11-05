@@ -610,10 +610,10 @@ describe('contract-drift: typed surface', () => {
   });
 
   test('sanitizeEcho on a very long input keeps exactly the first 200 kept code points', () => {
-    const interleaved = 'a​'.repeat(500000); // 1M code points, half hostile
+    const interleaved = 'a\u{200B}'.repeat(500000); // 1M code points, half hostile
     assert.equal(sanitizeEcho(interleaved), 'a'.repeat(200));
     assert.equal(sanitizeEcho(`${'b'.repeat(300000)}tail`), 'b'.repeat(200));
-    assert.equal(sanitizeEcho('​'.repeat(1000000)), '');
+    assert.equal(sanitizeEcho('\u{200B}'.repeat(1000000)), '');
   });
 
   test('sanitizeEcho caps by code point and never splits a surrogate pair', () => {

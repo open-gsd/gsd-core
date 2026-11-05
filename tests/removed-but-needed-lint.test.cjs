@@ -794,7 +794,7 @@ describe('removed-but-needed lint: gitignored-path refinement (#3677)', () => {
     assert.equal(matchesByFullPath(DELETED, new Set(['other.md']), new Set()), false);
   });
 
-  test('property: both arms agree — an ignored deletion matches only its own path', () => {
+  test('property: both arms agree, an ignored deletion matches only its own path', () => {
     fc.assert(
       fc.property(
         fc.stringMatching(/^[a-z]{1,8}$/),
@@ -905,12 +905,12 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-utf8-'));
     t.after(() => cleanup(tmpDir));
     initIgnoreRepo(tmpDir);
-    const p = '.gsd/café/40-design.md';
+    const p = '.gsd/caf\u{e9}/40-design.md';
     const result = getIgnoredDeletions(tmpDir, [p], BASE_REF);
     assert.deepEqual([...result], [p]);
   });
 
-  test('degrades to an empty Set (no throw) when git cannot answer — not a git repo', (t) => {
+  test('degrades to an empty Set (no throw) when git cannot answer (not a git repo)', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-norepo-'));
     t.after(() => cleanup(tmpDir));
     const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF);
@@ -1406,7 +1406,7 @@ describe('removed-but-needed lint: base branch selection (resolveBaseBranch)', (
   });
 
   test('an unsafe GSD_REMOVED_BUT_NEEDED_BASE or GITHUB_BASE_REF is a hard failure with a sanitized message', () => {
-    for (const bad of ['a b', 'x;y', '..', 'a/../b', 'a..b', '-rf', 'a//b', 'a/', '$(x)', 'bad\u001bname']) {
+    for (const bad of ['a b', 'x;y', '..', 'a/../b', 'a..b', '-rf', 'a//b', 'a/', '$(x)', 'bad\u001bname', '@', '@{-1}']) {
       for (const key of ['GSD_REMOVED_BUT_NEEDED_BASE', 'GITHUB_BASE_REF']) {
         assert.throws(
           () => resolveBaseBranch({ [key]: bad }),
@@ -1424,7 +1424,7 @@ describe('removed-but-needed lint: base branch selection (resolveBaseBranch)', (
     assert.equal(resolveBaseBranch({ GITHUB_BASE_REF: 'release/1.20' }), 'release/1.20');
     assert.equal(resolveBaseBranch({ GSD_REMOVED_BUT_NEEDED_BASE: 'feat_x-1.2' }), 'feat_x-1.2');
     // legal per `git check-ref-format --branch`
-    for (const ok of ['release+hotfix', 'feat@x', 'rel#1', 'été']) {
+    for (const ok of ['release+hotfix', 'feat@x', 'rel#1', '\u{e9}t\u{e9}']) {
       assert.equal(resolveBaseBranch({ GITHUB_BASE_REF: ok }), ok, ok);
     }
   });
@@ -1480,7 +1480,7 @@ describe('removed-but-needed lint: NUL-safe git output (core.quotePath)', () => 
     // initIgnoreRepo already branched to 'pr'; build the base content on main.
     git('checkout', '-q', 'main');
     const body = Array.from({ length: 40 }, (_, i) => `line ${i} of a rename candidate`).join('\n') + '\n';
-    const gone = 'notes/café.md';
+    const gone = 'notes/caf\u{e9}.md';
     fs.mkdirSync(path.join(tmpDir, 'notes'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, gone), '# gone\n');
     fs.writeFileSync(path.join(tmpDir, 'notes', 'old-name.md'), body);
@@ -1498,7 +1498,7 @@ describe('removed-but-needed lint: NUL-safe git output (core.quotePath)', () => 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nul-ls-'));
     t.after(() => cleanup(tmpDir));
     const git = initIgnoreRepo(tmpDir);
-    const keep = 'notes/café.md';
+    const keep = 'notes/caf\u{e9}.md';
     fs.mkdirSync(path.join(tmpDir, 'notes'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, keep), '# keep\n');
     git('add', '-A');
