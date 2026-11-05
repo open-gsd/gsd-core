@@ -687,7 +687,6 @@ ui-phase → UI-SPEC.md (design contract, optional)
     │
     ▼
 plan-phase
-    ├── Research gate (blocks until each RESEARCH.md open question cites a D-NN from CONTEXT.md <decisions>)
     ├── Phase Researcher → RESEARCH.md
     │       └── Package Legitimacy Gate: registry-API verdict on every package; [SLOP] removed,
     │           [SUS]/[ASSUMED] flagged; Audit table written to RESEARCH.md
@@ -695,6 +694,8 @@ plan-phase
     │       └── checkpoint:human-verify injected before [ASSUMED]/[SUS] installs;
     │           T-{phase}-SC STRIDE row added for install-bearing plans
     ├── Plan Checker → Verify loop (max 3x)
+    │       └── Research gate (Dimension 11): blocks until each RESEARCH.md question needing a ruling
+    │           cites a D-NN from CONTEXT.md <decisions>; a cited source settles only a factual gap
     ├── Requirements coverage gate (REQ-IDs → plans)
     └── Decision coverage gate (CONTEXT.md `<decisions>` → plans, BLOCKING — #2492)
     │
