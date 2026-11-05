@@ -27,6 +27,7 @@ const {
   CHANGELOG_NOTES_ERROR,
   RELEASE_BODY_MAX_CHARS,
   resolveOutputPath,
+  writeOutput,
 } = require('../scripts/release-notes/changelog-release-notes.cjs');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'release-notes', 'changelog-release-notes.cjs');
@@ -300,7 +301,9 @@ describe('release body budget (#5922)', () => {
       const fill = RELEASE_BODY_MAX_CHARS + delta - base;
       const body = buildSized(sectionOf(1, 'x'.repeat(fill)));
       // delta 0 -> exactly the budget; the untruncated body is returned whole.
-      assert.equal(body.includes('more entries'), truncated, `delta ${delta}`);
+      // the one dropped bullet is announced in the singular
+      assert.equal(body.includes('_\u2026and 1 more entry. See the full'), truncated, `delta ${delta}`);
+      assert.equal(body.includes('more entries'), false, `delta ${delta}`);
       assert.ok(body.length <= RELEASE_BODY_MAX_CHARS, `delta ${delta}: ${body.length}`);
       if (!truncated) assert.equal(body.length, RELEASE_BODY_MAX_CHARS + delta);
     }
@@ -316,6 +319,31 @@ describe('release body budget (#5922)', () => {
     assert.ok(body.endsWith('compare/v1.0.0...v2.0.0\n'));
   });
 
+  // Smallest budget the builder accepts, found by probing the builder itself.
+  function floorOf(changelog, whole) {
+    let floor = whole;
+    for (let max = whole; max > 0; max--) {
+      try {
+        buildSized(changelog, { maxChars: max });
+      } catch (err) {
+        assert.equal(err.code, CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL);
+        break;
+      }
+      floor = max;
+    }
+    return floor;
+  }
+
+  test('floor-1 throws BUDGET_TOO_SMALL, floor and floor+1 stay within budget', () => {
+    const changelog = sectionOf(3, 'v'.repeat(80));
+    const floor = floorOf(changelog, buildSized(changelog).length);
+    assert.equal(codeOf(() => buildSized(changelog, { maxChars: floor - 1 })), CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL);
+    for (const max of [floor, floor + 1]) {
+      const body = buildSized(changelog, { maxChars: max });
+      assert.ok(body.length <= max, `max ${max}: ${body.length}`);
+    }
+  });
+
   test('a cut landing right after the second subsection heading drops that heading', () => {
     const changelog = [
       '# Changelog', '', '## [2.0.0] - 2026-02-01', '',
@@ -324,9 +352,10 @@ describe('release body budget (#5922)', () => {
       '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '',
     ].join('\n');
     const whole = buildSized(changelog).length;
+    const floor = floorOf(changelog, whole);
     let sawCutAfterHeading = false;
-    // Sweep budgets across the span where the second bullet no longer fits.
-    for (let max = whole; max > whole - 400; max--) {
+    // Sweep budgets from the untruncated size down to the builder's own floor.
+    for (let max = whole; max >= floor; max--) {
       const body = buildSized(changelog, { maxChars: max });
       assert.ok(body.length <= max);
       assertNoDanglingHeading(body);
@@ -350,14 +379,23 @@ describe('release body budget (#5922)', () => {
     fc.assert(
       fc.property(
         fc.array(fc.integer({ min: 1, max: 400 }), { minLength: 1, maxLength: 40 }),
-        fc.integer({ min: 600, max: 6000 }),
+        fc.integer({ min: 250, max: 6000 }),
         (sizes, maxChars) => {
           const bullets = sizes.map((n, i) => `- **b${i}** — ${'z'.repeat(n)}. (#${i})\n  continuation ${i}`);
           const changelog = [
             '# Changelog', '', '## [2.0.0] - 2026-02-01', '', '### Added', '',
             ...bullets, '', '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '',
           ].join('\n');
-          const body = buildSized(changelog, { maxChars });
+          let body;
+          try {
+            body = buildSized(changelog, { maxChars });
+          } catch (err) {
+            // Either the output fits, or the budget is below the zero-entry floor (well under 400).
+            assert.ok(err instanceof ChangelogNotesError);
+            assert.equal(err.code, CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL);
+            assert.ok(maxChars < 400, `floor error at ${maxChars}`);
+            return;
+          }
           assert.ok(body.length <= maxChars, `${body.length} > ${maxChars}`);
           const emitted = [];
           for (let i = 0; i < bullets.length; i++) if (body.includes(bullets[i])) emitted.push(i);
@@ -432,7 +470,31 @@ describe('resolveOutputPath (#5922)', () => {
         timeout: PROBE_TIMEOUT_MS,
       });
       assert.notEqual(res.status, 0);
+      assert.ok(res.stderr.includes('error[output-not-allowed]'), res.stderr);
       assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('writeOutput refuses a final-component symlink (ELOOP) and leaves its target unchanged', {
+    skip: fs.constants.O_NOFOLLOW === undefined ? 'O_NOFOLLOW unavailable' : false,
+  }, () => {
+    const root = tmp();
+    const outside = path.join(root, 'outside.md');
+    const link = path.join(root, 'link.md');
+    fs.writeFileSync(outside, 'untouched');
+    try {
+      try {
+        fs.symlinkSync(outside, link);
+      } catch (_e) {
+        return; // symlink creation unsupported here
+      }
+      assert.equal(codeOf(() => writeOutput(link, 'body')), CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED);
+      assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
+      const plain = path.join(root, 'plain.md');
+      writeOutput(plain, 'body');
+      assert.equal(fs.readFileSync(plain, 'utf8'), 'body');
     } finally {
       cleanup(root);
     }

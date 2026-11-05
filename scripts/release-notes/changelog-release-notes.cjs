@@ -34,6 +34,7 @@ const CHANGELOG_NOTES_ERROR = Object.freeze({
   EMPTY_SECTION: 'empty-section',
   NO_PREVIOUS: 'no-previous',
   OUTPUT_NOT_ALLOWED: 'output-not-allowed',
+  BUDGET_TOO_SMALL: 'budget-too-small',
 });
 
 class ChangelogNotesError extends Error {
@@ -188,6 +189,15 @@ function buildChangelogReleaseNotes({
   // order until the next one would not fit alongside the notice and footer.
   const units = splitUnits(body);
   let remaining = units.filter((u) => u.kind === 'bullet').length;
+  // The smallest possible body carries no entries at all; if even that is over
+  // budget no truncation can help, so fail instead of returning an oversized body.
+  const floor = assemble('', remaining).length;
+  if (floor > maxChars) {
+    throw new ChangelogNotesError(
+      CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL,
+      `release body budget ${maxChars} is below the ${floor}-character floor (install block, notice and footer)`,
+    );
+  }
   const kept = [];
   for (const unit of units) {
     const after = remaining - (unit.kind === 'bullet' ? 1 : 0);
@@ -247,6 +257,30 @@ function resolveOutputPath(output, { cwd = process.cwd(), tmpdir = os.tmpdir(), 
   );
 }
 
+/**
+ * Write the body without following a symlink at the final path component.
+ * O_NOFOLLOW (where defined) closes the window between resolveOutputPath's
+ * lstat and the open; ELOOP is mapped to a typed error.
+ * @throws {ChangelogNotesError}
+ */
+function writeOutput(target, body) {
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0);
+  let fd;
+  try {
+    fd = fs.openSync(target, flags, 0o644);
+  } catch (err) {
+    if (err && err.code === 'ELOOP') {
+      throw new ChangelogNotesError(CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED, `--output ${target} is a symbolic link`);
+    }
+    throw err;
+  }
+  try {
+    fs.writeFileSync(fd, body, 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 const FLAGS_WITH_VALUE = new Set([
   '--version', '--tag', '--changelog', '--output', '--package', '--repo', '--previous',
 ]);
@@ -287,19 +321,12 @@ function main() {
       repoSlug: opts.repo || defaultRepoSlug,
       previous: opts.previous === undefined ? null : opts.previous,
     });
+    writeOutput(outputPath, body);
   } catch (err) {
     if (err instanceof ChangelogNotesError) {
       throw new ExitError(1, `error[${err.code}]: ${err.message}`);
     }
     throw err;
-  }
-  // O_NOFOLLOW (where defined) closes the window between the lstat above and the write.
-  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0);
-  const fd = fs.openSync(outputPath, flags, 0o644);
-  try {
-    fs.writeSync(fd, body);
-  } finally {
-    fs.closeSync(fd);
   }
 }
 
@@ -313,5 +340,6 @@ module.exports = {
   CHANGELOG_NOTES_ERROR,
   RELEASE_BODY_MAX_CHARS,
   resolveOutputPath,
+  writeOutput,
   parseArgs,
 };
