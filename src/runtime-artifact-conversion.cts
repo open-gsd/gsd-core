@@ -2001,7 +2001,7 @@ function convertClaudeToTraeMarkdownBody(content) {
   converted = converted.replace(/\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  // #5715: convertClaudeToTraeMarkdown shields the emitted prefix, so these rules see only source text.
+  // #5715: an emitted prefix is shielded by convertClaudeToTraeMarkdown; the skills path runs this before the prefix pass, and the profile maps the own-dir forms.
   converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
   converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, () => '$HOME/.trae');
   // Environment variable name rewrite
@@ -4150,19 +4150,24 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
       break;
     }
 
-    case 'slash-bare-own-derived':
+    case 'slash-bare-own-derived': {
       // #2094: descriptor-driven — dirName resolves to '.trae' via
       // getDirName()/localConfigDir, so the own-dir rule is built rather than
-      // hardcoded (byte-identical output for trae).
+      // hardcoded. #5715: own-dir slash and bare forms (both `~/` and `$HOME/`
+      // spellings) map to the install prefix, so a custom or local config dir is
+      // honoured; default global output is unchanged.
+      const keepDefaultOwnBare = (match: string) => (normalizedPathPrefix === '$HOME/' + dirName ? match : normalizedPathPrefix);
       content = rewriteSourceFormsOnce(content, [
         ...b.slash('.claude'),
         ...b.localSlash('.claude'),
-        ...b.tilde(dirName),
+        ...b.slash(dirName),
         ...b.bare('.claude', CLAUDE_HOME_BARE_BOUNDARY),
         ...b.localBare('.claude', CLAUDE_HOME_BARE_BOUNDARY),
+        ...b.bare(dirName, LOOKAHEAD, keepDefaultOwnBare),
       ]);
       content = processAttribution(content, attribution);
       break;
+    }
 
     case 'slash-bare-own-tilde-bare':
       content = rewriteSourceFormsOnce(content, [

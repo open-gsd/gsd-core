@@ -2728,7 +2728,7 @@ function convertClaudeToTraeMarkdownBody(content) {
   converted = converted.replace(/\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  // #5715: convertClaudeToTraeMarkdown shields the emitted prefix, so these rules see only source text.
+  // #5715: an emitted prefix is shielded by convertClaudeToTraeMarkdown; the skills path runs this before the prefix pass, and the profile maps the own-dir forms.
   converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
   converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, () => '$HOME/.trae');
   // Environment variable name rewrite
