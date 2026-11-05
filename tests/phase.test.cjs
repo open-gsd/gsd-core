@@ -19585,6 +19585,20 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
   });
 });
 
+describe('#5726 STATE milestone scalar fallback read', () => {
+  const { readStateMilestoneScalar, classifyMilestoneScalar } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+
+  test('a no-frontmatter `milestone: v1.0 # current` line classifies to the bare version', () => {
+    const raw = readStateMilestoneScalar('milestone: v1.0 # current\n# State\n');
+    assert.deepEqual(classifyMilestoneScalar(raw), { explicitNull: false, version: 'v1.0' });
+  });
+
+  test('a quoted no-frontmatter value is unquoted', () => {
+    const raw = readStateMilestoneScalar('milestone: "v1.0"\n# State\n');
+    assert.deepEqual(classifyMilestoneScalar(raw), { explicitNull: false, version: 'v1.0' });
+  });
+});
+
 describe('#5726 closed-marker vocabulary is one source', () => {
   const { isClosedMilestoneHeading } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
   const WORDS = ['CLOSED', 'ARCHIVED', 'ABANDONED', 'SHIPPED', 'FAILED'];

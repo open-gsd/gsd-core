@@ -2275,12 +2275,27 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
   // so a value that spells the requested version (quoted), a null/empty value and
   // a `milestone:` line in the body are not drift. The matching-version control
   // shows the guard fires identically with no WARNING.
+  test('a genuinely different STATE version (v2.0) still emits the mismatch WARNING (positive control)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap v1.0\n\n### Phase 2: Real Work\n**Goal:** Not started\n',
+    );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\nstatus: active\n---\n# State\n');
+    const result = runGsdTools(
+      ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--dry-run'],
+      tmpDir,
+    );
+    assert.ok(result.error.includes('WARNING:') && result.error.includes('v2.0'), result.error);
+  });
+
   for (const [label, stateText] of [
     ['a matching unquoted version (control)', '---\nmilestone: v1.0\nstatus: active\n---\n# State\n'],
     ['a quoted matching version', '---\nmilestone: "v1.0"\nstatus: active\n---\n# State\n'],
     ['an explicit null', '---\nmilestone: null\nstatus: active\n---\n# State\n'],
     ['an empty quoted string', "---\nmilestone: ''\nstatus: active\n---\n# State\n"],
     ['no frontmatter key and a fenced body example', '---\nstatus: active\n---\n# State\n\n```\nmilestone: v9.9\n```\n'],
+    ['a version spelled without the leading v', '---\nmilestone: 1.0\nstatus: active\n---\n# State\n'],
+    ['a no-frontmatter line with a trailing comment', 'milestone: v1.0 # current\n# State\n'],
   ]) {
     test(`no WARNING is emitted for ${label}`, () => {
       fs.writeFileSync(
