@@ -2067,9 +2067,12 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // directory would otherwise receive the rename. Remaining race: the stat and the rename are
   // separate syscalls, so a swap landing between them (or during a retry) is not observed, and a
   // temp file created before such a swap stays in the directory it was created in. That temp may
-  // therefore be orphaned in the old directory after a parent swap: a minor leak, never another
-  // file deleted, because temp names are random and only a path this write created is unlinked.
-  // The same holds for the refusal just below: once the parent has been swapped, unlinkSync of
+  // therefore be orphaned in the old directory after a parent swap: a minor leak. What gets
+  // unlinked differs by path: the direct-write fallback unlinks only a file whose dev/ino match
+  // the descriptor this write created, while this temp cleanup is by NAME. After a parent swap
+  // that name resolves through the new parent, and deleting another file is avoided only because
+  // the temp name (pid plus 48 random bits, see defaultTempSuffix) is unpredictable and cannot
+  // pre-exist in a different directory. The same holds for the refusal just below: once the parent has been swapped, unlinkSync of
   // the temp path resolves through the NEW parent, so the real temp stays orphaned in the original
   // directory. Documented residual: a same-class race that needs write access to the parent
   // directory; no further race machinery guards it.
