@@ -108,8 +108,9 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(collect, /any heading/, 'step 1 must not key on one literal heading');
     assert.match(collect, /\bprose\b/, 'step 1 must collect questions written as prose');
     assert.match(collect, /whatever status it claims/, 'a question the researcher calls closed is still collected');
-    assert.match(collect, /settled with a cited source is not one/, 'research findings are not questions');
-    assert.match(collect, /assumption or risk counts only if it names such a pending answer or ruling/, 'an assumption counts when it needs an answer, not only a ruling');
+    assert.match(collect, /a fact settled with a cited source/, 'research findings are not questions');
+    assert.match(collect, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
+    assert.match(collect, /assumption or risk, unless it names such a pending answer or ruling/, 'an assumption counts when it needs an answer, not only a ruling');
   });
 
   test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it and predates this run', () => {
@@ -239,6 +240,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
     assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
+    assert.match(rule, /a\s+factual\s+question\s+you\s+settled/);
+    assert.match(rule, /No\s+source\s+settles\s+a\s+choice\s+that\s+needs\s+a\s+user\s+ruling/);
     assert.match(rule, /CONTEXT\.md's\s+`<decisions>`/);
     assert.match(rule, /Never\s+add\s+a\s+decision\s+to\s+CONTEXT\.md/);
     // Anchored on the negation: matching `cite a plan` alone passes when "never" becomes "always".
@@ -264,5 +267,6 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(guide, /`D-NN`/);
     assert.match(guide, /CONTEXT\.md's `<decisions>`/);
     assert.match(guide, /List every open question in that section/);
+    assert.match(guide, /No source settles a choice that needs a user ruling/);
   });
 });

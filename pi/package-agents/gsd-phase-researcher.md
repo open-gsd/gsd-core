@@ -521,7 +521,8 @@ Verified patterns from official sources:
 ```
 
 **Open Questions — only the user closes one.** List only what your research could not answer, and list
-every such question in that section; a question you settled belongs in the findings, with its source. Never
+every such question in that section; a factual question you settled belongs in the findings, with its source.
+No source settles a choice that needs a user ruling (a name, a TTL, a scope call): list that choice. Never
 mark a question resolved, decided or closed yourself, and never add a `(RESOLVED)` suffix to the section
 heading. If CONTEXT.md's `<decisions>` already records a decision that answers a question, cite it on that
 question as `RESOLVED (D-NN): <ruling>`, using the decision's real number. Never add a decision to
