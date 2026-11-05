@@ -1042,7 +1042,32 @@ describe('removed-but-needed lint: skip only when the base is unresolvable', () 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nobase-'));
     t.after(() => cleanup(tmpDir));
     buildTempRepo(tmpDir, [{ file: 'a.md', content: 'a\n' }], [{ file: 'b.md', content: 'b\n' }]);
-    const result = runLint(tmpDir, { GSD_REMOVED_BUT_NEEDED_BASE: 'no-such-branch' });
+    const result = runLint(tmpDir, { GSD_REMOVED_BUT_NEEDED_BASE: 'no-such-branch', CI: '', GITHUB_ACTIONS: '' });
+    assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stdout, /skipping/);
+  });
+
+  for (const [name, env] of [
+    ['CI=true', { CI: 'true', GITHUB_ACTIONS: '' }],
+    ['GITHUB_ACTIONS=true', { CI: '', GITHUB_ACTIONS: 'true' }],
+    ['CI=1', { CI: '1', GITHUB_ACTIONS: '' }],
+  ]) {
+    test(`an unresolvable base FAILS under ${name} instead of skipping`, (t) => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nobase-ci-'));
+      t.after(() => cleanup(tmpDir));
+      buildTempRepo(tmpDir, [{ file: 'a.md', content: 'a\n' }], [{ file: 'b.md', content: 'b\n' }]);
+      const result = runLint(tmpDir, { GSD_REMOVED_BUT_NEEDED_BASE: 'no-such-branch', ...env });
+      assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stdout}`);
+      assert.match(result.stderr, /could not resolve origin\/no-such-branch/);
+      assert.doesNotMatch(result.stdout, /skipping/);
+    });
+  }
+
+  test('CI="false" is not CI: the unresolvable base still skips', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nobase-cifalse-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(tmpDir, [{ file: 'a.md', content: 'a\n' }], [{ file: 'b.md', content: 'b\n' }]);
+    const result = runLint(tmpDir, { GSD_REMOVED_BUT_NEEDED_BASE: 'no-such-branch', CI: 'false', GITHUB_ACTIONS: '' });
     assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
     assert.match(result.stdout, /skipping/);
   });

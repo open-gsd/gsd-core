@@ -563,6 +563,29 @@ describe('contract-drift: typed surface', () => {
     assert.equal(sanitizeEcho('a\x00b\x07c\x1fd'), 'abcd');
     assert.equal(sanitizeEcho('x'.repeat(500)).length, 200);
   });
+
+  test('sanitizeEcho also strips C1 controls, line/paragraph separators, zero-width and bidi controls', () => {
+    const ranges = [
+      [0x80, 0x9f], // C1, incl. 8-bit CSI U+009B
+      [0x2028, 0x2029], // line / paragraph separator
+      [0x200b, 0x200f], // zero-width + LRM/RLM
+      [0x202a, 0x202e], // bidi embeddings/overrides
+      [0x2066, 0x2069], // bidi isolates
+      [0xfeff, 0xfeff], // BOM / zero-width no-break space
+    ];
+    for (const [lo, hi] of ranges) {
+      for (let c = lo; c <= hi; c += 1) {
+        assert.equal(sanitizeEcho(`a${String.fromCodePoint(c)}b`), 'ab', `U+${c.toString(16)} must be stripped`);
+      }
+    }
+  });
+
+  test('sanitizeEcho keeps the neighbours of the stripped ranges and ordinary non-ASCII text', () => {
+    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe]) {
+      const s = `a${String.fromCodePoint(c)}b`;
+      assert.equal(sanitizeEcho(s), s, `U+${c.toString(16)} must be kept`);
+    }
+  });
 });
 
 // ─── parseConsumedByCell ─────────────────────────────────────────────────────
