@@ -114,10 +114,17 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(collect, /any heading/, 'step 1 must not key on one literal heading');
     assert.match(collect, /\bprose\b/, 'step 1 must collect questions written as prose');
     assert.match(collect, /whatever status it claims/, 'a question the researcher calls closed is still collected');
-    assert.match(collect, /a fact settled with a cited source/, 'research findings are not questions');
-    assert.match(collect, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
-    assert.match(collect, /Claude's Discretion area of CONTEXT\.md given a sourced recommendation/, 'a delegated area needs no ruling, and CONTEXT.md decides what is delegated');
-    assert.match(collect, /`\[ASSUMED\]` fact or risk naming no pending ruling/, 'an Assumptions Log fact is not a question; a pending ruling is, wherever it sits');
+    // The exclusions sit after their marker, so they stay exclusions: one that moves in front of it, or a
+    // marker reworded into a collection rule, fails here.
+    const marker = collect.indexOf('Not one:');
+    assert.notEqual(marker, -1, 'step 1 must mark what it excludes');
+    const collected = collect.slice(0, marker);
+    const excluded = collect.slice(marker);
+    assert.doesNotMatch(collected, /cited source|Discretion|ASSUMED/, 'an exclusion sits on the collecting side of its marker');
+    assert.match(excluded, /a fact settled with a cited source/, 'research findings are not questions');
+    assert.match(excluded, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
+    assert.match(excluded, /an area CONTEXT\.md lists under Claude's Discretion, given a sourced recommendation/, 'a delegated area needs no ruling, and CONTEXT.md decides what is delegated');
+    assert.match(excluded, /`\[ASSUMED\]` fact or risk naming no pending answer or ruling/, 'an Assumptions Log fact is not a question; a pending answer or ruling is, wherever it sits');
   });
 
   test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it and predates this run', () => {
@@ -127,8 +134,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(pass.includes('every `D-NN` it cites') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions> for every citation: ${pass}`);
     assert.match(pass, /\bone answers\b/, 'one real citation must not carry a second that is missing, and one must answer');
     assert.match(pass, /outside Claude's Discretion/, 'a Discretion entry delegates the choice, so it records no ruling');
-    assert.match(pass, /not added during this planning run/);
-    assert.match(pass, /`git log -p` on CONTEXT\.md/, 'the not-added condition must name a check the checker can run');
+    assert.match(pass, /not added this run/);
+    assert.match(pass, /`git log -p`, `git diff` on CONTEXT\.md/, 'the not-added condition must name checks that see both committed and uncommitted additions');
   });
 
   test('no CONTEXT.md leaves every question a BLOCKER', () => {
@@ -140,9 +147,9 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(blocker, 'Process must carry a BLOCKER step');
     const cases = {
       'every other question': /every other question/i,
-      'any marking, any case': /however it is marked, in any case/,
+      'any marking, any letter case': /however it is marked, in any letter case/,
       'no D-NN': /no `D-NN`/,
-      'a D-NN CONTEXT.md lacks': /does not contain/,
+      'a D-NN CONTEXT.md lacks': /CONTEXT\.md lacks/,
       'a D-NN outside <decisions>': /outside `<decisions>`/,
       'a D-NN that decides something else': /decide something else/,
       'a plan': /\bon a plan\b/,
@@ -168,7 +175,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
     for (const prop of props) {
       assert.match(prop, /cites only D-NNs/);
-      assert.match(prop, /CONTEXT\.md <decisions>/);
+      assert.match(prop, /CONTEXT\.md <decisions> \(not Discretion\)/, 'the binding property must carry the rule step 2 enforces, or the planner can satisfy it where the checker refuses');
       assert.match(prop, /recorded before this run/, 'the binding property must carry the not-added-this-run condition');
       assert.match(prop, /one of which answers it/);
     }
@@ -218,7 +225,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     const item = criteria.match(/- \[ \] Research resolution checked[^\n]*\n[^\n]*/);
     assert.ok(item, 'success_criteria must list the research resolution check');
     assert.match(item[0], /cites only `D-NN`s/);
-    assert.match(item[0], /CONTEXT\.md `<decisions>`/);
+    assert.match(item[0], /CONTEXT\.md `<decisions>` \(not Discretion\)/);
     assert.match(item[0], /any heading/);
     assert.match(item[0], /one answering it/, 'the checklist must carry the body\'s relevance condition');
   });
@@ -228,7 +235,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   test('the planner cites a decision already on record, and otherwise returns the conflict', () => {
     const row = splitLines(plannerRevision()).find((l) => l.startsWith('| research_resolution |'));
     assert.ok(row, 'the revision strategy table must carry a research_resolution row');
-    assert.match(row, /Cite a `D-NN` already under CONTEXT\.md `<decisions>`/);
+    assert.match(row, /Cite a `D-NN` already under CONTEXT\.md `<decisions>`, outside Claude's Discretion/);
     assert.match(row, /add RESEARCH\.md to the Step 6 commit/, 'Step 6 commits only PLAN.md files, so the citation would stay uncommitted');
     assert.match(row, /return `## REVISION_CONFLICT`/, 'the planner cannot reach the property, so the loop must not spend iterations on it');
     assert.match(row, /`\/gsd:discuss-phase`/);
