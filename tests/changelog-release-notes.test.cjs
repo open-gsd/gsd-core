@@ -286,6 +286,27 @@ describe('release body budget (#5922)', () => {
     out.push('', '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '');
     return out.join('\n');
   }
+  // Independent assembly of the smallest possible body (no entries kept) for a
+  // 2.0.0 section of `n` bullets whose predecessor is 1.0.0.
+  function zeroEntryBody(n) {
+    const noun = n === 1 ? 'entry' : 'entries';
+    return [
+      '## Install',
+      '',
+      '```bash',
+      `npm i ${PKG}@2.0.0`,
+      '# or',
+      `npm i ${PKG}@latest`,
+      '```',
+      '',
+      "## What's Changed",
+      '',
+      `_\u2026and ${n} more ${noun}. See the full [CHANGELOG](https://github.com/${SLUG}/blob/v2.0.0/CHANGELOG.md)._`,
+      '',
+      `**Full Changelog**: https://github.com/${SLUG}/compare/v1.0.0...v2.0.0`,
+      '',
+    ].join('\n');
+  }
   const buildSized = (changelog, extra) =>
     buildChangelogReleaseNotes({ changelog, version: '2.0.0', packageName: PKG, repoSlug: SLUG, ...extra });
 
@@ -334,13 +355,14 @@ describe('release body budget (#5922)', () => {
     return floor;
   }
 
-  test('floor-1 throws BUDGET_TOO_SMALL, floor and floor+1 stay within budget', () => {
-    const changelog = sectionOf(3, 'v'.repeat(80));
-    const floor = floorOf(changelog, buildSized(changelog).length);
-    assert.equal(codeOf(() => buildSized(changelog, { maxChars: floor - 1 })), CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL);
-    for (const max of [floor, floor + 1]) {
-      const body = buildSized(changelog, { maxChars: max });
-      assert.ok(body.length <= max, `max ${max}: ${body.length}`);
+  test('floor-1 throws BUDGET_TOO_SMALL, floor returns the zero-entry body exactly, floor+1 stays within budget', () => {
+    for (const bulletCount of [1, 3]) {
+      const changelog = sectionOf(bulletCount, 'v'.repeat(80));
+      const expected = zeroEntryBody(bulletCount);
+      const floor = expected.length;
+      assert.equal(codeOf(() => buildSized(changelog, { maxChars: floor - 1 })), CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL, `n=${bulletCount}`);
+      assert.equal(buildSized(changelog, { maxChars: floor }), expected, `n=${bulletCount}`);
+      assert.ok(buildSized(changelog, { maxChars: floor + 1 }).length <= floor + 1, `n=${bulletCount}`);
     }
   });
 
@@ -393,7 +415,7 @@ describe('release body budget (#5922)', () => {
             // Either the output fits, or the budget is below the zero-entry floor (well under 400).
             assert.ok(err instanceof ChangelogNotesError);
             assert.equal(err.code, CHANGELOG_NOTES_ERROR.BUDGET_TOO_SMALL);
-            assert.ok(maxChars < 400, `floor error at ${maxChars}`);
+            assert.ok(maxChars < zeroEntryBody(bullets.length).length, `floor error at ${maxChars}`);
             return;
           }
           assert.ok(body.length <= maxChars, `${body.length} > ${maxChars}`);
