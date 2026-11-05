@@ -116,4 +116,64 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
       assert.deepStrictEqual(lines, [], root);
     }
   });
+
+  test('both writers extend one user ignore file once each and keep the user prefix', (t) => {
+    const root = freshRepo();
+    t.after(() => cleanup(root));
+    const ignorePath = path.join(root, '.gsd', '.gitignore');
+    fs.mkdirSync(path.join(root, '.gsd'));
+    const userRules = 'user-rule/\n';
+    fs.writeFileSync(ignorePath, userRules);
+    assert.strictEqual(sentinel(root).recorded, true);
+    assert.strictEqual(probe(root).confirmed, true);
+    // A second round must not duplicate either block.
+    assert.strictEqual(sentinel(root).recorded, true);
+    const text = fs.readFileSync(ignorePath, 'utf8');
+    const lines = text.split(/\r?\n/);
+    const count = (line) => lines.filter((l) => l === line).length;
+    assert.ok(text.startsWith(userRules), 'user lines stay a verbatim prefix');
+    assert.strictEqual(count('# gsd-core dispatch sentinel'), 1);
+    assert.strictEqual(count('# gsd-core harness fork probe'), 1);
+    assert.strictEqual(count('/.gitignore'), 1);
+    const statusLines = git(root, ['status', '--porcelain']).split('\n').filter((l) => l.includes('.gsd'));
+    assert.deepStrictEqual(statusLines, []);
+  });
+
+  test('sentinel temp write is exclusive: a planted temp-name link is untouched and only expected entries remain', (t) => {
+    const root = freshRepo();
+    const outside = tmp('gsd-5757-outside-');
+    t.after(() => cleanup(root));
+    t.after(() => cleanup(outside));
+    // The temp suffix is random, so a decoy cannot be planted at the exact
+    // name; plant one at a legacy-style name and assert it is never written
+    // through and that no temp file is left behind.
+    const victim = path.join(outside, 'victim.txt');
+    fs.writeFileSync(victim, 'original');
+    fs.mkdirSync(path.join(root, '.gsd'));
+    fs.symlinkSync(victim, path.join(root, '.gsd', 'dispatch-isolation-sentinel.json.tmp-1-1'));
+    assert.strictEqual(sentinel(root).recorded, true);
+    assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'original');
+    const sentinelFile = path.join(root, '.gsd', 'dispatch-isolation-sentinel.json');
+    assert.strictEqual(fs.lstatSync(sentinelFile).isFile(), true);
+    const leftovers = fs.readdirSync(path.join(root, '.gsd'))
+      .filter((n) => n.startsWith('dispatch-isolation-sentinel.json.tmp-') && n !== 'dispatch-isolation-sentinel.json.tmp-1-1');
+    assert.deepStrictEqual(leftovers, []);
+  });
+
+  test('sentinel refusals keep their historical error text (symlinked .gsd and symlinked .gitignore)', (t) => {
+    const dirRoot = freshRepo();
+    const ignoreRoot = freshRepo();
+    const outside = tmp('gsd-5757-outside-');
+    t.after(() => cleanup(dirRoot));
+    t.after(() => cleanup(ignoreRoot));
+    t.after(() => cleanup(outside));
+    fs.symlinkSync(outside, path.join(dirRoot, '.gsd'), 'dir');
+    assert.match(sentinel(dirRoot).error, /sentinel directory is a symlink/);
+    const target = path.join(outside, 'target.txt');
+    fs.writeFileSync(target, 'precious\n');
+    fs.mkdirSync(path.join(ignoreRoot, '.gsd'));
+    fs.symlinkSync(target, path.join(ignoreRoot, '.gsd', '.gitignore'));
+    assert.match(sentinel(ignoreRoot).error, /sentinel ignore file is a symlink/);
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'precious\n');
+  });
 });

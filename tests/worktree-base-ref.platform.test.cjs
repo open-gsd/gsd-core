@@ -89,6 +89,9 @@ describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
     const result = observeHarnessForkFromHead({ cwd: root, headSha: head });
     assert.strictEqual(result.confirmed, true);
     assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'original');
+    // The planted link was replaced by a regular cache file, not followed.
+    const cacheFile = path.join(root, '.gsd', 'harness-fork-probe.json');
+    assert.strictEqual(fs.lstatSync(cacheFile).isFile(), true);
   });
 
   test('#5757: an existing user .gitignore without a catch-all keeps its rules and gains the probe rules once (case 4)', (t) => {

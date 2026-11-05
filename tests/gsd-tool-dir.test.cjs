@@ -27,7 +27,7 @@ const { splitLines } = require(
   path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'text-lines.cjs'),
 );
 
-const MARKER ='# gsd-core test owner';
+const MARKER = '# gsd-core test owner';
 const RULES = ['/thing.json', '/thing.json.tmp-*', '/.gitignore'];
 const OPTIONS = { marker: MARKER, rules: RULES };
 
@@ -88,7 +88,10 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
     t.after(() => cleanup(root));
     const ignorePath = path.join(root, '.gsd', '.gitignore');
     fs.mkdirSync(path.join(root, '.gsd'));
-    const lineArb = fc.string({ maxLength: 8 }).filter((s) => !/[\r\n]/.test(s) && s !== '*');
+    const randomLineArb = fc.string({ maxLength: 8 }).filter((s) => !/[\r\n]/.test(s) && s !== '*');
+    // Mix in the marker and rule lines themselves so partial-presence and
+    // marker-present paths are reached, not only the all-missing path.
+    const lineArb = fc.oneof(fc.constantFrom(MARKER, ...RULES), randomLineArb);
     const textArb = fc.tuple(fc.array(lineArb, { maxLength: 6 }), fc.boolean())
       .map(([lines, trailing]) => lines.join('\n') + (trailing && lines.length ? '\n' : ''));
     fc.assert(fc.property(textArb, (userText) => {
