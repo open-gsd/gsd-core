@@ -1325,6 +1325,9 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * Special means a target that, with links followed, is a character device or a FIFO, or one of
    * the descriptor aliases /dev/stdout, /dev/stderr, /dev/fd/N, /proc/self/fd/N; any other
    * regular file takes the atomic path, and block devices and sockets are always refused (ENXIO).
+   * A descriptor alias is never reopened by path: the bytes go to the descriptor number it names
+   * (1, 2, N) with fs.writeSync, backing off on EAGAIN (an inherited O_NONBLOCK) and coding EPIPE;
+   * this works where reopening fails (a Node child's stdio is a socketpair on Linux).
    * A FIFO needs a reader (ENXIO otherwise). Caveats: a shell append redirect (`>> file`) is
    * truncated by the in-place write of /dev/stdout exactly as the previous plain write did. On
    * Windows the /dev/* and /proc aliases do not exist; NUL and CON are character devices and are
@@ -1653,11 +1656,14 @@ function writeFifoNonBlocking(
   filePath: string,
   data: Buffer,
   wait: { sleep?: (ms: number) => void; maxWaitMs?: number } = {},
+  existingFd?: number,
 ): void {
   const sleep = wait.sleep ?? defaultSleep;
   // No bound by default: a slow existing reader is the user's own pipeline (`| less`).
   const maxWaitMs = wait.maxWaitMs ?? Infinity;
-  const fd = fs.openSync(filePath, fs.constants.O_WRONLY | (fs.constants.O_NONBLOCK ?? 0));
+  // A descriptor alias (/dev/stdout …) is written through the fd the process already holds —
+  // never reopened by path, which fails on a Linux socketpair stdio and loses O_APPEND.
+  const fd = existingFd ?? fs.openSync(filePath, fs.constants.O_WRONLY | (fs.constants.O_NONBLOCK ?? 0));
   try {
     let off = 0;
     let waited = 0;
@@ -1687,8 +1693,18 @@ function writeFifoNonBlocking(
       }
     }
   } finally {
-    try { fs.closeSync(fd); } catch { /* already closed */ }
+    if (existingFd === undefined) {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
   }
+}
+
+/** The descriptor number a process-own alias names (/dev/stdout -> 1 …), or null. */
+function descriptorAliasFd(resolvedTarget: string): number | null {
+  if (resolvedTarget === '/dev/stdout') return 1;
+  if (resolvedTarget === '/dev/stderr') return 2;
+  const m = /^\/(?:dev|proc\/self)\/fd\/(\d+)$/.exec(resolvedTarget);
+  return m ? Number(m[1]) : null;
 }
 
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
@@ -1712,6 +1728,11 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
     }
     if (special !== null && (special.isCharacterDevice() || special.isFIFO() || isDescriptorAlias)) {
+      const aliasFd = descriptorAliasFd(resolvedTarget);
+      if (aliasFd !== null) {
+        writeFifoNonBlocking(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait, aliasFd);
+        return;
+      }
       if (special.isFIFO()) {
         writeFifoNonBlocking(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
         return;
