@@ -1318,6 +1318,12 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * destination file. Absent, the whole document is normalized.
    */
   prior?: string;
+  /**
+   * The destination was chosen by the user (`--output /dev/stdout`): a character device, or a
+   * FIFO that has a reader, is written in place instead of refused with ENXIO. Pass it only from
+   * user-chosen-output callers; config and planning writes keep refusing special targets.
+   */
+  allowSpecialTarget?: boolean;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -1462,7 +1468,7 @@ function defaultTempSuffix(): string {
  * on; `O_NOFOLLOW` is added where the platform has it (absent on Windows). On EEXIST a new
  * suffix is drawn, up to EXCLUSIVE_TEMP_ATTEMPTS times, then the EEXIST is thrown. On
  * ENAMETOOLONG (a target whose name leaves no room for the default suffix) the suffix shrinks
- * to 4 random bytes of hex (retried once more) before the error is thrown. Any
+ * to 4 random bytes of hex, then to 2, before the error is thrown. Any
  * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
  *
  * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
@@ -1475,9 +1481,9 @@ export function openExclusiveTempSync(
 ): { fd: number; tmpPath: string } {
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
   let collision: unknown;
-  let shrink = 0; // 0 = nextSuffix, then 4 random hex bytes
+  let shrink = 0; // 0 = nextSuffix, 1 = 4 random bytes, 2 = 2 random bytes
   for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
-    const suffix = shrink === 0 ? nextSuffix() : randomBytes(4).toString('hex');
+    const suffix = shrink === 0 ? nextSuffix() : randomBytes(shrink === 1 ? 4 : 2).toString('hex');
     const tmpPath = `${basePath}.tmp.${suffix}`;
     try {
       return { fd: fs.openSync(tmpPath, flags, 0o666), tmpPath };
@@ -1628,6 +1634,28 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     prior = readPriorMarkdown(filePath, opts.encoding ?? 'utf-8');
   }
   const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
+  if (opts.allowSpecialTarget === true) {
+    // A user-chosen destination such as /dev/stdout: written in place, no temp file, no restore.
+    let special: fs.Stats | null = null;
+    try { special = fs.statSync(filePath); } catch { /* absent: the ordinary path below */ }
+    // /dev/stdout may also resolve to a regular file (`> out.txt`); anything under /dev/ is
+    // the process's own descriptor space and is written in place like any special target.
+    if (special !== null && (special.isCharacterDevice() || special.isFIFO() || filePath.startsWith('/dev/'))) {
+      // A FIFO is opened non-blocking, so with no reader the open fails ENXIO — the refusal.
+      const fd = fs.openSync(
+        filePath,
+        fs.constants.O_WRONLY
+          | (special.isFIFO() ? (fs.constants.O_NONBLOCK ?? 0) : 0)
+          | (special.isFile() ? fs.constants.O_TRUNC : 0),
+      );
+      try {
+        fs.writeFileSync(fd, normalized, encoding);
+      } finally {
+        try { fs.closeSync(fd); } catch { /* already closed */ }
+      }
+      return;
+    }
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
   // Step 1: write the sibling tmp file, created exclusively under an unpredictable name so a

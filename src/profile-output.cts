@@ -765,7 +765,7 @@ function cmdWriteProfile(cwd: string, options: CmdWriteProfileOptions, raw: bool
   }
 
   platformEnsureDir(path.dirname(outputPath));
-  platformWriteSync(outputPath, template);
+  platformWriteSync(outputPath, template, { allowSpecialTarget: true });
 
   const result = {
     profile_path: outputPath,
@@ -946,7 +946,7 @@ function cmdGenerateDevPreferences(cwd: string, options: CmdGenerateDevPreferenc
   }
 
   platformEnsureDir(path.dirname(outputPath));
-  platformWriteSync(outputPath, template);
+  platformWriteSync(outputPath, template, { allowSpecialTarget: true });
 
   const result = {
     command_path: outputPath,
@@ -1220,7 +1220,7 @@ function cmdGenerateClaudeMd(cwd: string, options: CmdGenerateClaudeMdOptions, r
     existingContent = sections.join('\n\n') + '\n';
     action = 'created';
     platformEnsureDir(path.dirname(outputPath));
-    platformWriteSync(outputPath, existingContent);
+    platformWriteSync(outputPath, existingContent, { allowSpecialTarget: true });
   } else if (!/<!-- GSD:[a-z]+-start/.test(existingContent) && !options.force) {
     // #1098: the target instruction file already exists and contains NO GSD
     // section markers — it is a hand-crafted CLAUDE.md/AGENTS.md, not a
@@ -1277,7 +1277,7 @@ function cmdGenerateClaudeMd(cwd: string, options: CmdGenerateClaudeMdOptions, r
       fileContent = fileContent.trimEnd() + '\n\n' + buildClaudeMdProfilePlaceholder(resolveRuntime(cwd)) + '\n';
     }
 
-    platformWriteSync(outputPath, fileContent);
+    platformWriteSync(outputPath, fileContent, { allowSpecialTarget: true });
   }
 
   const finalContent = safeReadFile(outputPath);

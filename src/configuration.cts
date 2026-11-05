@@ -339,8 +339,12 @@ function readConfigBounded(filePath: string): string {
   const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     const st = fstatSync(fd);
-    if (!st.isFile()) throw new Error(`${filePath} is not a regular file`);
-    if (st.size > CONFIG_READ_MAX_BYTES) throw new Error(`${filePath} exceeds ${CONFIG_READ_MAX_BYTES} bytes`);
+    if (!st.isFile()) {
+      throw Object.assign(new Error(`${filePath} is not a regular file`), { code: st.isDirectory() ? 'EISDIR' : 'ENXIO' });
+    }
+    if (st.size > CONFIG_READ_MAX_BYTES) {
+      throw Object.assign(new Error(`${filePath} exceeds ${CONFIG_READ_MAX_BYTES} bytes`), { code: 'EFBIG' });
+    }
     const buf = Buffer.allocUnsafe(st.size);
     let off = 0;
     while (off < st.size) {
