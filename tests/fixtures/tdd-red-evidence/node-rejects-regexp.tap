@@ -4,7 +4,7 @@ not ok 1 - rejects a malformed token
   ---
   duration_ms: 1.0686
   type: 'test'
-  location: 'D:\\AI\\open source\\5819-repro\\rejects-red.test.cjs:5:1'
+  location: 'C:\\work\\repro\\rejects-red.test.cjs:5:1'
   failureType: 'testCodeFailure'
   error: |-
     The input did not match the regular expression /rejected token/. Input:
@@ -17,14 +17,14 @@ not ok 1 - rejects a malformed token
   actual:
   error: 'boom: token accepted'
   stack: |-
-    TestContext.<anonymous> (D:\AI\open source\5819-repro\rejects-red.test.cjs:6:39)
+    TestContext.<anonymous> (C:\work\repro\rejects-red.test.cjs:6:39)
     Test.runInAsyncScope (node:async_hooks:227:14)
     Test.run (node:internal/test_runner/test:1382:25)
     Test.start (node:internal/test_runner/test:1242:17)
     startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
   operator: 'rejects'
   stack: |-
-    async TestContext.<anonymous> (D:\AI\open source\5819-repro\rejects-red.test.cjs:6:3)
+    async TestContext.<anonymous> (C:\work\repro\rejects-red.test.cjs:6:3)
     async Test.run (node:internal/test_runner/test:1389:7)
     async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
   ...

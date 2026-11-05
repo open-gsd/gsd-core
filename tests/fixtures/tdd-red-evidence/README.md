@@ -47,7 +47,10 @@ test('rejects a malformed token', () => {
 });
 ```
 
-  Command: `node --test --test-reporter=tap <file>.test.cjs` (exit 1 each).
+  Command: `node --test --test-reporter=tap <file>.test.cjs` (exit 1 each). The
+  capture machine's absolute source paths (`D:\AI\…`) were neutralized to
+  `C:\work\repro\…` (Windows-style, backslashes kept) in `location:` and stack
+  lines; names, line numbers and structure are the verbatim capture.
 
 ## Other formats
 

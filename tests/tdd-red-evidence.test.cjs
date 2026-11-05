@@ -1351,14 +1351,69 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
   });
 
   test('a repeated failureType key in quoted or single-line flow form is equally refused', () => {
+    // Review finding on the old fixture: the flow row appended block keys after the
+    // flow mapping, which is a YAML syntax error, so the row passed by failing the
+    // tolerant parse before the ambiguity check ever ran. The flow mapping is now the
+    // WHOLE body: a flow-mapping body has no block key lines to enumerate, so recovery
+    // refuses it structurally rather than guessing at its key set.
     for (const diag of [
       ["  'failureType': 'testTimeoutFailure'", "  'failureType': 'testCodeFailure'"],
-      // One flow-mapping body line repeating failureType: a line-anchored scan alone
-      // would miss it; the interruption signal stays ambiguous either way.
-      ["  {failureType: 'testTimeoutFailure', error: 'a', error: 'b', failureType: 'testCodeFailure'}"],
-      // Escape-spelled double-quoted key: YAML decodes "\x66" to 'f', so at parse level
-      // both keys are failureType and the first (interrupting) value must not be masked.
-      ['  "failureType": \'testTimeoutFailure\'', '  "' + String.fromCharCode(92) + 'x66ailureType": \'testCodeFailure\''],
+      ['  {failureType: \'testTimeoutFailure\', error: \'a\', error: \'b\', failureType: \'testCodeFailure\'}'],
+    ]) {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP(diag),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED', JSON.stringify(diag));
+      assert.ok(result.evidence.report_errors.includes('Malformed TAP'), JSON.stringify(diag));
+    }
+    // A flow body whose only duplicates are error/stack is refused the same way —
+    // fail-closed for a shape whose keys cannot be enumerated block-wise, never a
+    // partial recovery.
+    const flowOnly = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(["  {failureType: 'testCodeFailure', error: 'a', error: 'b'}"]),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(flowOnly.verdict, 'INVALID_RED');
+    assert.ok(flowOnly.evidence.report_errors.includes('Malformed TAP'));
+    // Independent-review finding on the parse-derived count: a flow body whose ONLY
+    // duplicate is failureType collapses to ONE distinct key under last-key-wins, so
+    // a single-segment count of distinct keys reads it as one write and would recover,
+    // masking the interrupting value. The strict per-segment parse must catch it.
+    for (const diag of [
+      ["  {failureType: 'testTimeoutFailure', failureType: 'testCodeFailure'}"],
+      ["  {failureType: 'testTimeoutFailure',", "    failureType: 'testCodeFailure'}"],
+      ['  {"failureType": \'testTimeoutFailure\', "' + String.fromCharCode(92) + 'U00000066ailureType": \'testCodeFailure\'}'],
+    ]) {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP(diag),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED', JSON.stringify(diag));
+      assert.ok(result.evidence.report_errors.includes('Malformed TAP'), JSON.stringify(diag));
+    }
+  });
+
+  test('a repeated failureType cannot be hidden behind any YAML key spelling (review finding)', () => {
+    // The ambiguity rule is decided by the YAML parser's decoded keys, not by a text
+    // scan: every spelling js-yaml resolves to failureType counts. The escape and
+    // explicit-key rows are spellings a text count demonstrably missed; the
+    // escaped-line-break row is defense in depth — js-yaml refuses a line-broken
+    // implicit key in the whole-body tolerant parse, and the segment parse refuses
+    // it again if it is ever spelled as an explicit key.
+    const BS = String.fromCharCode(92);
+    for (const diag of [
+      // 8-hex \U escape: js-yaml decodes \U00000066 to 'f'.
+      ['  "failureType": \'testTimeoutFailure\'', '  "' + BS + 'U00000066ailureType": \'testCodeFailure\''],
+      // Explicit key with a trailing comment: '? failureType # c' then ': value'.
+      ["  failureType: 'testTimeoutFailure'", '  ? failureType # c', "  : 'testCodeFailure'"],
+      // Double-quoted key split by an escaped line break (continuation deeper-indented).
+      ['  "failureType": \'testTimeoutFailure\'', '  "failure' + BS, '    Type": \'testCodeFailure\''],
+      // 4-hex \u escape (the decoded-count must cover it alongside \U).
+      ['  "failureType": \'testTimeoutFailure\'', '  "' + BS + 'u0066ailureType": \'testCodeFailure\''],
     ]) {
       const result = classifyRedEvidence(validRedInput({
         output: dupDiagTAP([...diag, "  error: 'first'", "  error: 'second'"]),
@@ -1368,6 +1423,26 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
       assert.equal(result.verdict, 'INVALID_RED', JSON.stringify(diag));
       assert.ok(result.evidence.report_errors.includes('Malformed TAP'), JSON.stringify(diag));
     }
+  });
+
+  test('failureType-looking text inside a diagnostic VALUE is not a key (review finding)', () => {
+    // A genuine RED whose assertion message mentions "failureType:" inside the error
+    // block scalar must still recover: the key set is the parser-decoded mapping keys,
+    // not every occurrence of the token in the body.
+    const diag = [
+      "  failureType: 'testCodeFailure'",
+      '  error: |-',
+      '    expected a failureType: testTimeoutFailure error, got none',
+      "  stack: 'frame one'",
+      "  stack: 'frame two'",
+    ];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(result.evidence.report_errors, []);
   });
 
   test('a single escape-spelled failureType key recovers like the plain form', () => {

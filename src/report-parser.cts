@@ -49,6 +49,59 @@ const INTERRUPTION_ISSUE = 'Test run interrupted by cancellation, hook failure, 
 class AnchorDetectedSignal extends Error {}
 
 /**
+ * Count how many top-level mapping keys of a diagnostic-block body decode to `failureType`
+ * (#5819 review: the key identity is decided by the YAML parser, never by scanning text).
+ * The body is split into one segment per top-level key line — the key line at the block's
+ * base indent plus every deeper line belonging to it (values, block scalars, nested maps,
+ * explicit-key `: value` lines, quoted-key continuations) — and each segment is parsed on
+ * its own: STRICTLY first (a segment that only parses with the duplicate-key relaxation —
+ * a flow mapping whose repeated entries collapse to one distinct key, a nested duplicate —
+ * carries more entries than distinct keys and the whole block is refused), then with the
+ * tolerant, anchor-refusing options, and the single distinct key of the result IS the
+ * decoded key. Spellings a text scan misses — `"\U00000066ailureType"`, an explicit
+ * `? failureType # c` — decode identically here, and `failureType:` inside a VALUE stays
+ * a value. Anything that is not a clean block mapping of single-key segments — a
+ * flow-mapping body, a scalar body, a segment that does not parse, content shallower
+ * than the base indent, a document marker — returns null: a key set the recovery cannot
+ * derive from the parse is an ambiguity it fails closed on.
+ */
+function countDecodedFailureTypeKeys(body: string, parseSegment: (segment: string) => unknown): number | null {
+  const segments: string[][] = [];
+  let base: number | null = null;
+  for (const line of body.split('\n')) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) {
+      if (segments.length > 0) segments[segments.length - 1].push(line);
+      continue;
+    }
+    const indent = line.length - line.trimStart().length;
+    if (base === null) base = indent;
+    if (indent < base) return null;
+    if (indent === base) {
+      if (/^(?:---|\.\.\.)\s*$/.test(line.trim())) return null;
+      segments.push([line]);
+    } else if (segments.length > 0) {
+      segments[segments.length - 1].push(line);
+    } else {
+      return null;
+    }
+  }
+  let writes = 0;
+  for (const segment of segments) {
+    let parsed: unknown;
+    try {
+      parsed = parseSegment(`${segment.join('\n')}\n`);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const keys = Object.keys(parsed);
+    if (keys.length !== 1) return null;
+    if (keys[0] === 'failureType') writes++;
+  }
+  return writes;
+}
+
+/**
  * #5819: node:test repeats `error` and `stack` in the diagnostic block of a failed
  * `assert.throws`/`assert.rejects` RegExp assertion, and the vendored tap-parser's YAML
  * rejects duplicate mapping keys, so the whole block comes back as non-TAP data (an
@@ -90,21 +143,16 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
   } catch (err) {
     if (!(err instanceof YAMLException) || !/duplicated mapping key/i.test(err.message)) return null;
   }
-  // Count `failureType` keys anywhere in the body — block form, quoted form and flow
-  // mapping positions included (the line-anchored scan missed a single-line
-  // `{failureType: a, failureType: b}` body): two occurrences anywhere make the
-  // interruption signal ambiguous, so the block is never recovered. A double-quoted
-  // key is unescaped before comparing, because YAML decodes `"\x66…"`/`"\u0066…"`
-  // to the same key the plain form spells and the ambiguity rule must not be
-  // spellable around (single-quoted and plain keys have no escape forms).
-  let failureTypeKeys = 0;
-  for (const _match of body.matchAll(/(?:^|[,\[{(\s])(?:'failureType'|failureType)\s*:/g)) failureTypeKeys++;
-  for (const match of body.matchAll(/(?:^|[,\[{(\s])"((?:\\.|[^"\\])*)"\s*:/g)) {
-    const key = (match[1] ?? '').replace(/\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4})/g, (escape) =>
-      String.fromCodePoint(parseInt(escape.slice(2), 16)));
-    if (key === 'failureType') failureTypeKeys++;
-  }
-  if (failureTypeKeys > 1) return null;
+  // The interruption signal must be unambiguous, and its identity is judged the same way
+  // the parser judges it: every top-level key is decoded by a strict-then-tolerant parse
+  // of its own segment (see countDecodedFailureTypeKeys). A body whose key set cannot be
+  // derived that way — flow mappings included — is refused whole rather than counted in
+  // text.
+  const failureTypeWrites = countDecodedFailureTypeKeys(body, (segment) => {
+    yamlLoad(segment, { schema: FAILSAFE_SCHEMA, ...refuseAnchors });
+    return yamlLoad(segment, { json: true, schema: FAILSAFE_SCHEMA, ...refuseAnchors });
+  });
+  if (failureTypeWrites === null || failureTypeWrites > 1) return null;
   return tolerant as Record<string, unknown>;
 }
 
