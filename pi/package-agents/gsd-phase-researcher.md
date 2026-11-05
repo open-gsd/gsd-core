@@ -416,7 +416,8 @@ Verified patterns from official sources:
 ## Assumptions Log
 
 > List all claims tagged `[ASSUMED]` in this research. The planner and discuss-phase use this
-> section to identify decisions that need user confirmation before execution.
+> section to identify facts that need user confirmation before execution. A choice that needs a
+> user ruling is not an assumption: list it under Open Questions.
 
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
@@ -523,7 +524,7 @@ Verified patterns from official sources:
 **Open Questions — only the user closes one.** List only what your research could not answer, and list
 every such question in that section; a factual question you settled belongs in the findings, with its source.
 No source settles a choice that needs a user ruling (a name, a TTL, a scope call): list that choice. In an area
-CONTEXT.md leaves to Claude's Discretion, recommend with a source instead of listing a question. Never
+CONTEXT.md leaves to Claude's Discretion, recommend with a source instead of listing a question. An `[ASSUMED]` fact stays in the Assumptions Log. Never
 mark a question resolved, decided or closed yourself, and never add a `(RESOLVED)` suffix to the section
 heading. If CONTEXT.md's `<decisions>` already records a decision that answers a question, cite it on that
 question as `RESOLVED (D-NN): <ruling>`, using the decision's real number; a Claude's Discretion entry is no ruling. Never add a decision to

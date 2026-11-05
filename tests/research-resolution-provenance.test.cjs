@@ -111,7 +111,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(collect, /a fact settled with a cited source/, 'research findings are not questions');
     assert.match(collect, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
     assert.match(collect, /Claude's Discretion area of CONTEXT\.md given a sourced recommendation/, 'a delegated area needs no ruling, and CONTEXT.md decides what is delegated');
-    assert.match(collect, /assumption or risk, unless it names such a pending answer or ruling/, 'an assumption counts when it needs an answer, not only a ruling');
+    assert.match(collect, /`\[ASSUMED\]` fact or risk naming no pending ruling/, 'an Assumptions Log fact is not a question; a pending ruling is, wherever it sits');
   });
 
   test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it and predates this run', () => {
@@ -234,6 +234,14 @@ describe('researcher never resolves its own questions (#5438)', () => {
   test('no part of the RESEARCH.md template carries a gate token a model could copy', () => {
     assert.match(fence().body, /\n## Open Questions\n/, 'the template must keep its Open Questions section');
     assert.doesNotMatch(fence().body, GATE_TOKEN);
+  });
+
+  test('the Assumptions Log holds facts, and a choice needing a ruling goes under Open Questions', () => {
+    const log = span(fence().body, '## Assumptions Log', /\n## /);
+    assert.match(log, /facts\s+that\s+need\s+user\s+confirmation/);
+    assert.match(log, /not\s+an\s+assumption:\s+list\s+it\s+under\s+Open\s+Questions/);
+    assert.doesNotMatch(log, /decisions\s+that\s+need\s+user\s+confirmation/, 'the log header must not call its rows pending decisions');
+    assert.match(fence().after, /`\[ASSUMED\]`\s+fact\s+stays\s+in\s+the\s+Assumptions\s+Log/);
   });
 
   test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
