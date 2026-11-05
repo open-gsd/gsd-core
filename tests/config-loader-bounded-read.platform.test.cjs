@@ -582,6 +582,32 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     assert.ok(r.stdout.includes('via-fd-1'), r.stdout);
   });
 
+  test('/dev/fd/5 (a descriptor beyond stdio) is not written through the descriptor alias', () => {
+    const fifo = path.join(tmpDir, 'fd5.fifo');
+    makeFifo(fifo);
+    const script = [
+      'const fs = require("node:fs");',
+      'const keep = fs.openSync(process.argv[2], fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);',
+      'const fd = fs.openSync(process.argv[2], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);',
+      'const calls = []; const realWrite = fs.writeSync;',
+      'fs.writeSync = (f, ...rest) => { calls.push(f); return realWrite(f, ...rest); };',
+      'let code = "ok";',
+      'try { require(process.argv[1]).platformWriteSync("/dev/fd/" + fd, "x", { allowSpecialTarget: true, verbatim: true }); }',
+      'catch (e) { code = e.code; }',
+      'process.stdout.write(JSON.stringify({ code, aliasWrite: calls.includes(fd), fd, keep }));',
+    ].join('\n');
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, fifo], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    const out = JSON.parse(r.stdout);
+    assert.ok(out.fd > 2, 'the test fd is beyond stdio');
+    assert.strictEqual(out.aliasWrite, false, 'a descriptor beyond stdio is never written via the alias path');
+  });
+
   test('profile-output --output /dev/null (a user-chosen device) is written', () => {
     fs.writeFileSync(path.join(tmpDir, 'analysis.json'), JSON.stringify({ data_source: 'x', dimensions: {} }));
     const script = [
