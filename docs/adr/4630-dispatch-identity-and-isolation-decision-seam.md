@@ -162,6 +162,19 @@ query naming neither a phase nor a plan has no keyed record to read: it reads th
 whatever scope that carries, so it can hold another orchestrator's degrade and run sequentially for
 the rest of that record's window. That is the safe direction, and it is bounded.
 
+The hold reads by scope and the guard reads by recency, so the two can disagree, in two known ways.
+A newer unscoped `harness-worktree` outranks a plan's `none` for the guard while that plan's own
+query stays held, so the guard demands the harness flag. A plan stored as sequential gets past that
+with its gate's forced re-record, which makes its record the newest again. Nothing atomic joins that
+write to the dispatch, so another unscoped write between them blocks the dispatch, which fails
+closed. A plan stored as `true` dispatches with the flag, and the guard allows it.
+
+A plan that decides `true` within ten minutes of its own sequential decision also stays held: its
+re-record is a plain query, which answers `none` and writes nothing. Unless a newer record applies,
+the guard still reads `none`, so the flagged dispatch runs in a worktree but one that omits the flag
+is allowed. Records carry no run identity, so the hold cannot tell an earlier run's degrade from
+this run's.
+
 Two windows apply, and they differ on purpose. The hold lapses ten minutes after `decided_at`. The
 guard's trust in a fresh record lasts ten minutes from `written_at`, and it also honours an aged
 `none` for its own phase for up to 24 hours (`AGED_NONE_MAX_MS`,
