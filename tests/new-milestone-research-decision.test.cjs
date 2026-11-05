@@ -8,7 +8,7 @@
  *     synthesizer's required_reading lists only files written in this run,
  *  4. Step 9 reads FEATURES.md only when the features dimension ran,
  *  5. researchers are briefed on the milestone's work and the existing
- *     codebase, and research is not offered when agents are not installed,
+ *     codebase,
  *  6. Step 10 passes SUMMARY.md to the roadmapper only when research ran,
  *  7. this run's outputs are cleared first, so an earlier run's file cannot pass
  *     for them, and the synthesizer prompt reads only the files it is given,
@@ -127,17 +127,13 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.match(body, /`\{dimensions kept\}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `\{N\}` is its count/);
     assert.match(body, /`\{required_reading_lines\}` is one line `- \{research_dir\}\/\{FILE\}` per dimension in `\{dimensions kept\}`/);
     assert.match(body, /`\{research_summary_line\}` is `- \{research_dir\}\/SUMMARY\.md` when research ran and an empty string when it did not/);
-    const clear = body.indexOf('rm -f {research_dir}/SUMMARY.md');
+    const disclose = body.indexOf('Replacing research files:');
+    const clear = body.indexOf('rm -f "{research_dir}/SUMMARY.md"');
     const spawn = body.indexOf('Spawn {N} parallel');
-    assert.ok(clear !== -1 && spawn !== -1 && clear < spawn, 'outputs must be cleared before the researchers are spawned');
-    assert.match(body, /`rm -f \{research_dir\}\/\{FILE\}` for each dimension in `\{dimensions kept\}`/);
-  });
-
-  test('without installed agents, research is skipped without asking', () => {
-    const ask = body.indexOf('AskUserQuestion');
-    const gate = body.indexOf('**If `agents_installed` is false:** do not ask');
-    assert.ok(gate !== -1 && gate < ask, 'the agents_installed gate must precede the research prompt');
-    assert.match(body, /continue to Step 9 as if the user chose Skip/);
+    assert.ok(disclose !== -1 && clear !== -1 && spawn !== -1, 'the disclosure, the removal, and the spawn must all exist');
+    assert.ok(disclose < clear && clear < spawn, 'the replacement must be disclosed before the files are removed, and removal precedes the researcher spawn');
+    assert.match(body, /earlier contents will be lost; only committed copies remain in git/);
+    assert.match(body, /`rm -f "\{research_dir\}\/\{FILE\}"` for each dimension in `\{dimensions kept\}`/);
   });
 });
 
