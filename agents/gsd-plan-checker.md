@@ -603,7 +603,7 @@ issue:
 The researcher writes RESEARCH.md, so its own resolution closes nothing. Only the user closes a question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
 
 **Process:**
-1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); a Claude's Discretion area of CONTEXT.md given a sourced recommendation; an assumption or risk, unless it names such a pending answer or ruling. None → PASS.
+1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); a Claude's Discretion area of CONTEXT.md given a sourced recommendation; an `[ASSUMED]` fact or risk naming no pending ruling. None → PASS.
 2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and was not added during this planning run, and one answers it.
 3. Every other question is a BLOCKER, however it is marked, in any case: no `D-NN`; a cited `D-NN` CONTEXT.md does not contain or holds outside `<decisions>`; only `D-NN`s that decide something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
 4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
