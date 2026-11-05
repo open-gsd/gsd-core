@@ -766,14 +766,6 @@ function readParenClose(str, i, ctx) {
   return at;
 }
 
-// The close paren counting finds, from inside a reader.
-function countedClose(str, i) {
-  closeByCount = true;
-  const at = findParenClose(str, i);
-  closeByCount = false;
-  return at;
-}
-
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early. Under
@@ -974,13 +966,13 @@ function scanCommandParenClose(str, i, ctx) {
     // A delimiter. Two `(` belong to the word before them and do not end it.
     if (ch === '(' && word !== null && !(top && top.st === 'pat')) {
       // `!(` where a command can start is `!` and a subshell with extglob
-      // off, and an extended-glob word with it on. The two can close at
-      // different parens and neither can be preferred without reading the
-      // other mode wrong, so this one group is closed by the counter this
-      // file had before, exactly as it was.
+      // off, bash's default outside an interactive shell, and an
+      // extended-glob word with it on. This reading takes the first: `!` is
+      // the pipeline's negation and the `(` is read again as a subshell. The
+      // second reading, a glob group closed by paren counting, is the one the
+      // counting scans make, and every span is scanned both ways.
       if (word.raw === '!' && !word.quoted && !cond && reservedOk('!')) {
-        word.quoted = true;
-        i = countedClose(str, i + 1) + 1;
+        endWord();
         continue;
       }
       // An extended-glob group: `?(` `*(` `+(` `@(` `!(` inside a word.
