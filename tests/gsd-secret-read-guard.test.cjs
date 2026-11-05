@@ -2423,13 +2423,30 @@ describe("regressions: #5255 — zsh's reading of $'…' (review round 6, Major 
 
     // bash runs `ls` after these (the PID, then a plain-quoted `x\`); zsh
     // stops at a quote that never closes ("unmatched '") and runs nothing.
-    // The zsh reading has no value to check, so the guard denies, as it does
-    // for every unterminated span.
-    for (const cmd of [R`echo $$'x\'; ls`, 'echo $\\\n$\'x\\\'; ls']) {
-      test(`zsh reading: denies ${JSON.stringify(cmd)} as ansi-c-unterminated (bash would allow it)`, () => {
-        assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
+    // Issue #5255 lists the first as its allow control: `$$'x'` is the PID and
+    // a plain quote, so zsh's reading denies nothing for want of a value. The
+    // same holds for a span it cannot decode, which zsh does not decode after
+    // an even run. The odd run keeps the deny: that span is `$'…'` to both.
+    for (const cmd of [
+      R`echo $$'x\'; ls`,
+      'echo $\\\n$\'x\\\'; ls',
+      R`echo $$$$'x\'; ls`,
+      R`echo $$'\ud800'; ls`,
+    ]) {
+      test(`allows ${JSON.stringify(cmd)}: an even run owns no span to deny`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
       });
     }
+
+    test('denies an odd run before a span that never closes, under either shell', () => {
+      const cmd = R`echo $$$'x\'; ls`;
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
+    });
+
+    test('still reports a read the bash reading sees after an even run', () => {
+      const cmd = R`echo $$'x\'; cat .env`;
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
 
     for (const cmd of [R`echo $$'x'; ls`, "cat <<$$'EF'\nbody\n$EF\nls", "cat <<$$'EF'\nbody\n$$EF\nls"]) {
       test(`allows ${JSON.stringify(cmd)}`, () => {

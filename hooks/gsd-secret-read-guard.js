@@ -1334,15 +1334,23 @@ function tokenize(str, reading) {
         if (opensAnsiC(run, str, reading)) {
           hasWord = true;
           if (quoted === 'none') quoted = 'single';
+          // A span that bash reads as a plain quote after a PID (an even run,
+          // under zsh's reading) never denies for want of a value: `$$'x'` is
+          // the PID and a plain quote, as #5255 requires, so the bash reading
+          // judges `echo $$'x\'; ls`. Secret reads in the span's word still
+          // count (it can still report them).
+          const noValue = (code) => {
+            if (unreadable === null && run.owned) unreadable = { code, text: quoteExcerpt(str, run.end - 1) };
+          };
           const end = ansiCQuoteEnd(str, run.end);
           if (end === -1) {
-            if (unreadable === null) unreadable = { code: 'ansi-c-unterminated', text: quoteExcerpt(str, run.end - 1) };
+            noValue('ansi-c-unterminated');
             i = str.length;
             continue;
           }
           const decoded = decodeAnsiC(str.slice(run.end + 1, end), reading);
           if (decoded === null) {
-            if (unreadable === null) unreadable = { code: 'ansi-c-undecodable', text: quoteExcerpt(str, run.end - 1) };
+            noValue('ansi-c-undecodable');
           } else {
             buf += decoded;
           }
