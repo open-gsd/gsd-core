@@ -1167,6 +1167,11 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
     // of these can shorten to the real `tdd.md`.
     'tdd.md_', 'tdd.md-', 'tdd.md_.', 'tdd.md._', 'tdd.md-)',
   ];
+  // The detail is echoed through sanitizeEcho, which drops C1 controls (U+0085) and zero-width
+  // characters (U+200B) so a hostile pointer cannot forge or hide output a reader trusts. Those two
+  // spellings are therefore reported as written minus the invisible character; every other spelling
+  // is echoed verbatim.
+  const ECHOED_AS = new Map([['tdd.md\u0085xx', 'tdd.mdxx'], ['tdd.md\u200Bxx', 'tdd.mdxx']]);
 
   test('#4930: every continuation spelling is reported once, as written', (t) => {
     const dir = createTempDir('gsd-4930-spellings-');
@@ -1188,10 +1193,14 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
       .map((x) => x.detail);
     assert.equal(details.length, CONTINUATIONS.length, JSON.stringify(details));
     for (const tail of CONTINUATIONS) {
+      const echoed = ECHOED_AS.get(tail) ?? tail;
       assert.ok(
-        details.some((d) => d.includes(`@~/.claude/gsd-core/references/${tail} does not name a reference whole`)),
+        details.some((d) => d.includes(`@~/.claude/gsd-core/references/${echoed} does not name a reference whole`)),
         `${JSON.stringify(tail)} must be reported as written: ${JSON.stringify(details)}`,
       );
+    }
+    for (const d of details) {
+      assert.ok(!['\u0085', '​'].some((ch) => d.includes(ch)), `an invisible character reached the echoed detail: ${JSON.stringify(d)}`);
     }
   });
 
