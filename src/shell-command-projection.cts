@@ -1717,7 +1717,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // A symlink to such an alias is refused too (the realpath is checked when the target exists),
   // and a non-canonical descriptor name (/dev/fd/01) is refused outright.
   const refuseFdAlias = (candidate: string): void => {
-    const m = /^\/(?:dev|proc\/(?:self|\d+))\/fd\/(\d+)$/.exec(candidate);
+    const m = /^\/(?:dev|proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?)\/fd\/(\d+)$/.exec(candidate);
     if (m === null) return;
     if (!/^(?:0|[1-9]\d*)$/.test(m[1]) || Number(m[1]) > 2) {
       throw Object.assign(
@@ -1738,6 +1738,15 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     let next: string;
     try { next = path.resolve(path.dirname(hop), fs.readlinkSync(hop)); } catch { break; }
     refuseFdAlias(next);
+    // The link may reach the alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7).
+    let viaDir: string | null = null;
+    try {
+      const realDir = fs.realpathSync(path.dirname(next));
+      if (/^(?:\/dev\/fd|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd)$/.test(realDir)) {
+        viaDir = `${realDir}/${path.basename(next)}`;
+      }
+    } catch { /* the directory is absent or unresolvable */ }
+    if (viaDir !== null) refuseFdAlias(viaDir); // outside the try: its ENXIO must propagate
     hop = next;
   }
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
