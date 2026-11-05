@@ -2717,8 +2717,11 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
   test("#5513's earlier tag reading ends a tag holding a $'…' span at any whitespace", () => {
     const { findSecretRead, findSecretReadUnderOtherReadings } = require(HOOK_PATH);
     // The word reading keeps the CR in the tag, so `E` ends no heredoc and the
-    // rest of the command is its body; the earlier reading ends the tag at the CR.
-    const cmd = "echo $(cat <<$'E'\r\nbody\nE\n); cat .env";
+    // rest of the command is its body; the earlier reading ends the tag at the
+    // CR. A nested rescan re-reads the tag through tokenize, so only at the
+    // nesting limit, where none runs, does the `$( )` reader decide. The `(`
+    // keeps bash 3.2's reading of the span from ending it at the body's `)`.
+    const cmd = "echo $(echo $(echo $(echo $(cat <<$'E'\r\n(\nE\n); cat .env";
     assert.equal(findSecretRead(cmd, 0), null, 'the word reading sees no read');
     assert.deepEqual(findSecretReadUnderOtherReadings(cmd), { code: 'secret-read', text: '.env' });
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
@@ -2742,9 +2745,10 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
   const token = fc.constantFrom(
     'cat ', 'cat .env', '.env', 'echo ', 'ls', ' ', ' ', '; ', '\n', ' | ', ' && ', '#',
     "'", '"', '`', '\\', '\\\n', '$', '$$', "$'", '$"', '${', '}', '$(', ')', '(', '((', '))', '$((', '$[', ']',
-    '<<', '<<E', 'E\n', '<(', ':-', '%', 'x', "\\'", 'eval ', 'bash -c ',
+    '<<', '<<E', 'E\n', '<(', ':-', '%', 'x', "\\'", 'eval ', 'bash -c ', '{', '<<}', '<<{', '<<-', '<<<',
+    "$'\\x41'", "$'.e\\x6ev'", '$${', '$$(', '$\\\n', 'case a in a) ', ';; esac',
   );
-  const command = fc.array(token, { minLength: 1, maxLength: 12 }).map((parts) => parts.join(''));
+  const command = fc.array(token, { minLength: 1, maxLength: 16 }).map((parts) => parts.join(''));
 
   test('property: every command the frozen scanner denies, the hook denies', () => {
     const { findSecretRead, findSecretReadUnderOtherReadings } = require(HOOK_PATH);
@@ -2754,9 +2758,9 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
       if (scan(base, cmd) === null) return true;
       denied++;
       return scan(head, cmd) !== null;
-    }), { seed: 5285, numRuns: 20000 });
+    }), { seed: 5285, numRuns: 30000 });
     // A soup that the frozen scanner never denied would pass this vacuously.
-    assert.ok(denied >= 1000, `the frozen scanner denied ${denied} of 20,000`);
+    assert.ok(denied >= 1000, `the frozen scanner denied ${denied} of 30,000`);
   });
 
   test('the frozen scanner is what it says: it misses the reads #5255 is about', () => {
