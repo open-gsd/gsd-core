@@ -1577,6 +1577,7 @@ function defaultTempSuffix(): string {
  * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
  * `mode` is the creation mode (default 0o666, narrowed by the umask): a caller replacing a
  * private file passes that file's mode so the temp is never briefly more readable than it.
+ * `label` names the temp (`<basePath>.<label>.<suffix>`; default `tmp`).
  *
  * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
  * process killed between the create and the rename leaves one beside its target, and a later
@@ -1586,13 +1587,14 @@ export function openExclusiveTempSync(
   basePath: string,
   nextSuffix: () => string = defaultTempSuffix,
   mode = 0o666,
+  label = 'tmp',
 ): { fd: number; tmpPath: string } {
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
   let collision: unknown;
   let shrink = 0; // 0 = nextSuffix, 1 = 4 random bytes, 2 = 2 random bytes
   for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
     const suffix = shrink === 0 ? nextSuffix() : randomBytes(shrink === 1 ? 4 : 2).toString('hex');
-    const tmpPath = `${basePath}.tmp.${suffix}`;
+    const tmpPath = `${basePath}.${label}.${suffix}`;
     try {
       return { fd: fs.openSync(tmpPath, flags, mode), tmpPath };
     } catch (err) {
@@ -2118,7 +2120,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   walkedParent ??= statParent();
   if (opts.atomic === true) {
-    publishViaTempFile(filePath + '.tmp.' + process.pid, filePath, normalized, encoding);
+    publishViaTempFile(filePath, normalized, encoding, 'tmp');
     return;
   }
 
@@ -2197,11 +2199,26 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
  * direct-write fallback. The temp file is removed on any failure — also a
  * write that created it and failed partway — and the error is thrown; the
  * destination is then exactly as it was.
+ *
+ * The temp file is `<filePath>.<label>.<pid>.<random>`, created exclusively
+ * (O_EXCL, O_NOFOLLOW) and written through that descriptor, so an entry planted
+ * at any name is never opened or followed (#5759). It takes an existing regular
+ * target's permission bits, so a private file is never briefly more readable.
  */
-function publishViaTempFile(tmpPath: string, filePath: string, data: string | Buffer, encoding?: BufferEncoding): void {
+function publishViaTempFile(filePath: string, data: string | Buffer, encoding: BufferEncoding | undefined, label: string): void {
+  let mode = 0o666;
   try {
-    if (typeof data === 'string') fs.writeFileSync(tmpPath, data, encoding);
-    else fs.writeFileSync(tmpPath, data);
+    const st = fs.lstatSync(filePath);
+    if (st.isFile()) mode = st.mode & 0o777;
+  } catch { /* absent: default mode */ }
+  const { fd, tmpPath } = openExclusiveTempSync(filePath, undefined, mode, label);
+  try {
+    try {
+      if (typeof data === 'string') fs.writeFileSync(fd, data, encoding);
+      else fs.writeFileSync(fd, data);
+    } finally {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
     const renameErr = atomicRenameWithRetry(tmpPath, filePath);
     if (renameErr !== null) throw renameErr;
   } catch (err) {
@@ -2232,23 +2249,63 @@ function removeFileWithRetry(filePath: string): void {
  * verbatim (no normalization) through a temp file and rename, or the file
  * removed when `bytes` is null (it did not exist). Throws on failure, leaving
  * no temp file behind; the destination is then as it was before the call.
+ *
+ * `unlinkOnlyIf` (with `bytes` null): the file is removed only while `lstat`
+ * still reports that device and inode — the file this run created. Any other
+ * entry at the path (a file another process put there since) is left in place
+ * and the call throws ESTALE. Absent is fine either way.
  */
-export function platformRestoreFileSync(filePath: string, bytes: Buffer | null): void {
+export function platformRestoreFileSync(
+  filePath: string,
+  bytes: Buffer | null,
+  opts: { unlinkOnlyIf?: { dev: number; ino: number } } = {},
+): void {
   if (bytes === null) {
+    const expected = opts.unlinkOnlyIf;
+    if (expected !== undefined) {
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(filePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      if (st.dev !== expected.dev || st.ino !== expected.ino) {
+        throw Object.assign(
+          new Error(`ESTALE: ${filePath} is no longer the file this run created — left in place`),
+          { code: 'ESTALE' },
+        );
+      }
+    }
     removeFileWithRetry(filePath);
     return;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  publishViaTempFile(filePath + '.restore.' + process.pid, filePath, bytes);
+  publishViaTempFile(filePath, bytes, undefined, 'restore');
 }
 
-/** #5831: a file's exact bytes, or null when it does not exist. Other read errors throw. */
+/**
+ * #5831: a file's exact bytes, or null when it does not exist. Opened
+ * non-blocking and checked with fstat, so a FIFO or device at the path fails
+ * with ENXIO instead of blocking the caller (who may hold a lock); a directory
+ * fails with EISDIR. There is no size cap: the caller needs every byte. Other
+ * read errors throw.
+ */
 export function platformReadBytesSync(filePath: string): Buffer | null {
+  let fd: number;
   try {
-    return fs.readFileSync(filePath);
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (st.isDirectory()) throw Object.assign(new Error(`EISDIR: ${filePath} is a directory`), { code: 'EISDIR' });
+    if (!st.isFile()) throw Object.assign(new Error(`ENXIO: ${filePath} is not a regular file — refusing to read it`), { code: 'ENXIO' });
+    return fs.readFileSync(fd);
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
   }
 }
 

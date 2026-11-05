@@ -7418,6 +7418,19 @@ function publishPrunedToArchive(
 ): ArchiveRollback | null {
   const stateBytes = platformReadBytesSync(statePath);
   if (stateBytes === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
+  // A symlinked or special archive is refused before it is read or snapshotted: reading through a
+  // link would snapshot another file's bytes, and the rollback would then replace the link itself.
+  try {
+    const archiveStat = fs.lstatSync(archivePath);
+    if (!archiveStat.isFile()) {
+      throw new Error(
+        `state prune: ${archivePath} is ${archiveStat.isSymbolicLink() ? 'a symlink' : 'not a regular file'}; ` +
+        'refusing to archive into it. STATE.md was not changed.',
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
   const archiveBytes = platformReadBytesSync(archivePath);
   const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
   const run = pruneRunMarker(sections, cutoff, keepRecent);
@@ -7430,6 +7443,14 @@ function publishPrunedToArchive(
     restoreArchiveAfterFailedWrite(archivePath, archiveBytes, writeErr);
     throw writeErr;
   }
+
+  // The file this run just created, by identity: a rollback to "absent" removes only that file,
+  // never one another process put at the path since.
+  let created: { dev: number; ino: number } | undefined;
+  try {
+    const st = fs.lstatSync(archivePath);
+    created = { dev: st.dev, ino: st.ino };
+  } catch { /* gone already: nothing to remove on rollback */ }
 
   return {
     restore(stateErr: unknown): void {
@@ -7461,7 +7482,8 @@ function publishPrunedToArchive(
         }
       }
       try {
-        platformRestoreFileSync(archivePath, archiveBytes);
+        if (archiveBytes !== null) platformRestoreFileSync(archivePath, archiveBytes);
+        else if (created !== undefined) platformRestoreFileSync(archivePath, null, { unlinkOnlyIf: created });
       } catch (restoreErr) {
         throw new AggregateError(
           [stateErr, restoreErr],
@@ -7484,7 +7506,14 @@ function publishPrunedToArchive(
 function restoreArchiveAfterFailedWrite(archivePath: string, archiveBytes: Buffer | null, writeErr: unknown): void {
   try {
     const now = platformReadBytesSync(archivePath);
-    const unchanged = now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
+    if (archiveBytes === null && now !== null) {
+      // No archive existed and this run's write failed, so whatever is there now is not ours.
+      throw Object.assign(
+        new Error(`ESTALE: ${archivePath} appeared during the failed write and was not created by this run — left in place`),
+        { code: 'ESTALE' },
+      );
+    }
+    const unchanged =now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
     if (!unchanged) platformRestoreFileSync(archivePath, archiveBytes);
   } catch (restoreErr) {
     throw new AggregateError(
