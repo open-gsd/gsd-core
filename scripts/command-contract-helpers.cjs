@@ -950,8 +950,12 @@ const REMEDIES = Object.freeze({
  * U+200B -> `\u{200B}`, tag characters (U+E0000-U+E007F) -> `\u{E0041}`. The
  * escape introducer itself, a literal backslash U+005C, is escaped as `\u{5C}`
  * so a spelled-out `\u{202E}` in the input can never print identically to a
- * real U+202E: distinct inputs keep distinct output. The output is therefore
- * free of every hostile character.
+ * real U+202E: whenever nothing was dropped (guaranteed when the output is at
+ * most 190 code points, since the longest escape `\u{10FFFF}` is 10), the
+ * output decodes back to exactly the input, so distinct inputs have distinct
+ * output. Once the cap truncates, the tail is dropped and inputs differing
+ * only beyond it can share one output (e.g. 195 `a` with and without a
+ * trailing U+0085). The output is free of every hostile character.
  *
  * Cap: 200 code points of OUTPUT (an escape counts as its own length, never
  * split), so the result is bounded however hostile the input; scanning stops

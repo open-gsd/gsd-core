@@ -605,6 +605,24 @@ describe('contract-drift: typed surface', () => {
     );
   });
 
+  test('sanitizeEcho round-trips: an untruncated output decodes back to the input (property)', () => {
+    const decode = (out) => out.replace(/\\u\{([0-9A-F]+)\}/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+    const special = [0x5c, 0x75, 0x7b, 0x7d, 0x30, 0x35, 0x41, 0x46, 0x202e, 0x85, 0x200b, 0xd800, 0xdfff, 0x1f600].map((cp) =>
+      String.fromCodePoint(cp),
+    );
+    const arb = fc
+      .array(fc.oneof(fc.constantFrom(...special), fc.string({ unit: 'binary', maxLength: 8 })), { maxLength: 120 })
+      .map((parts) => parts.join(''));
+    fc.assert(
+      fc.property(fc.oneof(arb, fc.string({ unit: 'binary', maxLength: 300 })), (s) => {
+        const out = sanitizeEcho(s);
+        // The longest escape (`\u{10FFFF}`) is 10 code points, so an output of at most 190 cannot have been truncated.
+        if (Array.from(out).length <= 190) assert.equal(decode(out), s);
+      }),
+      { numRuns: 1000 },
+    );
+  });
+
   test('sanitizeEcho also escapes C1 controls, line/paragraph separators, zero-width and bidi controls', () => {
     const ranges = [
       [0x80, 0x9f], // C1, incl. 8-bit CSI U+009B
@@ -1212,7 +1230,8 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
   ];
   // The detail is echoed through sanitizeEcho, which ESCAPES C1 controls (U+0085) and zero-width
   // characters (U+200B) as `\u{X}` so a hostile pointer cannot forge or hide output a reader
-  // trusts, yet the spelling stays traceable as written. Every other spelling is echoed verbatim.
+  // trusts, yet the spelling stays traceable as written. A literal backslash is escaped too
+  // (`\u{5C}`). Every other spelling is echoed verbatim.
   // BS is a literal backslash built from its code point.
   const BS = String.fromCharCode(0x5c);
   const ECHOED_AS = new Map([
@@ -1248,7 +1267,7 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
       );
     }
     for (const d of details) {
-      assert.ok(!['\u0085', String.fromCodePoint(0x200b)].some((ch) => d.includes(ch)),`an invisible character reached the echoed detail: ${JSON.stringify(d)}`);
+      assert.ok(!['\u0085', String.fromCodePoint(0x200b)].some((ch) => d.includes(ch)), `an invisible character reached the echoed detail: ${JSON.stringify(d)}`);
     }
   });
 
