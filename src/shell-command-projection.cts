@@ -1717,7 +1717,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // A symlink to such an alias is refused too (the realpath is checked when the target exists),
   // and a non-canonical descriptor name (/dev/fd/01) is refused outright.
   const refuseFdAlias = (candidate: string): void => {
-    const m = /^\/(?:dev|proc\/self)\/fd\/(\d+)$/.exec(candidate);
+    const m = /^\/(?:dev|proc\/(?:self|\d+))\/fd\/(\d+)$/.exec(candidate);
     if (m === null) return;
     if (!/^(?:0|[1-9]\d*)$/.test(m[1]) || Number(m[1]) > 2) {
       throw Object.assign(
@@ -1727,9 +1727,19 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     }
   };
   refuseFdAlias(path.resolve(filePath));
-  let realTarget: string | null = null;
-  try { realTarget = fs.realpathSync(filePath); } catch { /* absent target: nothing to resolve */ }
-  if (realTarget !== null) refuseFdAlias(realTarget);
+  // Only a symlink can hide an alias, so ordinary writes pay nothing. realpath is not used: on
+  // Linux it resolves /dev/fd/N through /proc to pipe:[..] or the file, losing the alias. Each hop
+  // is read and resolved against its own directory, bounded at 40 hops.
+  let hop = path.resolve(filePath);
+  for (let hops = 0; hops < 40; hops++) {
+    let isLink = false;
+    try { isLink = fs.lstatSync(hop).isSymbolicLink(); } catch { /* absent: nothing to follow */ }
+    if (!isLink) break;
+    let next: string;
+    try { next = path.resolve(path.dirname(hop), fs.readlinkSync(hop)); } catch { break; }
+    refuseFdAlias(next);
+    hop = next;
+  }
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
   if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
