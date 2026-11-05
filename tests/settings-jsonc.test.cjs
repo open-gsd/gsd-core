@@ -472,10 +472,10 @@ describe('writeSettings on a symlinked settings file (#5037)', () => {
 
   const PRIOR = JSON.stringify({ env: { MY_TOKEN: 'keep-me' } }, null, 2) + '\n';
   const NEXT = { hooks: { SessionStart: [] }, env: { MY_TOKEN: 'keep-me' } };
-  // The symlink refusal is a plain Error with no code, while a filesystem
-  // error (from realpath or the rename) always carries one, so this tells the
-  // refusal apart from an fs failure without matching any text.
-  const isRefusal = (err) => err instanceof Error && err.code === undefined;
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+  // Each symlink refusal carries its own code, so a test names the one it
+  // expects and fails if a different refusal, or any other error, is thrown.
+  const refusedWith = (code) => (err) => err instanceof Error && err.code === code;
 
   let savedOptIn;
 
@@ -522,7 +522,7 @@ describe('writeSettings on a symlinked settings file (#5037)', () => {
     }
     const { configDir, dotfilesDir, settingsPath, targetPath } = layout;
 
-    assert.throws(() => writeSettings(settingsPath, NEXT), isRefusal);
+    assert.throws(() => writeSettings(settingsPath, NEXT), refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED));
 
     assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
     assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
@@ -564,7 +564,8 @@ describe('writeSettings on a symlinked settings file (#5037)', () => {
       }
       const { settingsPath, targetPath } = layout;
 
-      assert.throws(() => writeSettings(settingsPath, NEXT), isRefusal);
+      // A missing target either way: asking for the opt-in would not help.
+      assert.throws(() => writeSettings(settingsPath, NEXT), refusedWith(SYMLINKED_LEAF_REFUSAL.TARGET_MISSING));
 
       assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'the dangling link must survive');
       assert.strictEqual(fs.existsSync(targetPath), false, 'nothing may be created at the missing target');
@@ -596,7 +597,7 @@ describe('writeSettings on a symlinked settings file (#5037)', () => {
     }
     const { configDir, settingsPath, targetPath } = layout;
 
-    assert.throws(() => configureAntigravityPermissions(true, configDir), isRefusal);
+    assert.throws(() => configureAntigravityPermissions(true, configDir), refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED));
 
     assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
     assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), PRIOR, 'the link target must be byte-for-byte unchanged');
