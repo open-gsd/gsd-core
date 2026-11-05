@@ -21,7 +21,7 @@ Routes to the pause-work workflow which handles:
 - Current phase detection from recent files
 - Complete state gathering (position, completed work, remaining work, decisions, blockers)
 - Handoff file creation with all context sections
-- Git commit as WIP
+- Git commit handoff
 - Resume instructions
 </objective>
 

@@ -6,7 +6,7 @@
 //     what the runtime loads, so asserting on the text asserts the deployed
 //     contract. Same category tests/verifier-behavior-unverified.test.cjs uses
 //     for the sibling #966 axis.
-//   docs-parity — the single docs/AGENTS.md assertion is not runtime-loaded
+//   docs-parity — the single docs/reference/agents.md assertion is not runtime-loaded
 //     text; it holds human documentation in sync with the shipped contract,
 //     which has no runtime enumeration API. Claiming the first category for it
 //     would overstate what that category covers.
@@ -51,7 +51,7 @@ const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf-8');
 
 const verifier = read('agents', 'gsd-verifier.md');
 const template = read('gsd-core', 'templates', 'verification-report.md');
-const agentsDoc = read('docs', 'AGENTS.md');
+const agentsDoc = read('docs', 'reference', 'agents.md');
 const verifyPhase = read('gsd-core', 'references', 'verifier-phase-gates.md');
 
 const QUALIFIER = '✓ VERIFIED (coincidental-reliance)';
@@ -283,7 +283,7 @@ describe('#1955: cross-surface parity (agent, template, verifier gate reference)
     );
   });
 
-  test('docs/AGENTS.md documents the coincidental-reliance advisory', () => {
+  test('docs/reference/agents.md documents the coincidental-reliance advisory', () => {
     assert.match(agentsDoc, /coincidental-reliance/);
   });
 });

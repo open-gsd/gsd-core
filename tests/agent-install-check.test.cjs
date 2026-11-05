@@ -1504,3 +1504,99 @@ describe('checkCodexSandboxPosture (#3897 rung 3 — not yet implemented, RED un
 // coverage documented in this file's own header comment ("missing dir →
 // agents_installed:false, missing_agents = all expected") and exercised above.
 // It must stay green; nothing in this rung touches that path.
+
+// ─── #5496: the canonical agent-source directory in every install layout ──────────────────────
+//
+// The sandbox posture derives each role's expected `sandbox_mode` from the CANONICAL agent
+// definitions (the YAML `tools:` declaration). The compiled module sits at <root>/gsd-core/bin/lib,
+// so <root> is three parents up. In the repository and the npm package the canonical sources are
+// <root>/agents. In an installed config dir <root>/agents holds the CONVERTED runtime copies (no
+// `tools:`), and the canonical sources are <root>/gsd-core/agents.
+describe('canonicalAgentSourceDir (#5496)', () => {
+  let root;
+  beforeEach(() => { root = createTempDir('gsd-5496-layout-'); });
+  afterEach(() => { cleanup(root); });
+
+  const dirWithAgent = (rel) => {
+    const dir = path.join(root, rel);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'gsd-executor.md'), '---\nname: gsd-executor\ntools: Read, Write\n---\n');
+    return dir;
+  };
+
+  test('the repository and npm-package layouts resolve <root>/agents', () => {
+    const agents = dirWithAgent('agents');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('the installed layout resolves the nested canonical dir, not the converted copies beside it', () => {
+    dirWithAgent('agents'); // converted runtime copies
+    const nested = dirWithAgent(path.join('gsd-core', 'agents'));
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), nested);
+  });
+
+  test('a nested dir with no agent sources is not canonical', () => {
+    const agents = dirWithAgent('agents');
+    fs.mkdirSync(path.join(root, 'gsd-core', 'agents'), { recursive: true });
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a nested dir holding only compact variants is not canonical', () => {
+    const agents = dirWithAgent('agents');
+    const nested = path.join(root, 'gsd-core', 'agents');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'gsd-executor.compact.md'), 'x');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  // #5636: "holds agent sources" means a recognized agent file (`gsd-<name>.md`, not a `.compact.md`
+  // variant), not any markdown file. A stray README in the nested dir must not hide the real agents.
+  const nestedWith = (...names) => {
+    const nested = path.join(root, 'gsd-core', 'agents');
+    fs.mkdirSync(nested, { recursive: true });
+    for (const name of names) fs.writeFileSync(path.join(nested, name), 'x');
+    return nested;
+  };
+
+  test('a nested dir holding only a README is not canonical (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    nestedWith('README.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a README beside a gsd-*.md does not stop the nested dir winning (#5636)', () => {
+    dirWithAgent('agents');
+    const nested = nestedWith('README.md', 'gsd-executor.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), nested);
+  });
+
+  test('a nested dir holding only non-agent markdown is not canonical (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    nestedWith('notes.md', 'AGENTS.md', 'executor.md', 'gsd-.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a nested dir holding a README and only compact variants is not canonical (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    nestedWith('README.md', 'gsd-executor.compact.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a compact variant beside a real agent does not disqualify the nested dir (#5636)', () => {
+    dirWithAgent('agents');
+    const nested = nestedWith('gsd-executor.compact.md', 'gsd-planner.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), nested);
+  });
+
+  test('a nested path that is a file, not a directory, falls back to the root-level path (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    fs.mkdirSync(path.join(root, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'gsd-core', 'agents'), 'not a directory');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('with neither present it still returns the root-level path (the caller reports nothing found)', () => {
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), path.join(root, 'agents'));
+  });
+});
+

@@ -218,6 +218,19 @@ describe('local adapter — happy path', () => {
     assert.strictEqual(result.source, capDir);
   });
 
+  test('#5017: a blank GSD_HOME falls back to the home directory instead of staging under a relative path', async (t) => {
+    const home = createTempDir('gsd-5017-home-');
+    t.after(() => cleanup(home));
+    const keys = ['HOME', 'USERPROFILE', 'GSD_HOME'];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    t.after(() => { for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } });
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.GSD_HOME = '';
+    const result = await resolveCapabilitySource(capDir, { hostVersion: '1.5.0' });
+    assert.strictEqual(result.stagedDir, path.join(home, '.gsd', 'capabilities', 'test-cap-local'));
+  });
+
   test('staging creates the capability under <gsdHome>/.gsd/capabilities/<id>/', async () => {
     const result = await resolveCapabilitySource(capDir, { gsdHome, hostVersion: '1.5.0' });
     const expectedDir = path.join(gsdHome, '.gsd', 'capabilities', 'test-cap-local');

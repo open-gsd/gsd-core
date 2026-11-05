@@ -211,11 +211,11 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
  * that shape resolves to "not present".
  */
-function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]]): ScopedConfigValue {
+function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd), 'config.json'), keyPath);
+    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
     if (scoped.present) return scoped;
-    if (resolveEnvWorkstream() !== null) {
+    if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
       return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
     }
   } catch {
@@ -705,6 +705,24 @@ function findContextMdIn(
   }
 }
 
+/**
+ * Is `name` the phase's requirements SPEC (#5629)? A plain `NN-SPEC.md`: the `-AI-SPEC.md` (AI design
+ * contract) and `-UI-SPEC.md` (UI design contract) variants have other purposes and never lock requirements.
+ * The one definition behind the init payloads' `has_spec` / `spec_path`, the discuss and plan-phase workflows
+ * (which read those fields) and the context-drift gate, so they cannot disagree about which file is "the SPEC".
+ */
+function isPhaseSpecFile(name: string): boolean {
+  return name.endsWith('-SPEC.md') && !name.endsWith('-AI-SPEC.md') && !name.endsWith('-UI-SPEC.md');
+}
+
+/**
+ * The phase SPEC in an already-read directory listing, or `null`. The lexically first match, so the answer
+ * does not depend on the filesystem's readdir order. The caller's array is not reordered.
+ */
+function findPhaseSpecIn(files: readonly string[]): string | null {
+  return files.filter(isPhaseSpecFile).sort()[0] ?? null;
+}
+
 export = {
   worktreesOptedOut,
   readScopedConfigValue,
@@ -730,6 +748,8 @@ export = {
   diagnoseUnresolvedActiveWorkstream,
   describeUnresolvedWorkstreamReason,
   findContextMdIn,
+  isPhaseSpecFile,
+  findPhaseSpecIn,
   // Test seam (audit M1): inject a deterministic isPidAlive so the liveness-gated
   // steal decision is exercised without real pids. Mirrors capability-lock.cts.
   _setLockProbes(probes: Partial<{ isPidAlive: (pid: number) => boolean }>): void {

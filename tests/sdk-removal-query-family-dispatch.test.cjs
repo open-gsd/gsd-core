@@ -91,6 +91,8 @@ describe('SDK-removal CJS query family dispatch', () => {
       '- **D-02:** Keep verification warnings visible when decisions are missing.',
       '</decisions>',
     ].join('\n'));
+    // A plan that does not cite D-02: a phase dir with no plan or summary is a caller error (#4939).
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n\nNothing here cites the decision.\n');
 
     const result = runGsdTools(['query', 'check.decision-coverage-verify', phaseDir, contextPath], tmpDir);
     assert.strictEqual(result.success, true, result.error);

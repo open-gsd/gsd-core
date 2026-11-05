@@ -115,10 +115,14 @@ set. Only the identifier moved, and only because GSD has had no Gemini runtime s
 (Google sunset Gemini CLI on 2026-06-18, removal shipped 1.8.0). The sole consumer was, and
 remains, `convertClaudeAgentToAntigravityAgent`.
 
-The mapped **values** are untouched and must stay so — `read_file`, `write_file`, `replace`,
-`run_shell_command`, `glob`, `search_file_content`, `google_web_search`, `web_fetch`,
-`write_todos` are Gemini's built-in tool dialect, which Antigravity genuinely speaks. That
-dialect is Google's contract; the identifier was GSD's own choice. `ConverterName` (ADR-1016's
+The mapped **values** were untouched by the rename. They began as Gemini's built-in tool
+dialect (`read_file`, `write_file`, `replace`, `run_shell_command`, `glob`,
+`search_file_content`, `google_web_search`, `web_fetch`, `write_todos`). That dialect is
+Google's contract; the identifier was GSD's own choice. Later work moved the table to the
+names Antigravity registers: #4705 to Antigravity-native names, and #5447 to the exact set
+agy 1.3.5 accepts (`write_to_file`, `find_by_name`, `search_web`, `read_url_content`), with
+`TodoWrite` dropped because agy registers no todo tool. An agent whose `tools:` list holds a
+name agy does not register does not start, so the table is a runtime contract, not a style. `ConverterName` (ADR-1016's
 closed enum, and `VALID_CONVERTER_NAMES` in `gsd-core/bin/lib/capability-validator.cjs`) is
 **not** affected: it admits only `convertClaude{Command,Agent}To*` names, and neither renamed
 symbol was ever a member, so no capability descriptor's `converter` field changes.

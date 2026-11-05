@@ -1917,9 +1917,12 @@ test('finding-2: an OVERSIZED lock body is treated as unparseable (no pid) and N
 });
 
 // Revert-fails: drop the startTime field from the lock body written by acquireLock → the body has no
-// `startTime` key, so this assertion (startTime present + equals the cached self start-time when
-// obtainable, else null) fails on the missing key.
-test('finding-1: acquireLock records hostname + pid + token + startTime in the lockfile body', () => {
+// `startTime` key, so this assertion (startTime present + equals the start-time the injected probe
+// reported for this process) fails on the missing key.
+test('finding-1: acquireLock records hostname + pid + token + startTime in the lockfile body', (t) => {
+  // The start time comes from the injectable probe, never a live one: on Windows the live probe is a
+  // PowerShell launch whose cold start can time out under load, which made this test (and `next`) red.
+  withLockProbes(t, { alive: true, startTime: 'START-SELF' });
   const dir = runtime();
   const handle = lifecycle.acquireLock(dir);
   assert.ok(handle, 'acquireLock must succeed on a fresh dir');
@@ -1930,13 +1933,47 @@ test('finding-1: acquireLock records hostname + pid + token + startTime in the l
   assert.strictEqual(parsed.pid, process.pid, 'lock body must record the pid');
   assert.strictEqual(typeof parsed.token, 'string', 'lock body must record the owner token');
   assert.strictEqual(parsed.token, handle.token, 'the recorded token must equal the handle token');
-  // startTime must be PRESENT as a key (string when obtainable on this OS, null otherwise) — and must
-  // equal what getProcessStartTime reports for THIS process (the cached self start-time).
+  // startTime must be PRESENT as a key and must be exactly what the probe reported for THIS process.
   assert.ok('startTime' in parsed, 'lock body must record a startTime key');
-  const selfStart = lifecycle.getProcessStartTime(process.pid);
-  assert.strictEqual(parsed.startTime, selfStart === null ? null : selfStart,
-    'recorded startTime must equal this process\'s observed start-time');
+  assert.strictEqual(parsed.startTime, 'START-SELF',
+    'recorded startTime must be the start-time the (injected) probe reported for this process');
   lifecycle.releaseLock(handle);
+});
+
+test('finding-1: an unobtainable self start-time is recorded as null (the key stays present)', (t) => {
+  withLockProbes(t, { alive: true, startTime: null });
+  const dir = runtime();
+  const handle = lifecycle.acquireLock(dir);
+  assert.ok(handle, 'acquireLock must succeed even when the start-time cannot be read');
+  const parsed = JSON.parse(fs.readFileSync(handle.path, 'utf8'));
+  assert.ok('startTime' in parsed, 'lock body must record a startTime key');
+  assert.strictEqual(parsed.startTime, null, 'an unobtainable start-time is recorded as null, not an error');
+  lifecycle.releaseLock(handle);
+});
+
+// The default (non-injected) path still records this process's real start-time. POSIX only: there the
+// probe is a /proc read or `ps`, not the PowerShell launch whose cold start made the old form of this
+// assertion depend on timing on Windows.
+test('finding-1: with the real probe, acquireLock records a non-null start-time on POSIX', { skip: process.platform === 'win32' }, () => {
+  lifecycle._resetLockProbes();
+  const handle = lifecycle.acquireLock(runtime());
+  assert.ok(handle, 'acquireLock must succeed on a fresh dir');
+  const parsed = JSON.parse(fs.readFileSync(handle.path, 'utf8'));
+  assert.strictEqual(typeof parsed.startTime, 'string', 'the real probe must yield a start-time string');
+  assert.ok(parsed.startTime.length > 0);
+  lifecycle.releaseLock(handle);
+});
+
+test('finding-1: replacing the probe forgets a start-time cached from the previous one', (t) => {
+  withLockProbes(t, { alive: true, startTime: 'FIRST' });
+  const first = lifecycle.acquireLock(runtime());
+  assert.strictEqual(JSON.parse(fs.readFileSync(first.path, 'utf8')).startTime, 'FIRST');
+  lifecycle.releaseLock(first);
+  lifecycle._setLockProbes({ getProcessStartTime: () => 'SECOND' });
+  const second = lifecycle.acquireLock(runtime());
+  assert.strictEqual(JSON.parse(fs.readFileSync(second.path, 'utf8')).startTime, 'SECOND',
+    'the cached self start-time must not outlive the probe it came from');
+  lifecycle.releaseLock(second);
 });
 
 // ---------------------------------------------------------------------------

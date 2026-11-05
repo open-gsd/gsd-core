@@ -194,6 +194,13 @@ describe('gen-health-docs.cjs row content (representative codes)', () => {
     assert.match(row, /Yes \(`--backfill`\)/);
   });
 
+  test('W030 renders the known-legacy-statuses Repairable override, not a bare "Yes" (#5291)', () => {
+    const region = renderErrorCodesRegion(rules);
+    const row = region.split('\n').find((line) => line.startsWith('| W030 |'));
+    assert.ok(row);
+    assert.match(row, /Yes \(known legacy statuses only\)/);
+  });
+
   test('W025 (workflow-layer diagnostic, not a Rule) is absent from the generated table', () => {
     const region = renderErrorCodesRegion(rules);
     assert.ok(
@@ -216,12 +223,12 @@ describe('gen-health-docs.cjs row content (representative codes)', () => {
     assert.ok(lastW < firstI, 'every W-code must sort before every I-code');
   });
 
-  test('renderRepairActionsRegion lists all 6 real repair actions, including the previously-undocumented addAiIntegrationPhaseKey', () => {
+  test('renderRepairActionsRegion lists all 7 real repair actions, including the previously-undocumented addAiIntegrationPhaseKey', () => {
     const region = renderRepairActionsRegion();
     for (const action of REMEDY_ACTION_ORDER) {
       assert.ok(region.includes(`| ${action} |`), `missing repair action row: ${action}`);
     }
-    assert.equal(REMEDY_ACTION_ORDER.length, 6);
+    assert.equal(REMEDY_ACTION_ORDER.length, 7);
     assert.ok(region.includes('addAiIntegrationPhaseKey'), '#3309: this action was "live in code, missing from docs"');
   });
 });

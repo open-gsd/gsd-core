@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "query",
+    "check.decision-coverage-verify",
+    ".planning/phases/01-decisions/ctxdir",
+    ".planning/phases/01-decisions/CONTEXT.md"
+  ],
+  "fixture": "dc",
+  "stdout": "{\n  \"skipped\": false,\n  \"blocking\": false,\n  \"reason\": \"phase directory holds no plans\",\n  \"total\": null,\n  \"honored\": null,\n  \"not_honored\": [],\n  \"message\": \"Decision coverage verify (warning): the phase directory \\\".planning/phases/01-decisions/ctxdir\\\" holds no PLAN or SUMMARY files, so nothing was scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.\"\n}",
+  "stderr": "",
+  "exitCode": 0
+}

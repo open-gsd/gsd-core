@@ -6,8 +6,9 @@
  * Mirrors tests/opencode-imperative-reference.test.cjs's structure (Host-
  * Integration axes classification/negotiation + the Context7-verified
  * upgrades) for pi's three additive upgrades:
- *   1. EXTENSION_EVENT_SURFACES.pi — the full ~30-event ExtensionAPI surface
- *      (was a single-event ['tool_call'] placeholder).
+ *   1. EXTENSION_EVENT_SURFACES.pi — the full ExtensionAPI event surface
+ *      (was a single-event ['tool_call'] placeholder; 30 events in #2102, the
+ *      41 pi 1.3.0 declares since #5557).
  *   2. Event bindings — pi/gsd.cjs actually binds session_start,
  *      before_agent_start, session_before_compact (+ tool_call) via pi.on(),
  *      not just declaring the surface in host-integration.cts.
@@ -54,7 +55,19 @@ function mockPi() {
   };
 }
 
-// -- (1) EXTENSION_EVENT_SURFACES.pi has all 30 events -----------------------
+// -- (1) EXTENSION_EVENT_SURFACES.pi has all 41 pi 1.3.0 events (#5557) -------
+//
+// Source of truth: the `on(event: "...", ...)` overloads in pi 1.3.0's
+// @earendil-works/pi-coding-agent dist/core/extensions/types.d.ts (the host's
+// own declarations; pi.dev's extensions page lists a lossy subset). The 30
+// events #2102 declared are a strict subset; the 11 below were added since.
+
+const PI_130_ADDED_EVENTS = [
+  'agent_before_settle', 'agent_settled', 'before_provider_headers',
+  'cache_warming_decision', 'context_with_system', 'mcp_servers_change',
+  'provider_stream_event', 'session_compact_failed', 'ui_prompt_end',
+  'ui_prompt_start', 'user_bash',
+];
 
 const EXPECTED_PI_EVENTS = [
   'session_start', 'project_trust', 'resources_discover', 'input',
@@ -65,16 +78,66 @@ const EXPECTED_PI_EVENTS = [
   'session_before_switch', 'session_shutdown', 'session_before_fork',
   'session_info_changed', 'session_before_compact', 'session_compact',
   'session_before_tree', 'session_tree', 'thinking_level_select', 'model_select',
+  ...PI_130_ADDED_EVENTS,
 ];
 
-test('pi extension-event surface declares all 30 documented ExtensionAPI events (#2102)', () => {
+test('pi extension-event surface declares exactly the 41 pi 1.3.0 ExtensionAPI events (#5557)', () => {
   const surface = extensionEventSurfaceFor('pi');
   assert.ok(surface, 'pi is a consumed extensionEvents dialect');
-  assert.equal(surface.length, 30, `expected exactly 30 events, got ${surface.length}`);
+  assert.equal(surface.length, 41, `expected exactly 41 events, got ${surface.length}`);
+  assert.equal(new Set(surface).size, surface.length, 'no duplicate events');
   for (const ev of EXPECTED_PI_EVENTS) {
     assert.ok(surface.includes(ev), `expected pi extension-event surface to include "${ev}"`);
   }
   assert.deepEqual([...surface].sort(), [...EXPECTED_PI_EVENTS].sort());
+});
+
+test('every event gsdPiExtension binds is declared in the pi extension-event surface (#5557)', () => {
+  const pi = mockPi();
+  gsdPiExtension(pi);
+  const surface = extensionEventSurfaceFor('pi');
+  const bound = Object.keys(pi._recorded.events);
+  assert.ok(bound.length > 0, 'extension binds at least one event');
+  for (const ev of bound) {
+    assert.ok(surface.includes(ev), `pi/gsd.cjs binds "${ev}", which is not in the declared pi surface`);
+  }
+});
+
+test('pi descriptor declares a node runtime for the managed pi 1.3.0 install (#5557)', () => {
+  assert.equal(PI_AXES.runtime, 'node');
+  assert.ok(!/bun/i.test(PI_CAP.description), 'descriptor description must not claim a bun runtime');
+  const negotiated = negotiateHostCapabilities(PI_AXES);
+  assert.equal(negotiated.effective.runtime, 'node');
+  assert.equal(negotiated.effective.dispatch.namedDispatch, false);
+  // The generated registry is what the CLI reads; it must carry the same values
+  // as the source descriptor (a stale registry once rendered nothing for pi).
+  const registered = require('../gsd-core/bin/lib/capability-registry.cjs').runtimes.pi.runtime.hostIntegration;
+  assert.equal(registered.runtime, 'node');
+  assert.equal(registered.effortSurface, 'argv');
+});
+
+test('pi declares an argv effort surface and renders pi --thinking (pi 1.3.0 CLI, #5557)', () => {
+  const { renderEffortArgv, clampEffortForHost } = require('../gsd-core/bin/lib/model-catalog.cjs');
+  assert.equal(PI_AXES.effortSurface, 'argv');
+  assert.equal(negotiateHostCapabilities(PI_AXES).effective.effortSurface, 'argv');
+  assert.deepEqual(renderEffortArgv('pi', 'high', 'argv').argv, ['--thinking', 'high']);
+  // pi accepts minimal natively, so unlike claude/codex it is not clamped up to low.
+  assert.deepEqual(renderEffortArgv('pi', 'minimal', 'argv').argv, ['--thinking', 'minimal']);
+  // `inherit` is never a wire level (#3533 10d); pi's own `off` has no universal counterpart.
+  assert.deepEqual(renderEffortArgv('pi', 'inherit', 'argv').argv, []);
+  assert.equal(clampEffortForHost('pi', 'off'), null);
+  // The axis gate still wins over the table: a non-argv surface renders nothing.
+  assert.deepEqual(renderEffortArgv('pi', 'high', 'none').argv, []);
+  // Pin pi's own supported set: only the universal ladder reaches argv.
+  for (const level of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.deepEqual(renderEffortArgv('pi', level, 'argv').argv, ['--thinking', level]);
+  }
+  // Hostile / out-of-set levels never reach argv (the level is argv-bound).
+  for (const level of ['ultra', '', 'HIGH', 'high; rm -rf /', '--model', 'high --model x']) {
+    assert.deepEqual(renderEffortArgv('pi', level, 'argv').argv, [], `level ${JSON.stringify(level)} must render nothing`);
+  }
+  // A hostile host id never resolves an inherited member of the table.
+  assert.deepEqual(renderEffortArgv('__proto__', 'high', 'argv').argv, []);
 });
 
 // -- (2) the binding actually binds session_start/before_agent_start/ -------

@@ -22,7 +22,7 @@ import type { Decision } from './decisions.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { stripFencedCode, collectSections, extractXmlTagBodies } from './markdown-sectionizer.cjs';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
-import { readDirEvidence, readTextEvidence, evidenceFound } from './gate-evidence.cjs';
+import { readDirEvidence, readTextEvidence, statEvidence, evidenceFound } from './gate-evidence.cjs';
 import type { Evidence, Observed } from './gate-evidence.cjs';
 import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -34,6 +34,20 @@ const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planDocumentMod = require('./plan-document.cjs');
+const { parsePlanDocument } = planDocumentMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import taskContentResolutionMod = require('./task-content-resolution.cjs');
+const {
+  resolveTaskContent,
+  splitTrackerId,
+  loadResolverCapabilities,
+  isResolverFailure,
+  contentTexts,
+} = taskContentResolutionMod;
+
+type CapabilityLike = Parameters<typeof resolveTaskContent>[0]['capabilities'][number];
 
 // ─── Decision matching ────────────────────────────────────────────────────────
 
@@ -62,6 +76,22 @@ export function decisionMentioned(haystack: string | null | undefined, decision:
 }
 
 // ─── File reading ─────────────────────────────────────────────────────────────
+
+// #4939: loadPlanContents answers no files for a path that is not there, and that reads
+// as "no plan cites anything" — so a phase-dir argument that names no directory
+// (the phase NUMBER in the phase-dir slot) must be told apart BEFORE the scan.
+// Answers null for a directory, else what is wrong with the path and what to do
+// about it. Like the plan gate's contextKind (#4794), the message names the real
+// stat outcome: a permission or I/O failure (EACCES, ELOOP, EIO) is reported as
+// unreadable, not as a missing directory. Only ENOENT/ENOTDIR mean the path is not there.
+export function phaseDirProblem(dirPath: string): { reason: string; what: string; hint: string; unreadable: boolean } | null {
+  const passDirectory = 'Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.';
+  const st = statEvidence(dirPath);
+  if (st.kind === 'none') return { reason: 'phase directory not found', what: 'does not exist', hint: passDirectory, unreadable: false };
+  if (st.kind === 'unreadable') return { reason: 'phase directory unreadable', what: `could not be read (${st.reason})`, hint: 'Check that the directory is readable.', unreadable: true };
+  if (st.value.isDirectory()) return null;
+  return { reason: 'phase path is not a directory', what: st.value.isFile() ? 'is a file, not a directory' : 'is not a directory', hint: passDirectory, unreadable: false };
+}
 
 /**
  * The contents of the phase files `pick` selects (#5170, ADR-5057 §4). An ABSENT phase directory
@@ -169,6 +199,79 @@ export function extractPlanDesignatedSections(planContent: string | null | undef
   parts.push(bodyParts.join('\n'));
   parts.push(extractXmlTagBodies(cleaned));
   return parts.join('\n\n');
+}
+
+export interface TrackerResolveDeps {
+  loadCapabilities?: (cwd: string) => CapabilityLike[];
+  resolveTaskContentFn?: typeof resolveTaskContent;
+  /** Test seam: monotonic-ish clock for the aggregate budget. */
+  now?: () => number;
+}
+
+/** Aggregate wall-clock budget for all resolver spawns in one gate run; registry load and each spawn's timeout are inside it (spawn timeouts are clamped to the remainder), so this is the true bound for resolver work. */
+export const TRACKER_RESOLVE_BUDGET_MS = 120_000;
+
+const unreadable = (reason: string, span: string): Observed<never> => ({ kind: 'unreadable', reason, span });
+
+/**
+ * Extra scannable text per plan (same index) from tracker-resolved task content; '' for plans without `tracker-id=`.
+ * `missingResolver` names the first tracker id with no installed resolver: coverage is monotone (a mention anywhere counts), so
+ * that can only cause a false "uncovered" — callers go `unreadable` only when a decision would otherwise be uncovered.
+ */
+export function resolveTrackerBodies(projectDir: string, planContents: string[], deps: TrackerResolveDeps = {}): Observed<{ bodies: string[]; missingResolver: { span: string; reason: string } | null }> {
+  let missingResolver: { span: string; reason: string } | null = null;
+  let capabilities: CapabilityLike[] | null = null;
+  const seen = new Map<string, string[]>();
+  const resolveFn = deps.resolveTaskContentFn ?? resolveTaskContent;
+  const bodies: string[] = [];
+  const now = deps.now ?? (() => performance.now());
+  const startedAt = now();
+  for (const raw of planContents) {
+    const content = stripCommentsAndFences(raw);
+    if (!/\btracker-id\s*=/i.test(content)) {
+      bodies.push('');
+      continue;
+    }
+    const parts: string[] = [];
+    for (const task of parsePlanDocument(content).tasks) {
+      const trackerId = task.trackerId;
+      if (trackerId === null) continue;
+      const cached = seen.get(trackerId);
+      if (cached) {
+        parts.push(...cached);
+        continue;
+      }
+      if (capabilities === null) {
+        try {
+          capabilities = (deps.loadCapabilities ?? loadResolverCapabilities)(projectDir);
+        } catch (err) {
+          return unreadable(`capability registry unreadable: ${err instanceof Error ? err.message : String(err)}`, trackerId);
+        }
+      }
+      // Floor: spawnSync rejects a fractional timeout, and a 0 timeout means unbounded, so a sub-ms remainder is a rejection.
+      const remainingMs = Math.floor(TRACKER_RESOLVE_BUDGET_MS - (now() - startedAt));
+      if (remainingMs <= 0) {
+        return unreadable(`tracker resolution exceeded the ${TRACKER_RESOLVE_BUDGET_MS} ms aggregate budget`, trackerId);
+      }
+      try {
+        const result = resolveFn({ trackerId, capabilities, timeoutOverrideMs: remainingMs });
+        if (result.kind === 'no-resolver') {
+          missingResolver ??= { span: trackerId, reason: `no task-content resolver installed for tracker prefix "${splitTrackerId(trackerId)?.prefix}"` };
+        }
+        // Per field: an unclosed fence in one field must not swallow the rest.
+        const texts = result.kind === 'resolved' ? contentTexts(result.content).map(stripCommentsAndFences) : [];
+        seen.set(trackerId, texts);
+        parts.push(...texts);
+      } catch (err) {
+        if (isResolverFailure(err)) {
+          return unreadable(`tracker task content unresolved: ${err.message}`, trackerId);
+        }
+        throw err;
+      }
+    }
+    bodies.push(parts.join('\n'));
+  }
+  return evidenceFound({ bodies, missingResolver });
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────

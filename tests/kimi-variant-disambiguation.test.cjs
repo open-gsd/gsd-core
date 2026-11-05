@@ -28,7 +28,7 @@ function runInstall(args, home) {
   // spawnSync captures stdout AND stderr separately regardless of exit code
   // (execFileSync drops stderr on success, which hid the console.error warnings).
   const r = spawnSync('node', [INSTALL_JS, ...args], {
-    env: { ...process.env, HOME: home, USERPROFILE: home, GSD_TEST_MODE: '1' },
+    env: { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home, GSD_TEST_MODE: '1' },
     encoding: 'utf8',
     timeout: PROBE_TIMEOUT_MS,
   });

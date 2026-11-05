@@ -48,6 +48,14 @@ Optional flags parsed from the `<arguments>` block:
 - `--files=file1,file2,...` — Explicit file list override. Has highest precedence for file scoping per D-08. When provided, workflow skips SUMMARY.md extraction and git diff fallback entirely.
 
 Context files (CLAUDE.md, SUMMARY.md, phase state) are resolved inside the workflow via `gsd-tools query init.phase-op` and delegated to agent via `<required_reading>` blocks.
+
+## Outside a phase
+
+Reviewer lanes run without a phase (`gsd_run` is defined by the runtime-launcher preamble inside workflow fences; in a plain shell call `node <install>/gsd-core/bin/gsd-tools.cjs` instead): pipe canonical repo-relative file paths (one per line) to stdin of
+`gsd_run review-lane dispatch-step --repo-root <root> --depth <quick|standard|deep> --base-sha <sha> --run-dir "$(mktemp -d)" --cap-id code-review --point execute:post --explicit <slugs> --raw`.
+`review-lane` flags are space-separated (`--depth quick`), never `--flag=value`. `--explicit` (omitted, nothing dispatches yet the call exits ok), `--depth`, `--base-sha` (lane reviews changes relative to it; commit them first) and stdin paths are required; `--run-dir` should be a fresh temp dir (default `.` writes the prompt file into the current directory); read each lane's output path (`results[].reviewPath`) from the JSON before removing it. `--cap-id`/`--point` select the `code-review` capability, which must be enabled (`workflow.code_review`) and active at `--point` — `execute:post`, or `execute:wave:post` when `workflow.code_review_point` selects it; otherwise nothing dispatches.
+`--explicit` takes comma-separated canonical slugs, no spaces (`codex,antigravity`), not flag aliases (`antigravity`, not `agy`); slugs: first column of `gsd_run review-lane sections` (`review-lane flags` lists flags/aliases).
+Each lane declares its own model key, which is not always its slug (antigravity's is `review.models.agy`); see the `review.models.*` table in `docs/CONFIGURATION.md`. Unset = lane default model.
 </context>
 
 <process>

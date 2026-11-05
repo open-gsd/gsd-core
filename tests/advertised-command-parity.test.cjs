@@ -37,6 +37,7 @@ const INVOCATION = {
   codex: '$gsd-new-project',
   cursor: 'gsd-new-project (mention the skill name)',
   kimi: '/skill:gsd-new-project',
+  pi: '/skill:gsd-new-project',
 };
 const expectedCommand = (runtime) => INVOCATION[runtime] || DEFAULT_CMD;
 
@@ -67,18 +68,23 @@ describe('advertised command equals the registered surface', () => {
       }
     }
     assert.deepEqual(unregistered.sort(), [
-      'pi:global', 'pi:local', 'vscode:global', 'vscode:local', 'windsurf:global',
+      'vscode:global', 'vscode:local', 'windsurf:global',
       'cline:local', 'kimi:local', 'kimi-code:local',
     ].sort());
   });
 
-  test('a native-extension runtime is told the command its extension actually registers', () => {
+  // #5547: pi used to be the one runtime whose only registered surface was its
+  // native `/gsd` extension command, so it was told to run `/gsd`. It now also
+  // installs every command as a skill, so it is told the skill command — and
+  // the extension's own `/gsd` is still the one command it registers.
+  test('pi registers a new-project skill trigger and is told to invoke it as /skill:', () => {
     const names = [];
     const pi = new Proxy({}, { get: (_, key) => (key === 'registerCommand' ? (name) => names.push(name) : () => {}) });
     require('../pi/gsd.cjs')(pi);
     assert.deepEqual(names, ['gsd']);
     for (const scope of SCOPES) {
-      assert.deepEqual(resolveAdvertisedNewProject('pi', scope), { kind: 'unregistered', nativeCommand: '/gsd' });
+      assert.deepEqual(registeredTriggers('pi', scope), ['gsd-new-project']);
+      assert.deepEqual(resolveAdvertisedNewProject('pi', scope), { kind: 'command', command: '/skill:gsd-new-project' });
     }
     assert.deepEqual(resolveAdvertisedNewProject('windsurf', 'global'), { kind: 'unregistered', nativeCommand: null });
   });
@@ -92,6 +98,7 @@ describe('previously advertised strings are preserved for registered runtimes (H
     kimi: '/skill:gsd-new-project',
     'kimi-code': DEFAULT_CMD,
     opencode: DEFAULT_CMD,
+    pi: '/skill:gsd-new-project',
     qwen: DEFAULT_CMD,
     windsurf: DEFAULT_CMD,
   };
@@ -124,7 +131,7 @@ describe('cross-agent default for an id GSD cannot know (ADR-5057 §5 Phase 10 a
 
 describe('the installer completion message is generated from the registered surface (wired surface)', () => {
   const cases = [
-    ['pi', 'global', false],
+    ['pi', 'global', true],
     ['windsurf', 'global', false],
     ['claude', 'global', true],
     ['codex', 'global', true],
@@ -138,10 +145,10 @@ describe('the installer completion message is generated from the registered surf
         assert.ok(done.startsWith('Done!'), `no completion message in:\n${out}`);
         if (advertises) {
           assert.match(done, /gsd-new-project/);
+          if (runtime === 'pi') assert.match(done, /\/skill:gsd-new-project/, 'pi invokes a skill as /skill:<name>, never /gsd-new-project');
         } else {
           assert.doesNotMatch(done, /gsd-new-project/, `completion message advertises an unregistered command:\n${done}`);
           assert.match(done, /registers no/);
-          if (runtime === 'pi') assert.match(done, /registers \/gsd/);
         }
       } finally {
         cleanup(res.root);

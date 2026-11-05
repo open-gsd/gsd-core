@@ -246,22 +246,33 @@ test('Kimi project selectors override matching global selectors (#4032)', (t) =>
     'the matching global selector must not survive the project override');
 });
 
-test('Kimi neutralizes ~/.claude/gsd-core references instead of leaking a repointed path (#4032)', (t) => {
+test('Kimi neutralizes ~/.claude/gsd-core references and the install points them at the installed root (#4032, #5123)', (t) => {
   // Routing Kimi through the ADR-1235 pre-converter pipeline (needed so
   // project-scoped agent_tools selectors reach it, see the test above) also
   // runs _applyAgentPathRewrites. Kimi's own neutralizeKimiAgentPrompt expects
   // to see the ORIGINAL `~/.claude/gsd-core` text; kimi/kimi-code capability.json
   // now opt out via hostBehaviors.noPathRewrite so that still holds.
+  //
+  // #5123: the prose "GSD core/<path>" that neutralization leaves is not a path
+  // the agent can open, so a global install retargets it to the real installed
+  // root. What must stay true: no raw Claude path leaks, and no path survives
+  // that does not exist.
   const install = installRuntime(t, 'kimi', { scope: 'global' });
   // Inspect generated prompts, not the installation-owned raw source corpus.
   const artifacts = emittedAgentArtifacts(install, 'gsd-executor', path.join(install.configDir, 'agents'));
-  assert.ok(artifacts.some((artifact) => artifact.includes('GSD core')),
-    'a ~/.claude/gsd-core reference must neutralize to prose, not a repointed Kimi path');
   assert.ok(artifacts.every((artifact) =>
     !artifact.includes('~/.claude/gsd-core') &&
-    !artifact.includes('$HOME/.claude/gsd-core') &&
-    !artifact.includes('config/agents/gsd-core/references')),
-    'no raw Claude- or Kimi-prefixed gsd-core path may leak into the Kimi prompt body');
+    !artifact.includes('$HOME/.claude/gsd-core')),
+    'no raw Claude-prefixed gsd-core path may leak into the Kimi prompt body');
+  assert.ok(artifacts.every((artifact) => !/GSD core\/[a-z]/.test(artifact)),
+    'no dangling prose "GSD core/<path>" may remain');
+  const refs = artifacts.flatMap((artifact) =>
+    artifact.match(/(?:\$HOME(?:\/[^\s`"')]{0,200}?)?|\/[^\s`"')]{1,200}?)\/gsd-core\/references\/[A-Za-z0-9._-]{1,80}\.md/g) || []);
+  assert.ok(refs.length > 0, 'the prompt must still reference gsd-core files, now by their real path');
+  for (const ref of refs) {
+    const resolved = ref.startsWith('$HOME/') ? path.join(install.home, ref.slice('$HOME/'.length)) : ref;
+    assert.ok(fs.existsSync(resolved), `${ref} must exist after install`);
+  }
 });
 
 test('Kilo global install resolves project agent_tools from the working directory (#4032)', (t) => {

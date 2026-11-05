@@ -90,6 +90,8 @@ jq dependency). Write dirty repo names to a temp file so the list survives acros
 subsequent command executions:
 
 ```bash
+# #5548: drop inherited repo-location vars (set inside git hooks) so cwd, not GIT_DIR, picks ROOT.
+unset GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_OBJECT_DIRECTORY GIT_DIR GIT_WORK_TREE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_INDEX_FILE GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE GIT_COMMON_DIR
 ROOT=$(git rev-parse --show-toplevel)
 DIRTY_FILE=$(mktemp)
 

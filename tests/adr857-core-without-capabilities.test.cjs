@@ -44,7 +44,7 @@ const realRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 // ── Helpers from test harness ─────────────────────────────────────────────────
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, installSpawnEnv } = require('./helpers.cjs');
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -122,6 +122,9 @@ function runCli(args, cwd) {
   try {
     const stdout = execFileSync(process.execPath, [GSD_TOOLS, ...args], {
       cwd,
+      // A sandboxed HOME: the children must not see capabilities installed under
+      // the developer's real ~/.gsd (#5594) — this file's premise is a core with none.
+      env: installSpawnEnv(),
       encoding: 'utf-8',
       timeout: GSD_TOOLS_CLI_TIMEOUT_MS,
     });

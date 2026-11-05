@@ -44,7 +44,7 @@ Read ALL `<required_reading>` files. Extract:
 
 **Project skills:** check `.claude/skills/` or `.agents/skills/` if either exists.
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md — list skill subdirs, read each `SKILL.md` (~130-line index), load `rules/*.md` as needed. NEVER load full `AGENTS.md` (100KB+ cost). Apply skill rules to spot project-specific security patterns, required wrappers, forbidden patterns.
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-security-auditor`) — list skill subdirs, read each `SKILL.md` (~130-line index), load `rules/*.md` as needed. NEVER load full `AGENTS.md` (100KB+ cost). Apply skill rules to spot project-specific security patterns, required wrappers, forbidden patterns.
 </step>
 
 <step name="analyze_threats">

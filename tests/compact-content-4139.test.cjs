@@ -34,14 +34,36 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, cleanup, withIsolatedProcessState } = require('./helpers.cjs');
+
+test('#5039: compact-content config seed ignores conflicting ambient defaults', (t) => {
+  const ambientHome = createTempDir('gsd-5039-compact-ambient-');
+  const controlDir = createTempProject('gsd-5039-compact-control-');
+  const seededDir = createTempProject('gsd-5039-compact-seeded-');
+  t.after(() => { cleanup(ambientHome); cleanup(controlDir); cleanup(seededDir); });
+  fs.mkdirSync(path.join(ambientHome, '.gsd'));
+  fs.writeFileSync(path.join(ambientHome, '.gsd', 'defaults.json'),
+    JSON.stringify({ workflow: { compact_content: true } }));
+
+  const [control, seeded] = withIsolatedProcessState(() => {
+    Object.assign(process.env, homeSandboxEnv(ambientHome));
+    return [runGsdTools('config-ensure-section', controlDir), seedConfigSection(seededDir)];
+  });
+
+  assert.ok(control.success, `Control seed failed: ${control.error}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(controlDir, '.planning', 'config.json'), 'utf-8'))
+    .workflow.compact_content, true, 'the unsandboxed control must read the ambient default');
+  assert.ok(seeded.success, `Sandboxed seed failed: ${seeded.error}`);
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(seededDir, '.planning', 'config.json'), 'utf-8'))
+    .workflow.compact_content, false, 'the sandboxed seed must retain the built-in default');
+});
 
 describe('workflow.compact_content config (#4139)', () => {
   let tmpDir;
 
   beforeEach(() => {
     tmpDir = createTempProject();
-    runGsdTools('config-ensure-section', tmpDir);
+    seedConfigSection(tmpDir);
   });
   afterEach(() => { cleanup(tmpDir); });
 

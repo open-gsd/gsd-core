@@ -43,6 +43,10 @@ const { cleanup, createTempDir } = require('./helpers.cjs');
 const { BUILD_SCRIPT, buildParityManifest, buildInstallTree, PKG_VERSION } = require('./helpers/install-shared.cjs');
 const {
   resolveChangedPaths,
+  resolveBase,
+  isReleaseMergePr,
+  RELEASE_MERGE_NEXT_CANDIDATES,
+  readAckTrailers,
   resolveAttributionBase,
   resolveAttributionInputs,
   baseRefCandidates,
@@ -63,6 +67,7 @@ const {
   BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 } = require('./helpers/emitted-runtime.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { EXPECTED_MANIFEST_COUNT, loadManifests } = require('./helpers/emitted-provenance.cjs');
 // ADR-3942 §6: scripts/lint-emitted-drift-ack.cjs (the legacy JSON-ack-file pre-merge
@@ -1443,17 +1448,17 @@ test('base-ref candidates are ordered most-specific first and de-duplicated', ()
   // pinned rather than left implicit.
   assert.deepEqual(
     baseRefCandidates({ GSD_EMITTED_BASE: 'abc123', GITHUB_BASE_REF: 'next' }),
-    ['abc123', 'origin/next', 'next'],
+    ['abc123', 'origin/next', 'next', 'upstream/next'],
     'an explicit override wins, then the Actions base ref, then the defaults',
   );
   assert.deepEqual(
     baseRefCandidates({ GITHUB_BASE_REF: 'release/1.9' }),
-    ['origin/release/1.9', 'release/1.9', 'origin/next', 'next'],
+    ['origin/release/1.9', 'release/1.9', 'upstream/next', 'origin/next', 'next'],
     'a non-next base ref is honored before falling back',
   );
   assert.deepEqual(
     baseRefCandidates({}),
-    ['origin/next', 'next'],
+    ['upstream/next', 'origin/next', 'next'],
     'with no env, the repo defaults are the only candidates',
   );
   // De-duplication matters: GITHUB_BASE_REF=next must not produce origin/next twice.
@@ -2133,6 +2138,91 @@ function makeForkedRepo(baseAdvance) {
   return { root, forkSha, tipSha };
 }
 
+// The feature starts at upstream's newer tip; the fork's origin stays behind.
+function makeRemoteBaseRepo(t, { origin = true, upstream = true } = {}) {
+  const fixture = makeForkedRepo(1);
+  const { root, forkSha, tipSha } = fixture;
+  t.after(() => cleanup(root));
+  if (origin) gitFixture(root, ['update-ref', 'refs/remotes/origin/next', forkSha]);
+  if (upstream) gitFixture(root, ['update-ref', 'refs/remotes/upstream/next', tipSha]);
+  gitFixture(root, ['checkout', '-q', '-b', 'feature', tipSha]);
+  gitFixture(root, ['branch', '-D', 'next']);
+  return fixture;
+}
+
+test('#5187: an unpinned fork uses upstream/next instead of stale origin/next', (t) => {
+  const { root, tipSha } = makeRemoteBaseRepo(t);
+  assert.deepEqual(resolveBase({}, { cwd: root }), { ref: 'upstream/next', sha: tipSha });
+  assert.deepEqual(resolveAttributionBase({}, { cwd: root }), {
+    ref: 'upstream/next', tipSha, sha: tipSha,
+  });
+});
+
+test('#5187: an origin-only clone still resolves origin/next', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t, { upstream: false });
+  assert.deepEqual(resolveBase({}, { cwd: root }), { ref: 'origin/next', sha: forkSha });
+});
+
+test('#5187: a checkout without base refs keeps the null result', (t) => {
+  const { root } = makeRemoteBaseRepo(t, { origin: false, upstream: false });
+  assert.equal(resolveBase({}, { cwd: root }), null);
+  assert.equal(resolveAttributionBase({}, { cwd: root }), null);
+});
+
+test('#5187: an explicit pin takes precedence over CI and upstream refs', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t);
+  assert.deepEqual(resolveBase({ GSD_EMITTED_BASE: forkSha, GITHUB_BASE_REF: 'next' }, { cwd: root }), {
+    ref: forkSha, sha: forkSha,
+  });
+});
+
+test('#5187: the CI remote base takes precedence over upstream/next', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t);
+  assert.deepEqual(resolveBase({ GITHUB_BASE_REF: 'next' }, { cwd: root }), {
+    ref: 'origin/next', sha: forkSha,
+  });
+});
+
+test('#5187: the CI local base takes precedence over upstream/next', (t) => {
+  const { root, forkSha } = makeRemoteBaseRepo(t, { origin: false });
+  gitFixture(root, ['branch', 'ci-base', forkSha]);
+  assert.deepEqual(resolveBase({ GITHUB_BASE_REF: 'ci-base' }, { cwd: root }), {
+    ref: 'ci-base', sha: forkSha,
+  });
+});
+
+for (const hasBase of [true, false]) {
+  test(`#5187: ${hasBase ? 'failure' : 'skip'} output names the resolved base and GSD_EMITTED_BASE`, (t) => {
+    const { root } = makeRemoteBaseRepo(t, { origin: hasBase, upstream: hasBase });
+    const probe = path.join(root, 'base-output.test.cjs');
+    fs.writeFileSync(probe, `
+      const { test } = require('node:test');
+      const assert = require('node:assert/strict');
+      const { resolveAttributionBase } = require(${JSON.stringify(require.resolve('./helpers/emitted-runtime.cjs'))});
+      test('attribution output probe', (t) => {
+        const base = resolveAttributionBase({}, {
+          cwd: __dirname, diagnostic: (message) => t.diagnostic(message),
+        });
+        if (!base) { t.skip('no base ref resolvable'); return; }
+        assert.fail('forced attribution failure');
+      });
+    `);
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    delete env.GSD_RUN_TESTS_LEDGER_FILE;
+    delete env.GSD_RUN_TESTS_EVENTS_FILE;
+    const result = runNode(['--test', '--test-reporter=tap', probe], {
+      cwd: root, timeoutMs: FRESH_FIXTURE_GIT_TIMEOUT_MS,
+      env,
+    });
+    assert.equal(result.outcome, OUTCOME.EXITED);
+    assert.equal(result.exitCode, hasBase ? 1 : 0);
+    assert.match(result.stdout, hasBase ? /resolved base: upstream\/next/ : /resolved base: none/);
+    assert.match(result.stdout, /GSD_EMITTED_BASE=<ref\|sha>/);
+    if (!hasBase) assert.match(result.stdout, /# skipped 1/);
+  });
+}
+
 for (const baseAdvance of [0, 1, 2]) {
   test(`#5008: base advanced ${baseAdvance} commit(s) past the fork — the gate measures from the merge-base`, () => {
     const { root, forkSha, tipSha } = makeForkedRepo(baseAdvance);
@@ -2282,6 +2372,7 @@ test('#5008: every differential input is pinned to the merge-base, never the tip
 // comparing against those would be vacuous.
 
 test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_TEST_TIMEOUT_MS }, async (t) => {
+  const resolved = resolveAttributionBase(process.env, { diagnostic: (message) => t.diagnostic(message) });
   if (process.platform === 'win32') {
     // Mirrors the golden harness: install output is platform-specific on Windows
     // (backslash paths), so parity is asserted on macOS + Linux. An explicit t.skip,
@@ -2305,7 +2396,6 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
   // a PASS (ADR-2719 §6). Hard-failing instead would make the suite permanently red
   // wherever a base ref cannot exist by construction, which is not a propagation
   // finding — it is a statement about the checkout.
-  const resolved = resolveAttributionBase();
   if (!resolved) {
     t.skip(
       'no base ref resolvable — tried ' + baseRefCandidates().join(', ') +
@@ -2776,3 +2866,180 @@ describe('#3271: emitted-runtime-bounds', () => {
 // #3875 open-PR-deferred fragment-sweep machinery, plus tests/emitted-drift-acks/ itself
 // — the commit-trailer acknowledgment leaves no tree artifact to sweep, defer, or guard.
 // Every describe block that lived here exercised that now-deleted script and is gone with it.
+
+// ── #5902: a release-merge PR measures attribution from `next`, not from `main` ──────
+//
+// `release/X.Y.0` / `hotfix/X.Y.Z` -> `main` has `main` as its PR base, so a base-derived
+// range spans the whole release cycle (PRs already checked on `next`) and the ack
+// trailers read as stale. The base for that PR shape is merge-base(next, HEAD).
+
+/**
+ * `main` @ c0 -> `next` adds c1 (the fork point) -> `release/1.2.0` adds a commit ->
+ * `next` advances one commit. HEAD is left on `release/1.2.0`.
+ */
+function makeReleaseMergeRepo() {
+  const root = createTempDir('gsd-5902-release-merge-');
+  gitFixture(root, ['init', '-q', '-b', 'main']);
+  fs.writeFileSync(path.join(root, 'shared.txt'), 'main\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'main tip']);
+  const mainSha = gitFixture(root, ['rev-parse', 'HEAD']);
+
+  gitFixture(root, ['checkout', '-q', '-b', 'next']);
+  fs.writeFileSync(path.join(root, 'shared.txt'), 'next fork\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'next fork point']);
+  const forkSha = gitFixture(root, ['rev-parse', 'HEAD']);
+
+  gitFixture(root, ['checkout', '-q', '-b', 'release/1.2.0']);
+  fs.writeFileSync(path.join(root, 'release-only.txt'), 'release\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'release-only change']);
+
+  gitFixture(root, ['checkout', '-q', 'next']);
+  fs.writeFileSync(path.join(root, 'shared.txt'), 'next advanced\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'next advanced']);
+  gitFixture(root, ['checkout', '-q', 'release/1.2.0']);
+  assert.notEqual(mainSha, forkSha);
+  return { root, mainSha, forkSha };
+}
+
+const SAME_REPO = 'open-gsd/gsd-core';
+function prEnv(headRef, baseRef, extra = {}) {
+  return {
+    GITHUB_HEAD_REF: headRef,
+    GITHUB_BASE_REF: baseRef,
+    GITHUB_REPOSITORY: SAME_REPO,
+    GITHUB_EVENT_PATH: '/event.json',
+    ...extra,
+  };
+}
+const payloadReader = (fullName) => () => JSON.stringify({ pull_request: { head: { repo: { full_name: fullName } } } });
+
+for (const head of ['release/1.2.0', 'hotfix/1.2.1']) {
+  test(`#5902: ${head} -> main measures from merge-base(next, HEAD), ignoring GSD_EMITTED_BASE`, () => {
+    const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+    try {
+      const messages = [];
+      const env = prEnv(head, 'main', { GSD_EMITTED_BASE: mainSha });
+      const r = resolveAttributionBase(env, {
+        cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => messages.push(m),
+      });
+      assert.equal(r.sha, forkSha, 'the release-merge base must be the fork point on next');
+      assert.equal(r.ref, 'next');
+      assert.notEqual(r.sha, mainSha);
+      assert.ok(messages.some((m) => m.includes('next') && m.includes('release-merge')),
+        'the diagnostic must name the chosen base and say why');
+    } finally {
+      cleanup(root);
+    }
+  });
+}
+
+test('#5902: the release-merge base is the same sha baseline, changed paths and trailers consume', () => {
+  const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+  try {
+    const env = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    const base = resolveAttributionBase(env, { cwd: root, readFile: payloadReader(SAME_REPO) });
+    const expectedShas = [];
+    const { changedPaths } = resolveAttributionInputs(base, {
+      cwd: root,
+      resolveBaselineFn: (o) => { expectedShas.push(o.expectedSha); return { ok: true, baseline: {} }; },
+      readJson: () => null,
+    });
+    assert.deepEqual(expectedShas, [forkSha]);
+    assert.deepEqual(changedPaths, ['release-only.txt']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+const KEEPS_PIN = [
+  ['a fork payload', prEnv('release/1.2.0', 'main'), payloadReader('someone/gsd-core')],
+  ['an ordinary head to main', prEnv('fix/1-x', 'main'), payloadReader(SAME_REPO)],
+  ['a missing payload', prEnv('release/1.2.0', 'main'), () => { throw new Error('ENOENT'); }],
+  ['an unparseable payload', prEnv('release/1.2.0', 'main'), () => 'not json'],
+  ['release/1.2.0 into next', prEnv('release/1.2.0', 'next'), payloadReader(SAME_REPO)],
+  ['release/1.2 (too short)', prEnv('release/1.2', 'main'), payloadReader(SAME_REPO)],
+  ['release/1.2.0.0 (too long)', prEnv('release/1.2.0.0', 'main'), payloadReader(SAME_REPO)],
+  ['no GITHUB_EVENT_PATH', { ...prEnv('release/1.2.0', 'main'), GITHUB_EVENT_PATH: '' }, payloadReader(SAME_REPO)],
+];
+for (const [label, baseEnv, readFile] of KEEPS_PIN) {
+  test(`#5902: ${label} keeps GSD_EMITTED_BASE`, () => {
+    const { root, mainSha } = makeReleaseMergeRepo();
+    try {
+      assert.equal(isReleaseMergePr(baseEnv, { readFile }), false);
+      const r = resolveAttributionBase({ ...baseEnv, GSD_EMITTED_BASE: mainSha }, { cwd: root, readFile });
+      assert.equal(r.ref, mainSha);
+      assert.equal(r.sha, mainSha, 'merge-base(main, HEAD) is main itself in this fixture');
+    } finally {
+      cleanup(root);
+    }
+  });
+}
+
+test('#5902: the payload repo comparison is case-insensitive', () => {
+  assert.equal(isReleaseMergePr(prEnv('release/1.2.0', 'main'), { readFile: payloadReader('Open-GSD/GSD-Core') }), true);
+});
+
+test('#5902: the "Tried:" diagnostic lists the candidates actually tried', () => {
+  const { root, mainSha } = makeReleaseMergeRepo();
+  try {
+    const triedOf = (env, readFile) => {
+      const messages = [];
+      resolveAttributionBase(env, { cwd: root, readFile, diagnostic: (m) => messages.push(m) });
+      const line = messages.find((m) => m.includes('Tried: '));
+      return line.slice(line.indexOf('Tried: ') + 'Tried: '.length);
+    };
+    const releaseEnv = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    assert.equal(triedOf(releaseEnv, payloadReader(SAME_REPO)), RELEASE_MERGE_NEXT_CANDIDATES.join(', '));
+    const releaseLine = [];
+    resolveAttributionBase(releaseEnv, {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => releaseLine.push(m),
+    });
+    assert.ok(releaseLine.some((m) => m.includes('resolved base') && !m.includes('to override')),
+      'a release-merge PR ignores GSD_EMITTED_BASE, so the override hint must be absent');
+    assert.deepEqual([...RELEASE_MERGE_NEXT_CANDIDATES], ['origin/next', 'upstream/next', 'next']);
+
+    const ordinaryEnv = prEnv('fix/1-x', 'main', { GSD_EMITTED_BASE: mainSha });
+    assert.equal(triedOf(ordinaryEnv, payloadReader(SAME_REPO)), baseRefCandidates(ordinaryEnv).join(', '));
+    const ordinaryLine = [];
+    resolveAttributionBase(ordinaryEnv, {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => ordinaryLine.push(m),
+    });
+    assert.ok(ordinaryLine.some((m) => m.includes('resolved base') && m.includes('to override')),
+      'an ordinary PR keeps the GSD_EMITTED_BASE override hint');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('#5902: CI shape — main merged into the release branch does not move the base or leak main-only trailers', () => {
+  const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+  try {
+    // A squash on main (never on next) carrying an ack trailer, as the previous release left it.
+    gitFixture(root, ['checkout', '-q', 'main']);
+    fs.writeFileSync(path.join(root, 'main-only.txt'), 'squash\n');
+    gitFixture(root, ['add', '-A']);
+    gitFixture(root, ['commit', '-q', '-m',
+      'chore: merge release v1.1.0 to main\n\nEmitted-Drift-Ack-Growth: x.md \u2014 reason']);
+    const squashSha = gitFixture(root, ['rev-parse', 'HEAD']);
+    assert.equal(gitFixture(root, ['branch', '--contains', squashSha, '--list', 'next']), '',
+      'the squash must not be reachable from next');
+
+    // CI "Rebase check": merge main into the release branch.
+    gitFixture(root, ['checkout', '-q', 'release/1.2.0']);
+    gitFixture(root, ['merge', '-q', '--no-ff', '-m', 'Merge main into release/1.2.0', 'main']);
+
+    const env = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    const base = resolveAttributionBase(env, { cwd: root, readFile: payloadReader(SAME_REPO) });
+    assert.equal(base.sha, forkSha, 'the base is still the fork point on next');
+
+    const ack = readAckTrailers({ baseRef: base.sha, cwd: root });
+    assert.equal(JSON.stringify(ack).includes('x.md'), false,
+      'no trailer of the main-only squash may reach the measured range');
+  } finally {
+    cleanup(root);
+  }
+});

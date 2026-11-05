@@ -1342,7 +1342,7 @@ describe('verify codebase-drift: workflow.drift_threshold / drift_action through
       cwd: tmp,
       encoding: 'utf-8',
       timeout: PROBE_TIMEOUT_MS,
-      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_WORKSTREAM: workstream ?? '' },
+      env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
     });
     assert.equal(r.status, 0, `verify codebase-drift failed: ${r.stderr}`);
     return { data: JSON.parse(r.stdout), stderr: r.stderr };

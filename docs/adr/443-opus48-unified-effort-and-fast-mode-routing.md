@@ -210,3 +210,24 @@ Common core: `low`, `medium`, `high`, `xhigh`.
 - Anthropic effort API: `output_config.effort` (`low`/`medium`/`high`/`xhigh`/`max`); fast mode: `speed` (`standard`/`fast`)
 - Claude Code effort: `/effort`, `--effort`, `CLAUDE_CODE_EFFORT_LEVEL`, `effortLevel` setting, subagent `effort` frontmatter (anthropics/claude-code #31536, completed); fast mode: `/fast` (interactive only)
 - OpenAI Codex effort: `model_reasoning_effort` config key; Responses API `reasoning.effort`; `ReasoningEffort` enum `none<minimal<low<medium<high<xhigh`
+
+## Amendment (2026-10-20): the review.md invocation-argument claim is stale (#2861)
+
+The 2026-07-21 amendment's status table (third row) says the resolved effort cascade reaching a
+spawned host as an invocation argument is "Delivered" by `gsd-core/workflows/review.md` calling
+`resolve-execution … --host <id>` per reviewer and appending the rendered argument. That was
+accurate on 2026-07-21. It stopped being accurate nine days later: `3f6b063fbb` (#2861,
+2026-07-30) rewrote `invoke_reviewers` onto the declared-lane-manifest model (ADR-2782) and
+dropped the `resolve-execution`/`--host` call along with it. `git log -S'resolve-execution' --
+gsd-core/workflows/review.md` shows no hit on `next` today.
+
+**What `review.md` actually does now (#4255).** Per-lane effort resolves from data, never from an
+invocation argument: the lane's `effortConfigKey` (`review.effort.<slug>`) → the lane's declared
+`defaultEffort` → nothing emitted, so the CLI's own configuration applies. `review.md` itself is
+explicit that effort "is never read from an agent's execution settings."
+
+**What this does not change.** `tests/effort-surface-axis.test.cjs`'s guard — no workflow,
+reference, or agent invokes `resolve-execution … --effort` — still holds, trivially:
+`review.md` no longer calls `resolve-execution` at all, let alone with `--effort`. Decision item
+1 stays scoped to the operator surface per the 2026-08-19 amendment above; this correction
+touches only the factual "how review.md delivers effort to a host" claim, not that ratification.

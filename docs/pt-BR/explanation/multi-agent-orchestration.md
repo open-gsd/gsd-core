@@ -81,7 +81,7 @@ e escrever um único documento de saída recebe exatamente essas permissões —
 execução de Bash, sem acesso a um estado mais amplo. Essa restrição é intencional: ela
 mantém o raio de impacto pequeno caso um agente se comporte de forma inesperada.
 
-Para o catálogo completo de 31 agentes, consulte [Inventário](../INVENTORY.md#agents-31-shipped).
+Para o catálogo completo de agentes, consulte [Inventário](../INVENTORY.md#agentes).
 
 ---
 

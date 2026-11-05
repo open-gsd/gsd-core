@@ -679,6 +679,9 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   sdk_unknown_command: 'USAGE',
   sdk_missing_arg: 'USAGE',
   phase_not_found: 'UNAVAILABLE',
+  phase_id_collision: 'USAGE',
+  ambiguous_phase_owner: 'USAGE',
+  phase_naming_not_custom: 'USAGE',
   phase_verification_incomplete: 'UNAVAILABLE',
   phase_plan_coverage_incomplete: 'UNAVAILABLE',
   summary_no_planning: 'NO_INPUT',
@@ -708,14 +711,14 @@ function expectedErrorCode3912(reasonValue, version) {
   return CODE_FOR_3912.get(outcome);
 }
 
-describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 27-member enum', () => {
+describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 30-member enum', () => {
   afterEach(() => {
     resolveContractVersion({ argv: ['node', 'x'], env: {} }); // restore v1 default
   });
 
   // A1 — the acceptance criterion: EVERY member of ERROR_REASON, iterated
   // from the enum itself (not a hand-picked subset), exits 1 under v1. A
-  // 28th member added to the enum without a table entry still exits 1
+  // further member added to the enum without a table entry still exits 1
   // under v1 (v1 never consults the table at all); under v2, the table
   // lookup for that member yields `undefined`, `CODE_FOR_3912.get(undefined)`
   // yields `undefined`, and `err.code === expected` fails against the real
@@ -942,11 +945,11 @@ describe('#3912 A3-A5: output({error}) records DEGRADED — shape-exhaustive plu
         // PASS leaves output()'s DEGRADED untouched. So the migrated sites record a declared outcome where
         // they used to record DEGRADED, and the census count falls because of the call shape, not because
         // the error key stopped being recorded.
-        'roadmap.cts': 3, 'state.cts': 27, 'template.cts': 3, 'workstream.cts': 7,  // +1 #3807: advance-plan's ambiguous-position error; +1 #3784: advance-plan's ambiguous-PLAN-position error (two plan spellings, different numbers); +1 #4806: cmdFrontmatterGet's unparseable-frontmatter error
+        'roadmap.cts': 3, 'state.cts': 21, 'template.cts': 3, 'workstream.cts': 7,  // +1 #3807: advance-plan's ambiguous-position error; +1 #3784: advance-plan's ambiguous-PLAN-position error (two plan spellings, different numbers); +1 #4806: cmdFrontmatterGet's unparseable-frontmatter error; -6 #4926: add-decision / add-blocker / add-roadmap-evolution's `STATE.md not found` and `<field> required` refusals moved to the fault path
       },
       `per-file output({error}) census drifted: ${JSON.stringify(perFile)}`,
     );
-    assert.strictEqual(total, 61, `enumerated output({error}) population drifted from the measured 61 (69 - verify.cts's 8 sites that #5170 converted to typed verdicts): got ${total}`);
+    assert.strictEqual(total, 55, `enumerated output({error}) population drifted from the measured 55 (69 - verify.cts's 8 sites that #5170 converted to typed verdicts - #4926's 6 refusals moved to error()): got ${total}`);
   });
 });
 
