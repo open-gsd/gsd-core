@@ -6699,13 +6699,17 @@ function resolveSymlinkWriteTarget(filePath) {
  * #5716: refuse a symlinked Codex config.toml unless GSD_ALLOW_SYMLINKED_DEST is set, as
  * installCodexConfig and the hooks.json writer refuse it. Callers run this only when they
  * are about to write config.toml, so a link GSD would leave alone is never refused.
+ * Returns whether config.toml is a symlink, so a caller that goes on to write it acts on
+ * the same observation the check made.
  */
 function assertCodexConfigLinkAllowed(configPath) {
-  if (!isSymlinkedDestOptIn() && fs.lstatSync(configPath).isSymbolicLink()) {
+  const isSymlink = fs.lstatSync(configPath).isSymbolicLink();
+  if (isSymlink && !isSymlinkedDestOptIn()) {
     throw new Error(
       `Codex config.toml at "${configPath}" is a symlink, refusing to change it. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
     );
   }
+  return isSymlink;
 }
 
 /**
@@ -6718,13 +6722,14 @@ function assertCodexConfigLinkAllowed(configPath) {
  * to is touched. Returns true when the file was deleted.
  */
 function writeStrippedCodexConfig(configPath, cleaned) {
-  assertCodexConfigLinkAllowed(configPath);
-  const isSymlink = fs.lstatSync(configPath).isSymbolicLink();
+  const isSymlink = assertCodexConfigLinkAllowed(configPath);
   if (cleaned === null && !isSymlink) {
     fs.unlinkSync(configPath);
     return true;
   }
-  fs.writeFileSync(resolveSymlinkWriteTarget(configPath), cleaned === null ? '' : cleaned);
+  // A link that passed the check implies the opt-in, so it is written at the file it
+  // resolves to. Both callers skip a dangling link before they get here.
+  fs.writeFileSync(isSymlink ? fs.realpathSync(configPath) : configPath, cleaned === null ? '' : cleaned);
   return false;
 }
 
