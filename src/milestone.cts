@@ -96,6 +96,40 @@ function phasesArchiveRoot(cwd: string): string {
   return path.join(planningPaths(cwd).planning, PHASES_ARCHIVE_DIR);
 }
 
+/**
+ * #5270: the archive-destination display shared by both `phases clear` refusal
+ * messages — the archive root under the active (workstream/project-aware)
+ * planning root, rendered relative to cwd, with a `<label>` placeholder for
+ * the archive version (it is resolved at archive time by
+ * archivePhaseDirectories and can change before the command re-runs). Single
+ * source: PHASES_ARCHIVE_DIR / PHASES_ARCHIVE_SUFFIX through
+ * phasesArchiveRoot, so the messages can never drift from where phase
+ * directories are actually archived. Exported so tests can pin the message
+ * text by asserting the CLI error equals this function's output, without
+ * matching raw output text.
+ */
+function phasesClearArchiveDestDisplay(cwd: string): string {
+  return `${toPosixPath(path.relative(cwd, phasesArchiveRoot(cwd)))}/<label>${PHASES_ARCHIVE_SUFFIX}/`;
+}
+
+/** Refusal message for `phases clear` with directories present and no --confirm. */
+function phasesClearConfirmRefusalMessage(cwd: string, count: number): string {
+  return (
+    `phases clear would archive ${count} phase director${count === 1 ? 'y' : 'ies'} to ` +
+    `${phasesClearArchiveDestDisplay(cwd)}. Pass --confirm to proceed.`
+  );
+}
+
+/** Refusal message for the #1447 uncommitted-changes guard (directories are archived, not deleted). */
+function phasesClearUncommittedRefusalMessage(cwd: string, changes: number): string {
+  return (
+    `phases clear aborted: ${changes} uncommitted change${changes === 1 ? '' : 's'} detected in phase directories. ` +
+    `Archive or commit outgoing phase work before running this command, ` +
+    `or pass --force to skip this check; the directories, uncommitted changes included, ` +
+    `are archived under ${phasesClearArchiveDestDisplay(cwd)}. (#1447, #1871)`
+  );
+}
+
 interface MilestoneCompleteOptions {
   name?: string;
   force?: boolean;
@@ -587,7 +621,11 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // (flat mode is a no-op).
   const planningBase = planningPaths(cwd).planning;
   const milestonesPath = path.join(planningBase, 'MILESTONES.md');
-  const archiveDir = path.join(planningBase, 'milestones');
+  // Nit (#5280 re-review): route through phasesArchiveRoot so this command has
+  // no private copy of the `milestones` layout — the single owner for the
+  // archive root remains the phases-clear helper (same value: the
+  // workstream-aware planning base + PHASES_ARCHIVE_DIR).
+  const archiveDir = phasesArchiveRoot(cwd);
   const phasesDir = planningPaths(cwd).phases;
   const today = realClock.localToday();
   const milestoneName = options.name || version;
@@ -1377,16 +1415,12 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
 
     // #5270: the archive root follows planningPaths(cwd), which differs from
     // `.planning/` under an active workstream or project, so the messages
-    // render the real root relative to cwd. The label stays a placeholder:
-    // it is resolved at archive time and can change before the re-run.
-    const archiveRootRel = toPosixPath(path.relative(cwd, phasesArchiveRoot(cwd)));
-    const archiveDestDisplay = `${archiveRootRel}/<label>${PHASES_ARCHIVE_SUFFIX}/`;
-
+    // render the real root relative to cwd — both refusals are built by the
+    // exported phasesClear{Confirm,Uncommitted}RefusalMessage formatters so
+    // the test suite can pin the text through the seam (trek-e ruling on
+    // #5280) instead of matching raw CLI output.
     if (dirs.length > 0 && !confirm) {
-      error(
-        `phases clear would archive ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'} to ` +
-          `${archiveDestDisplay}. Pass --confirm to proceed.`,
-      );
+      error(phasesClearConfirmRefusalMessage(cwd, dirs.length));
     }
 
     // Guard (#1447): refuse to clear phase directories that contain
@@ -1421,12 +1455,7 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
         .split('\n')
         .filter((line) => line.trim().length > 0);
       if (uncommittedLines.length > 0) {
-        error(
-          `phases clear aborted: ${uncommittedLines.length} uncommitted change${uncommittedLines.length === 1 ? '' : 's'} detected in phase directories. ` +
-            `Archive or commit outgoing phase work before running this command, ` +
-            `or pass --force to skip this check; the directories, uncommitted changes included, ` +
-            `are archived under ${archiveDestDisplay}. (#1447, #1871)`,
-        );
+        error(phasesClearUncommittedRefusalMessage(cwd, uncommittedLines.length));
       }
     }
 
@@ -1976,4 +2005,7 @@ export = {
   cmdPhasesClear,
   cmdQuickArchive,
   buildQuickArchiveIndex,
+  phasesClearArchiveDestDisplay,
+  phasesClearConfirmRefusalMessage,
+  phasesClearUncommittedRefusalMessage,
 };

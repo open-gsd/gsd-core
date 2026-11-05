@@ -16,6 +16,7 @@ const path = require('path');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup, readFileNormalized } = require('./helpers.cjs');
+const milestone = require('../gsd-core/bin/lib/milestone.cjs');
 const { writeState } = require('./fixtures/index.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -1089,5 +1090,126 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
     assert.ok(!partABody.includes('## Evolution'), 'Evolution repair must NOT be nested inside the guarded Part A');
     assert.ok(partBBody.includes('## Evolution'), 'Part B must contain the Evolution section template');
     assert.match(partBBody, /always runs/i, 'Part B must state it always runs regardless of GSD_WS');
+  });
+});
+
+// ─── #5270: refusal-message formatter seam (trek-e ruling on #5280) ─────────
+
+// Both `phases clear` refusal messages must be pinned without matching raw CLI
+// output. The seam: the source builds both messages through exported formatter
+// functions that render the archive destination from the shared
+// PHASES_ARCHIVE_* layout, and these tests assert (1) the formatters' own
+// output never claims deletion, and (2) the actual CLI error equals the
+// corresponding formatter's output for the same cwd and count.
+describe('phases clear refusal messages — formatter seam (#5270 ruling on #5280)', () => {
+  test('confirm refusal names the archive and its location, and never claims deletion', () => {
+    const cwd = createTempProject();
+    try {
+      const message = milestone.phasesClearConfirmRefusalMessage(cwd, 2);
+      assert.ok(
+        message.includes(`.planning${path.sep}milestones${path.sep}<label>-phases${path.sep}`),
+        `message must render the archive location; got: ${message}`,
+      );
+      assert.match(message, /archive/i, 'message must say the directories are archived');
+      assert.doesNotMatch(message, /permanently/i, 'message must not claim permanence');
+
+      // The #5270 regression this pins: "delete"/"permanently" must never come back.
+      assert.ok(!/\bdelete[sd]?\b|\bpermanently\b/i.test(message), `no delete/permanently wording allowed; got: ${message}`);
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('uncommitted-guard refusal names the archive and its location, and never claims deletion', () => {
+    const cwd = createTempProject();
+    try {
+      const message = milestone.phasesClearUncommittedRefusalMessage(cwd, 1);
+      assert.ok(
+        message.includes(`.planning${path.sep}milestones${path.sep}<label>-phases${path.sep}`),
+        `message must render the archive location; got: ${message}`,
+      );
+      assert.match(message, /archived under/i, 'message must say where the directories are archived');
+      assert.ok(!/\bdelete[sd]?\b|\bpermanently\b/i.test(message), `no delete/permanently wording allowed; got: ${message}`);
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('CLI --confirm refusal equals the exported confirm formatter output (the seam, not raw text)', () => {
+    const cwd = createTempProject();
+    try {
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
+      fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+      const result = runGsdTools(['phases', 'clear'], cwd);
+      assert.ok(!result.success, 'phases clear without --confirm must be refused');
+
+      const expected = 'Error: ' + milestone.phasesClearConfirmRefusalMessage(cwd, 2);
+      assert.strictEqual(
+        result.error,
+        expected,
+        'CLI refusal must byte-match the formatter output (modulo the stderr Error: prefix)',
+      );
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('CLI uncommitted-guard refusal equals the exported uncommitted formatter output', () => {
+    const cwd = createTempGitProject();
+    try {
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '01-foundation', 'PLAN.md'), '# Plan (uncommitted)');
+
+      const result = runGsdTools(['phases', 'clear', '--confirm'], cwd);
+      assert.ok(!result.success, 'phases clear must refuse when the guard sees uncommitted changes');
+
+      const expected = 'Error: ' + milestone.phasesClearUncommittedRefusalMessage(cwd, 1);
+      assert.strictEqual(
+        result.error,
+        expected,
+        'CLI guard refusal must byte-match the formatter output (modulo the stderr Error: prefix)',
+      );
+      assert.ok(fs.existsSync(path.join(phasesDir, '01-foundation')), 'phase directory must survive the refusal');
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('with an active workstream the refusals report the WORKSTREAM archive root (workstream path test)', () => {
+    const cwd = createTempProject();
+    try {
+      const phasesDir = path.join(cwd, '.planning', 'workstreams', 'seam-ws', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
+
+      // The expected text is built in-process, which reads the ambient env — so
+      // the workstream must be set (and restored) around the assertion, exactly
+      // like the child run's per-call override.
+      const saved = process.env.GSD_WORKSTREAM;
+      process.env.GSD_WORKSTREAM = 'seam-ws';
+      try {
+        const result = runGsdTools(['phases', 'clear'], cwd, { GSD_WORKSTREAM: 'seam-ws' });
+        assert.ok(!result.success, 'phases clear in a workstream still refuses without --confirm');
+
+        const expected = 'Error: ' + milestone.phasesClearConfirmRefusalMessage(cwd, 1);
+        assert.strictEqual(
+          result.error,
+          expected,
+          'workstream-mode refusal must byte-match the formatter output',
+        );
+        // Minor 1 (#5280 re-review): the workstream-aware path is the one reported.
+        assert.ok(
+          expected.includes(`.planning${path.sep}workstreams${path.sep}seam-ws${path.sep}milestones${path.sep}<label>-phases${path.sep}`),
+          `refusal must report the workstream archive root; got: ${expected}`,
+        );
+      } finally {
+        if (saved === undefined) delete process.env.GSD_WORKSTREAM;
+        else process.env.GSD_WORKSTREAM = saved;
+      }
+    } finally {
+      cleanup(cwd);
+    }
   });
 });
