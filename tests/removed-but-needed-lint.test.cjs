@@ -37,6 +37,7 @@ const {
   parseNameStatusZ,
   parseCheckIgnoreZ,
   getTrackedIgnoredFiles,
+  resolveBaseBranch,
   scan,
 } = require(LINT_SCRIPT);
 const fc = require('fast-check');
@@ -315,7 +316,8 @@ describe('removed-but-needed lint: main() end-to-end wiring', () => {
 
     const result = runNode(
       [scriptCopy],
-      { cwd: tmpDir, env: { ...process.env, GSD_REMOVED_BUT_NEEDED_BASE: 'nonexistent-branch' } },
+      // CI/GITHUB_ACTIONS cleared: under CI an unresolvable base is a failure, not a skip.
+      { cwd: tmpDir, env: { ...process.env, GSD_REMOVED_BUT_NEEDED_BASE: 'nonexistent-branch', CI: '', GITHUB_ACTIONS: '' } },
     );
     assert.equal(result.exitCode, 0, `expected graceful skip (exit 0), got ${result.exitCode}: ${result.stderr}`);
     assert.match(result.stdout, /skipping/);
@@ -1132,6 +1134,34 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['.gsd/x/a.md']);
   });
 
+  test('an UNTRACKED .gitignore over tracked files is not a failure (only tracked rules count)', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-untracked-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { 'sub/a.md': 'x\n' });
+    fs.writeFileSync(path.join(tmpDir, 'sub', '.gitignore'), '*.md\n');
+    assertRuleActive(tmpDir, 'sub/a.md');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), []);
+  });
+
+  test('a locally MODIFIED tracked .gitignore rule is not trusted either', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-dirty-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { 'src/a.md': 'x\n' });
+    fs.appendFileSync(path.join(tmpDir, '.gitignore'), 'src/\n');
+    assertRuleActive(tmpDir, 'src/a.md');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), []);
+  });
+
+  test('a COMMITTED nested .gitignore rule over a tracked file is a failure', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-nested-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir, { 'sub/a.md': 'x\n' });
+    fs.writeFileSync(path.join(tmpDir, 'sub', '.gitignore'), '*.md\n');
+    git('add', 'sub/.gitignore');
+    git('commit', '-q', '-m', 'ignore md');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['sub/a.md']);
+  });
+
   test('getTrackedIgnoredFiles is empty for a clean repo', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-clean-'));
     t.after(() => cleanup(tmpDir));
@@ -1170,6 +1200,56 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     const result = runLint(tmpDir);
     assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
     assert.match(result.stdout, /ok lint-removed-but-needed/);
+  });
+});
+
+describe('removed-but-needed lint: base branch selection (resolveBaseBranch)', () => {
+  test('pull_request: GITHUB_BASE_REF wins', () => {
+    assert.equal(resolveBaseBranch({ GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'main' }), 'main');
+  });
+
+  test('GSD_REMOVED_BUT_NEEDED_BASE overrides everything', () => {
+    assert.equal(
+      resolveBaseBranch({ GSD_REMOVED_BUT_NEEDED_BASE: 'x', GITHUB_BASE_REF: 'main' }),
+      'x',
+    );
+  });
+
+  test('push: no base ref -> the documented default next', () => {
+    assert.equal(resolveBaseBranch({ GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' }), 'next');
+    assert.equal(resolveBaseBranch({}), 'next');
+  });
+
+  test('merge_group: the base is derived from the gh-readonly-queue ref', () => {
+    assert.equal(
+      resolveBaseBranch({ GITHUB_EVENT_NAME: 'merge_group', GITHUB_REF: 'refs/heads/gh-readonly-queue/main/pr-12-0123abcdef' }),
+      'main',
+    );
+    assert.equal(
+      resolveBaseBranch({ GITHUB_EVENT_NAME: 'merge_group', GITHUB_REF: 'refs/heads/gh-readonly-queue/release/1.2/pr-7-abc123' }),
+      'release/1.2',
+    );
+  });
+
+  test('merge_group: a malformed or unsafe GITHUB_REF falls back to next', () => {
+    for (const ref of [
+      '',
+      'refs/heads/main',
+      'refs/heads/gh-readonly-queue/main/not-a-queue-suffix',
+      'refs/heads/gh-readonly-queue/../x/pr-1-abc',
+      'refs/heads/gh-readonly-queue/-rf/pr-1-abc',
+      'refs/heads/gh-readonly-queue/a b/pr-1-abc',
+      'refs/heads/gh-readonly-queue/a$(x)/pr-1-abc',
+    ]) {
+      assert.equal(resolveBaseBranch({ GITHUB_EVENT_NAME: 'merge_group', GITHUB_REF: ref }), 'next', ref);
+    }
+  });
+
+  test('a non-merge_group event ignores a queue-shaped GITHUB_REF', () => {
+    assert.equal(
+      resolveBaseBranch({ GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/gh-readonly-queue/main/pr-12-0123abcdef' }),
+      'next',
+    );
   });
 });
 

@@ -572,6 +572,10 @@ describe('contract-drift: typed surface', () => {
       [0x202a, 0x202e], // bidi embeddings/overrides
       [0x2066, 0x2069], // bidi isolates
       [0xfeff, 0xfeff], // BOM / zero-width no-break space
+      [0x061c, 0x061c], // Arabic letter mark (bidi)
+      [0x2060, 0x2064], // word joiner + invisible operators
+      [0x180e, 0x180e], // Mongolian vowel separator
+      [0x00ad, 0x00ad], // soft hyphen
     ];
     for (const [lo, hi] of ranges) {
       for (let c = lo; c <= hi; c += 1) {
@@ -581,9 +585,24 @@ describe('contract-drift: typed surface', () => {
   });
 
   test('sanitizeEcho keeps the neighbours of the stripped ranges and ordinary non-ASCII text', () => {
-    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe]) {
+    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a, 0xfefe, 0x061b, 0x061d, 0x205f, 0x180d, 0x180f, 0xac, 0xae]) {
       const s = `a${String.fromCodePoint(c)}b`;
       assert.equal(sanitizeEcho(s), s, `U+${c.toString(16)} must be kept`);
+    }
+  });
+
+  test('sanitizeEcho caps by code point and never splits a surrogate pair', () => {
+    const out = sanitizeEcho(`a${'\u{1F600}'.repeat(250)}`);
+    assert.equal(Array.from(out).length, 200);
+    for (let i = 0; i < out.length; i += 1) {
+      const u = out.charCodeAt(i);
+      if (u >= 0xd800 && u <= 0xdbff) {
+        const next = out.charCodeAt(i + 1);
+        assert.ok(next >= 0xdc00 && next <= 0xdfff, 'lone high surrogate');
+        i += 1;
+      } else {
+        assert.ok(u < 0xdc00 || u > 0xdfff, 'lone low surrogate');
+      }
     }
   });
 });
