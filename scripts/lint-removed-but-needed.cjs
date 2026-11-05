@@ -559,7 +559,7 @@ function isSafeRepoPath(rel) {
 function isolatedGitEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|CONFIG.*)$/.test(key)) {
+    if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|TEMPLATE_DIR|CONFIG.*)$/.test(key)) {
       delete env[key];
     }
   }
@@ -602,7 +602,7 @@ function ignoredByTrackedRules(root, paths) {
   const gitDir = path.join(tmp, '.git');
   const isolated = { env: isolatedGitEnv(), cwd: tmp };
   try {
-    cp.execFileSync('git', ['--git-dir', gitDir, '--work-tree', tmp, 'init', '-q'], {
+    cp.execFileSync('git', ['--git-dir', gitDir, '--work-tree', tmp, 'init', '-q', '--template='], {
       ...isolated,
       timeout: 15000,
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -920,6 +920,7 @@ module.exports = {
   matchesByFullPath,
   getTrackedIgnoredFiles,
   ignoredByTrackedRules,
+  isolatedGitEnv,
   isSafeRepoPath,
   resolveBaseBranch,
   isBaseResolvable,
