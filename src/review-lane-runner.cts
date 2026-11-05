@@ -1138,6 +1138,11 @@ export async function runOpenAiCompatible(
   let model = plan.model;
   if (!model && plan.modelsUrl) {
     const listed = await deps.httpJson(plan.modelsUrl, { method: 'GET', timeoutMs: 2_000 });
+    // A redirect is a lane failure, not "discovery found nothing" (#5433): the host answered with
+    // somewhere else to go, so the configured URL is wrong and the completions request would be too.
+    if (listed.status >= 300 && listed.status < 400 && listed.error) {
+      return { review: '', rawBody: listed.error, model: recordedModel(plan.fallbackModel, MODEL_SOURCE.REQUESTED) };
+    }
     if (listed.ok) {
       try {
         const parsed = JSON.parse(listed.body) as { data?: Array<{ id?: unknown }> };

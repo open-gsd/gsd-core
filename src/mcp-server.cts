@@ -126,10 +126,10 @@ const TOOLS = [
       type: 'object',
       properties: {
         family: { type: 'string', description: 'Command family (e.g. "query", "state", "phase").' },
-        subcommand: { type: 'string', description: 'Subcommand name.' },
+        subcommand: { type: 'string', description: 'Subcommand name, if the command takes one. Omit or leave empty for family-only commands.' },
         args: { type: 'array', items: {}, description: 'Positional args.' },
       },
-      required: ['family', 'subcommand'],
+      required: ['family'],
     },
   },
   {
@@ -207,10 +207,13 @@ function callTool(name: string, args: unknown, ctx: McpContext): { content: Arra
     if (name === 'gsd_invoke_command') {
       const family = asString(a.family);
       const subcommand = asString(a.subcommand);
-      if (!family || !subcommand) {
-        return { isError: true, content: [{ type: 'text', text: 'gsd_invoke_command requires string "family" and "subcommand".' }] };
+      if (!family) {
+        return { isError: true, content: [{ type: 'text', text: 'gsd_invoke_command requires a non-empty string "family".' }] };
       }
-      const res = dispatchGsdCommand({ family, subcommand, args: Array.isArray(a.args) ? (a.args as string[]) : [], cwd });
+      if (a.subcommand !== undefined && subcommand === null) {
+        return { isError: true, content: [{ type: 'text', text: 'gsd_invoke_command requires string "subcommand" when provided.' }] };
+      }
+      const res = dispatchGsdCommand({ family, subcommand: subcommand ?? undefined, args: Array.isArray(a.args) ? (a.args as string[]) : [], cwd });
       if (!res.ok) {
         return { isError: true, content: [{ type: 'text', text: res.stderr || res.stdout || `dispatch failed (exit ${res.code})` }] };
       }

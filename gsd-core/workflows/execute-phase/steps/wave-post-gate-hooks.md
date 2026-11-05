@@ -2,7 +2,7 @@
 
 Detail for the `kind == "gate"` dispatch at the execute:wave:post hook point, extracted from the host step 5.7 (#3606 — the host file carries a frozen pre-phase-6 byte ceiling, #1168; evaluation detail lives here).
 
-⚠ **Validate `check` before shell use** (third-party manifest input) — `gsd-core/references/loop-hook-dispatch.md` § `gate`.
+⚠ **Validate `check` before shell use** (third-party manifest input; wherever `${hook.check.query}` appears, write the dot-normalized query, each `.` as `-`, and validate and pass that same value) — `gsd-core/references/loop-hook-dispatch.md` § `gate`.
 
 **For each active entry where `kind == "gate"`** (process in array order), run the gate check — a `predicate` gate (ADR-2008 / #2008) uses the check CLI's `predicate` form with the predicate JSON, phase directory and phase number (shown in the second block below):
 

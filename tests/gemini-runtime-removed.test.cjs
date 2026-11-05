@@ -225,8 +225,8 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
     const result = convertClaudeAgentToAntigravityAgent(input);
     const toolsBlock = result.slice(result.indexOf('tools:')).split('\n').filter((l) => l.startsWith('- '));
     assert.ok(toolsBlock.includes('- view_file'), 'Read → view_file (native name, #4705)');
-    assert.ok(toolsBlock.includes('- write_file'), 'Write → write_file');
-    assert.ok(toolsBlock.includes('- web_fetch'), 'WebFetch → web_fetch');
+    assert.ok(toolsBlock.includes('- write_to_file'), 'Write → write_to_file (#5447)');
+    assert.ok(toolsBlock.includes('- read_url_content'), 'WebFetch → read_url_content (#5447)');
     assert.ok(!toolsBlock.some((l) => /\bskill\b/.test(l)), 'Skill is still excluded (would be an invalid backend tool name)');
   });
 
@@ -261,21 +261,22 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
     // view_file / replace_file_content / grep_search / run_command as native,
     // and its tool-validation warning says wrong names can hang the subagent.
     // The old "Antigravity speaks the Gemini dialect" rationale was the belief
-    // at #4727 time; the confirmed bug #4705 supersedes it.
+    // at #4727 time; the confirmed bug #4705 supersedes it. #5447 moved four
+    // values to the names agy 1.3.5 registers and dropped TodoWrite (agy has no
+    // todo tool; it is now excluded below instead of mapped).
     assert.deepStrictEqual(mod.claudeToAntigravityTools, {
       Read: 'view_file',
-      Write: 'write_file',
+      Write: 'write_to_file',
       Edit: 'replace_file_content',
       Bash: 'run_command',
-      Glob: 'glob',
+      Glob: 'find_by_name',
       Grep: 'grep_search',
-      WebSearch: 'google_web_search',
-      WebFetch: 'web_fetch',
-      TodoWrite: 'write_todos',
-    }, 'the tool map keys are the #4727 rename surface (add/remove still fails); the VALUES are the #4705 Antigravity-native vocabulary');
+      WebSearch: 'search_web',
+      WebFetch: 'read_url_content',
+    }, 'the tool map keys are the #4727 rename surface (add/remove still fails); the VALUES are the #5447 agy-registered vocabulary');
 
     // In-set / out-of-set boundary pair: the excluded ids still return null individually...
-    for (const excluded of ['mcp__anything', 'Task', 'Agent', 'AskUserQuestion', 'ask_user', 'Skill', 'SlashCommand']) {
+    for (const excluded of ['mcp__anything', 'Task', 'Agent', 'AskUserQuestion', 'ask_user', 'Skill', 'SlashCommand', 'TodoWrite']) {
       assert.strictEqual(
         mod.convertAntigravityToolName(excluded),
         null,

@@ -254,8 +254,10 @@ test('unmarkedWorkflowEmitsByteIdenticalForEveryRuntime', (t) => {
     // and the two installs necessarily used DIFFERENT temp roots — an
     // unnormalized compare would report a spurious mismatch driven by
     // temp-path length, not by anything composeWorkflow's wiring did.
-    const realText = stripRoot(fs.readFileSync(realPath, 'utf8'), real.root);
-    const stubText = stripRoot(fs.readFileSync(stubPath, 'utf8'), stub.root);
+    // #5637: each install stamps its own random heredoc terminator; fold it back to the canonical token.
+    const foldNonce = (text) => text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
+    const realText = foldNonce(stripRoot(fs.readFileSync(realPath, 'utf8'), real.root));
+    const stubText = foldNonce(stripRoot(fs.readFileSync(stubPath, 'utf8'), stub.root));
     assert.equal(
       Buffer.byteLength(realText, 'utf8'),
       Buffer.byteLength(stubText, 'utf8'),

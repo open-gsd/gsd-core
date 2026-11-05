@@ -689,7 +689,7 @@ verified: YYYY-MM-DDTHH:MM:SSZ
 status: passed | gaps_found | human_needed
 score: N/M must-haves verified
 covered_files: [...]
-covered_digest: "v3:sha256:..."
+covered_digest: "v4:sha256:..."
 behavior_unverified: 0 # Count of ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths (present + wired, behavior not exercised); each is detailed in behavior_unverified_items below (and in human_verification when status is human_needed)
 overrides_applied: 0 # Count of PASSED (override) items included in score
 overrides: # Only if overrides exist — carried forward or newly added

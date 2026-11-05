@@ -190,7 +190,7 @@ v1.40 中，六个命名空间路由器作为第一阶段入口点随附发布�
 - `[SUS]` — 包被标记；规划器在安装任务前插入 `checkpoint:human-verify`
 - `[OK]` — 包已批准，不添加检查点
 
-来自 WebSearch 的包被标记为 `[ASSUMED]`（而非 `[VERIFIED]`），处理方式与 `[SUS]` 相同 — 安装前需要人工检查点。如果无法安装 `slopcheck`，所有推荐的包都会被标记为 `[ASSUMED]` 并加以限制。
+来自 WebSearch 的包被标记为 `[ASSUMED]`（而非 `[VERIFIED]`），处理方式与 `[SUS]` 相同 — 安装前需要人工检查点。注册表查询失败时降级为 `[SUS]` 而不是抛出异常，因此会被门控，而不会被静默接受。`slopcheck` 是可选的仅升级适配器，任何随附配置都没有接入它；门控的运行不需要它。
 
 完整的检查点格式、裁决表和故障排除，请参阅[用户指南中的包合法性检查门](USER-GUIDE.md#package-legitimacy-gate-v1421)。
 
@@ -1000,7 +1000,7 @@ ROADMAP.md 中阶段的 CRUD 操作 — 通过单一合并命令添加、插入�
 
 | 章节 | 键 |
 |---------|------|
-| 规划调优 | `workflow.plan_bounce`、`workflow.plan_bounce_passes`、`workflow.plan_bounce_script`、`workflow.subagent_timeout`、`workflow.inline_plan_threshold` |
+| 规划调优 | `planner.stall_detection_enabled`、`planner.stall_threshold_minutes`、`planner.stall_detect_interval_minutes`、`workflow.plan_bounce`、`workflow.plan_bounce_passes`、`workflow.plan_bounce_script`、`workflow.subagent_timeout`、`workflow.inline_plan_threshold` |
 | 执行调优 | `workflow.node_repair`、`workflow.node_repair_budget`、`workflow.auto_prune_state` |
 | 讨论调优 | `workflow.max_discuss_passes` |
 | 跨 AI 执行 | `workflow.cross_ai_execution`、`workflow.cross_ai_command`、`workflow.cross_ai_timeout` |
