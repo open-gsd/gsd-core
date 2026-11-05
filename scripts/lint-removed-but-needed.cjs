@@ -149,6 +149,7 @@
  */
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
@@ -533,24 +534,58 @@ function getDirtyGitignores(root) {
 }
 
 /**
- * Of `sources`, those `git ls-files` lists as tracked. Throws if git fails.
+ * Which of `paths` are ignored by the TRACKED `.gitignore` files alone, at
+ * their HEAD versions. `check-ignore -v` reports only the highest-precedence
+ * rule, so evaluating in the working tree lets an untracked or locally edited
+ * nested `.gitignore` mask a tracked rule. Instead every `.gitignore` at HEAD
+ * is materialized into a fresh empty repo (no `info/exclude`, global excludes
+ * disabled) and `git check-ignore --no-index` runs there; the paths need not
+ * exist. The temp dir is always removed. Throws if git fails.
  * @param {string} root
- * @param {string[]} sources
- * @returns {Set<string>}
+ * @param {string[]} paths - repo-relative, forward-slash separated
+ * @returns {Set<string>} the subset ignored by a non-negated tracked rule
  */
-function filterTrackedSources(root, sources) {
-  if (sources.length === 0) return new Set();
-  return new Set(
-    cp.execFileSync('git', ['--literal-pathspecs', 'ls-files', '-z', '--', ...sources], {
-      cwd: root,
-      encoding: 'utf8',
-      timeout: 15000,
-      maxBuffer: gitMaxBuffer(),
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-      .split('\0')
-      .filter(Boolean),
-  );
+function ignoredByTrackedRules(root, paths) {
+  if (paths.length === 0) return new Set();
+  const gitignores = cp.execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 15000,
+    maxBuffer: gitMaxBuffer(),
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).split('\0').filter((p) => p.split('/').pop() === '.gitignore');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignore-'));
+  try {
+    cp.execFileSync('git', ['init', '-q'], { cwd: tmp, timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'] });
+    for (const rel of gitignores) {
+      const blob = cp.execFileSync('git', ['show', `HEAD:${rel}`], {
+        cwd: root,
+        timeout: 15000,
+        maxBuffer: gitMaxBuffer(),
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const dest = path.join(tmp, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, blob);
+    }
+    let out;
+    try {
+      out = cp.execFileSync('git', ['-c', 'core.excludesFile=', 'check-ignore', '--no-index', '-v', '-z', '--stdin'], {
+        cwd: tmp,
+        encoding: 'utf8',
+        input: paths.map((f) => `${f}\0`).join(''),
+        timeout: 15000,
+        maxBuffer: gitMaxBuffer(),
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+    } catch (e) {
+      if (e && e.status === 1) return new Set(); // none ignored
+      throw e;
+    }
+    return new Set(parseCheckIgnoreZ(out).map((m) => m.pathname));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -559,10 +594,9 @@ function filterTrackedSources(root, sources) {
  *
  * - if the diff `<baseRef>...HEAD` touches any `.gitignore`, nothing is
  *   refined (the post-diff ignore rules are PR-controlled);
- * - `--no-index` makes git consult the ignore rules even though the path was
- *   once tracked; `-v` names the rule's source so `.git/info/exclude`, a
- *   global `core.excludesFile` and negated patterns can be rejected, and the
- *   source must be a TRACKED `.gitignore`;
+ * - the rules are the tracked `.gitignore` files at HEAD only, evaluated in an
+ *   isolated temp repo ({@link ignoredByTrackedRules}) so untracked files,
+ *   `.git/info/exclude`, global excludes and negated patterns cannot matter;
  * - `-z` throughout, so non-ASCII paths are not C-quoted.
  *
  * Degrades, never throws: exit 1 ("none ignored") and every other failure
@@ -583,21 +617,9 @@ function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
     // A local (staged or unstaged) edit to a tracked .gitignore is just as
     // un-base-controlled as a committed one.
     if (getDirtyGitignores(root).length > 0) return new Set();
-    const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
-      cwd: root,
-      encoding: 'utf8',
-      input: deletedFiles.map((f) => `${f}\0`).join(''),
-      timeout: 15000,
-      maxBuffer: gitMaxBuffer(),
-      stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    const matches = parseCheckIgnoreZ(out);
-    if (matches.length === 0) return new Set();
-    const sources = [...new Set(matches.map((m) => m.source))];
-    const tracked = filterTrackedSources(root, sources);
-    return new Set(matches.filter((m) => tracked.has(m.source)).map((m) => m.pathname));
+    return ignoredByTrackedRules(root, deletedFiles);
   } catch {
-    // exit 1 (none ignored) and any other failure: no refinement.
+    // Any failure: no refinement.
     return new Set();
   }
 }
@@ -712,30 +734,11 @@ function scan(root, baseRef) {
  * @returns {string[]} repo-relative paths
  */
 function getTrackedIgnoredFiles(root) {
-  // Candidate pass: ls-files reads EVERY per-directory .gitignore, including
-  // untracked ones, so it only nominates paths.
-  const candidates = cp.execFileSync('git', ['ls-files', '-z', '-c', '-i', '--exclude-per-directory=.gitignore'], {
-    cwd: root,
-    encoding: 'utf8',
-    timeout: 15000,
-    maxBuffer: gitMaxBuffer(),
-  }).split('\0').filter(Boolean);
-  if (candidates.length === 0) return [];
-  // Confirm pass: keep a candidate only when the rule that ignores it comes
-  // from a TRACKED .gitignore with no local edits (header: "tracked .gitignore
-  // rules unchanged from the base").
-  const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
-    cwd: root,
-    encoding: 'utf8',
-    input: candidates.map((f) => `${f}\0`).join(''),
-    timeout: 15000,
-    maxBuffer: gitMaxBuffer(),
-    stdio: ['pipe', 'pipe', 'ignore'],
-  });
-  const matches = parseCheckIgnoreZ(out);
-  const dirty = new Set(getDirtyGitignores(root));
-  const tracked = filterTrackedSources(root, [...new Set(matches.map((m) => m.source))]);
-  return [...new Set(matches.filter((m) => tracked.has(m.source) && !dirty.has(m.source)).map((m) => m.pathname))];
+  // Every tracked file is judged against the tracked .gitignore files at HEAD
+  // only (see ignoredByTrackedRules), so local/untracked rules cannot mask or
+  // add a finding.
+  const ignored = ignoredByTrackedRules(root, getSurvivingFiles(root));
+  return [...ignored];
 }
 
 /**
