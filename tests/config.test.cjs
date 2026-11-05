@@ -1601,7 +1601,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
     { command: 'config-set-model-profile', positionals: ['quality'] },
     { command: 'migrate-config', positionals: [] },
   ];
-  const unsupportedFlags = ['--dry-run', '--bogus-flag', '---dry-run', '--5', '--', '-1', '-'];
+  const unsupportedFlags = ['--dry-run', '--bogus-flag', '--dry-run=', '--raw=true', '---dry-run', '--5', '--', '-1', '-'];
   // Noncanonical bytes and a real legacy key expose both rewriting and migration.
   const legacyBytes = '{ "depth" : "comprehensive", "model_profile" : "balanced", "commit_docs" : false }\n';
 
@@ -1690,7 +1690,49 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
           }
         });
       }
+
+      test(`${invocation} accepts a repeated --raw without changing the mutation`, (t) => {
+        const f = fixture(command === 'migrate-config');
+        t.after(() => cleanup(f.dir));
+        const result = runGsdTools(
+          [...prefix, command, ...positionals, '--raw', '--raw'],
+          f.dir,
+          homeSandboxEnv(f.dir),
+        );
+        assert.ok(result.success, result.error);
+        assert.ok(fs.existsSync(f.configPath));
+      });
+
+      test(`${invocation} refuses an extra positional before writing`, (t) => {
+        const f = fixture(false);
+        t.after(() => cleanup(f.dir));
+        const extra = command === 'config-set-model-profile' ? 'extra-profile' : 'extra';
+        const result = runGsdTools(
+          [...prefix, command, ...positionals, extra, '--json-errors'],
+          f.dir,
+          homeSandboxEnv(f.dir),
+        );
+        assertUnchanged(f);
+        assert.equal(result.success, false);
+        assert.equal(result.exitCode, 1);
+        assert.match(JSON.parse(result.error).message, /Unexpected argument/);
+      });
     }
+  }
+
+  for (const profile of [undefined, '', '   ']) {
+    test(`config-set-model-profile refuses ${profile === undefined ? 'a missing' : JSON.stringify(profile)} profile before writing`, (t) => {
+      const f = fixture(false);
+      t.after(() => cleanup(f.dir));
+      const result = runGsdTools(
+        ['config-set-model-profile', ...(profile === undefined ? [] : [profile]), '--json-errors'],
+        f.dir,
+        homeSandboxEnv(f.dir),
+      );
+      assertUnchanged(f);
+      assert.equal(result.success, false);
+      assert.equal(result.exitCode, 1);
+    });
   }
 
   test('unknown flag spelling and placement cannot bypass refusal on any of the three routes', async () => {

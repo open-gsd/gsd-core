@@ -798,13 +798,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
   }
 
-  function rejectUnknownConfigMutationFlags(args) {
+  function rejectUnknownConfigMutationFlags(args, positionalCount) {
     // #5286: reject before dispatch or positional selection; main removes --raw.
-    rejectUnknownFlags(args.slice(1), new Set(['--raw']), args[0]);
+    const knownFlags = new Set(['--raw']);
+    rejectUnknownFlags(args.slice(1), knownFlags, args[0]);
+    const positionals = args.slice(1).filter((arg) => !knownFlags.has(arg));
+    if (positionals.length > positionalCount) {
+      error(`Unexpected argument for ${args[0]}: ${positionals[positionalCount]}`, ERROR_REASON.USAGE);
+    }
   }
 
   function routeConfigEnsureSection({ args, cwd, raw }) {
-    rejectUnknownConfigMutationFlags(args);
+    rejectUnknownConfigMutationFlags(args, 0);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-ensure-section',
       registryArgs: args.slice(1),
@@ -833,7 +838,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigSetModelProfile({ args, cwd, raw }) {
-    rejectUnknownConfigMutationFlags(args);
+    rejectUnknownConfigMutationFlags(args, 1);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-set-model-profile',
       registryArgs: args.slice(1),
@@ -907,7 +912,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   async function routeMigrateConfig({ args, cwd, raw }) {
-    rejectUnknownConfigMutationFlags(args);
+    rejectUnknownConfigMutationFlags(args, 0);
     await config.cmdMigrateConfig(cwd, raw);
   }
 

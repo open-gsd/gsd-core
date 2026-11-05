@@ -658,9 +658,11 @@ it is not reported when the config already exists.
 
 `config-ensure-section`, `config-set-model-profile`, and `migrate-config` accept
 `--raw` but do not support `--dry-run`. They reject unsupported flags with a
-usage error before writing, including flags before the profile argument. The
-same contract applies with the `query` prefix. `config-set --dry-run` supports
-previewing an individual value change without writing.
+usage error before writing, including `--json`, `--force`, `--workstream`, and
+repeated global `--cwd` / `--project-dir` flags, including flags before the
+profile argument. Extra positional arguments are refused too. The same contract
+applies with the `query` prefix. `config-set --dry-run` supports previewing an
+individual value change without writing.
 
 ---
 
