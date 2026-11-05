@@ -1479,10 +1479,22 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
 
   test('#5715: trae converter does not rescan prefix', () => {
     const prefix = '$HOME/.claude/profiles/work/';
-    const rewritten = _applyRuntimeRewrites(SLASH_SRC, 'trae', prefix, true, undefined);
-    const skill = installJs.convertClaudeCommandToTraeSkill(rewritten, 'gsd-x');
+    const skill = _applyRuntimeRewrites(installJs.convertClaudeCommandToTraeSkill(SLASH_SRC, 'gsd-x'), 'trae', prefix, true, undefined);
     assert.strictEqual(occurrences(skill, '$HOME/.claude/profiles/work/'), 2, skill);
     assert.ok(!skill.includes('.trae/profiles'), skill);
+  });
+
+  test('#5715: Trae own-dir forms follow the install prefix', () => {
+    const src = ['A ~/.trae/x', 'B $HOME/.trae/y', 'C ~/.trae', 'D $HOME/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex'].join('\n');
+    const cases = [
+      ['$HOME/.trae/', true, ['A $HOME/.trae/x', 'B $HOME/.trae/y', 'C ~/.trae', 'D $HOME/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex']],
+      ['$HOME/.claude/profiles/work/', true, ['A $HOME/.claude/profiles/work/x', 'B $HOME/.claude/profiles/work/y', 'C $HOME/.claude/profiles/work', 'D $HOME/.claude/profiles/work', 'E ~/.trae-plugin', 'F $HOME/.traex']],
+      ['.trae/', false, ['A .trae/x', 'B .trae/y', 'C .trae', 'D .trae', 'E ~/.trae-plugin', 'F $HOME/.traex']],
+      ['/p/proj/.trae/', false, ['A /p/proj/.trae/x', 'B /p/proj/.trae/y', 'C /p/proj/.trae', 'D /p/proj/.trae', 'E ~/.trae-plugin', 'F $HOME/.traex']],
+    ];
+    for (const [prefix, isGlobal, expected] of cases) {
+      assert.strictEqual(_applyRuntimeRewrites(src, 'trae', prefix, isGlobal, undefined), expected.join('\n'), prefix);
+    }
   });
 
   describe('windsurf .devin forms', () => {
@@ -1746,10 +1758,6 @@ describe('#5715: shieldEmittedPrefix', () => {
     }
   });
 
-  test('#5715: the standalone Trae converter leaves ~/.claude/ and $HOME/.claude/ forms for the rewrite pass', () => {
-    const src = 'See ~/.claude/x and $HOME/.claude/y and .claude/skills/z';
-    assert.strictEqual(conv.convertClaudeToTraeMarkdown(src), 'See ~/.claude/x and $HOME/.claude/y and .trae/skills/z');
-  });
 });
 
 describe('#5715: --config-dir containing .claude/ and $& on every runtime with a post-prefix converter (spawned installer)', { skip: process.platform === 'win32' && 'POSIX paths' }, () => {

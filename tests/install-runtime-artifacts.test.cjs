@@ -5430,9 +5430,10 @@ describe('rewriteStagedSkillBodies', () => {
     }
   });
 
-  // #5715: the Trae converter no longer rewrites `~/.claude/` or `$HOME/.claude/`
-  // itself; the `slash-bare-own-derived` profile does, in the pass that runs on the
-  // staged skill AFTER the converter. These tests pin the end-to-end result.
+  // #5715: the Trae converter rewrites `~/.claude/` and `$HOME/.claude/` to the
+  // Trae dir; the `slash-bare-own-derived` profile then maps the Trae dir forms to
+  // the install prefix, in the pass that runs on the staged skill AFTER the
+  // converter. These tests pin the end-to-end result.
   describe('#5715: Trae staged skill config-dir paths', () => {
     const TRAE_SRC = [
       '---',
