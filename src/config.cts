@@ -763,15 +763,33 @@ function readPath(obj: Record<string, unknown>, dotted: string): unknown {
   return isPlainObject(section) ? section[field] : undefined;
 }
 
+/** `obj` without the value at a one- or two-segment config path; a section left empty is dropped. */
+function withoutPath(obj: Record<string, unknown>, dotted: string): Record<string, unknown> {
+  const [head, field] = dotted.split('.');
+  const result: Record<string, unknown> = { ...obj };
+  if (field === undefined) {
+    delete result[head];
+  } else if (isPlainObject(result[head])) {
+    const section: Record<string, unknown> = { ...result[head] };
+    delete section[field];
+    if (Object.keys(section).length === 0) delete result[head];
+    else result[head] = section;
+  }
+  return result;
+}
+
 /**
- * Remove from `store` the legacy spelling of every setting `patch` sets, or the
- * stale legacy value keeps winning over the saved one. `patch` has passed the
- * `config-set` key rules, which accept only canonical spellings.
+ * Remove from `store` the other spelling of every setting `patch` sets. A stale
+ * legacy value keeps winning over a saved canonical one, and a stale canonical
+ * value is copied into every new project beside a saved legacy one. `patch` has
+ * passed the `config-set` key rules, which accept the canonical spellings and a
+ * few legacy ones (`commit_docs`).
  */
 function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...store };
+  let result: Record<string, unknown> = { ...store };
   for (const [legacy, canonical] of SPELLING_TWINS) {
-    if (readPath(patch, canonical) !== undefined) delete result[legacy];
+    if (readPath(patch, canonical) !== undefined) result = withoutPath(result, legacy);
+    if (readPath(patch, legacy) !== undefined) result = withoutPath(result, canonical);
   }
   return result;
 }
@@ -804,8 +822,11 @@ function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<st
  * `resolve_model_ids`, unlisted `workflow` keys …) survive. The settings are held
  * to the `config-set` rules first, as `config-new-project` holds its choices,
  * since this store seeds every new project; a null clears its key. A saved
- * setting removes its legacy spelling (SPELLING_TWINS). A missing file is
+ * setting removes its other spelling (SPELLING_TWINS). A missing file is
  * created; an unreadable or non-object one is refused rather than overwritten.
+ * A symlinked store is written through, so the link survives. Saves are not
+ * serialized: the store has other unlocked writers (the installer, the
+ * `depth` migration), so concurrent writes are documented as unsupported.
  */
 function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, raw: boolean): void {
   let settings: unknown;
@@ -824,10 +845,18 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
   let existing: Record<string, unknown> = {};
   const created = !fs.existsSync(defaultsPath);
+  // A store kept as a symlink (into a dotfiles repo) is read and written at its
+  // target: the atomic write renames over its path, which would replace the link.
+  let storePath = defaultsPath;
   if (!created) {
+    try {
+      storePath = fs.realpathSync(defaultsPath);
+    } catch (err) {
+      error(`Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`);
+    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+      parsed = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
     } catch (err) {
       error(`Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`);
     }
@@ -838,7 +867,7 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   }
 
   try {
-    platformWriteSync(defaultsPath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
+    platformWriteSync(storePath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
   } catch (err) {
     error('Failed to write defaults.json: ' + (err as Error).message);
   }
@@ -1841,6 +1870,7 @@ export = {
   cmdConfigNewProject,
   cmdConfigSaveDefaults,
   mergeIntoGlobalDefaults,
+  SPELLING_TWINS,
   cmdConfigPath,
   cmdMigrateConfig,
   // Exported for programmatic use by capability-writer and tests

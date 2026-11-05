@@ -737,13 +737,19 @@ It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.
 `GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
 replaces. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
 `resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
-`config-set` key and value rules first, as `config-new-project` choices are, so only canonical
-spellings are accepted (`git.branching_strategy`, not `branching_strategy`). A saved setting
-removes its legacy spelling from the store (`research` for `workflow.research`, `depth` for
-`granularity`), so a stale value cannot keep winning. A missing file is created. The search
-flags that new projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
+`config-set` key and value rules first, as `config-new-project` choices are, so a key must be
+spelled the way `config-set` accepts it: `git.branching_strategy`, not `branching_strategy`
+(a few flat spellings, such as `commit_docs`, are accepted). Saving either spelling of a
+setting removes the other from the store (`research` for `workflow.research`,
+`planning.commit_docs` for `commit_docs`, `depth` for `granularity`), so a stale value cannot
+keep winning or be copied into new projects. A missing file is created, and a store kept as a
+symlink is written through to its target, so the link survives. The search flags that new
+projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
 `tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. A store that is not
 valid JSON, or not a JSON object, is refused and left as it was.
+
+Saves are not serialized. Two saves at the same time, or a save while the installer updates
+the store, can lose one writer's keys, so run them one at a time.
 
 ---
 

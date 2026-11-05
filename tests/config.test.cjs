@@ -4229,6 +4229,84 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   });
 });
 
+describe('#5681: a save removes the other spelling of every spelling twin', () => {
+  // Table-driven over SPELLING_TWINS, the one list of [legacy, canonical] pairs,
+  // so a new LEGACY_FLAT_KEYS entry is covered without a new row.
+  const { SPELLING_TWINS } = configLib;
+  const at = (obj, dotted) => dotted.split('.').reduce((o, seg) => (o == null ? undefined : o[seg]), obj);
+  const nested = (dotted, value) => {
+    const [head, field] = dotted.split('.');
+    return field === undefined ? { [head]: value } : { [head]: { [field]: value } };
+  };
+  function store(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-twins-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, JSON.stringify(contents));
+    const save = (settings) => runGsdTools(['config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
+    return { defaultsPath, save, read: () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')) };
+  }
+
+  test('saving each canonical spelling drops its stale legacy spelling', (t) => {
+    assert.ok(SPELLING_TWINS.length > 0, 'precondition: the twin table is not empty');
+    const seeded = {};
+    const patch = {};
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      seeded[legacy] = 'stale-legacy';
+      const [head, field] = canonical.split('.');
+      if (field === undefined) patch[head] = true;
+      else patch[head] = { ...patch[head], [field]: true };
+    }
+    // config-set's value rules accept `true` for every canonical key; the row is
+    // about which spelling survives, not the value.
+    const { save, read } = store(t, seeded);
+    const result = save(patch);
+    assert.ok(result.success, result.error);
+    const saved = read();
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      assert.strictEqual(at(saved, legacy), undefined, `${legacy} must be dropped when ${canonical} is saved`);
+      assert.strictEqual(at(saved, canonical), true, `${canonical} must hold the saved value`);
+    }
+  });
+
+  test('saving a legacy spelling drops its stale canonical spelling, or is refused untouched', (t) => {
+    const accepted = [];
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      const seeded = nested(canonical, 'stale-canonical');
+      const { defaultsPath, save, read } = store(t, seeded);
+      const before = fs.readFileSync(defaultsPath, 'utf-8');
+      const result = save({ [legacy]: true });
+      if (result.success) {
+        accepted.push(legacy);
+        assert.strictEqual(at(read(), canonical), undefined, `${canonical} must be dropped when ${legacy} is saved`);
+        assert.strictEqual(at(read(), legacy), true);
+      } else {
+        assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before, `a refused ${legacy} save must leave the store as it was`);
+      }
+    }
+    // The settings template saves the flat `commit_docs`, so this direction is live.
+    assert.ok(accepted.includes('commit_docs'), `commit_docs must be an accepted legacy spelling (accepted: ${accepted.join(', ')})`);
+  });
+
+  test('a symlinked store is written through, and the link survives', { skip: process.platform === 'win32' }, (t) => {
+    const gsdHome = createTempDir('gsd-5681-link-');
+    const dotfiles = createTempDir('gsd-5681-dotfiles-');
+    t.after(() => { cleanup(gsdHome); cleanup(dotfiles); });
+    const real = path.join(dotfiles, 'defaults.json');
+    fs.writeFileSync(real, JSON.stringify({ runtime: 'codex', model_profile: 'quality' }));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.symlinkSync(real, defaultsPath);
+
+    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
+    assert.ok(result.success, result.error);
+    assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the store must still be a symlink after a save');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(real, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' },
+      'the save must land in the link target, merged');
+  });
+});
+
 describe('#5681: config-save-defaults holds the settings to the config-set rules', () => {
   // The store seeds every new project, so it takes only what config-set would
   // store, as config-new-project's choices do (#5268).

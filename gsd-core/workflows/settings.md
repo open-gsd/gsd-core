@@ -570,7 +570,7 @@ AskUserQuestion([
 
 If "Yes": merge these settings into the global defaults store, `${GSD_HOME:-$HOME}/.gsd/defaults.json` (`~/.gsd/defaults.json` unless `GSD_HOME` is set). Do not write the file yourself: `config-save-defaults` merges, so keys this flow does not manage (`model_overrides`, `effort`, `runtime`, `resolve_model_ids`, `workflow` keys not listed below) survive, and it never copies machine-detected fields like `brave_search` (#5681).
 
-Replace each `<current>` with the setting's current value written as JSON (a string in double quotes; `true`, `false`, a number or `null` bare). The quoted heredoc passes the object to the command unchanged, so a `'`, `$` or backtick in a value such as `quick_branch_template` needs no escaping:
+Replace each `<current>` with the setting's current value written as JSON (a string in double quotes; `true`, `false` or a number bare). Leave out a setting that has no current value: a `null` removes the key from the store, so it would clear a value saved earlier. The quoted heredoc passes the object to the command unchanged, so a `'`, `$` or backtick in a value such as `quick_branch_template` needs no escaping:
 
 ```bash
 DEFAULTS_JSON=$(cat <<'JSON'
