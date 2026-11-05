@@ -48,6 +48,44 @@ function makeFifo(fifoPath) {
   execFileSync('mkfifo', [fifoPath], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
 }
 
+/**
+ * Start a FIFO reader child, wait until it has opened the pipe ("ready" on its stderr), then run
+ * a platformWriteSync writer of `total` bytes against it. Resolves with the writer's stdout (its
+ * "done" or the error code it caught) and the reader's stdout. Both children are bounded by a
+ * kill timer; nothing asserts on elapsed time.
+ */
+function withFifoReader(fifo, readerScript, extraOpts, total, cwd, killReader = false) {
+  const { spawn } = require('node:child_process');
+  return new Promise((resolve, reject) => {
+    const reader = spawn(process.execPath, ['-e', readerScript, fifo], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let readerOut = '';
+    let started = false;
+    const kill = setTimeout(() => { reader.kill('SIGKILL'); reject(new Error('FIFO reader did not finish')); }, PROBE_TIMEOUT_MS * 3);
+    reader.stdout.on('data', (d) => { readerOut += d; });
+    reader.stderr.on('data', () => {
+      if (started) return;
+      started = true;
+      const writerScript = [
+        'try {',
+        '  require(process.argv[1]).platformWriteSync(process.argv[2], "x".repeat(' + total + '),',
+        '    { allowSpecialTarget: true, verbatim: true' + extraOpts + ' });',
+        '  process.stdout.write("done");',
+        '} catch (e) { process.stdout.write(e.code || String(e)); }',
+      ].join('\n');
+      const w = spawn(process.execPath, ['-e', writerScript, SHELL_PROJECTION_PATH, fifo], {
+        cwd, env: installSpawnEnv({}), stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      let writer = '';
+      w.stdout.on('data', (d) => { writer += d; });
+      w.on('close', () => {
+        // A reader that exits on EOF is awaited so its byte count arrives; a stalled one is killed.
+        if (killReader) reader.kill('SIGKILL');
+        reader.on('close', () => { clearTimeout(kill); resolve({ writer, readerOut }); });
+      });
+    });
+  });
+}
+
 function loadResolvedInChild(cwd) {
   return runNode(['-e', LOAD_RESOLVED_SCRIPT, CONFIG_LOADER_PATH, cwd], {
     cwd,
@@ -544,36 +582,46 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     const reader = [
       'const fs = require("node:fs");',
       'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'process.stderr.write("ready");',
       'const buf = Buffer.alloc(4096); let n = 0, r;',
       'const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);',
       'while ((r = fs.readSync(fd, buf, 0, buf.length, null)) > 0) { n += r; if (n % 65536 < 4096) sleep(5); }',
       'process.stdout.write(String(n));',
     ].join('\n');
-    const { spawn } = require('node:child_process');
-    const child = spawn(process.execPath, ['-e', reader, fifo], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let received = '';
-    child.stdout.on('data', (d) => { received += d; });
-    const writer = [
-      'const { platformWriteSync } = require(process.argv[1]);',
-      `platformWriteSync(process.argv[2], "x".repeat(${total}), { allowSpecialTarget: true, verbatim: true });`,
-      'process.stdout.write("done");',
+
+    return withFifoReader(fifo, reader, `, specialTargetWait: {}`, total, tmpDir).then(({ writer, readerOut }) => {
+      assert.strictEqual(writer, 'done');
+      assert.strictEqual(Number(readerOut), total);
+    });
+  });
+
+  test('a reader that closes mid-write surfaces a coded EPIPE error, not a hang', () => {
+    const fifo = path.join(tmpDir, 'leave.fifo');
+    makeFifo(fifo);
+    const reader = [
+      'const fs = require("node:fs");',
+      'const fd = fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'process.stderr.write("ready");',
+      'fs.readSync(fd, Buffer.alloc(65536), 0, 65536, null);',
+      'process.exit(0);',
     ].join('\n');
-    const r = runNode(['-e', writer, SHELL_PROJECTION_PATH, fifo], {
-      cwd: tmpDir,
-      env: installSpawnEnv({}),
-      timeoutMs: PROBE_TIMEOUT_MS,
-    });
-    return new Promise((resolve, reject) => {
-      const kill = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('reader did not finish')); }, PROBE_TIMEOUT_MS);
-      child.on('close', () => {
-        clearTimeout(kill);
-        try {
-          assertExitedByItself(r);
-          assert.strictEqual(Number(received), total);
-          resolve();
-        } catch (err) { reject(err); }
-      });
-    });
+
+    return withFifoReader(fifo, reader, ', specialTargetWait: { sleep: () => {}, maxWaitMs: 100000 }', 256 * 1024, tmpDir)
+      .then(({ writer }) => { assert.strictEqual(writer, 'EPIPE'); });
+  });
+
+  test('a reader that never drains the pipe ends in a coded ETIMEDOUT once the bound is spent', () => {
+    const fifo = path.join(tmpDir, 'stall.fifo');
+    makeFifo(fifo);
+    const reader = [
+      'const fs = require("node:fs");',
+      'fs.openSync(process.argv[1], fs.constants.O_RDONLY);',
+      'process.stderr.write("ready");',
+      'setTimeout(() => {}, 60000);',
+    ].join('\n');
+
+    return withFifoReader(fifo, reader, ', specialTargetWait: { sleep: () => {}, maxWaitMs: 10 }', 256 * 1024, tmpDir, true)
+      .then(({ writer }) => { assert.strictEqual(writer, 'ETIMEDOUT'); });
   });
 
   test('a regular file reached through /dev/../ takes the atomic path (no special handling)', () => {
@@ -1048,6 +1096,28 @@ describe('#5759 plugin copies honor the shared config size cap', () => {
       });
     }
   }
+});
+
+// Windows only: NUL is a character device and is written in place (no temp file beside it).
+describe('#5759 allowSpecialTarget on Windows device names', {
+  skip: process.platform === 'win32' ? false : 'NUL and CON exist only on Windows',
+}, () => {
+  test('platformWriteSync("NUL", ..., { allowSpecialTarget: true }) succeeds and leaves no temp file', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-nul-'));
+    try {
+      const script = [
+        'try { require(process.argv[1]).platformWriteSync("NUL", "hello\\n", { allowSpecialTarget: true }); process.stdout.write("ok"); }',
+        'catch (e) { process.stdout.write(String(e.code)); }',
+      ].join('\n');
+      const r = runNode(['-e', script, SHELL_PROJECTION_PATH], {
+        cwd, env: installSpawnEnv({}), timeoutMs: PROBE_TIMEOUT_MS,
+      });
+
+      assertExitedByItself(r);
+      assert.strictEqual(r.stdout, 'ok');
+      assert.deepStrictEqual(fs.readdirSync(cwd), []);
+    } finally { cleanup(cwd); }
+  });
 });
 
 // Runs on every OS: a directory at the config path is unusable everywhere. POSIX reports
