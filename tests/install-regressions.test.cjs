@@ -2292,63 +2292,12 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
     }
   });
 
-  // Uninstall rewrites settings.json through writeSettings after it removes
-  // GSD's files, so the refusal comes at that write, once those removals are
-  // done. Checking before the first removal is left to its own design.
+  // Uninstall rewrites settings.json only after it removes GSD's files, so
+  // when it would rewrite a symlinked settings.json it checks the link before
+  // the first removal. A refusal must leave every installed file in place,
+  // not just the link. A settings.json it would not rewrite (no GSD entries,
+  // unparseable, or a dangling link) must not block the uninstall.
   describe('uninstall', () => {
-    for (const optIn of [false, true]) {
-      test(optIn
-        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 uninstall cleans the link target and the link survives'
-        : 'without GSD_ALLOW_SYMLINKED_DEST uninstall refuses the settings write and leaves the link and its target unchanged', (t) => {
-        const root = createTempDir('gsd-5037-uninstall-');
-        t.after(() => cleanup(root));
-        const claudeDir = path.join(root, '.claude');
-        const settingsPath = path.join(claudeDir, 'settings.json');
-        fs.mkdirSync(claudeDir, { recursive: true });
-        fs.writeFileSync(settingsPath, JSON.stringify(USER_SETTINGS, null, 2) + '\n');
-
-        const installed = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn: false });
-        assert.strictEqual(installed.exitCode, 0, `setup install exited ${installed.exitCode}\n${installed.stdout}\n${installed.stderr}`);
-        const gsdCoreDir = path.join(claudeDir, 'gsd-core');
-        assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
-
-        // Move the installed settings.json into a dotfiles dir and link it back.
-        const installedSettings = fs.readFileSync(settingsPath, 'utf8');
-        fs.unlinkSync(settingsPath);
-        const targetPath = linkSettings(root, settingsPath, installedSettings);
-        if (!targetPath) {
-          t.skip('symlink creation unsupported on this platform/privilege');
-          return;
-        }
-        assert.ok(hasGsdSessionStartHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
-
-        const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
-
-        assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
-        assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
-        if (optIn) {
-          assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
-          assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
-          const after = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
-          assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive in the link target');
-          assert.strictEqual(hasGsdSessionStartHook(after), false, 'GSD hooks must be removed from the link target');
-        } else {
-          // 1, not merely non-zero: a timed-out or killed uninstall reports null.
-          assert.strictEqual(result.exitCode, 1,
-            `a refused settings write must fail the uninstall\n${result.stdout}\n${result.stderr}`);
-          // gsd-core/ is removed just before the settings write, so its absence
-          // shows the run got that far rather than failing earlier.
-          assert.strictEqual(fs.existsSync(gsdCoreDir), false,
-            'the uninstall must have reached the settings write before failing');
-          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), installedSettings,
-            'the link target must be byte-for-byte unchanged');
-        }
-      });
-    }
-
-    // writeSettings only runs when uninstall changed the settings, so a link
-    // holding no GSD entries, or a dangling one, is never written and must not
-    // block the uninstall, with or without the opt-in.
     function installClaudeGlobal(root) {
       const claudeDir = path.join(root, '.claude');
       const installed = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn: false });
@@ -2356,6 +2305,73 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
       const gsdCoreDir = path.join(claudeDir, 'gsd-core');
       assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
       return { claudeDir, settingsPath: path.join(claudeDir, 'settings.json'), gsdCoreDir };
+    }
+
+    // Every entry under `dir` except settings.json (the link, which has its
+    // own asserts), as sorted [path, kind, size, mtimeMs] rows, so a
+    // before/after comparison shows any file removed, added or rewritten.
+    function snapshotTree(dir) {
+      return fs.readdirSync(dir, { recursive: true }).map(String)
+        .filter((rel) => rel !== 'settings.json')
+        .sort()
+        .map((rel) => {
+          const st = fs.lstatSync(path.join(dir, rel));
+          const kind = st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : 'file';
+          // A directory's mtime moves whenever an entry is added or removed,
+          // which the path list already shows, so only files carry size and mtime.
+          return kind === 'file' ? [rel, kind, st.size, st.mtimeMs] : [rel, kind];
+        });
+    }
+
+    // Asserts a refused uninstall exited 1 and changed nothing in the config
+    // dir, and that the link and its target are as they were.
+    function assertRefusedUnchanged(result, l, before) {
+      // 1, not merely non-zero: a timed-out or killed uninstall reports null.
+      assert.strictEqual(result.exitCode, 1,
+        `a refused settings write must fail the uninstall\n${result.stdout}\n${result.stderr}`);
+      assert.deepStrictEqual(snapshotTree(l.claudeDir), before.tree, 'the config dir must be left unchanged');
+      assert.ok(fs.lstatSync(l.settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(l.settingsPath), l.targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(l.targetPath, 'utf8'), before.target,
+        'the link target must be byte-for-byte unchanged');
+    }
+
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 uninstall cleans the link target and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST uninstall refuses before removing anything', (t) => {
+        const root = createTempDir('gsd-5037-uninstall-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        fs.mkdirSync(claudeDir, { recursive: true });
+        fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify(USER_SETTINGS, null, 2) + '\n');
+        const l = installClaudeGlobal(root);
+
+        // Move the installed settings.json into a dotfiles dir and link it back.
+        const installedSettings = fs.readFileSync(l.settingsPath, 'utf8');
+        fs.unlinkSync(l.settingsPath);
+        l.targetPath = linkSettings(root, l.settingsPath, installedSettings);
+        if (!l.targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        assert.ok(hasGsdSessionStartHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
+        const before = { tree: snapshotTree(l.claudeDir), target: installedSettings };
+
+        const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
+
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          assert.strictEqual(fs.existsSync(l.gsdCoreDir), false, 'uninstall must remove gsd-core/');
+          assert.ok(fs.lstatSync(l.settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+          assert.strictEqual(fs.readlinkSync(l.settingsPath), l.targetPath, 'the link must still point at the same target');
+          const after = JSON.parse(fs.readFileSync(l.targetPath, 'utf8'));
+          assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive in the link target');
+          assert.strictEqual(hasGsdSessionStartHook(after), false, 'GSD hooks must be removed from the link target');
+        } else {
+          assertRefusedUnchanged(result, l, before);
+        }
+      });
     }
 
     test('without GSD_ALLOW_SYMLINKED_DEST uninstall succeeds over a linked settings.json with no GSD entries and leaves it untouched', (t) => {
@@ -2379,6 +2395,60 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
       assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
     });
 
+    // Step 6 skips a settings.json it cannot parse, so it never writes one,
+    // and an unparseable link must not block the uninstall either.
+    test('without GSD_ALLOW_SYMLINKED_DEST uninstall succeeds over an unparseable linked settings.json and leaves it untouched', (t) => {
+      const root = createTempDir('gsd-5037-uninstall-unparseable-');
+      t.after(() => cleanup(root));
+      const { claudeDir, settingsPath, gsdCoreDir } = installClaudeGlobal(root);
+      const before = '{ not json';
+      fs.unlinkSync(settingsPath);
+      const targetPath = linkSettings(root, settingsPath, before);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn: false });
+
+      assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+      assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+    });
+
+    // pi keeps its own settings in the settings.json beside GSD's files, and
+    // GSD writes no entries there, so uninstalling GSD from pi never rewrites
+    // it and a linked one must not block the uninstall.
+    test('without GSD_ALLOW_SYMLINKED_DEST a pi global uninstall succeeds over a linked settings.json with no GSD entries', (t) => {
+      const root = createTempDir('gsd-5037-uninstall-pi-');
+      t.after(() => cleanup(root));
+      const piDir = path.join(root, '.pi', 'agent');
+      const installed = runInstaller(root, ['--pi', '--global', '--config-dir', piDir], { optIn: false });
+      assert.strictEqual(installed.exitCode, 0, `setup install exited ${installed.exitCode}\n${installed.stdout}\n${installed.stderr}`);
+      const gsdCoreDir = path.join(piDir, 'gsd-core');
+      assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
+      const settingsPath = path.join(piDir, 'settings.json');
+      assert.strictEqual(fs.existsSync(settingsPath), false, 'setup: the pi install must not have written settings.json');
+      const before = JSON.stringify({ defaultModel: 'x' }, null, 2) + '\n';
+      const targetPath = linkSettings(root, settingsPath, before);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      const result = runInstaller(root, ['--pi', '--global', '--uninstall', '--config-dir', piDir], { optIn: false });
+
+      assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+      assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+    });
+
+    // existsSync reports a dangling link as missing, so neither the check nor
+    // step 6 looks at it, and the uninstall completes with or without the opt-in.
     for (const optIn of [false, true]) {
       test(`uninstall succeeds over a dangling settings.json link and leaves it in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'})`, (t) => {
         const root = createTempDir('gsd-5037-uninstall-dangling-');
