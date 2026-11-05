@@ -20,6 +20,9 @@ const LINT_REASON = Object.freeze({
   OK_FRAGMENT_PRESENT: 'ok_fragment_present',
   OK_OPT_OUT_LABEL: 'ok_opt_out_label',
   OK_NO_USER_FACING_CHANGES: 'ok_no_user_facing_changes',
+  // #5903: the release pipeline's own PRs consume every fragment into
+  // CHANGELOG.md, so they carry none by design.
+  OK_RELEASE_PIPELINE: 'ok_release_pipeline',
   FAIL_MISSING_FRAGMENT: 'fail_missing_fragment',
   FAIL_INVALID_FRAGMENT: 'fail_invalid_fragment',
   FAIL_PR_FIELD_DRIFT: 'fail_pr_field_drift',
@@ -86,12 +89,17 @@ function findPrFieldDrift(prEntries, realPrNumber) {
   return drift;
 }
 
-function evaluateLint({ changedFiles, labels, fragmentFailures = [], prFieldDrift = [] }) {
+function evaluateLint({
+  changedFiles, labels, fragmentFailures = [], prFieldDrift = [], releasePipelineKind = null,
+}) {
   if (fragmentFailures.length > 0) {
     return { ok: false, reason: LINT_REASON.FAIL_INVALID_FRAGMENT, failures: fragmentFailures };
   }
   if (prFieldDrift.length > 0) {
     return { ok: false, reason: LINT_REASON.FAIL_PR_FIELD_DRIFT, drift: prFieldDrift };
+  }
+  if (releasePipelineKind) {
+    return { ok: true, reason: LINT_REASON.OK_RELEASE_PIPELINE, releasePipelineKind };
   }
   if (changedFiles.some(isFragment)) {
     return { ok: true, reason: LINT_REASON.OK_FRAGMENT_PRESENT };
@@ -107,6 +115,7 @@ function evaluateLint({ changedFiles, labels, fragmentFailures = [], prFieldDrif
 
 const { ExitError, runMain } = require('../lib/cli-exit.cjs');
 const { parseFragment } = require('./parse.cjs');
+const { releasePipelinePrKind } = require('../release-pipeline-pr.cjs');
 
 function main() {
   const fs = require('node:fs');
@@ -119,6 +128,12 @@ function main() {
   // `pull_request` in the payload, or no payload at all) — the drift check
   // below is a no-op in that case, it never fails a push run.
   let realPrNumber = null;
+  // #5903: head/base refs and whether the head lives in this repository, for
+  // the release-pipeline exemption. sameRepo is false when anything is missing
+  // (a deleted fork has head.repo === null).
+  let headRef;
+  let baseRef;
+  let sameRepo = false;
   if (eventPath && fs.existsSync(eventPath)) {
     try {
       const event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
@@ -126,6 +141,12 @@ function main() {
       if (event.pull_request && Number.isInteger(event.pull_request.number)) {
         realPrNumber = event.pull_request.number;
       }
+      headRef = event.pull_request?.head?.ref;
+      baseRef = event.pull_request?.base?.ref;
+      const headRepo = event.pull_request?.head?.repo?.full_name;
+      const thisRepo = process.env.GITHUB_REPOSITORY;
+      sameRepo = typeof headRepo === 'string' && typeof thisRepo === 'string'
+        && headRepo !== '' && headRepo.toLowerCase() === thisRepo.toLowerCase();
     } catch { /* fall through */ }
   }
   // #2988: local fallback must match the repo's integration branch (`next`),
@@ -176,11 +197,15 @@ function main() {
   }
 
   const prFieldDrift = findPrFieldDrift(prEntries, realPrNumber);
-  const verdict = evaluateLint({ changedFiles, labels, fragmentFailures, prFieldDrift });
+  const releasePipelineKind = releasePipelinePrKind({ headRef, baseRef, sameRepo });
+  const verdict = evaluateLint({
+    changedFiles, labels, fragmentFailures, prFieldDrift, releasePipelineKind,
+  });
   if (process.argv.includes('--json')) {
     process.stdout.write(JSON.stringify({ ...verdict, changedFiles, labels }, null, 2) + '\n');
   } else if (verdict.ok) {
-    process.stdout.write(`ok changeset-lint: ${verdict.reason}\n`);
+    const kind = verdict.releasePipelineKind ? ` (${verdict.releasePipelineKind})` : '';
+    process.stdout.write(`ok changeset-lint: ${verdict.reason}${kind}\n`);
   } else if (verdict.reason === LINT_REASON.FAIL_INVALID_FRAGMENT) {
     process.stderr.write(`\nERROR changeset-lint: ${verdict.reason}\n`);
     process.stderr.write(`The following .changeset fragment(s) failed content validation:\n`);
