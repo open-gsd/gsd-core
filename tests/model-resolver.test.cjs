@@ -7073,8 +7073,8 @@ describe('#5329 — existing Claude project omit diagnostic', () => {
         assert.equal(modelResolver.resolveModelInternal(project, agent), '');
       }
       assert.equal(writes.length, 1, 'one project warning must cover all omitted agents');
-      assert.deepEqual(writes, [modelResolver.PROJECT_MODEL_OMIT_WARNING + '\n']);
-      assert.equal(modelResolver.MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT, 'project_model_omit');
+      const codes = writes.flatMap((line) => [...line.matchAll(/\[([a-z][a-z0-9_]{0,63})\]/g)].map((match) => match[1]));
+      assert.deepEqual(codes, [modelResolver.MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT]);
     });
   });
 
@@ -7083,11 +7083,9 @@ describe('#5329 — existing Claude project omit diagnostic', () => {
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
     withConfig({ model_profile: 'balanced' }, 'claude', writes => {
       assert.equal(modelResolver.resolveModelInternal(project, 'gsd-executor'), 'sonnet');
-      assert.equal(
-        writes.includes(modelResolver.PROJECT_MODEL_OMIT_WARNING + '\n'),
-        false,
-        'a shared-only omit must not emit the project-omit diagnostic',
-      );
+      const codes = writes.flatMap((line) => [...line.matchAll(/\[([a-z][a-z0-9_]{0,63})\]/g)].map((match) => match[1]));
+      assert.equal(codes.includes(modelResolver.MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT), false,
+        'a shared-only omit must not emit the project-omit diagnostic');
     });
   });
 

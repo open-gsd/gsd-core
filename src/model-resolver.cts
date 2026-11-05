@@ -293,16 +293,14 @@ function _resetModelPolicyWarningCacheForTests(): void {
 const _modelOverrideUnmappableWarned = new Set<string>();
 function warnModelOverrideUnmappable(agentType: string, overrideValue: string): void {
   const key = `${agentType}::${overrideValue}`;
-  if (_modelOverrideUnmappableWarned.has(key)) return;
-  _modelOverrideUnmappableWarned.add(key);
   // Cap emission length so an oversized or secret-shaped value cannot leak in
   // full to stderr/logs (#2041 security review). MUST go to stderr — resolve-
   // model's JSON result is parsed from stdout.
   const safe = overrideValue.length > 64 ? overrideValue.slice(0, 64) + '…' : overrideValue;
-  process.stderr.write(
+  warnOnce(_modelOverrideUnmappableWarned, key,
     `gsd: warning — model_overrides value "${safe}" for ${agentType} is a fully-qualified ` +
     `Claude model ID with no tier alias; passing it through verbatim. Claude Code setups ` +
-    `whose Agent tool accepts only tier aliases will not honor it. (#4192)\n`,
+    `whose Agent tool accepts only tier aliases will not honor it. (#4192)`,
   );
 }
 
