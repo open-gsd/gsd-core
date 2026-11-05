@@ -39,6 +39,7 @@ const {
   getTrackedIgnoredFiles,
   ignoredByTrackedRules,
   isolatedGitEnv,
+  initScratchRepo,
   isSafeRepoPath,
   resolveBaseBranch,
   scan,
@@ -1262,6 +1263,25 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
       else process.env.GIT_DIR = saved;
     }
     assert.deepEqual(snapshot(), before, 'decoy repo config and info/exclude unchanged');
+  });
+
+  test('initScratchRepo copies no template: init.templateDir from a global config is not applied', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-tpl-home-'));
+    const tpl = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-tpl-src-'));
+    const control = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-tpl-control-'));
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-tpl-scratch-'));
+    t.after(() => { for (const d of [home, tpl, control, scratch]) cleanup(d); });
+    fs.mkdirSync(path.join(tpl, 'info'), { recursive: true });
+    fs.writeFileSync(path.join(tpl, 'info', 'exclude'), 'src/\n');
+    fs.writeFileSync(path.join(home, '.gitconfig'), `[init]\n\ttemplateDir = ${tpl.replace(/\\/g, '/')}\n`);
+    const env = { ...isolatedGitEnv(), HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
+    // Positive control: a plain `git init` DOES pick the template up here.
+    const plain = cp.spawnSync('git', ['init', '-q', control], { env, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.match(fs.readFileSync(path.join(control, '.git', 'info', 'exclude'), 'utf8'), /src\//);
+    // The scratch repo does not.
+    initScratchRepo(scratch, env);
+    assert.equal(fs.existsSync(path.join(scratch, '.git', 'info', 'exclude')), false);
   });
 
   test('an ambient git template (GIT_TEMPLATE_DIR with info/exclude "src/") does not affect the result', (t) => {
