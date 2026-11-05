@@ -9519,12 +9519,42 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual('auto_prune_error' in JSON.parse(result.output), false, '#5831: no error field when auto-prune succeeds');
 
       const newState = readStateMdForAutoPrune(tmpDir);
       assert.doesNotMatch(newState, /\[Phase 1\]: Old decision/);
       assert.doesNotMatch(newState, /\[Phase 2\]: Old decision/);
       assert.match(newState, /\[Phase 5\]: Recent decision/);
       assert.match(newState, /\[Phase 6\]: Current decision/);
+    });
+
+    test('#5831: a failed auto-prune reports auto_pruned false and keeps every entry in STATE.md', () => {
+      writeConfigForAutoPrune(tmpDir, { workflow: { auto_prune_state: true } });
+      const oldDecisions = ['- [Phase 1]: Old decision from phase 1', '- [Phase 2]: Old decision from phase 2'];
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', ...oldDecisions, '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md')); // the archive is unusable
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `phase complete must not fail on a best-effort auto-prune: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual(typeof out.auto_prune_error, 'string', 'the failure is reported, not swallowed');
+      assert.ok(out.auto_prune_error.length > 0);
+      assert.strictEqual(out.has_warnings, true);
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 1,
+        'one advisory warning names the failed auto-prune');
+
+      const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
+      const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
+      const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+      const prunable = transitionCore(state, { kind: 'prune', cutoff: 2 }, { clock: realClock }).data.archivedSections;
+      assert.deepStrictEqual(prunable.map(s => ({ section: s.section, lines: s.lines })),
+        [{ section: 'Decisions', lines: oldDecisions }], 'the old decisions are still in STATE.md');
     });
 
     test('does NOT prune when auto_prune_state is false (default)', () => {
