@@ -67,13 +67,21 @@ function runStructureStep(t, shell, heading, content, prelude, epilogue = []) {
   const result = runHook('-c', [script, 'structure-step', dir, process.execPath, path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')], {
     interpreter: shell,
     cwd: dir,
-    env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir },
+    env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir, SystemRoot: process.env.SystemRoot },
     timeoutMs: PROBE_TIMEOUT_MS,
   });
   assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
   assert.equal(result.exitCode, 0, result.stderr);
   return result.stdout;
 }
+
+// bash's echo leaves JSON escapes alone, so the zsh cases above are the only runtime
+// witness, and they skip where zsh is absent. This check runs everywhere.
+test('no plan-checker copy prints the structure JSON with echo (#5178)', () => {
+  for (const file of [AGENT_PATH, path.join(__dirname, '..', 'pi', 'package-agents', 'gsd-plan-checker.md')]) {
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /\becho\s+"?\$\{?PLAN_STRUCTURE\b/, file);
+  }
+});
 
 describe('plan-checker discovers research and summary artifacts (#5178)', {
   skip: skipUnless('bash'),
