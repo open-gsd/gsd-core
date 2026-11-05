@@ -367,6 +367,20 @@ describe('#5297 git adapter — exact pinned target', {
     });
   }
 
+  test('#sha:<commit> cannot fall back from a failed fetch to the cloned tip', async () => {
+    const fetchFailGit = (args, opts) => {
+      if (args.includes('fetch')) {
+        return { exitCode: 1, stdout: '', stderr: 'fetch unavailable', signal: null, error: null };
+      }
+      return localGit(args, opts);
+    };
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#sha:${commits.tip}`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: fetchFailGit },
+    }), /git fetch .* failed/);
+    assert.strictEqual(fs.existsSync(path.join(gsdHome, '.gsd', 'capabilities', 'pinned-cap')), false);
+    assertScratchClonesRemoved('sha pin fetch failure');
+  });
+
   test('checkout failure cleans the scratch clone', async () => {
     const checkoutFailGit = (args, opts) => {
       if (args.includes('checkout')) {
@@ -470,7 +484,7 @@ describe('#5297 git adapter — normalized ref safety', () => {
   test('full 40- and 64-hex sha pins pass validation and reach Git', async (t) => {
     const gsdHome = createTempDir('gsd-ref-full-sha-');
     t.after(() => cleanup(gsdHome));
-    for (const value of ['a'.repeat(40), 'b'.repeat(64)]) {
+    for (const value of ['a'.repeat(40), 'b'.repeat(64), 'A'.repeat(40), 'B'.repeat(64)]) {
       const calls = [];
       const fakeGit = (args) => {
         calls.push([...args]);

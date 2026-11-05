@@ -107,7 +107,7 @@ gsd capability install https://github.com/your-org/gsd-cap-example.git#v1.0.0
 For a reproducible pin that cannot be moved, consumers can use a commit SHA instead:
 
 ```bash
-gsd capability install https://github.com/your-org/gsd-cap-example.git#sha:abc123def456...
+gsd capability install https://github.com/your-org/gsd-cap-example.git#sha:0123456789abcdef0123456789abcdef01234567
 ```
 
 Publish release notes on your Git host so users know what changed between versions.
