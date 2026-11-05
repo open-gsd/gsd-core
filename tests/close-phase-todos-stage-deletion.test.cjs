@@ -42,7 +42,10 @@ describe('#2415: close_phase_todos must stage the pending/ deletion alongside co
 
     assert.match(filesList, /"\$\{ADDED\[@\]\}"/, 'commit --files must carry the ADDED array (destinations of the move)');
     assert.match(filesList, /--files-removed\s+"\$\{REMOVED\[@\]\}"/, 'the moved-away file must be staged as a deletion via --files-removed (#2415, #4208)');
-    assert.match(filesList, /\.planning\/STATE\.md/, 'commit --files must still include .planning/STATE.md (the step also updates state)');
+    // #5861: STATE.md is the selected project's or workstream's (init state_path), never the root literal,
+    // and an absent one (null state_path) is skipped rather than passed as an empty pathspec.
+    assert.match(stepBody, /STATE_FILE=\$\(gsd_run query init\.execute-phase \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} "\$\{PHASE_NUMBER\}" --pick state_path\)/, 'STATE.md must be resolved through init state_path');
+    assert.match(filesList, /\$\{STATE_FILE:\+"\$STATE_FILE"\} --files-removed/, 'commit --files must still include STATE.md (the step also updates state), omitted only when it is absent');
 
     // The arrays are only worth asserting if they are built from the right two dirs:
     // ADDED from completed/ (destination), REMOVED from pending/ (source).
@@ -92,7 +95,8 @@ describe('#4208: cleanup.md archives phase directories without a --files directo
     // entry stages EVERYTHING under it, so an in-flight phase or quick-task
     // file a concurrent session had written there would be committed too --
     // the sweep #4208 exists to remove.
-    for (const dir of ['.planning/phases/', '.planning/quick/']) {
+    // #5861: the directories are the selected project's or workstream's ("$PLANNING_DIR/..."), not root literals.
+    for (const dir of ['"$PLANNING_DIR/phases/"', '"$PLANNING_DIR/quick/"']) {
       assert.ok(removed.includes(dir), `${dir} must be under --files-removed. Line: ${line}`);
       assert.ok(!added.includes(dir), `${dir} must NOT be under --files -- a directory entry there sweeps in concurrent writes. Line: ${line}`);
     }
@@ -107,7 +111,8 @@ describe('#4208: cleanup.md archives phase directories without a --files directo
     assert.match(added, /--files\s/, `the additive half must actually carry --files. Line: ${line}`);
     // --files keeps its #2014 skip-if-missing contract: it is the additive
     // half and the only half that can carry a path that must be WRITTEN.
-    assert.ok(added.includes('.planning/milestones/'), `the archive destination must stay under --files. Line: ${line}`);
-    assert.ok(added.includes('.planning/STATE.md'), `STATE.md must stay under --files. Line: ${line}`);
+    assert.ok(added.includes('"$PLANNING_DIR/milestones/"'), `the archive destination must stay under --files. Line: ${line}`);
+    assert.ok(added.includes('${STATE_FILE:+"$STATE_FILE"}'), `STATE.md (init state_path) must stay under --files. Line: ${line}`);
+    assert.match(fs.readFileSync(CLEANUP, 'utf8'), /STATE_FILE=\$\(gsd_run query init\.resume [^\n]*--pick state_path\)/, 'STATE_FILE must come from init state_path');
   });
 });

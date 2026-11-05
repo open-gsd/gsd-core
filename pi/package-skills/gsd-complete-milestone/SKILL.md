@@ -46,7 +46,9 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 
 0. **Check for audit:**
 
-   - Look for `.planning/v{{version}}-MILESTONE-AUDIT.md`
+   - Look for `v{{version}}-MILESTONE-AUDIT.md` where `/skill:gsd-audit-milestone` writes it: the selected project's or
+     workstream's planning directory, i.e. the directory of `gsd_run query config-path --raw` (with
+     `--ws=<name>` when the arguments carry `--ws <name>`); `.planning/` for the root project
    - If missing or stale: recommend `/skill:gsd-audit-milestone` first
    - If audit status is `gaps_found`: recommend closing the gaps inline
      (the audit output already enumerates them — insert closure phases

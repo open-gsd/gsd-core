@@ -54,7 +54,8 @@ for (const subcommand of [undefined, '']) {
 
     const cli = runGsdTools(['config-path', '--raw', '--json-errors'], dir);
     assert.equal(cli.success, true, cli.error);
-    assert.equal(cli.output, path.join(dir, '.planning', 'config.json'));
+    // config-path prints forward slashes on every platform, like init's config_path (#5861).
+    assert.equal(cli.output, path.join(dir, '.planning', 'config.json').split(path.sep).join('/'));
 
     const args = { family: 'config-path' };
     if (subcommand !== undefined) args.subcommand = subcommand;

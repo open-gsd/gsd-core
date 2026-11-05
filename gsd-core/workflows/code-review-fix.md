@@ -34,6 +34,9 @@ AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer ${GSD_WS:+-
 # (gsd-code-reviewer → "verification", gsd-code-fixer → "execution"); thread them below.
 REVIEWER_MODEL=$(gsd_run query resolve-model gsd-code-reviewer --raw)
 FIXER_MODEL=$(gsd_run query resolve-model gsd-code-fixer --raw)
+# #2825/#5861: the fixer runs before its launcher preamble, so resolve workflow.use_worktrees here
+# (the selected project's or workstream's config) and pass it in the fixer <config> block.
+USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees ${GSD_WS:+--ws=${GSD_WS##* }} --raw 2>/dev/null || echo "true")
 ```
 
 Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `padded_phase`, `commit_docs`.
@@ -220,6 +223,7 @@ ${REVIEW_PATH}
 <config>
 phase_dir: ${PHASE_DIR}
 padded_phase: ${PADDED_PHASE}
+use_worktrees: ${USE_WORKTREES}
 review_path: ${REVIEW_PATH}
 fix_scope: ${FIX_SCOPE}
 fix_report_path: ${FIX_REPORT_PATH}
@@ -369,6 +373,7 @@ ${REVIEW_PATH}
 <config>
 phase_dir: ${PHASE_DIR}
 padded_phase: ${PADDED_PHASE}
+use_worktrees: ${USE_WORKTREES}
 review_path: ${REVIEW_PATH}
 fix_scope: ${FIX_SCOPE}
 fix_report_path: ${FIX_REPORT_PATH}

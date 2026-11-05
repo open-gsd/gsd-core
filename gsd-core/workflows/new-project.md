@@ -196,7 +196,7 @@ Loop until "Create PROJECT.md" selected.
 
 **If auto mode:** Synthesize from provided document. No "Ready?" gate was shown — proceed directly to commit.
 
-Synthesize all context into `.planning/PROJECT.md` using the template from `templates/project.md`.
+Synthesize all context into the PROJECT.md at init's `project_path` (`.planning/PROJECT.md` for the root project) using the template from `templates/project.md`.
 
 **For greenfield projects:**
 
@@ -296,7 +296,7 @@ Do not compress. Capture everything gathered.
 
 ```bash
 mkdir -p .planning
-gsd_run query commit "docs: initialize project" --files .planning/PROJECT.md
+gsd_run query commit "docs: initialize project" --files "{project_path}"
 ```
 
 ## 5. Workflow Preferences
@@ -639,7 +639,7 @@ gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[s
 **Commit config.json:**
 
 ```bash
-gsd_run query commit "chore: add project config" --files .planning/config.json
+gsd_run query commit "chore: add project config" --files "{config_path}"
 ```
 
 ## 5.1. Sub-Repo Detection
@@ -706,7 +706,7 @@ Researching [domain] ecosystem...
 Create research directory:
 
 ```bash
-mkdir -p .planning/research
+mkdir -p "{research_dir}"
 ```
 
 **Determine milestone context:**
@@ -885,7 +885,7 @@ Cross-check requirements against Core Value from PROJECT.md. If gaps detected, s
 
 **Generate REQUIREMENTS.md:**
 
-Create `.planning/REQUIREMENTS.md` with:
+Create REQUIREMENTS.md at init's `requirements_path` (`.planning/REQUIREMENTS.md` for the root project) with:
 
 - v1 Requirements grouped by category (checkboxes, REQ-IDs)
 - v2 Requirements (deferred)
@@ -936,7 +936,7 @@ If "adjust": Return to scoping.
 **Commit requirements:**
 
 ```bash
-gsd_run query commit "docs: define v1 requirements" --files .planning/REQUIREMENTS.md
+gsd_run query commit "docs: define v1 requirements" --files "{requirements_path}"
 ```
 
 ## 7.5. Project Structure Mode

@@ -73,7 +73,8 @@ describe('#5165 ship.md track_shipping writes the activity line only', () => {
   const step = extractStep('track_shipping');
 
   test('the activity line carries the phase + PR description and no Status is written', () => {
-    assert.match(step, /state\.update "Last Activity" "\$\(date \+%Y-%m-%d\) -- Phase \$\{PHASE_NUMBER\} shipped as PR #\$\{PR_NUMBER\}"/);
+    // #5861: the write carries the --ws token so it lands in the scope the ship-note commit stages.
+    assert.match(step, /state\.update \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} "Last Activity" "\$\(date \+%Y-%m-%d\) -- Phase \$\{PHASE_NUMBER\} shipped as PR #\$\{PR_NUMBER\}"/);
     assert.doesNotMatch(step, /state\.update "Status"/);
   });
 });

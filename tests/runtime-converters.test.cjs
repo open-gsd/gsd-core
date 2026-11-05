@@ -1796,7 +1796,7 @@ test('manager.md and autonomous.md no longer contain old "not claude" background
         // pre-selection rule would go dead on that runtime.
         const settingsOut = conversion._applyRuntimeRewrites(readWorkflow('settings.md'), rt, `$HOME/.${rt}/`, true, undefined);
         assert.ok(
-          settingsOut.includes('USE_WORKTREES_CURRENT=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null)'),
+          settingsOut.includes('USE_WORKTREES_CURRENT=$(gsd_run query config-get ${GSD_WS:+--ws=${GSD_WS##* }} workflow.use_worktrees --raw 2>/dev/null)'),
           `${rt}/settings.md: the bare tri-state worktrees read must survive per-runtime stamping byte-identical`,
         );
       }
@@ -1823,7 +1823,7 @@ test('manager.md and autonomous.md no longer contain old "not claude" background
       // "pre-select Leave unchanged only when absent" rule dead there. The bare
       // read signals absence as empty output and matches no stamp pattern.
       assert.ok(
-        src.includes('USE_WORKTREES_CURRENT=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null)'),
+        src.includes('USE_WORKTREES_CURRENT=$(gsd_run query config-get ${GSD_WS:+--ws=${GSD_WS##* }} workflow.use_worktrees --raw 2>/dev/null)'),
         'settings.md: current worktrees value must use the bare tri-state read (empty = absent)',
       );
       assert.ok(

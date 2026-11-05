@@ -673,7 +673,8 @@ Skill(skill="gsd-audit-milestone")
 After audit completes, detect the result:
 
 ```bash
-AUDIT_FILE=".planning/v${milestone_version}-MILESTONE-AUDIT.md"
+AUDIT_FILE=$(gsd_run query config-path --raw) && AUDIT_FILE=${AUDIT_FILE%/config.json}/v${milestone_version}-MILESTONE-AUDIT.md
+: "${AUDIT_FILE:?planning directory not resolved}"
 AUDIT_STATUS=$(grep "^status:" "${AUDIT_FILE}" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
 ```
 

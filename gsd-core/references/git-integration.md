@@ -136,8 +136,11 @@ SUMMARY: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
 What to commit:
 
 ```bash
-gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files .planning/phases/XX-name/{phase}-{plan}-PLAN.md .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md
+DOCS=(); for f in "{state_path}" "{roadmap_path}"; do [ -f "$f" ] && DOCS+=("$f"); done
+gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "{phase_dir}/{phase}-{plan}-PLAN.md" "{phase_dir}/{phase}-{plan}-SUMMARY.md" "${DOCS[@]}"
 ```
+
+`{phase_dir}`, `{state_path}` and `{roadmap_path}` are the init fields of those names, so a named project or workstream commits its own files. Some inits return null for an absent file; the loop leaves such a doc out rather than pass an empty pathspec.
 
 **Note:** Code files NOT included - already committed per-task.
 

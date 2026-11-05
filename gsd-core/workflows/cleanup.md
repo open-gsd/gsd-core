@@ -27,7 +27,14 @@ RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --raw --default "
 Read `.planning/MILESTONES.md` to identify completed milestones and their versions.
 
 ```bash
-cat .planning/MILESTONES.md
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+cat "$PLANNING_DIR/MILESTONES.md"
 ```
 
 Extract each milestone version (e.g., v1.0, v1.1, v2.0).
@@ -35,7 +42,14 @@ Extract each milestone version (e.g., v1.0, v1.1, v2.0).
 Check which milestone archive dirs already exist:
 
 ```bash
-ls -d .planning/milestones/v*-phases 2>/dev/null || true
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+ls -d "$PLANNING_DIR"/milestones/v*-phases 2>/dev/null || true
 ```
 
 Filter to milestones that do NOT already have a `-phases` archive directory.
@@ -55,7 +69,14 @@ Stop here.
 For each completed milestone without a `-phases` archive, read the archived ROADMAP snapshot to determine which phases belong to it:
 
 ```bash
-cat .planning/milestones/v{X.Y}-ROADMAP.md
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+cat "$PLANNING_DIR/milestones/v{X.Y}-ROADMAP.md"
 ```
 
 Extract phase numbers and names from the archived roadmap (e.g., Phase 1: Foundation, Phase 2: Auth).
@@ -63,7 +84,14 @@ Extract phase numbers and names from the archived roadmap (e.g., Phase 1: Founda
 Check which of those phase directories still exist in `.planning/phases/`:
 
 ```bash
-ls -d .planning/phases/*/ 2>/dev/null || true
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+ls -d "$PLANNING_DIR"/phases/*/ 2>/dev/null || true
 ```
 
 Match phase directories to milestone membership. Only include directories that still exist in `.planning/phases/`.
@@ -75,7 +103,14 @@ Match phase directories to milestone membership. Only include directories that s
 Check whether `.planning/quick/` has anything to retroactively archive (#2142):
 
 ```bash
-ls -d .planning/quick/*/ 2>/dev/null || true
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+ls -d "$PLANNING_DIR"/quick/*/ 2>/dev/null || true
 ```
 
 **If no directories are found:** `.planning/quick/` is empty (or absent) — say nothing about quick-task archival and do not offer the step. Skip straight to `show_dry_run` with no quick-task summary or prompt.
@@ -83,7 +118,14 @@ ls -d .planning/quick/*/ 2>/dev/null || true
 **If at least one directory is found:** determine the target milestone. Unlike phase directories — whose milestone membership is derivable from the archived ROADMAP snapshot each completed milestone already has — quick tasks carry **no on-disk provenance** at all; there is no way to tell which milestone any given quick task directory belongs to. The target is therefore the single most recent completed milestone (from `.planning/MILESTONES.md`, already read in `identify_completed_milestones`, listed newest-first) that does not yet have a `-quick` archive directory:
 
 ```bash
-ls -d .planning/milestones/v*-quick 2>/dev/null || true
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+ls -d "$PLANNING_DIR"/milestones/v*-quick 2>/dev/null || true
 ```
 
 Walk `.planning/MILESTONES.md`'s entries newest-first and pick the first version with no matching `v{version}-quick` directory above. If every completed milestone already has a `-quick` archive, or `.planning/MILESTONES.md` has no entries, there is no valid target — say so and skip the quick-task step entirely (do not prompt).
@@ -175,13 +217,27 @@ If "Skip": do not run `archive_quick_tasks` — proceed to `archive_phases` (or 
 For each milestone, move phase directories:
 
 ```bash
-mkdir -p .planning/milestones/v{X.Y}-phases
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+mkdir -p "$PLANNING_DIR/milestones/v{X.Y}-phases"
 ```
 
 For each phase directory belonging to this milestone:
 
 ```bash
-mv .planning/phases/{dir} .planning/milestones/v{X.Y}-phases/
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+mv "$PLANNING_DIR/phases/{dir}" "$PLANNING_DIR/milestones/v{X.Y}-phases/"
 ```
 
 Repeat for all milestones in the cleanup set.
@@ -195,7 +251,12 @@ Only run this step when the "Yes — archive quick tasks into v{X.Y}" option was
 Uses the narrow `milestone.archive-quick` command (#2142 escalation) rather than `milestone.complete --archive-quick`: cleanup runs against milestones that are typically ALREADY completed, and `milestone.complete` is the full close-out — it archives ROADMAP/REQUIREMENTS and writes a MILESTONES.md entry, so re-running it against an already-completed milestone would clobber that milestone's archived ROADMAP/REQUIREMENTS snapshot (the very snapshot this cleanup depends on) and duplicate its MILESTONES.md entry. `milestone.archive-quick` shares the same move/README-index/table-reset logic as `milestone.complete --archive-quick` (same underlying helper) without any of that.
 
 ```bash
-gsd_run query milestone.archive-quick "v{X.Y}"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query milestone.archive-quick ${GSD_WS:+--ws=${GSD_WS##* }} "v{X.Y}"
 ```
 
 This moves every directory under `.planning/quick/` into `.planning/milestones/v{X.Y}-quick/`, (re)writes that directory's `README.md` index, and clears STATE.md's `### Quick Tasks Completed` table rows — identical move/index/reset behavior to the `--archive-quick` flag documented in `complete-milestone.md`'s `archive_milestone` step, without touching ROADMAP.md, REQUIREMENTS.md, MILESTONES.md, or milestone-completion guards. Extract `archived` from the result to confirm.
@@ -223,7 +284,15 @@ Notes:
 Commit the changes:
 
 ```bash
-gsd_run query commit "chore: archive phase directories from completed milestones" --files .planning/milestones/ .planning/STATE.md --files-removed .planning/phases/ .planning/quick/
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+STATE_FILE=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick state_path)  # always a path; commit skips it when STATE.md is absent
+gsd_run query commit "chore: archive phase directories from completed milestones" --files "$PLANNING_DIR/milestones/" ${STATE_FILE:+"$STATE_FILE"} --files-removed "$PLANNING_DIR/phases/" "$PLANNING_DIR/quick/"
 ```
 
 `.planning/phases/` and `.planning/quick/` go under `--files-removed`, not `--files` (#4208): a `--files` directory entry stages everything under it, so it would also commit any in-flight phase or quick-task file a concurrent session had written there. `--files-removed` stages only the tracked files under those directories that the archival `mv` moved away, and leaves everything still present untouched.

@@ -625,7 +625,6 @@ CONTEXT_PATH=$(_gsd_field "$INIT" context_path)
 REVIEWS_PATH=$(_gsd_field "$INIT" reviews_path)
 PATTERNS_PATH=$(_gsd_field "$INIT" patterns_path)
 
-# Detect spike/sketch findings skills (project-local)
 SPIKE_FINDINGS_PATH=$(ls ./.claude/skills/spike-findings-*/SKILL.md 2>/dev/null | head -1 || true)
 SKETCH_FINDINGS_PATH=$(ls ./.claude/skills/sketch-findings-*/SKILL.md 2>/dev/null | head -1 || true)
 
@@ -1305,7 +1304,6 @@ After plans pass the checker (or checker is skipped), verify that all phase requ
 
 **Step 1: Extract requirement IDs claimed by plans**
 ```bash
-# Collect all requirement IDs from plan frontmatter
 PLAN_REQS=$(grep -h "requirements_addressed\|requirements:" ${PHASE_DIR}/*-PLAN.md 2>/dev/null | tr -d '[]' | tr ',' '\n' | sed 's/^[[:space:]]*//' | sort -u)
 ```
 
@@ -1418,24 +1416,32 @@ after thousands of dollars of execution.
 
 ## 13b. Record Planning Completion in STATE.md
 
-After plans pass all gates, record that planning is complete so STATE.md reflects the new phase status:
+After plans pass all gates, record planning completion in STATE.md:
 
 ```bash
-gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query state.planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
+This sets STATUS to "Ready to execute", the plan count, and the Last Activity timestamp.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 
-After plans are finalized, annotate the ROADMAP.md plan list for this phase with:
+After plans are finalized, annotate this phase's ROADMAP.md plan list (from PLAN frontmatter alone, no LLM pass) with:
 - **Wave dependency notes** — a bold header before each wave group ("Wave 2 *(blocked on Wave 1 completion)*")
 - **Cross-cutting constraints** — a "Cross-cutting constraints:" subsection listing `must_haves.truths` entries that appear in 2 or more plans
 
-This step is derived entirely from existing PLAN frontmatter — no extra LLM pass is required.
-
 ```bash
-gsd_run query roadmap.annotate-dependencies "${PHASE_NUMBER}"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query roadmap.annotate-dependencies ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}"
 ```
 
 Skip this step if `plan_count` is 0. Re-running regenerates the annotation from current PLAN frontmatter; an unchanged result writes nothing, and an unrecognised checklist row leaves ROADMAP.md untouched and reports `skipped: "unrecognised_checklist_row"`. The `**Cross-cutting constraints:**` header line ends in an HTML-comment marker; that block is machine-owned and the bullets directly under it are regenerated. Put hand-written bullets after a blank line. Bullets kept from a block written before the marker existed are reported as `stale_legacy_constraints`.
@@ -1445,7 +1451,8 @@ Skip this step if `plan_count` is 0. Re-running regenerates the annotation from 
 If `commit_docs` is true (from the init JSON parsed in step 1), commit the generated plan artifacts (including any ROADMAP.md annotations from step 13c):
 
 ```bash
-gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE_DIR}"/*-PLAN.md .planning/STATE.md .planning/ROADMAP.md
+DOCS=(); for f in "{state_path}" "{roadmap_path}"; do [ -f "$f" ] && DOCS+=("$f"); done  # absent docs (null init paths) are left out
+gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE_DIR}"/*-PLAN.md "${DOCS[@]}"
 ```
 
 This commits all PLAN.md files for the phase plus the updated STATE.md and ROADMAP.md to version-control the planning artifacts. Skip this step if `commit_docs` is false.

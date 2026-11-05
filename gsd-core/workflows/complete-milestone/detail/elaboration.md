@@ -57,7 +57,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 
    # quick_tasks (--dir) — the scanner's `slug` strips a leading
    # YYYYMMDD-/YYYY-MM-DD- date prefix for display; `--dir` needs the
-   # ORIGINAL .planning/quick/<dir>/ name, so reconstruct it from `date`+`slug`.
+   # ORIGINAL <planning dir>/quick/<dir>/ name, so reconstruct it from `date`+`slug`.
    while IFS= read -r dir; do
      [ -z "$dir" ] && continue
      if ! gsd_run query audit-open acknowledge --category quick_tasks --milestone "$MILESTONE_VERSION" --dir "$dir"; then

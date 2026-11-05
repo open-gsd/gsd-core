@@ -66,14 +66,16 @@ Context files are resolved inside the workflow (`init quick`) and delegated via 
 When SUBCMD=list:
 
 ```bash
-ls -d .planning/quick/*/  2>/dev/null
+QUICK_DIR=$(gsd-tools query config-path --raw) && QUICK_DIR=${QUICK_DIR%/config.json}/quick   # the selected project's or workstream's quick/ dir
+: "${QUICK_DIR:?quick directory not resolved}"   # an empty value would list / as quick tasks
+ls -d "$QUICK_DIR"/*/  2>/dev/null
 ```
 
 For each directory found:
 - Check if PLAN.md exists
 - Check if SUMMARY.md exists; if so, read `status` from its frontmatter via:
   ```bash
-  gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md status
+  gsd-tools query frontmatter.get "$(gsd-tools query init.quick --pick quick_dir)/{dir}/SUMMARY.md" status
   ```
 - Determine directory creation date: `stat -f "%SB" -t "%Y-%m-%d"` (macOS) or `stat -c "%w"` (Linux); fall back to the date prefix in the directory name (format: `YYYYMMDD-` prefix)
 - Derive display status:
@@ -108,7 +110,7 @@ When SUBCMD=status and SLUG is set (already sanitized):
 
 Find directory matching `*-{SLUG}` pattern:
 ```bash
-dir=$(ls -d .planning/quick/*-{SLUG}/ 2>/dev/null | head -1)
+dir=$(ls -d "$(gsd-tools query init.quick --pick quick_dir)"/*-{SLUG}/ 2>/dev/null | head -1)
 ```
 
 If no directory found, print `No quick task found with slug: {SLUG}` and stop.
@@ -135,7 +137,7 @@ When SUBCMD=resume and SLUG is set (already sanitized):
 
 1. Find the directory matching `*-{SLUG}` pattern:
    ```bash
-   dir=$(ls -d .planning/quick/*-{SLUG}/ 2>/dev/null | head -1)
+   dir=$(ls -d "$(gsd-tools query init.quick --pick quick_dir)"/*-{SLUG}/ 2>/dev/null | head -1)
    ```
 2. If no directory found, print `No quick task found with slug: {SLUG}` and stop.
 

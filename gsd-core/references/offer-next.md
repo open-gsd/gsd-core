@@ -58,7 +58,14 @@ Read and follow `~/.claude/gsd-core/workflows/transition.md`, passing through th
 Check whether CONTEXT.md already exists for the next phase:
 
 ```bash
-ls .planning/phases/*{next}*/{next}-CONTEXT.md 2>/dev/null || echo "no-context"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+ls "$PLANNING_DIR"/phases/*{next}*/{next}-CONTEXT.md 2>/dev/null || echo "no-context"
 ```
 
 If CONTEXT.md does **not** exist for the next phase, present:

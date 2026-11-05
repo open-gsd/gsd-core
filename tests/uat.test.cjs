@@ -1898,8 +1898,9 @@ describe('#2287 progress.md forensic_audit: deferred-items.md contract', () => {
   test('forensic_audit now runs 7 checks (was 6) and globs deferred-items.md', () => {
     assert.ok(/running 7 deep checks/i.test(section),
       'forensic_audit must advertise 7 deep checks (was 6) now that deferred-items.md is read');
-    assert.ok(/\.planning\/phases\/\*\/deferred-items\.md/.test(section),
-      'forensic_audit must glob .planning/phases/*/deferred-items.md');
+    // #5861: the selected project's or workstream's phases/, not the root .planning/phases/.
+    assert.ok(/"\$PLANNING_DIR"\/phases\/\*\/deferred-items\.md/.test(section),
+      'forensic_audit must glob <planning dir>/phases/*/deferred-items.md');
   });
 
   test('the new check reports unresolved deferred items with the same ✓/⚠ semantics as the other checks', () => {

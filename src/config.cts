@@ -18,7 +18,7 @@ const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
 const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
-import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, toPosixPath } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
@@ -1664,9 +1664,11 @@ function getCmdConfigSetModelProfileResultMessage(
 function cmdConfigPath(cwd: string, _raw: boolean, workstreamContext: WorkstreamContext | null = null): void {
   // Always emit as plain text — a file path is used via shell substitution,
   // never consumed as JSON. Passing raw=true forces plain-text output.
-  const configPath = workstreamContext && workstreamContext.configPath
+  // #5861: forward slashes on every platform, matching the init `config_path`
+  // field, so shell fences can take its directory with ${p%/config.json}.
+  const configPath = toPosixPath(workstreamContext && workstreamContext.configPath
     ? workstreamContext.configPath
-    : path.join(planningDir(cwd), 'config.json');
+    : path.join(planningDir(cwd), 'config.json'));
   output(configPath, true, configPath);
 }
 
