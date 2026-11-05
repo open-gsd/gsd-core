@@ -966,18 +966,16 @@ function sanitizeEcho(text) {
  * @returns {boolean}
  */
 function isEchoHostile(code) {
-  return (
-    code <= 0x1f
-    || (code >= 0x7f && code <= 0x9f)
-    || code === 0x00ad || code === 0x061c || code === 0x180e
-    || (code >= 0x2060 && code <= 0x2064)
-    || code === 0x2028 || code === 0x2029
-    || (code >= 0x200b && code <= 0x200f)
-    || (code >= 0x202a && code <= 0x202e)
-    || (code >= 0x2066 && code <= 0x2069)
-    || code === 0xfeff
-  );
+  return ECHO_HOSTILE_RE.test(String.fromCodePoint(code));
 }
+
+// Category-based: Cc controls (C0, DEL, C1), Cf format chars (zero-width, bidi,
+// soft hyphen, BOM, tags U+E0000-E007F, interlinear annotation, musical
+// format), Zl/Zp separators, Cs surrogates, Co private use, Cn unassigned;
+// plus variation selectors and the invisible filler characters that are not Cf.
+// Each combining/variation/filler member is its own alternative so no
+// character class holds a combining sequence (no-misleading-character-class).
+const ECHO_HOSTILE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Cn}]|[︀-️]|[\u{E0100}-\u{E01EF}]|͏|ᅟ|ᅠ|ㅤ|ﾠ|឴|឵|⠀/u;
 
 module.exports = {
   CANONICAL_TOOLS,

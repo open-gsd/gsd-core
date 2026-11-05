@@ -543,11 +543,13 @@ function getDirtyGitignores(root) {
  */
 function isSafeRepoPath(rel) {
   if (!rel) return false;
-  return rel.split('/').every((seg) => (
-    seg !== '' && seg !== '.' && seg !== '..'
-    && !seg.includes('\\') && !seg.includes(':')
-    && seg.toLowerCase() !== '.git'
-  ));
+  return rel.split('/').every((seg) => {
+    if (seg === '' || seg === '.' || seg === '..' || seg.includes('\\') || seg.includes(':')) return false;
+    // Windows/NTFS aliases of `.git`: trailing dots/spaces are dropped, and
+    // `GIT~1` is its 8.3 short name.
+    const folded = seg.replace(/[. ]+$/, '').toLowerCase();
+    return folded !== '.git' && !/^git~\d+$/.test(folded);
+  });
 }
 
 /**
@@ -556,12 +558,19 @@ function isSafeRepoPath(rel) {
  * object store or config removed.
  * @returns {NodeJS.ProcessEnv}
  */
-function isolatedGitEnv() {
+function isolatedGitEnv(scratchDir = null) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|TEMPLATE_DIR|CONFIG.*)$/.test(key)) {
+    if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CEILING_DIRECTORIES|TEMPLATE_DIR|EXEC_PATH|ATTR_.*|CONFIG.*)$/.test(key)) {
       delete env[key];
     }
+  }
+  // No system or global git config at all (and no per-user config home).
+  env.GIT_CONFIG_NOSYSTEM = '1';
+  env.GIT_CONFIG_GLOBAL = os.devNull;
+  if (scratchDir) {
+    env.HOME = scratchDir;
+    env.XDG_CONFIG_HOME = scratchDir;
   }
   return env;
 }
@@ -574,7 +583,7 @@ function isolatedGitEnv() {
  * @param {NodeJS.ProcessEnv} [env] - defaults to {@link isolatedGitEnv}()
  * @returns {string} the git dir
  */
-function initScratchRepo(dir, env = isolatedGitEnv()) {
+function initScratchRepo(dir, env = isolatedGitEnv(dir)) {
   const gitDir = path.join(dir, '.git');
   cp.execFileSync('git', ['--git-dir', gitDir, '--work-tree', dir, 'init', '-q', '--template='], {
     cwd: dir,
@@ -619,7 +628,7 @@ function ignoredByTrackedRules(root, paths) {
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignore-'));
   const gitDir = path.join(tmp, '.git');
-  const isolated = { env: isolatedGitEnv(), cwd: tmp };
+  const isolated = { env: isolatedGitEnv(tmp), cwd: tmp };
   try {
     initScratchRepo(tmp, isolated.env);
     const tmpPrefix = path.resolve(tmp) + path.sep;
@@ -856,13 +865,31 @@ const MERGE_QUEUE_REF_RE = /^refs\/heads\/gh-readonly-queue\/(.+)\/pr-\d+-[0-9a-
  * @returns {string}
  */
 function resolveBaseBranch(env) {
-  if (env.GSD_REMOVED_BUT_NEEDED_BASE) return env.GSD_REMOVED_BUT_NEEDED_BASE;
-  if (env.GITHUB_BASE_REF) return env.GITHUB_BASE_REF;
+  for (const key of ['GSD_REMOVED_BUT_NEEDED_BASE', 'GITHUB_BASE_REF']) {
+    const value = env[key];
+    if (!value) continue;
+    // An explicit base that is not a safe branch name is a hard failure, never
+    // a silent fallback to a different base.
+    if (!isSafeBranchName(value)) {
+      throw new ExitError(1, `lint-removed-but-needed: invalid base branch in ${key}: '${sanitizeEcho(value)}'`);
+    }
+    return value;
+  }
   if (env.GITHUB_EVENT_NAME === 'merge_group') {
     const m = MERGE_QUEUE_REF_RE.exec(env.GITHUB_REF || '');
-    if (m && SAFE_BRANCH_RE.test(m[1]) && !m[1].split('/').some((s) => s === '..' || s === '')) return m[1];
+    if (m && isSafeBranchName(m[1])) return m[1];
   }
   return 'next';
+}
+
+/**
+ * Pure: is `name` a safe branch name for `origin/<name>` — safe-character
+ * pattern, no `..` anywhere, no empty segment (leading/trailing/double `/`).
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isSafeBranchName(name) {
+  return SAFE_BRANCH_RE.test(name) && !name.includes('..') && !name.split('/').some((s) => s === '');
 }
 
 function main() {
@@ -889,7 +916,7 @@ function main() {
     // shallow checkout. Fail loudly so the workflow fetches the base.
     throw new ExitError(
       1,
-      `lint-removed-but-needed: could not resolve ${baseRef} in CI, so the deleted-file check cannot run `
+      `lint-removed-but-needed: could not resolve ${sanitizeEcho(baseRef)} in CI, so the deleted-file check cannot run `
         + '(fetch the base ref, e.g. a checkout with fetch-depth 0 or an explicit `git fetch origin <base>`)',
     );
   }
@@ -897,7 +924,7 @@ function main() {
     // origin/<base> unreachable on a local machine (e.g. a shallow clone with
     // no matching remote-tracking ref) — skip the deleted-file check rather
     // than fail it, matching lint-fix-has-regression-tests.cjs.
-    console.log(`lint-removed-but-needed: could not resolve ${baseRef}, skipping the deleted-file check`);
+    console.log(`lint-removed-but-needed: could not resolve ${sanitizeEcho(baseRef)}, skipping the deleted-file check`);
   }
   if (violations.length > 0) {
     const detail = violations
