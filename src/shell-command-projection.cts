@@ -1584,6 +1584,16 @@ function writeTargetDirect(
     }
   };
 
+  // A symlinked target is never written through: the atomic publish replaces the link entry, and
+  // where that is impossible the direct path must not open the link and modify whatever it points at.
+  try {
+    if (fs.lstatSync(filePath).isSymbolicLink()) {
+      refuse('a symlinked target cannot be replaced atomically, and is never written through — refusing', 'ENXIO');
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && (err as NodeJS.ErrnoException).code !== 'ENOTDIR') throw err;
+  }
+
   let created = false;
   let fd: number;
   let prior: Buffer | null = null;
@@ -1876,9 +1886,6 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // direct fallback write is tied to it (see writeTargetDirect).
   let walked: WalkedTarget = 'absent';
   const finalPath = physicalPath(hop);
-  // Set when the approved chain ends at a regular file reached through at least one link: the
-  // atomic publish then replaces THAT file, so the link the user made stays a link.
-  let linkedRegularTarget: string | null = null;
   if (finalPath !== null) {
     let st: fs.Stats | null = null;
     try {
@@ -1890,7 +1897,6 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       // Still a link after 40 hops: an unclassifiable chain.
       if (st.isSymbolicLink()) refuseUnresolved('ELOOP', 'the symbolic link chain is circular or longer than 40 links');
       walked = { dev: st.dev, ino: st.ino };
-      if (hop !== filePath && st.isFile()) linkedRegularTarget = finalPath;
     }
   }
   opts.writeSeams?.afterPathWalk?.();
@@ -1950,38 +1956,15 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // after the rename): the temp file is CREATED with that mode, so it is never more permissive
   // than the target it replaces, not even for an instant. Without one the temp is created 0o666
   // and the kernel applies the umask (the process umask is never read or changed here).
-  // A link the walk approved (ending at a regular file) is preserved: the temp is created beside,
-  // and renamed over, the file the link chain resolves to, never over the link itself. The
-  // resolved file must still be the {dev, ino} the walk approved.
-  const publishPath = linkedRegularTarget ?? filePath;
-  const refuseIfResolvedTargetChanged = (): void => {
-    if (linkedRegularTarget === null || walked === 'absent') return;
-    let now: fs.Stats;
-    try {
-      now = fs.lstatSync(linkedRegularTarget);
-    } catch {
-      throw Object.assign(
-        new Error(`ENXIO: cannot write ${filePath}: the link target vanished after the path was checked`),
-        { code: 'ENXIO' },
-      );
-    }
-    if (!now.isFile() || now.dev !== walked.dev || now.ino !== walked.ino) {
-      throw Object.assign(
-        new Error(`ENXIO: cannot write ${filePath}: the link target is not the file the path check approved`),
-        { code: 'ENXIO' },
-      );
-    }
-  };
-  refuseIfResolvedTargetChanged();
   let targetMode: number | null = null;
   try {
-    const existing = fs.lstatSync(publishPath);
+    const existing = fs.lstatSync(filePath);
     if (existing.isFile()) targetMode = existing.mode & 0o777;
   } catch { /* no existing target, or no permission bits on this platform */ }
   let tmpPath: string;
   let tmpFd: number;
   try {
-    ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(publishPath, undefined, targetMode ?? 0o666));
+    ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(filePath, undefined, targetMode ?? 0o666));
   } catch {
     writeTargetDirect(filePath, normalized, encoding, walked);
     return;
@@ -2002,13 +1985,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
 
   // Step 2: atomic publish, retrying transient Windows locks.
-  try {
-    refuseIfResolvedTargetChanged();
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
-    throw err;
-  }
-  const renameErr = atomicRenameWithRetry(tmpPath, publishPath);
+  const renameErr = atomicRenameWithRetry(tmpPath, filePath);
   if (renameErr === null) return;
 
   try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
