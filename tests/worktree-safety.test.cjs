@@ -6307,7 +6307,7 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
   });
 
-  test('executor prohibits `git reset --hard` with no exception; the branch check it once exempted has no reset (#5310)', () => {
+  test('executor prohibits `git reset --hard` with no exception (#5310)', () => {
     // The exemption named the startup <worktree_branch_check> step, which has been verify-only
     // since #48: a hard reset in the executor's own prohibited list must not carry a carve-out.
     const executorSource = read('agents/gsd-executor.md');
@@ -6344,12 +6344,16 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
       1,
       'gsd-executor.md must mention `git reset --hard` only in its prohibition'
     );
+  });
 
+  test('the branch check the old exemption named stays verify-only, with no reset (#48, #5310)', () => {
     // The step the old exemption pointed at must still give it nothing to apply to.
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
     assert.ok(fragmentSource.includes('VERIFY-ONLY'), 'canonical fragment must still declare itself VERIFY-ONLY (#48)');
     assert.ok(!fragmentSource.includes('git reset'), 'canonical fragment must contain no `git reset` in any form (#48)');
+  });
 
+  test('git-integration.md, required reading for the executor, offers no hard reset as recovery (#48, #5310)', () => {
     // execute-plan.md, which the orchestrator hands the executor, @-includes git-integration.md as required
     // reading, so its failure-recovery notes reach the executor too.
     const executePlan = read('gsd-core/workflows/execute-plan.md');
