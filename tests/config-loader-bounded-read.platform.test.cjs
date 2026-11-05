@@ -413,6 +413,81 @@ describe('#5759 platformWriteSync never blocks on or follows a planted temp file
     if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, 0o600);
   });
 
+  test('the temp file is never more permissive than an existing 0600 target, even at its first write', () => {
+    const target = path.join(tmpDir, 'private2.json');
+    fs.writeFileSync(target, '{"old":true}');
+    fs.chmodSync(target, 0o600);
+    const script = [
+      'const fs = require("node:fs");',
+      'let firstMode = null;',
+      'const realWrite = fs.writeFileSync;',
+      'fs.writeFileSync = (fd, ...rest) => {',
+      '  if (typeof fd === "number" && firstMode === null) firstMode = fs.fstatSync(fd).mode & 0o777;',
+      '  return realWrite(fd, ...rest);',
+      '};',
+      'require(process.argv[1]).platformWriteSync(process.argv[2], "{\\"new\\":true}\\n");',
+      'process.stdout.write(JSON.stringify({ firstMode }));',
+    ].join('\n');
+
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    const { firstMode } = JSON.parse(r.stdout);
+    if (process.platform !== 'win32') assert.strictEqual(firstMode & 0o077, 0, `temp mode at first write: ${firstMode.toString(8)}`);
+  });
+
+  test('direct fallback: a failed restore is flagged on the thrown error (restoreFailed)', () => {
+    const target = path.join(tmpDir, 'restore.json');
+    fs.writeFileSync(target, 'OLD CONTENT\n');
+    const script = [
+      'const fs = require("node:fs");',
+      'const realOpen = fs.openSync;',
+      'fs.openSync = (p, ...rest) => {',
+      '  if (String(p).includes(".tmp.")) { const e = new Error("EACCES: no temp"); e.code = "EACCES"; throw e; }',
+      '  return realOpen(p, ...rest);',
+      '};',
+      'const realWrite = fs.writeFileSync;',
+      'fs.writeFileSync = (fd, ...rest) => {',
+      '  if (typeof fd === "number") { const e = new Error("ENOSPC: injected"); e.code = "ENOSPC"; throw e; }',
+      '  return realWrite(fd, ...rest);',
+      '};',
+      'fs.writeSync = () => { const e = new Error("EIO: restore"); e.code = "EIO"; throw e; };',
+      'try { require(process.argv[1]).platformWriteSync(process.argv[2], "NEW\\n"); process.stdout.write("{}"); }',
+      'catch (e) { process.stdout.write(JSON.stringify({ code: e.code, restoreFailed: e.restoreFailed === true })); }',
+    ].join('\n');
+
+    const r = runNode(['-e', script, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assertExitedByItself(r);
+    assert.deepStrictEqual(JSON.parse(r.stdout), { code: 'ENOSPC', restoreFailed: true });
+  });
+
+  test('direct fallback: a write-only (0200) target is refused before truncation, content intact', (t) => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) { t.skip('root bypasses mode bits'); return; }
+    const target = path.join(tmpDir, 'writeonly.json');
+    fs.writeFileSync(target, 'KEEP\n');
+    fs.chmodSync(target, 0o200);
+
+    const r = runNode(['-e', DIRECT_FALLBACK_SCRIPT, SHELL_PROJECTION_PATH, target], {
+      cwd: tmpDir,
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    fs.chmodSync(target, 0o600);
+
+    assertExitedByItself(r);
+    assert.strictEqual(JSON.parse(r.stdout).code, 'EACCES');
+    assert.strictEqual(fs.readFileSync(target, 'utf8'), 'KEEP\n');
+  });
+
   test('a target name too long for the default temp suffix is still written atomically (shorter suffix)', () => {
     const name = `${'n'.repeat(236)}.json`;
     const target = path.join(tmpDir, name);
@@ -613,6 +688,15 @@ describe('#5759 every other rerouted reader returns on a FIFO config.json', { sk
 
     assertExitedByItself(r);
     assert.ok(JSON.parse(r.stdout).message.includes('ENXIO'), r.stdout);
+  });
+
+  test('isRealInstallFs is true by default and false while a fake adapter is injected', () => {
+    const adapter = require(path.join(LIB_DIR, 'install-fs-adapter.cjs'));
+    assert.strictEqual(adapter.isRealInstallFs(), true);
+    adapter.withInstallFs({ existsSync: () => false }, () => {
+      assert.strictEqual(adapter.isRealInstallFs(), false);
+    });
+    assert.strictEqual(adapter.isRealInstallFs(), true);
   });
 
   test('the installer warning for an unusable project config prints the path with control characters escaped', () => {
