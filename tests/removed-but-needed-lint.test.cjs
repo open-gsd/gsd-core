@@ -1016,15 +1016,21 @@ describe('removed-but-needed lint: echoed paths are control-char-free', () => {
 
   test('reason strings from both arms strip control characters from every path', () => {
     const deleted = `gsd-core/workflows/${NASTY_BASE}`;
+    // A surviving file shares the basename, so both arms match by FULL path: the
+    // live corpus must cite the full deleted path, not just its basename.
     const live = findSurvivingReferences(
       [deleted],
-      [{ file: 'gsd-core/ci\nte\u001b.md', content: `see ${NASTY_BASE}` }],
+      [{ file: 'gsd-core/ci\nte\u001b.md', content: `see ${deleted}` }],
       new Set([NASTY_BASE]),
     );
+    // The tests arm matches line by line, so a path holding a line break can
+    // never sit on one line; its fixture path carries BEL and ESC instead.
+    const testBase = 'bad\u0007name\u001b[31m.md';
+    const testDeleted = `gsd-core/workflows/${testBase}`;
     const tests = findSurvivingTestReferences(
-      [deleted],
-      [{ file: 'tests/a.test.cjs', content: `fs.readFileSync('${deleted}')\n` }],
-      new Set([NASTY_BASE]),
+      [testDeleted],
+      [{ file: 'tests/a.test.cjs', content: `fs.readFileSync('${testDeleted}')\n` }],
+      new Set([testBase]),
     );
     for (const v of [...live, ...tests]) {
       assert.ok(![...v.reason].some((ch) => ch.codePointAt(0) <= 0x1f || ch.codePointAt(0) === 0x7f), v.reason);
@@ -1441,9 +1447,12 @@ describe('removed-but-needed lint: NUL parsers (property)', () => {
   const seg = fc.stringMatching(/^[a-z0-9._-]{1,10}$/);
 
   test('parseNameStatusZ round-trips records, including two-path R/C entries', () => {
+    // fc.record yields null-prototype objects; the parser returns ordinary ones,
+    // and strict deepEqual compares prototypes, so rebuild each as a plain object.
+    const plain = ({ status, paths }) => ({ status, paths });
     const record = fc.oneof(
-      fc.record({ status: fc.constantFrom('D', 'M', 'A', 'T'), paths: fc.array(seg, { minLength: 1, maxLength: 1 }) }),
-      fc.record({ status: fc.constantFrom('R100', 'R075', 'C050'), paths: fc.array(seg, { minLength: 2, maxLength: 2 }) }),
+      fc.record({ status: fc.constantFrom('D', 'M', 'A', 'T'), paths: fc.array(seg, { minLength: 1, maxLength: 1 }) }).map(plain),
+      fc.record({ status: fc.constantFrom('R100', 'R075', 'C050'), paths: fc.array(seg, { minLength: 2, maxLength: 2 }) }).map(plain),
     );
     fc.assert(
       fc.property(fc.array(record, { maxLength: 8 }), (records) => {
@@ -1491,7 +1500,9 @@ describe('removed-but-needed lint: NUL-safe git output (core.quotePath)', () => 
     git('rm', '-q', '--', gone);
     git('mv', 'notes/old-name.md', 'notes/new-name.md');
     git('commit', '-q', '-m', 'delete and rename');
-    assert.deepEqual(getDeletedFiles(tmpDir, BASE_REF), [gone]);
+    // git diff runs with --no-renames, so a rename is a deletion of the old
+    // path plus an addition of the new one: the old name is a deleted file.
+    assert.deepEqual(getDeletedFiles(tmpDir, BASE_REF), [gone, 'notes/old-name.md']);
   });
 
   test('getSurvivingFiles returns a non-ASCII tracked path verbatim', (t) => {
