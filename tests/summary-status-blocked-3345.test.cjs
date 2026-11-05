@@ -351,7 +351,7 @@ function probePredicate5789(name, summaryPath) {
 }
 
 function makeFifo5789(file) {
-  execFileSync('mkfifo', [file]);
+  execFileSync('mkfifo', [file], { timeout: PROBE_TIMEOUT_MS });
 }
 
 function writeCliPhase5789(projectDir, { fifo }) {
