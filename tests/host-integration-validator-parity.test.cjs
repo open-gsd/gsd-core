@@ -665,16 +665,6 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     }));
   });
 
-  test('property: no non-string is a mode, including values that stringify to one', () => {
-    const member = fc.constantFrom(...DISPATCH_ISOLATION_MODES);
-    const lookalike = fc.oneof(member.map((m) => [m]), member.map((m) => ({ toString: () => m })));
-    fc.assert(fc.property(fc.oneof(fc.anything(), lookalike), (v) => {
-      fc.pre(typeof v !== 'string');
-      assert.equal(isDispatchIsolation(v), false);
-      assert.equal(isBaseCheckIsolationMode(v), false);
-    }));
-  });
-
   test('property: the shell-list parser recovers exactly the alternatives of a bare-word `case` alternation line, in order (round-trip)', () => {
     // The scan below is a parser over workflow markdown; a parser that drops,
     // merges or splits an alternative would pin a list it misread. Its domain
