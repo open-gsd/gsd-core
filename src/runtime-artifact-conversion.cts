@@ -2000,10 +2000,10 @@ function convertClaudeToTraeMarkdownBody(content) {
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
   converted = converted.replace(/\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
-  // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
+  // Use negative lookahead (?![\w-]|\.\w) to preserve .claude-plugin, .claudeignore and .claude.json.
   // #5715: an emitted prefix is shielded by convertClaudeToTraeMarkdown; the skills path runs this before the prefix pass, and the profile maps the own-dir forms.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, () => '$HOME/.trae');
+  converted = converted.replace(/~\/\.claude(?![\w-]|\.\w)/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-]|\.\w)/g, () => '$HOME/.trae');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
@@ -4163,7 +4163,7 @@ function _applyRuntimeRewritesInner(content, runtime, pathPrefix, isGlobal = fal
         ...b.slash(dirName),
         ...b.bare('.claude', CLAUDE_HOME_BARE_BOUNDARY),
         ...b.localBare('.claude', CLAUDE_HOME_BARE_BOUNDARY),
-        ...b.bare(dirName, LOOKAHEAD, keepDefaultOwnBare),
+        ...b.bare(dirName, CLAUDE_HOME_BARE_BOUNDARY, keepDefaultOwnBare),
       ]);
       content = processAttribution(content, attribution);
       break;
