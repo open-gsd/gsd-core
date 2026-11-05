@@ -3372,7 +3372,7 @@ describe('#2376 — init.* path fields resolve when process cwd differs from --c
     // required_reading is filled from a directive whose lines are built from {research_dir}.
     assert.ok(content.includes(
       '`{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension'
-    ),'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
+    ), 'research-synthesizer required_reading lines must be built from {research_dir}, not bare .planning/research/*.md literals');
     assert.ok(content.includes(
       '<required_reading>\n{required_reading_lines}\n</required_reading>'
     ), 'research-synthesizer spawn must read the {required_reading_lines} built from {research_dir}');

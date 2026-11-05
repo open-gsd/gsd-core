@@ -331,15 +331,13 @@ with "agent type not found". Run the installer with --global to make agents avai
 
 Proceeding without research subagents — roadmap will be generated inline.
 ```
-Step 8 then skips research without asking, and the roadmap is generated inline.
+Skip the parallel research spawn step and generate the roadmap inline.
 
 <!-- gsd:section id="reset-phase-safety" when="flag:--reset-phase-numbers" -->
 If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` list: read and execute `gsd-core/workflows/new-milestone/steps/reset-phase-safety.md`. Otherwise skip — do not read the file.
 <!-- /gsd:section -->
 
 ## 8. Research Decision
-
-**If `agents_installed` is false:** do not ask — research needs the researcher subagents. Display `Skipping research — GSD agents not installed (see warning above)` and continue to Step 9 as if the user chose Skip.
 
 Check `research_enabled` from init JSON (loaded from config).
 
@@ -374,7 +372,7 @@ Run one researcher per dimension (stack, features, architecture, pitfalls) by de
 mkdir -p .planning/research
 ```
 
-Remove what this run will rewrite, so a file left from an earlier run cannot pass for this run's output: `rm -f {research_dir}/SUMMARY.md` and `rm -f {research_dir}/{FILE}` for each dimension in `{dimensions kept}`. Files of skipped dimensions are left in place and never read.
+Remove what this run will rewrite, so a file left from an earlier run cannot pass for this run's output. First display the files being replaced (`Replacing research files: {research_dir}/SUMMARY.md, {research_dir}/{FILE} for each kept dimension — earlier contents will be lost; only committed copies remain in git`), then run `rm -f "{research_dir}/SUMMARY.md"` and `rm -f "{research_dir}/{FILE}"` for each dimension in `{dimensions kept}`. Files of skipped dimensions are left in place and never read.
 
 Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
 
