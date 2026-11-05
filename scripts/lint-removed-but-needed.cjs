@@ -83,10 +83,11 @@
  * ## Gitignored-path refinement (#3677)
  *
  * #3677 deleted `.gsd/phase/.../40-design.md` and `50-test-matrix.md`, files
- * force-committed despite `.gitignore`. ~50 tracked comments cite OTHER,
+ * force-committed despite `.gitignore`. Tracked comments cite OTHER,
  * untracked local design docs that carry the same basenames, so the bare
- * basename was misattributed to the deletion (40 false violations measured
- * at the pre-fix commit 31782c1fd2 against origin/next).
+ * basename was misattributed to the deletion (MEASURED: 40 false violations
+ * at the pre-fix commit 31782c1fd2 against origin/next, with the built
+ * gsd-core/bin/lib copied in).
  *
  * A gitignored path was never meant to be tracked, and its basename is
  * shared by untracked local files that tracked comments cite — so a
@@ -100,7 +101,8 @@
  * The verdict must not be steerable by the change under review or depend on
  * the machine, so:
  *
- * - Only ignore rules from TRACKED `.gitignore` files count. The source of
+ * - Only ignore rules from TRACKED `.gitignore` files that are unchanged from
+ *   the base (committed diff AND local edits) count. The source of
  *   each match (`check-ignore -v`) must be a repo-relative path whose
  *   basename is `.gitignore` AND that `git ls-files` lists; `.git/info/exclude`,
  *   a global `core.excludesFile`, an untracked `.gitignore` and negated (`!`)
@@ -393,14 +395,14 @@ function findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenam
   return violations;
 }
 
-function getDeletedFiles(root, baseRef) {
+function getDeletedFiles(root, baseRef, entries = null) {
   // Deliberately let a git failure (unresolvable ref, no merge base, etc.)
   // propagate as a plain Error — main() treats ANY scan() failure as "cannot
   // resolve this base ref in this environment" and degrades to a skip,
   // matching lint-fix-has-regression-tests.cjs. There is no failure mode here
   // that should hard-exit non-zero; a real drift is only ever reported once
   // the diff succeeds and findSurvivingReferences finds a violation.
-  return parseNameStatusZ(gitDiffNameStatus(root, baseRef))
+  return (entries || getDiffEntries(root, baseRef))
     .filter((entry) => entry.status === 'D')
     .map((entry) => entry.paths[0]);
 }
@@ -421,6 +423,18 @@ function gitDiffNameStatus(root, baseRef, quiet = false) {
     maxBuffer: GIT_MAX_BUFFER,
     ...(quiet ? { stdio: ['ignore', 'pipe', 'ignore'] } : {}),
   });
+}
+
+/**
+ * The parsed `git diff --name-status -z <baseRef>...HEAD`, run once per scan
+ * and shared by getDeletedFiles and getIgnoredDeletions.
+ * @param {string} root
+ * @param {string} baseRef
+ * @param {boolean} [quiet]
+ * @returns {{ status: string, paths: string[] }[]}
+ */
+function getDiffEntries(root, baseRef, quiet = false) {
+  return parseNameStatusZ(gitDiffNameStatus(root, baseRef, quiet));
 }
 
 /**
@@ -497,12 +511,21 @@ function parseCheckIgnoreZ(out) {
  * @param {string} baseRef - the ref the diff is taken against
  * @returns {Set<string>} the subset that is gitignored, forward-slash separated
  */
-function getIgnoredDeletions(root, deletedFiles, baseRef) {
+function getIgnoredDeletions(root, deletedFiles, baseRef, entries = null) {
   if (deletedFiles.length === 0) return new Set();
   try {
-    const touchesGitignore = parseNameStatusZ(gitDiffNameStatus(root, baseRef, true))
+    const diffEntries = entries || getDiffEntries(root, baseRef, true);
+    const touchesGitignore = diffEntries
       .some((entry) => entry.paths.some((p) => p.split('/').pop() === '.gitignore'));
     if (touchesGitignore) return new Set();
+    // A local (staged or unstaged) edit to a tracked .gitignore is just as
+    // un-base-controlled as a committed one.
+    const dirtyGitignores = cp.execFileSync(
+      'git',
+      ['diff', '--name-only', '-z', 'HEAD', '--', ':(glob)**/.gitignore'],
+      { cwd: root, encoding: 'utf8', timeout: 15000, maxBuffer: GIT_MAX_BUFFER, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).split('\0').filter(Boolean);
+    if (dirtyGitignores.length > 0) return new Set();
     const out = cp.execFileSync('git', ['check-ignore', '--no-index', '-v', '-z', '--stdin'], {
       cwd: root,
       encoding: 'utf8',
@@ -593,7 +616,9 @@ function buildCorpus(root) {
 }
 
 function scan(root, baseRef) {
-  const deletedFiles = getDeletedFiles(root, baseRef);
+  // One `git diff --name-status -z` per scan, shared by both consumers.
+  const diffEntries = getDiffEntries(root, baseRef);
+  const deletedFiles = getDeletedFiles(root, baseRef, diffEntries);
   if (deletedFiles.length === 0) return [];
   const corpus = buildCorpus(root);
   // tests/ arm (#3565): same deletions, discriminated references. A bare
@@ -624,7 +649,7 @@ function scan(root, baseRef) {
     ...testsCorpus.map((t) => t.file),
   ]);
   // #3677: a gitignored deleted path is matched by full path too.
-  const ignoredDeletions = getIgnoredDeletions(root, deletedFiles, baseRef);
+  const ignoredDeletions = getIgnoredDeletions(root, deletedFiles, baseRef, diffEntries);
   const violations = findSurvivingReferences(deletedFiles, corpus, survivingBasenames, ignoredDeletions);
   violations.push(...findSurvivingTestReferences(deletedFiles, testsCorpus, survivingBasenames, ignoredDeletions));
   return violations;
