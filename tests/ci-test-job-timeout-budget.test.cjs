@@ -140,11 +140,13 @@ const LANE_COSTS = [
     // this figure is the slowest ROW, windows or macos shard.
     //
     // It is windows. Sharded SIX ways as of #5029, its long pole across
-    // eighteen 6-shard runs was 16m38s / 15m17s / 16m25s / 16m21s / 17m22s /
-    // 18m15s / 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s / 16m58s /
-    // 16m23s / 15m18s / 14m27s / 18m35s / 21m43s (the last two at 367 tier
-    // files). The worst, 21m43s (shard 5/6, run 40802722711), came from a slow
-    // VM: the same shard and partition took 18m17s on run 40798310354, and
+    // nineteen 6-shard runs of this PR was 16m38s / 15m17s / 16m25s / 16m21s /
+    // 17m22s / 18m15s / 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s /
+    // 16m58s / 16m23s / 15m18s / 14m27s / 18m35s / 21m43s / 15m05s (the last
+    // three at 367 tier files), and 14m49s-18m29s across the twelve fork runs
+    // SHARD_BALANCE's baselines come from (367-375 files; worst shard 2/6, run
+    // 42034565931). The worst, 21m43s (shard 5/6, run 40802722711), came from a
+    // slow VM: the same shard and partition took 18m17s on run 40798310354, and
     // #5473's spawn watcher logged 12 slow probes (max 7.0s) against 4 (max
     // 2.1s). By this file's convention it still counts: it rounds up to 22, so
     // this cap may not drop below 33m.
@@ -157,11 +159,11 @@ const LANE_COSTS = [
     // convention that observation counts: m=40 requires 60m, over the 45m
     // cap, so the row was split three ways rather than the observation
     // excluded. First 3-shard run (37694227292): 8m42s / 7m48s / 10m09s; the
-    // worst 3-shard row since is 11m49s (shard 2/3, run 40798310354). Even at
-    // that slow runner's worst 2.1x, 11m49s would be ~25m: it would then set
-    // this entry (25, so 38m required), still inside the 45m cap. If a macOS
-    // shard ever outruns windows, it sets this entry — re-measured, never
-    // scaled.
+    // worst 3-shard row since is 15m10s (shard 1/3, fork run 42023874553). At
+    // that slow runner's worst 2.1x, 15m10s would be ~32m, which requires 48m:
+    // over the 45m cap, so a 3-shard row on such a runner could force this
+    // decision again. None has been observed. If a macOS shard ever outruns
+    // windows, it sets this entry — re-measured, never scaled.
     //
     // Why six shards and not fewer, in budget terms: measured windows long
     // poles were 34m24s and 34m14s at 3 shards (runs 36322513056, 36357457440)
@@ -177,7 +179,7 @@ const LANE_COSTS = [
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
     // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
-    evidence: 'run 40802722711 — windows shard 5/6 21m43s, worst of eighteen 6-shard runs (binding row); macOS 3-shard worst 11m49s on run 40798310354',
+    evidence: 'run 40802722711 — windows shard 5/6 21m43s, worst of 31 6-shard runs (binding row); macOS 3-shard worst 15m10s on fork run 42023874553',
   },
 ];
 
