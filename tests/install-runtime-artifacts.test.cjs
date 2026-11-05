@@ -5439,8 +5439,8 @@ describe('rewriteStagedSkillBodies', () => {
       'description: Probe',
       '---',
       '',
-      'See ~/.claude/get-shit-done/x.md',
-      'and $HOME/.claude/get-shit-done/y.md',
+      'See ~/.claude/gsd-core/x.md',
+      'and $HOME/.claude/gsd-core/y.md',
       '',
     ].join('\n');
 
@@ -5471,8 +5471,8 @@ describe('rewriteStagedSkillBodies', () => {
     test('both source forms become the $HOME/.trae/ prefix, no .claude/ and no doubled .trae', () => {
       const HOME = path.resolve(os.tmpdir(), 'gsd-5715-fake-home');
       const lines = stageTraeSkill({ configDir: path.join(HOME, '.trae'), homedir: HOME });
-      assert.ok(lines.includes('See $HOME/.trae/get-shit-done/x.md'), lines.join('\n'));
-      assert.ok(lines.includes('and $HOME/.trae/get-shit-done/y.md'), lines.join('\n'));
+      assert.ok(lines.includes('See $HOME/.trae/gsd-core/x.md'), lines.join('\n'));
+      assert.ok(lines.includes('and $HOME/.trae/gsd-core/y.md'), lines.join('\n'));
       const out = lines.join('\n');
       assert.ok(!out.includes('.claude/'), out);
       assert.ok(!out.includes('.trae/.trae'), out);
@@ -5484,8 +5484,8 @@ describe('rewriteStagedSkillBodies', () => {
       const prefix = `${path.resolve(configDir).replace(/\\/g, '/')}/`;
       // homedir is unrelated to configDir, so the absolute (non-$HOME) prefix is used.
       const lines = stageTraeSkill({ configDir, homedir: '/home/u-5715' });
-      assert.ok(lines.includes(`See ${prefix}get-shit-done/x.md`), lines.join('\n'));
-      assert.ok(lines.includes(`and ${prefix}get-shit-done/y.md`), lines.join('\n'));
+      assert.ok(lines.includes(`See ${prefix}gsd-core/x.md`), lines.join('\n'));
+      assert.ok(lines.includes(`and ${prefix}gsd-core/y.md`), lines.join('\n'));
       const out = lines.join('\n');
       assert.strictEqual(out.split(prefix).length - 1, 2, out);
       assert.ok(!out.includes('.trae/'), out);
@@ -5496,8 +5496,8 @@ describe('rewriteStagedSkillBodies', () => {
       const configDir = path.join(base, '.claude-alt');
       const prefix = `${path.resolve(configDir).replace(/\\/g, '/')}/`;
       const lines = stageTraeSkill({ configDir, homedir: '/home/u-5715' });
-      assert.ok(lines.includes(`See ${prefix}get-shit-done/x.md`), lines.join('\n'));
-      assert.ok(lines.includes(`and ${prefix}get-shit-done/y.md`), lines.join('\n'));
+      assert.ok(lines.includes(`See ${prefix}gsd-core/x.md`), lines.join('\n'));
+      assert.ok(lines.includes(`and ${prefix}gsd-core/y.md`), lines.join('\n'));
       const out = lines.join('\n');
       assert.strictEqual(out.split(prefix).length - 1, 2, out);
       assert.ok(!out.includes('.trae/'), out);

@@ -1377,8 +1377,8 @@ describe('#5715: config-dir rewrites are single-pass and literal', () => {
       trae: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.trae/z'],
       kimi: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.kimi-code/z'],
       pi: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.pi/z'],
-      hermes: ['A $HOME/.hermes/x', 'B $HOME/.claude', 'C $HOME/.hermes/y', 'D $HOME/.claude', 'E ./.hermes/z'],
-      qwen: ['A $HOME/.qwen/x', 'B $HOME/.claude', 'C $HOME/.qwen/y', 'D $HOME/.claude', 'E ./.qwen/z'],
+      hermes: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.hermes/z'],
+      qwen: ['A $HOME/.claude/x', 'B $HOME/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.qwen/z'],
       claude: ['A $HOME/.claude/x', 'B ~/.claude', 'C $HOME/.claude/y', 'D $HOME/.claude', 'E ./.claude/z'],
     };
     for (const [id, lines] of Object.entries(golden)) {
