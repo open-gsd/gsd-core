@@ -112,7 +112,9 @@
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
 //   `$VAR` gap; a heredoc tag whose `${…}` holds a quoted `}`, which only
 //   the bash and zsh readings read and only with a trigger
-//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); a `#` comment in a
+//   (`: <<${x#'}'}<newline>${x#'}'}<newline>cat .env`); a substitution in a
+//   `$(( ))` beside a `'`, which reads as a quote until zsh's arithmetic is
+//   applied (`echo $(( ' $(cat .env >&2) ' ))`); a `#` comment in a
 //   `$( )`, whose `(` or `)` the scan counts
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
 //   continuation that opens a `$(` inside "…" or a heredoc body
@@ -680,6 +682,7 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
       const run = dollarRun(str, i);
       const math = str[run.end] === '[' ? zshMathEnd(str, run.end, shell) : -1;
       if (math !== -1) {
+        if (nested) collectSubstitutions(str.slice(run.end + 1, math), nested, shell);
         i = math + 1;
       } else if (quotes && opensAnsiC(run, str, shell)) {
         const end = ansiCQuoteEnd(str, run.end);
@@ -1404,6 +1407,7 @@ function tokenize(str, reading) {
         const math = c === '$' && str[i + 1] === '[' ? zshMathEnd(str, i + 1, reading) : -1;
         if (math !== -1) {
           buf += str.slice(i, math + 1);
+          collectSubstitutions(str.slice(i + 2, math), nested, reading);
           i = math + 1;
           continue;
         }
