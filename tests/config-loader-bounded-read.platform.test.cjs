@@ -1120,13 +1120,20 @@ describe('#5759 openExclusiveTempSync creates the temp file exclusively and neve
 describe('#5759 printablePath escapes invisible and bidirectional formatting characters', () => {
   const { printablePath } = require(path.join(LIB_DIR, 'config-file-read.cjs'));
   const escaped = (cp) => `\\u${cp.toString(16).padStart(4, '0')}`;
-  // [first, last] of each escaped range; the code points on both sides must pass through.
-  const RANGES = [[0x200b, 0x200f], [0x2028, 0x2029], [0x202a, 0x202e], [0x2066, 0x2069]];
+  // [first, last, below, above] of each escaped range. `below` / `above` are the nearest code points
+  // outside the range that printablePath leaves alone: the numeric neighbours of three ranges are
+  // themselves escaped (U+2029 / U+202a abut each other, U+206a is a Cf character), so they are not used.
+  const RANGES = [
+    [0x200b, 0x200f, 0x200a, 0x2010],
+    [0x2028, 0x2029, 0x2027, 0x202f],
+    [0x202a, 0x202e, 0x2027, 0x202f],
+    [0x2066, 0x2069, 0x205f, 0x2070],
+  ];
 
-  for (const [lo, hi] of RANGES) {
+  for (const [lo, hi, below, above] of RANGES) {
     test(`U+${lo.toString(16)}..U+${hi.toString(16)} are escaped and the neighbours are not`, () => {
-      assert.strictEqual(printablePath(`a${String.fromCodePoint(lo - 1)}b`), `a${String.fromCodePoint(lo - 1)}b`);
-      assert.strictEqual(printablePath(`a${String.fromCodePoint(hi + 1)}b`), `a${String.fromCodePoint(hi + 1)}b`);
+      assert.strictEqual(printablePath(`a${String.fromCodePoint(below)}b`), `a${String.fromCodePoint(below)}b`);
+      assert.strictEqual(printablePath(`a${String.fromCodePoint(above)}b`), `a${String.fromCodePoint(above)}b`);
       for (let cp = lo; cp <= hi; cp++) {
         assert.strictEqual(printablePath(`a${String.fromCodePoint(cp)}b`), `a${escaped(cp)}b`, `U+${cp.toString(16)}`);
       }
@@ -2216,6 +2223,9 @@ describe('#5759 review round: every bounded reader and special-target writer ope
       const calls = spyOpens();
 
       const hooks = await require(copy).server({ directory: project });
+      // The Kilo plugin reads the config only for a tracked session (contextWarningsDisabled is gated on
+      // currentSessionId); the OpenCode plugin also reads it for its community-hook gates.
+      await hooks.event({ event: { type: 'session.created', properties: { info: { id: 's1', directory: project } } } });
       const call = { tool: 'bash', args: { command: 'ls' }, sessionID: 's1' };
       try { await hooks['tool.execute.after'](call, { args: call.args, output: '', metadata: {} }); } catch { /* only the open matters */ }
 
