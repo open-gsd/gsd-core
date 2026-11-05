@@ -2070,8 +2070,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     const shapes = [
       "cat ${x:-$'.env'}", "cat ${x-$'.e\\x6ev'}",
       "cat ${x:+a}$'.env'", 'cat .env${}',
-      'x$(($"));cat .env', '$((")); cat .env #',
-      "echo ${x+$[ } ' ]}; cat $'.env' #'",
       "echo \"${x\\\n%'\"'$${y}'}\" $'\\'; cat .env #'",
     ];
     for (const cmd of shapes) {
@@ -2114,6 +2112,65 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
     }
+  });
+
+  describe("zsh's arithmetic: a quote in `$(( ))`, `(( ))` or `$[ ]` is not a quote", () => {
+    // Each read the file in zsh 5.9 only (Alpine 3, 2026-11-05); bash and dash
+    // fail the line. A `'` in the same place reads only inside a ${…} that is
+    // not expanded: anywhere else zsh's arithmetic stops the line on it.
+    const blocks = [
+      'x$(($"));cat .env',
+      '$((")); cat .env #',
+      '$(( " )); cat .env #',
+      '(( " )); cat .env #',
+      'echo $[ " ]; cat .env #"',
+      'echo "$[ " ]"; cat .env',
+      "echo ${x+$[ } ' ]}; cat $'.env' #'",
+      "echo ${x+$[ } \" ]}; cat $'.env' #\"",
+      "echo ${x+$$[ } ' ]}; cat $'.env' #'",
+    ];
+    for (const cmd of blocks) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+
+    const allows = [
+      'echo $((1+2)); ls',
+      'echo $(("1"+2)); ls',
+      'echo $[ "1" ]; ls',
+      '(( "1" )); ls',
+      '((echo "a"); ls)', // a subshell in a subshell: it does not end in `))`
+      'echo "((" ; ls',
+      "echo $'a' ${x+$[ 1 ]}; ls",
+      "echo $[ ' ]; ls #'",
+    ];
+    for (const cmd of allows) {
+      test(`allows ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+
+    test('a read before 200,000 unclosed `$[` in a ${…} is still named', () => {
+      const cmd = `cat .env\necho $'a' \${x+${'$['.repeat(200000)}`;
+      assertBlocked(runHook(bash(cmd)), 'read, then unclosed $[', { tool: 'Bash', path: '.env' });
+    });
+
+    test('200,000 unclosed `$[` in a ${…} end in command-too-complex, not a hook timeout', () => {
+      const cmd = `echo $'a' \${x+${'$['.repeat(200000)}`;
+      assertBlocked(runHook(bash(cmd)), 'unclosed $[', { code: 'command-too-complex', tool: 'Bash', path: '' });
+    });
+
+    test('property: zsh reads past a quote in `$(( ))` and `$[ ]` wherever the read follows', () => {
+      const body = fc.array(fc.constantFrom('1', '+', ' ', '"', '"'), { minLength: 1, maxLength: 5 })
+        .map((parts) => parts.join(''))
+        .filter((text) => text.includes('"'));
+      const forms = [(b) => `$((${b}));cat .env`, (b) => `echo $[${b}]; cat .env`, (b) => `((${b}));cat .env`];
+      fc.assert(fc.property(body, fc.constantFrom(...forms), (b, form) => {
+        const cmd = form(b);
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      }), { seed: 5285, numRuns: 30 });
+    });
   });
 
   describe('boundaries (#5255 review round 6, Minor 5)', () => {

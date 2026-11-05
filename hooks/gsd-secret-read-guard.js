@@ -80,7 +80,8 @@
 //   segment's names as the sub-command's read operands.
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
-// before `{` or `(`, or a `$` before a line continuation, is scanned under
+// before `{` or `(`, a `$` before a line continuation, or a `"` and zsh's
+// arithmetic (`((`, `$[`), is scanned under
 // bash's, zsh's and dash's reading of it, then the scan as it was before
 // #5255, and denied on any; a `$'…'` word with
 // no value to check is denied as `ansi-c-unterminated` / `ansi-c-undecodable`.
@@ -110,10 +111,7 @@
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
 //   name joined to an expansion (`cat ${x:+a}$'.env'`, `cat .env${}`), the
-//   `$VAR` gap; zsh's `$((` holding a quote
-//   (`x$(($"));cat .env`, `$((")); cat .env #`), #5523's form I; and zsh's
-//   `$[ … ]` arithmetic, in which a `'` is not a quote, inside `${…}`
-//   (`echo ${x+$[ } ' ]}; cat $'.env' #'`), the same form; and a line
+//   `$VAR` gap; and a line
 //   continuation inside a `${` or its name within "…", which dash removes
 //   first, so the dash reading misses its pattern operator and takes a `'`
 //   after it as text where dash takes a quote
@@ -180,7 +178,8 @@ const MAX_NESTING_DEPTH = 3;
 // reading and every nested rescan (#5255). Four readings, each rescanning
 // each nested `$( )`, multiply the work: a 1 MiB run of `$$(` is tokenized
 // about 60 times over and took seconds per call. A command holding a reading
-// trigger (`$'`, `$"`, `$${`, `$$(`, `$\<newline>`; readEachWay) is scanned
+// trigger (`$'`, `$"`, `$${`, `$$(`, `$\<newline>`, or `"` with `((` or `$[`;
+// readsEachWay) is scanned
 // four times, and a nested body it rescans (`$( )`, backticks, `<( )`,
 // `eval`, `bash -c`, a heredoc or here-string fed to a shell) that holds one
 // is scanned four times under each of those. Eight times the length cap lets
@@ -505,7 +504,8 @@ function classifyGrepGlob(glob) {
 //         before `'` always ends in a `$'` opener: `$$'x'` is the PID and a
 //         span, where bash reads the PID and a plain 'x' (opensAnsiC); after
 //         an even run only `\\` and `\'` are escapes in it, though the zsh
-//         reading decodes it in full (opensAnsiC).
+//         reading decodes it in full (opensAnsiC). In `$(( ))`, `(( ))` and
+//         `$[ ]` a quote is not one (zshMathEnd).
 //   dash  `$` is a literal and the quote after it a plain one, and a run of
 //         `$` pairs left to right as bash's does: `$${` is the PID and a `{`.
 //   plain the scan as it was before #5255: dash's quoting, but a run is not
@@ -678,7 +678,10 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
       i++;
     } else {
       const run = dollarRun(str, i);
-      if (quotes && opensAnsiC(run, str, shell)) {
+      const math = str[run.end] === '[' ? zshMathEnd(str, run.end, shell) : -1;
+      if (math !== -1) {
+        i = math + 1;
+      } else if (quotes && opensAnsiC(run, str, shell)) {
         const end = ansiCQuoteEnd(str, run.end);
         if (end === -1) return unclosed(str, read);
         i = end + 1;
@@ -941,6 +944,10 @@ let heredocTagsAsWords = true;
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early.
 function findParenClose(str, i, reading) {
+  if (str[i] === '(' && str[i - 2] === '$') {
+    const math = zshMathEnd(str, i, reading);
+    if (math !== -1) return math;
+  }
   let depth = 1;
   let heredocTags = [];
   let read = i;
@@ -1007,16 +1014,28 @@ function findParenClose(str, i, reading) {
   return str.length;
 }
 
-// Index of the `]` closing a `$[` whose text starts at `i`, nested `[ ]`
-// counted, or -1 when none does. Only findParenClose under a reading calls
-// it, and on -1 goes on one character, so each step is charged to
-// readerSteps: unclosed `$[` would otherwise each read to the end.
-function bracketClose(str, i) {
-  let depth = 1;
-  for (; i < str.length; i++) {
+// Under zsh's reading, the index of the bracket closing the arithmetic whose
+// opener is at `i` — the `[` of `$[`, or the inner `(` of `$((` or `((` — or
+// -1 when there is none, under another reading, or with the ${…} reader off.
+// zsh takes a `$[ … ]` and a `$(( … ))` as arithmetic before anything else, and
+// in arithmetic a quote is not one: `x$(($"));cat .env` and
+// `echo ${x+$[ } ' ]}; cat $'.env' #'` run the read. `$(( … ))` must end in
+// `))`, or it is a `$( )` holding a subshell, and without a `"` the two
+// readings of it agree, so only a body holding one is taken here. Called
+// where a caller goes on one character on -1, so each step is charged:
+// unclosed openers would otherwise each read to the end.
+function zshMathEnd(str, i, reading) {
+  if (reading !== 'zsh' || asBefore) return -1;
+  const bracket = str[i] === '[';
+  const [open, close] = bracket ? '[]' : '()';
+  let depth = 0;
+  for (let p = i; p < str.length; p++) {
     chargeReader(1);
-    if (str[i] === '[') depth++;
-    else if (str[i] === ']' && --depth === 0) return i;
+    if (str[p] === open) depth++;
+    else if (str[p] === close && --depth === 0) {
+      if (bracket) return p;
+      return str[p + 1] === ')' && str.slice(i, p).includes('"') ? p + 1 : -1;
+    }
   }
   return -1;
 }
@@ -1315,6 +1334,13 @@ function tokenize(str, reading) {
         i = run.end;
         continue;
       }
+      const math = str[run.end] === '[' ? zshMathEnd(str, run.end, reading) : -1;
+      if (math !== -1) {
+        hasWord = true;
+        buf += str.slice(i, math + 1);
+        i = math + 1;
+        continue;
+      }
       // Any other run. bash (and dash) pair it left to right, so an even run
       // is all PIDs and the `{` or `(` after it is a literal: bash runs the
       // rest of `echo $${; cat .env`. zsh's lexer instead opens a `${…}` after
@@ -1358,6 +1384,12 @@ function tokenize(str, reading) {
         // continuations (runParen). Not under zsh's reading, and not in a
         // heredoc tag word, which is not expanded: there dash reads
         // `"$\<newline>("` as the text `$(`.
+        const math = c === '$' && str[i + 1] === '[' ? zshMathEnd(str, i + 1, reading) : -1;
+        if (math !== -1) {
+          buf += str.slice(i, math + 1);
+          i = math + 1;
+          continue;
+        }
         const paren = reading && c === '$' && expectTag === null ? runParen(str, i, reading, true) : null;
         if (paren) {
           hasWord = true;
@@ -1558,6 +1590,10 @@ function tokenize(str, reading) {
       if (str[i] === '&') { text = '&&'; i++; }
       sep(text);
       continue;
+    }
+    if (ch === '(' && str[i + 1] === '(' && !hasWord) {
+      const math = zshMathEnd(str, i + 1, reading);
+      if (math !== -1) { i = math + 1; continue; }
     }
     if (ch === '(' || ch === ')') {
       sep(ch);
@@ -2017,7 +2053,9 @@ function readEachWay(command, depth) {
 function readsEachWay(command) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   return joined.includes("$'") || joined.includes('$"') || joined.includes('$${') || joined.includes('$$(')
-    || command.includes('$\\\n');
+    || command.includes('$\\\n')
+    // zsh's arithmetic holding a `"` (zshMathEnd): `$[`, `$((` and `((`.
+    || (joined.includes('"') && (joined.includes('((') || joined.includes('$[')));
 }
 
 // A Bash block for a read of the secret file `text` names.
