@@ -30,6 +30,9 @@ const {
   findSurvivingTestReferences,
   isDocsHistoricalRecord,
   getIgnoredDeletions,
+  getDeletedFiles,
+  getSurvivingFiles,
+  matchesByFullPath,
   scan,
 } = require(LINT_SCRIPT);
 const fc = require('fast-check');
@@ -745,7 +748,42 @@ describe('removed-but-needed lint: gitignored-path refinement (#3677)', () => {
     assert.equal(violations.length, 1);
   });
 
-  test('property: ignored deletion matches only its own directory path', () => {
+  test('ignored AND colliding deletion: the #3907 reason wins over the gitignore reason', () => {
+    const violations = findSurvivingReferences(
+      [DELETED],
+      [{ file: 'src/a.cts', content: 'see .gsd/phase/x/40-design.md here' }],
+      new Set(['40-design.md']),
+      IGNORED,
+    );
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].reason, /#3907/);
+    assert.doesNotMatch(violations[0].reason, /gitignored/);
+  });
+
+  test('a deleted path preceded by "/" (a longer path) is NOT a reference, in either arm', () => {
+    const live = findSurvivingReferences(
+      [DELETED],
+      [{ file: 'src/a.cts', content: 'see foo/.gsd/phase/x/40-design.md here' }],
+      new Set(),
+      IGNORED,
+    );
+    assert.deepEqual(live, []);
+    const tests = findSurvivingTestReferences(
+      [DELETED],
+      [{ file: 'tests/a.test.cjs', content: "fs.readFileSync('foo/.gsd/phase/x/40-design.md')\n" }],
+      new Set(),
+      IGNORED,
+    );
+    assert.deepEqual(tests, []);
+  });
+
+  test('matchesByFullPath: true for an ignored or colliding deletion, false otherwise', () => {
+    assert.equal(matchesByFullPath(DELETED, new Set(), IGNORED), true);
+    assert.equal(matchesByFullPath(DELETED, new Set(['40-design.md']), new Set()), true);
+    assert.equal(matchesByFullPath(DELETED, new Set(['other.md']), new Set()), false);
+  });
+
+  test('property: both arms agree — an ignored deletion matches only its own path', () => {
     fc.assert(
       fc.property(
         fc.stringMatching(/^[a-z]{1,8}$/),
@@ -754,46 +792,242 @@ describe('removed-but-needed lint: gitignored-path refinement (#3677)', () => {
           fc.pre(a !== b);
           const deleted = `.gsd/${a}/40-design.md`;
           const ignored = new Set([deleted]);
-          const other = findSurvivingReferences(
+          const otherLive = findSurvivingReferences(
             [deleted],
             [{ file: 'src/a.cts', content: `see .gsd/${b}/40-design.md and 40-design.md` }],
             new Set(),
             ignored,
           );
-          const own = findSurvivingReferences(
+          const ownLive = findSurvivingReferences(
             [deleted],
             [{ file: 'src/a.cts', content: `see ${deleted} here` }],
             new Set(),
             ignored,
           );
-          return other.length === 0 && own.length >= 1;
+          const otherTests = findSurvivingTestReferences(
+            [deleted],
+            [{ file: 'tests/a.test.cjs', content: `fs.readFileSync('.gsd/${b}/40-design.md')\nfs.readFileSync('40-design.md')\n` }],
+            new Set(),
+            ignored,
+          );
+          const ownTests = findSurvivingTestReferences(
+            [deleted],
+            [{ file: 'tests/a.test.cjs', content: `fs.readFileSync('${deleted}')\n` }],
+            new Set(),
+            ignored,
+          );
+          return (
+            otherLive.length === 0 && otherTests.length === 0
+            && ownLive.length >= 1 && ownTests.length >= 1
+          );
         },
       ),
     );
   });
 });
 
+const BASE_REF = 'origin/main';
+
+/**
+ * A repo whose BASE commit tracks `.gitignore` (+ extra tracked files), with
+ * `refs/remotes/origin/main` at the base and HEAD on a `pr` branch (no PR
+ * commit yet). Ignore rules are therefore base-controlled.
+ * @param {string} tmpDir
+ * @param {Record<string,string>} trackedFiles - repo-relative path -> content, committed with `add -f`
+ */
+function initIgnoreRepo(tmpDir, trackedFiles = {}) {
+  const git = (...args) => gitOrThrow(args, { cwd: tmpDir });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'Test');
+  fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.gsd\n');
+  git('add', '.gitignore');
+  for (const [file, content] of Object.entries(trackedFiles)) {
+    const abs = path.join(tmpDir, file);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+    git('add', '-f', '--', file);
+  }
+  git('commit', '-q', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', '-b', 'pr');
+  return git;
+}
+
 describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
   test('returns only the gitignored paths of a real repo', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-'));
     t.after(() => cleanup(tmpDir));
-    gitOrThrow(['init', '-q'], { cwd: tmpDir });
-    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.gsd\n');
-    const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md', 'src/x.cts']);
+    initIgnoreRepo(tmpDir);
+    const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md', 'src/x.cts'], BASE_REF);
     assert.deepEqual([...result], ['.gsd/a/b.md']);
   });
 
   test('no ignored path (git exits 1) yields an empty Set', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-none-'));
     t.after(() => cleanup(tmpDir));
-    gitOrThrow(['init', '-q'], { cwd: tmpDir });
-    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.gsd\n');
-    const result = getIgnoredDeletions(tmpDir, ['src/x.cts', 'docs/y.md']);
+    initIgnoreRepo(tmpDir);
+    const result = getIgnoredDeletions(tmpDir, ['src/x.cts', 'notes/y.md'], BASE_REF);
     assert.equal(result.size, 0);
   });
 
   test('empty input yields an empty Set without needing a repo', () => {
-    const result = getIgnoredDeletions(os.tmpdir(), []);
+    const result = getIgnoredDeletions(os.tmpdir(), [], BASE_REF);
     assert.equal(result.size, 0);
+  });
+
+  test('a non-ASCII ignored path is found (git core.quotePath cannot mangle it)', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-utf8-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir);
+    const p = '.gsd/café/40-design.md';
+    const result = getIgnoredDeletions(tmpDir, [p], BASE_REF);
+    assert.deepEqual([...result], [p]);
+  });
+
+  test('degrades to an empty Set (no throw) when git cannot answer — not a git repo', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-norepo-'));
+    t.after(() => cleanup(tmpDir));
+    const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF);
+    assert.equal(result.size, 0);
+  });
+
+  test('.git/info/exclude is NOT honored (machine-local rule)', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-exclude-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir);
+    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), 'local-only/\n');
+    const result = getIgnoredDeletions(tmpDir, ['local-only/a.md'], BASE_REF);
+    assert.equal(result.size, 0);
+  });
+
+  test('a global core.excludesFile is NOT honored (machine-local rule)', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-global-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir);
+    const excludes = path.join(tmpDir, 'global-excludes');
+    fs.writeFileSync(excludes, 'globally-ignored/\n');
+    const globalConfig = path.join(tmpDir, 'global-gitconfig');
+    fs.writeFileSync(globalConfig, `[core]\n\texcludesFile = ${excludes.replace(/\\/g, '/')}\n`);
+    const prior = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    try {
+      const result = getIgnoredDeletions(tmpDir, ['globally-ignored/a.md'], BASE_REF);
+      assert.equal(result.size, 0);
+    } finally {
+      if (prior === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = prior;
+    }
+  });
+
+  test('an UNTRACKED .gitignore is NOT honored (only tracked, base-controlled rules)', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-untracked-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'sub', '.gitignore'), '*.md\n');
+    const result = getIgnoredDeletions(tmpDir, ['sub/a.md'], BASE_REF);
+    assert.equal(result.size, 0);
+  });
+
+  test('a diff that touches a .gitignore disables the refinement (the PR controls those rules)', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-touched-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir);
+    fs.appendFileSync(path.join(tmpDir, '.gitignore'), 'x.cjs\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'pr touches gitignore');
+    const result = getIgnoredDeletions(tmpDir, ['gsd-core/bin/lib/x.cjs'], BASE_REF);
+    assert.equal(result.size, 0);
+  });
+
+  test('a diff that touches a NESTED .gitignore also disables the refinement', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-nested-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'pkg', '.gitignore'), 'y.cjs\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'pr adds nested gitignore');
+    const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF);
+    assert.equal(result.size, 0);
+  });
+});
+
+describe('removed-but-needed lint: NUL-safe git output (core.quotePath)', () => {
+  test('getDeletedFiles returns a non-ASCII deleted path verbatim and handles renames', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nul-del-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir);
+    // initIgnoreRepo already branched to 'pr'; build the base content on main.
+    git('checkout', '-q', 'main');
+    const body = Array.from({ length: 40 }, (_, i) => `line ${i} of a rename candidate`).join('\n') + '\n';
+    const gone = 'notes/café.md';
+    fs.mkdirSync(path.join(tmpDir, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, gone), '# gone\n');
+    fs.writeFileSync(path.join(tmpDir, 'notes', 'old-name.md'), body);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'more base');
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git('checkout', '-q', '-b', 'pr2');
+    git('rm', '-q', '--', gone);
+    git('mv', 'notes/old-name.md', 'notes/new-name.md');
+    git('commit', '-q', '-m', 'delete and rename');
+    assert.deepEqual(getDeletedFiles(tmpDir, BASE_REF), [gone]);
+  });
+
+  test('getSurvivingFiles returns a non-ASCII tracked path verbatim', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nul-ls-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir);
+    const keep = 'notes/café.md';
+    fs.mkdirSync(path.join(tmpDir, 'notes'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, keep), '# keep\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add');
+    assert.ok(getSurvivingFiles(tmpDir).includes(keep));
+  });
+});
+
+describe('removed-but-needed lint: gitignored refinement wired through scan() end-to-end (#3677)', () => {
+  const TRACKED_IGNORED = '.gsd/x/40-design.md';
+
+  /**
+   * @param {string} prefix
+   * @param {string} citation - text the surviving gsd-core file carries
+   * @param {boolean} touchGitignore - the PR also edits .gitignore
+   */
+  function runScenario(t, prefix, citation, touchGitignore) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir, { [TRACKED_IGNORED]: '# design\n' });
+    fs.unlinkSync(path.join(tmpDir, TRACKED_IGNORED));
+    fs.mkdirSync(path.join(tmpDir, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-core', 'cite.md'), `${citation}\n`);
+    if (touchGitignore) fs.appendFileSync(path.join(tmpDir, '.gitignore'), '40-design.md\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'pr changes');
+    const scriptCopy = copyScriptInto(tmpDir);
+    return runNode(
+      [scriptCopy],
+      { cwd: tmpDir, env: { ...process.env, GSD_REMOVED_BUT_NEEDED_BASE: 'main' } },
+    );
+  }
+
+  test('exit 0: a bare-basename citation of a deleted gitignored path is not attributed to it', (t) => {
+    const result = runScenario(t, 'gsd-rbn-e2e-bare-', 'see 40-design.md for the local design', false);
+    assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
+  });
+
+  test('exit 1: the full deleted path is still caught', (t) => {
+    const result = runScenario(t, 'gsd-rbn-e2e-full-', `see ${TRACKED_IGNORED} for the design`, false);
+    assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /gitignored/);
+  });
+
+  test('exit 1: a PR that also edits .gitignore cannot disable the basename check', (t) => {
+    const result = runScenario(t, 'gsd-rbn-e2e-touched-', 'see 40-design.md for the local design', true);
+    assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /basename '40-design\.md' still referenced/);
   });
 });
