@@ -10,6 +10,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
+const { declaredWindowsConformanceShards } = require('./helpers/shard-spec.cjs');
 
 const {
   resolveJobTimeoutMinutes,
@@ -948,11 +950,7 @@ test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)',
   const workflow = yaml.load(
     fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', SHARD_BALANCE.workflowFile), 'utf8'),
   );
-  const windowsEntries = workflow.jobs['test-conformance'].strategy.matrix.include
-    .filter((e) => e.os === 'windows-latest');
-  const totals = [...new Set(windowsEntries.map((e) => Number(String(e.shard).split('/')[1])))];
-  assert.equal(totals.length, 1, `windows conformance entries disagree on the shard total: ${JSON.stringify(windowsEntries)}`);
-  const [total] = totals;
+  const total = declaredWindowsConformanceShards(workflow);
 
   assert.equal(
     SHARD_BALANCE.baselineShardTotal, total,
@@ -1001,4 +999,53 @@ test('the live gap limit holds at its boundary on the declared shard layout (#50
   const overLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit + 1), SHARD_BALANCE), SHARD_BALANCE);
   assert.equal(overLimit.status, 'breach');
   assert.deepEqual(overLimit.breaches.map((b) => [b.kind, b.slowest]), [['gap', keys[slowIdx]]]);
+});
+
+// The threshold invariant (CONTEXT.md, RULESET.TESTS.property-based-testing).
+// The boundary rows above pin minRuns-1, minRuns and minRuns+1 on one fixture;
+// this holds the rule for any run history, in both directions, so a guard that
+// stops firing fails here as surely as one that fires too early. Samples arrive
+// shuffled because "newest" has to come from createdAt, not from array order.
+test('baseline-mismatch fires exactly when the lane left an established baseline layout (#5029)', () => {
+  const { baselineShardTotal, minRuns } = SHARD_BALANCE;
+  const samplesOf = (layouts) => layouts.flatMap((total, run) => Array.from({ length: total }, (_, i) => ({
+    runId: run + 1,
+    createdAt: new Date(Date.UTC(2026, 10, 1, run)).toISOString(),
+    index: i + 1,
+    total,
+    shard: `${i + 1}/${total}`,
+    elapsedMs: 600000,
+  })));
+  const otherLayout = fc.integer({ min: 1, max: 8 }).filter((total) => total !== baselineShardTotal);
+  const baselineRunsThenOthers = fc.tuple(
+    fc.oneof(fc.constantFrom(minRuns - 1, minRuns, minRuns + 1), fc.nat({ max: minRuns * 3 })),
+    fc.array(otherLayout, { maxLength: 6 }),
+  ).map(([baselineRuns, others]) => [...Array(baselineRuns).fill(baselineShardTotal), ...others]);
+  const anyHistory = fc.array(fc.oneof(otherLayout, fc.constant(baselineShardTotal)), { maxLength: 40 });
+  const history = fc.oneof(baselineRunsThenOthers, anyHistory).chain((layouts) => {
+    const samples = samplesOf(layouts);
+    return fc.shuffledSubarray(samples, { minLength: samples.length, maxLength: samples.length })
+      .map((shuffled) => ({ layouts, samples: shuffled }));
+  });
+
+  const seen = { mismatch: 0, withheld: 0, stayed: 0 };
+  fc.assert(fc.property(history, ({ layouts, samples }) => {
+    const baselineRuns = layouts.filter((total) => total === baselineShardTotal).length;
+    const moved = layouts.length > 0 && layouts[layouts.length - 1] !== baselineShardTotal;
+    const established = baselineRuns >= minRuns;
+    if (!moved) seen.stayed += 1;
+    else if (established) seen.mismatch += 1;
+    else seen.withheld += 1;
+
+    const { status } = evaluateShardBalance(samples, SHARD_BALANCE);
+    assert.equal(
+      status === 'baseline-mismatch', moved && established,
+      `layouts ${JSON.stringify(layouts)} gave status ${status}`,
+    );
+  }), { numRuns: 300 });
+
+  assert.ok(
+    seen.mismatch > 0 && seen.withheld > 0 && seen.stayed > 0,
+    `the property must exercise every case, saw ${JSON.stringify(seen)}`,
+  );
 });

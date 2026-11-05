@@ -663,9 +663,11 @@ jobs:
           #
           # Sharding is not free per shard. The #5029 projection in the same
           # test file fits each run's long pole as a fixed cost per shard plus
-          # the shard's share of the tier, and only a minute or two of that
-          # fixed cost is job-level checkout and npm ci. So each added shard
-          # buys less while costing a 2x-billed Windows runner permanently.
+          # the shard's share of the tier. Job-level setup is about a minute
+          # of that fixed cost (60-72s outside the test step on run
+          # 40884472868); the rest sits inside the test step and is
+          # unattributed. So each added shard buys less while costing a
+          # 2x-billed Windows runner permanently.
           #
           # Halving the files per shard also relaxes the per-chunk 600s cap and
           # maxUnmeasuredPerChunk, both of which have drawn red builds here

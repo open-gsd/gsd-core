@@ -117,6 +117,11 @@ until someone closes it.
 | `baseline-mismatch` | The newest run's Windows shard count differs from the baseline's (6), and the baseline's layout has at least 10 runs. The lane was re-sharded away from it. | Measure the new layout and update `baselineShardTotal` and `baselineP90Ms` in `SHARD_BALANCE`. Until then, no gap or p90 verdict is given. A re-shard PR should already fail `tests/ci-timeout-report.test.cjs`, which checks this count against `test.yml`. |
 | `error` | The GitHub API could not be read. The step logs a warning. | Re-run the workflow once the API is reachable. The per-job report step is unaffected. |
 
+The check reads the newest 40 runs. So `baseline-mismatch` needs at least 10 of those to be
+baseline-layout runs: once they age out, a lane that really did move reads `insufficient-data`
+and never `baseline-mismatch`. An issue already opened stays open, but if `insufficient-data`
+lasts past 10 pushes, compare the newest run's shard count with `baselineShardTotal`.
+
 The check never fails the workflow and never changes how shards are packed; it only reports.
 Closing the tracking issue after a fix is up to you. A later breach opens a new one.
 

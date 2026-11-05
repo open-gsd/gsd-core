@@ -31,9 +31,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
+const fc = require('fast-check');
 const { COVERED } = require('../scripts/mutation-matrix.cjs');
 const { THRESHOLD_PCT, isNearCap } = require('../scripts/lib/ci-job-timing.cjs');
 const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
+const { declaredWindowsConformanceShards } = require('./helpers/shard-spec.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
@@ -151,25 +153,26 @@ const LANE_COSTS = [
     // 18m13s-26m01s across six runs on this PR (repo-wide p90 26.0m over 43
     // runs, 09-30..10-04, tests/ci-timeout-budget-history.jsonl), 26m58s on
     // run 34434252144 — and 39m43s on run 37086102648, a slow runner (every
-    // chunk 1.1-2.1x slower on the same 228-file tier). By this file's convention that
-    // observation counts: m=40 requires 60m, over the 45m cap, so the row was
-    // split three ways rather than the observation excluded. First 3-shard
-    // run (37694227292): 8m42s / 7m48s / 10m09s; the worst 3-shard row since
-    // is 11m49s (shard 2/3, run 40798310354). Even at that slow runner's worst
-    // 2.1x, 11m49s would be ~25m: it would then set this entry (25, so 38m
-    // required), still inside the 45m cap. If a macOS shard ever outruns
-    // windows, it sets this entry — re-measured, never scaled.
+    // chunk 1.1-2.1x slower on the same 228-file tier). By this file's
+    // convention that observation counts: m=40 requires 60m, over the 45m
+    // cap, so the row was split three ways rather than the observation
+    // excluded. First 3-shard run (37694227292): 8m42s / 7m48s / 10m09s; the
+    // worst 3-shard row since is 11m49s (shard 2/3, run 40798310354). Even at
+    // that slow runner's worst 2.1x, 11m49s would be ~25m: it would then set
+    // this entry (25, so 38m required), still inside the 45m cap. If a macOS
+    // shard ever outruns windows, it sets this entry — re-measured, never
+    // scaled.
     //
     // Why six shards and not fewer, in budget terms: measured windows long
     // poles were 34m24s and 34m14s at 3 shards (runs 36322513056, 36357457440)
     // and 30m17s at 4 (run 36349891343), requiring 53m and 47m against a 45m
-    // cap. Raising the cap
-    // was ruled out by #5029 — ADR-4641 records 45m as the cliff #869 and #3057
-    // were filed about — so the split moved instead. #5071 -> #5097 has since
-    // priced Windows files by Windows measurements, which collapsed shard
-    // imbalance to 1.01-1.02; if this lane is ever resharded downward on the
-    // strength of that, re-measure the windows long pole from that run and
-    // set this entry from the slowest row, rather than scaling a figure.
+    // cap. Raising the cap was ruled out by #5029 — ADR-4641 records 45m as
+    // the cliff #869 and #3057 were filed about — so the split moved instead.
+    // #5071 -> #5097 has since priced Windows files by Windows measurements,
+    // which collapsed shard imbalance to 1.01-1.02; if this lane is ever
+    // resharded downward on the strength of that, re-measure the windows long
+    // pole from that run and set this entry from the slowest row, rather than
+    // scaling a figure.
     //
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
@@ -291,19 +294,12 @@ function slowRunnerCapShare(shards, tierFiles, capMinutes, model = WINDOWS_CONFO
   return (projectedLongPoleSeconds(shards, tierFiles, model) * model.slowRunnerSkew) / (capMinutes * 60);
 }
 
-function declaredWindowsConformanceShards(workflow) {
-  const entries = workflow.jobs['test-conformance'].strategy.matrix.include
-    .filter((e) => e.os === 'windows-latest');
-  const totals = [...new Set(entries.map((e) => Number(String(e.shard).split('/')[1])))];
-  assert.equal(totals.length, 1, `windows conformance entries disagree on the shard total: ${JSON.stringify(entries)}`);
-  return totals[0];
-}
-
 test('the Windows conformance worst shard clears its cap on a slow runner (#5029)', async (t) => {
   await t.test('at the shard count test.yml declares and the current tier size', () => {
     const workflow = loadWorkflow('test.yml');
     const cap = workflow.jobs['test-conformance']['timeout-minutes'];
     const shards = declaredWindowsConformanceShards(workflow);
+    assert.ok(Number.isInteger(shards) && shards > 0, `test.yml must declare a positive shard count, got ${shards}`);
     const tierFiles = CONFORMANCE_TIER_FILES.length;
     const share = slowRunnerCapShare(shards, tierFiles, cap);
     const projected = projectedLongPoleSeconds(shards, tierFiles);
@@ -325,6 +321,31 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
     assert.equal(isNearCap(slowRunnerCapShare(1, line - 1, 45, unit)), false);
     assert.equal(isNearCap(slowRunnerCapShare(1, line, 45, unit)), true);
     assert.equal(isNearCap(slowRunnerCapShare(1, line + 1, 45, unit)), true);
+  });
+
+  // The budget-limit invariant (CONTEXT.md, RULESET.TESTS.property-based-testing):
+  // for any tier and cap, adding shards never raises the share, so a count that
+  // clears the near-cap line also clears it at every higher count.
+  await t.test('adding shards never raises the projected share of the cap', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 64 }),
+      fc.integer({ min: 1, max: 64 }),
+      fc.nat({ max: 5000 }),
+      fc.integer({ min: 1, max: 360 }),
+      (a, b, tierFiles, cap) => {
+        const [fewer, more] = a <= b ? [a, b] : [b, a];
+        const shareAtFewer = slowRunnerCapShare(fewer, tierFiles, cap);
+        const shareAtMore = slowRunnerCapShare(more, tierFiles, cap);
+        assert.ok(
+          shareAtMore <= shareAtFewer,
+          `${more} shards share ${shareAtMore}, above ${fewer} shards at ${shareAtFewer}`,
+        );
+        assert.ok(
+          isNearCap(shareAtFewer) || !isNearCap(shareAtMore),
+          `${fewer} shards clear the near-cap line but ${more} do not`,
+        );
+      },
+    ));
   });
 });
 
