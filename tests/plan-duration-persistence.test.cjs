@@ -118,8 +118,8 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
       realCli ? 'gsd_run() { node "$FIXTURE_TOOLS" "$@"; }' :
         'gsd_run() { if [ -n "$FIXTURE_MUTATION_LOG" ]; then node -e \'const fs=require("node:fs");fs.appendFileSync(process.argv[1],JSON.stringify(process.argv.slice(2))+"\\n")\' "$FIXTURE_MUTATION_LOG" "$@"; fi; if [ "$2" = summary-extract ]; then printf "%s\\n" "$FIXTURE_DECISIONS_JSON"; elif [ "$2" = state.record-metric ]; then node -e \'const a=process.argv.slice(1);process.stdout.write(JSON.stringify({duration:a[a.indexOf("--duration")+1]})+"\\n")\' "$@"; fi; }',
       executableCode
-        .replaceAll('{phase}', phase)
-        .replaceAll('{plan}', plan)
+        .replaceAll('{phase_json}', JSON.stringify(phase))
+        .replaceAll('{plan_json}', JSON.stringify(plan))
         .replaceAll('{timing_attempt}', attempt)
         .replaceAll('{task_count}', String(taskCount))
         .replaceAll('{file_count}', String(fileCount))
@@ -278,14 +278,10 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           const sentinel = path.join(dir, 'delimiter-ran');
           const identity = [`prefix\n${delimiter}\ntouch ${sentinel}`, delimiter];
           try {
-            if (delimiter === 'PLAN!PHASE!5212' || delimiter === 'PLAN!NUMBER!5212') {
-              assert.throws(() => runFresh(dir, start(), 1000, identity));
-            } else {
-              runFresh(dir, start(), 1000, identity);
-              assert.deepEqual(runFresh(dir, finish(), 1060, identity), {
-                duration: '1 min', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T00:17:40Z',
-              });
-            }
+            runFresh(dir, start(), 1000, identity);
+            assert.deepEqual(runFresh(dir, finish(), 1060, identity), {
+              duration: '1 min', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T00:17:40Z',
+            });
             assert.equal(fs.existsSync(sentinel), false, `${delimiter} must never execute identity text`);
           } finally { cleanup(dir); }
         }
