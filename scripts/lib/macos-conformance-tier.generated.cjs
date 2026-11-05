@@ -205,7 +205,6 @@ module.exports = {
   "tests/reapply-verify-hunks.test.cjs",
   "tests/refactor-1390-t3-characterization.test.cjs",
   "tests/release-pipeline-pr.test.cjs",
-  "tests/removed-but-needed-lint.test.cjs",
   "tests/require-issue-link-policy.test.cjs",
   "tests/response-language-coverage.test.cjs",
   "tests/retired-artifact-cleanup.test.cjs",

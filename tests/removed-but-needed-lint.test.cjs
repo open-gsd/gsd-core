@@ -16,7 +16,6 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
-const cp = require('node:child_process');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -47,7 +46,7 @@ const {
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runGit } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { copyScriptWithDeps } = require('./helpers/copy-script-fixture.cjs');
 
@@ -845,12 +844,31 @@ const BASE_REF = 'origin/main';
  * because the machine-local rule never took effect.
  */
 function assertRuleActive(cwd, relPath) {
-  const r = cp.spawnSync('git', ['check-ignore', '--no-index', '-q', '--', relPath], {
-    cwd,
-    encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
-  });
-  assert.equal(r.status, 0, `precondition: git must ignore ${relPath} (rule not active): ${r.stderr}`);
+  const r = runGit(['check-ignore', '--no-index', '-q', '--', relPath], { cwd, timeoutMs: GIT_TIMEOUT_MS });
+  assert.equal(r.exitCode, 0, `precondition: git must ignore ${relPath} (rule not active): ${r.stderr}`);
+}
+
+/**
+ * Capability probe: can this filesystem hold a file called `name` under `dir`
+ * and read the same name back? Tests that need a name some hosts refuse (a line
+ * break, a backslash, a colon) skip on the probe instead of sniffing the OS.
+ * @param {import('node:test').TestContext} t
+ * @param {string} dir
+ * @param {string} name - a single path segment
+ * @returns {boolean} true when the name is usable (the test must go on)
+ */
+function nameUsable(t, dir, name) {
+  const abs = path.join(dir, name);
+  try {
+    fs.writeFileSync(abs, '');
+    const stored = fs.readdirSync(dir).includes(name);
+    fs.unlinkSync(abs);
+    if (stored) return true;
+  } catch {
+    // refused under that name: the skip below
+  }
+  t.skip(`this filesystem does not hold the file name ${JSON.stringify(name)}`);
+  return false;
 }
 
 /**
@@ -1039,9 +1057,10 @@ describe('removed-but-needed lint: echoed paths are control-char-free', () => {
     assert.equal(tests.length, 1);
   });
 
-  test('end-to-end output carries no raw control characters from a hostile path', { skip: process.platform === 'win32' }, (t) => {
+  test('end-to-end output carries no raw control characters from a hostile path', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ctrl-'));
     t.after(() => cleanup(tmpDir));
+    if (!nameUsable(t, tmpDir, NASTY_BASE)) return;
     buildTempRepo(
       tmpDir,
       [{ file: `gsd-core/workflows/${NASTY_BASE}`, content: '# gone\n' }],
@@ -1213,21 +1232,28 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     }
   });
 
-  test('an unsafe tracked .gitignore path is a hard failure here and disables the refinement for deletions', { skip: process.platform === 'win32' }, (t) => {
+  test('an unsafe tracked .gitignore path is a hard failure here and disables the refinement for deletions', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-unsafe-'));
     t.after(() => cleanup(tmpDir));
+    if (!nameUsable(t, tmpDir, 'we\\ird')) return;
     initIgnoreRepo(tmpDir, { 'we\\ird/.gitignore': '*.md\n', 'src/a.md': 'x\n' });
     assert.throws(() => getTrackedIgnoredFiles(tmpDir));
     assert.equal(getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF).size, 0);
   });
 
-  test('a committed SYMLINK named .gitignore is not a rule file', { skip: process.platform === 'win32' }, (t) => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-symlink-'));
+  test('a committed link-mode (120000) entry named .gitignore is not a rule file', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-linkmode-'));
     t.after(() => cleanup(tmpDir));
     const git = initIgnoreRepo(tmpDir, { 'sub/a.md': 'x\n' });
-    fs.symlinkSync('*.md', path.join(tmpDir, 'sub', '.gitignore'));
-    git('add', '-f', 'sub/.gitignore');
-    git('commit', '-q', '-m', 'symlinked gitignore');
+    // Written straight into the index as mode 120000, so no host link support
+    // is needed and the entry is a link on every platform.
+    const blob = path.join(tmpDir, 'link-target-blob');
+    fs.writeFileSync(blob, '*.md');
+    const oid = git('hash-object', '-w', '--', 'link-target-blob').trim();
+    fs.unlinkSync(blob);
+    git('update-index', '--add', '--cacheinfo', `120000,${oid},sub/.gitignore`);
+    git('commit', '-q', '-m', 'link-mode gitignore');
+    assert.equal(git('ls-tree', 'HEAD', '--', 'sub/.gitignore').split(/\s/)[0], '120000');
     assert.deepEqual(getTrackedIgnoredFiles(tmpDir), []);
   });
 
@@ -1289,20 +1315,21 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     fs.writeFileSync(path.join(home, '.gitconfig'), `[init]\n\ttemplateDir = ${tpl.replace(/\\/g, '/')}\n`);
     // Deliberately NOT isolatedGitEnv(): that env disables global config, which
     // is exactly what would hide the positive control below.
-    const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
+    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'xdg') };
     for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_TEMPLATE_DIR', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[k];
     // Positive control: a plain `git init` DOES pick the template up here.
-    const plain = cp.spawnSync('git', ['init', '-q', control], { env, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
-    assert.equal(plain.status, 0, plain.stderr);
+    const plain = runGit(['init', '-q', control], { env, timeoutMs: GIT_TIMEOUT_MS });
+    assert.equal(plain.exitCode, 0, plain.stderr);
     assert.match(fs.readFileSync(path.join(control, '.git', 'info', 'exclude'), 'utf8'), /src\//);
     // The scratch repo does not.
     initScratchRepo(scratch, env);
     assert.equal(fs.existsSync(path.join(scratch, '.git', 'info', 'exclude')), false);
   });
 
-  test('candidate paths are literal: pathspec magic cannot resolve to an ignored path', { skip: process.platform === 'win32' }, (t) => {
+  test('candidate paths are literal: pathspec magic cannot resolve to an ignored path', (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-literal-'));
     t.after(() => cleanup(tmpDir));
+    if (!nameUsable(t, tmpDir, ':(top).gsd')) return;
     initIgnoreRepo(tmpDir, { '.gsd/a.md': 'x\n' });
     // `:(top).gsd/a.md` would resolve to the ignored `.gsd/a.md` as a pathspec,
     // but as a LITERAL file name it is a different, non-ignored path.
