@@ -1780,9 +1780,12 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // Only ENOENT (a component is absent) and ENOTDIR (a component is a non-directory) mean "nothing
   // can exist there". Any other failure (EACCES, ELOOP, ENAMETOOLONG ...) leaves the path
   // unclassified and is refused: guessing it harmless is the window an attacker needs.
-  const refuseUnresolved = (code: string | undefined): never => {
+  const refuseUnresolved = (
+    code: string | undefined,
+    what = 'a directory on its path cannot be resolved',
+  ): never => {
     throw Object.assign(
-      new Error(`ENXIO: cannot write ${filePath}: a directory on its path cannot be resolved (${code ?? 'unknown error'}) — refusing`),
+      new Error(`ENXIO: cannot write ${filePath}: ${what} (${code ?? 'unknown error'}) — refusing`),
       { code: 'ENXIO' },
     );
   };
@@ -1815,7 +1818,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     }
   };
   // The physical parent directory plus the final name, with the final component not followed
-  // (null when the parent is unresolvable).
+  // (null when a parent component is absent, ENOENT/ENOTDIR; any other failure refuses).
   const physicalPath = (rawPath: string): string | null => {
     const realDir = physicalDir(rawPath);
     return realDir === null ? null : `${realDir === '/' ? '' : realDir}/${path.basename(rawPath)}`;
@@ -1843,7 +1846,9 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     let link: string;
     try {
       link = fs.readlinkSync(hop);
-    } catch { break; }
+    } catch (err) {
+      return refuseUnresolved((err as NodeJS.ErrnoException).code, 'a symbolic link on its path cannot be read');
+    }
     let next: string | null = null;
     // Kept raw (joined by string, never normalised): the next iteration's native realpath
     // resolves any `..` in it against the symlinks it crosses.
@@ -1871,17 +1876,21 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // direct fallback write is tied to it (see writeTargetDirect).
   let walked: WalkedTarget = 'absent';
   const finalPath = physicalPath(hop);
+  // Set when the approved chain ends at a regular file reached through at least one link: the
+  // atomic publish then replaces THAT file, so the link the user made stays a link.
+  let linkedRegularTarget: string | null = null;
   if (finalPath !== null) {
     let st: fs.Stats | null = null;
     try {
       st = fs.lstatSync(finalPath);
     } catch (err) {
-      if (!isMissing(err)) refuseUnresolved((err as NodeJS.ErrnoException).code);
+      if (!isMissing(err)) refuseUnresolved((err as NodeJS.ErrnoException).code, 'the target cannot be inspected');
     }
     if (st !== null) {
       // Still a link after 40 hops: an unclassifiable chain.
-      if (st.isSymbolicLink()) refuseUnresolved('ELOOP');
+      if (st.isSymbolicLink()) refuseUnresolved('ELOOP', 'the symbolic link chain is circular or longer than 40 links');
       walked = { dev: st.dev, ino: st.ino };
+      if (hop !== filePath && st.isFile()) linkedRegularTarget = finalPath;
     }
   }
   opts.writeSeams?.afterPathWalk?.();
@@ -1941,15 +1950,38 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // after the rename): the temp file is CREATED with that mode, so it is never more permissive
   // than the target it replaces, not even for an instant. Without one the temp is created 0o666
   // and the kernel applies the umask (the process umask is never read or changed here).
+  // A link the walk approved (ending at a regular file) is preserved: the temp is created beside,
+  // and renamed over, the file the link chain resolves to, never over the link itself. The
+  // resolved file must still be the {dev, ino} the walk approved.
+  const publishPath = linkedRegularTarget ?? filePath;
+  const refuseIfResolvedTargetChanged = (): void => {
+    if (linkedRegularTarget === null || walked === 'absent') return;
+    let now: fs.Stats;
+    try {
+      now = fs.lstatSync(linkedRegularTarget);
+    } catch {
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: the link target vanished after the path was checked`),
+        { code: 'ENXIO' },
+      );
+    }
+    if (!now.isFile() || now.dev !== walked.dev || now.ino !== walked.ino) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: the link target is not the file the path check approved`),
+        { code: 'ENXIO' },
+      );
+    }
+  };
+  refuseIfResolvedTargetChanged();
   let targetMode: number | null = null;
   try {
-    const existing = fs.lstatSync(filePath);
+    const existing = fs.lstatSync(publishPath);
     if (existing.isFile()) targetMode = existing.mode & 0o777;
   } catch { /* no existing target, or no permission bits on this platform */ }
   let tmpPath: string;
   let tmpFd: number;
   try {
-    ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(filePath, undefined, targetMode ?? 0o666));
+    ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(publishPath, undefined, targetMode ?? 0o666));
   } catch {
     writeTargetDirect(filePath, normalized, encoding, walked);
     return;
@@ -1970,7 +2002,13 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   }
 
   // Step 2: atomic publish, retrying transient Windows locks.
-  const renameErr = atomicRenameWithRetry(tmpPath, filePath);
+  try {
+    refuseIfResolvedTargetChanged();
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
+    throw err;
+  }
+  const renameErr = atomicRenameWithRetry(tmpPath, publishPath);
   if (renameErr === null) return;
 
   try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }

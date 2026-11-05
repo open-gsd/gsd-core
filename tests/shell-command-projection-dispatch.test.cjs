@@ -2757,7 +2757,7 @@ test('platformEnsureDir propagates EACCES when parent dir is unwritable', (t) =>
 
 // ─── Symlink-following / escape behavior ────────────────────────────────────
 
-test('platformWriteSync REPLACES a symlink with a regular file rather than following it (safe behavior)', (t) => {
+test('platformWriteSync writes through a symlink to a regular file and keeps the link (#5759)', (t) => {
   // Security-relevant invariant: if the destination path is a symlink
   // pointing somewhere the user did not intend the writer to touch
   // (e.g. an attacker-planted symlink in `.planning/` pointing at
@@ -2786,16 +2786,10 @@ test('platformWriteSync REPLACES a symlink with a regular file rather than follo
 
   platformWriteSync(linkPath, 'new content\n');
 
-  // The real target is UNTOUCHED — the safety property.
-  assert.equal(
-    fs.readFileSync(realTarget, 'utf-8'),
-    'original — must not be touched\n',
-    'symlink target must be preserved when writer writes "through" the link',
-  );
-  // The link entry is now a regular file with the new content.
-  const stat = fs.lstatSync(linkPath);
-  assert.equal(stat.isSymbolicLink(), false, 'symlink entry replaced by a regular file (atomic rename semantics)');
-  assert.equal(stat.isFile(), true);
+  // #5759: a link that passed the alias walk is the user's own; the atomic publish replaces the
+  // file the link resolves to and leaves the link a link.
+  assert.equal(fs.lstatSync(linkPath).isSymbolicLink(), true, 'the link stays a link');
+  assert.equal(fs.readFileSync(realTarget, 'utf-8'), 'new content\n', 'the resolved file is updated');
   assert.equal(fs.readFileSync(linkPath, 'utf-8'), 'new content\n');
 });
 
