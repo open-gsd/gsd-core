@@ -6309,6 +6309,10 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
   });
 
+  // One line naming a hard reset, however it is spelled: the flag anywhere after the word (`git reset -q --hard`,
+  // "`git reset` with `--hard`") or the two words (hard-reset, hard reset).
+  const HARD_RESET_SPELLING = /\breset\b.*--hard|\bhard[-\s]+reset/i;
+
   test('executor prohibits `git reset --hard` with no exception (#5310)', () => {
     // The exemption named the startup <worktree_branch_check> step, which has been verify-only
     // since #48: a hard reset in the executor's own prohibited list must not carry a carve-out.
@@ -6353,11 +6357,12 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
       stripFencedCode(executorSource).text.split(/\r?\n/).includes(resetBullets[0]),
       'the `git reset --hard` prohibition must not sit inside a fenced code block'
     );
-    // A re-grant elsewhere in the file (a later bullet or paragraph) would bypass the bullet itself.
-    assert.equal(
-      executorSource.split('git reset --hard').length - 1,
-      1,
-      'gsd-executor.md must mention `git reset --hard` only in its prohibition'
+    // A re-grant elsewhere in the file (a later bullet or paragraph, in any spelling) would bypass the
+    // bullet itself.
+    assert.deepEqual(
+      lines.filter((line) => HARD_RESET_SPELLING.test(line)),
+      [resetBullets[0]],
+      'gsd-executor.md must name a hard reset only in its prohibition'
     );
   });
 
@@ -6365,7 +6370,7 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     // The step the old exemption pointed at must still give it nothing to apply to.
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
     assert.ok(fragmentSource.includes('VERIFY-ONLY'), 'canonical fragment must still declare itself VERIFY-ONLY (#48)');
-    assert.ok(!fragmentSource.includes('git reset'), 'canonical fragment must contain no `git reset` in any form (#48)');
+    assert.doesNotMatch(fragmentSource, /git\b.*\sreset/i, 'canonical fragment must contain no `git reset` in any form (#48)');
   });
 
   test('git-integration.md, required reading for the executor, offers no hard reset as recovery (#48, #5310)', () => {
@@ -6377,9 +6382,10 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
       'execute-plan.md must still include git-integration.md (else move this assertion to its new reading)'
     );
     const gitIntegration = read('gsd-core/references/git-integration.md');
-    assert.ok(
-      !gitIntegration.includes('git reset --hard'),
-      'git-integration.md is executor required reading and must not offer `git reset --hard` as recovery (#48, #5310)'
+    assert.doesNotMatch(
+      gitIntegration,
+      HARD_RESET_SPELLING,
+      'git-integration.md is executor required reading and must not offer a hard reset as recovery (#48, #5310)'
     );
   });
 
