@@ -558,15 +558,33 @@ describe('#5831: state prune never loses entries', () => {
     return plan;
   }
 
+  // The seam writes temp files through an exclusively-created descriptor
+  // (`fs.writeFileSync(fd, ...)`), so a mock that matches by path resolves the
+  // descriptor back to the path it was opened under.
+  const openedPaths = new Map();
+  function pathOf(target) {
+    return typeof target === 'number' ? openedPaths.get(target) : target;
+  }
+  function trackOpenedPaths() {
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, ...rest) => {
+      const fd = realOpen.call(fs, p, ...rest);
+      if (typeof p === 'string') openedPaths.set(fd, p);
+      return fd;
+    });
+  }
+
   /**
    * Make writes to paths under `prefix` throw `code`; `before(p)` runs first
    * (e.g. to truncate the target the way a direct-write fallback would).
    */
   function failWritesTo(prefix, code, before = () => {}) {
     const realWrite = fs.writeFileSync;
+    trackOpenedPaths();
     mock.method(fs, 'writeFileSync', (p, ...rest) => {
-      if (typeof p === 'string' && p.startsWith(prefix)) {
-        before(p, realWrite);
+      const target = pathOf(p);
+      if (typeof target === 'string' && target.startsWith(prefix)) {
+        before(target, realWrite);
         const err = new Error(`${code}: simulated write failure`);
         err.code = code;
         throw err;
@@ -578,7 +596,7 @@ describe('#5831: state prune never loses entries', () => {
   /** Files in .planning/ other than STATE.md, the archive and the lock: temp-file leftovers. */
   function planningLeftovers() {
     const keep = new Set([path.basename(statePath), path.basename(archivePath), path.basename(statePath) + '.lock']);
-    return fs.readdirSync(path.dirname(statePath)).filter(f => !keep.has(f) && /\.(tmp|restore)\.\d+$/.test(f));
+    return fs.readdirSync(path.dirname(statePath)).filter(f => !keep.has(f) && /\.(tmp|restore)\.\d+(\.[0-9a-f]{12})?$/.test(f));
   }
 
   /** How many archive lines are exactly `line`. */
@@ -664,10 +682,12 @@ describe('#5831: state prune never loses entries', () => {
     const writes = captureArchiveWrites();
 
     const realWrite = fs.writeFileSync;
+    trackOpenedPaths();
     mock.method(fs, 'writeFileSync', (p, data, ...rest) => {
       const fail = (code) => { const e = new Error(`${code}: simulated`); e.code = code; throw e; };
-      if (typeof p === 'string' && p.startsWith(statePath)) fail('ENOSPC');
-      if (typeof p === 'string' && p.startsWith(archivePath + '.restore.')) {
+      const target = pathOf(p);
+      if (typeof target === 'string' && target.startsWith(statePath)) fail('ENOSPC');
+      if (typeof target === 'string' && target.startsWith(archivePath + '.restore.')) {
         realWrite.call(fs, p, data.subarray(0, 4)); // the temp file exists, partly written
         fail('EIO');
       }
@@ -729,14 +749,16 @@ describe('#5831: state prune never loses entries', () => {
    */
   function damagingStateWrite(damage, failRestore = false) {
     const realWrite = fs.writeFileSync;
+    trackOpenedPaths();
     mock.method(fs, 'writeFileSync', (p, ...rest) => {
       const fail = (code) => { const e = new Error(`${code}: simulated`); e.code = code; throw e; };
-      if (p === statePath || (typeof p === 'string' && p.startsWith(statePath + '.tmp.'))) {
+      const target = pathOf(p);
+      if (target === statePath || (typeof target === 'string' && target.startsWith(statePath + '.tmp.'))) {
         if (damage === 'truncated') realWrite.call(fs, statePath, '');
         else if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
         fail('ENOSPC');
       }
-      if (failRestore && typeof p === 'string' && p.startsWith(statePath + '.restore.')) fail('EIO');
+      if (failRestore && typeof target === 'string' && target.startsWith(statePath + '.restore.')) fail('EIO');
       return realWrite.call(fs, p, ...rest);
     });
   }
@@ -787,7 +809,7 @@ describe('#5831: state prune never loses entries', () => {
     failWritesTo(statePath, 'ENOSPC', () => { stateWriteFailed = true; });
     const realRead = fs.readFileSync;
     mock.method(fs, 'readFileSync', (p, ...rest) => {
-      if (stateWriteFailed && p === statePath) { const e = new Error('EIO: simulated read'); e.code = 'EIO'; throw e; }
+      if (stateWriteFailed && pathOf(p) === statePath) { const e = new Error('EIO: simulated read'); e.code = 'EIO'; throw e; }
       return realRead.call(fs, p, ...rest);
     });
     let thrown = null;
@@ -801,14 +823,69 @@ describe('#5831: state prune never loses entries', () => {
     assert.ok(lockReleased(), 'the STATE.md lock is released');
   });
 
+  // ── hostile archive: a symlink, a FIFO, a file swapped in after the snapshot ──
+
+  const posixOnly = { skip: process.platform === 'win32' ? 'POSIX symlinks and FIFOs' : false };
+
+  test('a symlinked STATE-ARCHIVE.md is refused: STATE.md, the link and its target are unchanged', posixOnly, () => {
+    const linked = path.join(tmpDir, 'elsewhere-archive.md');
+    fs.writeFileSync(linked, SEED_ARCHIVE);
+    fs.symlinkSync(linked, archivePath);
+    const stateBefore = fs.readFileSync(statePath);
+
+    assert.throws(() => prune(3), /symlink|regular file/i);
+
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+    assert.ok(fs.lstatSync(archivePath).isSymbolicLink(), 'the link is still a link');
+    assert.strictEqual(fs.readFileSync(linked, 'utf-8'), SEED_ARCHIVE, 'the link target is untouched');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
+  test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', posixOnly, () => {
+    const { spawnSync } = require('node:child_process');
+    assert.strictEqual(spawnSync('mkfifo', [archivePath]).status, 0, 'mkfifo');
+    const stateBefore = fs.readFileSync(statePath);
+    const script = `try { require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/state.cjs'))})` +
+      `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: false, silent: true }, true); console.log('RAN'); }` +
+      ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: 15000, encoding: 'utf-8' });
+
+    assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
+    assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+  });
+
+  test('a rollback does not delete a file that replaced the archive after this run created it', posixOnly, () => {
+    const foreign = 'FOREIGN archive, not created by this prune\n';
+    let swapped = false;
+    failWritesTo(statePath, 'ENOSPC', () => {
+      if (swapped) return;
+      swapped = true;
+      // Created while the archive still exists, so it has a different inode.
+      const incoming = path.join(tmpDir, '.planning', 'incoming-archive');
+      fs.writeFileSync(incoming, foreign);
+      fs.renameSync(incoming, archivePath);
+    });
+    let thrown = null;
+    try { prune(3); } catch (err) { thrown = err; }
+    mock.restoreAll();
+
+    assert.ok(thrown instanceof AggregateError, 'the refused rollback is reported alongside the STATE.md error');
+    assert.strictEqual(thrown.errors[0].code, 'ENOSPC');
+    assert.strictEqual(fs.readFileSync(archivePath, 'utf-8'), foreign, 'the foreign file is left in place');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
   // ── ordering, contention, occurrences, boundary, dry-run ───────────────
 
   test('the archive is written while the STATE.md lock is held and before STATE.md changes', () => {
     const stateBefore = fs.readFileSync(statePath);
     const observed = [];
     const realWrite = fs.writeFileSync;
+    trackOpenedPaths();
     mock.method(fs, 'writeFileSync', (p, ...rest) => {
-      if (typeof p === 'string' && p.startsWith(archivePath)) {
+      const target = pathOf(p);
+      if (typeof target === 'string' && target.startsWith(archivePath)) {
         observed.push({ lockHeld: fs.existsSync(statePath + '.lock'), stateUnchanged: fs.readFileSync(statePath).equals(stateBefore) });
       }
       return realWrite.call(fs, p, ...rest);
@@ -833,12 +910,13 @@ describe('#5831: state prune never loses entries', () => {
     const archiveAccess = [];
     const realRead = fs.readFileSync;
     const realWrite = fs.writeFileSync;
+    trackOpenedPaths();
     mock.method(fs, 'readFileSync', (p, ...rest) => {
-      if (typeof p === 'string' && p.startsWith(archivePath)) archiveAccess.push('read');
+      if (typeof pathOf(p) === 'string' && pathOf(p).startsWith(archivePath)) archiveAccess.push('read');
       return realRead.call(fs, p, ...rest);
     });
     mock.method(fs, 'writeFileSync', (p, ...rest) => {
-      if (typeof p === 'string' && p.startsWith(archivePath)) archiveAccess.push('write');
+      if (typeof pathOf(p) === 'string' && pathOf(p).startsWith(archivePath)) archiveAccess.push('write');
       return realWrite.call(fs, p, ...rest);
     });
     const writes = captureArchiveWrites();

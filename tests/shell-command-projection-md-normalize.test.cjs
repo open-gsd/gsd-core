@@ -705,7 +705,7 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
       // The temp write lands some bytes, then fails; every write to the
       // destination itself truncates it first and then fails — the
       // direct-write fallback on a full disk.
-      const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3);
+      const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3, { resolveDescriptors: true });
       try {
         assert.throws(() => scp.platformWriteSync(target, '# New\n', { atomic: true }), (err) => err.code === 'ENOSPC');
       } finally {
@@ -719,7 +719,7 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
 
   test('the same failure under a default write truncates the destination (the fallback the atomic mode removes)', () => {
     fs.writeFileSync(target, PREVIOUS);
-    const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3);
+    const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3, { resolveDescriptors: true });
     try {
       assert.throws(() => scp.platformWriteSync(target, '# New\n'), (err) => err.code === 'ENOSPC');
     } finally {
@@ -758,7 +758,7 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
   test('a restore whose temp write creates the file and then fails leaves no temp file and the destination as it was', () => {
     fs.writeFileSync(target, 'published block\n');
     const before = fs.readFileSync(target);
-    const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target + '.restore.'), 2);
+    const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target + '.restore.'), 2, { resolveDescriptors: true });
     try {
       assert.throws(() => scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS)), (err) => err.code === 'ENOSPC');
     } finally {
@@ -776,5 +776,56 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     assert.deepStrictEqual(scp.platformReadBytesSync(target), bytes);
     assert.strictEqual(scp.platformReadBytesSync(path.join(dir, 'missing.md')), null);
     assert.throws(() => scp.platformReadBytesSync(dir), (err) => err.code === 'EISDIR');
+  });
+
+  // ── hostile names and special files ────────────────────────────────────
+
+  const posixOnly = { skip: process.platform === 'win32' ? 'POSIX symlinks and FIFOs' : false };
+
+  test('an atomic publish never writes through a symlink planted at the pid-only temp name', posixOnly, () => {
+    const victim = path.join(dir, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+    fs.symlinkSync(victim, `${target}.tmp.${process.pid}`);
+    scp.platformWriteSync(target, '# New\n', { atomic: true });
+    assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), '# New\n');
+  });
+
+  test('a restore never writes through a symlink planted at the pid-only temp name', posixOnly, () => {
+    const victim = path.join(dir, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+    fs.writeFileSync(target, 'current\n');
+    fs.symlinkSync(victim, `${target}.restore.${process.pid}`);
+    scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS));
+    assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+  });
+
+  test('a byte read of a FIFO fails with ENXIO instead of blocking', posixOnly, () => {
+    const { spawnSync } = require('node:child_process');
+    assert.strictEqual(spawnSync('mkfifo', [target]).status, 0, 'mkfifo');
+    const lib = require.resolve('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const script = `try { require(${JSON.stringify(lib)}).platformReadBytesSync(${JSON.stringify(target)}); console.log('READ'); }` +
+      ` catch (e) { console.log('THREW ' + e.code); }`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: 15000, encoding: 'utf-8' });
+    assert.strictEqual(child.error, undefined, `the read must not block (${child.error && child.error.code})`);
+    assert.strictEqual(child.stdout.trim(), 'THREW ENXIO');
+  });
+
+  test('restoring "absent" with an identity unlinks only the file that identity names', () => {
+    fs.writeFileSync(target, 'created by this run\n');
+    const { dev, ino } = fs.lstatSync(target);
+    // A different inode takes the name: created while the first still exists.
+    const incoming = path.join(dir, 'incoming.md');
+    fs.writeFileSync(incoming, 'FOREIGN\n');
+    fs.renameSync(incoming, target);
+
+    assert.throws(() => scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev, ino } }), (err) => err.code === 'ESTALE');
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), 'FOREIGN\n', 'the foreign file stays');
+
+    const mine = fs.lstatSync(target);
+    scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
+    assert.strictEqual(fs.existsSync(target), false, 'a matching identity is unlinked');
+    scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
   });
 });
