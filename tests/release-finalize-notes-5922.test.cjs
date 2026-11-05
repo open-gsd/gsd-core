@@ -113,7 +113,7 @@ describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
         { mode: 0o755 },
       );
 
-      const res = spawnSync('bash', ['-eo', 'pipefail', '-c', `${buildStep.run}\n${finalizeStep.run}`], {
+      const res = spawnSync('bash', ['-e', '-c', `${buildStep.run}\n${finalizeStep.run}`], {
         cwd: work,
         encoding: 'utf8',
         timeout: PROBE_TIMEOUT_MS,
@@ -152,7 +152,7 @@ describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
         `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(called)}, 'x');\n`,
         { mode: 0o755 },
       );
-      const res = spawnSync('bash', ['-eo', 'pipefail', '-c', buildStep.run], {
+      const res = spawnSync('bash', ['-e', '-c', buildStep.run], {
         cwd: work,
         encoding: 'utf8',
         timeout: PROBE_TIMEOUT_MS,

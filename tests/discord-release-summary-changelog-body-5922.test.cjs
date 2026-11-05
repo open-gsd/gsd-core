@@ -130,4 +130,27 @@ describe('discord summary of a CHANGELOG-built release body (#5922)', () => {
     ].join('\n'));
     assert.deepEqual(sections.get('Feature'), ['Big thing - with a long explanation (#20)']);
   });
+
+  test('a Security-only CHANGELOG body is summarised to headlines with their refs', () => {
+    const securityBody = buildChangelogReleaseNotes({
+      changelog: [
+        '# Changelog', '', '## [1.21.1] - 2026-12-02', '', '### Security', '',
+        '- **Path traversal closed** — long explanation here. (#7) (#8)',
+        '- **Token no longer logged** — more explanation. (#9)', '',
+        '## [1.21.0] - 2026-12-01', '', '### Fixed', '', '- **x** — y. (#1)', '',
+      ].join('\n'),
+      version: '1.21.1',
+      packageName: PKG,
+      repoSlug: 'open-gsd/gsd-core',
+    });
+    assert.deepEqual(collectSections(securityBody).get('Security'), [
+      'Path traversal closed (#7) (#8)',
+      'Token no longer logged (#9)',
+    ]);
+  });
+
+  test('an old-format body with a Removed heading is now bucketed under Removed', () => {
+    const sections = collectSections(['## Removed', '* dropped thing by @x in https://github.com/o/r/pull/30'].join('\n'));
+    assert.deepEqual(sections.get('Removed'), ['dropped thing (#30)']);
+  });
 });

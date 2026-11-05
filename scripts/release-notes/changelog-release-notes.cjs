@@ -47,6 +47,9 @@ class ChangelogNotesError extends Error {
 // GitHub rejects release bodies over 125,000 characters; stay well inside.
 const RELEASE_BODY_MAX_CHARS = 120000;
 
+// Stricter than isStableTripletSemver (src/semver-compare.cts:49-51), which
+// strips a leading `v` before testing: --previous must be a bare X.Y.Z, so a
+// `v1.2.0` is rejected here rather than silently accepted.
 const STRICT_TRIPLET_RE = /^\d+\.\d+\.\d+$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
@@ -168,9 +171,11 @@ function buildChangelogReleaseNotes({
   const footer = `**Full Changelog**: https://github.com/${repoSlug}/compare/v${prev}...v${ver}`;
   const changelogUrl = `https://github.com/${repoSlug}/blob/v${ver}/CHANGELOG.md`;
   const assemble = (bodyText, dropped) => {
-    const parts = [install, `## What's Changed\n\n${bodyText}`];
+    // An empty body (nothing fit) leaves just the heading, never a blank run.
+    const parts = [install, bodyText ? `## What's Changed\n\n${bodyText}` : "## What's Changed"];
     if (dropped > 0) {
-      parts.push(`_\u2026and ${dropped} more entries. See the full [CHANGELOG](${changelogUrl})._`);
+      const noun = dropped === 1 ? 'entry' : 'entries';
+      parts.push(`_\u2026and ${dropped} more ${noun}. See the full [CHANGELOG](${changelogUrl})._`);
     }
     parts.push(footer);
     return parts.join('\n\n') + '\n';
@@ -202,6 +207,7 @@ function buildChangelogReleaseNotes({
 /**
  * Resolve `--output` and require it to sit under the working directory, the OS
  * temp directory or RUNNER_TEMP (symlinks resolved on the parent directory).
+ * An existing symlink as the final component is refused outright.
  * @returns {string} Absolute path to write.
  * @throws {ChangelogNotesError}
  */
@@ -222,7 +228,18 @@ function resolveOutputPath(output, { cwd = process.cwd(), tmpdir = os.tmpdir(), 
     } catch (_e) {
       continue;
     }
-    if (target.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep)) return target;
+    if (target.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep)) {
+      let st = null;
+      try {
+        st = fs.lstatSync(target);
+      } catch (_e) {
+        st = null; // does not exist yet
+      }
+      if (st && st.isSymbolicLink()) {
+        throw new ChangelogNotesError(CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED, `--output ${output} is a symbolic link`);
+      }
+      return target;
+    }
   }
   throw new ChangelogNotesError(
     CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
@@ -276,7 +293,14 @@ function main() {
     }
     throw err;
   }
-  fs.writeFileSync(outputPath, body, 'utf8');
+  // O_NOFOLLOW (where defined) closes the window between the lstat above and the write.
+  const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0);
+  const fd = fs.openSync(outputPath, flags, 0o644);
+  try {
+    fs.writeSync(fd, body);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 if (require.main === module) {

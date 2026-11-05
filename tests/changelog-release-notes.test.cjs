@@ -263,6 +263,20 @@ describe('buildChangelogReleaseNotes (#5922)', () => {
   });
 });
 
+// Every `###` heading in the What's Changed body must be followed (ignoring
+// blank lines) by an entry, never by the truncation notice, another heading or
+// the end of the section.
+function assertNoDanglingHeading(body) {
+  const lines = body.split('\n');
+  lines.forEach((line, i) => {
+    if (!/^### /.test(line)) return;
+    let j = i + 1;
+    while (j < lines.length && lines[j].trim() === '') j++;
+    assert.ok(j < lines.length, 'heading at end of body');
+    assert.ok(/^[-*] /.test(lines[j]), `heading ${JSON.stringify(line)} followed by ${JSON.stringify(lines[j])}`);
+  });
+}
+
 describe('release body budget (#5922)', () => {
   // A 1.8.0-sized section would exceed GitHub's 125,000-character body limit.
   function sectionOf(bulletCount, bulletBody) {
@@ -302,6 +316,36 @@ describe('release body budget (#5922)', () => {
     assert.ok(body.endsWith('compare/v1.0.0...v2.0.0\n'));
   });
 
+  test('a cut landing right after the second subsection heading drops that heading', () => {
+    const changelog = [
+      '# Changelog', '', '## [2.0.0] - 2026-02-01', '',
+      '### Added', '', '- **a1** — one. (#1)', '',
+      '### Fixed', '', `- **f1** — ${'q'.repeat(300)}. (#2)`, '',
+      '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '',
+    ].join('\n');
+    const whole = buildSized(changelog).length;
+    let sawCutAfterHeading = false;
+    // Sweep budgets across the span where the second bullet no longer fits.
+    for (let max = whole; max > whole - 400; max--) {
+      const body = buildSized(changelog, { maxChars: max });
+      assert.ok(body.length <= max);
+      assertNoDanglingHeading(body);
+      if (body.includes('### Added') && !body.includes('### Fixed') && body.includes('more entry')) sawCutAfterHeading = true;
+    }
+    assert.ok(sawCutAfterHeading, 'sweep reached the case where only the first subsection survives');
+  });
+
+  test('when nothing fits there is no blank run, exactly one blank line between sections, and the count is singular', () => {
+    const changelog = sectionOf(1, 'w'.repeat(500));
+    const body = buildSized(changelog, { maxChars: 600 });
+    assert.ok(body.length <= 600);
+    assert.equal(body.includes('\n\n\n'), false);
+    assert.ok(body.includes("## What's Changed\n\n_\u2026and 1 more entry. See the full"));
+    assert.equal(body.includes('1 more entries'), false);
+    const many = buildSized(sectionOf(50, 'w'.repeat(40)), { maxChars: 700 });
+    assert.ok(/and \d+ more entries\./.test(many));
+  });
+
   test('property: output never exceeds the budget and emits only verbatim bullets of the section, in order', () => {
     fc.assert(
       fc.property(
@@ -314,13 +358,14 @@ describe('release body budget (#5922)', () => {
             ...bullets, '', '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '',
           ].join('\n');
           const body = buildSized(changelog, { maxChars });
-          assert.ok(body.length <= maxChars || sizes.length === 0, `${body.length} > ${maxChars}`);
+          assert.ok(body.length <= maxChars, `${body.length} > ${maxChars}`);
           const emitted = [];
           for (let i = 0; i < bullets.length; i++) if (body.includes(bullets[i])) emitted.push(i);
           // verbatim, a prefix of the section in order
           assert.deepEqual(emitted, bullets.slice(0, emitted.length).map((_b, i) => i));
           assert.equal((body.match(/^- \*\*b\d+\*\*/gm) || []).length, emitted.length);
-          assert.equal(body.includes('more entries'), emitted.length < bullets.length);
+          assert.equal(body.includes('more entries') || body.includes('more entry'), emitted.length < bullets.length);
+          assertNoDanglingHeading(body);
         },
       ),
       { numRuns: 100 },
@@ -337,9 +382,9 @@ describe('resolveOutputPath (#5922)', () => {
     const cwd = tmp();
     const runner = tmp();
     try {
-      assert.equal(path.basename(resolveOutputPath('notes.md', { cwd, tmpdir: '/nonexistent-5922', runnerTemp: undefined })), 'notes.md');
+      assert.equal(path.basename(resolveOutputPath('notes.md', { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })), 'notes.md');
       assert.equal(path.dirname(resolveOutputPath(path.join(runner, 'n.md'), { cwd: '/nonexistent-5922', tmpdir: '/nonexistent-5922-b', runnerTemp: runner })), fs.realpathSync(runner));
-      assert.ok(resolveOutputPath(path.join(os.tmpdir(), 'n.md'), { cwd: '/nonexistent-5922', runnerTemp: undefined }).endsWith('n.md'));
+      assert.ok(resolveOutputPath(path.join(os.tmpdir(), 'n.md'), { cwd: '/nonexistent-5922', runnerTemp: null }).endsWith('n.md'));
     } finally {
       cleanup(cwd);
       cleanup(runner);
@@ -352,11 +397,42 @@ describe('resolveOutputPath (#5922)', () => {
     const sibling = path.join(root, 'work-evil');
     fs.mkdirSync(cwd);
     fs.mkdirSync(sibling);
-    const opts = { cwd, tmpdir: '/nonexistent-5922', runnerTemp: undefined };
+    const opts = { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null };
     try {
       for (const bad of [path.join(sibling, 'n.md'), '../n.md', path.join(cwd, 'missing', 'n.md'), '/etc/n.md']) {
         assert.equal(codeOf(() => resolveOutputPath(bad, opts)), CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED, bad);
       }
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('an existing symlink as the final component is refused, and the CLI does not write through it', () => {
+    const root = tmp();
+    const outside = path.join(root, 'outside.md');
+    const cwd = path.join(root, 'work');
+    fs.mkdirSync(cwd);
+    fs.writeFileSync(outside, 'untouched');
+    try {
+      fs.symlinkSync(outside, path.join(cwd, 'notes.md'));
+    } catch (_e) {
+      cleanup(root);
+      return; // symlink creation unsupported here
+    }
+    try {
+      assert.equal(
+        codeOf(() => resolveOutputPath('notes.md', { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })),
+        CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
+      );
+      const changelog = path.join(root, 'CHANGELOG.md');
+      fs.writeFileSync(changelog, CHANGELOG);
+      const res = spawnSync(process.execPath, [SCRIPT, '--version', '1.20.1', '--changelog', changelog, '--output', 'notes.md'], {
+        cwd,
+        encoding: 'utf8',
+        timeout: PROBE_TIMEOUT_MS,
+      });
+      assert.notEqual(res.status, 0);
+      assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
     } finally {
       cleanup(root);
     }
@@ -371,7 +447,7 @@ describe('resolveOutputPath (#5922)', () => {
     fs.symlinkSync(outside, path.join(cwd, 'link'));
     try {
       assert.equal(
-        codeOf(() => resolveOutputPath(path.join('link', 'n.md'), { cwd, tmpdir: '/nonexistent-5922', runnerTemp: undefined })),
+        codeOf(() => resolveOutputPath(path.join('link', 'n.md'), { cwd, tmpdir: '/nonexistent-5922', runnerTemp: null })),
         CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
       );
     } finally {

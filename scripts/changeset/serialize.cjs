@@ -1,13 +1,13 @@
 'use strict';
 
-// F3: matches linked headers: ## [1.42.1](url) - 2026-05-15. The
-// (?:\([^)]*\))? group skips an optional (url) after the closing ] before the
-// optional date suffix. Exported so line-slicing consumers (release-notes
-// builder, #5922) locate headings with the exact regex parseChangelog uses.
 // Body of a dated release rendered by `render --allow-empty` when no fragment
 // exists (cli.cjs injectEmptyPlaceholder). Shared so consumers recognise it.
 const EMPTY_RELEASE_PLACEHOLDER = '_No notable changes._';
 
+// F3: matches linked headers: ## [1.42.1](url) - 2026-05-15. The
+// (?:\([^)]*\))? group skips an optional (url) after the closing ] before the
+// optional date suffix. Exported so line-slicing consumers (release-notes
+// builder, #5922) locate headings with the exact regex parseChangelog uses.
 const RELEASE_HEADING_RE = /^##\s+\[([^\]]+)\](?:\([^)]*\))?\s*(?:-\s*(\S+))?/;
 
 /**

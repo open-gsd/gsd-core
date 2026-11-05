@@ -57,6 +57,7 @@ function normalizeHeading(value) {
   if (lower === 'fixed') return 'Fix';
   if (lower === 'changed') return 'Enhancement';
   if (lower === 'deprecated') return 'Deprecated';
+  // Note: an old-format body with a `## Removed` heading now buckets under Removed (#5922).
   if (lower === 'removed') return 'Removed';
   if (lower === 'feature' || lower === 'features') return 'Feature';
   if (lower === 'fix' || lower === 'fixes' || lower === 'bug fixes') return 'Fix';
@@ -70,7 +71,7 @@ function normalizeHeading(value) {
 // A body built from a CHANGELOG section (#5922) carries Keep-a-Changelog
 // subsection headings. GitHub-generated and formatter output never does, so
 // its bullets keep the original (unchanged) handling.
-const CHANGELOG_HEADING_RE = /^###\s+(?:Added|Changed|Deprecated|Removed|Fixed)\s*$/m;
+const CHANGELOG_HEADING_RE = /^###\s+(?:Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/m;
 
 function collectSections(body) {
   const text = normalizeNewlines(body);
