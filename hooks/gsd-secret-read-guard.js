@@ -1283,6 +1283,15 @@ function tokenize(str, reading) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
+  // Set once no `}` is left: a heredoc tag's `${` goes on past a failed search,
+  // so each would otherwise search the rest of the command again.
+  let noBraceLeft = false;
+  const nextBrace = (from) => {
+    if (noBraceLeft) return -1;
+    const at = str.indexOf('}', from);
+    noBraceLeft = at === -1;
+    return at;
+  };
 
   const flush = () => {
     if (!hasWord) return;
@@ -1481,9 +1490,9 @@ function tokenize(str, reading) {
     if (ch === '$' && str[i + 1] === '{') {
       hasWord = true;
       const inner = [];
-      const j = reading ? ansiCBraceClose(str, i + 2, reading, inner, false) : str.indexOf('}', i);
+      const j = reading ? ansiCBraceClose(str, i + 2, reading, inner, false) : nextBrace(i);
       if (j !== -1) for (const cmd of inner) nested.push(cmd);
-      const k = j === -1 && reading && !asBefore ? str.indexOf('}', i) : j;
+      const k = j === -1 && reading && !asBefore ? nextBrace(i) : j;
       // A heredoc tag is not expanded, and dash ends one whose `${` never
       // closes at the next metacharacter (`<<${;cat .env` runs the read), where
       // a word with such a `${` holds the rest of the line.
