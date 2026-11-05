@@ -18,13 +18,20 @@ const { cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const STEP_NAME = 'Create GitHub Release';
+const CREATE_STEP = 'Create GitHub Release';
+const BUILD_STEP = 'Build GitHub Release notes';
+const NOTES_PATH = '${RUNNER_TEMP}/release-notes.md';
 
-function loadStep(jobName) {
+function loadSteps(jobName) {
   const wf = yaml.load(fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'release.yml'), 'utf8'));
-  const steps = (wf.jobs[jobName] && wf.jobs[jobName].steps) || [];
-  return steps.find((s) => s.name === STEP_NAME);
+  return (wf.jobs[jobName] && wf.jobs[jobName].steps) || [];
 }
+
+function loadStep(jobName, stepName) {
+  return loadSteps(jobName).find((s) => s.name === stepName);
+}
+
+const indexOfStep = (steps, name) => steps.findIndex((s) => s.name === name);
 
 const CHANGELOG = [
   '# Changelog',
@@ -46,7 +53,8 @@ const CHANGELOG = [
 ].join('\n');
 
 describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
-  const finalizeStep = loadStep('finalize');
+  const finalizeStep = loadStep('finalize', CREATE_STEP);
+  const buildStep = loadStep('finalize', BUILD_STEP);
 
   test('the step exists and is no longer fed by --generate-notes', () => {
     assert.ok(finalizeStep, 'finalize must have a "Create GitHub Release" step');
@@ -55,9 +63,26 @@ describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
     assert.equal(finalizeStep.run.includes('format-github-release-notes'), false);
   });
 
-  test('the rc job keeps GitHub-generated notes (its commits are the original PR merges)', () => {
-    const rcStep = loadStep('rc');
-    assert.ok(rcStep, 'rc job keeps its "Create GitHub Release" step');
+  test('the notes are built before the irreversible tag/publish steps, unconditionally, and consumed from the same path', () => {
+    const steps = loadSteps('finalize');
+    const build = indexOfStep(steps, BUILD_STEP);
+    assert.ok(build > -1, 'finalize must have a "Build GitHub Release notes" step');
+    assert.ok(build < indexOfStep(steps, 'Tag and push'), 'built before Tag and push');
+    assert.ok(build < indexOfStep(steps, 'Publish to npm (latest)'), 'built before npm publish');
+    assert.ok(build > indexOfStep(steps, 'Verify CHANGELOG promoted'), 'built from the promoted CHANGELOG');
+    assert.equal(buildStep.if, undefined, 'no dry_run guard: a dry run validates the builder too');
+    assert.ok(buildStep.run.includes(NOTES_PATH));
+    assert.ok(finalizeStep.run.includes(`--notes-file "${NOTES_PATH}"`));
+    assert.equal(finalizeStep.run.includes('changelog-release-notes'), false, 'create step only publishes');
+  });
+
+  // release.yml:72 rejects an rc for hotfix versions ("Hotfix (patch) releases
+  // skip the rc action"), so rc only runs for X.Y.0 cut from next, whose
+  // commits are the original PR merge commits: GitHub's generated list is
+  // correct there and the pre-release keeps it.
+  test('the rc job (X.Y.0 only, hotfix rcs are rejected) keeps GitHub-generated notes', () => {
+    const rcStep = loadStep('rc', 'Create GitHub pre-release');
+    assert.ok(rcStep, 'rc job has a "Create GitHub pre-release" step');
     assert.ok(rcStep.run.includes('--generate-notes'));
   });
 
@@ -88,7 +113,7 @@ describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
         { mode: 0o755 },
       );
 
-      const res = spawnSync('bash', ['-eo', 'pipefail', '-c', finalizeStep.run], {
+      const res = spawnSync('bash', ['-eo', 'pipefail', '-c', `${buildStep.run}\n${finalizeStep.run}`], {
         cwd: work,
         encoding: 'utf8',
         timeout: PROBE_TIMEOUT_MS,
@@ -110,7 +135,7 @@ describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
     }
   });
 
-  test('a version with no CHANGELOG section stops the step before gh is called', {
+  test('a version with no CHANGELOG section fails the build step and writes no notes file', {
     skip: process.platform === 'win32' ? 'bash step body' : false,
   }, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5922-wf-'));
@@ -127,14 +152,15 @@ describe('release.yml finalize "Create GitHub Release" (#5922)', () => {
         `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(called)}, 'x');\n`,
         { mode: 0o755 },
       );
-      const res = spawnSync('bash', ['-eo', 'pipefail', '-c', finalizeStep.run], {
+      const res = spawnSync('bash', ['-eo', 'pipefail', '-c', buildStep.run], {
         cwd: work,
         encoding: 'utf8',
         timeout: PROBE_TIMEOUT_MS,
         env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, VERSION: '9.9.9', RUNNER_TEMP: tmp },
       });
       assert.notEqual(res.status, 0);
-      assert.equal(fs.existsSync(called), false, 'gh release create must not run with an empty body');
+      assert.equal(fs.existsSync(called), false);
+      assert.equal(fs.existsSync(path.join(tmp, 'release-notes.md')), false, 'no empty body file');
     } finally {
       cleanup(dir);
     }

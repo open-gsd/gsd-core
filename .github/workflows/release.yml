@@ -835,6 +835,20 @@ jobs:
         run: |
           node scripts/changeset/cli.cjs verify --version "$VERSION" --changelog CHANGELOG.md
 
+      # #5922: build the Release body from the promoted CHANGELOG.md section,
+      # not GitHub's merged-PR list (empty for a hotfix of cherry-picks). Runs
+      # before the irreversible tag/publish steps so a builder failure cannot
+      # strand a published version without a Release; no dry_run guard so a
+      # dry run validates it too.
+      - name: Build GitHub Release notes
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/release-notes/changelog-release-notes.cjs \
+            --version "${VERSION}" \
+            --changelog CHANGELOG.md \
+            --output "${RUNNER_TEMP}/release-notes.md"
+
       # npm bundled with Node 24 (pinned via setup-node) already supports trusted publishing (#318)
 
       - name: Dry-run publish validation
@@ -900,12 +914,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
         run: |
-          # #5922: build the body from the promoted CHANGELOG.md section, not
-          # GitHub's merged-PR list (empty for a hotfix of cherry-picks).
-          node scripts/release-notes/changelog-release-notes.cjs \
-            --version "${VERSION}" \
-            --changelog CHANGELOG.md \
-            --output "${RUNNER_TEMP}/release-notes.md"
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes-file "${RUNNER_TEMP}/release-notes.md" \

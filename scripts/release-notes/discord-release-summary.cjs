@@ -11,6 +11,8 @@ const DEFAULT_MAX_CONTENT = 1850;
 const SECTION_LIMITS = Object.freeze([
   ['Breaking', 4],
   ['Security', 4],
+  ['Removed', 3],
+  ['Deprecated', 3],
   ['Feature', 4],
   ['Fix', 4],
   ['Enhancement', 3],
@@ -53,8 +55,9 @@ function normalizeHeading(value) {
   // CHANGELOG section, whose subsections use these names.
   if (lower === 'added') return 'Feature';
   if (lower === 'fixed') return 'Fix';
-  if (lower === 'changed' || lower === 'deprecated') return 'Enhancement';
-  if (lower === 'removed') return 'Breaking';
+  if (lower === 'changed') return 'Enhancement';
+  if (lower === 'deprecated') return 'Deprecated';
+  if (lower === 'removed') return 'Removed';
   if (lower === 'feature' || lower === 'features') return 'Feature';
   if (lower === 'fix' || lower === 'fixes' || lower === 'bug fixes') return 'Fix';
   if (lower === 'enhancement' || lower === 'enhancements' || lower === 'improvements') return 'Enhancement';
@@ -64,7 +67,45 @@ function normalizeHeading(value) {
   return heading;
 }
 
+// A body built from a CHANGELOG section (#5922) carries Keep-a-Changelog
+// subsection headings. GitHub-generated and formatter output never does, so
+// its bullets keep the original (unchanged) handling.
+const CHANGELOG_HEADING_RE = /^###\s+(?:Added|Changed|Deprecated|Removed|Fixed)\s*$/m;
+
 function collectSections(body) {
+  const text = normalizeNewlines(body);
+  return CHANGELOG_HEADING_RE.test(text) ? collectChangelogSections(text) : collectLegacySections(text);
+}
+
+function collectLegacySections(text) {
+  const sections = new Map();
+  let current = null;
+
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    const heading = trimmed.match(/^#{2,3}\s+(.+)$/);
+
+    if (heading) {
+      current = normalizeHeading(heading[1]);
+      continue;
+    }
+
+    const bullet = trimmed.match(/^([*-])\s+(.+)$/);
+    if (!bullet || !current) continue;
+
+    let section = current;
+    if (section === "What's Changed") {
+      section = classifyTitle(trimmed);
+    }
+
+    if (!sections.has(section)) sections.set(section, []);
+    sections.get(section).push(cleanBullet(trimmed));
+  }
+
+  return sections;
+}
+
+function collectChangelogSections(text) {
   const sections = new Map();
   let current = null;
   // Bullet in flight: CHANGELOG bullets wrap onto indented continuation lines
@@ -78,7 +119,7 @@ function collectSections(body) {
     pending = null;
   }
 
-  for (const line of normalizeNewlines(body).split('\n')) {
+  for (const line of text.split('\n')) {
     const trimmed = line.trim();
     const heading = trimmed.match(/^#{2,3}\s+(.+)$/);
 
@@ -102,10 +143,7 @@ function collectSections(body) {
     }
 
     flush();
-    let section = current;
-    if (section === "What's Changed") {
-      section = classifyTitle(trimmed);
-    }
+    const section = current === "What's Changed" ? classifyTitle(trimmed) : current;
     pending = { section, text: trimmed };
   }
   flush();

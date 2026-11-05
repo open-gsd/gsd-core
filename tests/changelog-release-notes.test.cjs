@@ -18,12 +18,15 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
+const { EMPTY_RELEASE_PLACEHOLDER } = require('../scripts/changeset/serialize.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   buildChangelogReleaseNotes,
   ChangelogNotesError,
   CHANGELOG_NOTES_ERROR,
+  RELEASE_BODY_MAX_CHARS,
+  resolveOutputPath,
 } = require('../scripts/release-notes/changelog-release-notes.cjs');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'release-notes', 'changelog-release-notes.cjs');
@@ -180,11 +183,18 @@ describe('buildChangelogReleaseNotes (#5922)', () => {
     assert.equal(codeOf(() => build({ changelog, version: '1.0.1' })), CHANGELOG_NOTES_ERROR.UNDATED_SECTION);
   });
 
-  test('a section with no bullets fails with EMPTY_SECTION', () => {
-    const noSubsections = '# Changelog\n\n## [1.0.1] - 2026-02-01\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- **x** — y. (#1)\n';
+  test('a section with no content or no bullets fails with EMPTY_SECTION', () => {
+    const noContent = '# Changelog\n\n## [1.0.1] - 2026-02-01\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- **x** — y. (#1)\n';
     const emptySubsection = '# Changelog\n\n## [1.0.1] - 2026-02-01\n\n### Fixed\n\n## [1.0.0] - 2026-01-01\n';
-    assert.equal(codeOf(() => build({ changelog: noSubsections, version: '1.0.1' })), CHANGELOG_NOTES_ERROR.EMPTY_SECTION);
+    assert.equal(codeOf(() => build({ changelog: noContent, version: '1.0.1' })), CHANGELOG_NOTES_ERROR.EMPTY_SECTION);
     assert.equal(codeOf(() => build({ changelog: emptySubsection, version: '1.0.1' })), CHANGELOG_NOTES_ERROR.EMPTY_SECTION);
+  });
+
+  test('a zero-fragment release (render --allow-empty placeholder) is accepted and emitted as the body', () => {
+    const changelog = `# Changelog\n\n## [1.0.1] - 2026-02-01\n\n${EMPTY_RELEASE_PLACEHOLDER}\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- **x** — y. (#1)\n`;
+    const body = build({ changelog, version: '1.0.1' });
+    assert.ok(body.includes(`## What's Changed\n\n${EMPTY_RELEASE_PLACEHOLDER}\n\n**Full Changelog**: `));
+    assert.ok(body.endsWith('compare/v1.0.0...v1.0.1\n'));
   });
 
   test('no previous release heading fails with NO_PREVIOUS, and --previous overrides it', () => {
@@ -253,6 +263,123 @@ describe('buildChangelogReleaseNotes (#5922)', () => {
   });
 });
 
+describe('release body budget (#5922)', () => {
+  // A 1.8.0-sized section would exceed GitHub's 125,000-character body limit.
+  function sectionOf(bulletCount, bulletBody) {
+    const out = ['# Changelog', '', '## [2.0.0] - 2026-02-01', '', '### Fixed', ''];
+    for (let i = 0; i < bulletCount; i++) out.push(`- **entry-${i}** — ${bulletBody}. (#${i})`);
+    out.push('', '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '');
+    return out.join('\n');
+  }
+  const buildSized = (changelog, extra) =>
+    buildChangelogReleaseNotes({ changelog, version: '2.0.0', packageName: PKG, repoSlug: SLUG, ...extra });
+
+  test('the budget sits under GitHub\'s 125,000-character limit', () => {
+    assert.ok(RELEASE_BODY_MAX_CHARS < 125000);
+  });
+
+  test('bodies of budget-1, budget and budget+1 characters: only budget+1 is truncated', () => {
+    // One bullet of adjustable length; the full body length is linear in it.
+    const probe = buildSized(sectionOf(1, 'x'));
+    const base = probe.length - 1; // body length minus the one-character filler
+    for (const [delta, truncated] of [[-1, false], [0, false], [1, true]]) {
+      const fill = RELEASE_BODY_MAX_CHARS + delta - base;
+      const body = buildSized(sectionOf(1, 'x'.repeat(fill)));
+      // delta 0 -> exactly the budget; the untruncated body is returned whole.
+      assert.equal(body.includes('more entries'), truncated, `delta ${delta}`);
+      assert.ok(body.length <= RELEASE_BODY_MAX_CHARS, `delta ${delta}: ${body.length}`);
+      if (!truncated) assert.equal(body.length, RELEASE_BODY_MAX_CHARS + delta);
+    }
+  });
+
+  test('a truncated body keeps leading bullets whole, counts the rest and links the CHANGELOG', () => {
+    const body = buildSized(sectionOf(3000, 'y'.repeat(60)));
+    assert.ok(body.length <= RELEASE_BODY_MAX_CHARS);
+    const kept = (body.match(/^- \*\*entry-\d+\*\*/gm) || []).length;
+    assert.ok(kept > 0 && kept < 3000);
+    assert.ok(body.includes('- **entry-0** —'));
+    assert.ok(body.includes(`_\u2026and ${3000 - kept} more entries. See the full [CHANGELOG](https://github.com/${SLUG}/blob/v2.0.0/CHANGELOG.md)._\n\n**Full Changelog**: `));
+    assert.ok(body.endsWith('compare/v1.0.0...v2.0.0\n'));
+  });
+
+  test('property: output never exceeds the budget and emits only verbatim bullets of the section, in order', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 1, max: 400 }), { minLength: 1, maxLength: 40 }),
+        fc.integer({ min: 600, max: 6000 }),
+        (sizes, maxChars) => {
+          const bullets = sizes.map((n, i) => `- **b${i}** — ${'z'.repeat(n)}. (#${i})\n  continuation ${i}`);
+          const changelog = [
+            '# Changelog', '', '## [2.0.0] - 2026-02-01', '', '### Added', '',
+            ...bullets, '', '## [1.0.0] - 2026-01-01', '', '### Fixed', '', '- **old** — x. (#1)', '',
+          ].join('\n');
+          const body = buildSized(changelog, { maxChars });
+          assert.ok(body.length <= maxChars || sizes.length === 0, `${body.length} > ${maxChars}`);
+          const emitted = [];
+          for (let i = 0; i < bullets.length; i++) if (body.includes(bullets[i])) emitted.push(i);
+          // verbatim, a prefix of the section in order
+          assert.deepEqual(emitted, bullets.slice(0, emitted.length).map((_b, i) => i));
+          assert.equal((body.match(/^- \*\*b\d+\*\*/gm) || []).length, emitted.length);
+          assert.equal(body.includes('more entries'), emitted.length < bullets.length);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+});
+
+describe('resolveOutputPath (#5922)', () => {
+  function tmp() {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5922-out-'));
+  }
+
+  test('accepts paths under cwd, the OS temp dir and RUNNER_TEMP', () => {
+    const cwd = tmp();
+    const runner = tmp();
+    try {
+      assert.equal(path.basename(resolveOutputPath('notes.md', { cwd, tmpdir: '/nonexistent-5922', runnerTemp: undefined })), 'notes.md');
+      assert.equal(path.dirname(resolveOutputPath(path.join(runner, 'n.md'), { cwd: '/nonexistent-5922', tmpdir: '/nonexistent-5922-b', runnerTemp: runner })), fs.realpathSync(runner));
+      assert.ok(resolveOutputPath(path.join(os.tmpdir(), 'n.md'), { cwd: '/nonexistent-5922', runnerTemp: undefined }).endsWith('n.md'));
+    } finally {
+      cleanup(cwd);
+      cleanup(runner);
+    }
+  });
+
+  test('rejects paths outside every allowed root, traversal, a sibling-prefix dir and a missing directory', () => {
+    const root = tmp();
+    const cwd = path.join(root, 'work');
+    const sibling = path.join(root, 'work-evil');
+    fs.mkdirSync(cwd);
+    fs.mkdirSync(sibling);
+    const opts = { cwd, tmpdir: '/nonexistent-5922', runnerTemp: undefined };
+    try {
+      for (const bad of [path.join(sibling, 'n.md'), '../n.md', path.join(cwd, 'missing', 'n.md'), '/etc/n.md']) {
+        assert.equal(codeOf(() => resolveOutputPath(bad, opts)), CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED, bad);
+      }
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('a symlinked parent that escapes the allowed root is rejected', () => {
+    const root = tmp();
+    const outside = path.join(root, 'outside');
+    const cwd = path.join(root, 'work');
+    fs.mkdirSync(outside);
+    fs.mkdirSync(cwd);
+    fs.symlinkSync(outside, path.join(cwd, 'link'));
+    try {
+      assert.equal(
+        codeOf(() => resolveOutputPath(path.join('link', 'n.md'), { cwd, tmpdir: '/nonexistent-5922', runnerTemp: undefined })),
+        CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
+      );
+    } finally {
+      cleanup(root);
+    }
+  });
+});
+
 describe('changelog-release-notes CLI (#5922)', () => {
   function withTmp(fn) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5922-'));
@@ -311,6 +438,9 @@ describe('changelog-release-notes CLI (#5922)', () => {
       assert.notEqual(noOutput.status, 0);
       const noVersion = run(['--changelog', changelog, '--output', output]);
       assert.notEqual(noVersion.status, 0);
+      const outside = run(['--version', '1.20.1', '--changelog', changelog, '--output', '/etc/gsd-5922-notes.md']);
+      assert.notEqual(outside.status, 0);
+      assert.ok(outside.stderr.includes(CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED));
       const unknown = run(['--version', '1.20.1', '--changelog', changelog, '--output', output, '--bogus', 'x']);
       assert.notEqual(unknown.status, 0);
     });

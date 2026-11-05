@@ -17,10 +17,11 @@
  */
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const { ExitError, runMain } = require('../lib/cli-exit.cjs');
-const { parseChangelog, RELEASE_HEADING_RE } = require('../changeset/serialize.cjs');
+const { parseChangelog, RELEASE_HEADING_RE, EMPTY_RELEASE_PLACEHOLDER } = require('../changeset/serialize.cjs');
 const { isStableTripletSemver } = require('../../gsd-core/bin/lib/semver-compare.cjs');
 const { packageName: defaultPackageName, repoSlug: defaultRepoSlug } = require('../../gsd-core/bin/lib/package-identity.cjs');
 
@@ -32,6 +33,7 @@ const CHANGELOG_NOTES_ERROR = Object.freeze({
   UNDATED_SECTION: 'undated-section',
   EMPTY_SECTION: 'empty-section',
   NO_PREVIOUS: 'no-previous',
+  OUTPUT_NOT_ALLOWED: 'output-not-allowed',
 });
 
 class ChangelogNotesError extends Error {
@@ -41,6 +43,9 @@ class ChangelogNotesError extends Error {
     this.code = code;
   }
 }
+
+// GitHub rejects release bodies over 125,000 characters; stay well inside.
+const RELEASE_BODY_MAX_CHARS = 120000;
 
 const STRICT_TRIPLET_RE = /^\d+\.\d+\.\d+$/;
 const VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -53,12 +58,29 @@ function sliceBody(lines, startIdx, endIdx) {
 }
 
 /**
+ * Split a section body into ordered units: `###` headings, top-level bullets
+ * (with their continuation lines) and any leading text. Raw lines are kept so
+ * concatenating all units reproduces the body exactly.
+ */
+function splitUnits(body) {
+  const units = [];
+  for (const line of body.split('\n')) {
+    if (/^#{3,6}\s/.test(line)) units.push({ kind: 'heading', lines: [line] });
+    else if (/^[-*]\s/.test(line)) units.push({ kind: 'bullet', lines: [line] });
+    else if (units.length === 0) units.push({ kind: 'text', lines: [line] });
+    else units[units.length - 1].lines.push(line);
+  }
+  return units;
+}
+
+/**
  * @param {object} opts
  * @param {string} opts.changelog   Full CHANGELOG.md text.
  * @param {string} opts.version     Version, with or without a leading "v".
  * @param {string} [opts.packageName]
  * @param {string} [opts.repoSlug]
  * @param {string} [opts.previous]  Explicit previous release (strict X.Y.Z).
+ * @param {number} [opts.maxChars]  Body budget (default RELEASE_BODY_MAX_CHARS).
  * @returns {string} Release body, trailing newline included.
  * @throws {ChangelogNotesError}
  */
@@ -68,6 +90,7 @@ function buildChangelogReleaseNotes({
   packageName = defaultPackageName,
   repoSlug = defaultRepoSlug,
   previous = null,
+  maxChars = RELEASE_BODY_MAX_CHARS,
 }) {
   const ver = String(version || '').replace(/^v/, '');
   if (!VERSION_RE.test(ver)) {
@@ -108,7 +131,11 @@ function buildChangelogReleaseNotes({
     );
   }
   const bulletCount = release.sections.reduce((n, s) => n + s.bullets.length, 0);
-  if (bulletCount === 0) {
+  const endIdx = relIdx + 1 < headingLines.length ? headingLines[relIdx + 1] : lines.length;
+  const body = sliceBody(lines, headingLines[relIdx] + 1, endIdx);
+  // `render --allow-empty` writes a dated heading plus a placeholder for a
+  // zero-fragment release; that is a valid (if sparse) section.
+  if (bulletCount === 0 && body !== EMPTY_RELEASE_PLACEHOLDER) {
     throw new ChangelogNotesError(
       CHANGELOG_NOTES_ERROR.EMPTY_SECTION,
       `CHANGELOG.md section \`## [${ver}]\` has no bullets`,
@@ -129,22 +156,78 @@ function buildChangelogReleaseNotes({
     prev = earlier.version;
   }
 
-  const endIdx = relIdx + 1 < headingLines.length ? headingLines[relIdx + 1] : lines.length;
-  const body = sliceBody(lines, headingLines[relIdx] + 1, endIdx);
+  const install = [
+    '## Install',
+    '',
+    '```bash',
+    `npm i ${packageName}@${ver}`,
+    '# or',
+    `npm i ${packageName}@latest`,
+    '```',
+  ].join('\n');
+  const footer = `**Full Changelog**: https://github.com/${repoSlug}/compare/v${prev}...v${ver}`;
+  const changelogUrl = `https://github.com/${repoSlug}/blob/v${ver}/CHANGELOG.md`;
+  const assemble = (bodyText, dropped) => {
+    const parts = [install, `## What's Changed\n\n${bodyText}`];
+    if (dropped > 0) {
+      parts.push(`_\u2026and ${dropped} more entries. See the full [CHANGELOG](${changelogUrl})._`);
+    }
+    parts.push(footer);
+    return parts.join('\n\n') + '\n';
+  };
 
-  return [
-    [
-      '## Install',
-      '',
-      '```bash',
-      `npm i ${packageName}@${ver}`,
-      '# or',
-      `npm i ${packageName}@latest`,
-      '```',
-    ].join('\n'),
-    `## What's Changed\n\n${body}`,
-    `**Full Changelog**: https://github.com/${repoSlug}/compare/v${prev}...v${ver}`,
-  ].join('\n\n') + '\n';
+  const full = assemble(body, 0);
+  if (full.length <= maxChars) return full;
+
+  // Over budget: keep whole units (headings, bullets with continuations) in
+  // order until the next one would not fit alongside the notice and footer.
+  const units = splitUnits(body);
+  let remaining = units.filter((u) => u.kind === 'bullet').length;
+  const kept = [];
+  for (const unit of units) {
+    const after = remaining - (unit.kind === 'bullet' ? 1 : 0);
+    const candidate = [...kept, unit].map((u) => u.lines.join('\n')).join('\n').replace(/\s+$/, '');
+    if (assemble(candidate, after).length > maxChars) break;
+    kept.push(unit);
+    remaining = after;
+  }
+  // Never leave a heading with no entries under it.
+  while (kept.length > 0 && kept[kept.length - 1].kind === 'heading') kept.pop();
+  const keptBullets = kept.filter((u) => u.kind === 'bullet').length;
+  const dropped = units.filter((u) => u.kind === 'bullet').length - keptBullets;
+  const keptBody = kept.map((u) => u.lines.join('\n')).join('\n').replace(/\s+$/, '');
+  return assemble(keptBody, dropped);
+}
+
+/**
+ * Resolve `--output` and require it to sit under the working directory, the OS
+ * temp directory or RUNNER_TEMP (symlinks resolved on the parent directory).
+ * @returns {string} Absolute path to write.
+ * @throws {ChangelogNotesError}
+ */
+function resolveOutputPath(output, { cwd = process.cwd(), tmpdir = os.tmpdir(), runnerTemp = process.env.RUNNER_TEMP } = {}) {
+  const abs = path.resolve(cwd, output);
+  let realParent;
+  try {
+    realParent = fs.realpathSync(path.dirname(abs));
+  } catch (_e) {
+    throw new ChangelogNotesError(CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED, `--output directory does not exist: ${path.dirname(abs)}`);
+  }
+  const target = path.join(realParent, path.basename(abs));
+  for (const root of [cwd, tmpdir, runnerTemp]) {
+    if (!root) continue;
+    let realRoot;
+    try {
+      realRoot = fs.realpathSync(root);
+    } catch (_e) {
+      continue;
+    }
+    if (target.startsWith(realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep)) return target;
+  }
+  throw new ChangelogNotesError(
+    CHANGELOG_NOTES_ERROR.OUTPUT_NOT_ALLOWED,
+    `--output ${output} is outside the working directory, the temp directory and RUNNER_TEMP`,
+  );
 }
 
 const FLAGS_WITH_VALUE = new Set([
@@ -177,7 +260,9 @@ function main() {
   }
 
   let body;
+  let outputPath;
   try {
+    outputPath = resolveOutputPath(opts.output);
     body = buildChangelogReleaseNotes({
       changelog: fs.readFileSync(changelogPath, 'utf8'),
       version,
@@ -191,7 +276,7 @@ function main() {
     }
     throw err;
   }
-  fs.writeFileSync(path.resolve(opts.output), body, 'utf8');
+  fs.writeFileSync(outputPath, body, 'utf8');
 }
 
 if (require.main === module) {
@@ -202,5 +287,7 @@ module.exports = {
   buildChangelogReleaseNotes,
   ChangelogNotesError,
   CHANGELOG_NOTES_ERROR,
+  RELEASE_BODY_MAX_CHARS,
+  resolveOutputPath,
   parseArgs,
 };

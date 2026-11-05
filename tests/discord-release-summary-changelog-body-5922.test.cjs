@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const {
   buildChangelogReleaseNotes,
 } = require('../scripts/release-notes/changelog-release-notes.cjs');
+const { classifyTitle } = require('../scripts/release-notes/format-github-release-notes.cjs');
 const {
   buildDiscordReleasePayload,
   collectSections,
@@ -66,11 +67,10 @@ describe('discord summary of a CHANGELOG-built release body (#5922)', () => {
       'The fork-probe cache stays inside the project (#5757) (#5908)',
       '`effort sync --apply` keeps the manifest (#5683) (#5899)',
     ]);
-    assert.deepEqual(sections.get('Enhancement'), [
-      'Reviewer lanes cap their prompt (#4559) (#5839)',
-      'Old flag (#3)',
-    ]);
-    assert.deepEqual(sections.get('Breaking'), ['Legacy installer path (#4)']);
+    assert.deepEqual(sections.get('Enhancement'), ['Reviewer lanes cap their prompt (#4559) (#5839)']);
+    assert.deepEqual(sections.get('Deprecated'), ['Old flag (#3)']);
+    assert.deepEqual(sections.get('Removed'), ['Legacy installer path (#4)']);
+    assert.equal(sections.has('Breaking'), false);
     assert.deepEqual(sections.get('Security'), ['Path traversal closed (#7)']);
   });
 
@@ -92,6 +92,10 @@ describe('discord summary of a CHANGELOG-built release body (#5922)', () => {
     assert.ok(lines[featuresAt + 1].startsWith('- Pi can run GSD agent roles'));
     assert.ok(lines[fixesAt + 1].startsWith('- The fork-probe cache stays inside the project'));
     assert.equal(payload.content.includes('npm i @opengsd/gsd-core@1.21.0'), true);
+    const removedAt = lines.indexOf('**Removed**');
+    const deprecatedAt = lines.indexOf('**Deprecated**');
+    assert.ok(removedAt > -1 && deprecatedAt > -1, 'Removed and Deprecated keep their own groups');
+    assert.ok(lines.indexOf('**Security**') < removedAt && removedAt < deprecatedAt && deprecatedAt < featuresAt);
   });
 
   test('old-format GitHub-generated bodies are still bucketed by title', () => {
@@ -102,5 +106,28 @@ describe('discord summary of a CHANGELOG-built release body (#5922)', () => {
     ].join('\n'));
     assert.deepEqual(sections.get('Feature'), ['add thing (#10)']);
     assert.deepEqual(sections.get('Fix'), ['repair thing (#11)']);
+  });
+
+  test('old-format bodies are summarised exactly as before: bold bullets, indented lines and all', () => {
+    const boldBullet = '* **Breaking** - drop Node 18 by @x in https://github.com/o/r/pull/12';
+    const indented = '  * indented line by @y in https://github.com/o/r/pull/13';
+    const sections = collectSections(["## What's Changed", boldBullet, indented].join('\n'));
+    // base behaviour: every bullet, indented or not, is its own entry; ** is stripped, no headline reduction.
+    const expected = new Map();
+    for (const [line, text] of [[boldBullet, 'Breaking - drop Node 18 (#12)'], [indented, 'indented line (#13)']]) {
+      const bucket = classifyTitle(line.trim());
+      expected.set(bucket, [...(expected.get(bucket) || []), text]);
+    }
+    assert.deepEqual([...sections], [...expected]);
+  });
+
+  test('old-format bodies with their own ### Feature/Fix headings keep bold bullets verbatim', () => {
+    const sections = collectSections([
+      "## What's Changed",
+      '### Feature',
+      '* **Big thing** - with a long explanation by @x in https://github.com/o/r/pull/20',
+      '  continuation that base ignored',
+    ].join('\n'));
+    assert.deepEqual(sections.get('Feature'), ['Big thing - with a long explanation (#20)']);
   });
 });
