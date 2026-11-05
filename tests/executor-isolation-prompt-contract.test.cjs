@@ -284,7 +284,7 @@ test('#5531: the prose, changeset and tdd-walk header state what the fix does', 
   assert.ok(content.includes('CRLF'), 'the prose says what a CRLF or BOM in the written file does');
   assert.ok(!/^#\s+\{plan_id\} is this$/m.test(content), 'the Step 2 comment must not break mid-clause');
   assert.ok(content.includes('`quick` for `{phase_number}`'), 'a caller without a phase passes the literal quick');
-  // allow-test-rule: source-text-is-the-product the changeset and the harness header are the shipped text of this fix
+  // allow-test-rule: source-text-is-the-product the changeset and the harness header are the shipped text of this fix, see #5531
   const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
   assert.ok(read('.changeset', 'proud-zebras-hop.md').includes('apart from trailing newlines'), 'the changeset must not claim byte-identical delivery');
   assert.ok(read('tests', 'qa', 'tdd-walk.cjs').includes('mktemp creation, which this harness does not need'), 'the tdd-walk header names the mktemp creation unambiguously');
