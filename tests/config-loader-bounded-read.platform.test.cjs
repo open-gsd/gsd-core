@@ -1764,7 +1764,7 @@ describe('#5759 legitimate writes pass the walk identity tie on every platform',
   });
 });
 
-describe('#5759 a write through an intended symlink keeps the link and updates the real file', {
+describe('#5759 a symlinked target is replaced on the atomic path and refused on the direct path', {
   skip: process.platform === 'win32' ? 'symlinks need privileges on Windows' : false,
 }, () => {
   const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
@@ -1773,71 +1773,66 @@ describe('#5759 a write through an intended symlink keeps the link and updates t
   afterEach(() => { cleanup(tmpDir); });
 
   const deniedTemp = () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }); };
-  const modes = [['the atomic path', {}], ['the forced direct path', { writeSeams: { createTemp: deniedTemp } }]];
+  const direct = { writeSeams: { createTemp: deniedTemp } };
 
-  for (const [label, extra] of modes) {
-    test(`same-directory link, via ${label}`, () => {
+  // Each fixture: [label, build(tmpDir) -> { entry, real, linkTargets }]
+  const fixtures = [
+    ['same-directory link', () => {
       const real = path.join(tmpDir, 'real.txt');
-      const link = path.join(tmpDir, 'link.txt');
+      const entry = path.join(tmpDir, 'link.txt');
       fs.writeFileSync(real, 'old');
-      fs.symlinkSync('real.txt', link);
-
-      platformWriteSync(link, 'new', { verbatim: true, ...extra });
-
-      assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link');
-      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'new');
-      assert.deepStrictEqual(fs.readdirSync(tmpDir).sort(), ['link.txt', 'real.txt'], 'no temp file is left behind');
-    });
-
-    test(`link to a file in another directory, via ${label}`, () => {
+      fs.symlinkSync('real.txt', entry);
+      return { entry, real, links: { [entry]: 'real.txt' } };
+    }],
+    ['link to a file in another directory', () => {
       const otherDir = path.join(tmpDir, 'elsewhere');
       fs.mkdirSync(otherDir);
       const real = path.join(otherDir, 'real.txt');
-      const link = path.join(tmpDir, 'link.txt');
+      const entry = path.join(tmpDir, 'link.txt');
       fs.writeFileSync(real, 'old');
-      fs.symlinkSync(real, link);
+      fs.symlinkSync(real, entry);
+      return { entry, real, links: { [entry]: real } };
+    }],
+    ['chained links', () => {
+      const real = path.join(tmpDir, 'real.txt');
+      const mid = path.join(tmpDir, 'mid.txt');
+      const entry = path.join(tmpDir, 'top.txt');
+      fs.writeFileSync(real, 'old');
+      fs.symlinkSync('real.txt', mid);
+      fs.symlinkSync('mid.txt', entry);
+      return { entry, real, links: { [entry]: 'mid.txt', [mid]: 'real.txt' } };
+    }],
+  ];
 
-      platformWriteSync(link, 'new', { verbatim: true, ...extra });
+  for (const [label, build] of fixtures) {
+    test(`${label}: the atomic path replaces the link entry and leaves the real file untouched`, () => {
+      const { entry, real, links } = build();
 
-      assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link stays a link');
-      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'new');
-      assert.deepStrictEqual(fs.readdirSync(otherDir), ['real.txt'], 'no temp file is left behind');
+      platformWriteSync(entry, 'new', { verbatim: true });
+
+      const st = fs.lstatSync(entry);
+      assert.strictEqual(st.isSymbolicLink(), false, 'the link entry is replaced');
+      assert.ok(st.isFile());
+      assert.strictEqual(fs.readFileSync(entry, 'utf8'), 'new');
+      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'old', 'the file the link pointed at is never modified');
+      for (const [other, dest] of Object.entries(links)) {
+        if (other !== entry) assert.strictEqual(fs.readlinkSync(other), dest, 'intermediate links are untouched');
+      }
     });
 
-    test(`chained links, via ${label}`, () => {
-      const real = path.join(tmpDir, 'real.txt');
-      fs.writeFileSync(real, 'old');
-      fs.symlinkSync('real.txt', path.join(tmpDir, 'mid.txt'));
-      fs.symlinkSync('mid.txt', path.join(tmpDir, 'top.txt'));
+    test(`${label}: the forced direct path refuses, leaving the real file and the link untouched`, () => {
+      const { entry, real, links } = build();
 
-      platformWriteSync(path.join(tmpDir, 'top.txt'), 'new', { verbatim: true, ...extra });
+      let err;
+      try { platformWriteSync(entry, 'PWNED', { verbatim: true, ...direct }); } catch (e) { err = e; }
 
-      assert.ok(fs.lstatSync(path.join(tmpDir, 'top.txt')).isSymbolicLink());
-      assert.ok(fs.lstatSync(path.join(tmpDir, 'mid.txt')).isSymbolicLink());
-      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'new');
+      assert.ok(err, 'the write is refused');
+      assert.strictEqual(err.code, 'ENXIO');
+      assert.match(err.message, /symlinked target cannot be replaced atomically/);
+      assert.strictEqual(fs.readFileSync(real, 'utf8'), 'old');
+      assert.strictEqual(fs.readlinkSync(entry), links[entry]);
     });
   }
-
-  test('a resolved target swapped for a different file after the walk is refused and untouched', () => {
-    const real = path.join(tmpDir, 'real.txt');
-    const other = path.join(tmpDir, 'other.txt');
-    const link = path.join(tmpDir, 'link.txt');
-    fs.writeFileSync(real, 'APPROVED');
-    fs.writeFileSync(other, 'OTHER');
-    fs.symlinkSync('real.txt', link);
-
-    let code = 'ok';
-    try {
-      platformWriteSync(link, 'PWNED', {
-        verbatim: true,
-        writeSeams: { afterPathWalk: () => { fs.renameSync(other, real); } },
-      });
-    } catch (e) { code = e.code; }
-
-    assert.strictEqual(code, 'ENXIO');
-    assert.strictEqual(fs.readFileSync(real, 'utf8'), 'OTHER');
-    assert.ok(fs.lstatSync(link).isSymbolicLink());
-  });
 });
 
 describe('#5759 review round: printablePath escapes every format, separator and surrogate character', () => {
