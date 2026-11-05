@@ -407,7 +407,7 @@ function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir, platform = pro
   // remove it on ITS exit — that would delete the outer run's root mid-suite,
   // mass-ENOENTing every later fixture). RULE (#5688): follow os.tmpdir(). The
   // variables consulted are exactly the ones os.tmpdir() reads on this platform —
-  // POSIX: TMPDIR only; win32: TEMP, then TMP — as ONE ordered list. The FIRST
+  // POSIX: TMPDIR, then TMP, then TEMP; win32: TEMP, then TMP — as ONE ordered list. The FIRST
   // non-empty variable in that list decides BOTH whether a run root is inherited
   // (its basename carries the run-root prefix) AND the parent of a fresh root
   // (resolve()d). A set-but-not-a-run-root value is an operator redirect (or a
@@ -416,7 +416,7 @@ function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir, platform = pro
   // root is exported to all three variables so every child agrees.
   let inherited = '';
   let parent = '';
-  const readKeys = platform === 'win32' ? ['TEMP', 'TMP'] : ['TMPDIR'];
+  const readKeys = platform === 'win32' ? ['TEMP', 'TMP'] : ['TMPDIR', 'TMP', 'TEMP'];
   for (const key of readKeys) {
     const v = env[key] || '';
     if (!v) continue;
