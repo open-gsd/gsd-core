@@ -8040,10 +8040,6 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   }
 
   let autoPruned = false;
-  // #5831: a failed auto-prune stays non-fatal (exit code and completion are
-  // unchanged), but is reported instead of swallowed — prune now fails loudly
-  // when it cannot write the archive, and that must reach the user.
-  let autoPruneError: string | null = null;
   try {
     const configPath = path.join(planningDir(cwd), 'config.json');
     if (fs.existsSync(configPath)) {
@@ -8057,11 +8053,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         autoPruned = true;
       }
     }
-  } catch (err) {
-    // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
-    // the failed prune left them (it never loses entries).
-    autoPruneError = err instanceof Error ? err.message : String(err);
-    warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
+  } catch {
+    /* intentionally empty — auto-prune is best-effort */
   }
 
   const result = {
@@ -8076,8 +8069,6 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     state_updated: stateUpdated,
     requirements_updated: requirementsUpdated,
     auto_pruned: autoPruned,
-    // #5831: ADDITIVE — present only when auto-prune threw.
-    ...(autoPruneError !== null ? { auto_prune_error: autoPruneError } : {}),
     warnings,
     has_warnings: warnings.length > 0,
     // ADDITIVE, never a change to `warnings[]`'s element shape — that array is
