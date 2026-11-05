@@ -274,7 +274,7 @@ function cmdDocsInit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
   const result: Record<string, unknown> = {
     doc_writer_model: resolveModelInternal(cwd, 'gsd-doc-writer'),
-    commit_docs: config.commit_docs,
+    commit_docs: Boolean(config.commit_docs),
     existing_docs: scanExistingDocs(cwd),
     project_type: detectProjectType(cwd),
     doc_tooling: detectDocTooling(cwd),
