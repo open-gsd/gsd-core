@@ -1482,8 +1482,15 @@ describe('workflow call sites declare --files (#2269)', () => {
     // (which reaches us as a redirection; see METAVAR_REDIR_RE) or a bracketed
     // optional group. A real call's first argument is its commit message.
     const firstArg = tokens.slice(i + 1).find((t) => !t.op);
+    // A synopsis token like `[--files]` is unquoted documentation notation.
+    // A quoted string starting with `[--` (e.g. `"[--"`) is a commit message
+    // that happens to look like notation — the qmask bits distinguish them.
+    // qmask is a bitmask string: '0' means unquoted, '1' means quoted.
+    // A synopsis token like `[--files]` is unquoted (all zeros), while a
+    // quoted message like `"[--"` has qmask bits set for the quote chars.
+    const isSynopsish = (t) => (!t.qmask || !/1/.test(t.qmask)) && SYNOPSIS_TOKEN_RE.test(t.value);
     if (firstArg && ((firstArg.redir && METAVAR_REDIR_RE.test(firstArg.value))
-      || SYNOPSIS_TOKEN_RE.test(firstArg.value))) return false;
+      || isSynopsish(firstArg))) return false;
     // At least one argument. A mention carries none, and this is the whole of
     // the mention/invocation distinction the line-start anchor used to guess at.
     return tokens.slice(i + 1).some((t) => !t.op && !t.redir);
@@ -2652,7 +2659,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     // A bracketed metavariable as the --files VALUE is a real invocation too
     // (pause-work.md carries `--files [handoff-path]` live) — only a bracketed
     // FLAG marks synopsis notation.
-    const metavarValue = 'gsd_run query commit "wip: [context-name] paused" --files [handoff-path]';
+    const metavarValue = 'gsd_run query commit "docs(pause): [context-name] paused" --files [handoff-path]';
     const mvCands = invocationCandidates(metavarValue);
     assert.strictEqual(mvCands.length, 1, 'a metavariable VALUE must not exempt a real invocation');
     assert.ok(hasScopedFiles(mvCands[0]), 'a bracketed value is still a value');
@@ -2963,6 +2970,8 @@ describe('workflow call sites declare --files (#2269)', () => {
       'agents',
       'commands',
       'skills',
+      'pi/package-skills',
+      'pi/package-agents',
       'docs',
     ];
     const offenders = [];

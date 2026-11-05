@@ -85,6 +85,14 @@
  *     [--no-archive-phases]          Skip moving phase dirs to milestones/vX.Y-phases/ (archived by default)
  *     [--archive-quick]              Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                    Quick Tasks Completed table (#2142; opt-in, default OFF)
+ *     [--release-map <file>]         Archive a per-repository release map (JSON array of
+ *                                    {repo, release, reference, environment, status, tag}) as
+ *                                    milestones/vX.Y-RELEASE-MAP.json and record it in MILESTONES.md
+ *                                    (#5706; validated before any write, absent = unchanged)
+ *
+ *   milestone release-tags --map <file.json> [--dry-run]
+ *                                      Preflight, then create annotated tags per sub-repo from a JSON array of
+ *                                      {repo, tag, ref?, message?, skip?}; never pushes, never overwrites (#5705)
  *
  *   milestone archive-quick <version>  Move .planning/quick/* dirs to milestones/vX.Y-quick/ + reset the
  *                                      Quick Tasks Completed table, WITHOUT the milestone complete close-out
@@ -312,6 +320,7 @@ try {
 } catch { /* advisory — never block */ }
 
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv, peekActiveWorkstream } = require('./lib/active-workstream-store.cjs');
+const { planningDir, planningRoot } = require('./lib/planning-workspace.cjs');
 const state = require('./lib/state.cjs');
 const phase = require('./lib/phase.cjs');
 const roadmap = require('./lib/roadmap.cjs');
@@ -325,6 +334,7 @@ const config = require('./lib/config.cjs');
 const estimateCli = require('./lib/estimate-cli.cjs');
 const template = require('./lib/template.cjs');
 const milestone = require('./lib/milestone.cjs');
+const milestoneReleaseTags = require('./lib/milestone-release-tags.cjs');
 const commands = require('./lib/commands.cjs');
 const runtimeIdentity = require('./lib/runtime-identity.cjs');
 const init = require('./lib/init.cjs');
@@ -847,7 +857,31 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       error,
       output: output,
     });
-    if (!handled) config.cmdConfigNewProject(cwd, args[1], raw);
+    if (handled) return;
+    // #5268: this verb's flag surface is closed, as `todo complete`'s is
+    // (#4096). `--dry-run` is parsed and plumbed, and any OTHER flag fails loudly
+    // instead of being silently ignored: an accepted-but-ignored `--dry-run`
+    // wrote the config it was meant to preview. (`--raw` is spliced by the
+    // dispatcher before routing; it stays in the set as a guard against that
+    // splice ever moving.) The choices JSON is the one positional argument,
+    // wherever the flag sits, and a second one is refused for the same reason.
+    // A flag is a dash followed by a letter: `-1` is a (negative-number) JSON
+    // argument, refused below as choices that are not an object, not a flag.
+    const CONFIG_NEW_PROJECT_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
+    const positionals = [];
+    for (const a of args.slice(1)) {
+      if (typeof a === 'string' && /^--?[A-Za-z]/.test(a)) {
+        if (!CONFIG_NEW_PROJECT_KNOWN_FLAGS.has(a)) {
+          error(`Unknown flag for config-new-project: ${a}`, ERROR_REASON.USAGE);
+        }
+        continue;
+      }
+      positionals.push(a);
+    }
+    if (positionals.length > 1) {
+      error(`Unexpected argument for config-new-project: ${positionals[1]}. Usage: config-new-project [choices-json] [--dry-run]`, ERROR_REASON.USAGE);
+    }
+    config.cmdConfigNewProject(cwd, positionals[0], raw, { dryRun: args.includes('--dry-run') });
   }
 
   function routeConfigPath({ cwd, raw, workstreamContext }) {
@@ -1445,8 +1479,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // Silent no-op when the section is absent or the table is already canonical
     // — the quick/fast workflows call this before their first append, so the
     // migration runs exactly once, on the first quick run, unprompted otherwise.
-    const statePath = path.join(cwd, '.planning', 'STATE.md');
+    const planningPath = planningDir(cwd);
+    const statePath = path.join(planningPath, 'STATE.md');
     if (!fs.existsSync(statePath)) {
+      if (planningPath !== planningRoot(cwd)) {
+        throw new ExitError(1, `quick-tasks-migrate: STATE.md not found at ${statePath}`);
+      }
       output({ ok: true, migrated: false, reason: `STATE.md not found at ${statePath}` }, raw);
       return;
     }
@@ -1519,7 +1557,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             || (qtaQuickId && qtaSlug ? `[${qtaQuickId}-${qtaSlug}](./quick/${qtaQuickId}-${qtaSlug}/)` : undefined);
           const qtaStatus = qtaParsed['status'] || undefined;
 
-          const statePath = path.join(cwd, '.planning', 'STATE.md');
+          const statePath = path.join(planningDir(cwd), 'STATE.md');
           if (!fs.existsSync(statePath)) {
             error(`quick-tasks-append: STATE.md not found at ${statePath}`, ERROR_REASON.USAGE);
           }
@@ -1593,7 +1631,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const fsx = require('node:fs');
     const os = require('node:os');
     const { REVIEWER_LANES, mergeReviewerLanes } = require('./lib/review-lane-descriptor.cjs');
-    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneBudget } = require('./lib/review-lane-invocation.cjs');
+    const { resolveLanePlan: resolveLanePlanBase, resolveLaneEffort, resolveLaneCap, refuseIfOverCap, renderPromptRefusalStub, artifactPaths, applyPromptOverride } = require('./lib/review-lane-invocation.cjs');
+    const { estimateTokens } = require('./lib/prompt-budget.cjs');
     // OpenCode 2.x argv differs from 1.x (no --variant; effort rides on the model as `#variant`;
     // ADR-5331 D5/D8). The generation is probed lazily, only when the opencode lane is resolved.
     const resolveLanePlan = (laneInput) => {
@@ -1627,8 +1666,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // `plan`/`invoke` are the only subs that need the expensive plan-building path
     // below; `sections`/`flags` return earlier still. Anything else errors here, before
     // any of that work starts.
-    if (!['plan', 'invoke', 'sections', 'flags', 'dispatch-step', 'explicit-from-argv'].includes(sub)) {
-      error("Usage: review-lane <plan|invoke|sections|flags|dispatch-step|explicit-from-argv> [--selected a,b] [--run-dir D] [--repo-root R]");
+    const REVIEW_LANE_USAGE = 'Usage: review-lane <plan|invoke|sections|flags|availability|dispatch-step|explicit-from-argv> [--selected a,b] [--run-dir D] [--repo-root R]';
+    if (!['plan', 'invoke', 'sections', 'flags', 'availability', 'dispatch-step', 'explicit-from-argv'].includes(sub)) {
+      error(REVIEW_LANE_USAGE);
       return;
     }
     const runDir = flag('--run-dir') || '.';
@@ -1704,8 +1744,34 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             method: opts.method,
             headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
             body: opts.body,
+            // Never follow a redirect: the egress check compares the CONFIGURED host, so a
+            // followed redirect would send the review prompt to a host the user never named (#5433).
+            redirect: 'manual',
             signal: AbortSignal.timeout(opts.timeoutMs),
           });
+          // probe:true marks a reachability probe (returns status only, body ''): the status line is the answer, so do not
+          // let a stalled body turn a replying server into `missing`.
+          if (opts.probe) {
+            res.body?.cancel().catch(() => {});
+            return { ok: res.ok, status: res.status, body: '' };
+          }
+          if (res.status >= 300 && res.status < 400) {
+            res.body?.cancel().catch(() => {});
+            const location = res.headers.get('location');
+            let target = 'without a Location header';
+            if (location) {
+              target = 'to an unparseable Location';
+              try { target = `to ${new URL(location, url).host}`; } catch { /* keep the unparseable wording */ }
+            }
+            // Host and path only: a configured URL may carry credentials that must not reach a review file.
+            const asked = (() => { try { const u = new URL(url); return `${u.host}${u.pathname}`; } catch { return 'the configured URL'; } })();
+            return {
+              ok: false,
+              status: res.status,
+              body: '',
+              error: `${asked} answered HTTP ${res.status}, redirecting ${target}. The lane does not follow redirects; configure the final URL as the lane's host.`,
+            };
+          }
           return { ok: res.ok, status: res.status, body: await res.text() };
         } catch (e) {
           return { ok: false, status: 0, body: '', error: e && e.message ? e.message : String(e) };
@@ -1732,6 +1798,23 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     const selected = (flag('--selected') || '')
       .split(',').map((s) => s.trim()).filter(Boolean);
+    // #5266: `<slug>:available|missing` per openai-http lane. Host + default come from the lane
+    // descriptor (resolveLanePlan), probing is runner.probeLane — review.md keeps no host table.
+    // Prerequisite binaries (jq) are reported separately by the workflow, not folded in here.
+    // First-party lanes only: ADR-2782 D5 requires egress/consent before a third-party lane's host is
+    // contacted; detection has no such check, so installed third-party lanes are never probed here.
+    if (sub === 'availability') {
+      const { rows, warnings } = await runner.probeHttpLanes(
+        REVIEWER_LANES,
+        selected,
+        (lane) => resolveLanePlan({ lane, configGet, runDir, repoRoot }),
+        buildLaneRunnerDeps(),
+      );
+      for (const w of warnings) process.stderr.write(`review-lane availability: ${w}\n`);
+      process.stdout.write(rows.join('\n') + (rows.length ? '\n' : ''));
+      return;
+    }
+
     // ADR-2782 D8 (#2927): the lane map is first-party ∪ INSTALLED overlay
     // `reviewer` bodies, first-party winning on slug collision. Before this merge
     // the map was built from the frozen REVIEWER_LANES array alone, so an installed,
@@ -1833,11 +1916,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     };
     const effortFor = (lane) => resolveLaneEffort(lane, configGet, renderLaneEffort);
 
-    // Per-lane prompt budget: `resolveLaneBudget` (review-lane-invocation.cjs) owns the #2797
+    // Per-lane prompt cap: `resolveLaneCap` (review-lane-invocation.cjs) owns the #2797 + #4559
     // resolution semantics (shared with src/reviewer-step-dispatch.cts, #4209 R3 — was two
-    // verbatim copies). Only the budget VALUE is resolved here; assembly/trimming stay in
-    // `prompt-budget`, which the workflow calls, handing the trimmed file back via `--prompt-file`.
-    const budgetFor = (lane) => resolveLaneBudget(lane, configGet);
+    // verbatim copies). `plan` reports it; `invoke` REFUSES a lane whose prompt is over it
+    // (#4559) rather than trimming — the prompt is never edited on the way to a lane.
+    const capFor = (lane) => resolveLaneCap(lane, configGet);
 
     // #4209 (ADR-2782 seam) — the ONE interpreter route for a step that declared
     // `supportsReviewerLanes: true`. Wires `dispatchReviewerLanes` (src/reviewer-step-dispatch.cts)
@@ -1945,7 +2028,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const dispatchResult = await dispatchReviewerLanes(
         {
           trait,
-          selection: { explicitFlags, detected: rosterSlugs },
+          selection: { explicitFlags, detected: rosterSlugs, lanes: mergedLanes },
           repoRoot,
           paths,
           depth,
@@ -1977,17 +2060,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       } catch (e) {
         return { slug, ok: false, reason: 'malformed_lane', detail: `resolver threw: ${e && e.message ? e.message : String(e)}` };
       }
-      return r.ok
-        ? {
-            slug,
-            ok: true,
-            section: lane.reviewsSection,
-            transport: r.plan.transport,
-            promptBudget: budgetFor(lane),
-            promptPath: r.plan.transport === 'spawn' ? r.plan.stdin : r.plan.promptPath,
-            plan: r.plan,
-          }
-        : { slug, ok: false, reason: r.reason, detail: r.detail };
+      if (!r.ok) return { slug, ok: false, reason: r.reason, detail: r.detail };
+      const laneCap = capFor(lane);
+      return {
+        slug,
+        ok: true,
+        section: lane.reviewsSection,
+        transport: r.plan.transport,
+        promptBudget: laneCap.cap,
+        promptCapSource: laneCap.source,
+        contextWindowTokens: laneCap.contextWindowTokens,
+        promptPath: r.plan.transport === 'spawn' ? r.plan.stdin : r.plan.promptPath,
+        plan: r.plan,
+      };
     });
 
     if (sub === 'plan') {
@@ -1996,7 +2081,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     if (sub !== 'invoke') {
-      error("Usage: review-lane <plan|invoke|sections|flags|dispatch-step|explicit-from-argv> [--selected a,b] [--run-dir D] [--repo-root R]");
+      error(REVIEW_LANE_USAGE);
       return;
     }
 
@@ -2096,14 +2181,58 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       ];
     }
 
-    // `--prompt-file` lets the caller substitute a budget-trimmed prompt. Applied to whichever
-    // channel this lane actually reads from, so one flag serves both transports.
+    // `--prompt-file` lets the caller substitute a different prompt (a section subset, say). Applied
+    // to whichever channel this lane actually reads from (stdin, argv, an argv-embedded file
+    // reference, or the http promptPath), so one flag serves every lane (#5049). It is no longer a
+    // trim hand-off: nothing in review.md trims a prompt to fit a lane since #4559.
     const promptOverride = flag('--prompt-file');
     if (promptOverride) {
-      if (entry.plan.transport === 'spawn') {
-        if (entry.plan.stdin) entry.plan.stdin = promptOverride;
-      } else {
-        entry.plan.promptPath = promptOverride;
+      entry.plan = applyPromptOverride(entry.plan, promptOverride, repoRoot);
+    }
+
+    // #4559: refuse, never trim. Measure the prompt this lane would actually receive — the file
+    // the RESOLVED plan reads (stdin file, or the plan's prompt path for argv / argv-file-ref /
+    // http lanes; `--prompt-file` already retargeted the plan above) — against its cap BEFORE any
+    // consent lookup, probe or spawn. An unreadable file is not a refusal: the runner reports its
+    // own error for it. The decision itself lives in `refuseIfOverCap`; this only does the IO.
+    {
+      const plannedPrompt = entry.plan.transport === 'spawn' && entry.plan.stdin
+        ? entry.plan.stdin
+        : entry.plan.promptPath;
+      let promptText = null;
+      try {
+        promptText = fs.readFileSync(plannedPrompt || artifactPaths(runDir, entry.slug).promptPath, 'utf8');
+      } catch { promptText = null; }
+      if (promptText !== null) {
+        const refused = refuseIfOverCap({
+          lane: laneBySlug.get(entry.slug),
+          estimatedTokens: estimateTokens(promptText),
+          configGet,
+        });
+        if (refused) {
+          const reviewPath = entry.plan.reviewPath;
+          let stubWritten = true;
+          try {
+            fs.mkdirSync(path.dirname(reviewPath), { recursive: true });
+            fs.writeFileSync(reviewPath, renderPromptRefusalStub(entry.slug, refused.detail), 'utf8');
+          } catch (e) {
+            stubWritten = false;
+            process.stderr.write(
+              `review-lane invoke: could not write the refusal stub to ${reviewPath}: ` +
+              `${e && e.message ? e.message : String(e)}\n`,
+            );
+          }
+          output({
+            slug: entry.slug,
+            ok: false,
+            reason: refused.reason,
+            detail: refused.detail,
+            reviewPath,
+            stubWritten,
+            refusal: refused.refusal,
+          }, raw);
+          return;
+        }
       }
     }
 
@@ -2137,6 +2266,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // resolved command; --cwd (already parsed into `cwd`) locates package.json.
           const testCommandNormalizer = require('./lib/normalize-test-command.cjs');
           testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
+  }
+
+  function routeResolvePackageManager({ args, cwd }) {
+    // #5346: the gates' no-configured-command fallback asks here for the
+    // project's package manager (packageManager field, then lockfile, else npm).
+    // args[1] is the script name; --cwd (already parsed into `cwd`) locates package.json.
+    require('./lib/normalize-test-command.cjs').cmdResolvePackageManager(cwd, args[1]);
   }
 
   function routeDispatchShouldFlatten({ args, cwd, raw, error }) {
@@ -2773,6 +2909,54 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   /**
+   * #5682: ALSO record a plan-scoped decision at `.gsd/dispatch-isolation/<phase>--<plan>.json`, so a
+   * second orchestrator's write to the single legacy slot cannot erase it. Same payload, same atomic
+   * tmp+rename, same symlink/containment checks as the legacy directory. Best-effort: any failure is
+   * swallowed so the legacy result is unchanged. The key rule lives in hooks/lib/isolation-sentinel.js
+   * (the reader); if that module is unreachable from this install layout, only the legacy file is written.
+   */
+  function writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock) {
+    const nodePath = require('path');
+    const nodeFs = require('fs');
+    try {
+      const {
+        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS,
+      } = require('../../hooks/lib/isolation-sentinel.js');
+      // A plan-scoped decision lands at <phase>--<plan>.json; a plan-less one (the phase-level
+      // degrade) at <phase>.json, so concurrent phase-level orchestrators keep separate records.
+      const keyedFile = payload.plan
+        ? keyedSentinelPath(cwd, payload.phase, payload.plan)
+        : phaseSentinelPath(cwd, payload.phase);
+      if (!keyedFile) return;
+      const keyedDir = nodePath.join(cwd, KEYED_SENTINEL_DIR);
+      nodeFs.mkdirSync(keyedDir, { recursive: true });
+      if (nodeFs.lstatSync(keyedDir).isSymbolicLink() ||
+          nodePath.relative(nodeFs.realpathSync(sentinelDir), nodeFs.realpathSync(keyedDir)) !== 'dispatch-isolation') {
+        return;
+      }
+      const tmpPath = `${keyedFile}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      try {
+        nodeFs.writeFileSync(tmpPath, JSON.stringify(payload), { flag: 'wx' });
+        nodeFs.renameSync(tmpPath, keyedFile);
+      } catch (writeError) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+        throw writeError;
+      }
+      // Prune records and orphaned temp files older than the longest any record can still govern
+      // (AGED_NONE_MAX_MS, #5479), measured on the injected clock.
+      const cutoff = clock.now() - AGED_NONE_MAX_MS;
+      const written = nodePath.basename(keyedFile);
+      for (const name of nodeFs.readdirSync(keyedDir)) {
+        if (name === written || !(name.endsWith('.json') || name.includes('.json.tmp-'))) continue;
+        try {
+          const file = nodePath.join(keyedDir, name);
+          if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
+        } catch (_) { /* best-effort prune */ }
+      }
+    } catch (_) { /* keyed record is best-effort; the legacy record already landed */ }
+  }
+
+  /**
    * Atomically persist the resolved dispatch-isolation decision to the
    * run-scoped sentinel both isolation guard hooks read
    * (hooks/gsd-agent-isolation-guard.js, hooks/gsd-cursor-subagent-start.js;
@@ -2782,7 +2966,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2792,77 +2976,61 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
-      written_at: Date.now(),
+      written_at: clock.now(),
     };
+    let tmpPath = null;
     try {
-      nodeFs.mkdirSync(sentinelDir, { recursive: true });
-      // Never write through a project-supplied .gsd symlink. Resolve the
-      // directory as well so an ancestor redirect cannot escape this project.
-      if (nodeFs.lstatSync(sentinelDir).isSymbolicLink() ||
-          nodePath.relative(nodeFs.realpathSync(cwd), nodeFs.realpathSync(sentinelDir)) !== '.gsd') {
-        throw new Error('sentinel directory is a symlink or resolves outside the project');
-      }
-      // User projects do not inherit gsd-core's root .gitignore. Ignore this
-      // tool-owned directory locally before writing the first sentinel. An
-      // ordinary ignore-file IO failure must not prevent recording isolation.
-      const ignorePath = nodePath.join(sentinelDir, '.gitignore');
+      // #5757: the shared tool-owned .gsd owner refuses a project-supplied
+      // symlink (or ancestor redirect) and seeds/extends .gsd/.gitignore, so
+      // this writer and the fork-probe cache apply one policy. An ordinary
+      // ignore-file IO failure must not prevent recording isolation.
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
       try {
-        nodeFs.writeFileSync(ignorePath, '*\n', { flag: 'wx' });
-      } catch (ignoreError) {
-        if (ignoreError.code === 'EEXIST') {
-          // Keep a pre-existing ignore file. A bare '*' already ignores the
-          // whole directory, including this file and the sentinel temp file.
-          // Read through an fd opened without following links where supported;
-          // replace by rename rather than append through the path, so a link
-          // swapped in after the check cannot redirect a write elsewhere.
-          let fd;
-          let ignoreTmpPath;
-          try {
-            if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            fd = nodeFs.openSync(ignorePath, nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW || 0));
-            if (!nodeFs.fstatSync(fd).isFile()) throw new Error('sentinel ignore file is not a regular file');
-            const current = nodeFs.readFileSync(fd, 'utf8');
-            nodeFs.closeSync(fd);
-            fd = undefined;
-            if (!current.includes('# gsd-core dispatch sentinel') && !/^\*\r?$/m.test(current)) {
-              const additionalRules = `${current.endsWith('\n') ? '' : '\n'}# gsd-core dispatch sentinel\n` +
-                '/dispatch-isolation-sentinel.json\n' +
-                '/dispatch-isolation-sentinel.json.tmp-*\n' +
-                '/.gitignore\n';
-              ignoreTmpPath = `${ignorePath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-              nodeFs.writeFileSync(ignoreTmpPath, current + additionalRules, { flag: 'wx' });
-              if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-                throw new Error('sentinel ignore file is a symlink');
-              }
-              nodeFs.renameSync(ignoreTmpPath, ignorePath);
-              ignoreTmpPath = null;
-            }
-          } catch (existingIgnoreError) {
-            if (existingIgnoreError.code === 'ELOOP' || existingIgnoreError.message === 'sentinel ignore file is a symlink') {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            // Ignore seeding is best-effort; the sentinel is still useful if
-            // this path cannot be read or updated.
-          } finally {
-            if (fd !== undefined) nodeFs.closeSync(fd);
-            if (ignoreTmpPath) {
-              try { nodeFs.unlinkSync(ignoreTmpPath); } catch (_) { /* best-effort cleanup */ }
-            }
-          }
+        toolDir.ensureToolOwnedGsdDir(cwd, {
+          marker: '# gsd-core dispatch sentinel',
+          rules: [
+            '/dispatch-isolation-sentinel.json',
+            '/dispatch-isolation-sentinel.json.tmp-*',
+            '/dispatch-isolation/',
+            '/.gitignore',
+          ],
+        });
+      } catch (ownerError) {
+        // The recorded `error` text is observable JSON (hyrums-law): keep the
+        // sentinel's historical wording, translating by the owner's stable code.
+        if (ownerError && ownerError.code === toolDir.GSD_DIR_UNSAFE) {
+          throw new Error('sentinel directory is a symlink or resolves outside the project');
         }
+        if (ownerError && ownerError.code === toolDir.GSD_IGNORE_SYMLINK) {
+          throw new Error('sentinel ignore file is a symlink');
+        }
+        throw ownerError;
       }
-      // Atomic write: unique temp file + rename, so a concurrent reader (a
-      // guard hook firing mid-write) never observes a partially-written
-      // sentinel. Unique per-process+time so concurrent orchestrator-worktree
-      // invocations sharing the same sentinelDir never collide on the temp name.
-      const tmpPath = `${sentinelPath}.tmp-${process.pid}-${Date.now()}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
-      nodeFs.renameSync(tmpPath, sentinelPath);
+      // Atomic write: exclusive random temp file + rename, so a concurrent
+      // reader (a guard hook firing mid-write) never observes a
+      // partially-written sentinel, concurrent invocations sharing the same
+      // sentinelDir never collide on the temp name, and a planted link at a
+      // guessed temp name is never written through.
+      // `tmpPath` is assigned only once the exclusive create succeeded, so an
+      // EEXIST never unlinks an entry this process did not create.
+      const candidateTmp = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
+      tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(payload));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
+      tmpPath = null;
+      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
       return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
     }
   }
 
@@ -3022,7 +3190,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const jsonIdx = args.indexOf('--json');
           const agentSkillsJsonMode = jsonIdx !== -1;
           if (agentSkillsJsonMode) args.splice(jsonIdx, 1);
-          init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode);
+          // #5122: the agent's own self-load asks for configured skills only,
+          // never the persona fallback served to orchestrator-side injection.
+          const skillsOnlyIdx = args.indexOf('--skills-only');
+          const agentSkillsOnly = skillsOnlyIdx !== -1;
+          if (agentSkillsOnly) args.splice(skillsOnlyIdx, 1);
+          init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode, agentSkillsOnly);
   }
 
   function routeSkillManifest({ args, cwd, raw, error }) {
@@ -3135,7 +3308,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // --dry-run) the command refuses before touching anything. Distinct
             // from --force, which bypasses the narrow scope guards only.
             const confirm = args.includes('--confirm');
-            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm }, raw);
+            // #5706 (epic #3628): optional caller-supplied release map file.
+            // A flag with no usable value fails loud rather than being dropped.
+            let releaseMap = null;
+            const releaseMapIdx = args.indexOf('--release-map');
+            if (releaseMapIdx !== -1) {
+              const releaseMapValue = args[releaseMapIdx + 1];
+              if (typeof releaseMapValue !== 'string' || releaseMapValue.startsWith('--') || releaseMapValue.trim() === '') {
+                error('--release-map requires a file path (a JSON array of release-map entries)');
+              }
+              releaseMap = releaseMapValue;
+            }
+            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm, releaseMap }, raw);
           } else if (subcommand === 'archive-quick') {
             // #2142 escalation: narrow archival-only entry point (does NOT
             // touch ROADMAP/REQUIREMENTS/MILESTONES.md, runs no completion
@@ -3143,8 +3327,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // unlike `milestone complete --archive-quick`.
             const dryRun = args.includes('--dry-run');
             milestone.cmdQuickArchive(cwd, args[2], { dryRun }, raw);
+          } else if (subcommand === 'release-tags') {
+            // #5705 (epic #3628 Phase 1): repository-scoped annotated release tags.
+            milestoneReleaseTags.cmdMilestoneReleaseTags(cwd, args, raw);
           } else {
-            error('Unknown milestone subcommand. Available: complete, archive-quick', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown milestone subcommand. Available: complete, archive-quick, release-tags', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
@@ -4497,9 +4684,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
           if (subcommand === 'phase-status') {
             // #1956: deterministic STATE.md-vs-ROADMAP.md phase-status drift.
-            const { planningDir } = require('./lib/planning-workspace.cjs');
+            const { planningDir, resolvePhaseIdConvention } = require('./lib/planning-workspace.cjs');
             const { stateExtractField, stateCurrentPositionSlice } = require('./lib/state-document.cjs');
-            const { findRoadmapProgressTable } = require('./lib/roadmap-parser.cjs');
+            const { locateRoadmapProgress } = require('./lib/roadmap-progress.cjs');
             const { phaseKeyFromProse } = require('./lib/phase-id.cjs');
             // STATE.md's YAML frontmatter carries its own lowercase `status:`
             // scalar ahead of the body's `## Current Position` prose "Status:"
@@ -4515,6 +4702,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               : undefined;
 
             const dir = planningDir(cwd);
+            const phaseConvention = resolvePhaseIdConvention(cwd);
+            const proseKey = (value) => phaseKeyFromProse(value, undefined, phaseConvention);
             const statePath = path.join(dir, 'STATE.md');
             const roadmapPath = path.join(dir, 'ROADMAP.md');
 
@@ -4525,7 +4714,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               // missing_state below
             }
             if (stateContent === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? proseKey(phaseArg) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'missing_state',
@@ -4565,7 +4754,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // document.
             const currentPositionBody = stateCurrentPositionSlice(stateBody);
             if (currentPositionBody === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? proseKey(phaseArg) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'no_current_position',
@@ -4580,8 +4769,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Resolve the target phase: --phase if given, else whatever
             // STATE.md's Current Position reports as current.
             const phase = phaseArg !== undefined
-              ? phaseKeyFromProse(phaseArg)
-              : phaseKeyFromProse(stateExtractField(currentPositionBody, 'Phase'));
+              ? proseKey(phaseArg)
+              : proseKey(stateExtractField(currentPositionBody, 'Phase'));
 
             if (roadmapContent === null) {
               output({
@@ -4597,11 +4786,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
             const stateStatus = stateExtractField(currentPositionBody, 'Status');
 
-            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) —
-            // see findRoadmapProgressTable's doc comment (roadmap-parser.cts).
-            const table = findRoadmapProgressTable(roadmapContent);
+            // #1956/#2012: scoped to `## Progress` first (decoy-avoidance) — the
+            // Progress owner's rule (roadmap-progress.cts), shared with every reader and writer (#5762).
+            const { table } = locateRoadmapProgress(roadmapContent);
             const matchedRow = table
-              ? table.rows.find((row) => phaseKeyFromProse(row.Phase) === phase && phase !== null)
+              ? table.rows.find((row) => proseKey(row.Phase) === phase && phase !== null)
               : undefined;
 
             if (!matchedRow) {
@@ -4802,6 +4991,7 @@ const HOST_COMMAND_ROUTERS = {
     // #3676 (Phase 4, epic #3344): quick-batch coordination verbs.
     'quick-batch': routeQuickBatchCommand,
     'normalize-test-command': routeNormalizeTestCommand,
+    'resolve-package-manager': routeResolvePackageManager,
     'dispatch-should-flatten': routeDispatchShouldFlatten,
     'dispatch-isolation': routeDispatchIsolation,
     'dispatch-capacity': routeDispatchCapacity,
@@ -5107,7 +5297,7 @@ function runWithTimeout(argv) {
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
   'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, ' +
-  'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, ' +
+  'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
   'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +

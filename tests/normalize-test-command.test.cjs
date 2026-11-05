@@ -17,10 +17,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, runGsdTools } = require('./helpers.cjs');
 
 const normalizer = require('../gsd-core/bin/lib/normalize-test-command.cjs');
-const { normalizeTestCommand, isAlreadyOneShot } = normalizer;
+const { normalizeTestCommand, isAlreadyOneShot, resolvePackageManagerCommand } = normalizer;
 
 function tmpProject(testScript) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1857-'));
@@ -157,5 +157,82 @@ describe('normalizeTestCommand: security hardening (#1857 review)', () => {
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+// #5346: the gate fallbacks must use the project's package manager, decided in
+// one place — the `packageManager` field first, then the lockfile, else npm.
+describe('resolvePackageManagerCommand: the gate fallback uses the project\'s package manager (#5346)', () => {
+  let dir;
+  const project = ({ packageManager, lockfiles = [], packageJson } = {}) => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5346-'));
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      packageJson ?? JSON.stringify({ scripts: { build: 'x', test: 'y' }, ...(packageManager ? { packageManager } : {}) }),
+    );
+    for (const lock of lockfiles) fs.writeFileSync(path.join(dir, lock), '');
+    return dir;
+  };
+  afterEach(() => { if (dir) cleanup(dir); dir = undefined; });
+
+  for (const [lock, test_, build] of [
+    ['pnpm-lock.yaml', 'pnpm test', 'pnpm run build'],
+    ['yarn.lock', 'yarn test', 'yarn run build'],
+    ['bun.lock', 'bun run test', 'bun run build'],
+    ['bun.lockb', 'bun run test', 'bun run build'],
+    ['package-lock.json', 'npm test', 'npm run build'],
+  ]) {
+    test(`${lock}: test -> "${test_}", build -> "${build}"`, () => {
+      const d = project({ lockfiles: [lock] });
+      assert.strictEqual(resolvePackageManagerCommand('test', d), test_);
+      assert.strictEqual(resolvePackageManagerCommand('build', d), build);
+    });
+  }
+
+  test('no lockfile and no packageManager stays npm (unchanged)', () => {
+    const d = project();
+    assert.strictEqual(resolvePackageManagerCommand('test', d), 'npm test');
+    assert.strictEqual(resolvePackageManagerCommand('build', d), 'npm run build');
+  });
+
+  test('the packageManager field wins over a conflicting lockfile', () => {
+    const d = project({ packageManager: 'pnpm@9.1.0', lockfiles: ['yarn.lock'] });
+    assert.strictEqual(resolvePackageManagerCommand('test', d), 'pnpm test');
+  });
+
+  test('packageManager accepts a name with or without a version and a +sha suffix', () => {
+    assert.strictEqual(resolvePackageManagerCommand('test', project({ packageManager: 'yarn' })), 'yarn test');
+    cleanup(dir);
+    assert.strictEqual(resolvePackageManagerCommand('test', project({ packageManager: 'yarn@4.5.0+sha512.abc' })), 'yarn test');
+  });
+
+  test('an unsupported packageManager is ignored and the lockfile decides', () => {
+    const d = project({ packageManager: 'rush@5.0.0', lockfiles: ['pnpm-lock.yaml'] });
+    assert.strictEqual(resolvePackageManagerCommand('test', d), 'pnpm test');
+  });
+
+  test('a malformed or non-object package.json never throws and falls back to the lockfile / npm', () => {
+    assert.strictEqual(resolvePackageManagerCommand('test', project({ packageJson: '{not json', lockfiles: ['yarn.lock'] })), 'yarn test');
+    cleanup(dir);
+    assert.strictEqual(resolvePackageManagerCommand('test', project({ packageJson: '[1,2]' })), 'npm test');
+    cleanup(dir);
+    assert.strictEqual(resolvePackageManagerCommand('test', project({ packageJson: 'null' })), 'npm test');
+  });
+
+  test('a missing directory resolves to npm', () => {
+    assert.strictEqual(resolvePackageManagerCommand('build', path.join(os.tmpdir(), 'gsd-5346-does-not-exist')), 'npm run build');
+  });
+
+  for (const bad of ['', 'build; rm -rf /', '$(id)', 'a b', '../x', 'build\nx', '-x', 'x'.repeat(65)]) {
+    test(`a script name that is not a plain identifier is refused: ${JSON.stringify(bad).slice(0, 30)}`, () => {
+      assert.strictEqual(resolvePackageManagerCommand(bad, project({ lockfiles: ['pnpm-lock.yaml'] })), '');
+    });
+  }
+
+  test('the CLI verb prints the resolved command for the project', () => {
+    const d = project({ lockfiles: ['pnpm-lock.yaml'] });
+    const r = runGsdTools(['resolve-package-manager', 'test', '--cwd', d], d);
+    assert.strictEqual(r.success, true, r.error);
+    assert.strictEqual(r.output, 'pnpm test');
   });
 });

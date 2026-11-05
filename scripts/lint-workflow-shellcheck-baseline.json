@@ -385,6 +385,21 @@
     "message": "Double quote to prevent globbing and word splitting."
   },
   {
+    "file": "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
+    "code": "2317",
+    "message": "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."
+  },
+  {
+    "file": "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
+    "code": "2317",
+    "message": "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."
+  },
+  {
+    "file": "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
+    "code": "2317",
+    "message": "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."
+  },
+  {
     "file": "gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md",
     "code": "2016",
     "message": "Expressions don't expand in single quotes, use double quotes for that."
@@ -690,7 +705,7 @@
     "message": "Double quote to prevent globbing and word splitting."
   },
   {
-    "file": "gsd-core/workflows/plan-phase.md",
+    "file": "gsd-core/workflows/plan-phase/steps/auto-advance-check.md",
     "code": "2235",
     "message": "Use { ..; } instead of (..) to avoid subshell overhead."
   },
@@ -1108,20 +1123,5 @@
     "file": "gsd-core/workflows/verify-work/steps/mvp-uat-framing.md",
     "code": "2086",
     "message": "Double quote to prevent globbing and word splitting."
-  },
-  {
-    "file": "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
-    "code": "2317",
-    "message": "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."
-  },
-  {
-    "file": "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
-    "code": "2317",
-    "message": "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."
-  },
-  {
-    "file": "gsd-core/workflows/execute-phase/steps/code-review-disposition.md",
-    "code": "2317",
-    "message": "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."
   }
 ]

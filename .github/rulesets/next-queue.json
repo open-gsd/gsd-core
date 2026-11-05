@@ -1,0 +1,28 @@
+{
+  "name": "next-queue",
+  "target": "branch",
+  "enforcement": "disabled",
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+  ],
+  "rules": [
+    {
+      "type": "merge_queue",
+      "parameters": {
+        "check_response_timeout_minutes": 90,
+        "grouping_strategy": "ALLGREEN",
+        "max_entries_to_build": 2,
+        "max_entries_to_merge": 3,
+        "merge_method": "SQUASH",
+        "min_entries_to_merge": 2,
+        "min_entries_to_merge_wait_minutes": 15
+      }
+    }
+  ]
+}

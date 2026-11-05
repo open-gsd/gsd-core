@@ -114,6 +114,12 @@ function editsBeyondSharedDirective(base, file) {
     // sweep -- not quick-batch phase work. Any OTHER line still trips this row.
     if (body.includes('$ARGUMENTS') || body.includes('`<arguments>` block')) return false;
     if (body === '<arguments>$ARGUMENTS</arguments>' || body.startsWith('The text inside `<arguments>` is exactly what the user typed')) return false;
+    // #5143 fifth mechanical-sweep carve-out: the argument-capture sweep gives every
+    // shell fence that reads the typed text the same four-line quoted-heredoc capture
+    // and renames each use to the captured variable. Those lines are that sweep -- not
+    // quick-batch phase work. The exact capture lines and the renamed uses only.
+    if (body === "IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true" || body === 'GSD_ARGS_END' || body === "GSD_ARGS=${GSD_ARGS%$'\\n'}") return false;
+    if (/\$\{?GSD_ARGS\b/.test(body)) return false;
     return !importsDirectiveReference(body);
   });
 }

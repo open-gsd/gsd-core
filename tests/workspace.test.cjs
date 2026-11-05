@@ -9,7 +9,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv } = require('./helpers.cjs');
 const { detectChildRepos } = require('../gsd-core/bin/lib/init.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -134,7 +134,7 @@ describe('init list-workspaces', () => {
   });
 
   test('returns empty list when no workspaces exist', () => {
-    const result = runGsdTools('init list-workspaces', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init list-workspaces', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init failed: ${result.error}`);
     const data = JSON.parse(result.output);
     assert.strictEqual(data.workspace_count, 0);
@@ -158,7 +158,7 @@ describe('init list-workspaces', () => {
       '| hr-ui | /tmp/hr-ui | workspace/feature-a | worktree |',
     ].join('\n'));
 
-    const result = runGsdTools('init list-workspaces', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init list-workspaces', tmpDir, homeSandboxEnv(tmpDir));
     const data = JSON.parse(result.output);
     assert.strictEqual(data.workspace_count, 1);
     assert.strictEqual(data.workspaces[0].name, 'feature-a');
@@ -187,7 +187,7 @@ describe('init remove-workspace', () => {
   });
 
   test('errors when workspace not found', () => {
-    const result = runGsdTools('init remove-workspace nonexistent', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init remove-workspace nonexistent', tmpDir, homeSandboxEnv(tmpDir));
     assert.strictEqual(result.success, false);
     assert.ok(result.error.includes('Workspace not found'));
   });
@@ -209,7 +209,7 @@ describe('init remove-workspace', () => {
       '| api | /tmp/api | workspace/test-ws | clone |',
     ].join('\n'));
 
-    const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+    const result = runGsdTools('init remove-workspace test-ws', tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(result.success, `init failed: ${result.error}`);
     const data = JSON.parse(result.output);
     assert.strictEqual(data.workspace_name, 'test-ws');
@@ -246,7 +246,7 @@ describe('init remove-workspace', () => {
         JSON.stringify({ response_language: 'Japanese' })
       );
 
-      const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+      const result = runGsdTools('init remove-workspace test-ws', tmpDir, homeSandboxEnv(tmpDir));
       assert.ok(result.success, `init failed: ${result.error}`);
       const data = JSON.parse(result.output);
       assert.strictEqual(data.response_language, 'Japanese');
@@ -255,7 +255,7 @@ describe('init remove-workspace', () => {
     test('output omits response_language when not configured', () => {
       writeWorkspace(tmpDir, 'test-ws');
 
-      const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+      const result = runGsdTools('init remove-workspace test-ws', tmpDir, homeSandboxEnv(tmpDir));
       assert.ok(result.success, `init failed: ${result.error}`);
       const data = JSON.parse(result.output);
       assert.strictEqual(data.response_language, undefined);

@@ -20,6 +20,8 @@ import { resolveEvaluationScope } from './gate-evaluation-scope.cjs';
 import { runtimeCommand } from './runtime-slash.cjs';
 import type { ScopeStatus } from './gate-evaluation-scope.cjs';
 import { checkUiPresence } from './ui-safety-gate.cjs';
+import { readStaticFrontendEvidence } from './ui-frontend-evidence.cjs';
+import { evidenceNone } from './gate-evidence.cjs';
 
 const UI_FILE_EXTENSIONS_RE = /\.(tsx|jsx|css|scss|sass|less|vue|svelte|html)$/i;
 const UI_PATH_PATTERNS_RE = /\/(components|pages|views|screens|layouts|ui|frontend)\//i;
@@ -27,6 +29,8 @@ const UI_PATH_PATTERNS_RE = /\/(components|pages|views|screens|layouts|ui|fronte
 export interface UiSafetyGateResult {
   frontend: boolean;
   hasUiFiles: boolean;
+  /** Static frontend evidence in the project tree, by the definition `ui-plan-gate` uses (#5646). */
+  hasFrontendEvidence: boolean;
   hasUiSpec: boolean;
   block: boolean;
   message?: string;
@@ -34,7 +38,10 @@ export interface UiSafetyGateResult {
   /** Present only when the scope was widened (`degraded`) or unreadable (`unresolvable`). */
   scopeStatus?: Exclude<ScopeStatus, 'resolved'>;
   scopeReason?: string;
-  /** Present only when the ROADMAP or the phase directory could not be read (#5170): the verdict is `unreadable`. */
+  /**
+   * Present only when the ROADMAP, the phase directory, or (for a frontend phase with UI files and no
+   * UI-SPEC) the static frontend evidence could not be read (#5170): the verdict is `unreadable`.
+   */
   readError?: string;
 }
 
@@ -47,7 +54,10 @@ export interface UiSafetyGateResult {
  *       git call is bounded by the resolver's seam; an unreadable scope is reported, not "clean").
  *   (d) Phase directory → `*-UI-SPEC.md`.
  *
- * `block = frontend && hasUiFiles && !hasUiSpec`.
+ *   (c') Static frontend evidence (`readStaticFrontendEvidence`, the definition `computeUiPlanGate` uses),
+ *       probed only for a frontend phase that changed UI files (#5646).
+ *
+ * `block = frontend && hasUiFiles && hasFrontendEvidence && !hasUiSpec`.
  */
 export function computeUiSafetyGate(projectDir: string, phase: string): UiSafetyGateResult {
   // (a) phase section text (same two-pass lookup as computeUiPlanGate)
@@ -63,16 +73,30 @@ export function computeUiSafetyGate(projectDir: string, phase: string): UiSafety
     f.trim() && (UI_FILE_EXTENSIONS_RE.test(f) || UI_PATH_PATTERNS_RE.test(f)),
   );
 
+  // (c') #5646 — static structural corroboration, the same evidence `computeUiPlanGate` requires (#3312):
+  // `hasUiFiles` is a weak signal (an `.html` fixture, or any file under a `ui/` directory in any
+  // language), so on its own it halted projects with no frontend that the plan gate had cleared. Only
+  // probed when it could change the answer. `unreadable` (#5170) is a manifest or tree the probe could
+  // not look at: absence of evidence is then not established, and the verdict says so (below).
+  const frontendEvidence = frontend && hasUiFiles ? readStaticFrontendEvidence(projectDir) : evidenceNone<true>();
+  const hasFrontendEvidence = frontendEvidence.kind === 'found';
+
   // (d) phase directory and *-UI-SPEC.md
   // `none` is "no spec"; `unreadable` is "could not look" (#5170) and is carried to the verdict.
   const uiSpec = locateUiSpec(projectDir, phase);
   const hasUiSpec = uiSpec.kind === 'found';
-  const readError = roadmapReadError ?? (uiSpec.kind === 'unreadable' ? uiSpec.reason : undefined);
+  // Unreadable frontend evidence only matters when it could flip the verdict: with a UI-SPEC present the
+  // gate does not block whatever the tree holds.
+  const frontendReadError = frontendEvidence.kind === 'unreadable' && !hasUiSpec
+    ? `static frontend evidence could not be read (${frontendEvidence.reason})`
+    : undefined;
+  const readError = roadmapReadError ?? (uiSpec.kind === 'unreadable' ? uiSpec.reason : undefined) ?? frontendReadError;
 
-  // block only when: this is a frontend phase AND UI files were changed AND no UI-SPEC exists
-  const block = frontend && hasUiFiles && !hasUiSpec;
+  // block only when: this is a frontend phase AND UI files were changed AND the project has static
+  // frontend evidence AND no UI-SPEC exists
+  const block = frontend && hasUiFiles && hasFrontendEvidence && !hasUiSpec;
 
-  const result: UiSafetyGateResult = { frontend, hasUiFiles, hasUiSpec, block };
+  const result: UiSafetyGateResult = { frontend, hasUiFiles, hasFrontendEvidence, hasUiSpec, block };
   if (block) {
     result.message = `UI files changed in this wave but no UI-SPEC.md exists for Phase ${phase}. ` +
       `Run ${runtimeCommand(projectDir, `ui-phase ${phase}`)} to generate the design contract before continuing.`;

@@ -216,6 +216,8 @@ describe('representative corpus — decision-coverage guard (#2347)', () => {
       const phaseDir = makePhaseDir(tmpDir, '01-repcorpus');
       const contextPath = path.join(phaseDir, 'CONTEXT.md');
       fs.writeFileSync(contextPath, readFixture('decision-coverage-guard', fx.file), 'utf8');
+      // One plan that cites no decision: a phase dir with no plan at all is a caller error (#4939).
+      fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n\nNo decisions are cited here.\n', 'utf8');
 
       const r = runTools(['query', 'check.decision-coverage-plan', phaseDir, contextPath], tmpDir);
       assert.ok(r.success, `gate should succeed (JSON). stderr: ${r.error}`);

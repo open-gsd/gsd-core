@@ -253,3 +253,74 @@ test('#4692 property: unittest failures must all be headed and truncation before
     assertBlocked(output.replace(/failures=(\d+)/, (_, n) => `failures=${Number(n) + 1}`));
   }));
 });
+
+// #5106 — go test. The model is the SET of failing test names; the serialization (verbose or not,
+// one package or several) is independent of the parser, so a parser that mis-reads any of them
+// disagrees with the model rather than with itself.
+const goNames = fc.uniqueArray(fc.constantFrom('TestA', 'TestB', 'TestC', 'TestD', 'TestE', 'TestF'), { minLength: 1, maxLength: 6 });
+const goRun = fc.record({ names: goNames, failMask: fc.array(fc.boolean(), { minLength: 6, maxLength: 6 }), verbose: fc.boolean() });
+
+function goOutput(run) {
+  const rows = run.names.map((name, i) => ({ name, failed: run.failMask[i] }));
+  if (!rows.some(r => r.failed)) rows[0].failed = true;
+  const lines = [];
+  for (const r of rows) {
+    if (run.verbose) lines.push(`=== RUN   ${r.name}`);
+    if (r.failed) lines.push(`--- FAIL: ${r.name} (0.00s)`, '    x_test.go:1: nope');
+    else if (run.verbose) lines.push(`--- PASS: ${r.name} (0.00s)`);
+  }
+  lines.push('FAIL', 'FAIL\texample.com/p\t0.001s', 'FAIL', '');
+  return { output: lines.join('\n'), failed: rows.filter(r => r.failed).map(r => r.name) };
+}
+
+test('property: a go test report yields exactly the failing-name set, verbose or not', () => {
+  fc.assert(fc.property(goRun, (run) => {
+    const { output, failed } = goOutput(run);
+    const report = parseTestReport(output);
+    assert.equal(report.format, 'go-test');
+    assert.equal(report.valid, true, report.issues.join('; '));
+    assert.deepEqual(report.tests.filter(t => t.status === 'failed').map(t => t.name).sort(), [...failed].sort());
+    for (const name of run.names) {
+      const verdict = classifyRedEvidence({ command: 'go test', exitCode: 1, output, targetTest: name }).verdict;
+      assert.equal(verdict, failed.includes(name) ? 'RED_EVIDENCE_OK' : 'INVALID_RED', name);
+    }
+  }));
+});
+
+test('property: arbitrary go-shaped noise never throws and never accepts without a failing target', () => {
+  const noise = fc.array(fc.constantFrom('--- FAIL: TestA (0.00s)', '--- PASS: TestB (0.00s)', 'FAIL', 'ok  \tp\t0.1s', 'FAIL\tp [build failed]', '=== RUN   TestA', 'panic: x', '', '    --- FAIL: TestA/s (0.01s)'), { maxLength: 12 }).map(l => l.join('\n'));
+  fc.assert(fc.property(noise, (output) => {
+    const result = classifyRedEvidence({ command: 'go test', exitCode: 1, output, targetTest: 'TestA' });
+    if (result.verdict === 'RED_EVIDENCE_OK') {
+      assert.ok(result.evidence.failing_tests.includes('TestA'));
+      assert.ok(!/\[build failed\]/.test(output));
+    }
+  }));
+});
+
+test('#5721 property: a file-named load-failure entry is never a RED target; the real failure still is', () => {
+  const ext = fc.constantFrom('.test.js', '.spec.ts', '.test.mjs', '.test.cts', '.spec.mts', '.test.tsx', '.test.jsx');
+  const stem = fc.array(fc.constantFrom('a', 'Z', '7', '-', '_'), { minLength: 1, maxLength: 12 }).map(c => c.join(''));
+  // equal classname/name is the load-failure shape; any differing pair is a real test (and so a valid target).
+  fc.assert(fc.property(stem, ext, stem, fc.boolean(), (loadStem, extension, realStem, same) => {
+    const file = `L${loadStem}${extension}`;
+    const real = `R${realStem}`;
+    const sibling = `${file}x`;
+    const pair = parseTestReport(`<testsuite tests="1"><testcase classname="${file}" name="${same ? file : sibling}"><failure/></testcase></testsuite>`);
+    assert.equal(pair.tests[0].loadFailure === true, same);
+    const output = `<testsuites><testsuite tests="1"><testcase classname="${file}" name="${file}"><failure/></testcase></testsuite>`
+      + `<testsuite tests="1"><testcase classname="ok.test.js" name="${real}"><failure/></testcase></testsuite></testsuites>`;
+    const load = classifyRedEvidence(evidence(output, file));
+    assert.equal(load.verdict, 'INVALID_RED');
+    assert.equal(load.evidence.matched_test, null);
+    assert.equal(classifyRedEvidence(evidence(output, real)).verdict, 'RED_EVIDENCE_OK');
+  }));
+});
+
+test('#5721 property: classname "Test suite failed to run" is always flagged, whatever the name', () => {
+  const name = fc.string({ unit: fc.constantFrom('a', 'Z', '7', '-', '_', ' ', '.', '#', '>', 'ü'), maxLength: 30 });
+  fc.assert(fc.property(name, (title) => {
+    const report = parseTestReport(`<testsuite tests="1"><testcase classname="Test suite failed to run" name="${xmlEscape(title)}"><error/></testcase></testsuite>`);
+    assert.equal(report.tests[0].loadFailure, true);
+  }));
+});

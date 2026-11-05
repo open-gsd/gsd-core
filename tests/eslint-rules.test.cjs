@@ -14,6 +14,7 @@
  *   - local/no-raw-rmsync-in-tests
  *   - local/no-adhoc-markdown-parsing
  *   - local/require-subprocess-timeout
+ *   - local/require-read-only-git-env
  *   - local/require-registered-exit
  */
 
@@ -33,6 +34,7 @@ const noAdhocMarkdownParsing = require('../eslint-rules/no-adhoc-markdown-parsin
 const noDuplicateFoldMarker = require('../eslint-rules/no-duplicate-fold-marker.cjs');
 const requireSubprocessTimeout = require('../eslint-rules/require-subprocess-timeout.cjs');
 const requireRegisteredExit = require('../eslint-rules/require-registered-exit.cjs');
+const requireReadOnlyGitEnv = require('../eslint-rules/require-read-only-git-env.cjs');
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -4258,6 +4260,35 @@ describe('require-registered-exit rule', () => {
     test('a sanctioned process.exit() inside terminateNow is still flagged by the predecessor (why both directives are needed at that call site)', () => {
       const code = 'function terminateNow(outcome, payload) {\n  process.exit(2);\n}';
       assert.strictEqual(lintPredecessor(code, 'src/cli-exit.cts').length, 1);
+    });
+  });
+});
+
+// ─── require-read-only-git-env (#5048) ───────────────────────────────────────
+
+describe('require-read-only-git-env (#5048)', () => {
+  test('accepts a git spawn that takes its env from readOnlyGitEnv, and flags the rest', () => {
+    ruleTester.run('require-read-only-git-env', requireReadOnlyGitEnv, {
+      valid: [
+        { filename: 'src/x.cts', code: "spawnSync('git', ['status'], { env: readOnlyGitEnv() });" },
+        { filename: 'src/x.cts', code: "execFileSync('git', args, { cwd, env: { ...readOnlyGitEnv(), GIT_TERMINAL_PROMPT: '0', ...(opts.env || {}) } });" },
+        { filename: 'src/x.cts', code: "const env = { ...readOnlyGitEnv(), X: '1' }; spawnSync('git', args, { cwd, env });" },
+        { filename: 'hooks/x.js', code: "childProcess.execFileSync('git', ['status'], { env: readOnlyGitEnv() });" },
+        { filename: 'src/x.cts', code: "spawnSync('git', ['rev-list', 'HEAD'], { cwd }); // allow-index-refresh: walks commits, never opens the index" },
+        { filename: 'src/x.cts', code: "spawnSync('npm', ['ci'], {});" },
+        { filename: 'src/x.cts', code: "spawnSync('git', args, opts);" },
+        { filename: 'tests/x.test.cjs', code: "spawnSync('git', ['status'], {});" },
+      ],
+      invalid: [
+        { filename: 'src/x.cts', code: "spawnSync('git', ['status'], { cwd });", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "execFileSync('git', ['status']);", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "spawnSync('git', ['status'], { env: process.env });", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "const env = { ...process.env }; spawnSync('git', args, { env });", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'hooks/x.js', code: "childProcess.spawnSync('git', ['status'], {});", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "spawnSync('git.exe', ['status'], {});", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "spawnSync('git', ['status'], { env: readOnlyGitEnv });", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+        { filename: 'src/x.cts', code: "spawnSync('git', ['status'], {}); // allow-index-refresh:", errors: [{ messageId: 'requireReadOnlyGitEnv' }] },
+      ],
     });
   });
 });

@@ -2022,3 +2022,99 @@ describe('#3780: parallel writers serialize on the ledger lock', () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #5418: the counts-mismatch error on the READ path names the rows the table
+// and the fenced JSON block disagree about. The JSON block is authoritative;
+// a hand-added table row with bumped frontmatter counts used to surface only as
+// "counts disagree", pointing at the one part of the file that was right.
+// ---------------------------------------------------------------------------
+
+describe('#5418: parseLedger counts mismatch names the table-only / JSON-only rows', () => {
+  const NOW = '2026-10-01T00:00:00.000Z';
+  const TABLE_ONLY_ROW = '| 3 | 42 | deviation | z/table-only.sh | - | table only row | open | - | - | - |';
+
+  function twoEntryLedgerText() {
+    let ledger = emptyLedger(NOW);
+    ledger = appendWindow(ledger, makeEntry({ kind: 'deviation', phase: '1', description: 'first entry', file: 'a/one.sh' }), { now: NOW }).ledger;
+    ledger = appendWindow(ledger, makeEntry({ kind: 'deviation', phase: '2', description: 'second entry', file: 'b/two.sh' }), { now: NOW }).ledger;
+    return renderLedger(ledger);
+  }
+
+  function fenceLineIndex(lines) {
+    return lines.findIndex((l) => /^`{3,}json[ \t]*$/.test(l.trim()));
+  }
+
+  function withTableOnlyRow(raw) {
+    const lines = raw.split('\n');
+    const fence = fenceLineIndex(lines);
+    assert.ok(fence > 0, 'fixture must have a JSON fence');
+    let at = fence;
+    while (at > 0 && lines[at - 1].trim() === '') at -= 1;
+    lines.splice(at, 0, TABLE_ONLY_ROW);
+    return lines.join('\n');
+  }
+
+  function bumpCounts(raw, open, total) {
+    return raw
+      .replace(/^open_count: \d+$/m, `open_count: ${open}`)
+      .replace(/^total_count: \d+$/m, `total_count: ${total}`);
+  }
+
+  test('a table-only row with bumped counts is named, and the JSON block is called authoritative', () => {
+    const raw = bumpCounts(withTableOnlyRow(twoEntryLedgerText()), 3, 3);
+    assert.throws(() => parseLedger(raw), (err) => {
+      assert.ok(err instanceof WindowsError);
+      assert.equal(err.reason, 'windows_ledger_malformed', 'reason code unchanged');
+      assert.match(err.message, /Ledger counts disagree with entries/, 'original message kept');
+      assert.match(err.message, /in the table but not in the fenced JSON block: 3\b/, `must name the table-only row id 3: ${err.message}`);
+      assert.match(err.message, /JSON block/i, 'must say which source is authoritative');
+      return true;
+    });
+  });
+
+  test('a JSON-only id (row missing from the table) is named too', () => {
+    const raw = twoEntryLedgerText();
+    const lines = raw.split('\n');
+    const fence = fenceLineIndex(lines);
+    const rowIdx = lines.findIndex((l, i) => i < fence && /^\|\s*2\s*\|/.test(l));
+    assert.ok(rowIdx > 0, 'fixture must have a table row for id 2');
+    lines.splice(rowIdx, 1);
+    const mismatched = bumpCounts(lines.join('\n'), 1, 1);
+    assert.throws(() => parseLedger(mismatched), (err) => {
+      assert.equal(err.reason, 'windows_ledger_malformed');
+      assert.match(err.message, /in the fenced JSON block but not in the table: 2\b/, `must name the JSON-only row id 2: ${err.message}`);
+      return true;
+    });
+  });
+
+  test('a table-only row with the counts left alone still parses', () => {
+    const parsed = parseLedger(withTableOnlyRow(twoEntryLedgerText()));
+    assert.equal(parsed.entries.length, 2);
+  });
+
+  test('building the diagnostic never masks the original error (no table region at all)', () => {
+    const raw = twoEntryLedgerText();
+    const lines = raw.split('\n');
+    const fence = fenceLineIndex(lines);
+    const kept = lines.filter((l, i) => i >= fence || !l.startsWith('|'));
+    const mismatched = bumpCounts(kept.join('\n'), 3, 3);
+    assert.throws(() => parseLedger(mismatched), (err) => {
+      assert.ok(err instanceof WindowsError);
+      assert.equal(err.reason, 'windows_ledger_malformed');
+      assert.match(err.message, /Ledger counts disagree with entries/);
+      return true;
+    });
+  });
+
+  test('an empty ledger with a bumped count does not blame the _(none)_ placeholder row', () => {
+    const raw = bumpCounts(renderLedger(emptyLedger(NOW)), 1, 1);
+    assert.throws(() => parseLedger(raw), (err) => {
+      assert.equal(err.reason, 'windows_ledger_malformed');
+      assert.match(err.message, /Ledger counts disagree with entries/);
+      assert.ok(!/_\(none\)_/.test(err.message), `placeholder row must not be named: ${err.message}`);
+      return true;
+    });
+  });
+});
+

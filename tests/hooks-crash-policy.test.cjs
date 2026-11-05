@@ -328,6 +328,12 @@ const TABLE = [
     allow: () => ({ payload: undefined }),
   },
   {
+    file: 'gsd-path-export.js',
+    stdinTimeoutMs: null, // never reads stdin: it only needs $CLAUDE_ENV_FILE and its own install layout (#5465)
+    declaredOnCrash: null, // no HOOK_ON_CRASH import/usage; every failure path is a silent no-op then allow()
+    allow: () => ({ payload: undefined }),
+  },
+  {
     file: 'gsd-cursor-post-tool.js',
     stdinTimeoutMs: 10000,
     declaredOnCrash: null,
@@ -537,9 +543,10 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
     }
   });
 
-  // Every affected hook resolves 'git' with NO explicit `env` override on its
-  // own spawnSync call (see hooks/*.js's `SPAWNOPT`/`currentBranch`), so it
-  // inherits the HOOK PROCESS's own `process.env.PATH` — which is exactly the
+  // Every affected hook resolves 'git' with `env: gitEnv()` on its own
+  // spawnSync call (see hooks/*.js's `SPAWNOPT`/`currentBranch`) — process.env
+  // minus the repo-location vars (#5548) — so it inherits the HOOK PROCESS's own
+  // `process.env.PATH` unchanged — which is exactly the
   // `env` this test hands the hook via runHook()/baseEnv(). Setting PATH to
   // ONLY the stub dir guarantees the hook's internal git spawn resolves to
   // the stub, not a real git binary that might legitimately be fast.
@@ -589,8 +596,8 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
       const r = runHook(c.file, {
         payload,
         cwd,
-        // The stub dir must resolve FIRST (git() calls carry no explicit `env`
-        // override, so they inherit this exact PATH) — but the stub script
+        // The stub dir must resolve FIRST (git() calls pass `env: gitEnv()`,
+        // which keeps this exact PATH) — but the stub script
         // itself still needs a working `sh`/`sleep`, so the real PATH is
         // appended after it, never before (a real `git` earlier in PATH would
         // defeat the stub entirely).

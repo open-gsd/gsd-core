@@ -89,12 +89,13 @@ instalação.
 
 ### Cobertura por ecossistema
 
-O pesquisador usa comandos de verificação específicos de cada registro, em vez
-de uma única verificação genérica:
+O portão resolve os sinais diretamente da API de registro de cada ecossistema,
+em vez de uma única verificação genérica:
 
-- Node.js: `npm view`
-- Python: `pip index versions`
-- Rust: `cargo search`
+- Node.js: `registry.npmjs.org` (idade, URL do repositório, script `postinstall`)
+  mais `api.npmjs.org/downloads` (downloads semanais)
+- Python: `pypi.org/pypi/<pkg>/json` (idade, URL do repositório)
+- Rust: a API do crates.io (idade, downloads semanais, URL do repositório)
 
 Isso cobre alucinações entre ecossistemas, que ocorrem em aproximadamente 9%
 dos casos de acordo com a pesquisa USENIX de 2025 — situações em que uma IA
@@ -103,18 +104,19 @@ em uso.
 
 ### Degradação graciosa
 
-Se `slopcheck` não estiver disponível (não instalado, ou se a instalação via
-pip falhar no momento da pesquisa), o GSD aplica o fallback mais restrito
-possível: **todo pacote recomendado é marcado como `[ASSUMED]`**, e o planejador
-bloqueia cada instalação com uma tarefa `checkpoint:human-verify`. Pesquisa e
-planejamento prosseguem normalmente — o sistema nunca falha irrecuperavelmente
-por dependência de ferramenta ausente. Isso é intencionalmente mais restritivo
-do que o fluxo normal: a indisponibilidade do slopcheck significa que toda
-instalação de pacote recebe um checkpoint humano.
+Cada adaptador de registro tem um timeout de 5 segundos e retorna sinais
+degradados (todos nulos) em uma consulta com falha, em vez de lançar exceção.
+Sinais ausentes aparecem como motivos `unknown-age` / `unknown-downloads`, que
+levam um pacote a `[SUS]` — e `[SUS]` é condicionado à mesma tarefa
+`checkpoint:human-verify` que `[ASSUMED]`. O portão falha em direção à revisão
+humana, não ao silêncio, e pesquisa e planejamento prosseguem normalmente:
+nada aqui falha definitivamente por uma indisponibilidade de rede ou de
+ferramenta.
 
-A ferramenta `slopcheck` é licenciada sob MIT e instalável via pip. Se for
-descontinuada, o fallback de barreira `[ASSUMED]` garante que a cobertura por
-checkpoint humano seja mantida independentemente.
+`slopcheck` é um adaptador opcional que só pode escalar um veredicto, nunca
+rebaixá-lo, e não é o portão de instalar-ou-degradar. Nenhuma configuração
+distribuída o ativa; sua ausência mantém intactos os veredictos da API de
+registro, em vez de rebaixar tudo para `[ASSUMED]`.
 
 ---
 

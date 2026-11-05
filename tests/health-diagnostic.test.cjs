@@ -84,10 +84,10 @@ function setupHealthyProject(tmpDir) {
   fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
 }
 
-// ─── Row 9 — REMEDY_ACTION locks exactly 7 members ─────────────────────────
+// ─── Row 9 — REMEDY_ACTION locks exactly 8 members ─────────────────────────
 
 describe('REMEDY_ACTION', () => {
-  test('row 9: locks exactly 7 members (6 real repair actions + ADVISE)', () => {
+  test('row 9: locks exactly 8 members (7 real repair actions + ADVISE)', () => {
     assert.deepEqual(Object.keys(REMEDY_ACTION).sort(), [
       'ADD_AI_INTEGRATION_PHASE_KEY',
       'ADD_NYQUIST_KEY',
@@ -95,6 +95,7 @@ describe('REMEDY_ACTION', () => {
       'BACKFILL_MILESTONES',
       'CREATE_CONFIG',
       'REGENERATE_STATE',
+      'REPAIR_VERIFICATION_STATUS',
       'RESET_CONFIG',
     ]);
     assert.deepEqual(
@@ -106,6 +107,7 @@ describe('REMEDY_ACTION', () => {
         'backfillMilestones',
         'createConfig',
         'regenerateState',
+        'repairVerificationStatus',
         'resetConfig',
       ],
     );

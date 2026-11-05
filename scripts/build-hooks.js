@@ -42,6 +42,10 @@ const HOOKS_TO_COPY = [
   // plugin's bundled gsd-core/ tree; no-op in classic installs. Must ship to
   // dist so the installer copies it into the target hooks/ dir.
   'gsd-ensure-canonical-path.js',
+  // SessionStart PATH persistence (#5465): appends the installed gsd-core/bin to $CLAUDE_ENV_FILE,
+  // which Claude Code provides to SessionStart hooks but not to workflow Bash blocks. Must ship
+  // to dist so the installer copies it into the target hooks/ dir and registers SessionStart.
+  'gsd-path-export.js',
   // Required by gsd-check-update-worker.js at runtime — must ship alongside it
   // so require('./managed-hooks-registry.cjs') resolves in the installed hooks/ dir.
   'managed-hooks-registry.cjs',

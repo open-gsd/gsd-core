@@ -317,6 +317,106 @@ const CASES = [
       };
     },
   },
+  {
+    // #4939: mirror of the plan gate. Verify stays advisory, but a phase-dir argument that names no directory
+    // scanned nothing, so no decision may be reported "not honored".
+    id: 'U2o',
+    title: 'phase dir that does not exist -> advisory, reason "phase directory not found", null totals (#4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['1', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'advisory',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase directory not found',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory "1" does not exist, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
+  {
+    id: 'U2p',
+    title: 'a FILE in the phase-dir slot -> advisory, reason "phase path is not a directory", null totals (#4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['.planning/phases/01-x/01-CONTEXT.md', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'advisory',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase path is not a directory',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory ".planning/phases/01-x/01-CONTEXT.md" is a file, not a directory, so no plans or summaries were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
+  {
+    id: 'U2q',
+    title: 'phase dir whose stat fails with EACCES -> unreadable outcome, reason "phase directory unreadable" (stat failure injected, #4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+      const real = fs.statSync;
+      fs.statSync = function (p, ...rest) {
+        if (String(p).endsWith('01-x')) {
+          const err = new Error('EACCES: simulated stat failure');
+          err.code = 'EACCES';
+          throw err;
+        }
+        return real.call(fs, p, ...rest);
+      };
+      return function restore() { fs.statSync = real; };
+    },
+    args() { return ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'unreadable',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase directory unreadable',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory ".planning/phases/01-x" could not be read (EACCES), so no plans or summaries were scanned. Check that the directory is readable.',
+      };
+    },
+  },
+  {
+    id: 'U2r',
+    title: 'phase dir that holds no PLAN or SUMMARY file -> advisory, reason "phase directory holds no plans", null totals (#4939)',
+    git: true,
+    setup(dir, h) {
+      h.w(dir, '.planning/phases/01-x/01-CONTEXT.md', ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n'));
+    },
+    args() { return ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md']; },
+    outcome: 'advisory',
+    block: false,
+    expected() {
+      return {
+        skipped: false,
+        blocking: false,
+        reason: 'phase directory holds no plans',
+        total: null,
+        honored: null,
+        not_honored: [],
+        message: 'Decision coverage verify (warning): the phase directory ".planning/phases/01-x" holds no PLAN or SUMMARY files, so nothing was scanned. Pass the phase DIRECTORY that holds the plans (e.g. .planning/phases/01-slug), not the phase number.',
+      };
+    },
+  },
 ];
 
 function run(c) {
@@ -370,4 +470,206 @@ describe('U2 evaluateDecisionCoverageVerify', () => {
       assert.equal(JSON.stringify(actual), JSON.stringify(expected), 'payload key order is part of the contract');
     });
   }
+});
+
+describe('U3 tracker-resolved task content (#5317)', () => {
+  const tcr = require('../gsd-core/bin/lib/task-content-resolution.cjs');
+  const CTX = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '</decisions>', ''].join('\n');
+  const content = (action) => ({ action, verify: null, acceptanceCriteria: [], readFirst: [], done: null });
+  const TRACKED = '<task type="auto" tracker-id="beads:X-1">\n<action>stub</action>\n</task>\n';
+
+  function evalWith(plan, deps) {
+    const dir = createTempGitProject('gate-u3-');
+    try {
+      w(dir, '.planning/phases/01-x/01-CONTEXT.md', CTX);
+      w(dir, '.planning/phases/01-x/01-01-PLAN.md', plan);
+      return gate.evaluateDecisionCoverageVerify({
+        projectDir: dir,
+        args: ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md'],
+        deps,
+      });
+    } finally {
+      cleanup(dir);
+    }
+  }
+  const stub = (r) => ({ loadCapabilities: () => [], resolveTaskContentFn: () => r });
+
+  test('a: decision cited only in resolver text is honored', () => {
+    const r = evalWith(TRACKED, stub({ kind: 'resolved', content: content('D-01: use postgres') }));
+    assert.equal(r.outcome, 'pass');
+    assert.equal(r.payload.honored, 1);
+    assert.equal(r.block, false);
+  });
+
+  const errors = {
+    ambiguous: () => new tcr.ResolverAmbiguousError('beads', ['a', 'b']),
+    failed: () => new tcr.ResolverFailedError('bd', 1, 'boom'),
+    timeout: () => new tcr.ResolverTimeoutError('bd', 10),
+    malformed: () => new tcr.ResolverMalformedOutputError('bd', 'bad json', 'x'),
+  };
+  for (const [name, make] of Object.entries(errors)) {
+    test(`b: ${name} resolver error -> unreadable, never honored`, () => {
+      const r = evalWith(TRACKED, { loadCapabilities: () => [], resolveTaskContentFn: () => { throw make(); } });
+      assert.equal(r.outcome, 'unreadable');
+      assert.equal(r.block, false);
+      assert.match(r.payload.readError, /^beads:X-1: /);
+      assert.equal(r.payload.honored, null);
+    });
+  }
+
+  for (const kind of ['not-applicable', 'empty']) {
+    test(`c: ${kind} adds nothing`, () => {
+      const r = evalWith(TRACKED, stub({ kind }));
+      assert.equal(r.outcome, 'advisory');
+      assert.equal(r.payload.honored, 0);
+    });
+  }
+
+  test('d: non-Resolver error propagates', () => {
+    assert.throws(
+      () => evalWith(TRACKED, { loadCapabilities: () => [], resolveTaskContentFn: () => { throw new TypeError('bug'); } }),
+      TypeError,
+    );
+  });
+
+  test('e: plan without tracker-id never calls the stub', () => {
+    let calls = 0;
+    const r = evalWith('<objective>Unrelated</objective>\n', {
+      loadCapabilities: () => { calls++; return []; },
+      resolveTaskContentFn: () => { calls++; return { kind: 'resolved', content: content('D-01') }; },
+    });
+    assert.equal(calls, 0);
+    assert.equal(r.outcome, 'advisory');
+  });
+
+  test('f: throwing capability registry -> unreadable, no throw', () => {
+    const r = evalWith(TRACKED, { loadCapabilities: () => { throw new Error('boom'); }, resolveTaskContentFn: () => ({ kind: 'resolved', content: content('D-01') }) });
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /capability registry unreadable/);
+  });
+
+  test('g: tracker-id= only in prose/fence -> deps never called, same as no deps', () => {
+    const plan = 'prose tracker-id="beads:X-1"\n```\n<task tracker-id="beads:X-2">\n```\n';
+    let calls = 0;
+    const deps = { loadCapabilities: () => { calls++; return []; }, resolveTaskContentFn: () => { calls++; return { kind: 'no-resolver' }; } };
+    const withDeps = evalWith(plan, deps);
+    assert.equal(calls, 0);
+    assert.deepStrictEqual(withDeps, evalWith(plan, undefined));
+  });
+
+  test('h: same trackerId twice resolves once', () => {
+    let calls = 0;
+    const r = evalWith(TRACKED + TRACKED, { loadCapabilities: () => [], resolveTaskContentFn: () => { calls++; return { kind: 'resolved', content: content('D-01') }; } });
+    assert.equal(calls, 1);
+    assert.equal(r.payload.honored, 1);
+  });
+
+  test('i: D-01 only inside a fenced block of resolved text is not honored', () => {
+    const r = evalWith(TRACKED, stub({ kind: 'resolved', content: content('intro\n```\nD-01: fenced\n```\n') }));
+    assert.equal(r.payload.honored, 0);
+    assert.equal(r.outcome, 'advisory');
+  });
+
+  test('j: checkpoint task with tracker-id never reaches the resolver', () => {
+    let calls = 0;
+    evalWith('<task type="checkpoint:human-verify" tracker-id="beads:X-9">\n<action>stub</action>\n</task>\n', {
+      loadCapabilities: () => { calls++; return []; },
+      resolveTaskContentFn: () => { calls++; return { kind: 'resolved', content: content('D-01') }; },
+    });
+    assert.equal(calls, 0);
+  });
+
+  const full = (over) => ({ kind: 'resolved', content: { action: null, verify: null, acceptanceCriteria: [], readFirst: [], done: null, ...over } });
+  const FIELDS = {
+    verify: { verify: 'D-01 check' },
+    acceptanceCriteria: { acceptanceCriteria: ['D-01 holds'] },
+    readFirst: { readFirst: ['D-01 notes'] },
+    done: { done: 'D-01 done' },
+  };
+  for (const [field, over] of Object.entries(FIELDS)) {
+    test(`k: decision cited only in resolver ${field} is honored`, () => {
+      const r = evalWith(TRACKED, stub(full(over)));
+      assert.equal(r.outcome, 'pass');
+      assert.equal(r.payload.honored, 1);
+    });
+  }
+
+  test('l: multi-plan phase keeps resolver text and inline citations aligned', (t) => {
+    const ctx2 = ['<decisions>', '- **D-01:** Use PostgreSQL for the primary datastore layer', '- **D-02:** Use Redis for the session cache layer', '</decisions>', ''].join('\n');
+    const dir = createTempGitProject('gate-u3l-');
+    t.after(() => cleanup(dir));
+    w(dir, '.planning/phases/01-x/01-CONTEXT.md', ctx2);
+    w(dir, '.planning/phases/01-x/01-01-PLAN.md', '<objective>Honor D-02</objective>\n');
+    w(dir, '.planning/phases/01-x/01-02-PLAN.md', TRACKED);
+    const r = gate.evaluateDecisionCoverageVerify({
+      projectDir: dir,
+      args: ['.planning/phases/01-x', '.planning/phases/01-x/01-CONTEXT.md'],
+      deps: stub({ kind: 'resolved', content: content('D-01: use postgres') }),
+    });
+    assert.equal(r.payload.honored, 2);
+    assert.equal(r.outcome, 'pass');
+  });
+
+  test('n: tracker id "-" or holding control chars is rejected by the seam before any resolver', () => {
+    for (const bad of ['beads:--flag', 'beads: -x', 'beads:X\u0001']) {
+      const r = evalWith(TRACKED.replace('beads:X-1', bad), { loadCapabilities: () => [] });
+      assert.equal(r.outcome, 'unreadable');
+      assert.match(r.payload.readError, /tracker-id rejected/);
+    }
+  });
+
+  test('o: aggregate budget exhausted -> unreadable before the next spawn', () => {
+    const support = require('../gsd-core/bin/lib/decision-coverage-support.cjs');
+    let t = 0, calls = 0;
+    const r = evalWith(TRACKED.replace('beads:X-1', 'beads:A-1') + TRACKED.replace('beads:X-1', 'beads:B-1'), {
+      now: () => (t += support.TRACKER_RESOLVE_BUDGET_MS * 0.6),
+      loadCapabilities: () => [],
+      resolveTaskContentFn: () => { calls++; return { kind: 'resolved', content: content('D-01') }; },
+    });
+    assert.equal(calls, 1);
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /aggregate budget/);
+  });
+
+  test('p: budget boundary — spawn clamped to an integer remainder; elapsed >= budget (incl. fractional) rejected', () => {
+    const B = require('../gsd-core/bin/lib/decision-coverage-support.cjs').TRACKER_RESOLVE_BUDGET_MS;
+    for (const [elapsed, remaining] of [[B - 1.5, 1], [B - 1, 1], [B - 0.5, null], [B, null], [B + 1, null]]) {
+      const ticks = [0, elapsed], seen = []; let k = 0;
+      const r = evalWith(TRACKED, { now: () => ticks[Math.min(k++, 1)], loadCapabilities: () => [], resolveTaskContentFn: (i) => { seen.push(i.timeoutOverrideMs); return { kind: 'resolved', content: content('D-01') }; } });
+      if (remaining === null) {
+        assert.equal(r.outcome, 'unreadable');
+        assert.deepStrictEqual(seen, []);
+      } else {
+        assert.equal(r.outcome, 'pass');
+        assert.deepStrictEqual(seen, [remaining]);
+      }
+    }
+  });
+
+  const INLINE_TRACKED = '<objective>Honor D-01</objective>\n' + TRACKED;
+  for (const kind of ['not-applicable', 'no-resolver', 'empty']) {
+    test(`m: ${kind} retains inline citation next to a tracker stub task`, () => {
+      const r = evalWith(INLINE_TRACKED, stub({ kind }));
+      assert.equal(r.outcome, 'pass');
+      assert.equal(r.payload.honored, 1);
+    });
+  }
+
+  test('q: case/space variant TRACKER-ID still reaches the resolver', () => {
+    const calls = [];
+    const r = evalWith('<task type="auto" TRACKER-ID = "beads:X-1">\n<action>stub</action>\n</task>\n', {
+      loadCapabilities: () => [],
+      resolveTaskContentFn: (i) => { calls.push(i); return { kind: 'resolved', content: content('D-01') }; },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(r.payload.honored, 1);
+  });
+
+  test('r: default loader with unknown prefix (first-party beads resolver exists) -> no-resolver arm, no throw', () => {
+    const unknown = (x) => x.replace('beads:X-1', 'nosuchtracker:X-1');
+    assert.equal(evalWith(unknown(INLINE_TRACKED), undefined).payload.honored, 1);
+    const r = evalWith(unknown(TRACKED), undefined);
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.readError, /no task-content resolver installed/);
+  });
 });

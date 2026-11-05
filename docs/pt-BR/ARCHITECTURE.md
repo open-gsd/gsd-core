@@ -119,7 +119,7 @@ Pontos de entrada voltados ao usuário. Cada arquivo contém frontmatter YAML (n
 - **Copilot:** Comandos slash (forma com hífen, `/gsd-command-name`)
 - **Antigravity:** Skills
 
-**Total de comandos:** consulte [`docs/INVENTORY.md`](INVENTORY.md#commands) para a contagem oficial e o roster completo.
+**Total de comandos:** consulte [`docs/INVENTORY.md`](INVENTORY.md#comandos) para a contagem oficial e o roster completo.
 
 #### Roteamento hierárquico em dois estágios (v1.40, [#2792](https://github.com/open-gsd/gsd-core/issues/2792))
 
@@ -183,7 +183,7 @@ Definições de agentes especializados com frontmatter especificando:
 
 ### Referências (`gsd-core/references/*.md`)
 
-Documentos de conhecimento compartilhado que workflows e agentes `@-referenciam` (consulte [`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped) para a contagem oficial e o roster completo):
+Documentos de conhecimento compartilhado que workflows e agentes `@-referenciam` (consulte [`docs/INVENTORY.md`](INVENTORY.md#referências) para a contagem oficial e o roster completo):
 
 **Referências principais:**
 
@@ -266,7 +266,7 @@ Hooks de runtime que se integram ao agente de IA anfitrião:
 | `gsd-validate-commit.sh` | `PreToolUse` | Validação de commit para aplicação de commits convencionais |
 | `gsd-phase-boundary.sh` | `PostToolUse` | Detecção de limite de fase para transições de workflow |
 
-Consulte [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped) para o roster oficial de 11 hooks.
+Consulte [`docs/INVENTORY.md`](INVENTORY.md#hooks) para o roster oficial de 11 hooks.
 
 ### Hub de Roteamento de Comandos (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
@@ -274,7 +274,7 @@ Os roteadores de família de comandos CJS despacham através do `CommandRoutingH
 
 ### Ferramentas CLI (`gsd-core/bin/`)
 
-Utilitário CLI Node.js (`gsd-tools.cjs`) com módulos de domínio distribuídos em `gsd-core/bin/lib/` (consulte [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) para o roster oficial):
+Utilitário CLI Node.js (`gsd-tools.cjs`) com módulos de domínio distribuídos em `gsd-core/bin/lib/` (consulte [`docs/INVENTORY.md`](INVENTORY.md#módulos-de-cli) para o roster oficial):
 
 
 | Módulo                 | Responsabilidade                                                                                      |
@@ -329,7 +329,7 @@ Orquestrador (workflow .md)
 
 ### Categorias Principais de Criação de Agentes
 
-Taxonomia conceitual de padrões de criação para os 21 agentes primários. Para o roster oficial de 31 agentes (incluindo os 10 agentes avançados/especializados como `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), consulte [`docs/INVENTORY.md`](INVENTORY.md#agents-31-shipped).
+Taxonomia conceitual de padrões de criação para os agentes primários. Para o roster oficial de agentes (incluindo os agentes avançados/especializados como `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), consulte [`docs/INVENTORY.md`](INVENTORY.md#agentes).
 
 
 | Categoria        | Agentes                                                                                 | Paralelismo                                                                               |
@@ -689,13 +689,11 @@ O pipeline pesquisador → planner → executor inclui um portão de cadeia de s
 | Planejamento | `gsd-planner` | Lê a tabela de Auditoria; insere `checkpoint:human-verify` antes de qualquer tarefa de instalação `[ASSUMED]` ou `[SUS]`; adiciona linha STRIDE `T-{phase}-SC` supply-chain ao `<threat_model>` |
 | Execução | `gsd-executor` | REGRA 3 exclui a instalação de pacotes do escopo de correção automática; instalações com falha surgem como checkpoints, nunca substituições silenciosas |
 
-**Integração de proveniência de afirmações:** Nomes de pacotes descobertos via WebSearch são marcados como `[ASSUMED]` (não `[VERIFIED]`) independentemente do resultado do `npm view`. Isso estende o sistema de proveniência `[ASSUMED]` / `[VERIFIED]` / `[CITED]` existente, aplicando a tag de proveniência como um portão rígido no limite de instalação — `[ASSUMED]` sempre gera um `checkpoint:human-verify` no PLAN.md.
+**Integração de proveniência de afirmações:** Nomes de pacotes descobertos via WebSearch são marcados como `[ASSUMED]` (não `[VERIFIED]`) independentemente do veredicto da API de registro. Isso estende o sistema de proveniência `[ASSUMED]` / `[VERIFIED]` / `[CITED]` existente, aplicando a tag de proveniência como um portão rígido no limite de instalação — `[ASSUMED]` sempre gera um `checkpoint:human-verify` no PLAN.md.
 
-**Cobertura de ecossistemas:** O pesquisador usa comandos de verificação específicos de registro — `npm view` (Node), `pip index versions` (Python), `cargo search` (Rust) — em vez de uma única verificação genérica. Isso captura alucinações entre ecossistemas (taxa de ~9% documentada em pesquisa USENIX de 2025).
+**Cobertura de ecossistemas:** O portão resolve os sinais diretamente da API de registro de cada ecossistema, em vez de uma única verificação genérica — `registry.npmjs.org` + `api.npmjs.org/downloads` (Node), `pypi.org/pypi/<pkg>/json` (Python), a API do crates.io (Rust). Isso captura alucinações entre ecossistemas (taxa de ~9% documentada em pesquisa USENIX de 2025).
 
-**Degradação graceful:** Se o `slopcheck` não estiver disponível, cada pacote recomendado é marcado como `[ASSUMED]` e condicionado com um checkpoint. Pesquisa e planejamento prosseguem; o sistema nunca falha definitivamente por dependência de ferramenta ausente.
-
-**Dependência externa:** `slopcheck` (MIT, instalável via pip). Se abandonado, o fallback do portão `[ASSUMED]` mantém a cobertura de checkpoint humano.
+**Degradação graceful:** Cada adaptador de registro degrada para sinais nulos (nunca lança exceção) em uma consulta com falha; sinais ausentes levam um pacote a `[SUS]`, que é condicionado ao mesmo `checkpoint:human-verify` que `[ASSUMED]`. Pesquisa e planejamento prosseguem; o sistema nunca falha definitivamente por uma indisponibilidade de rede ou de ferramenta. `slopcheck` é um adaptador opcional que só escala veredictos — só pode elevar um veredicto, nunca rebaixá-lo — e não é o portão de instalar-ou-degradar. Nenhuma configuração distribuída o ativa.
 
 ---
 

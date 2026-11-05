@@ -214,6 +214,7 @@ const {
   runInstalledTreeAudit,
   extractBaselineTree,
   resolveBaselineRef,
+  explainNoBaseline,
   AUDIT_ATTEMPT_TIMEOUT_MS,
   AUDIT_MAX_ATTEMPTS,
   AUDIT_BACKOFF_BASE_MS,
@@ -258,10 +259,12 @@ describe('#3588: npm audit --omit=dev introduces no NEW advisories vs baseline (
     const baselineDir = baselineRef ? extractBaselineTree(baselineRef, ROOT, subdir) : null;
     if (baselineDir === null) {
       const vulns = audit.metadata.vulnerabilities;
-      assert.strictEqual(vulns.critical, 0, `no baseline available; falling back to zero-tolerance -- expected 0 critical; got ${vulns.critical}`);
-      assert.strictEqual(vulns.high, 0, `no baseline available; falling back to zero-tolerance -- expected 0 high; got ${vulns.high}`);
-      assert.strictEqual(vulns.moderate, 0, `no baseline available; falling back to zero-tolerance -- expected 0 moderate; got ${vulns.moderate}`);
-      assert.strictEqual(vulns.low, 0, `no baseline available; falling back to zero-tolerance -- expected 0 low; got ${vulns.low}`);
+      // #5659: say WHY there is no baseline (git refused the checkout, or no ref) so a fallback is never silent.
+      const fallback = `no baseline available (${explainNoBaseline(ROOT)}); falling back to zero-tolerance`;
+      assert.strictEqual(vulns.critical, 0, `${fallback} -- expected 0 critical; got ${vulns.critical}`);
+      assert.strictEqual(vulns.high, 0, `${fallback} -- expected 0 high; got ${vulns.high}`);
+      assert.strictEqual(vulns.moderate, 0, `${fallback} -- expected 0 moderate; got ${vulns.moderate}`);
+      assert.strictEqual(vulns.low, 0, `${fallback} -- expected 0 low; got ${vulns.low}`);
       return;
     }
     t.after(() => cleanup(baselineDir));

@@ -47,6 +47,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -84,6 +91,7 @@ function runCodexInstall(codexHome) {
 
   process.env.CODEX_HOME = codexHome;
   process.env.HOME = isolatedHome;
+  process.env.GSD_HOME = isolatedHome; // #5017: the defaults store root follows HOME
   process.env.USERPROFILE = isolatedHome;
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT);

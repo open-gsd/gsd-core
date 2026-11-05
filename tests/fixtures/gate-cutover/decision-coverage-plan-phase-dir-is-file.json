@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "query",
+    "check.decision-coverage-plan",
+    ".planning/phases/01-decisions/CONTEXT.md",
+    ".planning/phases/01-decisions/CONTEXT.md"
+  ],
+  "fixture": "dc",
+  "stdout": "{\n  \"passed\": false,\n  \"skipped\": false,\n  \"reason\": \"phase path is not a directory\",\n  \"total\": null,\n  \"covered\": null,\n  \"message\": \"Decision coverage gate: the phase directory \\\".planning/phases/01-decisions/CONTEXT.md\\\" is a file, not a directory, so no plans were scanned. Pass the phase DIRECTORY (e.g. .planning/phases/01-slug), not the phase number.\"\n}",
+  "stderr": "",
+  "exitCode": 0
+}

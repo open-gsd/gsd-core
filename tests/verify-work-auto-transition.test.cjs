@@ -270,7 +270,7 @@ describe('bug #3381: verify-work forwards workstream context', () => {
     );
     assert.match(
       workflow,
-      /PHASE_ARG=\$\(echo "\$ARGUMENTS" \| sed -E 's\/--ws\[\[:space:\]\]\+\[A-Za-z0-9\._-\]\+\/\/g' \| xargs\)/,
+      /PHASE_ARG=\$\(echo "\$GSD_ARGS" \| sed -E 's\/--ws\[\[:space:\]\]\+\[A-Za-z0-9\._-\]\+\/\/g' \| xargs\)/,
       'verify-work must derive PHASE_ARG after removing --ws',
     );
     // After #3797 architectural fix, callsites use gsd_run

@@ -66,7 +66,7 @@ Before executing, discover project context:
 - Load `rules/*.md` as needed during **implementation**.
 - Follow skill rules relevant to the task you are about to commit.
 
-**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md (agent type: `gsd-executor`)
 
 **CLAUDE.md enforcement:** If `./CLAUDE.md` exists, treat its directives as hard constraints during execution. Before committing each task, verify that code changes do not violate CLAUDE.md rules (forbidden patterns, required conventions, mandated tools). If a task action would contradict a CLAUDE.md directive, apply the CLAUDE.md rule — it takes precedence over plan instructions. Document any CLAUDE.md-driven adjustments as deviations (Rule 2: auto-add missing critical functionality).
 </project_context>
@@ -624,7 +624,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
   touching `refs/stash`:
 
   - **Move WIP off the working tree:** commit it to a throwaway branch you own
-    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "wip"`),
+    (e.g. `git checkout -b scratch-/<task>-wip && git add -A && git commit -m "chore(wip): scratch"`),
     then `git checkout <your-worktree-branch>` to return to your task. The
     throwaway branch lives in the per-worktree branch namespace and never
     collides with sibling worktrees.
@@ -766,7 +766,14 @@ Do NOT skip. Do NOT proceed to state updates if self-check fails.
 </self_check>
 
 <state_updates>
-After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (named flags):
+After SUMMARY.md, update ROADMAP.md progress FIRST, then STATE.md. The ROADMAP write is the step that can decline (`missing_phase_details`), and a decline stops the plan before any STATE.md write, so STATE.md never advances past a plan the ROADMAP did not record:
+
+```bash
+# Update ROADMAP.md progress for this phase (plan counts, status). A decline stops here, before STATE.md moves.
+PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+```
+
+Then update STATE.md using `gsd-tools query` state handlers (named flags):
 
 ```bash
 # Advance plan counter (handles edge cases automatically)
@@ -793,9 +800,6 @@ gsd_run query state.record-session \
 ```
 
 ```bash
-# Update ROADMAP.md progress for this phase (plan counts, status)
-gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}"
-
 # Mark completed requirements from PLAN.md frontmatter
 # Extract the `requirements` array from the plan's frontmatter, then mark each complete
 gsd_run query requirements.mark-complete ${REQ_IDS}

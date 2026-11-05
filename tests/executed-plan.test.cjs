@@ -27,6 +27,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { test, describe } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -646,15 +653,19 @@ describe('installRuntimeArtifacts — E4: kilo (second family member)', () => {
 });
 
 describe('installRuntimeArtifacts — E5/E7: empty layout + nativePlugin post-step (pi)', () => {
-  test('empty layout returns an empty plan', (t) => {
+  test('pi declares the skills and agents kinds (#5547, #5569)', (t) => {
     const configDir = createTempDir('gsd-e5-pi-');
     t.after(() => cleanup(configDir));
     sandboxHome(t, configDir);
 
     const result = installRuntimeArtifacts('pi', configDir, 'global', RESOLVED_CORE);
 
-    assert.ok(Array.isArray(result.kinds), 'E5: kinds must be an array even when layout.kinds is empty');
-    assert.strictEqual(result.kinds.length, 0, 'E5: pi declares an empty artifactLayout — kinds must be [], never undefined');
+    assert.ok(Array.isArray(result.kinds), 'E5: kinds must be an array');
+    assert.deepStrictEqual(
+      result.kinds.map((k) => k.kind),
+      ['skills', 'agents'],
+      'E5: pi declares skills (workflow entry points) and agents (the roles gsd_dispatch loads) — no commands kind',
+    );
   });
 
   test('native plugin post-step is recorded', (t) => {
@@ -1213,6 +1224,7 @@ describe('installRuntimeArtifacts — K3: real install before/after, full recurs
 
       for (const dir of [dirA, dirB]) {
         process.env.HOME = dir;
+        process.env.GSD_HOME = dir; // #5017: the defaults store root follows HOME
         process.env.USERPROFILE = dir;
         process.env.GSD_TEST_HOME_SANDBOX = dir;
         installRuntimeArtifacts(runtime, dir, 'global', RESOLVED_FULL);
@@ -1271,6 +1283,7 @@ describe('installRuntimeArtifacts — L1: plan kinds mirror layout kinds (proper
         const configDir = createTempDir(`gsd-l1-${runtime}-`);
         createdDirs.push(configDir);
         process.env.HOME = configDir;
+        process.env.GSD_HOME = configDir; // #5017: the defaults store root follows HOME
         process.env.USERPROFILE = configDir;
 
         const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, configDir, scope);
@@ -1347,6 +1360,7 @@ describe('installRuntimeArtifacts — L2: plan is deterministic (property)', () 
         const savedL2Home = process.env.HOME;
         const savedL2UserProfile = process.env.USERPROFILE;
         process.env.HOME = configDir;
+        process.env.GSD_HOME = configDir; // #5017: the defaults store root follows HOME
         process.env.USERPROFILE = configDir;
         try {
         const planA = installRuntimeArtifacts(runtime, configDir, scope, RESOLVED_CORE, undefined, undefined, { fs: createFakeInstallFs() });

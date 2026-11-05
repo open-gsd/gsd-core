@@ -20,6 +20,13 @@
 process.env.GSD_TEST_MODE = '1';
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
+
+// #5017: pinned GSD_HOME (next to HOME) is put back after each test so it never leaks into the next one.
+const __ORIG_GSD_HOME = process.env.GSD_HOME;
+require('node:test').afterEach(() => {
+  if (__ORIG_GSD_HOME === undefined) delete process.env.GSD_HOME;
+  else process.env.GSD_HOME = __ORIG_GSD_HOME;
+});
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -448,6 +455,7 @@ describe('#3531 readGsdEffectiveEffortConfig: home/project routing_tier_defaults
     const oldHome = process.env.HOME;
     const oldUserProfile = process.env.USERPROFILE;
     process.env.HOME = homeDir;
+    process.env.GSD_HOME = homeDir; // #5017: the defaults store root follows HOME
     process.env.USERPROFILE = homeDir; // os.homedir() is USERPROFILE-driven on win32
     t.after(() => {
       process.env.HOME = oldHome;
@@ -4691,6 +4699,7 @@ function isolateHome() {
   isolateWorkstreamEnv();
   _isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2297-home-'));
   process.env.HOME = _isolatedHome;
+  process.env.GSD_HOME = _isolatedHome; // #5017: the defaults store root follows HOME
   // Windows resolves the home dir from USERPROFILE, not HOME.
   process.env.USERPROFILE = _isolatedHome;
   process.env.GSD_HOME = _isolatedHome;

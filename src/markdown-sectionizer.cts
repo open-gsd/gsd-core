@@ -71,6 +71,15 @@ export interface CollectSectionOptions {
   stripFences?: boolean;
 }
 
+/** Options specific to `deleteSection`; legacy callers omit `endOffset`. */
+export interface DeleteSectionOptions extends CollectSectionOptions {
+  /**
+   * Maximum exclusive character offset for the deleted range. The ordinary
+   * heading-level boundary still applies, and the earlier boundary wins.
+   */
+  endOffset?: number;
+}
+
 /** Recognised bullet markers. */
 export type BulletMarker = 'dash' | 'checkbox-unchecked' | 'checkbox-checked' | 'numbered';
 
@@ -1001,6 +1010,126 @@ export function stripTaggedBlocks(content: string, tagName: string, allowAttribu
   return content.replace(taggedBlockPattern(tagName, caseSensitive ? 'g' : 'gi', allowAttributes), '');
 }
 
+/**
+ * Run `edit` over `content` with every `<tagName>…</tagName>` block hidden from
+ * it, then put the blocks back byte-for-byte (#5543). The blocks are swapped for
+ * one-line placeholder comments, so `edit` sees the rest of the document in its
+ * original order and cannot touch, or be captured by, a block's contents.
+ *
+ * Same hardened block pattern as `stripTaggedBlocks` (exact `<tag>` opener, so
+ * `<details open>` stays visible to `edit`). If `edit` returns a non-string, or
+ * drops a placeholder, the original `content` is returned unchanged rather than
+ * a document with a block missing.
+ *
+ * Nested blocks are NOT supported, exactly as for `extractTaggedBlocks` and
+ * `stripTaggedBlocks`: the first `</tag>` closes the block. Every ROADMAP reader
+ * that strips shipped milestones shares that grammar, so this writer sees the
+ * same blocks those readers do.
+ */
+export function editOutsideTaggedBlocks(
+  content: string,
+  tagName: string,
+  edit: (outside: string) => string,
+  allowAttributes = false,
+  caseSensitive = false,
+): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+  if (typeof tagName !== 'string' || tagName.length === 0) return edit(content);
+  const blocks: string[] = [];
+  let nonce = 0;
+  while (content.includes(`<!-- gsd-masked-${tagName}-${nonce}-`)) nonce += 1;
+  const placeholder = (i: number): string => `<!-- gsd-masked-${tagName}-${nonce}-${i} -->`;
+  const masked = content.replace(
+    taggedBlockPattern(tagName, caseSensitive ? 'g' : 'gi', allowAttributes),
+    (block: string) => {
+      blocks.push(block);
+      return placeholder(blocks.length - 1);
+    },
+  );
+  if (blocks.length === 0) return edit(content);
+  const edited = edit(masked);
+  if (typeof edited !== 'string') return content;
+  let restored = edited;
+  for (let i = 0; i < blocks.length; i++) {
+    const marker = placeholder(i);
+    const at = restored.indexOf(marker);
+    if (at === -1 || restored.indexOf(marker, at + marker.length) !== -1) return content;
+    restored = restored.slice(0, at) + blocks[i] + restored.slice(at + marker.length);
+  }
+  return restored;
+}
+
+// ─── maskFences / editOutsideFences (#5460) ───────────────────────────────────
+
+/** A fence-masked view of some content, plus the inverse that puts the blocks back. */
+export interface FenceMask {
+  /** The content with every fenced block (delimiters and body) replaced by one placeholder line. */
+  masked: string;
+  /**
+   * Put the fenced blocks back into `edited` (the masked text after an edit). Returns `null` when
+   * a placeholder was lost or duplicated by the edit, so the caller can fail closed.
+   */
+  restore(edited: string): string | null;
+}
+
+/**
+ * Hide every fenced code block from a line-oriented edit. State-transition writers locate their
+ * target with `/^Field:.*$/m`-style patterns; those match a fenced EXAMPLE of the field as readily
+ * as the live line, so the example got the new value and the live line stayed stale. Masking each
+ * block to a single `<!-- gsd-masked-fence-… -->` line lets the same pattern see only live lines;
+ * `restore` splices the blocks back byte-for-byte (CRLF included — the original line text is kept).
+ * The fence grammar is `scanFencedBlocks`' (the one every reader here uses), and an unterminated
+ * fence masks to the end of the content, as `stripFencedCode` treats it.
+ */
+export function maskFences(content: string): FenceMask {
+  const identity: FenceMask = { masked: content, restore: (edited) => edited };
+  if (typeof content !== 'string' || content.length === 0) return identity;
+  const lines = content.split('\n');
+  const blocks = scanFencedBlocks(lines);
+  if (blocks.length === 0) return identity;
+  let nonce = 0;
+  while (content.includes(`<!-- gsd-masked-fence-${nonce}-`)) nonce += 1;
+  const placeholder = (i: number): string => `<!-- gsd-masked-fence-${nonce}-${i} -->`;
+  const kept: string[] = [];
+  const originals: string[] = [];
+  let cursor = 0;
+  for (const block of blocks) {
+    const end = block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx;
+    for (; cursor < block.openLineIdx; cursor++) kept.push(lines[cursor]);
+    originals.push(lines.slice(block.openLineIdx, end + 1).join('\n'));
+    kept.push(placeholder(originals.length - 1));
+    cursor = end + 1;
+  }
+  for (; cursor < lines.length; cursor++) kept.push(lines[cursor]);
+  return {
+    masked: kept.join('\n'),
+    restore(edited: string): string | null {
+      if (typeof edited !== 'string') return null;
+      let restored = edited;
+      for (let i = 0; i < originals.length; i++) {
+        const marker = placeholder(i);
+        const at = restored.indexOf(marker);
+        if (at === -1 || restored.indexOf(marker, at + marker.length) !== -1) return null;
+        restored = restored.slice(0, at) + originals[i] + restored.slice(at + marker.length);
+      }
+      return restored;
+    },
+  };
+}
+
+/**
+ * Run `edit` over `content` with every fenced code block hidden from it (see `maskFences`).
+ * Content without a fence is edited as given. An edit that returns a non-string, or that loses a
+ * placeholder, returns the original content unchanged.
+ */
+export function editOutsideFences(content: string, edit: (outside: string) => string): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+  const mask = maskFences(content);
+  const edited = edit(mask.masked);
+  if (typeof edited !== 'string') return content;
+  return mask.restore(edited) ?? content;
+}
+
 // ─── replaceSection ───────────────────────────────────────────────────────────
 
 /**
@@ -1077,6 +1206,50 @@ export function withSection(
   return replaceSection(content, section, newBody);
 }
 
+// ─── heading slices (byte-exact writable window) ──────────────────────────────
+
+/** Character range `[start, end)` of one heading's writable slice. */
+export interface HeadingSliceRange {
+  /** Offset of the heading's `#`. */
+  start: number;
+  /** Exclusive end: the next heading of level <= `maxLevel`, or the end of the content. */
+  end: number;
+}
+
+/**
+ * Range of the slice that starts at `headings[index]` and runs to the next
+ * heading of level <= `maxLevel` (fence-aware: `headings` comes from
+ * `tokenizeHeadings`). Unlike `collectSection` it keeps the heading line and
+ * every trailing byte, so a caller that edits the slice can splice it back
+ * byte-exact (#5762).
+ */
+export function headingSliceRange(
+  content: string,
+  headings: HeadingToken[],
+  index: number,
+  maxLevel = 2,
+): HeadingSliceRange {
+  const next = headings.slice(index + 1).find((h) => h.level <= maxLevel);
+  return { start: headings[index].offset, end: next ? next.offset : content.length };
+}
+
+/**
+ * Run `edit` on `content.slice(range.start, end)` and splice the result back,
+ * where `end` excludes the single newline that precedes the next heading — the
+ * slice the pre-owner writers cut with `search(/\n#{1,2}[ \t]/)` — so a row
+ * inserted at the end of a table keeps the blank line before that heading.
+ */
+export function editHeadingSlice(
+  content: string,
+  range: HeadingSliceRange,
+  edit: (slice: string) => string,
+): string {
+  const end = range.end < content.length && range.end > range.start && content[range.end - 1] === '\n'
+    ? range.end - 1
+    : range.end;
+  return content.slice(0, range.start) + edit(content.slice(range.start, end)) + content.slice(end);
+}
+
 // ─── deleteSection ────────────────────────────────────────────────────────────
 
 /**
@@ -1108,13 +1281,15 @@ export function withSection(
  * double-blank gap accumulates where the section used to sit. Content
  * elsewhere in the document is never touched.
  *
+ * `endOffset` adds an optional caller-owned maximum boundary. It never widens
+ * the heading-level range, and callers that omit it retain the legacy bytes.
  * Returns `content` unchanged when no heading matches `headingPredicate`
  * (bounded no-op, mirroring `withSection`'s miss behaviour).
  */
 export function deleteSection(
   content: string,
   headingPredicate: (heading: HeadingToken) => boolean,
-  opts: CollectSectionOptions = {},
+  opts: DeleteSectionOptions = {},
 ): string {
   if (typeof content !== 'string') return content;
 
@@ -1153,7 +1328,12 @@ export function deleteSection(
   const eofOffset = acc;
 
   const sectionStart = lineOffsets[target.line - 1]; // start of the target heading LINE itself
-  const sectionEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+  const headingBoundedEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+  const explicitEnd = typeof opts.endOffset === 'number' && Number.isFinite(opts.endOffset)
+    ? Math.max(0, Math.min(content.length, opts.endOffset))
+    : headingBoundedEnd;
+  const sectionEnd = Math.min(headingBoundedEnd, explicitEnd);
+  if (sectionEnd <= sectionStart) return content;
 
   const before = content.slice(0, sectionStart);
   const after = content.slice(sectionEnd);

@@ -58,7 +58,7 @@ const { convertClaudeAgentToAntigravityAgent } = require('../bin/install.js');
 // touch the real machine. Runtime-config env overrides are stripped so the
 // child resolves config dirs strictly under the temp HOME.
 function runInstaller(args, homeDir) {
-  const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_TEST_MODE: '1' };
+  const env = { ...process.env, HOME: homeDir, USERPROFILE: homeDir, GSD_HOME: homeDir, GSD_TEST_MODE: '1' };
   for (const k of [
     'CLAUDE_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'ANTIGRAVITY_CONFIG_DIR',
     'XDG_CONFIG_HOME', 'CODEX_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'KILO_CONFIG_DIR',
@@ -123,7 +123,7 @@ describe('#1928 --gemini CLI deprecation redirect', () => {
     // exit before it (the dispatch defaults an empty selection to 'claude').
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(home, '.claude', 'sentinel.txt'), 'keep me');
-    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
     delete env.GSD_TEST_MODE;
     delete env.CLAUDE_CONFIG_DIR;
     const r = spawnSync(process.execPath, [INSTALL_JS, '--gemini', '--uninstall', '--global'], {
@@ -225,8 +225,8 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
     const result = convertClaudeAgentToAntigravityAgent(input);
     const toolsBlock = result.slice(result.indexOf('tools:')).split('\n').filter((l) => l.startsWith('- '));
     assert.ok(toolsBlock.includes('- view_file'), 'Read → view_file (native name, #4705)');
-    assert.ok(toolsBlock.includes('- write_file'), 'Write → write_file');
-    assert.ok(toolsBlock.includes('- web_fetch'), 'WebFetch → web_fetch');
+    assert.ok(toolsBlock.includes('- write_to_file'), 'Write → write_to_file (#5447)');
+    assert.ok(toolsBlock.includes('- read_url_content'), 'WebFetch → read_url_content (#5447)');
     assert.ok(!toolsBlock.some((l) => /\bskill\b/.test(l)), 'Skill is still excluded (would be an invalid backend tool name)');
   });
 
@@ -261,21 +261,22 @@ describe('#1928 Antigravity preserved (shared surface with the removed gemini ru
     // view_file / replace_file_content / grep_search / run_command as native,
     // and its tool-validation warning says wrong names can hang the subagent.
     // The old "Antigravity speaks the Gemini dialect" rationale was the belief
-    // at #4727 time; the confirmed bug #4705 supersedes it.
+    // at #4727 time; the confirmed bug #4705 supersedes it. #5447 moved four
+    // values to the names agy 1.3.5 registers and dropped TodoWrite (agy has no
+    // todo tool; it is now excluded below instead of mapped).
     assert.deepStrictEqual(mod.claudeToAntigravityTools, {
       Read: 'view_file',
-      Write: 'write_file',
+      Write: 'write_to_file',
       Edit: 'replace_file_content',
       Bash: 'run_command',
-      Glob: 'glob',
+      Glob: 'find_by_name',
       Grep: 'grep_search',
-      WebSearch: 'google_web_search',
-      WebFetch: 'web_fetch',
-      TodoWrite: 'write_todos',
-    }, 'the tool map keys are the #4727 rename surface (add/remove still fails); the VALUES are the #4705 Antigravity-native vocabulary');
+      WebSearch: 'search_web',
+      WebFetch: 'read_url_content',
+    }, 'the tool map keys are the #4727 rename surface (add/remove still fails); the VALUES are the #5447 agy-registered vocabulary');
 
     // In-set / out-of-set boundary pair: the excluded ids still return null individually...
-    for (const excluded of ['mcp__anything', 'Task', 'Agent', 'AskUserQuestion', 'ask_user', 'Skill', 'SlashCommand']) {
+    for (const excluded of ['mcp__anything', 'Task', 'Agent', 'AskUserQuestion', 'ask_user', 'Skill', 'SlashCommand', 'TodoWrite']) {
       assert.strictEqual(
         mod.convertAntigravityToolName(excluded),
         null,
