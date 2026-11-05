@@ -59,18 +59,21 @@ function unboundedConfigFileReason(absPath: string): string | null {
 }
 
 /**
- * A path as printed to a terminal: C0 controls, DEL and C1 controls become `\xNN`; zero-width and
- * bidirectional formatting characters (U+200B-200F, U+2028-2029, U+202A-202E, U+2066-2069)
- * become `\uNNNN`. A directory
+ * A path as printed to a terminal: C0 controls, DEL and C1 controls (general category Cc) become
+ * `\xNN`; every other format (Cf), line/paragraph separator (Zl, Zp) and lone-surrogate (Cs)
+ * character — zero-width and bidirectional controls, soft hyphen, tag characters — becomes
+ * `\uNNNN` (`\u{N...}` above the BMP). A directory
  * name can carry ESC (or a C1 CSI), and a path written to stderr verbatim is a terminal-escape
  * injection through that name.
  */
 function printablePath(p: string): string {
   return p.replace(
-    new RegExp('[\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]', 'g'),
+    new RegExp('[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\p{Cs}]', 'gu'),
     (c) => {
-      const code = c.charCodeAt(0);
-      return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
+      const code = c.codePointAt(0) as number;
+      const hex = code.toString(16).padStart(4, '0');
+      if (/\p{Cc}/u.test(c)) return `\\x${hex.slice(-2)}`; // C0, DEL, C1 (all <= 0xff)
+      return code > 0xffff ? `\\u{${hex}}` : `\\u${hex}`; // format, separator, lone surrogate
     },
   );
 }

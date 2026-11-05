@@ -399,7 +399,7 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
         // Windows may omit these flags: lstat/fstat still require a regular file,
         // but the open is not atomically no-follow there. Adopt Windows no-follow
         // flags here if Node exposes them; no caller should weaken these checks.
-        identityFd = fs.openSync(markerPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+        identityFd = fs.openSync(markerPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW | (fs.constants.O_NOCTTY ?? 0));
         const opened = fs.fstatSync(identityFd);
         if (!opened.isFile() || opened.size > 1024) continue;
         const buffer = Buffer.alloc(opened.size);

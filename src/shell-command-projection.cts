@@ -1445,7 +1445,7 @@ function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string |
   let fd: number | undefined;
   try {
     // O_NONBLOCK keeps opening a FIFO from waiting for a writer; it is absent on Windows.
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.size > MAX_PRIOR_BYTES) return undefined;
     // One byte of headroom: reading it means the file grew past what was measured.
@@ -1598,22 +1598,12 @@ function writeTargetDirect(filePath: string, normalized: string, encoding: Buffe
       }
     }
   }
-  // Defense in depth, before anything is truncated or written: on Linux the open descriptor's
-  // own /proc entry names what was really opened. A descriptor that reads back as a
-  // /dev/fd/N or /proc/.../fd/N path is a descriptor alias the path walk in platformWriteSync
-  // missed; a descriptor that is not a regular file is never written. Either is refused.
-  if (process.platform === 'linux') {
-    let opened = '';
-    try { opened = fs.readlinkSync(`/proc/self/fd/${fd}`); } catch { /* no /proc: the fstat checks above stand */ }
-    const notRegular = !fs.fstatSync(fd).isFile();
-    if (notRegular || /^(?:\/dev\/fd\/\d+|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd\/\d+)$/.test(opened)) {
-      try { fs.closeSync(fd); } catch { /* already closed */ }
-      if (created) {
-        try { fs.unlinkSync(filePath); } catch { /* already gone */ }
-      }
-      refuse('the opened descriptor is not a plain regular file; refusing', 'ENXIO');
-    }
-  }
+  // What guards this write: the path walk in platformWriteSync refuses a descriptor alias before
+  // this function is reached, and the probe's fstat plus the dev/ino comparison above ensure the
+  // descriptor opened for write is the same regular file that was probed. There is deliberately NO
+  // post-open /proc check: opening /dev/fd/N re-opens the underlying object, so the new descriptor
+  // never reads back as an alias, and a path to a file this process happens to hold open is a
+  // legitimate write.
   let failure: (Error & { restoreFailed?: boolean }) | undefined;
   try {
     // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
@@ -1685,7 +1675,10 @@ function writeSpecialTargetWithBackoff(
   const maxWaitMs = wait.maxWaitMs ?? Infinity;
   // A descriptor alias (/dev/stdout …) is written through the fd the process already holds —
   // never reopened by path, which fails on a Linux socketpair stdio and loses O_APPEND.
-  const fd = existingFd ?? fs.openSync(filePath, fs.constants.O_WRONLY | (fs.constants.O_NONBLOCK ?? 0));
+  const fd = existingFd ?? fs.openSync(
+    filePath,
+    fs.constants.O_WRONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0),
+  );
   try {
     let off = 0;
     let waited = 0;
@@ -1739,9 +1732,17 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // on the PHYSICAL path: the kernel resolves `..` after following symlinks, so a lexical
   // path.resolve/normalize would disagree with it and is never used for a decision here.
   const refuseFdAlias = (candidate: string): void => {
-    const m = /^\/(?:dev|proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?)\/fd\/(\d+)$/.exec(candidate);
+    const m = /^\/(?:dev|proc\/(self|thread-self|\d+)(?:\/task\/\d+)?)\/fd\/(\d+)$/.exec(candidate);
     if (m === null) return;
-    if (!/^(?:0|[1-9]\d*)$/.test(m[1]) || Number(m[1]) > 2) {
+    // Only this process's own descriptors are ever written by alias: /proc/<another pid>/fd/N
+    // names a different process's file and is refused whatever N is.
+    if (m[1] !== undefined && m[1] !== 'self' && m[1] !== 'thread-self' && Number(m[1]) !== process.pid) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: another process's descriptors are never written`),
+        { code: 'ENXIO' },
+      );
+    }
+    if (!/^(?:0|[1-9]\d*)$/.test(m[2]) || Number(m[2]) > 2) {
       throw Object.assign(
         new Error(`ENXIO: cannot write ${filePath}: only descriptors 0-2 may be written by alias`),
         { code: 'ENXIO' },
@@ -1788,16 +1789,24 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     let isLink = false;
     try { isLink = fs.lstatSync(hop).isSymbolicLink(); } catch { /* absent: nothing to follow */ }
     if (!isLink) break;
-    let next: string;
+    let next: string | null = null;
     try {
       const link = fs.readlinkSync(hop);
       const holder = physicalDir(hop);
-      if (!path.isAbsolute(link) && holder === null) break;
       // Kept raw (joined by string, never normalised): the next iteration's native realpath
       // resolves any `..` in it against the symlinks it crosses.
-      next = path.isAbsolute(link) ? link : `${holder === '/' ? '' : holder}/${link}`;
+      if (path.isAbsolute(link)) next = link;
+      else if (holder !== null) next = `${holder === '/' ? '' : holder}/${link}`;
     } catch { break; }
-    refuseFdAlias(path.resolve(next));
+    if (next === null) {
+      // A relative link whose holding directory cannot be resolved cannot be classified: refuse.
+      throw Object.assign(
+        new Error(`ENXIO: cannot write ${filePath}: a relative link in an unresolvable directory — refusing`),
+        { code: 'ENXIO' },
+      );
+    }
+    const physicalNext = physicalPath(next); // physical, never lexical: `..` follows symlinks
+    if (physicalNext !== null) refuseFdAlias(physicalNext);
     refuseViaRealDir(next);
     hop = next;
   }
@@ -1815,7 +1824,12 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // (`> out.txt`) or a socket (its own stdio), which is then written in place. Any other
     // regular file takes the atomic path.
     // Classified on the physical path (parent resolved by the OS, `..` after a symlink included).
-    const resolvedTarget = physicalPath(filePath) ?? path.resolve(filePath);
+    const physicalTarget = physicalPath(filePath);
+    if (special !== null && physicalTarget === null) {
+      // An existing target whose parent cannot be resolved cannot be classified: never guessed lexically.
+      throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: its directory cannot be resolved — refusing`), { code: 'ENXIO' });
+    }
+    const resolvedTarget = physicalTarget ?? path.resolve(filePath);
     const isDescriptorAlias = descriptorAliasFd(resolvedTarget) !== null;
     if (special !== null && (special.isBlockDevice() || (special.isSocket() && !isDescriptorAlias))) {
       throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
@@ -1830,7 +1844,10 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
         writeSpecialTargetWithBackoff(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
         return;
       }
-      const fd = fs.openSync(filePath, fs.constants.O_WRONLY | (special.isFile() ? fs.constants.O_TRUNC : 0));
+      const fd = fs.openSync(
+        filePath,
+        fs.constants.O_WRONLY | (fs.constants.O_NOCTTY ?? 0) | (special.isFile() ? fs.constants.O_TRUNC : 0),
+      );
       try {
         fs.writeFileSync(fd, normalized, encoding);
       } finally {
@@ -1847,8 +1864,8 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // existing file.
   // An existing regular target keeps its permission bits (a 0600 config must not come back 0644
   // after the rename): the temp file is CREATED with that mode, so it is never more permissive
-  // than the target it replaces, not even for an instant. Without one the temp is created 0600
-  // and widened to the default 0o666 & ~umask only after the bytes are written.
+  // than the target it replaces, not even for an instant. Without one the temp is created 0o666
+  // and the kernel applies the umask (the process umask is never read or changed here).
   let targetMode: number | null = null;
   try {
     const existing = fs.lstatSync(filePath);
@@ -1857,7 +1874,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   let tmpPath: string;
   let tmpFd: number;
   try {
-    ({ fd: tmpFd, tmpPath } = openExclusiveTempSync(filePath, undefined, targetMode ?? 0o600));
+    ({ fd: tmpFd, tmpPath } = openExclusiveTempSync(filePath, undefined, targetMode ?? 0o666));
   } catch {
     writeTargetDirect(filePath, normalized, encoding);
     return;
@@ -1869,10 +1886,6 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   try {
     fs.writeFileSync(tmpFd, normalized, encoding);
     wrote = true;
-    if (targetMode === null) {
-      const umask = process.umask();
-      try { fs.fchmodSync(tmpFd, 0o666 & ~umask); } catch { /* no permission bits on this platform */ }
-    }
   } catch { /* fall back below */ }
   try { fs.closeSync(tmpFd); } catch { wrote = false; }
   if (!wrote) {
