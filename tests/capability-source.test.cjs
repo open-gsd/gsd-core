@@ -876,6 +876,24 @@ function _fakeTarball(cap) {
 // #5298: exercise real clones through the existing exec override, mapping only
 // the fixture URL to a local repository so the test needs no network/server.
 describe('#5298 — Git source excludes only cloned .git metadata', () => {
+  const isolatedGitConfig = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  let savedGitConfigGlobal;
+  let savedGitConfigNoSystem;
+
+  beforeEach(() => {
+    savedGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
+    savedGitConfigNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+    process.env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+  });
+
+  afterEach(() => {
+    if (savedGitConfigGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = savedGitConfigGlobal;
+    if (savedGitConfigNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = savedGitConfigNoSystem;
+  });
+
   function fixture(t) {
     const root = createTempDir('gsd-git-metadata-');
     t.after(() => cleanup(root));
@@ -945,6 +963,9 @@ describe('#5298 — Git source excludes only cloned .git metadata', () => {
   test('real clone with a pinned ref checks out before metadata removal', async (t) => {
     const f = fixture(t);
     git(f.repo, 'tag', 'metadata-fixture-ref');
+    put(f.repo, 'README.md', 'Default branch content after the pinned ref\n');
+    git(f.repo, 'add', '-A');
+    git(f.repo, 'commit', '-qm', 'advance default branch past pinned ref');
     const project = path.join(f.root, 'ref-project');
     fs.mkdirSync(project);
     const result = await resolveCapabilitySource(`${f.spec}#metadata-fixture-ref`, {
@@ -955,6 +976,7 @@ describe('#5298 — Git source excludes only cloned .git metadata', () => {
     });
     t.after(() => cleanup(result.stagedDir));
     assert.equal(result.id, f.cap.id);
+    assert.equal(fs.readFileSync(path.join(result.stagedDir, 'README.md'), 'utf8'), f.files['README.md']);
     assert.equal(fs.existsSync(path.join(result.stagedDir, '.git')), false);
     assert.ok(f.clones.length > 0, 'fixture must observe the real scratch clone');
   });
@@ -979,11 +1001,7 @@ describe('#5298 — Git source excludes only cloned .git metadata', () => {
       execOverrides: { git: f.execGit },
     }), /metadata removal refused by fixture/);
     const stagingRoot = path.join(project, '.gsd', 'capabilities', '.staging');
-    assert.equal(
-      fs.existsSync(stagingRoot) ? fs.readdirSync(stagingRoot).length : 0,
-      0,
-      'shared staging must not start after metadata removal fails',
-    );
+    assert.equal(fs.existsSync(stagingRoot), false, 'shared staging must not start after metadata removal fails');
     assert.ok(f.clones.length > 0, 'fixture must observe the scratch clone');
     assert.ok(f.clones.every((dir) => !fs.existsSync(dir)), 'failure must clean every scratch clone');
   });
@@ -1002,7 +1020,7 @@ describe('#5298 — Git source excludes only cloned .git metadata', () => {
 
   test('git add stages regular files rather than an embedded repository', async (t) => {
     const { f, project } = await stagedFixture(t);
-    const add = realExecGit(['-c', 'core.excludesFile=', '-C', project, 'add', '-A'], { timeout: GIT_TIMEOUT_MS });
+    const add = realExecGit(['-C', project, 'add', '-A'], { timeout: GIT_TIMEOUT_MS });
     assert.equal(add.exitCode, 0, add.stderr);
     assert.doesNotMatch(add.stderr, /embedded git repository/i);
     const entries = splitLines(git(project, 'ls-files', '--stage')).filter(Boolean);
