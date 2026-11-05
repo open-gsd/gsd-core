@@ -646,8 +646,13 @@ export function observeHarnessForkFromHead(deps: {
       // `tmpPath` is assigned only once the exclusive create succeeded, so an
       // EEXIST never unlinks an entry this process did not create.
       const candidateTmp = `${target}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-      fs.writeFileSync(candidateTmp, content, { encoding: 'utf8', flag: 'wx' });
+      const tmpFd = fs.openSync(candidateTmp, 'wx');
       tmpPath = candidateTmp;
+      try {
+        fs.writeFileSync(tmpFd, content, 'utf8');
+      } finally {
+        fs.closeSync(tmpFd);
+      }
       retryRenameSync(tmpPath, target);
       tmpPath = null;
     } catch {

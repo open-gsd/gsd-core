@@ -3014,8 +3014,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // `tmpPath` is assigned only once the exclusive create succeeded, so an
       // EEXIST never unlinks an entry this process did not create.
       const candidateTmp = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-      nodeFs.writeFileSync(candidateTmp, JSON.stringify(payload), { flag: 'wx' });
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
       tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(payload));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
       tmpPath = null;
       writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
