@@ -305,6 +305,77 @@ describe('#4020 — run-tests temp root', () => {
       });
     });
 
+    describe('#5688 — parent follows the inheritance variable order (injected env)', () => {
+      // The seam takes an env object and a tmpdir function, so these rows are
+      // platform-independent: no process.env mutation, no reliance on which
+      // variables the host's os.tmpdir() reads.
+      function twoDirs(t) {
+        const base = createTempDir('gsd-5688-order-');
+        t.after(() => cleanup(base));
+        const a = path.join(base, 'a');
+        const b = path.join(base, 'b');
+        const fallback = path.join(base, 'fallback');
+        for (const d of [a, b, fallback]) fs.mkdirSync(d);
+        return { a, b, fallback };
+      }
+
+      test('#5688: TMPDIR (not a run root) wins over TEMP for the parent', (t) => {
+        const { a, b, fallback } = twoDirs(t);
+        const env = { TMPDIR: a, TEMP: b };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.equal(path.dirname(root), path.resolve(a));
+        for (const k of ['TMPDIR', 'TEMP', 'TMP']) assert.equal(env[k], root);
+      });
+
+      test('#5688: unset TMPDIR falls to TEMP for the parent', (t) => {
+        const { b, fallback } = twoDirs(t);
+        const env = { TEMP: b };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.equal(path.dirname(root), path.resolve(b));
+      });
+
+      test('#5688: only TMP set falls to TMP for the parent', (t) => {
+        const { a, fallback } = twoDirs(t);
+        const env = { TMP: a };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.equal(path.dirname(root), path.resolve(a));
+      });
+
+      test('#5688: empty TMPDIR is skipped like unset', (t) => {
+        const { b, fallback } = twoDirs(t);
+        const env = { TMPDIR: '', TEMP: b };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.equal(path.dirname(root), path.resolve(b));
+      });
+
+      test('#5688: all variables empty or unset use the tmpdir function', (t) => {
+        const { fallback } = twoDirs(t);
+        const env = { TMPDIR: '', TEMP: '' };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.equal(path.dirname(root), path.resolve(fallback));
+      });
+
+      test('#5688: TMPDIR run root is inherited, TEMP ignored', (t) => {
+        const { a, b, fallback } = twoDirs(t);
+        const inheritedRoot = path.join(a, 'gsd-test-run-order5688');
+        fs.mkdirSync(inheritedRoot);
+        const env = { TMPDIR: inheritedRoot, TEMP: b };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.equal(root, inheritedRoot);
+        for (const k of ['TMPDIR', 'TEMP', 'TMP']) assert.equal(env[k], inheritedRoot);
+      });
+
+      test('#5688: TMPDIR redirect wins over an inherited run root in TEMP', (t) => {
+        const { a, b, fallback } = twoDirs(t);
+        const staleRoot = path.join(b, 'gsd-test-run-stale5688');
+        fs.mkdirSync(staleRoot);
+        const env = { TMPDIR: a, TEMP: staleRoot };
+        const root = runner.setupRunTempRoot({ env, tmpdirFn: () => fallback });
+        assert.notEqual(root, staleRoot);
+        assert.equal(path.dirname(root), path.resolve(a));
+      });
+    });
+
     for (const [label, tmpdir] of [['empty', ''], ['unset', undefined]]) {
       test(`#5688: ${label} TMPDIR yields absolute root`, (t) => {
         const base = createTempDir('gsd-5688-def-');
