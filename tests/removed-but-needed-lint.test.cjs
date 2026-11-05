@@ -36,6 +36,7 @@ const {
   matchesByFullPath,
   parseNameStatusZ,
   parseCheckIgnoreZ,
+  getTrackedIgnoredFiles,
   scan,
 } = require(LINT_SCRIPT);
 const fc = require('fast-check');
@@ -983,6 +984,167 @@ describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
     git('commit', '-q', '-m', 'pr adds nested gitignore');
     const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md'], BASE_REF);
     assert.equal(result.size, 0);
+  });
+});
+
+function runLint(tmpDir, extraEnv = {}) {
+  const scriptCopy = copyScriptInto(tmpDir);
+  return runNode(
+    [scriptCopy],
+    { cwd: tmpDir, env: { ...process.env, GSD_REMOVED_BUT_NEEDED_BASE: 'main', ...extraEnv } },
+  );
+}
+
+describe('removed-but-needed lint: echoed paths are control-char-free', () => {
+  const NASTY_BASE = 'bad\nname\u001b[31m.md';
+
+  test('reason strings from both arms strip control characters from every path', () => {
+    const deleted = `gsd-core/workflows/${NASTY_BASE}`;
+    const live = findSurvivingReferences(
+      [deleted],
+      [{ file: 'gsd-core/ci\nte\u001b.md', content: `see ${NASTY_BASE}` }],
+      new Set([NASTY_BASE]),
+    );
+    const tests = findSurvivingTestReferences(
+      [deleted],
+      [{ file: 'tests/a.test.cjs', content: `fs.readFileSync('${deleted}')\n` }],
+      new Set([NASTY_BASE]),
+    );
+    for (const v of [...live, ...tests]) {
+      assert.ok(![...v.reason].some((ch) => ch.codePointAt(0) <= 0x1f || ch.codePointAt(0) === 0x7f), v.reason);
+    }
+    assert.equal(live.length, 1);
+    assert.equal(tests.length, 1);
+  });
+
+  test('end-to-end output carries no raw control characters from a hostile path', { skip: process.platform === 'win32' }, (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ctrl-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(
+      tmpDir,
+      [{ file: `gsd-core/workflows/${NASTY_BASE}`, content: '# gone\n' }],
+      [
+        { file: `gsd-core/workflows/${NASTY_BASE}`, content: null },
+        { file: 'gsd-core/ci\nte\u001b.md', content: `see ${NASTY_BASE}\n` },
+      ],
+    );
+    const result = runLint(tmpDir);
+    assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /deleted, but still referenced/);
+    assert.ok(!result.stderr.includes('\u001b'), 'raw ESC reached lint output');
+    assert.doesNotMatch(result.stderr, /bad\nname/);
+    assert.doesNotMatch(result.stderr, /ci\nte/);
+  });
+});
+
+describe('removed-but-needed lint: skip only when the base is unresolvable', () => {
+  test('an unresolvable base ref still skips with exit 0', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-nobase-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(tmpDir, [{ file: 'a.md', content: 'a\n' }], [{ file: 'b.md', content: 'b\n' }]);
+    const result = runLint(tmpDir, { GSD_REMOVED_BUT_NEEDED_BASE: 'no-such-branch' });
+    assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stdout, /skipping/);
+  });
+
+  test('a git failure on a RESOLVABLE base (output overflow) is a hard failure, not a skip', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-enobufs-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(
+      tmpDir,
+      [{ file: 'gsd-core/workflows/gone.md', content: '# gone\n' }],
+      [{ file: 'gsd-core/workflows/gone.md', content: null }],
+    );
+    const result = runLint(tmpDir, { GSD_REMOVED_BUT_NEEDED_GIT_MAX_BUFFER: '1' });
+    assert.notEqual(result.exitCode, 0, `expected non-zero exit: ${result.stdout}`);
+    assert.doesNotMatch(result.stdout, /skipping/);
+    assert.match(result.stderr, /lint-removed-but-needed/);
+  });
+});
+
+describe('removed-but-needed lint: renames cannot hide a deletion', () => {
+  const body = Array.from({ length: 40 }, (_, i) => `line ${i} of a copied workflow`).join('\n') + '\n';
+
+  test('getDeletedFiles reports D for a deletion paired with a near-copy under another name', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-norename-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(
+      tmpDir,
+      [{ file: 'gsd-core/workflows/gone.md', content: body }],
+      [
+        { file: 'gsd-core/workflows/gone.md', content: null },
+        { file: 'gsd-core/workflows/copy.md', content: body },
+      ],
+    );
+    assert.deepEqual(getDeletedFiles(tmpDir, BASE_REF), ['gsd-core/workflows/gone.md']);
+  });
+
+  test('end-to-end: the deleted file is still flagged when a copy was added', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-norename-e2e-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(
+      tmpDir,
+      [{ file: 'gsd-core/workflows/gone.md', content: body }],
+      [
+        { file: 'gsd-core/workflows/gone.md', content: null },
+        { file: 'gsd-core/workflows/copy.md', content: body },
+        { file: 'gsd-core/citer.md', content: 'see gone.md\n' },
+      ],
+    );
+    const result = runLint(tmpDir);
+    assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /gone\.md/);
+  });
+});
+
+describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)', () => {
+  test('getTrackedIgnoredFiles lists a force-added ignored file and ignores machine-local rules', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': '# a\n', 'src/ok.cts': 'x\n' });
+    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), 'src/\n');
+    assertRuleActive(tmpDir, 'src/ok.cts');
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), ['.gsd/x/a.md']);
+  });
+
+  test('getTrackedIgnoredFiles is empty for a clean repo', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-clean-'));
+    t.after(() => cleanup(tmpDir));
+    initIgnoreRepo(tmpDir, { 'src/ok.cts': 'x\n' });
+    assert.deepEqual(getTrackedIgnoredFiles(tmpDir), []);
+  });
+
+  test('getTrackedIgnoredFiles throws (hard failure) when git cannot answer', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-norepo-'));
+    t.after(() => cleanup(tmpDir));
+    assert.throws(() => getTrackedIgnoredFiles(tmpDir));
+  });
+
+  test('end-to-end: a force-added ignored file fails the lint and is named', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-e2e-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir, { '.gsd/x/a.md': '# a\n' });
+    fs.mkdirSync(path.join(tmpDir, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-core', 'unrelated.md'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'pr');
+    const result = runLint(tmpDir);
+    assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stderr, /\.gsd\/x\/a\.md/);
+    assert.match(result.stderr, /gitignored/);
+  });
+
+  test('end-to-end: a clean repo passes', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-e2e-clean-'));
+    t.after(() => cleanup(tmpDir));
+    const git = initIgnoreRepo(tmpDir, { 'src/ok.cts': 'x\n' });
+    fs.mkdirSync(path.join(tmpDir, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'gsd-core', 'unrelated.md'), 'x\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'pr');
+    const result = runLint(tmpDir);
+    assert.equal(result.exitCode, 0, `expected exit 0, got ${result.exitCode}: ${result.stderr}`);
+    assert.match(result.stdout, /ok lint-removed-but-needed/);
   });
 });
 
