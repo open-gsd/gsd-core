@@ -36,6 +36,8 @@ const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
+// In process, for the limits the rows below sit on either side of.
+const { checkBashCommand, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = require(HOOK_PATH);
 
 function runHook(payload) {
   const r = runHookSeam(HOOK_PATH, [], {
@@ -1028,6 +1030,67 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   });
   test('a read in front of 12000 nested "$( runs out of stack, as before #5267: allows', () => {
     assertAllowed(runHook(bash(`cat .env; echo "$(${'"$('.repeat(12000)}`)), '12000 "$(');
+  });
+
+  // Past MAX_READER_DEPTH nested spans the readers stop, and the span is
+  // closed by count, as before #5267; a stack overflow would do the same at a
+  // depth that depends on the runtime. Each row nests a `case` N spans deep,
+  // with a read after the innermost spans close. bash 5 closes the outermost
+  // span after the read, and only the grammar reading sees it there; paren
+  // counting closes every span one paren early, starting at the pattern's
+  // `)`, so the read is text inside the string. The pre-fix hook allows the
+  // row at every depth.
+  const nestedCase = (n) => `echo "$(${'$('.repeat(n - 1)}case x in y) :;; esac${')'.repeat(n - 1)}; cat .env)"`;
+  for (const n of [MAX_READER_DEPTH - 1, MAX_READER_DEPTH]) {
+    test(`a case ${n} spans deep is read by the grammar: blocks the read after it`, () => {
+      assertBlocked(runHook(bash(nestedCase(n))), `${n} deep`, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test(`a case ${MAX_READER_DEPTH + 1} spans deep is closed by count, as before #5267: allows`, () => {
+    assertAllowed(runHook(bash(nestedCase(MAX_READER_DEPTH + 1))), `${MAX_READER_DEPTH + 1} deep`);
+  });
+
+  // The size cap on the same scan: a read in a case arm is found up to
+  // MAX_COMMAND_LENGTH characters, and one character more is refused unread.
+  const atLength = (n) => {
+    const cmd = 'echo "$(case x in x) cat .env;; esac)" ';
+    return cmd + 'x'.repeat(n - cmd.length);
+  };
+  for (const n of [MAX_COMMAND_LENGTH - 1, MAX_COMMAND_LENGTH]) {
+    test(`a read in a case arm in a command of ${n} characters: blocks as secret-read`, () => {
+      const cmd = atLength(n);
+      assert.equal(cmd.length, n);
+      assertBlocked(runHook(bash(cmd)), `${n} characters`, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test(`a read in a case arm in a command of ${MAX_COMMAND_LENGTH + 1} characters: blocks as command-too-large`, () => {
+    const cmd = atLength(MAX_COMMAND_LENGTH + 1);
+    assert.equal(cmd.length, MAX_COMMAND_LENGTH + 1);
+    assertBlocked(runHook(bash(cmd)), `${MAX_COMMAND_LENGTH + 1} characters`, { code: 'command-too-large', tool: 'Bash' });
+  });
+
+  // A command that made a scan give up leaves nothing for the next one.
+  test('a scan that gave up leaves the readings as they were', () => {
+    const deep = `echo $(echo # )'\n) ${'"$('.repeat(9000)}`;
+    const byCount = 'echo "$(case x in y)"; cat .env';
+    const byGrammar = 'echo "$(case x in x) cat .env;; esac)"';
+    const byBodiesPass = 'echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"';
+    assert.equal(checkBashCommand(deep), null);
+    assert.deepEqual(checkBashCommand(byCount), { code: 'secret-read', hit: '.env' });
+    assert.equal(checkBashCommand(deep), null);
+    assert.deepEqual(checkBashCommand(byGrammar), { code: 'secret-read', hit: '.env' });
+    assert.equal(checkBashCommand(deep), null);
+    assert.deepEqual(checkBashCommand(byBodiesPass), { code: 'secret-read', hit: '.env' });
+  });
+
+  test('property: a nest paren counting never enters cannot cost its verdict', () => {
+    const OPEN = fc.constantFrom('"$(', '$(', '<(', '>(', '${', '$((', 'cat <<E$(', 'a=(', '`');
+    const nest = fc.array(fc.tuple(OPEN, fc.integer({ min: 1, max: 9000 })), { minLength: 1, maxLength: 4 });
+    fc.assert(fc.property(nest, (parts) => {
+      const text = parts.map(([open, n]) => open.repeat(n)).join('');
+      const cmd = `cat .env\necho $(echo # )'\n) ${text}`;
+      assert.deepEqual(checkBashCommand(cmd), { code: 'secret-read', hit: '.env' });
+    }), { seed: 5267, numRuns: 40 });
   });
 
   // Four shapes the readers once took quadratic time on. A hook that outlives
