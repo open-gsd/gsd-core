@@ -38,6 +38,7 @@ const {
   parseCheckIgnoreZ,
   getTrackedIgnoredFiles,
   ignoredByTrackedRules,
+  isolatedGitEnv,
   isSafeRepoPath,
   resolveBaseBranch,
   scan,
@@ -1221,23 +1222,63 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
     assert.deepEqual(getTrackedIgnoredFiles(tmpDir), []);
   });
 
-  test('ambient GIT_DIR / GIT_WORK_TREE cannot redirect the isolated evaluation', (t) => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-env-'));
-    const decoy = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-env-decoy-'));
-    t.after(() => { cleanup(tmpDir); cleanup(decoy); });
-    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
-    const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
-    process.env.GIT_DIR = path.join(tmpDir, '.git');
-    process.env.GIT_WORK_TREE = decoy;
+  test('isolatedGitEnv removes every variable that could redirect git', () => {
+    const keys = [
+      'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
+      'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_COUNT', 'GIT_TEMPLATE_DIR',
+    ];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) process.env[k] = '/somewhere';
     try {
-      assert.deepEqual([...ignoredByTrackedRules(tmpDir, ['.gsd/x/a.md', 'src/ok.cts'])], ['.gsd/x/a.md']);
+      const env = isolatedGitEnv();
+      for (const k of keys) assert.equal(k in env, false, `${k} must be removed`);
+      assert.equal(env.PATH, process.env.PATH, 'unrelated variables are kept');
     } finally {
       for (const [k, v] of Object.entries(saved)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
     }
-    assert.deepEqual(fs.readdirSync(decoy), [], 'decoy work tree untouched');
+  });
+
+  test('a GIT_DIR pointing at a decoy repo (info/exclude "src/") neither changes the result nor touches the decoy', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-env-'));
+    const decoyParent = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-env-decoy-'));
+    t.after(() => { cleanup(tmpDir); cleanup(decoyParent); });
+    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
+    // A clone, so the repo-reading git calls still find HEAD; its info/exclude is the bait.
+    const decoy = path.join(decoyParent, 'decoy');
+    gitOrThrow(['clone', '-q', tmpDir, decoy], { cwd: decoyParent });
+    fs.appendFileSync(path.join(decoy, '.git', 'info', 'exclude'), 'src/\n');
+    const snapshot = () => ['config', path.join('info', 'exclude')]
+      .map((f) => fs.readFileSync(path.join(decoy, '.git', f)).toString('hex'));
+    const before = snapshot();
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = path.join(decoy, '.git');
+    try {
+      assert.deepEqual([...ignoredByTrackedRules(tmpDir, ['.gsd/x/a.md', 'src/ok.cts'])], ['.gsd/x/a.md']);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+    }
+    assert.deepEqual(snapshot(), before, 'decoy repo config and info/exclude unchanged');
+  });
+
+  test('an ambient git template (GIT_TEMPLATE_DIR with info/exclude "src/") does not affect the result', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-tpl-'));
+    const tpl = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-trk-tpl-dir-'));
+    t.after(() => { cleanup(tmpDir); cleanup(tpl); });
+    initIgnoreRepo(tmpDir, { '.gsd/x/a.md': 'x\n' });
+    fs.mkdirSync(path.join(tpl, 'info'), { recursive: true });
+    fs.writeFileSync(path.join(tpl, 'info', 'exclude'), 'src/\n');
+    const saved = process.env.GIT_TEMPLATE_DIR;
+    process.env.GIT_TEMPLATE_DIR = tpl;
+    try {
+      assert.deepEqual([...ignoredByTrackedRules(tmpDir, ['.gsd/x/a.md', 'src/ok.cts'])], ['.gsd/x/a.md']);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_TEMPLATE_DIR;
+      else process.env.GIT_TEMPLATE_DIR = saved;
+    }
   });
 
   test('getTrackedIgnoredFiles is empty for a clean repo', (t) => {
