@@ -234,20 +234,15 @@ The cleanup tail (commit fixes -> remove worktree -> drop recovery sentinel) MUS
 ```bash
 # #2825: honor workflow.use_worktrees — the documented opt-out. When false,
 # edit/commit in the main checkout (wt=".", no temp branch, no sentinel, no
-# cleanup tail). Read the flag the same way the four sibling writer workflows
-# do. NOTE: this read parses .planning/config.json directly via `node` rather
-# than the gsd-tools CLI, because setup_worktree runs BEFORE the canonical
-# launcher preamble is sourced — invoking the CLI here would be undefined at
-# runtime and violates the runtime-launcher-parity preamble-ordering rule.
-# Once the preamble is sourced (later steps), the CLI is available.
-USE_WORKTREES=$(node -e '
-  try {
-    const fs = require("fs");
-    const p = (process.env.GSD_PROJECT_DIR || process.cwd()) + "/.planning/config.json";
-    const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
-    process.stdout.write(String((cfg.workflow && cfg.workflow.use_worktrees) ?? true));
-  } catch { process.stdout.write("true"); }
-')
+# cleanup tail). NOTE: setup_worktree runs BEFORE the canonical launcher
+# preamble is sourced, so the gsd-tools CLI is not available here (invoking it
+# would violate the runtime-launcher-parity preamble-ordering rule). The
+# orchestrator therefore resolves the flag through gsd-tools (`config-get`, so
+# the selected project's or workstream's config is read, with its inheritance,
+# never the root config by a literal path, #5861) and passes it as
+# `use_worktrees` in the <config> block. Absent or unrecognised: worktrees stay on.
+USE_WORKTREES="${use_worktrees:-true}"
+[ "$USE_WORKTREES" = "false" ] || USE_WORKTREES=true
 
 # Derive worktree path from padded_phase (parsed from config in next step,
 # but the shell snippet below is illustrative — adapt once config is parsed).
@@ -363,7 +358,7 @@ fi
 ```
 
 Concrete steps:
-1. Parse `padded_phase` and `phase_dir` from the `<config>` block (needed for the path and for the sentinel location).
+1. Parse `padded_phase`, `phase_dir` and `use_worktrees` from the `<config>` block (needed for the path, the sentinel location and the worktree opt-out).
 2. Resolve the current branch: `branch=$(git branch --show-current)`. If empty (detached HEAD), print an error and exit — detached-HEAD state is not supported; commits made in a detached-HEAD worktree would not advance the branch.
 3. **Recovery check (#2839, #2990):** If `${phase_dir}/.review-fix-recovery-pending.json` already exists, a prior run was interrupted. Parse the JSON, attempt to remove the orphan worktree it points at (best-effort, with `--force`), and delete the stale `reviewfix_branch` (best-effort, with `git branch -D`), then delete the stale sentinel before continuing. This makes a re-run of `/gsd:code-review --fix` self-healing.
 4. Create a unique worktree path **inside the repo**: `main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"` then `wt="$main_repo/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"` + `mkdir -p "$wt"`. The path lives under the same `.claude/worktrees/` dir the harness-managed executor worktrees use (already gitignored via `.claude/`, already in the session's permission scope), and the `$$`-PID + epoch suffix ensures concurrent runs for the same phase do not collide (#2647 — an absolute `/tmp` path landed outside the project tree and prompted on every read).
@@ -438,6 +433,7 @@ This cleanup is unconditional when a worktree was created — register it mental
 **1. Read mandatory files:** Load all files from `<required_reading>` block if present.
 
 **2. Parse config:** Extract from `<config>` block in prompt:
+- `use_worktrees`: `workflow.use_worktrees` as resolved by the orchestrator (`true`/`false`; read in setup_worktree)
 - `phase_dir`: Path to phase directory (e.g., `.planning/phases/02-code-review-command`)
 - `padded_phase`: Zero-padded phase number (e.g., "02")
 - `review_path`: Full path to REVIEW.md (e.g., `.planning/phases/02-code-review-command/02-REVIEW.md`)
@@ -671,9 +667,10 @@ _Iteration: {N}_
 
 **#2825 — honor `workflow.use_worktrees`.** Before creating a worktree, read the
 `workflow.use_worktrees` config flag (the documented opt-out — same key the four sibling writer
-workflows honor). `setup_worktree` reads it via `node` directly from `.planning/config.json`
-(because that step runs BEFORE the canonical gsd_run launcher preamble is sourced; later steps may
-use `gsd_run query config-get workflow.use_worktrees`). When it is `false`, do NOT create a worktree
+workflows honor). `setup_worktree` reads it from the `use_worktrees` value in the `<config>` block,
+which the orchestrator resolved for the selected project or workstream (#5861; the step runs BEFORE
+the canonical gsd_run launcher preamble is sourced, so it cannot query config itself; absent or
+unrecognised means worktrees stay on). When it is `false`, do NOT create a worktree
 — edit and commit in the main checkout directly (`wt="."`, no temp branch, no sentinel, no cleanup
 tail). A user who opted out of worktrees must
 never have one created. See the `setup_worktree` step for the gated bash.

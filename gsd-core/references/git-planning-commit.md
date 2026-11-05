@@ -9,8 +9,11 @@ Pass the message first, then file paths via `--files`. Both `commit` and `commit
 Always use this for `.planning/` files — it handles `commit_docs` and gitignore checks automatically:
 
 ```bash
-gsd_run query commit "docs({scope}): {description}" --files .planning/STATE.md .planning/ROADMAP.md
+DOCS=(); for f in "{state_path}" "{roadmap_path}"; do [ -f "$f" ] && DOCS+=("$f"); done
+[ ${#DOCS[@]} -eq 0 ] || gsd_run query commit "docs({scope}): {description}" --files "${DOCS[@]}"
 ```
+
+`{state_path}` and `{roadmap_path}` are the init fields of those names (the selected project's or workstream's files); never commit a root `.planning/<DOC>.md` literal, which names another project's file under a named project or workstream. Quote each path, and leave out a doc whose init field is null (absent file): an empty pathspec fails the commit, and a `--files` list with nothing after it stages all of `.planning/`.
 
 The CLI will return `skipped` (with reason) if `commit_docs` is `false`, `.planning/` is gitignored, or a per-phase `phase_commit_docs.<phase-id>` override resolves `false` for the phase being committed. No manual conditional checks needed.
 

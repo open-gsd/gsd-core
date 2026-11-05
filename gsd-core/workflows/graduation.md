@@ -43,7 +43,14 @@ GRADUATION_THRESHOLD=$(gsd_run query config-get features.graduation_threshold --
 Find LEARNINGS.md files from the last N completed phases (excluding the phase currently completing):
 
 ```bash
-find .planning/phases -name "*-LEARNINGS.md" | sort | tail -n "$GRADUATION_WINDOW"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1) # Read-loaded file: write the command's original argument string in place of $GSD_ARGS
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+find "$PLANNING_DIR/phases" -name "*-LEARNINGS.md" | sort | tail -n "$GRADUATION_WINDOW"
 ```
 
 For each file found:

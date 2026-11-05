@@ -166,9 +166,17 @@ Read project-level and prior phase context to avoid re-asking decided questions.
 
 **Step 1: Read project-level files**
 ```bash
-cat .planning/PROJECT.md 2>/dev/null || true
-cat .planning/REQUIREMENTS.md 2>/dev/null || true
-cat .planning/STATE.md 2>/dev/null || true
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PROJECT_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)
+cat "$PROJECT_PATH" 2>/dev/null || true
+REQUIREMENTS_PATH=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick requirements_path)
+cat "$REQUIREMENTS_PATH" 2>/dev/null || true
+STATE_PATH=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick state_path)
+cat "$STATE_PATH" 2>/dev/null || true
 ```
 
 Extract from these:
@@ -178,7 +186,14 @@ Extract from these:
 
 **Step 2: Read all prior CONTEXT.md files**
 ```bash
-(find .planning/phases -name "*-CONTEXT.md" 2>/dev/null || true) | sort
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+(find "$PLANNING_DIR/phases" -name "*-CONTEXT.md" 2>/dev/null || true) | sort
 ```
 
 For each CONTEXT.md where phase number < current phase:
@@ -612,7 +627,12 @@ Confirm: "Committed: docs(${padded_phase}): capture phase context (assumptions m
 Update STATE.md with session info:
 
 ```bash
-gsd_run query state.record-session \
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query state.record-session ${GSD_WS:+--ws=${GSD_WS##* }} \
   --stopped-at "Phase ${PHASE} context gathered (assumptions mode)" \
   --resume-file "${phase_dir}/${padded_phase}-CONTEXT.md"
 ```
@@ -620,7 +640,13 @@ gsd_run query state.record-session \
 Commit STATE.md:
 
 ```bash
-gsd_run query commit "docs(state): record phase ${PHASE} context session" --files .planning/STATE.md
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+STATE_FILE=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick state_path)
+[ -z "$STATE_FILE" ] || gsd_run query commit "docs(state): record phase ${PHASE} context session" --files "$STATE_FILE"
 ```
 </step>
 

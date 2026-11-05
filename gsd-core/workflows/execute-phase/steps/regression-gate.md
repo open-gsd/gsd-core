@@ -7,12 +7,21 @@ Run prior phases' test suites to catch cross-phase regressions BEFORE verificati
 
 **Step 1: Discover prior phases' test files**
 ```bash
-# Find all VERIFICATION.md files from prior phases in current milestone
-PRIOR_VERIFICATIONS=$(find .planning/phases/ -name "*-VERIFICATION.md" ! -path "*${PHASE_NUMBER}*" 2>/dev/null)
 # gsd-handoff:begin regression-files-reset
 _GSD_HANDOFF="$( { git rev-parse --absolute-git-dir 2>/dev/null || echo "${TMPDIR:-/tmp}/gsd-$(pwd | cksum | cut -d' ' -f1)"; } )/gsd-handoff"; mkdir -p "$_GSD_HANDOFF"
 rm -f "$_GSD_HANDOFF/regression-files"  # a list left by an earlier run must never reach this gate (#4915)
 # gsd-handoff:end regression-files-reset
+# Prior phases' VERIFICATION.md files under this scope's phases/ (the parent of init's `phase_dir`), minus those whose
+# path below phases/ contains ${PHASE_NUMBER}: the root project's rule. The test never sees the checkout path (#5861).
+CURRENT_PHASE_DIR="{phase_dir}"
+if [ ! -d "$CURRENT_PHASE_DIR" ]; then
+  echo "ERROR: regression gate: phase directory not resolved ('$CURRENT_PHASE_DIR'); substitute init's phase_dir." >&2
+  exit 1
+fi
+PHASES_DIR=$(dirname "$CURRENT_PHASE_DIR")
+PRIOR_VERIFICATIONS=$(find "$PHASES_DIR" -name "*-VERIFICATION.md" 2>/dev/null | while IFS= read -r f; do
+  case "${f#"$PHASES_DIR"/}" in (*"${PHASE_NUMBER}"*) ;; (*) printf '%s\n' "$f" ;; esac
+done)
 ```
 
 **Step 2: Extract test file lists from prior verifications**

@@ -54,7 +54,7 @@ INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}"
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `config_path`, `response_language`.
+Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `roadmap_path`, `requirements_path`, `config_path`, `response_language`. The `{phase_dir}`, `{state_path}`, `{roadmap_path}` and `{requirements_path}` placeholders below are these values: they point at the selected project or workstream, never at the root `.planning/` when another scope is active.
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
@@ -64,8 +64,8 @@ If `.planning/` missing: error.
 <step name="identify_plan">
 ```bash
 # Use plans/summaries from INIT JSON, or list files
-(ls .planning/phases/XX-name/*-PLAN.md 2>/dev/null || true) | sort
-(ls .planning/phases/XX-name/*-SUMMARY.md 2>/dev/null || true) | sort
+(ls "{phase_dir}"/*-PLAN.md 2>/dev/null || true) | sort
+(ls "{phase_dir}"/*-SUMMARY.md 2>/dev/null || true) | sort
 ```
 
 Find first PLAN without matching SUMMARY. Decimal phases supported (`01.1-hotfix/`).
@@ -95,13 +95,12 @@ PLAN_START_EPOCH=$(date +%s)
 
 <step name="parse_segments">
 ```bash
-# Count tasks — match <task tag at any indentation level
-TASK_COUNT=$(grep -cE '^\s*<task[[:space:]>]' .planning/phases/XX-name/{phase}-{plan}-PLAN.md 2>/dev/null || echo "0")
+TASK_COUNT=$(grep -cE '^\s*<task[[:space:]>]' "{phase_dir}/{phase}-{plan}-PLAN.md" 2>/dev/null || echo "0")
 INLINE_THRESHOLD=$(gsd_run query config-get workflow.inline_plan_threshold --raw 2>/dev/null || echo "2")
 USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 HUMAN_VERIFY_MODE=$(gsd_run query config-get workflow.human_verify_mode --default end-of-phase --raw 2>/dev/null || echo "end-of-phase")
-grep -n "type=\"checkpoint" .planning/phases/XX-name/{phase}-{plan}-PLAN.md
+grep -n "type=\"checkpoint" "{phase_dir}/{phase}-{plan}-PLAN.md"
 ```
 
 **Primary routing: task count threshold (#1979)**
@@ -204,7 +203,7 @@ Pattern B only (verify-only checkpoints). Skip for A/C.
 
 <step name="load_prompt">
 ```bash
-cat .planning/phases/XX-name/{phase}-{plan}-PLAN.md
+cat "{phase_dir}/{phase}-{plan}-PLAN.md"
 ```
 This IS the execution instructions. Follow exactly. If plan references CONTEXT.md: honor user's vision throughout.
 
@@ -403,7 +402,7 @@ fi
 
 <step name="generate_user_setup">
 ```bash
-grep -A 50 "^user_setup:" .planning/phases/XX-name/{phase}-{plan}-PLAN.md | head -50
+grep -A 50 "^user_setup:" "{phase_dir}/{phase}-{plan}-PLAN.md" | head -50
 ```
 
 If user_setup exists: create `{phase}-USER-SETUP.md` using the template at `~/.claude/gsd-core/templates/user-setup.md` (or its `~/.claude/gsd-core/templates/user-setup.compact.md` variant — resolve per `~/.claude/gsd-core/references/compact-content-gate.md` §"Streams 1b and 4"). Per service: env vars table, account setup checklist, dashboard config, local dev notes, verification commands. Status "Incomplete". Set `USER_SETUP_CREATED=true`. If empty/missing: skip.
@@ -415,7 +414,7 @@ emit narrative output between the Write tool call and the commit tool call.
 Truncation at this boundary is a known failure mode (see #2070 rescue logic in
 execute-phase.md step 5.5).
 
-Create `{phase}-{plan}-SUMMARY.md` at `.planning/phases/XX-name/`. Use the template at `~/.claude/gsd-core/templates/summary.md` (or `summary.compact.md` — same `compact-content-gate.md` resolution as the USER-SETUP template above).
+Create `{phase}-{plan}-SUMMARY.md` in `{phase_dir}/`. Use the template at `~/.claude/gsd-core/templates/summary.md` (or `summary.compact.md` — same `compact-content-gate.md` resolution as the USER-SETUP template above).
 
 **Frontmatter:** phase, plan, subsystem, tags | requires/provides/affects | tech-stack.added/patterns | key-files.created/modified | key-decisions | requirements-completed (**MUST** copy `requirements` array from PLAN.md frontmatter verbatim) | duration ($DURATION), completed ($PLAN_END_TIME date).
 
@@ -438,22 +437,20 @@ Next: more plans → "Ready for {next-plan}" | last → "Phase complete, ready f
 handles STATE.md/ROADMAP.md updates centrally after merging worktrees to avoid
 merge conflicts).
 
-Update STATE.md using gsd_run query (or legacy gsd-tools) state mutations:
+Update STATE.md:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 # Auto-detect parallel mode: .git is a file in worktrees, a directory in main repo
 IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
-
-# Skip in parallel mode — orchestrator handles STATE.md centrally
 if [ "$IS_WORKTREE" != "true" ]; then
-  # Advance plan counter (handles last-plan edge case)
-  gsd_run query state.advance-plan
-
-  # Recalculate progress bar from disk state
-  gsd_run query state.update-progress
-
-  # Record execution metrics
-  gsd_run query state.record-metric \
+  gsd_run query state.advance-plan ${GSD_WS:+--ws=${GSD_WS##* }}  # handles the last-plan edge case
+  gsd_run query state.update-progress ${GSD_WS:+--ws=${GSD_WS##* }}
+  gsd_run query state.record-metric ${GSD_WS:+--ws=${GSD_WS##* }} \
     --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
     --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
 fi
@@ -464,21 +461,31 @@ fi
 From SUMMARY: Extract decisions and add to STATE.md:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 # Add each decision from SUMMARY key-decisions
 # Prefer file inputs for shell-safe text (preserves `$`, `*`, etc. exactly)
-gsd_run query state.add-decision \
+gsd_run query state.add-decision ${GSD_WS:+--ws=${GSD_WS##* }} \
   --phase "${PHASE}" --summary-file "${DECISION_TEXT_FILE}" --rationale-file "${RATIONALE_FILE}"
 
 # Add blockers if any found
-gsd_run query state.add-blocker --text-file "${BLOCKER_TEXT_FILE}"
+gsd_run query state.add-blocker ${GSD_WS:+--ws=${GSD_WS##* }} --text-file "${BLOCKER_TEXT_FILE}"
 ```
 </step>
 
 <step name="update_session_continuity">
-Update session info using gsd_run query (or legacy gsd-tools):
+Update session info:
 
 ```bash
-gsd_run query state.record-session \
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query state.record-session ${GSD_WS:+--ws=${GSD_WS##* }} \
   --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" \
   --resume-file "None"
 ```
@@ -498,13 +505,16 @@ across siblings; the orchestrator owns the post-merge sync centrally
 (see execute-phase.md §5.7, single-writer contract from #1486 / dcb50396).
 
 ```bash
-# Auto-detect worktree mode: .git is a file in worktrees, a directory in main repo.
-# This mirrors the use_worktrees config flag for the executing handler.
-IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")  # mirrors use_worktrees for this handler
 
 if [ "$IS_WORKTREE" != "true" ]; then
   # use_worktrees: false → this handler is the sole post-plan sync point (#2661)
-  PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+  PROGRESS=$(gsd_run query roadmap.update-plan-progress ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 fi
 ```
 Counts PLAN vs SUMMARY files on disk. Updates progress table row with correct count and status (`In Progress` or `Complete` with date).
@@ -518,10 +528,15 @@ Extract requirement IDs from the plan's frontmatter (e.g., `requirements: [AUTH-
 **Shared-ID gate (#2388):** a requirement ID declared by more than one plan in this phase must not read `Complete` until every plan declaring it has finished (produced a `*-SUMMARY.md`) — otherwise the first plan to finish flips it `Complete` while its sibling plans are still running, before phase verification ever gets a chance to catch a real gap. Compute the ready subset first, then mark only those:
 
 ```bash
-READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS})
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+READY=$(gsd_run query requirements.ready-ids ${GSD_WS:+--ws=${GSD_WS##* }} "${PLAN_PATH}" ${REQ_IDS})
 READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
 if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
-  gsd_run query requirements.mark-complete ${READY_IDS}
+  gsd_run query requirements.mark-complete ${GSD_WS:+--ws=${GSD_WS##* }} ${READY_IDS}
 fi
 ```
 
@@ -541,11 +556,9 @@ Task code already committed per-task. Commit plan metadata:
 IS_WORKTREE=$([ -f .git ] && echo "true" || echo "false")
 
 # In parallel mode: exclude STATE.md and ROADMAP.md (orchestrator commits these)
-if [ "$IS_WORKTREE" = "true" ]; then
-  gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/REQUIREMENTS.md
-else
-  gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md
-fi
+if [ "$IS_WORKTREE" = "true" ]; then DOCS=("{requirements_path}"); else DOCS=("{state_path}" "{roadmap_path}" "{requirements_path}"); fi
+FILES=(); for f in "${DOCS[@]}"; do [ -f "$f" ] && FILES+=("$f"); done  # absent docs (null init paths) are left out
+gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "{phase_dir}/{phase}-{plan}-SUMMARY.md" "${FILES[@]}"
 ```
 </step>
 
@@ -559,7 +572,7 @@ If .planning/codebase/ doesn't exist: skip.
 # in the window (#3926, #4459). The resolver widens to the phase-directory range, and says so
 # in its `status`/`reason`, when the phase has no recorded task commits.
 # Exit 69 (UNAVAILABLE) is "could not look", not "no files changed": say so rather than print nothing.
-SCOPE_JSON=$(gsd_run check evaluation-scope --phase-dir ".planning/phases/XX-name" --raw 2>/dev/null) && SCOPE_RC=0 || SCOPE_RC=$?
+SCOPE_JSON=$(gsd_run check evaluation-scope --phase-dir "{phase_dir}" --raw 2>/dev/null) && SCOPE_RC=0 || SCOPE_RC=$?
 if [ "$SCOPE_RC" -ne 0 ]; then echo "Warning: evaluation scope unavailable (exit ${SCOPE_RC}); no changed-file list, so the map update below is skipped, not 'nothing changed'." >&2; else printf '%s' "$SCOPE_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).changedFiles.join('\n'))}catch{}})" || true; fi
 ```
 

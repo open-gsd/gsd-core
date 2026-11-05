@@ -299,6 +299,22 @@ describe('CR-AGENT: code review agent frontmatter', () => {
     );
   });
 
+  // #5861: the fixer no longer reads a root .planning/config.json itself; the orchestrator resolves
+  // workflow.use_worktrees for the selected scope and hands it over in every spawn's <config> block.
+  test('#5861 code-review-fix.md passes use_worktrees to every gsd-code-fixer spawn', () => {
+    const wf = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review-fix.md'), 'utf-8');
+    assert.match(wf, /USE_WORKTREES=\$\(gsd_run query config-get workflow\.use_worktrees \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} --raw/,
+      'USE_WORKTREES must be resolved from the selected scope\'s config');
+    const spawns = wf.split('Agent(subagent_type="gsd-code-fixer"').slice(1);
+    assert.equal(spawns.length, 2, 'expected the initial and the iteration fixer spawn');
+    for (const [i, spawn] of spawns.entries()) {
+      const config = spawn.slice(spawn.indexOf('<config>'), spawn.indexOf('</config>'));
+      assert.match(config, /^use_worktrees: \$\{USE_WORKTREES\}$/m, `fixer spawn ${i + 1} must pass use_worktrees in its <config> block`);
+    }
+    const agent = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-code-fixer.md'), 'utf-8');
+    assert.doesNotMatch(agent, /directly from `\.planning\/config\.json`/, 'the fixer must not claim to read the root config itself');
+  });
+
   test('#2825 gsd-code-fixer.md forbids rm -rf on a possible reparse point (Windows junction safety)', () => {
     const content = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-code-fixer.md'), 'utf-8');
     assert.ok(

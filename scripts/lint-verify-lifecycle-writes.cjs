@@ -20,8 +20,12 @@
  *   L2 (raw write, fail-closed) — in post-fingerprint text (`verify-work.md`
  *   and `verify-work/**`), a `query commit … --files <p...>`, `git add
  *   <p...>`, or `query frontmatter.set <p>` whose pathspec is not PROVABLY
- *   inert (a verification report path, or a `.planning/`-root shared
- *   planning doc) is flagged — including an unresolvable variable pathspec,
+ *   inert (a verification report path, a `.planning/`-root shared planning
+ *   doc, or an init `{roadmap_path}`/`{state_path}`/`{requirements_path}`
+ *   placeholder — the same shared doc in the selected project's or
+ *   workstream's planning directory, #5861; `{project_path}` is NOT inert,
+ *   see SCOPED_SHARED_DOC_PLACEHOLDER_RE) is flagged —
+ *   including an unresolvable variable pathspec,
  *   which fails closed rather than being treated as safe. EVERY pathspec
  *   token following `--files`/`add`, not just the first, is checked
  *   (#5105 S11).
@@ -73,6 +77,15 @@ const { assertWithinAllowlist } = require('./lib/allowlist-ratchet.cjs');
 const { isSharedPlanningDoc, isVerificationReportPath } = require('../gsd-core/bin/lib/verification.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
+
+// #5861: workflows name a shared planning doc of the SELECTED project or workstream through the init
+// field that resolves it, never a root `.planning/<DOC>.md` literal. These three fields always resolve to
+// a file directly under the selected scope's own planning directory, which the runtime itself classifies
+// as a shared planning doc of that scope (verification.cts `sharedRootsFor`, #5095), so the placeholder is
+// inert by construction. `{project_path}` is NOT one of them: under a workstream it resolves to the
+// project-level PROJECT.md outside the workstream's directory. Exact-match only: any other placeholder or
+// variable still fails closed.
+const SCOPED_SHARED_DOC_PLACEHOLDER_RE = /^\{(?:roadmap|state|requirements)_path\}$/;
 const ALLOWLIST_PATH = path.join(__dirname, 'lint-verify-lifecycle-writes.allowlist.json');
 
 // #5105 S12: `verify:post` may appear bare or quoted, and `loop render-hooks`
@@ -170,7 +183,7 @@ function scanForRawWrites(file, lines) {
   const violations = [];
   const flag = (line, text, pathspecRaw) => {
     const p = stripQuotes(pathspecRaw);
-    if (isVerificationReportPath(p) || isSharedPlanningDoc(p)) return;
+    if (isVerificationReportPath(p) || isSharedPlanningDoc(p) || SCOPED_SHARED_DOC_PLACEHOLDER_RE.test(p)) return;
     violations.push({ rule: 'L2', file, line, target: p, text: text.trim() });
   };
   const collectPathTokens = (tokens, startIdx) => {

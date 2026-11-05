@@ -250,7 +250,8 @@ describe('#3651 workflow — agent_skills array-form write', () => {
       'the comma-joined string write prescription must be gone — the resolver never splits it'
     );
     assert.ok(
-      /config-set agent_skills\.<slug> '\["[^"]{0,80}"(?:,\s*"[^"]{0,80}"){0,20}\]'/.test(src),
+      // #5861: the write carries the --ws token so it lands in the config the values were read from.
+      /config-set \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} agent_skills\.<slug> '\["[^"]{0,80}"(?:,\s*"[^"]{0,80}"){0,20}\]'/.test(src),
       'workflow must show the JSON array write form (config-set agent_skills.<slug> \'["…","…"]\')'
     );
     assert.ok(

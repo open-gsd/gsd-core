@@ -83,13 +83,18 @@ a column count — this replaces the prior inline `awk NF-2` arithmetic that was
 the root cause of #2133.
 
 ```bash
-# Detect whether STATE.md has a Quick Tasks Completed table
-if grep -q "Quick Tasks Completed" .planning/STATE.md 2>/dev/null; then
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+# Detect whether STATE.md (the selected project's or workstream's) has a Quick Tasks Completed table
+if grep -q "Quick Tasks Completed" "$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick state_path)" 2>/dev/null; then
   # #3730: bring a legacy pre-registry table onto the canonical schema BEFORE
   # appending — silent no-op when already canonical, so this runs harmlessly
   # on every fast task and migrates exactly once, on the first.
-  gsd_run quick-tasks-migrate || true
-  gsd_run quick-tasks-append --task "$TASK" || echo "⚠ fast.md log_to_state: could not append Quick Tasks row (see message above); continuing."
+  gsd_run quick-tasks-migrate ${GSD_WS:+--ws=${GSD_WS##* }} || true
+  gsd_run quick-tasks-append ${GSD_WS:+--ws=${GSD_WS##* }} --task "$TASK" || echo "⚠ fast.md log_to_state: could not append Quick Tasks row (see message above); continuing."
 fi
 ```
 </step>

@@ -79,9 +79,12 @@ Requirements with no cross-phase wiring MUST be flagged in the Requirements Inte
 <verification_process>
 
 ## Step 1: Build Export/Import Map
-For each phase, extract what it provides and consumes from SUMMARYs (grep `Key Files|Exports|
-Provides` sections across `.planning/phases/*/*-SUMMARY.md`; use `nullglob`/`NULL_GLOB` so an
-unmatched glob doesn't abort the loop). Build a provides/consumes map, e.g.:
+For each phase, extract what it provides and consumes from SUMMARYs: read the full phase directory
+paths the auditor passed under `Phases:` one per line (`while IFS= read -r phase_dir`, quoted, never
+word-split; none passed: this scope's `"$PLANNING_DIR"/phases/*/`, `PLANNING_DIR` being the directory of
+`gsd_run query config-path --raw`; never a root `.planning/` glob), grep `Key Files|Exports|Provides`
+sections across `"${phase_dir%/}"/*-SUMMARY.md`; use `nullglob`/`NULL_GLOB` so an unmatched glob doesn't
+abort the loop. Build a provides/consumes map, e.g.:
 ```
 Phase 1 (Auth): provides getCurrentUser, AuthProvider, useAuth, /api/auth/*; consumes nothing
 Phase 2 (API): provides /api/users/*, /api/data/*, UserType, DataType; consumes getCurrentUser

@@ -492,7 +492,12 @@ Report the PR URL and suggest: "Review the diff at {url}/files"
 Update STATE.md to reflect the shipping action. Write the activity line only, with its description; do not write `Status`. At ship time the Current Position block already describes the next phase, and `Status` feeds the frontmatter `status` field, so a free-text value such as "Phase N shipped" does not belong there (#5165).
 
 ```bash
-gsd_run query state.update "Last Activity" "$(date +%Y-%m-%d) -- Phase ${PHASE_NUMBER} shipped as PR #${PR_NUMBER}"
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query state.update ${GSD_WS:+--ws=${GSD_WS##* }} "Last Activity" "$(date +%Y-%m-%d) -- Phase ${PHASE_NUMBER} shipped as PR #${PR_NUMBER}"
 ```
 
 If `commit_docs` is true, commit the ship-note AND push it onto the PR branch so
@@ -502,7 +507,13 @@ merge (#2138). The `[ci skip]` trailer suppresses the redundant pipeline the pus
 would otherwise trigger (GitHub honors `[ci skip]` / `[skip ci]`):
 
 ```bash
-gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER} [ci skip]" --files .planning/STATE.md
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+STATE_FILE=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick state_path)
+[ -z "$STATE_FILE" ] || gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER} [ci skip]" --files "$STATE_FILE"
 SHIP_NOTE_SHA=$(git rev-parse HEAD)
 git push origin ${CURRENT_BRANCH} 2>&1 || echo "⚠ track_shipping: ship-note push failed — it is local-only; rerun: git push origin ${CURRENT_BRANCH}"
 

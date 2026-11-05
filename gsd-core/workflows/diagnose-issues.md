@@ -282,7 +282,7 @@ Update status in frontmatter to "diagnosed".
 
 Commit the updated UAT.md:
 ```bash
-gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
+gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files "{phase_dir}/{phase_num}-UAT.md"
 ```
 </step>
 

@@ -149,7 +149,13 @@ If user selects "Proceed anyway": set `closeout_type=override_closeout`; note in
 <config-check>
 
 ```bash
-cat .planning/config.json 2>/dev/null || true
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+CONFIG_PATH=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw)
+cat "$CONFIG_PATH" 2>/dev/null || true
 ```
 
 </config-check>
@@ -213,11 +219,18 @@ Milestone Stats:
 Extract one-liners from SUMMARY.md files using summary-extract:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 # #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
 
 # For each phase in milestone, extract one-liner
-for summary in .planning/phases/*-*/*-SUMMARY.md; do
+for summary in "$PLANNING_DIR"/phases/*-*/*-SUMMARY.md; do
   [ -e "$summary" ] || continue
   gsd_run query summary-extract "$summary" --fields one_liner --pick one_liner
 done
@@ -278,7 +291,12 @@ If "Yes": set `ARCHIVE_QUICK_FLAG="--archive-quick"`. If "Skip" (or `.planning/q
 **Delegate archival to `gsd_run query milestone.complete`:**
 
 ```bash
-ARCHIVE=$(gsd_run query milestone.complete "v[X.Y]" --name "[Milestone Name]" --confirm $ARCHIVE_QUICK_FLAG)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+ARCHIVE=$(gsd_run query milestone.complete ${GSD_WS:+--ws=${GSD_WS##* }} "v[X.Y]" --name "[Milestone Name]" --confirm $ARCHIVE_QUICK_FLAG)
 ```
 
 `--confirm` is required (#3726): the archive is irreversible (ROADMAP/REQUIREMENTS archived, phase
@@ -308,7 +326,12 @@ Verify after `--archive-quick` was passed: `✅ Quick tasks archived to .plannin
 If the user explicitly wants to keep phase directories in place as raw execution history, invoke `milestone complete` with `--no-archive-phases`:
 
 ```bash
-gsd_run query milestone complete v[X.Y] --no-archive-phases --confirm
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+gsd_run query milestone complete ${GSD_WS:+--ws=${GSD_WS##* }} v[X.Y] --no-archive-phases --confirm
 ```
 
 (When `PER_REPO_TAGGING` is `true`, this form takes the same `--release-map` argument.)

@@ -87,8 +87,8 @@ still apply.
 **Using `gsd-tools query` (preferred):**
 
 ```bash
-# Commit with automatic commit_docs + gitignore checks:
-gsd_run query commit "docs: update state" --files .planning/STATE.md
+# Commit with automatic commit_docs + gitignore checks ({state_path}: the init field, scoped to the selected project or workstream; null when STATE.md is absent):
+[ ! -f "{state_path}" ] || gsd_run query commit "docs: update state" --files "{state_path}"
 
 # Load config via state load (returns JSON):
 INIT=$(gsd_run query state.load)
@@ -108,7 +108,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 **Commit via CLI (handles checks automatically):**
 
 ```bash
-gsd_run query commit "docs: update state" --files .planning/STATE.md
+[ ! -f "{state_path}" ] || gsd_run query commit "docs: update state" --files "{state_path}"
 ```
 
 The CLI checks `commit_docs` config and gitignore status internally — no manual conditionals needed.

@@ -122,7 +122,14 @@ point the user at producing COVERAGE.md before re-running verification.
 **First: Check for active UAT sessions**
 
 ```bash
-(find .planning/phases -name "*-UAT.md" -type f 2>/dev/null || true)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PLANNING_DIR=$(gsd_run query config-path ${GSD_WS:+--ws=${GSD_WS##* }} --raw) && PLANNING_DIR=${PLANNING_DIR%/config.json}
+: "${PLANNING_DIR:?planning directory not resolved for this scope}"
+(find "$PLANNING_DIR/phases" -name "*-UAT.md" -type f 2>/dev/null || true)
 ```
 
 **If active sessions exist AND no $ARGUMENTS provided:**
@@ -369,7 +376,7 @@ skipped: 0
 [none yet]
 ```
 
-Write to `.planning/phases/XX-name/{phase_num}-UAT.md`
+Write to `{phase_dir}/{phase_num}-UAT.md` (init's scoped `phase_dir`, the tree `check_active_session` searches; this path is the `$uat_path` the later steps render and commit)
 
 Proceed to `present_test`.
 </step>
@@ -560,7 +567,7 @@ Choice [K]:
 (TEXT_MODE: present this as a plain-text numbered list per the text-mode convention and wait for the typed choice.)
 
 **If the user chooses [P]:**
-1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing `### Phase 999.{n}` heading in `.planning/ROADMAP.md` — scan the headings rather than counting them, since numbering may be non-contiguous. If `.planning/ROADMAP.md` does not exist, create it containing only a `## Backlog` section and use `1`.
+1. Compute the next backlog number: `{backlog_number}` = the smallest positive integer not already used by an existing `### Phase 999.{n}` heading in `{roadmap_path}` (init's, the same file step 3 commits) — scan the headings rather than counting them, since numbering may be non-contiguous. If `{roadmap_path}` does not exist, create it containing only a `## Backlog` section and use `1`.
 2. Append to that `## Backlog` section one backlog entry per deferred follow-up (each with its own `999.{backlog_number}` heading, incrementing per entry), with `test`/`idea`/`deferred_at` verbatim from the section's YAML and `{idea}` flattened to a single line (newlines → spaces — a multi-line response would corrupt the single-line entry; this mirrors `next.md`'s use of a slug for the same reason):
 
 ```markdown
@@ -575,7 +582,7 @@ Choice [K]:
 
 3. Commit the deferral record:
 ```bash
-gsd_run query commit "docs: defer Phase {phase_num} UAT follow-ups to backlog" --files .planning/ROADMAP.md
+gsd_run query commit "docs: defer Phase {phase_num} UAT follow-ups to backlog" --files "{roadmap_path}"
 ```
 
 **If the user chooses [K]:** continue to the summary unchanged — the deferred items remain in the UAT file's `## Deferred Follow-Ups` section.

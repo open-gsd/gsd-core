@@ -108,7 +108,8 @@ Set `is_re_verification = false`, proceed with Step 1.
 ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null
 ls "$PHASE_DIR"/*-SUMMARY.md 2>/dev/null
 gsd_run query roadmap.get-phase "$PHASE_NUM"
-grep -E "^| $PHASE_NUM" .planning/REQUIREMENTS.md 2>/dev/null
+# REQUIREMENTS_PATH: from <required_reading>
+grep -E "^| $PHASE_NUM" "$REQUIREMENTS_PATH" 2>/dev/null
 ```
 
 Extract phase goal from ROADMAP.md — this is the outcome to verify, not the tasks.
@@ -370,7 +371,7 @@ For each requirement ID from plans:
 **6c. Check for orphaned requirements:**
 
 ```bash
-grep -E "Phase $PHASE_NUM" .planning/REQUIREMENTS.md 2>/dev/null
+grep -E "Phase $PHASE_NUM" "$REQUIREMENTS_PATH" 2>/dev/null
 ```
 
 If REQUIREMENTS.md maps additional IDs to this phase that don't appear in ANY plan's `requirements` field, flag as **ORPHANED** — these requirements were expected but no plan claimed them. ORPHANED requirements MUST appear in the verification report.

@@ -323,14 +323,14 @@ Agent({
 
 **Applies only when MODE=merge.**
 
-Load existing `.planning/ROADMAP.md`, `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, all `CONTEXT.md` files under `.planning/phases/`.
+Load the existing `{roadmap_path}`, `{project_path}` and `{requirements_path}` and every `CONTEXT.md` under the `phases/` directory beside `{roadmap_path}`.
 
 The synthesizer has already hard-blocked on any LOCKED-in-ingest vs LOCKED-in-existing contradiction; if we reach this step, no such blockers remain.
 
 Plan the merge:
-- **New requirements** from synthesized `.planning/intel/requirements.md` that do not overlap existing REQUIREMENTS.md entries → append to REQUIREMENTS.md
-- **New decisions** from synthesized `.planning/intel/decisions.md` that do not overlap existing CONTEXT.md `<decisions>` blocks → write to a new phase's CONTEXT.md or append to the next milestone's requirements
-- **New scope** → derive phase additions following the `new-milestone.md` pattern; append phases to `.planning/ROADMAP.md`
+- **New requirements** from synthesized `{intel_dir}/requirements.md` that do not overlap existing `{requirements_path}` entries → append to `{requirements_path}`
+- **New decisions** from synthesized `{intel_dir}/decisions.md` that do not overlap existing CONTEXT.md `<decisions>` blocks → write to a new phase's CONTEXT.md or append to the next milestone's requirements
+- **New scope** → derive phase additions following the `new-milestone.md` pattern; append phases to `{roadmap_path}`
 
 Preview the merge diff to the user and gate via approve-revise-abort before writing.
 
@@ -343,12 +343,12 @@ Commit the ingest results:
 ```bash
 gsd_run commit \
   "docs: ingest {N} docs from {SCAN_PATH} (#2387)" --files \
-  .planning/PROJECT.md \
-  .planning/REQUIREMENTS.md \
-  .planning/ROADMAP.md \
-  .planning/STATE.md \
-  .planning/intel/ \
-  .planning/INGEST-CONFLICTS.md
+  "{project_path}" \
+  "{requirements_path}" \
+  "{roadmap_path}" \
+  "{state_path}" \
+  "{intel_dir}/" \
+  "{conflicts_path}"
 ```
 
 (For merge mode, substitute the actual set of modified files.)
