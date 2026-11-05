@@ -4717,7 +4717,16 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     ['v2.0 (v2.0 \u{2705})', true],
     ['v2.0 (v1.9 \u{2705}))', true],
     ['v2.0 ((v1.9 \u{2705})', true],
-    ['v2.0 (V1.9 \u{2705})', true],
+    ['v2.0 (V1.9 \u{2705})', false],
+    // The heading's own version and the group's are compared normalized (lowercase, dotted
+    // segments, suffix stripped); equal or prefix-related, missing, or after the group = closed.
+    ['v2 (v2 \u{2705})', true],
+    ['v2.0-beta (v2.0 \u{2705})', true],
+    ['V2.0 (v2.0 \u{2705})', true],
+    ['v2.0.1 (v2.0 \u{2705})', true],
+    ['(v1.9 \u{2705}) v2.0', true],
+    ['Core (v1.9 \u{2705})', true],
+    ['v3.0 (after v2.4 \u{2705})', false],
     ['v2.0 (a (v1.9 \u{2705}))', true],
     ['v2.0 (v1.9 \u{2705})', false],
     ['v2.1 Next (after v2.0 prep \u{2705})', false],
@@ -4757,9 +4766,9 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     }), { numRuns: 1000 });
   });
 
-  test('property: same-version, unbalanced, nested and wrong-case parentheticals read exactly as origin/next', () => {
+  test('property: same-version, unbalanced and nested parentheticals read exactly as origin/next', () => {
     const SHAPE = fc.constantFrom(
-      'v2.0 (v2.0 \u{2705})', 'v2.0 (v1.9 \u{2705}))', 'v2.0 ((v1.9 \u{2705})', 'v2.0 (V1.9 \u{2705})',
+      'v2.0 (v2.0 \u{2705})', 'v2.0 (v1.9 \u{2705}))', 'v2.0 ((v1.9 \u{2705})',
       'v2.0 (a (v1.9 \u{2705}))', 'v2.0 (v2.0 \u{1f5c4}\u{fe0f})', 'v2.0 )v1.9 \u{2705}(',
     );
     const WORDS = fc.array(fc.constantFrom('Next', 'Payment', 'Beta', 'MVP', 'WIP', 'Shipped'), { maxLength: 3 }).map((t) => t.join(' '));
@@ -4780,11 +4789,25 @@ describe('roadmap-parser: isClosedMilestoneHeading', () => {
     assert.strictEqual(isClosedMilestoneHeading(`${'('.repeat(60000)} v1.0`), false);
   });
 
-  test('property: an other-version parenthetical check mark alone never closes, anywhere in the heading', () => {
-    const NEUTRAL = fc.array(fc.constantFrom('v2.1', 'Next', 'Payment', 'Beta', 'MVP'), { maxLength: 3 }).map((t) => t.join(' '));
-    const PAREN = fc.constantFrom('(after v2.0 prep \u{2705})', '(\u{2705} replaces v1.0)', '(v3 \u{1f5c4} done)');
-    fc.assert(fc.property(NEUTRAL, PAREN, NEUTRAL, (a, p, b) => {
-      assert.strictEqual(isClosedMilestoneHeading(`${a} ${p} ${b}`), false);
-    }), { numRuns: 200 });
+  test('property: the exemption compares independently generated normalized own and group versions', () => {
+    const VERSION = fc.record({
+      segments: fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 1, maxLength: 3 }),
+      suffix: fc.constantFrom('', '-beta', '-rc.1'),
+      upper: fc.boolean(),
+    });
+    const render = (v) => `${v.upper ? 'V' : 'v'}${v.segments.join('.')}${v.suffix}`;
+    const related = (a, b) => {
+      const n = Math.min(a.segments.length, b.segments.length);
+      return a.segments.slice(0, n).every((x, i) => x === b.segments[i]);
+    };
+    const SHAPE = fc.constantFrom('before', 'after', 'none');
+    fc.assert(fc.property(VERSION, VERSION, SHAPE, (own, group, shape) => {
+      const paren = `(after ${render(group)} prep \u{2705})`;
+      const heading = shape === 'before' ? `${render(own)} Next ${paren}`
+        : shape === 'after' ? `${paren} ${render(own)}`
+          : `Core ${paren}`;
+      const expected = shape === 'before' ? related(own, group) : true;
+      assert.strictEqual(isClosedMilestoneHeading(heading), expected, JSON.stringify(heading));
+    }), { numRuns: 1000 });
   });
 });
