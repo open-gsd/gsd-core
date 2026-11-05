@@ -12,40 +12,20 @@
  * SUMMARY.md files (`git add -f`) to satisfy an unconditional
  * "SUMMARY.md created AND committed" criterion.
  *
- * The prompt-template and prose tests are source-text-is-the-product
- * assertions: the workflow markdown IS what the orchestrator runtime loads, and
- * the contract checked there is the documented dispatch text, per the issue's
- * acceptance list. The compose tests (#5531) are behavioural: they extract the
- * dispatch fragment's bash blocks and spawn bash through runHook, one fresh
- * shell per block, so no shell variable crosses from block 1 to the
- * read-and-check block.
+ * These are source-text-is-the-product assertions: the workflow markdown IS
+ * what the orchestrator runtime loads, and the contract checked there is the
+ * documented dispatch text, per the issue's acceptance list. The #5531 compose
+ * tests start no shell: they check the fragment's bash blocks as text, so they
+ * prove the blocks' shape, not what a shell does with them.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const fc = require('./helpers/fast-check-setup.cjs');
-const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
-const { extractFencedBashBlockContaining } = require('./qa/tdd-walk.cjs');
+const { readFileNormalized } = require('./helpers.cjs');
+const { DISPATCH_STEP_PATH, extractFencedBashBlockContaining } = require('./qa/tdd-walk.cjs');
 
-const FRAGMENT = path.join(
-  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md',
-);
 // allow-test-rule: source-text-is-the-product the dispatch fragment is runtime-loaded workflow text (#3637)
-const content = fs.readFileSync(FRAGMENT, 'utf8');
-
-const CREATE = 'PROMPT_FILE=$(mktemp';
-const READ = 'EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE")';
-
-/** A temp dir removed when the test `t` ends. */
-function tempDir(t) {
-  const dir = createTempDir('gsd-5531-');
-  t.after(() => cleanup(dir));
-  return dir;
-}
+const content = readFileNormalized(DISPATCH_STEP_PATH);
 
 /** The prompt template: the `text` fence the orchestrator writes to PROMPT_FILE. */
 function promptBody() {
@@ -54,58 +34,6 @@ function promptBody() {
   const close = content.indexOf('\n```', open + 8);
   assert.ok(close !== -1, 'the text fence must close');
   return content.slice(open + 8, close + 1);
-}
-
-/** The template as the orchestrator leaves it: ${AGENT_SKILLS} replaced, the other two compose-time placeholders resolved. */
-function composed(agentSkills) {
-  return promptBody()
-    .replace('${AGENT_SKILLS}', () => agentSkills)
-    .replace('Inline the actual contents', 'Inlined the contents')
-    .replace('${TDD_APPLICABLE', 'TDD_APPLICABLE');
-}
-
-const PHASE = '7';
-const PLAN = '3';
-const STEM = `gsd-executor-prompt-${PHASE}-${PLAN}`;
-
-/** `block` as its own bash command with this plan's identifiers substituted, as the orchestrator does; run in `cwd`. */
-function runBlock(root, block, { strict = false, tail = '', cwd = path.dirname(root) } = {}) {
-  const script = `${root}.sh`;
-  const q = root.replaceAll('\\', '/').replaceAll("'", "'\\''");
-  const text = block.replaceAll('{phase_number}', PHASE).replaceAll('{plan_number}', PLAN);
-  fs.mkdirSync(path.dirname(root), { recursive: true });
-  fs.writeFileSync(script, `${strict ? 'set -euo pipefail\n' : ''}ORCH_ROOT='${q}'\n${text}\n${tail}`);
-  return runHook(script, [], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, cwd });
-}
-
-/**
- * Run the read-and-check block alone in a fresh shell with ORCH_ROOT=`root`
- * (no PROMPT_FILE handed over: the block finds the file by glob) and print
- * $EXECUTOR_PROMPT. `text` is written where block 1 would have created the
- * file; `asDir` makes that path a directory instead.
- */
-function readAndCheck(root, { text, asDir = false, strict = false } = {}) {
-  const file = path.join(root, '.claude', `${STEM}-abcdef`);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (asDir) fs.mkdirSync(file);
-  else if (text !== undefined) fs.writeFileSync(file, text);
-  const r = runBlock(root, extractFencedBashBlockContaining(content, READ), { strict, tail: 'printf "%s" "$EXECUTOR_PROMPT"' });
-  return { ...r, gone: !fs.existsSync(file) };
-}
-
-/**
- * Write `agentSkills` into the template as the file tool would, then read it
- * back through the real block. The three compose-time placeholders are
- * `${AGENT_SKILLS}` (replaced by the embed), `Inline the actual contents` and
- * `${TDD_APPLICABLE` (both resolved by composed()).
- */
-function composeFromFile(agentSkills, { strict = false } = {}) {
-  const dir = createTempDir('gsd-5531-');
-  try {
-    return readAndCheck(path.join(dir, 'orch'), { text: composed(agentSkills), strict });
-  } finally {
-    cleanup(dir);
-  }
 }
 
 test('#3637: the executor prompt carries the required-reading contract with the explicit plan path', () => {
@@ -194,130 +122,132 @@ test('#3637: the persona rides the prompt (${AGENT_SKILLS}), same as the harness
   assert.match(promptBody(), /\$\{AGENT_SKILLS\}/, 'the gsd-executor persona variable must be spliced into the prompt');
 });
 
-test('#5531: apostrophe-bearing spliced content reaches the prompt unchanged through the prompt file', (t) => {
-  const dir = tempDir(t);
-  const sentinel = path.join(dir, 'pwned');
-  const persona = `<persona>\nthe user's vision; it doesn't '$(touch ${sentinel})' \`touch ${sentinel}\` "q" \\ end\nGSD_EXECUTOR_PROMPT_EOF\n</success_criteria>\ntouch ${sentinel}\n</persona>`;
-  const r = composeFromFile(persona, { strict: true });
-  assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
-  assert.equal(r.exitCode, 0, r.stderr);
-  assert.equal(r.stdout, composed(persona).replace(/\n$/, ''), 'the prompt must equal the composed template exactly');
-  assert.ok(!fs.existsSync(sentinel), 'spliced text must not be executed');
-  assert.ok(r.gone, 'the prompt file must be removed after it is read');
-});
-
-test('#5531: block 1 creates the prompt file under ORCH_ROOT/.claude', (t) => {
-  const root = path.join(tempDir(t), 'orch');
-  const block1 = `gsd_run() { echo false; }\n${extractFencedBashBlockContaining(content, CREATE)}`;
-  // The path is judged in bash, never compared against a Node path (Git Bash prints /c/... on windows-latest).
-  const ok = runBlock(root, block1, { tail: `case "$PROMPT_FILE" in "$ORCH_ROOT"/.claude/${STEM}-??????) ;; *) exit 3 ;; esac; [ -f "$PROMPT_FILE" ] || exit 4` });
-  assert.equal(ok.exitCode, 0, ok.stderr);
-  assert.match(ok.stdout, new RegExp(`^PROMPT_FILE=.*/\\.claude/${STEM}-.{6}$`, 'm'));
-  // A regular file where ORCH_ROOT/.claude must be: mkdir fails and FATAL names the cause.
-  const blocked = path.join(path.dirname(root), 'blocked');
-  fs.mkdirSync(blocked);
-  fs.writeFileSync(path.join(blocked, '.claude'), '');
-  const bad = runBlock(blocked, block1);
-  assert.equal(bad.exitCode, 1);
-  assert.match(bad.stderr, /FATAL/);
-});
-
-test('#5531: block 1 removes a leftover file of the same plan and keeps another plan\'s', (t) => {
-  const root = path.join(tempDir(t), 'orch');
-  const dir = path.join(root, '.claude');
-  fs.mkdirSync(dir, { recursive: true });
-  const mine = path.join(dir, `${STEM}-abcdef`);
-  const other = path.join(dir, `gsd-executor-prompt-${PHASE}-9-abcdef`);
-  fs.writeFileSync(mine, 'old');
-  fs.writeFileSync(other, 'other');
-  const r = runBlock(root, `gsd_run() { echo false; }\n${extractFencedBashBlockContaining(content, CREATE)}`);
-  assert.equal(r.exitCode, 0, r.stderr);
-  assert.ok(!fs.existsSync(mine), 'the leftover of this plan must be removed');
-  assert.ok(fs.existsSync(other), "another plan's file must stay");
-  assert.equal(fs.readdirSync(dir).filter((n) => n.startsWith(`${STEM}-`)).length, 1, 'only the new file of this plan remains');
-});
-
-test('#5531: block 2 finds the prompt file by glob in a fresh shell and fails closed under set -euo pipefail', (t) => {
-  const dir = tempDir(t);
-  for (const [name, args] of [
-    ['no file', {}], ['empty', { text: '' }], ['newline-only', { text: '\n' }], ['a directory at the path', { asDir: true }],
-  ]) {
-    const r = readAndCheck(path.join(dir, name.replaceAll(' ', '_')), { ...args, strict: true });
-    assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
-    assert.equal(r.exitCode, 1, `${name} must halt, not dispatch: ${r.stderr}`);
-    assert.match(r.stderr, /FATAL/, `${name}: halt must be loud`);
-    assert.equal(r.stdout, '', `${name}: no prompt printed`);
-  }
-  const ok = readAndCheck(path.join(dir, 'plain'), { text: composed('x'), strict: true });
-  assert.equal(ok.exitCode, 0, ok.stderr);
-  assert.equal(ok.stdout, composed('x').replace(/\n$/, ''));
-  assert.ok(ok.gone, 'the prompt file must be removed after it is read');
-});
-
-test('#5531: ORCH_ROOT text is data: quotes, backticks, $(...), spaces and $ in the path never run', (t) => {
-  const dir = tempDir(t);
-  for (const name of ["o'brien", 'bt`touch S`x', 'cs$(touch S)x', 'sp ace', 'dollar$HOME', 'dq"x']) {
-    const r = readAndCheck(path.join(dir, name), { text: composed('x'), strict: true });
-    assert.equal(r.exitCode, 0, `${name}: ${r.stderr}`);
-    assert.equal(r.stdout, composed('x').replace(/\n$/, ''), name);
-    assert.ok(r.gone, `${name}: file removed`);
-  }
-  assert.ok(!fs.existsSync(path.join(dir, 'S')), 'ORCH_ROOT text must not be executed');
-});
-
-test('#5531: the read-and-check block removes the prompt file before its first halt', (t) => {
-  const block = extractFencedBashBlockContaining(content, READ);
-  assert.ok(block.indexOf('rm -f -- "$PROMPT_FILE"') !== -1 && block.indexOf('rm -f -- "$PROMPT_FILE"') < block.indexOf('exit 1'), 'the prompt file must be removed before the first halt');
-  const dir = tempDir(t);
-  const r = readAndCheck(dir, { text: '' });
-  assert.equal(r.exitCode, 1);
-  assert.ok(r.gone, 'an empty prompt file must be removed before the halt');
-});
-
 test('#5531: the substitution instruction covers every bash block and every plan identifier it uses', () => {
   assert.match(content, /replace `\{phase_dir\}`, `\{plan_file\}`, `\{plan_number\}`, `\{phase_number\}` and `\{plan_padded\}`/, 'every bash block gets the identifiers substituted');
 });
 
-test('#5531: the dispatch prose states what the fix does', () => {
-  assert.ok(!content.includes('no shell variable crosses between them'), 'the blocks share a shell: ORCH_ROOT, EXPECTED_BASE, WAVE_WORKTREE_MANIFEST and EXECUTOR_PROMPT cross');
+test('#5531: the dispatch prose names what crosses between blocks', () => {
   assert.match(content, /`\$ORCH_ROOT`[^\n]*`\$EXECUTOR_PROMPT`/, 'the prose names what does cross between blocks');
-  assert.ok(content.includes('halt before the read-and-check block'), 'cleanup covers every halt before the read-and-check block');
-  assert.ok(content.includes('CRLF'), 'the prose says what a CRLF or BOM in the written file does');
-  assert.ok(content.includes('trailing newlines and NUL bytes'), 'the prose names the bytes `$(...)` drops');
-  assert.ok(content.includes("{plan_id} is this plan's `id` field"), 'the Step 2 comment keeps the {plan_id} clause on one line');
-  assert.ok(content.includes('`quick` for `{phase_number}`'), 'a caller without a phase passes the literal quick');
 });
 
-test('#5531: an un-substituted ${AGENT_SKILLS} or ${TDD_APPLICABLE marker halts', (t) => {
-  const dir = tempDir(t);
-  for (const [name, text, marker] of [
-    ['AGENT_SKILLS', composed('x') + '\n${AGENT_SKILLS}', '${AGENT_SKILLS}'],
-    ['TDD_APPLICABLE', composed('x') + '\n${TDD_APPLICABLE', '${TDD_APPLICABLE'],
-  ]) {
-    const r = readAndCheck(path.join(dir, name), { text });
-    assert.equal(r.exitCode, 1, `${name}: ${r.stderr}`);
-    assert.ok(r.stderr.includes(marker), `${name}: the message must name the marker that fired: ${r.stderr}`);
-    assert.ok(r.gone, `${name}: the prompt file must be removed`);
+test('#5531: the dispatch prose covers the cleanup of every halt before the read-and-check block', () => {
+  assert.ok(content.includes('halt before the read-and-check block'), 'cleanup covers every halt before the read-and-check block');
+});
+
+test('#5531: the dispatch prose says what the read-back does to CRLF, a BOM, NUL bytes and trailing newlines', () => {
+  assert.ok(content.includes('a CRLF or BOM'), 'the prose says what a CRLF or BOM in the written file does');
+  assert.ok(content.includes('trailing newlines and NUL bytes'), 'the prose names the bytes `$(...)` drops');
+});
+
+test('#5531: the Step 2 comment keeps the {plan_id} clause on one line', () => {
+  assert.ok(content.includes("{plan_id} is this plan's `id` field"), 'the Step 2 comment keeps the {plan_id} clause on one line');
+});
+
+// ─── #5531: the compose blocks, checked as text (no shell is spawned) ───
+
+const READ = 'EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE")';
+const CREATE = 'PROMPT_FILE=$(mktemp';
+const createBlock = () => extractFencedBashBlockContaining(content, CREATE);
+const readBlock = () => extractFencedBashBlockContaining(content, READ);
+
+/** True when every `$VAR` use on its line sits inside an unescaped pair of double quotes. */
+function everyUseQuoted(block, variable) {
+  const use = new RegExp(`\\$\\{?${variable}\\}?`, 'g');
+  return block.split('\n').filter((l) => !l.trimStart().startsWith('#')).every((line) => {
+    const bare = line.replace(/\\./g, '__');
+    return [...bare.matchAll(use)].every((m) => (bare.slice(0, m.index).match(/"/g) ?? []).length % 2 === 1);
+  });
+}
+
+test('#5531: the template reaches the shell only as file bytes: no heredoc, eval or shell assignment carries its text', () => {
+  for (const marker of ['<objective>', '<mcp_tools>', '[gsd:dispatch']) {
+    assert.throws(() => extractFencedBashBlockContaining(content, marker), /no fenced bash block contains/, `${marker} must sit in no bash block`);
+  }
+  for (const block of [createBlock(), readBlock()]) {
+    const code = block.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n');
+    assert.ok(!/<<|\beval\b|\bsource\b/.test(code), 'no heredoc, eval or source in a compose block');
+  }
+  assert.equal(readBlock().match(/EXECUTOR_PROMPT=/g).length, 1, 'one EXECUTOR_PROMPT assignment');
+  assert.ok(content.includes('with your file-writing tool and never through the shell'), 'the template is written with the file tool');
+});
+
+const PATTERN = "'gsd-executor-prompt-{phase_number}-{plan_number}-??????'";
+const FIND = 'find "${ORCH_ROOT}/.claude" -maxdepth 1 -name ' + PATTERN;
+
+test('#5531: block 1 text: creates the prompt file under ORCH_ROOT/.claude and halts loudly when it cannot', () => {
+  const block = createBlock();
+  const at = (s) => block.indexOf(s);
+  const mkdir = 'mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL';
+  const rm = FIND + ' -exec rm -f -- {} + || { echo "FATAL';
+  const mktemp = 'PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/gsd-executor-prompt-{phase_number}-{plan_number}-XXXXXX") || { echo "FATAL';
+  const printed = 'echo "PROMPT_FILE=$PROMPT_FILE"';
+  for (const s of [mkdir, rm, mktemp, printed]) assert.ok(at(s) !== -1, `block 1 has: ${s}`);
+  assert.ok(at(mkdir) < at(rm) && at(rm) < at(mktemp) && at(mktemp) < at(printed), 'mkdir, leftover removal, mktemp, print: in that order');
+  assert.ok(/\{ echo "FATAL[^\n]*>&2; exit 1; \}/.test(block.slice(at(mkdir), at(rm))), 'a failed mkdir exits 1 with FATAL on stderr');
+  assert.ok(/-exec rm -f -- \{\} \+ \|\| \{ echo "FATAL[^\n]*>&2; exit 1; \}/.test(block), 'a failed leftover removal exits 1 with FATAL on stderr');
+  assert.ok(/-XXXXXX"\) \|\| \{ echo "FATAL[^\n]*>&2; exit 1; \}/.test(block), 'a failed mktemp exits 1 with FATAL on stderr');
+});
+
+test("#5531: one plan-keyed name pattern owns the leftover removal and the lookup, and no shell glob is left in either block", () => {
+  const re = /-name '(gsd-executor-prompt-\{phase_number\}-\{plan_number\}-\?{6})'/g;
+  const removal = [...createBlock().matchAll(re)].map((m) => m[1]);
+  const lookups = [...readBlock().matchAll(re)].map((m) => m[1]);
+  assert.equal(removal.length, 1, 'block 1 removes leftovers by the pattern');
+  assert.equal(lookups.length, 2, 'block 2 looks the file up and removes every match on a halt by the same pattern');
+  assert.equal(new Set([...removal, ...lookups]).size, 1, 'one pattern text in all three places');
+  const match = (plan, name) => new RegExp(`^${removal[0].replace('{phase_number}', '7').replace('{plan_number}', plan).replace('?'.repeat(6), '.{6}')}$`).test(name);
+  assert.ok(match('3', 'gsd-executor-prompt-7-3-abcdef'), 'this plan leftover matches');
+  assert.ok(!match('3', 'gsd-executor-prompt-7-9-abcdef'), "another plan's file stays");
+  assert.ok(!match('3', 'gsd-executor-prompt-7-30-abcdef'), 'plan 30 is not plan 3');
+  for (const block of [createBlock(), readBlock()]) {
+    const code = block.split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n').replace(/'[^']*'|"[^"]*"/g, '""').replaceAll('$?', '');
+    assert.ok(!code.includes('?'), 'a ? outside quotes is a shell glob, which some shells treat as fatal when it matches nothing');
+    assert.ok(!/\bfor\b[^\n]*\bin\b/.test(code), 'no for-list takes the place of the lookup');
   }
 });
 
-test('#5531: well-formed compose passes the guard under set -euo pipefail', () => {
-  const r = composeFromFile("the user's 'vision'", { strict: true });
-  assert.equal(r.exitCode, 0, r.stderr);
-  assert.ok(r.stdout.includes("the user's 'vision'"));
+test('#5531: block 2 text: finds the file by the pattern, halts on no match or more than one match, and removes every match first', () => {
+  const block = readBlock();
+  const at = (s) => block.indexOf(s);
+  const lookup = 'PROMPT_FILE=$(' + FIND + ' 2>/dev/null || :)\ncase "$PROMPT_FILE" in\n';
+  const arm = "  ''|*'\n'*)\n    " + FIND + ' -exec rm -f -- {} + 2>/dev/null || :\n    echo "FATAL';
+  assert.ok(at(lookup) !== -1, 'the lookup assigns PROMPT_FILE from find and switches on it');
+  assert.ok(at(arm) > at(lookup), 'the empty and the newline-containing value (two matches) share the halting arm');
+  assert.ok(/exit 1 ;;\nesac\n/.test(block.slice(at(arm))), 'the arm exits 1 before the read');
+  assert.ok(at('esac') < at(READ), 'the halt comes before the read');
+  assert.equal(block.match(/PROMPT_FILE=/g).length, 1, 'PROMPT_FILE is assigned once, by the lookup');
 });
 
-test('#5531: any printable embed (apostrophes, $(...), backticks, quotes, delimiter-like and indented lines) reaches the prompt unchanged', () => {
-  const line = fc.oneof(
-    fc.string({ unit: 'grapheme-ascii', minLength: 1, maxLength: 40 }),
-    fc.constantFrom("it's", '$(touch S)', '`touch S`', '"q"', 'GSD_EXECUTOR_PROMPT_EOF', '  GSD_EXECUTOR_PROMPT_EOF', '</success_criteria>'),
-  );
-  fc.assert(
-    fc.property(fc.array(line, { minLength: 1, maxLength: 6 }), (lines) => {
-      const embed = lines.join('\n');
-      const r = composeFromFile(embed, { strict: true });
-      return r.exitCode === 0 && r.stdout.includes(embed);
-    }),
-    { numRuns: 10 },
-  );
+test('#5531: block 2 text: reads the file in its own command and removes it before the read status and every check can halt', () => {
+  const block = readBlock();
+  const at = (s) => block.indexOf(s);
+  const order = [
+    'PROMPT_FILE=$(find',
+    'case "$PROMPT_FILE" in',
+    'if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE"); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi',
+    'rm -f -- "$PROMPT_FILE" || :',
+    '[ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file',
+    '[ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty',
+    "grep -q '<required_reading>'",
+  ];
+  order.reduce((prev, s) => {
+    assert.ok(at(s) > prev, `in order: ${s}`);
+    return at(s);
+  }, -1);
+  assert.ok(block.trimEnd().endsWith('fi'), 'the block ends with an if, so a passing compose returns 0 under set -e');
+});
+
+test('#5531: block 2 text: five guards halt on a truncated template or an un-substituted marker, and the template carries each marker', () => {
+  const needles = [...readBlock().matchAll(/printf '%s' "\$EXECUTOR_PROMPT" \| grep -q '([^']*)'/g)].map((m) => m[1]);
+  assert.deepEqual(needles, ['<required_reading>', 'skipped_gitignored', 'Inline the actual contents', '\\${AGENT_SKILLS}', '\\${TDD_APPLICABLE']);
+  const body = promptBody();
+  for (const marker of ['<required_reading>', 'skipped_gitignored', 'Inline the actual contents', '${AGENT_SKILLS}', '${TDD_APPLICABLE']) {
+    assert.ok(body.includes(marker), `the template carries ${marker}, so a skipped compose step leaves it for a guard to find`);
+  }
+});
+
+test('#5531: ORCH_ROOT and PROMPT_FILE are only ever expanded inside double quotes, so path text is data', () => {
+  for (const block of [createBlock(), readBlock()]) {
+    for (const variable of ['ORCH_ROOT', 'PROMPT_FILE']) assert.ok(everyUseQuoted(block, variable), `${variable} is quoted on every use`);
+  }
 });
