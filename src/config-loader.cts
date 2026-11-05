@@ -16,14 +16,18 @@
  *   - ./unusable-input.cjs   (warnUnusableInput, UNUSABLE_REASON — #3760)
  *   - ./config-schema.cjs    (VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS)
  *   - ./planning-workspace.cjs (planningDir, planningRoot)
- *   - ./shell-command-projection.cjs (execGit, platformWriteSync, platformReadSync)
+ *   - ./shell-command-projection.cjs (execGit, platformWriteSync)
+ *   - ./capability-ledger.cjs (readSmallRegularFile — bounded regular-file read, #5759)
  *   - ./core-utils.cjs       (detectSubRepos)
  *   - ./model-catalog.cjs    (KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+import { execGit, platformWriteSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLedgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = capabilityLedgerMod;
 // #4717: runtime-identity fill — env rung + per-install marker rung.
 import { readInstallRuntimeMarker } from './runtime-slash.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -599,9 +603,30 @@ interface ConfigResolution {
 }
 
 /**
+ * Largest config.json the loader will read (#5759). Real configs are a few KB; 1 MiB
+ * is generous enough that no legitimate config is refused. A larger file is reported
+ * unusable (EFBIG) rather than read whole.
+ */
+const CONFIG_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Read a config.json as a bounded regular file (#5759): the single reader shared by the
+ * loader and the resolve-model omit check, so the two cannot diverge. Opens non-blocking
+ * and fstats the fd, so a FIFO or device with no writer is refused instead of blocking
+ * open(2) forever. Returns the UTF-8 text, or null when the file is absent (ENOENT);
+ * throws a LedgerIOError carrying `.code` (ENXIO FIFO/device, EISDIR directory, EFBIG
+ * over CONFIG_MAX_BYTES, or the errno) for every other condition.
+ */
+function readConfigFileBounded(filePath: string): string | null {
+  return readSmallRegularFile(filePath, CONFIG_MAX_BYTES);
+}
+
+/**
  * Read + JSON-parse a config file, keeping *absent* distinguishable from
- * *unusable*. `platformReadSync` returns null on ENOENT and re-throws every
- * other errno, which is the seam that makes this separable at all.
+ * *unusable*. `readConfigFileBounded` returns null on ENOENT and throws an error
+ * carrying `.code` for every other condition — a FIFO/device (ENXIO), a directory
+ * (EISDIR), an oversized file (EFBIG) or an errno — which is the seam that makes
+ * this separable at all.
  */
 function _readConfigFile(filePath: string):
   | { kind: 'ok'; data: Record<string, unknown> }
@@ -609,7 +634,7 @@ function _readConfigFile(filePath: string):
   | { kind: 'fault'; fault: ConfigFault } {
   let raw: string | null;
   try {
-    raw = platformReadSync(filePath);
+    raw = readConfigFileBounded(filePath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? 'EUNKNOWN';
     return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNREADABLE, path: filePath, code } };
@@ -1214,6 +1239,8 @@ export = {
   loadConfig,
   loadConfigResolved,
   CONFIG_REASON,
+  CONFIG_MAX_BYTES,
+  readConfigFileBounded,
   _warnedUnusableConfig,
   isGitIgnored,
   CONFIG_DEFAULTS,
