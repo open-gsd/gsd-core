@@ -117,8 +117,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(dim11(), /only\s+the\s+user\s+closes/i);
     const pass = steps().find((l) => /\bpasses only\b/.test(l));
     assert.ok(pass, 'a step must state the one way a question passes');
-    assert.ok(pass.includes('`D-NN`') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions>: ${pass}`);
-    assert.match(pass, /\banswers\b/);
+    assert.ok(pass.includes('every `D-NN` it cites') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions> for every citation: ${pass}`);
+    assert.match(pass, /\bone answers\b/, 'one real citation must not carry a second that is missing, and one must answer');
     assert.match(pass, /not added during this planning run/);
   });
 
@@ -135,7 +135,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
       'no D-NN': /no `D-NN`/,
       'a D-NN CONTEXT.md lacks': /does not contain/,
       'a D-NN outside <decisions>': /outside `<decisions>`/,
-      'a D-NN that decides something else': /decides something else/,
+      'a D-NN that decides something else': /decide something else/,
       'a plan': /\bon a plan\b/,
       'a disposition': /"planning-time disposition"/,
       'the research itself': /research itself/,
@@ -148,10 +148,10 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     const props = [...dim11().matchAll(/required_property:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
     for (const prop of props) {
-      assert.match(prop, /D-NN/);
+      assert.match(prop, /cites only D-NNs/);
       assert.match(prop, /CONTEXT\.md <decisions>/);
       assert.match(prop, /recorded before this run/, 'the binding property must carry the not-added-this-run condition');
-      assert.match(prop, /\banswers\b/);
+      assert.match(prop, /one of which answers it/);
     }
   });
 
@@ -198,10 +198,10 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     const criteria = span(checker(), '<success_criteria>', /<\/success_criteria>/);
     const item = criteria.match(/- \[ \] Research resolution checked[^\n]*\n[^\n]*/);
     assert.ok(item, 'success_criteria must list the research resolution check');
-    assert.match(item[0], /`D-NN`/);
+    assert.match(item[0], /cites only `D-NN`s/);
     assert.match(item[0], /CONTEXT\.md `<decisions>`/);
     assert.match(item[0], /any heading/);
-    assert.match(item[0], /\banswers\b/, 'the checklist must carry the body\'s relevance condition');
+    assert.match(item[0], /one answering it/, 'the checklist must carry the body\'s relevance condition');
   });
 });
 
@@ -264,7 +264,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     const guide = span(researchTemplate().slice(guidelinesAt), '\n**Open Questions:**\n', /\n\n/);
     assert.match(guide, /never\s+mark\s+a\s+question\s+resolved/i);
     assert.match(guide, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+`## Open Questions`\s+section\s+heading/);
-    assert.match(guide, /`D-NN`/);
+    assert.match(guide, /every `D-NN` it cites/);
+    assert.match(guide, /one answers it/);
     assert.match(guide, /CONTEXT\.md's `<decisions>`/);
     assert.match(guide, /List every open question in that section/);
     assert.match(guide, /No source settles a choice that needs a user ruling/);

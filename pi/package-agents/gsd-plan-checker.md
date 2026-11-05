@@ -605,8 +605,8 @@ The researcher writes RESEARCH.md, so its own resolution closes nothing. Only th
 
 **Process:**
 1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); an assumption or risk, unless it names such a pending answer or ruling. None → PASS.
-2. A question passes only when it cites a `D-NN` that is under CONTEXT.md's `<decisions>`, answers the question asked, and was not added during this planning run.
-3. Every other question is a BLOCKER, however it is marked, in any case: no `D-NN`; a `D-NN` CONTEXT.md does not contain, holds outside `<decisions>`, or that decides something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
+2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>` and was not added during this planning run, and one answers the question asked.
+3. Every other question is a BLOCKER, however it is marked, in any case: no `D-NN`; a cited `D-NN` CONTEXT.md does not contain or holds outside `<decisions>`; only `D-NN`s that decide something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
 4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
 **Example — unresolved questions:**
@@ -614,7 +614,7 @@ The researcher writes RESEARCH.md, so its own resolution closes nothing. Only th
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "Every RESEARCH.md open question cites a D-NN under CONTEXT.md <decisions>, recorded before this run, that answers it"
+  required_property: "Every RESEARCH.md open question cites only D-NNs under CONTEXT.md <decisions>, recorded before this run, one of which answers it"
   description: "RESEARCH.md has open questions with no user decision on record"
   file: "01-RESEARCH.md"
   unresolved_questions:
@@ -1071,7 +1071,7 @@ Plan verification complete when:
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
 - [ ] Research resolution checked (if RESEARCH.md exists): every open question, under any heading,
-      cites a `D-NN` under CONTEXT.md `<decisions>` that answers it; anything else is a blocker
+      cites only `D-NN`s under CONTEXT.md `<decisions>`, one answering it; anything else is a blocker
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)
