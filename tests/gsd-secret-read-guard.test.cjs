@@ -2685,6 +2685,46 @@ describe("decodeAnsiC against bash 5.2 and zsh 5.9 (in-process; review round 6, 
   });
 });
 
+describe('readings: an error, the block reported, and the heredoc tag', () => {
+  const R = String.raw;
+
+  test('a bug in a reading reaches the crash policy once the plain reading has found nothing', (t) => {
+    const { findSecretRead } = require(HOOK_PATH);
+    t.mock.method(Buffer, 'from', () => { throw new TypeError('decoder bug'); });
+    let thrown = null;
+    try {
+      findSecretRead(R`echo $'\x41'; ls`, 0);
+    } catch (e) {
+      thrown = e;
+    }
+    const plainVerdict = findSecretRead(R`cat .env; echo $'\x41'`, 0);
+    t.mock.restoreAll();
+    assert.ok(thrown instanceof TypeError, 'the decoder bug is not swallowed');
+    assert.deepEqual(plainVerdict, { code: 'secret-read', text: '.env' }, 'the plain reading keeps its verdict');
+  });
+
+  test('a secret read outranks a word with no value to check, whichever reading reports first', () => {
+    // bash's and zsh's readings see a span that never closes; dash's sees `cat .env`.
+    const cmd = R`echo $'x\'; cat .env`;
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  test('a word with no value to check is still the block when no reading finds a read', () => {
+    const cmd = R`echo $'x\'; ls`;
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
+  });
+
+  test("#5513's earlier tag reading ends a tag holding a $'…' span at any whitespace", () => {
+    const { findSecretRead, findSecretReadUnderOtherReadings } = require(HOOK_PATH);
+    // The word reading keeps the CR in the tag, so `E` ends no heredoc and the
+    // rest of the command is its body; the earlier reading ends the tag at the CR.
+    const cmd = "echo $(cat <<$'E'\r\nbody\nE\n); cat .env";
+    assert.equal(findSecretRead(cmd, 0), null, 'the word reading sees no read');
+    assert.deepEqual(findSecretReadUnderOtherReadings(cmd), { code: 'secret-read', text: '.env' });
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+});
+
 describe('findSecretRead returns one result shape (#5255 review round 6, Nit 3)', () => {
   const { findSecretRead } = require(HOOK_PATH);
   const R = String.raw;

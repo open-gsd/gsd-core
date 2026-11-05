@@ -1109,7 +1109,9 @@ function doubleQuoteEnd(str, i, reading, nested) {
 function ansiCTagWord(str, i, shell) {
   let tag = '';
   let sawSpan = false;
-  while (i < str.length && !TAG_WORD_END_RE.test(str[i])) {
+  // #5513's earlier reading ends a tag at any whitespace (readHeredocTag).
+  const tagEnd = heredocTagsAsWords ? TAG_WORD_END_RE : /[\s;&|<>()]/;
+  while (i < str.length && !tagEnd.test(str[i])) {
     const ch = str[i];
     if (ch === '\\') {
       if (i + 1 < str.length && str[i + 1] !== '\n') tag += str[i + 1]; // `\<newline>` continues the line
@@ -2052,10 +2054,14 @@ function unfinishedBy(e) {
 }
 
 // findSecretRead below the top level: the readings of `command`, then the
-// plain scan, as described above.
+// plain scan, as described above. A secret read outranks a word with no value
+// to check, so which block a command gets does not hang on which reading
+// reported first.
 function readEachWay(command, depth) {
   if (!readsEachWay(command)) return scanCommand(command, depth, false);
   readingsRan = true;
+  let unreadable = null;
+  let bug = null;
   for (const shell of READINGS) {
     let hit = null;
     try {
@@ -2067,12 +2073,19 @@ function readEachWay(command, depth) {
       // stack in findParenClose. An error here must not cost the plain
       // reading's verdict, which is the one the guard gave before #5255; an
       // overflow, or a spent budget, still leaves the command unfinished
-      // (findSecretRead).
+      // (findSecretRead). Any other error is a bug in the reading, and it
+      // goes on to the crash policy, once the plain reading has had its say.
       if (unfinishedBy(e)) scanUnfinished = true;
+      else if (bug === null) bug = e;
     }
-    if (hit !== null) return hit;
+    if (hit !== null && hit.code === 'secret-read') return hit;
+    if (unreadable === null) unreadable = hit;
   }
-  return scanCommand(command, depth, false);
+  const plain = scanCommand(command, depth, false);
+  if (plain !== null) return plain;
+  if (unreadable !== null) return unreadable;
+  if (bug !== null) throw bug;
+  return null;
 }
 
 // Whether `command` holds a form the readings are for (findSecretRead).
@@ -2578,6 +2591,6 @@ function main() {
   });
 }
 
-module.exports = { decodeAnsiC, findSecretRead };
+module.exports = { decodeAnsiC, findSecretRead, findSecretReadUnderOtherReadings };
 
 if (require.main === module) main();
