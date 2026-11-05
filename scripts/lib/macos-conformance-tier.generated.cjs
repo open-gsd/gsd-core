@@ -204,6 +204,7 @@ module.exports = {
   "tests/quick-research.test.cjs",
   "tests/reapply-verify-hunks.test.cjs",
   "tests/refactor-1390-t3-characterization.test.cjs",
+  "tests/release-notes-real-os-5922.test.cjs",
   "tests/release-pipeline-pr.test.cjs",
   "tests/require-issue-link-policy.test.cjs",
   "tests/response-language-coverage.test.cjs",
