@@ -104,22 +104,26 @@ function isClosedMilestoneHeading(headingText: string): boolean {
 
 /**
  * Does a check mark close the heading? One linear pass splits the heading into
- * its top-level text and its top-level parentheticals. A parenthetical whose
- * version (case-sensitive `v<digits>`) differs from the heading's own version
- * (VERSION_TOKEN over the text outside every parenthetical) is exempt. An
- * unbalanced or nested parenthesis anywhere disables the exemption, so such a
- * heading reads exactly as before #5726.
+ * its top-level text and its top-level parentheticals. A parenthetical is exempt
+ * only when the heading's own version (text before the first parenthetical)
+ * exists and every version the parenthetical names is unrelated to it; versions
+ * are normalized by one helper (case-insensitive, dotted segments, suffix dropped,
+ * a dotted prefix counts as the same). An unbalanced or nested parenthesis, a
+ * missing own version or a version after the group disables the exemption, so such
+ * a heading reads exactly as before #5726.
  */
 function hasClosedStatusMark(headingText: string): boolean {
   let depth = 0;
   let start = 0;
   let outside = '';
+  let ownText = '';
   const groups: string[] = [];
   for (let i = 0; i < headingText.length; i++) {
     const ch = headingText[i];
     if (ch === '(') {
       depth += 1;
       if (depth > 1) return CLOSED_STATUS_MARK_RE.test(headingText);
+      if (groups.length === 0) ownText = outside;
       start = i + 1;
     } else if (ch === ')') {
       depth -= 1;
@@ -131,11 +135,32 @@ function hasClosedStatusMark(headingText: string): boolean {
   }
   if (depth !== 0) return CLOSED_STATUS_MARK_RE.test(headingText);
   if (CLOSED_STATUS_MARK_RE.test(outside)) return true;
-  const ownVersion = outside.match(VERSION_TOKEN)?.[0];
+  const own = versionSegments(ownText);
   return groups.some((group) => {
-    const named = group.match(/\bv\d+(?:\.\d+)*/)?.[0];
-    return (named === undefined || named === ownVersion) && CLOSED_STATUS_MARK_RE.test(group);
+    if (!CLOSED_STATUS_MARK_RE.test(group)) return false;
+    const named = versionsIn(group);
+    // Fail closed: exempt only when the heading's own version precedes the group, the
+    // group names a version, and every version it names is unrelated to the own one.
+    return own === null || named.length === 0 || named.some((v) => versionsRelated(own, v));
   });
+}
+
+const HEADING_VERSION_RE = /\bv\d+(?:\.\d+)*/gi;
+
+/** `v` + digits + dotted segments, lowercased as numbers; any suffix (`-beta`, `.rc`) is dropped. */
+function versionsIn(text: string): number[][] {
+  return (text.match(HEADING_VERSION_RE) ?? []).map((v) => v.slice(1).split('.').map(Number));
+}
+
+function versionSegments(text: string): number[] | null {
+  return versionsIn(text)[0] ?? null;
+}
+
+/** Equal, or one a dotted-segment prefix of the other (`v2` / `v2.0` / `v2.0.1`). */
+function versionsRelated(a: readonly number[], b: readonly number[]): boolean {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /**
