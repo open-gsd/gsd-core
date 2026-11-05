@@ -2978,83 +2978,59 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       plan: plan || null,
       written_at: clock.now(),
     };
+    let tmpPath = null;
     try {
-      nodeFs.mkdirSync(sentinelDir, { recursive: true });
-      // Never write through a project-supplied .gsd symlink. Resolve the
-      // directory as well so an ancestor redirect cannot escape this project.
-      if (nodeFs.lstatSync(sentinelDir).isSymbolicLink() ||
-          nodePath.relative(nodeFs.realpathSync(cwd), nodeFs.realpathSync(sentinelDir)) !== '.gsd') {
-        throw new Error('sentinel directory is a symlink or resolves outside the project');
-      }
-      // User projects do not inherit gsd-core's root .gitignore. Ignore this
-      // tool-owned directory locally before writing the first sentinel. An
-      // ordinary ignore-file IO failure must not prevent recording isolation.
-      const ignorePath = nodePath.join(sentinelDir, '.gitignore');
+      // #5757: the shared tool-owned .gsd owner refuses a project-supplied
+      // symlink (or ancestor redirect) and seeds/extends .gsd/.gitignore, so
+      // this writer and the fork-probe cache apply one policy. An ordinary
+      // ignore-file IO failure must not prevent recording isolation.
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
       try {
-        nodeFs.writeFileSync(ignorePath, '*\n', { flag: 'wx' });
-      } catch (ignoreError) {
-        if (ignoreError.code === 'EEXIST') {
-          // Keep a pre-existing ignore file. A bare '*' already ignores the
-          // whole directory, including this file and the sentinel temp file.
-          // Read through an fd opened without following links where supported;
-          // replace by rename rather than append through the path, so a link
-          // swapped in after the check cannot redirect a write elsewhere.
-          let fd;
-          let ignoreTmpPath;
-          try {
-            if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            fd = nodeFs.openSync(ignorePath, nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW || 0));
-            if (!nodeFs.fstatSync(fd).isFile()) throw new Error('sentinel ignore file is not a regular file');
-            const current = nodeFs.readFileSync(fd, 'utf8');
-            nodeFs.closeSync(fd);
-            fd = undefined;
-            const hasCatchAll = /^\*\r?$/m.test(current);
-            const hasMarker = current.includes('# gsd-core dispatch sentinel');
-            // #5682: a block written before the keyed directory existed lacks its rule.
-            const lacksKeyedRule = !/^\/dispatch-isolation\/\r?$/m.test(current);
-            if (!hasCatchAll && (!hasMarker || lacksKeyedRule)) {
-              const additionalRules = hasMarker
-                ? `${current.endsWith('\n') ? '' : '\n'}/dispatch-isolation/\n`
-                : `${current.endsWith('\n') ? '' : '\n'}# gsd-core dispatch sentinel\n` +
-                  '/dispatch-isolation-sentinel.json\n' +
-                  '/dispatch-isolation-sentinel.json.tmp-*\n' +
-                  '/dispatch-isolation/\n' +
-                  '/.gitignore\n';
-              ignoreTmpPath = `${ignorePath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-              nodeFs.writeFileSync(ignoreTmpPath, current + additionalRules, { flag: 'wx' });
-              if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-                throw new Error('sentinel ignore file is a symlink');
-              }
-              nodeFs.renameSync(ignoreTmpPath, ignorePath);
-              ignoreTmpPath = null;
-            }
-          } catch (existingIgnoreError) {
-            if (existingIgnoreError.code === 'ELOOP' || existingIgnoreError.message === 'sentinel ignore file is a symlink') {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            // Ignore seeding is best-effort; the sentinel is still useful if
-            // this path cannot be read or updated.
-          } finally {
-            if (fd !== undefined) nodeFs.closeSync(fd);
-            if (ignoreTmpPath) {
-              try { nodeFs.unlinkSync(ignoreTmpPath); } catch (_) { /* best-effort cleanup */ }
-            }
-          }
+        toolDir.ensureToolOwnedGsdDir(cwd, {
+          marker: '# gsd-core dispatch sentinel',
+          rules: [
+            '/dispatch-isolation-sentinel.json',
+            '/dispatch-isolation-sentinel.json.tmp-*',
+            '/dispatch-isolation/',
+            '/.gitignore',
+          ],
+        });
+      } catch (ownerError) {
+        // The recorded `error` text is observable JSON (hyrums-law): keep the
+        // sentinel's historical wording, translating by the owner's stable code.
+        if (ownerError && ownerError.code === toolDir.GSD_DIR_UNSAFE) {
+          throw new Error('sentinel directory is a symlink or resolves outside the project');
         }
+        if (ownerError && ownerError.code === toolDir.GSD_IGNORE_SYMLINK) {
+          throw new Error('sentinel ignore file is a symlink');
+        }
+        throw ownerError;
       }
-      // Atomic write: unique temp file + rename, so a concurrent reader (a
-      // guard hook firing mid-write) never observes a partially-written
-      // sentinel. Unique per-process+time so concurrent orchestrator-worktree
-      // invocations sharing the same sentinelDir never collide on the temp name.
-      const tmpPath = `${sentinelPath}.tmp-${process.pid}-${Date.now()}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
-      nodeFs.renameSync(tmpPath, sentinelPath);
+      // Atomic write: exclusive random temp file + rename, so a concurrent
+      // reader (a guard hook firing mid-write) never observes a
+      // partially-written sentinel, concurrent invocations sharing the same
+      // sentinelDir never collide on the temp name, and a planted link at a
+      // guessed temp name is never written through.
+      // `tmpPath` is assigned only once the exclusive create succeeded, so an
+      // EEXIST never unlinks an entry this process did not create.
+      const candidateTmp = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
+      tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(payload));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
+      tmpPath = null;
       writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
       return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
     }
   }
 
