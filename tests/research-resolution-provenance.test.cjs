@@ -9,22 +9,27 @@
  *
  * ## What this suite locks
  *
- * - Dimension 11 collects every open question, under any heading or in prose; passes one
- *   only on the provenance it accepts (a `D-NN` under CONTEXT.md's `<decisions>` that
- *   answers it and predates the planning run); blocks every other question, naming the
- *   citation shapes the forgery used (none, a plan, a "disposition"); and blocks every
- *   question when CONTEXT.md is absent. Only the no-questions case reaches PASS.
- * - Its fix_hint routes to recording a user ruling, not to writing the marker: a decision
- *   already on record is cited; otherwise no decision is added during planning: the user
- *   rules in discuss-phase (or a sourced answer settles a factual gap), and a research re-run
- *   writes the citation.
+ * - Dimension 11 collects every question still needing an answer or a ruling, under any heading
+ *   or in prose. A cited source closes a factual question only; a Claude's Discretion area of
+ *   CONTEXT.md takes a sourced recommendation; an `[ASSUMED]` fact is not a question. It passes a
+ *   question only on the provenance it accepts: every `D-NN` it cites sits under CONTEXT.md's
+ *   `<decisions>`, outside Claude's Discretion, predating the planning run, and one answers it.
+ *   It blocks every other question, naming the citation shapes the forgery used (none, a plan, a
+ *   "disposition"), and every question when CONTEXT.md is absent. Only the no-questions case
+ *   reaches PASS.
+ * - Its fix_hint routes to recording a user ruling, not to writing the marker: a decision already
+ *   on record is cited; otherwise no decision is added during planning: the user rules in
+ *   discuss-phase (or a source settles a factual gap), and a research re-run writes the citation.
+ * - `planner-revision.md` carries the same route as a `research_resolution` strategy row, ending
+ *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape is a
  *   BLOCKER example.
  * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
  *   includes it.
  * - The researcher and `gsd-core/templates/research.md` forbid self-resolution, and
  *   state the rule outside the RESEARCH.md template, no part of which carries a
- *   `RESOLVED` token a model could copy into the file the checker reads.
+ *   `RESOLVED` token a model could copy into the file the checker reads. The template's
+ *   Assumptions Log holds facts; a choice awaiting a ruling goes under Open Questions.
  *
  * ## What it cannot prove
  *
@@ -148,6 +153,16 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     for (const [name, re] of Object.entries(cases)) assert.match(blocker, re, `BLOCKER step omits: ${name}`);
   });
 
+  test('the worked issue carries the dimension and blocker severity the revision loop keys on', () => {
+    const lines = splitLines(dim11());
+    const at = lines.findIndex((l) => l.startsWith('**Example — unresolved questions:**'));
+    assert.notEqual(at, -1, 'Dimension 11 must carry the unresolved-questions example');
+    const close = lines.findIndex((l, i) => i > at + 1 && l.startsWith('```'));
+    const example = lines.slice(at, close).map((l) => l.trim());
+    assert.ok(example.includes('dimension: research_resolution'));
+    assert.ok(example.includes('severity: blocker'));
+  });
+
   test('the binding required_property carries the relevance condition', () => {
     const props = [...dim11().matchAll(/required_property:\s*"([^"]*)"/g)].map((m) => m[1]);
     assert.ok(props.length >= 1, 'Dimension 11 must carry a required_property example');
@@ -262,7 +277,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
 
   test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
     const rule = fence().after;
-    assert.match(rule, /never\s+mark\s+a\s+question\s+resolved/i);
+    assert.match(rule, /never\s+mark\s+a\s+question\s+resolved,\s+decided\s+or\s+closed/i);
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
     assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
@@ -290,7 +305,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(researchTemplate().slice(0, guidelinesAt), /\n## Open Questions\n/);
     assert.doesNotMatch(researchTemplate().slice(0, guidelinesAt), GATE_TOKEN);
     const guide = span(researchTemplate().slice(guidelinesAt), '\n**Open Questions:**\n', /\n\n/);
-    assert.match(guide, /never\s+mark\s+a\s+question\s+resolved/i);
+    assert.match(guide, /never\s+mark\s+a\s+question\s+resolved,\s+decided\s+or\s+closed/i);
     assert.match(guide, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+`## Open Questions`\s+section\s+heading/);
     assert.match(guide, /every `D-NN` it cites/);
     assert.match(guide, /one answers it/);
