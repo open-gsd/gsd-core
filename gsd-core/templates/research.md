@@ -580,7 +580,7 @@ function useVehicleControls(rigidBodyRef) {
 - Sources: Mark confidence levels honestly
 
 **Open Questions:**
-- Only the user closes an open question: never mark a question resolved yourself, and never add a `(RESOLVED)` suffix to the `## Open Questions` section heading
+- Only the user closes an open question: never mark a question resolved, decided or closed yourself, and never add a `(RESOLVED)` suffix to the `## Open Questions` section heading
 - List every open question in that section, never in prose or under another heading
 - A cited source settles a factual question. No source settles a choice that needs a user ruling (a name, a TTL, a scope call): that stays an open question
 - In an area CONTEXT.md lists under Claude's Discretion, recommend with a source instead of listing a question. A Discretion entry is never a ruling on any other question
