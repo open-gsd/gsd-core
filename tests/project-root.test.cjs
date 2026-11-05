@@ -485,5 +485,47 @@ describe('findProjectRoot nearest-.planning resolution (#1414)', () => {
       const start = mkDeep(proj, 'a', 'b');
       assert.strictEqual(findProjectRoot(start), proj);
     });
+
+    // `HOME=.` is a misconfigured environment: `realpath('.')` is the process
+    // cwd, so resolving it would make whatever directory the process runs in
+    // count as `$HOME` and stop the walk there.
+    test('a relative $HOME keeps the spelled stop, so the process cwd is not taken as $HOME', () => {
+      const proj = mkDeep(tmpDir, 'proj');
+      fs.mkdirSync(path.join(proj, '.planning'));
+      const mid = mkDeep(proj, 'mid');
+      const start = mkDeep(mid, 'a', 'b');
+      const savedCwd = process.cwd();
+      process.env.HOME = '.';
+      process.env.USERPROFILE = '.';
+      process.chdir(mid);
+      try {
+        assert.strictEqual(findProjectRoot(start), proj,
+          'the walk must pass the process cwd and reach the project above it');
+      } finally {
+        process.chdir(savedCwd);
+      }
+    });
+
+    // A walked directory whose realpath fails (here EACCES: an ancestor has no
+    // search permission) is not `$HOME`; the walk goes on past it.
+    test('a walked directory whose realpath fails is not taken as $HOME', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
+      const home = mkDeep(tmpDir, 'home');
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      process.env.GSD_HOME = home;
+      fs.mkdirSync(path.join(tmpDir, '.planning'));
+      const locked = mkDeep(tmpDir, 'locked');
+      const start = mkDeep(locked, 'b', 'c');
+      const mode = fs.statSync(locked).mode;
+      fs.chmodSync(locked, mode & ~0o777);
+      try {
+        assert.throws(() => fs.realpathSync.native(path.join(locked, 'b')),
+          'precondition: the intermediate directory cannot be resolved');
+        assert.strictEqual(findProjectRoot(start), tmpDir,
+          'an unresolvable intermediate directory must not stop the walk');
+      } finally {
+        fs.chmodSync(locked, mode);
+      }
+    });
   });
 });

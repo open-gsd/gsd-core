@@ -47,10 +47,14 @@ export function findProjectRoot(startDir: string): string {
   const fsRoot = path.parse(resolvedStart).root;
   const home = os.homedir();
   let realHome: string | null = null;
-  try {
-    realHome = fs.realpathSync.native(home);
-  } catch {
-    // no `$HOME` on disk: only the spelled comparison applies
+  // A relative `$HOME` (`HOME=.`) would resolve against the process cwd and
+  // make that directory count as `$HOME`; keep the spelled comparison for it.
+  if (path.isAbsolute(home)) {
+    try {
+      realHome = fs.realpathSync.native(home);
+    } catch {
+      // no `$HOME` on disk: only the spelled comparison applies
+    }
   }
 
   // #5624: the `$HOME` stop holds however `$HOME` or the walked path is

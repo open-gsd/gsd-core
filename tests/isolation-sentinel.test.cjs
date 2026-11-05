@@ -127,7 +127,9 @@ describe('hooks/lib/isolation-sentinel.js: resolveSentinelRoot self-heal reachab
 // either-spelling `$HOME` stop. A hook with its own walk and a spelled-only
 // stop would answer differently from gsd-tools for this cwd, the #3050 split.
 describe('hooks/lib/isolation-sentinel.js: resolveSentinelRoot stops at a symlinked $HOME (#5624)', () => {
-  test('a cwd spelled through the $HOME target does not resolve to a .planning/ above $HOME', (t) => {
+  // `$HOME` names the link; the cwd is spelled through the target, as
+  // `process.cwd()` reports it. Returns the target's resolved spelling.
+  function symlinkedHome(t) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-sentinel-home-'));
     const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, GSD_HOME: process.env.GSD_HOME };
     t.after(() => {
@@ -144,13 +146,32 @@ describe('hooks/lib/isolation-sentinel.js: resolveSentinelRoot stops at a symlin
     process.env.HOME = link;
     process.env.USERPROFILE = link;
     process.env.GSD_HOME = link;
+    return { tmpDir, home: fs.realpathSync.native(target) };
+  }
+
+  test('a cwd spelled through the $HOME target does not resolve to a .planning/ above $HOME', (t) => {
+    const { tmpDir, home } = symlinkedHome(t);
     fs.mkdirSync(path.join(tmpDir, '.planning'));
-    const cwd = path.join(fs.realpathSync.native(target), 'ws', 'sub');
+    const cwd = path.join(home, 'ws', 'sub');
     fs.mkdirSync(cwd, { recursive: true });
 
     const { resolveSentinelRoot } = require(SENTINEL_MODULE_PATH);
     assert.equal(resolveSentinelRoot(cwd), cwd,
       'the hook must not read a sentinel from the workspace above $HOME');
+  });
+
+  // Positive control for the row above. resolveSentinelRoot returns the raw cwd
+  // from its catch on any failure, the same value that row expects; only a real
+  // walk through findProjectRoot can answer `$HOME` here.
+  test('a cwd spelled through the $HOME target still resolves to a .planning/ at $HOME', (t) => {
+    const { home } = symlinkedHome(t);
+    fs.mkdirSync(path.join(home, '.planning'));
+    const cwd = path.join(home, 'ws', 'sub');
+    fs.mkdirSync(cwd, { recursive: true });
+
+    const { resolveSentinelRoot } = require(SENTINEL_MODULE_PATH);
+    assert.equal(resolveSentinelRoot(cwd), home,
+      'the hook must walk up to the project rooted at $HOME, not degrade to the raw cwd');
   });
 });
 
