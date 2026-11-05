@@ -283,6 +283,8 @@ test('#5531: the dispatch prose states what the fix does', () => {
   assert.match(content, /`\$ORCH_ROOT`[^\n]*`\$EXECUTOR_PROMPT`/, 'the prose names what does cross between blocks');
   assert.ok(content.includes('halt before the read-and-check block'), 'cleanup covers every halt before the read-and-check block');
   assert.ok(content.includes('CRLF'), 'the prose says what a CRLF or BOM in the written file does');
+  assert.ok(content.includes('trailing newlines and NUL bytes'), 'the prose names the bytes `$(...)` drops');
+  assert.ok(content.includes("{plan_id} is this plan's `id` field"), 'the Step 2 comment keeps the {plan_id} clause on one line');
   assert.ok(content.includes('`quick` for `{phase_number}`'), 'a caller without a phase passes the literal quick');
 });
 
