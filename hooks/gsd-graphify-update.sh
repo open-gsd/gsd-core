@@ -16,7 +16,9 @@
 #   1. Stdin payload present and tool_name == "Bash"
 #   2. tool_input.command matches a HEAD-advancing git op (shell-direct or
 #      `query commit` via gsd_run, gsd-tools, or gsd-tools.cjs, including a
-#      quoted Node entrypoint after the launcher preamble — see #3653/#5332)
+#      quoted Node entrypoint after the launcher preamble — see #3653/#5332).
+#      Global-flag forms are intentionally excluded because this hook cannot
+#      resolve their target checkout; the onboarding `--cwd` call is #5935.
 #   3. Inside a git repo
 #   4. Current branch == default branch (git.base_branch override, else main/master/trunk)
 #   5. .planning/config.json sets graphify.enabled=true AND graphify.auto_update=true
