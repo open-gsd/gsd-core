@@ -112,12 +112,14 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
       ['invalid', '# Plan without frontmatter\n', 1],
       ['escaped JSON', '---\nphase: 1\nplan: 1\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: {}\n---\n<tasks><task type="auto"><name>Line one\nLine two</name><files>x.js</files><action>Act</action><verify>node --test</verify><done>Done</done></task></tasks>\n', 0, 'Line one\nLine two'],
     ]) {
-      test(`${shell}: Step 8 captures the ${label} structure verdict (#5178)`, { skip }, (t) => {
+      test(`${shell}: Step 8 prints the ${label} structure verdict and its exit status (#5178)`, { skip }, (t) => {
         const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
           'gsd_run() { if [ "$2" = frontmatter.get ]; then printf "\\nFRONTMATTER\\n"; fi; "$NODE" "$TOOLS" "$@"; }',
-        ], ['printf "\\nSTATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"']);
-        assert.ok(stdout.split(/\r?\n/).includes(`STATUS=${exitCode}`), stdout);
-        const structure = JSON.parse(stdout.split('\nFRONTMATTER\n')[0]);
+        ]);
+        const lines = stdout.split('\nFRONTMATTER\n')[0].split(/\r?\n/);
+        const statusIdx = lines.findIndex((line) => line.startsWith('structure_exit='));
+        assert.equal(lines[statusIdx], `structure_exit=${exitCode}`, stdout);
+        const structure = JSON.parse(lines.slice(0, statusIdx).join('\n'));
         assert.equal(structure.valid, exitCode === 0);
         if (taskName) assert.equal(structure.tasks[0].name, taskName);
       });
