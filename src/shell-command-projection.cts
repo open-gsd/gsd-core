@@ -2120,7 +2120,10 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   walkedParent ??= statParent();
   if (opts.atomic === true) {
-    publishViaTempFile(filePath, normalized, encoding, 'tmp');
+    publishViaTempFile(filePath, normalized, encoding, 'tmp', {
+      checkParent: () => { if (parentChanged()) refuseParentSwap(); },
+      createTemp: opts.writeSeams?.createTemp,
+    });
     return;
   }
 
@@ -2205,13 +2208,29 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
  * at any name is never opened or followed (#5759). It takes an existing regular
  * target's permission bits, so a private file is never briefly more readable.
  */
-function publishViaTempFile(filePath: string, data: string | Buffer, encoding: BufferEncoding | undefined, label: string): void {
+function publishViaTempFile(
+  filePath: string,
+  data: string | Buffer,
+  encoding: BufferEncoding | undefined,
+  label: string,
+  hooks: {
+    checkParent?: () => void;
+    createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
+  } = {},
+): void {
   let mode = 0o666;
+  let hasTargetMode = false;
   try {
     const st = fs.lstatSync(filePath);
-    if (st.isFile()) mode = st.mode & 0o777;
+    if (st.isFile()) { mode = st.mode & 0o777; hasTargetMode = true; }
   } catch { /* absent: default mode */ }
-  const { fd, tmpPath } = openExclusiveTempSync(filePath, undefined, mode, label);
+  hooks.checkParent?.();
+  const { fd, tmpPath } = hooks.createTemp !== undefined
+    ? hooks.createTemp(filePath, undefined, mode)
+    : openExclusiveTempSync(filePath, undefined, mode, label);
+  if (hasTargetMode) {
+    try { fs.fchmodSync(fd, mode); } catch { /* no permission bits on this platform */ }
+  }
   try {
     try {
       if (typeof data === 'string') fs.writeFileSync(fd, data, encoding);
@@ -2219,6 +2238,7 @@ function publishViaTempFile(filePath: string, data: string | Buffer, encoding: B
     } finally {
       try { fs.closeSync(fd); } catch { /* already closed */ }
     }
+    hooks.checkParent?.();
     const renameErr = atomicRenameWithRetry(tmpPath, filePath);
     if (renameErr !== null) throw renameErr;
   } catch (err) {

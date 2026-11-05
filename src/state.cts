@@ -7513,7 +7513,7 @@ function restoreArchiveAfterFailedWrite(archivePath: string, archiveBytes: Buffe
         { code: 'ESTALE' },
       );
     }
-    const unchanged =now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
+    const unchanged = now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
     if (!unchanged) platformRestoreFileSync(archivePath, archiveBytes);
   } catch (restoreErr) {
     throw new AggregateError(
