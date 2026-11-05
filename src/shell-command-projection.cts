@@ -1322,6 +1322,12 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * The destination was chosen by the user (`--output /dev/stdout`): a character device, or a
    * FIFO that has a reader, is written in place instead of refused with ENXIO. Pass it only from
    * user-chosen-output callers; config and planning writes keep refusing special targets.
+   * Special means a target that, with links followed, is a character device or a FIFO, or one of
+   * the descriptor aliases /dev/stdout, /dev/stderr, /dev/fd/N, /proc/self/fd/N; any other
+   * regular file takes the atomic path, and block devices and sockets are always refused (ENXIO).
+   * A FIFO needs a reader (ENXIO otherwise). Caveats: a shell append redirect (`>> file`) is
+   * truncated by the in-place write of /dev/stdout exactly as the previous plain write did, and
+   * on Windows the NUL / CON names are not recognised here (they take the ordinary path).
    */
   allowSpecialTarget?: boolean;
 }
@@ -1638,20 +1644,30 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // A user-chosen destination such as /dev/stdout: written in place, no temp file, no restore.
     let special: fs.Stats | null = null;
     try { special = fs.statSync(filePath); } catch { /* absent: the ordinary path below */ }
-    // /dev/stdout may also resolve to a regular file (`> out.txt`); anything under /dev/ is
-    // the process's own descriptor space and is written in place like any special target.
-    if (special !== null && (special.isCharacterDevice() || special.isFIFO() || filePath.startsWith('/dev/'))) {
-      // A FIFO is opened non-blocking, so with no reader the open fails ENXIO — the refusal.
-      const fd = fs.openSync(
-        filePath,
-        fs.constants.O_WRONLY
-          | (special.isFIFO() ? (fs.constants.O_NONBLOCK ?? 0) : 0)
-          | (special.isFile() ? fs.constants.O_TRUNC : 0),
-      );
+    if (special !== null && (special.isBlockDevice() || special.isSocket())) {
+      throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
+    }
+    // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
+    // (`> out.txt`), which is then written in place. Any other regular file takes the atomic path.
+    const resolvedTarget = path.resolve(filePath);
+    const isDescriptorAlias = /^\/dev\/(stdout|stderr|fd\/\d+)$/.test(resolvedTarget)
+      || /^\/proc\/self\/fd\/\d+$/.test(resolvedTarget);
+    if (special !== null && (special.isCharacterDevice() || special.isFIFO() || isDescriptorAlias)) {
+      const nonBlock = fs.constants.O_NONBLOCK ?? 0;
+      let probeFd: number | undefined;
+      if (special.isFIFO()) {
+        // The non-blocking open is only the reader probe (ENXIO = no reader = the refusal); the
+        // probe stays open while the real, blocking descriptor is opened so a slow reader can
+        // never make a write fail with EAGAIN.
+        probeFd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
+      }
+      let fd: number | undefined;
       try {
+        fd = fs.openSync(filePath, fs.constants.O_WRONLY | (special.isFile() ? fs.constants.O_TRUNC : 0));
         fs.writeFileSync(fd, normalized, encoding);
       } finally {
-        try { fs.closeSync(fd); } catch { /* already closed */ }
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+        if (probeFd !== undefined) { try { fs.closeSync(probeFd); } catch { /* already closed */ } }
       }
       return;
     }
