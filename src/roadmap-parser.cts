@@ -1371,7 +1371,10 @@ function classifyMilestoneScalar(raw: string | null | undefined): { explicitNull
   if (trimmed === '') return { explicitNull: false, version: null };
   const bare = trimmed.replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
   if (/^(?:null|Null|NULL|~)$/.test(bare)) return { explicitNull: true, version: null };
-  return { explicitNull: false, version: bare === '' ? null : bare };
+  // The input is already a DECODED scalar (#4998): a quote or ` #` inside it is
+  // literal content, so the version is the trimmed text. The raw line read decodes
+  // its own YAML spelling in `readStateMilestoneScalar`.
+  return { explicitNull: false, version: trimmed };
 }
 
 /**
@@ -1405,7 +1408,10 @@ function readStateMilestoneScalar(stateRaw: string): string | null {
   // line (the `---` closing the frontmatter), so it reads as absent.
   const m = stateRaw.match(/^milestone:[ \t]*(\S.*)/m);
   if (!m) return null;
-  return m[1];
+  // #5726: this branch holds on-disk YAML text, so decode it here (trailing
+  // ` # comment`, one pair of surrounding quotes) to match what the frontmatter
+  // parser would have returned.
+  return m[1].replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
 }
 
 /**
