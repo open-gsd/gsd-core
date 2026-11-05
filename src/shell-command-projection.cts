@@ -1502,52 +1502,79 @@ export function openExclusiveTempSync(
  * refused with code ENXIO.
  */
 function writeTargetDirect(filePath: string, normalized: string, encoding: BufferEncoding): void {
-  const nonBlock = fs.constants.O_NONBLOCK ?? 0;
-  // Open an existing target WITHOUT truncating, so nothing is destroyed before the
-  // regular-file check. It is created only when absent — and never through a dangling
-  // symlink, which would plant a file wherever the link points. `created` lets a failed
-  // write remove the empty file it just made (and only that: a symlink is never unlinked).
-  let created = false;
-  let fd: number;
-  try {
-    // O_RDWR: the old bytes are read back below so a failed write can restore them.
-    fd = fs.openSync(filePath, fs.constants.O_RDWR | nonBlock);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    let dangling = false;
-    try { dangling = fs.lstatSync(filePath).isSymbolicLink(); } catch { /* no entry at all */ }
-    if (dangling) {
-      throw Object.assign(
-        new Error(`ENXIO: cannot write ${filePath}: it is a dangling symlink — refusing to create through it`),
-        { code: 'ENXIO' },
-      );
+  const nonBlock = (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0);
+  const refuse = (message: string, code: string): never => {
+    throw Object.assign(new Error(`${code}: cannot write ${filePath}: ${message}`), { code });
+  };
+
+  // Probe an existing target READ-ONLY and non-blocking, so a device or FIFO is never opened
+  // for write: it is classified by fstat, and the old bytes are captured for a restore.
+  // Returns null when the target is absent.
+  const probe = (): { prior: Buffer; dev: number; ino: number } | null => {
+    let fd: number;
+    try {
+      fd = fs.openSync(filePath, fs.constants.O_RDONLY | nonBlock);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
     }
-    fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | nonBlock, 0o666);
-    created = true;
-  }
-  let failure: Error | undefined;
-  try {
-    const st = fs.fstatSync(fd);
-    if (!st.isFile()) {
-      throw Object.assign(
-        new Error(`ENXIO: cannot write ${filePath}: not a regular file (FIFO/device) — refusing`),
-        { code: 'ENXIO' },
-      );
-    }
-    // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
-    // old tail. The old bytes (when small enough) are held so a failed write puts them back:
-    // the result is the whole new content or the whole old content, not a mixture.
-    let prior: Buffer | null = null;
-    if (!created && st.size > 0 && st.size <= MAX_PRIOR_BYTES) {
-      prior = Buffer.alloc(st.size);
+    try {
+      const st = fs.fstatSync(fd);
+      if (st.isDirectory()) refuse('it is a directory', 'EISDIR');
+      if (!st.isFile()) refuse('not a regular file (FIFO/device) — refusing', 'ENXIO');
+      // The truncate-then-write below needs the old bytes to put back on a failed write. A file
+      // too large to hold (or read short) is refused BEFORE anything is truncated. Remaining
+      // caveat: between the truncate and the first successful write the file is empty.
+      if (st.size > MAX_PRIOR_BYTES) refuse(`existing file is larger than ${MAX_PRIOR_BYTES} bytes`, 'EFBIG');
+      const prior = Buffer.alloc(st.size);
       let got = 0;
       while (got < prior.length) {
         const n = fs.readSync(fd, prior, got, prior.length - got, got);
         if (n <= 0) break;
         got += n;
       }
-      if (got !== prior.length) prior = null;
+      if (got !== prior.length) refuse('existing content could not be read back', 'EIO');
+      return { prior, dev: st.dev, ino: st.ino };
+    } finally {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
     }
+  };
+
+  let created = false;
+  let fd: number | undefined;
+  let prior: Buffer | null = null;
+  for (let attempt = 0; fd === undefined; attempt++) {
+    const existing = probe();
+    if (existing !== null) {
+      fd = fs.openSync(filePath, fs.constants.O_WRONLY | nonBlock);
+      const st = fs.fstatSync(fd);
+      if (!st.isFile() || st.dev !== existing.dev || st.ino !== existing.ino) {
+        try { fs.closeSync(fd); } catch { /* already closed */ }
+        refuse('the target changed while it was being opened', 'ENXIO');
+      }
+      prior = existing.prior;
+    } else {
+      // Create exclusively and without following a link: a symlink planted since the probe (or
+      // a dangling one) makes this EEXIST, never a file created through it.
+      try {
+        fd = fs.openSync(
+          filePath,
+          fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0) | nonBlock,
+          0o666,
+        );
+        created = true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        // Something appeared: probe once more as an existing target; a second miss means a
+        // dangling symlink (or a race), and nothing is created through it.
+        if (attempt >= 1) refuse('it is a dangling symlink — refusing to create through it', 'ENXIO');
+      }
+    }
+  }
+  let failure: Error | undefined;
+  try {
+    // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
+    // old tail; the old bytes held above are put back if the write fails.
     fs.ftruncateSync(fd, 0);
     try {
       fs.writeFileSync(fd, normalized, encoding);
@@ -1609,6 +1636,12 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   try {
     fs.writeFileSync(tmpFd, normalized, encoding);
     wrote = true;
+    // An existing regular target keeps its permission bits (a 0600 config must not come back
+    // 0644 after the rename). A new file keeps the default 0o666 & ~umask.
+    try {
+      const existing = fs.lstatSync(filePath);
+      if (existing.isFile()) fs.fchmodSync(tmpFd, existing.mode & 0o7777);
+    } catch { /* no existing target, or no permission bits on this platform */ }
   } catch { /* fall back below */ }
   try { fs.closeSync(tmpFd); } catch { wrote = false; }
   if (!wrote) {

@@ -43,7 +43,11 @@ function readConfigFileBounded(filePath: string): string | null {
  * (absent, or not on the real file system at all, as with an installer fake-fs adapter), so the
  * caller's own read decides. stat(2) follows links and never opens, so it cannot block. This is
  * the guard for readers that must go through an injected fs seam and so cannot use
- * `readConfigFileBounded`; it is a check-then-read, not the descriptor-bound read.
+ * `readConfigFileBounded`; it is a check-then-read, not the descriptor-bound read. Residual
+ * race: the install-fs adapter exposes `openSync`/`readSync` with string flags (no O_NONBLOCK)
+ * and no `fstatSync`, so the check cannot be bound to the descriptor that is read; a path
+ * swapped for a FIFO between this stat and the adapter's read can still block. Closing that
+ * needs `fstatSync` and numeric open flags on the adapter.
  */
 function unboundedConfigFileReason(absPath: string): string | null {
   try {
