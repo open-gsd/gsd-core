@@ -29,8 +29,10 @@ const {
   classifyTestReference,
   findSurvivingTestReferences,
   isDocsHistoricalRecord,
+  getIgnoredDeletions,
   scan,
 } = require(LINT_SCRIPT);
+const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -672,5 +674,126 @@ describe('removed-but-needed lint: docs historical-record exemption end-to-end (
       { cwd: tmpDir, env: { ...process.env, GSD_REMOVED_BUT_NEEDED_BASE: 'main' } },
     );
     assert.equal(result.exitCode, 1, `expected exit 1, got ${result.exitCode}: ${result.stderr}`);
+  });
+});
+
+// ─── #3677: gitignored-path refinement — a deleted path that is gitignored
+// was never meant to be tracked; its basename is shared by untracked local
+// files that tracked comments cite, so matching switches to the full path.
+
+describe('removed-but-needed lint: gitignored-path refinement (#3677)', () => {
+  const DELETED = '.gsd/phase/x/40-design.md';
+  const IGNORED = new Set([DELETED]);
+
+  test('ignored deletion: other-path and bare-basename citations are NOT violations', () => {
+    const violations = findSurvivingReferences(
+      [DELETED],
+      [{ file: 'src/a.cts', content: 'see .gsd/phase/other/40-design.md and 40-design.md' }],
+      new Set(),
+      IGNORED,
+    );
+    assert.deepEqual(violations, []);
+  });
+
+  test('ignored deletion: the exact full path IS a violation and the reason names gitignore', () => {
+    const violations = findSurvivingReferences(
+      [DELETED],
+      [{ file: 'src/a.cts', content: 'see .gsd/phase/x/40-design.md here' }],
+      new Set(),
+      IGNORED,
+    );
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0].deletedFile, DELETED);
+    assert.match(violations[0].reason, /gitignored/);
+  });
+
+  test('NON-ignored deletion with the same corpus still fails by basename (default 4th arg unchanged)', () => {
+    const violations = findSurvivingReferences(
+      [DELETED],
+      [{ file: 'src/a.cts', content: 'see 40-design.md' }],
+    );
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].reason, /basename '40-design\.md' still referenced/);
+  });
+
+  test('tests arm, ignored deletion: a bare-basename pin is NOT a violation', () => {
+    const violations = findSurvivingTestReferences(
+      [DELETED],
+      [{ file: 'tests/a.test.cjs', content: "fs.readFileSync('40-design.md')\n" }],
+      new Set(),
+      IGNORED,
+    );
+    assert.deepEqual(violations, []);
+  });
+
+  test('tests arm, ignored deletion: a full-path pin IS a pins-existence violation', () => {
+    const violations = findSurvivingTestReferences(
+      [DELETED],
+      [{ file: 'tests/a.test.cjs', content: "fs.readFileSync('.gsd/phase/x/40-design.md')\n" }],
+      new Set(),
+      IGNORED,
+    );
+    assert.equal(violations.length, 1);
+    assert.match(violations[0].reason, /pins-existence/);
+  });
+
+  test('tests arm, NON-ignored deletion: bare-basename pin still fails (default 4th arg unchanged)', () => {
+    const violations = findSurvivingTestReferences(
+      [DELETED],
+      [{ file: 'tests/a.test.cjs', content: "fs.readFileSync('40-design.md')\n" }],
+    );
+    assert.equal(violations.length, 1);
+  });
+
+  test('property: ignored deletion matches only its own directory path', () => {
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[a-z]{1,8}$/),
+        fc.stringMatching(/^[a-z]{1,8}$/),
+        (a, b) => {
+          fc.pre(a !== b);
+          const deleted = `.gsd/${a}/40-design.md`;
+          const ignored = new Set([deleted]);
+          const other = findSurvivingReferences(
+            [deleted],
+            [{ file: 'src/a.cts', content: `see .gsd/${b}/40-design.md and 40-design.md` }],
+            new Set(),
+            ignored,
+          );
+          const own = findSurvivingReferences(
+            [deleted],
+            [{ file: 'src/a.cts', content: `see ${deleted} here` }],
+            new Set(),
+            ignored,
+          );
+          return other.length === 0 && own.length >= 1;
+        },
+      ),
+    );
+  });
+});
+
+describe('removed-but-needed lint: getIgnoredDeletions (#3677)', () => {
+  test('returns only the gitignored paths of a real repo', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-'));
+    t.after(() => cleanup(tmpDir));
+    gitOrThrow(['init', '-q'], { cwd: tmpDir });
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.gsd\n');
+    const result = getIgnoredDeletions(tmpDir, ['.gsd/a/b.md', 'src/x.cts']);
+    assert.deepEqual([...result], ['.gsd/a/b.md']);
+  });
+
+  test('no ignored path (git exits 1) yields an empty Set', (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-rbn-ignored-none-'));
+    t.after(() => cleanup(tmpDir));
+    gitOrThrow(['init', '-q'], { cwd: tmpDir });
+    fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.gsd\n');
+    const result = getIgnoredDeletions(tmpDir, ['src/x.cts', 'docs/y.md']);
+    assert.equal(result.size, 0);
+  });
+
+  test('empty input yields an empty Set without needing a repo', () => {
+    const result = getIgnoredDeletions(os.tmpdir(), []);
+    assert.equal(result.size, 0);
   });
 });
