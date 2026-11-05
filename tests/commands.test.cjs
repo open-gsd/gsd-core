@@ -1319,8 +1319,19 @@ describe('scaffold command', () => {
         { level: 2, text: 'Result' },
       ],
     );
-    const resultSection = collectSections(document, (heading) => heading.level <= 2)
-      .find((section) => section.heading.text === 'Result');
+    const sections = collectSections(document, (heading) => heading.level <= 2);
+    const goalSection = sections.find((section) => section.heading.text === 'Goal-Backward Verification');
+    assert.ok(goalSection, 'scaffold must contain a Goal-Backward Verification section');
+    assert.equal(goalSection.body.trim(), '**Phase Goal:** [From ROADMAP.md]');
+
+    const checksSection = sections.find((section) => section.heading.text === 'Checks');
+    assert.ok(checksSection, 'scaffold must contain a Checks section');
+    assert.deepEqual(splitLines(checksSection.body.trim()), [
+      '| # | Requirement | Status | Evidence |',
+      '|---|------------|--------|----------|',
+    ]);
+
+    const resultSection = sections.find((section) => section.heading.text === 'Result');
     assert.ok(resultSection, 'scaffold must contain a Result section');
     assert.equal(resultSection.body.trim(), '_Pending verification_');
   });
