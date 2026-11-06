@@ -647,6 +647,8 @@ describe('regressions', () => {
       // MILESTONE_GATE_BLOCKED (a blocking ship:pre predicate gate refusing `milestone complete`).
       // Keep all previous members while checking the four intentional additions.
       assert.strictEqual(seen.reasonCount, 31);
+      // The REASON_TO_OUTCOME doc comment in src/io.cts names the enum size; it must track the registry.
+      assert.ok(fs.readFileSync(path.join(__dirname, '..', 'src', 'io.cts'), 'utf-8').includes(`Closed over the ${seen.reasonCount}-member enum`));
       assert.deepEqual(seen.keys, [
         'CONFIG_KEY_NOT_FOUND', 'CONFIG_NO_FILE', 'CONFIG_PARSE_FAILED', 'CONFIG_INVALID_KEY',
         'SDK_FAIL_FAST', 'SDK_UNKNOWN_COMMAND', 'SDK_MISSING_ARG', 'PHASE_NOT_FOUND',
