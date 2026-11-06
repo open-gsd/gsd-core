@@ -118,6 +118,8 @@ export default tseslint.config(
       // #2874 (epic #2866 Phase 5): tsc-generated runtime artifact — lint the
       // src/install-fs-adapter.cts source, not this.
       'gsd-core/bin/lib/install-fs-adapter.cjs',
+      // #5683: tsc-generated runtime artifact — lint src/install-manifest-record.cts, not this.
+      'gsd-core/bin/lib/install-manifest-record.cjs',
       // #2875 (epic #2866 Phase 6): tsc-generated runtime artifact — lint the
       // src/user-artifact-staging.cts source, not this.
       'gsd-core/bin/lib/user-artifact-staging.cjs',
@@ -311,6 +313,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/installer-migrations.cjs',
       'gsd-core/bin/lib/worktree-safety.cjs',
       'gsd-core/bin/lib/worktree-base-ref.cjs',
+      'gsd-core/bin/lib/gsd-tool-dir.cjs',
       'gsd-core/bin/lib/planning-workspace.cjs',
       'gsd-core/bin/lib/planning-scope.cjs',
       'gsd-core/bin/lib/command-roster.cjs',
