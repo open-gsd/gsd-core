@@ -355,8 +355,9 @@ back to Step 3.
    step before the summary is returned:
    ```bash
    git add <files the fix touched>
-   git diff --cached --quiet -- ":(literal)<file fix touched>" ... || git commit -m "fix: {brief description}" -- ":(literal)<file fix touched>" ...
+   git diff --cached --quiet -- ':(literal)<file fix touched>' ... || git commit -m "fix: {brief description}" -- ':(literal)<file fix touched>' ...
    ```
+   A `'` in a path becomes `'\''`.
 2. **Session doc.** Commit via the CLI, which already gates on `commit_docs` and returns
    `skipped_commit_docs_false` when disabled — call it unconditionally rather than
    re-checking the config here, so the policy lives in one place. `query commit` treats an

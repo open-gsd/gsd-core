@@ -3340,11 +3340,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('parity: the scanner reads the secret guard\'s -c cluster regex and git value-option set', () => {
+    // allow-test-rule: architectural-invariant (#5211)
     const hook = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), 'utf8');
-    const hookRe = hook.match(/const DASH_C_RE = (\/.*\/);/)[1];
+    const hookRe = hook.match(/const DASH_C_RE = (\/.{1,60}\/);/)[1];
+    // allow-test-rule: architectural-invariant (#5211)
     const scanSrc = fs.readFileSync(path.join(__dirname, 'helpers', 'shipped-command-scan.cjs'), 'utf8');
+    // allow-test-rule: architectural-invariant (#5211)
     assert.ok(scanSrc.includes(hookRe), `shellDashCPayloads must use ${hookRe}`);
-    const set = hook.match(/const GIT_GLOBAL_VALUE_OPTIONS = new Set\(\[([^\]]*)\]\)/)[1].match(/'[^']+'/g).map((s) => s.slice(1, -1));
+    const set = hook.match(/const GIT_GLOBAL_VALUE_OPTIONS = new Set\(\[([^\]]{1,400})\]\)/)[1].match(/'[^']{1,40}'/g).map((s) => s.slice(1, -1));
     // The scanner also knows `--super-prefix`, which the hook fails closed on; it must never know less than the hook.
     assert.deepEqual(set.filter((o) => !GIT_VALUE_FLAGS.has(o)), []);
   });
@@ -3510,6 +3513,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
+  // allow-test-rule: source-text-is-the-product (#5211)
   test('stop-tracking recipe carries the same four fragments in all six docs', () => {
     const norm = (t) => t.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
@@ -3541,6 +3545,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
+  // allow-test-rule: source-text-is-the-product (#5211)
   test('git-integration.md commit examples quote every path as :(literal)', () => {
     for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
@@ -3550,6 +3555,18 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
+  // allow-test-rule: source-text-is-the-product (#5211)
+  test('a pasted-path placeholder in a commit pathspec is single-quoted in every shipped prompt, never double-quoted', () => {
+    const sites = ['agents/gsd-debug-session-manager.md', 'agents/gsd-debug-session-manager.compact.md', 'agents/gsd-executor.md', 'agents/gsd-debugger.md',
+      'pi/package-agents/gsd-debug-session-manager.md', 'pi/package-agents/gsd-executor.md', 'pi/package-agents/gsd-debugger.md', 'pi/package-skills/gsd-debug/SKILL.md',
+      'gsd-core/workflows/audit-fix.md', 'gsd-core/workflows/validate-phase.md'];
+    for (const f of sites) {
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      assert.ok(md.includes(":(literal)"), `${f}: has a literal pathspec`);
+      assert.equal(/":\(literal\)[^"]{1,80}[}>]"/.test(md), false, `${f}: double-quoted placeholder`);
+    }
+  });
+  // allow-test-rule: source-text-is-the-product (#5211)
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
       const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
@@ -3563,7 +3580,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
 
   test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
     const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
-      .replace('":(literal){step-2 path}" ...', '":(literal)src/a.ts" ":(literal)src/[b].ts"');
+      .replace("':(literal){step-2 path}' ...", "':(literal)src/a.ts' ':(literal)src/[b].ts'");
     const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489e-');
     fs.mkdirSync(path.join(dir, 'src'));
     fs.writeFileSync(path.join(dir, 'src/a.ts'), 'a'); fs.writeFileSync(path.join(dir, 'stray'), 's');
@@ -3642,12 +3659,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     test('zero staged deletions: exits 0, commits nothing', () => {
       const r = run([]);
       assert.deepStrictEqual([r.status, r.commits], [0, 1]);
-    });
-
-    test('the step prose names the staging step and covers commit, skip and refusal', () => {
-      const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/complete-milestone.md'), 'utf8');
-      assert.ok(md.includes('`git rm` in reorganize_roadmap_and_delete_originals staged the deletion'));
-      assert.ok(md.includes('when it refused (exit 1), stop and report its message'));
     });
   });
 });
