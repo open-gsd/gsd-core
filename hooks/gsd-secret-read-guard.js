@@ -147,7 +147,8 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | debugger-cli-spawn
+//         env-file-secret | glob-too-complex | command-too-large |
+//         debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below).
@@ -305,6 +306,13 @@ const NON_READING_COMMANDS = new Set([
 // segment is still checked, so the carve-out cannot launder a read.
 const CONTAINER_RUNTIMES = new Set(['docker', 'docker-compose', 'podman', 'nerdctl']);
 const ENV_FILE_FLAG_RE = /^--env-file(=|$)/;
+
+// #5885: runtimes that also take `--env-file <file>` but stay OUTSIDE the
+// #4639 exemption: the program they run is usually one the agent just wrote,
+// and it can print `process.env`. A secret value there is still denied, with
+// its own code (`env-file-secret`) so the message names that policy instead
+// of reporting a read. Nothing in this set is exempted.
+const ENV_FILE_RUNTIMES = new Set(['node', 'bun', 'deno', 'uv']);
 
 // #4856: git subcommands that report or drop a path's ignore / tracking
 // status and never print the file, so their pathspec operands are names —
@@ -1106,6 +1114,14 @@ function envFileValueIndices(operands) {
   return exempt;
 }
 
+// #5885: the hit for a secret `--env-file` value under ENV_FILE_RUNTIMES.
+// Every other hit is the offending token text; this one carries its code and
+// the file the flag names (the value after `=`, or the bare flag's operand).
+function envFileHit(text) {
+  const eq = ENV_FILE_FLAG_RE.test(text) ? text.indexOf('=') : -1;
+  return { code: 'env-file-secret', target: eq === -1 ? text : text.slice(eq + 1) };
+}
+
 // True when `text` is a listed long option, or a short cluster (`-co`) whose
 // every letter is listed. `--opt=value`, an abbreviation, or a cluster
 // holding a value option (`-ciX`) is not.
@@ -1236,7 +1252,7 @@ function findSecretReadUnderOtherReadings(command) {
   return null;
 }
 
-// Returns the offending token text, or null.
+// Returns the offending token text, an envFileHit() object (#5885), or null.
 function findSecretRead(command, depth) {
   const { tokens, nested } = tokenize(command);
 
@@ -1342,9 +1358,12 @@ function findSecretRead(command, depth) {
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
+    const envFile = ENV_FILE_RUNTIMES.has(base) ? envFileValueIndices(operands) : null;
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return operands[k].text;
+      if (!operandNamesSecret(operands[k].text)) continue;
+      if (envFile !== null && envFile.has(k)) return envFileHit(operands[k].text);
+      return operands[k].text;
     }
   }
   return null;
@@ -1526,6 +1545,12 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'alternatives and cannot be checked for secret-file matches. Use a narrower glob.';
   }
+  if (code === 'env-file-secret') {
+    return `Secret read guard: --env-file loads the secret file '${target}' into the process environment, ` +
+      'and the program it starts can print that environment into the conversation. ' +
+      'Run the command with a non-secret file instead (for example --env-file .env.example), ' +
+      'or ask the user for the values you need.';
+  }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
       'A shell-spawned debugger runs detached, returns no structured result, and the debug checkpoint never advances. ' +
@@ -1692,7 +1717,10 @@ process.stdin.on('end', () => {
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
     exemption.bashLine = command;
     const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-    if (hit !== null) emitBlock('secret-read', tool, hit);
+    if (hit !== null) {
+      if (typeof hit === 'string') emitBlock('secret-read', tool, hit);
+      else emitBlock(hit.code, tool, hit.target);
+    }
     const spawn = findDebuggerCliSpawn(command, 0);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
     allow(undefined);
