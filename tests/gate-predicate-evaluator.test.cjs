@@ -402,6 +402,15 @@ describe('evaluatePredicate — message trimming', () => {
     assert.ok(!message.includes('boom'));
   });
 
+  test('prefix at cap-1, cap and cap+1 units: one text unit, prefix whole, prefix cut', () => {
+    const codeFor = (prefixLen) => 'x'.repeat(prefixLen - exitPrefix('').length);
+    const at = (prefixLen) => run({ exitCode: codeFor(prefixLen), stderr: 'boom' }).message;
+    const cap = COMMAND_MAX_OUTPUT_CHARS;
+    assert.equal(at(cap - 1), exitPrefix(codeFor(cap - 1)) + 'm');
+    assert.equal(at(cap), exitPrefix(codeFor(cap)));
+    assert.equal(at(cap + 1), exitPrefix(codeFor(cap + 1)).slice(0, cap));
+  });
+
   test('short output is kept whole after the prefix', () => {
     assert.equal(run({ exitCode: 1, stderr: 'boom' }).message, `${exitPrefix(1)}boom`);
   });
