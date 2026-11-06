@@ -151,7 +151,7 @@ test('#5531: the two compose blocks derive the wave-keyed prompt file name the s
   assert.ok(bash.some((l) => l.includes('mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX"')), 'mktemp creates the stem plus a 6-wide suffix');
 });
 
-test('#5531: the wave name the prompt file carries is the one execute-phase.md gives the manifest', () => {
+test('#5531: the wave name shape the prompt file carries is the one execute-phase.md gives the manifest', () => {
   // The integration test builds wave names of this shape by hand.
   const executePhase = readFileNormalized(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'));
   assert.ok(executePhase.includes('mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX"'), 'the manifest is named gsd-worktree-wave-XXXXXX');
