@@ -558,10 +558,143 @@ describe('contract-drift: typed surface', () => {
     }
   });
 
-  test('sanitizeEcho strips control characters and caps length', () => {
+  // sanitizeEcho escapes each hostile code point as `\u{X}` (uppercase hex, unpadded). BS is a
+  // literal backslash built from its code point so this file holds no escape-ambiguous text.
+  const BS = String.fromCharCode(0x5c);
+  const escaped = (c) => `${BS}u{${c.toString(16).toUpperCase()}}`;
+  const HOSTILE_CLASS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Cn}]/u;
+
+  test('sanitizeEcho escapes control characters and caps length', () => {
     assert.equal(sanitizeEcho('clean text'), 'clean text');
-    assert.equal(sanitizeEcho('a\x00b\x07c\x1fd'), 'abcd');
+    assert.equal(
+      sanitizeEcho(`a${String.fromCodePoint(0)}b${String.fromCodePoint(7)}c${String.fromCodePoint(0x1f)}d`),
+      `a${escaped(0)}b${escaped(7)}c${escaped(0x1f)}d`,
+    );
     assert.equal(sanitizeEcho('x'.repeat(500)).length, 200);
+  });
+
+  test('sanitizeEcho escapes as uppercase unpadded \\u{X}, and an escape is never split by the cap', () => {
+    assert.equal(sanitizeEcho(String.fromCodePoint(0x85)), `${BS}u{85}`);
+    assert.equal(sanitizeEcho(String.fromCodePoint(0x200b)), `${BS}u{200B}`);
+    assert.equal(sanitizeEcho(String.fromCodePoint(0xe0041)), `${BS}u{E0041}`);
+    // `\u{85}` is 6 output code points. n plain characters + the escape: n=193 -> 199 total,
+    // n=194 -> exactly 200 (kept), n=195 -> 201 would exceed the cap, so the escape is dropped whole.
+    const c1 = String.fromCodePoint(0x85);
+    assert.equal(sanitizeEcho(`${'a'.repeat(193)}${c1}`), `${'a'.repeat(193)}${BS}u{85}`);
+    assert.equal(sanitizeEcho(`${'a'.repeat(194)}${c1}`), `${'a'.repeat(194)}${BS}u{85}`);
+    assert.equal(Array.from(sanitizeEcho(`${'a'.repeat(194)}${c1}`)).length, 200);
+    assert.equal(sanitizeEcho(`${'a'.repeat(195)}${c1}`), 'a'.repeat(195));
+  });
+
+  test('sanitizeEcho escapes a literal backslash, so an ASCII spelling never collides with a hostile one', () => {
+    assert.equal(sanitizeEcho(`x${BS}y`), `x${BS}u{5C}y`);
+    const spelledOut = `x${BS}u{202E}y`; // ASCII text that merely looks like an escape
+    const hostile = `x${String.fromCodePoint(0x202e)}y`;
+    assert.notEqual(sanitizeEcho(spelledOut), sanitizeEcho(hostile));
+    assert.equal(sanitizeEcho(spelledOut), `x${BS}u{5C}u{202E}y`);
+    assert.equal(sanitizeEcho(hostile), `x${BS}u{202E}y`);
+  });
+
+  test('sanitizeEcho output is bounded and hostile-free for any input (property)', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary', maxLength: 600 }), (s) => {
+        const out = sanitizeEcho(s);
+        assert.ok(!HOSTILE_CLASS.test(out), 'a hostile character reached the output');
+        assert.ok(Array.from(out).length <= 200, `output exceeds the cap: ${Array.from(out).length}`);
+      }),
+    );
+  });
+
+  test('sanitizeEcho round-trips: an untruncated output decodes back to the input (property)', () => {
+    const decode = (out) => out.replace(/\\u\{([0-9A-F]+)\}/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+    const bs = String.fromCharCode(0x5c);
+    const special = [
+      ...[0x5c, 0x75, 0x7b, 0x7d, 0x30, 0x35, 0x41, 0x46, 0x202e, 0x85, 0x200b, 0xd800, 0xdfff, 0x1f600].map((cp) =>
+        String.fromCodePoint(cp),
+      ),
+      `${bs}u{`, // spelled-out escape prefix (ASCII text, not a hostile character)
+      `${bs}u{202E}`, // spelled-out full escape
+    ];
+    const arb = fc
+      .array(fc.oneof(fc.constantFrom(...special), fc.string({ unit: 'binary', maxLength: 8 })), { maxLength: 120 })
+      .map((parts) => parts.join(''));
+    fc.assert(
+      fc.property(fc.oneof(arb, fc.string({ unit: 'binary', maxLength: 300 })), (s) => {
+        const out = sanitizeEcho(s);
+        // The longest escape (`\u{10FFFF}`) is 10 code points, so an output of at most 190 cannot have been truncated.
+        if (Array.from(out).length <= 190) assert.equal(decode(out), s);
+      }),
+      { numRuns: 1000 },
+    );
+  });
+
+  test('sanitizeEcho also escapes C1 controls, line/paragraph separators, zero-width and bidi controls', () => {
+    const ranges = [
+      [0x80, 0x9f], // C1, incl. 8-bit CSI U+009B
+      [0x2028, 0x2029], // line / paragraph separator
+      [0x200b, 0x200f], // zero-width + LRM/RLM
+      [0x202a, 0x202e], // bidi embeddings/overrides
+      [0x2066, 0x2069], // bidi isolates
+      [0xfeff, 0xfeff], // BOM / zero-width no-break space
+      [0x061c, 0x061c], // Arabic letter mark (bidi)
+      [0x2060, 0x2064], // word joiner + invisible operators
+      [0x180e, 0x180e], // Mongolian vowel separator
+      [0x00ad, 0x00ad], // soft hyphen
+    ];
+    for (const [lo, hi] of ranges) {
+      for (let c = lo; c <= hi; c += 1) {
+        assert.equal(sanitizeEcho(`a${String.fromCodePoint(c)}b`), `a${escaped(c)}b`, `U+${c.toString(16)} must be escaped`);
+      }
+    }
+  });
+
+  test('sanitizeEcho escapes by Unicode category: tags, variation selectors, fillers, private-use, unassigned, lone surrogates', () => {
+    const points = [
+      0xe0001, 0xe0041, 0xe007f, // tag characters (Cf)
+      0xfe00, 0xfe0f, 0xe0100, 0xe01ef, // variation selectors
+      0xfff9, 0xfffa, 0xfffb, // interlinear annotation (Cf)
+      0x1d173, 0x1d17a, // musical format controls (Cf)
+      0x206a, 0x206f, // deprecated format controls (Cf; previously kept)
+      0x034f, 0x115f, 0x1160, 0x3164, 0xffa0, 0x17b4, 0x17b5, 0x2800, // fillers
+      0xe000, 0xf8ff, // private use (Co)
+      0xfdd0, 0xfffe, 0xffff, // permanent noncharacters (Cn in every Unicode version)
+      0x180b, 0x180c, 0x180d, 0x180f, // Mongolian free variation selectors (Mn)
+      0xd800, 0xdfff, // lone surrogates (Cs)
+    ];
+    for (const c of points) {
+      assert.equal(sanitizeEcho(`a${String.fromCodePoint(c)}b`), `a${escaped(c)}b`, `U+${c.toString(16)} must be escaped`);
+    }
+  });
+
+  test('sanitizeEcho keeps the neighbours of the escaped ranges and ordinary non-ASCII text', () => {
+    for (const c of [0xa0, 0xe9, 0x200a, 0x2010, 0x2027, 0x202f, 0x061b, 0x205f, 0xac, 0xae, 0x4e2d, 0x1f600]) {
+      const s = `a${String.fromCodePoint(c)}b`;
+      assert.equal(sanitizeEcho(s), s, `U+${c.toString(16)} must be kept`);
+    }
+  });
+
+  test('sanitizeEcho on a very long input stays within 200 output code points', () => {
+    const interleaved = 'a\u{200B}'.repeat(500000); // 1M code points, half hostile
+    // 'a' + 8-char escape = 9 output code points per pair: 22 whole pairs (198), then 'a' (199);
+    // the next escape (8) would exceed the cap, so it is dropped whole.
+    assert.equal(sanitizeEcho(interleaved), `a${BS}u{200B}`.repeat(22) + 'a');
+    assert.equal(sanitizeEcho(`${'b'.repeat(300000)}tail`), 'b'.repeat(200));
+    assert.equal(sanitizeEcho('\u{200B}'.repeat(1000000)), `${BS}u{200B}`.repeat(25));
+  });
+
+  test('sanitizeEcho caps by code point and never splits a surrogate pair', () => {
+    const out = sanitizeEcho(`a${'\u{1F600}'.repeat(250)}`);
+    assert.equal(Array.from(out).length, 200);
+    for (let i = 0; i < out.length; i += 1) {
+      const u = out.charCodeAt(i);
+      if (u >= 0xd800 && u <= 0xdbff) {
+        const next = out.charCodeAt(i + 1);
+        assert.ok(next >= 0xdc00 && next <= 0xdfff, 'lone high surrogate');
+        i += 1;
+      } else {
+        assert.ok(u < 0xdc00 || u > 0xdfff, 'lone low surrogate');
+      }
+    }
   });
 });
 
@@ -1100,6 +1233,17 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
     // of these can shorten to the real `tdd.md`.
     'tdd.md_', 'tdd.md-', 'tdd.md_.', 'tdd.md._', 'tdd.md-)',
   ];
+  // The detail is echoed through sanitizeEcho, which ESCAPES C1 controls (U+0085) and zero-width
+  // characters (U+200B) as `\u{X}` so a hostile pointer cannot forge or hide output a reader
+  // trusts, yet the spelling stays traceable as written. A literal backslash is escaped too
+  // (`\u{5C}`). Every other spelling is echoed verbatim.
+  // BS is a literal backslash built from its code point.
+  const BS = String.fromCharCode(0x5c);
+  const ECHOED_AS = new Map([
+    ['tdd.md\u0085xx', `tdd.md${BS}u{85}xx`],
+    ['tdd.md\u200Bxx', `tdd.md${BS}u{200B}xx`],
+    ['tdd.md\\xx', `tdd.md${BS}u{5C}xx`], // a literal backslash is escaped too, so spellings never collide
+  ]);
 
   test('#4930: every continuation spelling is reported once, as written', (t) => {
     const dir = createTempDir('gsd-4930-spellings-');
@@ -1121,10 +1265,14 @@ describe('contract-drift: end-to-end via check-contract-drift.cjs --root', () =>
       .map((x) => x.detail);
     assert.equal(details.length, CONTINUATIONS.length, JSON.stringify(details));
     for (const tail of CONTINUATIONS) {
+      const echoed = ECHOED_AS.get(tail) ?? tail;
       assert.ok(
-        details.some((d) => d.includes(`@~/.claude/gsd-core/references/${tail} does not name a reference whole`)),
+        details.some((d) => d.includes(`@~/.claude/gsd-core/references/${echoed} does not name a reference whole`)),
         `${JSON.stringify(tail)} must be reported as written: ${JSON.stringify(details)}`,
       );
+    }
+    for (const d of details) {
+      assert.ok(!['\u0085', String.fromCodePoint(0x200b)].some((ch) => d.includes(ch)), `an invisible character reached the echoed detail: ${JSON.stringify(d)}`);
     }
   });
 
