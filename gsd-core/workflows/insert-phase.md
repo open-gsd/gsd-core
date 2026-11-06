@@ -64,7 +64,7 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_A=(); GSD_WSV=; read -rd "" -a GSD_W <<<"${GSD_ARGS#--insert[[:space:]]}" || true; set -- "${GSD_W[@]}"
+GSD_A=(); GSD_WSV=; read -rd "" -a GSD_W <<<"$GSD_ARGS" || true; [ "${GSD_W[0]-}" = --insert ] && GSD_W=("${GSD_W[@]:1}"); set -- "${GSD_W[@]}"
 while [ $# -gt 0 ]; do case $1 in --ws) GSD_WSV=${2:-}; [ $# -gt 1 ] && shift;; *) GSD_T=${1#\"}; GSD_A+=("${GSD_T%\"}");; esac; shift; done
 RESULT=$(gsd_run query phase.insert "${GSD_A[@]}" ${GSD_WSV:+--ws="$GSD_WSV"})
 ```
