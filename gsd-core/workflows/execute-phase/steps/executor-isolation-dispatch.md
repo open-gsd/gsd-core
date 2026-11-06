@@ -107,7 +107,7 @@ fi
 # passes the held answer's `decidedAt`, so this re-record does not restart
 # the hold (dispatch-isolation-gate.md, "A plain re-query reports the held
 # decision").
-gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 `ISOLATION` — not `RUNTIME` — selects how the wave fans out. These three values are the only

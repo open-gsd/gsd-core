@@ -72,12 +72,12 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
-// #4904: the hold-renewal sweep appends the same single expansion to every
+// #4904: the hold-renewal sweep appends the same pair of expansions to every
 // re-record of a dispatch-isolation decision that can follow a held answer, quick.md's
 // and quick-batch's included. Like the --ws sweep above it is a mechanical propagation,
 // and it is recognized the same way: an added line counts only when stripping the
-// expansion from it yields a removed line, or the reverse.
-const RENEW_HELD_FLAG = ' ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}';
+// pair from it yields a removed line, or the reverse.
+const RENEW_HELD_FLAG = ' ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"}';
 function isRenewHeldSweepLine(sign, body, addedBodies, removedBodies) {
   if (sign === '+' && body.includes(RENEW_HELD_FLAG)) {
     return removedBodies.has(body.split(RENEW_HELD_FLAG).join(''));
@@ -213,7 +213,7 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
 
   test('the #4904 hold-renewal carve-out accepts only the expansion appended to an otherwise unchanged line', () => {
     const before = 'gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" >/dev/null 2>&1 || true';
-    const after = 'gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true';
+    const after = 'gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true';
     const added = new Set([after]);
     const removed = new Set([before]);
     assert.equal(isRenewHeldSweepLine('+', after, added, removed), true, 'the added side of the pair');

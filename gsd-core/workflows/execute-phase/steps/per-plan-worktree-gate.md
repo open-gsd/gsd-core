@@ -134,7 +134,7 @@ if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then
   # answer's `decidedAt`, and `--renew-held` keeps it so this plan's record does
   # not restart the hold; the intersection only runs when USE_WORKTREES was not
   # already false, so its own degrade is always a new decision.
-  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation none ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
+  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation none ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # No plan-level override — re-resolve normally, still scoped to this plan,
   # so the sentinel's `plan` field always matches the plan about to dispatch.
