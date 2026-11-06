@@ -19,7 +19,7 @@ Manage phases in ROADMAP.md with a single consolidated command.
 
 Mode routing:
 - **default** (no flag): Add a new integer phase to the end of the current milestone → add-phase workflow
-- **--insert**: Insert urgent work as a decimal phase (e.g., 72.1) between existing phases (`--sibling` joins the parent level after a decimal phase; default nests) → insert-phase workflow
+- **--insert**: Insert urgent work as a decimal phase (e.g., 72.1) between existing phases (`--sibling` joins the parent level after a decimal phase; default nests, and bracket phase ids refuse the nested form) → insert-phase workflow
 - **--remove**: Remove a future phase and renumber subsequent phases → remove-phase workflow
 - **--edit**: Edit any field of an existing phase in place → edit-phase workflow
 </objective>

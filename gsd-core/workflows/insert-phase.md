@@ -71,7 +71,7 @@ RESULT=$(gsd_run query phase.insert "$GSD_AFTER" "$GSD_DESC" ${GSD_SIBLING:+--si
 
 The CLI handles:
 - Verifying target phase exists in ROADMAP.md
-- Calculating next decimal phase number (checking existing decimals on disk; nested by default, parent level with `--sibling`)
+- Calculating next decimal phase number (checking existing decimals on disk; nested by default, parent level with `--sibling`; bracket phase ids refuse the nested form after a decimal phase)
 - Generating slug from description
 - Creating the phase directory (`.planning/phases/{N.M}-{slug}/`)
 - Inserting the phase entry into ROADMAP.md after the target phase with (INSERTED) marker
