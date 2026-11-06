@@ -206,8 +206,8 @@ for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is
   // path, which is the standard find_and_fix flow. A bare `git commit` with nothing
   // staged exits non-zero and would abort this step before the summary is returned.
   const body = fs.readFileSync(file, 'utf8');
-  const line = splitLines(body).find((l) => l.includes('git diff --cached --quiet -- ')) ?? '';
-  const guard = line.indexOf('git diff --cached --quiet -- ');
+  const line = splitLines(body).find((l) => l.includes('git diff HEAD --quiet -- ')) ?? '';
+  const guard = line.indexOf('git diff HEAD --quiet -- ');
   const commit = line.indexOf(' || git commit -m ', guard);
   // allow-test-rule: source-text-is-the-product (#5211)
   assert.ok(guard !== -1 && commit !== -1 && line.indexOf(' -- ', commit + 1) !== -1,
@@ -215,7 +215,7 @@ for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is
       'already committed it, and an unguarded git commit exits non-zero on an empty diff',
   );
   // #5211: guard and commit must name the SAME paths, or the guard tests different files than the commit records.
-  const guardPaths = line.slice(guard + 'git diff --cached --quiet -- '.length, line.indexOf(' || ', guard));
+  const guardPaths = line.slice(guard + 'git diff HEAD --quiet -- '.length, line.indexOf(' || ', guard));
   const commitPaths = line.slice(line.indexOf(' -- ', commit) + 4);
   // allow-test-rule: source-text-is-the-product (#5211)
   assert.ok(guardPaths.length > 0 && guardPaths === commitPaths,
