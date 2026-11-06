@@ -717,7 +717,10 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     });
   }
 
-  test('the same failure under a default write truncates the destination (the fallback the atomic mode removes)', () => {
+  // The default write falls back to a direct write when the temp file cannot be written. That
+  // fallback truncates the destination, but it captures the old bytes first and puts them back
+  // when its own write fails, so the same failure ends with the previous bytes and no temp file.
+  test('the same failure under a default write puts the previous bytes back and leaves no temp file', () => {
     fs.writeFileSync(target, PREVIOUS);
     const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3, { resolveDescriptors: true });
     try {
@@ -725,7 +728,8 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     } finally {
       restore();
     }
-    assert.notDeepStrictEqual(fs.readFileSync(target), Buffer.from(PREVIOUS), 'the direct-write fallback damaged it');
+    assert.deepStrictEqual(fs.readFileSync(target), Buffer.from(PREVIOUS), 'the direct-write fallback restored it');
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md'], 'no temp file is left');
   });
 
   test('a rename that cannot be atomic (EXDEV) throws and leaves the destination and no temp file', () => {

@@ -979,25 +979,45 @@ describe('#5831: state prune never loses entries', () => {
     });
   }
 
-  for (const archiveBefore of ['present', 'absent']) {
-    test(`an archive write that damages the archive and then throws is undone before the error propagates (archive ${archiveBefore})`, () => {
-      if (archiveBefore === 'present') fs.writeFileSync(archivePath, SEED_ARCHIVE);
-      const stateBefore = fs.readFileSync(statePath);
-      const archiveBytes = bytesOrNull(archivePath);
-      const realPws = scp.platformWriteSync;
-      mock.method(scp, 'platformWriteSync', (p, ...rest) => {
-        if (p !== archivePath) return realPws.call(scp, p, ...rest);
-        fs.writeFileSync(archivePath, 'half a bl'); // any write path that leaves the file damaged
-        const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
-      });
-      assert.throws(() => prune(3), (err) => err.code === 'EIO' && !(err instanceof AggregateError));
-      mock.restoreAll();
-
-      assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive is put back exactly / removed again');
-      assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
-      assert.ok(lockReleased(), 'the STATE.md lock is released');
+  test('an archive write that damages the archive and then throws is undone before the error propagates (archive present)', () => {
+    fs.writeFileSync(archivePath, SEED_ARCHIVE);
+    const stateBefore = fs.readFileSync(statePath);
+    const archiveBytes = bytesOrNull(archivePath);
+    const realPws = scp.platformWriteSync;
+    mock.method(scp, 'platformWriteSync', (p, ...rest) => {
+      if (p !== archivePath) return realPws.call(scp, p, ...rest);
+      fs.writeFileSync(archivePath, 'half a bl'); // any write path that leaves the file damaged
+      const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
     });
-  }
+    assert.throws(() => prune(3), (err) => err.code === 'EIO' && !(err instanceof AggregateError));
+    mock.restoreAll();
+
+    assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive is put back exactly');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
+  // With no archive before the run, a file at the path after a failed write cannot be proven to
+  // be this run's (no identity was ever recorded for it): it is never deleted. The error carries
+  // both causes (EIO and ESTALE) and STATE.md, which still holds every entry, is untouched.
+  test('an archive write that creates a damaged archive and then throws leaves it in place and reports both causes (archive absent)', () => {
+    const stateBefore = fs.readFileSync(statePath);
+    const realPws = scp.platformWriteSync;
+    mock.method(scp, 'platformWriteSync', (p, ...rest) => {
+      if (p !== archivePath) return realPws.call(scp, p, ...rest);
+      fs.writeFileSync(archivePath, 'half a bl');
+      const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
+    });
+    let thrown = null;
+    try { prune(3); } catch (err) { thrown = err; }
+    mock.restoreAll();
+
+    assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
+    assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'ESTALE']);
+    assert.strictEqual(fs.readFileSync(archivePath, 'utf-8'), 'half a bl', 'the file that is not provably ours is left in place');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
 
   test('when undoing a damaging archive write also fails, both causes surface and STATE.md is untouched', () => {
     fs.writeFileSync(archivePath, SEED_ARCHIVE);
