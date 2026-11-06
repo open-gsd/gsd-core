@@ -194,9 +194,10 @@ TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 # each other's file for the same phase and plan numbers. A prompt file a crashed wave left
 # behind is swept once it is a day old.
 # The halts that #5531 adds exit with codes of the exit-code registry (docs/reference/exit-codes.md),
-# chosen by meaning: 69 UNAVAILABLE when the directory, the file or a leftover cannot be created,
-# removed or read; 66 NO_INPUT when the read-and-check block finds no prompt file; 70 INTERNAL when
-# it finds more than one or a NUL byte. The guards that were already here keep exit 1.
+# chosen by meaning: every one is 69 UNAVAILABLE (a prerequisite is absent or the input is
+# unreadable): the directory, the file or a leftover cannot be created or removed, the read-and-check
+# block finds no prompt file or more than one, or the file holds a NUL byte or cannot be read.
+# The guards that were already here keep exit 1.
 _PROMPT_PREFIX='gsd-executor-prompt'
 _PROMPT_STEM="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}"
 mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 69; }
@@ -293,16 +294,15 @@ _PROMPT_HITS=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 
 if [ "${#_PROMPT_HITS}" -ne 1 ]; then
   find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
   echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
-  [ "${#_PROMPT_HITS}" -eq 0 ] && exit 66
-  exit 70
+  exit 69
 fi
 PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null)
-_PROMPT_BYTES=$(wc -c < "$PROMPT_FILE" 2>/dev/null || :)
-_PROMPT_NONNUL=$(tr -d '\000' < "$PROMPT_FILE" 2>/dev/null | wc -c || :)
+_PROMPT_BYTES=$(wc -c 2>/dev/null < "$PROMPT_FILE" || :)
+_PROMPT_NONNUL=$(tr -d '\000' 2>/dev/null < "$PROMPT_FILE" | wc -c || :)
 if [ -n "$_PROMPT_BYTES" ] && [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
   rm -rf -- "$PROMPT_FILE" || :
   echo "FATAL: executor prompt file for plan {plan_number} holds a NUL byte, which a shell variable cannot carry. Halting." >&2
-  exit 70
+  exit 69
 fi
 if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE" && printf x); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
 EXECUTOR_PROMPT=${EXECUTOR_PROMPT%x}

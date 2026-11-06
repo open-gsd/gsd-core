@@ -33,9 +33,8 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   const WAVE = 'gsd-worktree-wave-aBc123';
   const BOM = String.fromCharCode(0xfeff);
   // The exit code of each halt #5531 adds: the typed value that tells them apart. The older guards keep exit 1.
-  // The exit codes of docs/reference/exit-codes.md: 69 UNAVAILABLE, 66 NO_INPUT, 70 INTERNAL. Several halts share one, so each case below
-  // is a separate input that only its own guard catches.
-  const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 66, two: 70, nul: 70, unreadable: 69, guard: 1 };
+  // Every added halt exits 69 UNAVAILABLE (docs/reference/exit-codes.md), so each case below is a separate input that only its own guard catches.
+  const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 69, two: 69, nul: 69, unreadable: 69, guard: 1 };
   // The two markers the read-and-check guards need, so a payload after them reaches the last guard.
   const GUARDED = '<required_reading>\nskipped_gitignored\n';
 
@@ -144,7 +143,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     }
   });
 
-  test('#5531: the read-and-check block removes the matched file and halts for no match (exit 66), two matches and a NUL byte (exit 70) and, with the shared exit 1, an empty file, a truncated or unmarked file and each unfinished-template marker', (t) => {
+  test('#5531: the read-and-check block removes the matched file and halts for no match, two matches and a NUL byte (exit 69) and, with the shared exit 1, an empty file, a truncated or unmarked file and each unfinished-template marker', (t) => {
     const dir = tempDir(t);
     const put = (text) => (root) => [place(root, `${STEM}-aaaaaa`, text)];
     const cases = {
