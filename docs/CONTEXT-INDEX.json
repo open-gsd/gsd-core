@@ -1264,7 +1264,7 @@
     {
       "id": "SEAM.code-unit-cap.owns",
       "klass": "SEAM",
-      "value": "the surrogate-safe cut of a string to at most N UTF-16 code units (head or tail), owned solely by src/code-unit-cap.cts capCodeUnits"
+      "value": "the surrogate-safe cut of a string to at most N UTF-16 code units (head or tail), implemented by src/code-unit-cap.cts capCodeUnits"
     },
     {
       "id": "SEAM.evaluation-scope.enforced-by",
