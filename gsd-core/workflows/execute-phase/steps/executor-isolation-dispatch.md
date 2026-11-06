@@ -138,7 +138,7 @@ Every entry with `needsReconciliation: true` (recorded running, process gone) is
 
 Run the loop below once per runnable plan in the wave, **one plan at a time** (`git worktree add` races on `.git/config.lock`).
 
-**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}` and `{plan_padded}` wherever the block uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
+**Before running each bash block below, substitute the plan's identifiers into it** exactly as you do for the `Agent()` prompt on the harness path: replace `{phase_dir}`, `{plan_file}`, `{plan_number}`, `{phase_number}`, `{plan_padded}`, `{plan_id}`, `{phase_name}`, `{prior_wave_summaries}` and `{worker_note}` wherever a bash block or the prompt template uses them with this plan's values. They are template placeholders, not shell variables. `$ORCH_ROOT` and `$EXPECTED_BASE` are real shell variables, already assigned earlier in this step; `$WAVE_WORKTREE_MANIFEST` was initialized above.
 
 First build the executor prompt. It is the **same prompt text the harness path's `Agent()` call uses** — same executor identity, same execution context, same required-reading contract — with only the harness-only framing removed: drop the `<worktree_branch_check>` build-time embed note (this backend pins the base itself via `worktree create --base` and verifies it at merge) and the `<parallel_execution>` harness block (its SUMMARY-commit semantics ride inside the embedded `execute-plan.md` worktree mode). Keep `<objective>`, `<execution_context>`, `<required_reading>`, `${AGENT_SKILLS}`, and `<success_criteria>` from the harness prompt — substituting the worktree-specific `<execution_context>` framing below. The checkpoint gate rule (#3370, in `per-plan-executor-routing.md`) applies here too: add no prompt text refusing or overriding auto-approval for the default `gate="blocking"` — only `blocking-human` always surfaces.
 
@@ -158,9 +158,9 @@ Create the prompt file for THIS plan; the block prints its path as `PROMPT_FILE=
 #   1. Inline each file listed in <execution_context> verbatim, in order.
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
-#   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
-#      {phase_dir}, {plan_file}, {plan_id}, and {plan_padded} placeholders
-#      (same values the harness path substitutes into its Agent() prompt).
+#   2. Substitute this plan's placeholders, the ones the substitution
+#      instruction above names (same values the harness path substitutes
+#      into its Agent() prompt).
 #      {plan_id} is this plan's `id` field from the phase-plan-index JSON —
 #      the guard hooks compare it verbatim against the sentinel the per-plan
 #      gate wrote, so a paraphrase or omission costs the dispatch its
@@ -190,13 +190,22 @@ TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 # The prompt file lives under ORCH_ROOT/.claude, inside every host's writable
 # root (the worktrees live there too). Its name is keyed by plan so the
 # read-and-check block finds it by name pattern; leftovers of this plan are removed first.
-mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 1; }
-find "${ORCH_ROOT}/.claude" -maxdepth 1 -name 'gsd-executor-prompt-{phase_number}-{plan_number}-??????' -exec rm -f -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 1; }
-PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/gsd-executor-prompt-{phase_number}-{plan_number}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 1; } # XXXXXX path-final on BSD/macOS (#1520)
+# The name carries this wave's manifest name, so two orchestrators in one checkout never touch
+# each other's file for the same phase and plan numbers. A prompt file a crashed wave left
+# behind is swept once it is a day old.
+# The halts that #5531 adds exit with their own sysexits(3) codes from the generic band 64 to 78
+# of ADR-3889, so the caller can tell which one fired: 73 cannot create the directory or the file,
+# 74 cannot remove a leftover, 69 no file or more than one (the registered UNAVAILABLE), 65 NUL
+# byte, 77 unreadable. Only 69 is registered. The guards that were already here keep exit 1.
+_PROMPT_STEM="gsd-executor-prompt-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}"
+mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 73; }
+find "${ORCH_ROOT}/.claude" -maxdepth 1 -name 'gsd-executor-prompt-*' -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || :
+find "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 74; }
+PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 73; } # XXXXXX path-final on BSD/macOS (#1520)
 echo "PROMPT_FILE=$PROMPT_FILE"
 ```
 
-Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted:
+Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted. `mktemp` created that file empty, so a file tool that refuses to overwrite a file it has not read must read it first:
 
 ```text
 <objective>
@@ -274,18 +283,28 @@ Then read it back and check it:
 # This block runs as its own command: it finds the file block 1 created by the
 # same plan-keyed name pattern, so no path text is spliced into shell source.
 # `find` takes the pattern as an argument: an unmatched pattern is not a shell
-# glob error under bash or zsh. No match, or more than one, halts.
-PROMPT_FILE=$(find "${ORCH_ROOT}/.claude" -maxdepth 1 -name 'gsd-executor-prompt-{phase_number}-{plan_number}-??????' 2>/dev/null || :)
+# glob error under bash or zsh. No match, or more than one, halts. The exit codes of
+# these halts are listed in block 1.
+_PROMPT_NAME="gsd-executor-prompt-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}-??????"
+PROMPT_FILE=$(find "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null || :)
 case "$PROMPT_FILE" in
   ''|*'
 '*)
-    find "${ORCH_ROOT}/.claude" -maxdepth 1 -name 'gsd-executor-prompt-{phase_number}-{plan_number}-??????' -exec rm -f -- {} + 2>/dev/null || :
+    find "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
     echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
-    exit 1 ;;
+    exit 69 ;;
 esac
-if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE"); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
-rm -f -- "$PROMPT_FILE" || :
-[ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 1; }
+_PROMPT_BYTES=$(wc -c < "$PROMPT_FILE" 2>/dev/null || :)
+_PROMPT_NONNUL=$(tr -d '\000' < "$PROMPT_FILE" 2>/dev/null | wc -c || :)
+if [ -n "$_PROMPT_BYTES" ] && [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
+  rm -rf -- "$PROMPT_FILE" || :
+  echo "FATAL: executor prompt file for plan {plan_number} holds a NUL byte, which a shell variable cannot carry. Halting." >&2
+  exit 65
+fi
+if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE" && printf x); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
+EXECUTOR_PROMPT=${EXECUTOR_PROMPT%x}
+rm -rf -- "$PROMPT_FILE" || :
+[ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 77; }
 [ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty for plan {plan_number}." >&2; exit 1; }
 # #3637 fail-closed verification. Two classes of check:
 #   (a) template completeness — the prompt must carry the required-reading
@@ -322,11 +341,11 @@ if printf '%s' "$EXECUTOR_PROMPT" | grep -q '\${TDD_APPLICABLE'; then
 fi
 ```
 
-The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. `cat` keeps the file's bytes apart from the trailing newlines and NUL bytes `$(...)` drops, so a CRLF or BOM the file tool writes reaches the executor as written.
+The prompt reaches the shell only as file contents read by `cat`, so apostrophes, `$(...)`, backticks and quotes in the template or in any spliced embed are never parsed or run; do not escape them. The read-back appends a sentinel `x` inside the command substitution and strips it, which keeps the trailing newlines `$(...)` would drop, so a CRLF, a BOM or trailing newlines the file tool writes reach the executor as written. A prompt file that holds a NUL byte halts instead, because a shell variable cannot carry one.
 
 Run the blocks in one shell, each as its own command: `$ORCH_ROOT`, `$EXPECTED_BASE` and `$WAVE_WORKTREE_MANIFEST` stay set, and `$EXECUTOR_PROMPT` from the read-and-check block reaches the spawn block. No path text is handed from block 1 to the read-and-check block: it finds the file by the same plan-keyed name pattern block 1 created it with.
 
-The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes it before any check, so every halt of that block runs with the file already gone. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -f --` on the path block 1 printed before halting.
+The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes the file on every halt after the read, so the file is already gone when the block halts. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -rf --` on the path block 1 printed before halting.
 
 Then create the worktree and resolve the spawn:
 
