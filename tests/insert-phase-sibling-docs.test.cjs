@@ -8,6 +8,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -20,19 +21,18 @@ const ROUTERS = [
   'pi/package-skills/gsd-phase/SKILL.md',
 ];
 
-const DOCS = [
-  'docs/COMMANDS.md',
-  'docs/USER-GUIDE.md',
-  'docs/FEATURES.md',
-  'docs/features/phase-management.md',
-];
+const DOCS = {
+  'docs/COMMANDS.md': '--insert 15.2 --sibling',
+  'docs/USER-GUIDE.md': '--insert 15.2 --sibling',
+  'docs/FEATURES.md': '--insert [N] [--sibling]',
+  'docs/features/phase-management.md': '--insert [N] [--sibling]',
+};
 const NEST_SITES = [
   WF,
   ...ROUTERS,
   'gsd-core/workflows/help/modes/full.md',
   'gsd-core/workflows/help/modes/full.compact.md',
   'docs/COMMANDS.md',
-  '.changeset/kind-deer-travel.md',
 ];
 
 describe('#5583 insert-phase --sibling', () => {
@@ -48,13 +48,32 @@ describe('#5583 insert-phase --sibling', () => {
   test('workflow parses --sibling out of the description and forwards it', () => {
     const WORKFLOW = read(WF);
     assert.match(WORKFLOW, /Usage: \/gsd:phase --insert <after> \[--sibling\] <description>/);
-    assert.match(WORKFLOW, /never part of the description/);
+    assert.match(WORKFLOW, /the token directly after the first argument/);
     const cmds = WORKFLOW.match(/^RESULT=\$\(gsd_run query phase\.insert .*$/gm) || [];
     assert.equal(cmds.length, 1, 'one phase.insert call per run');
     assert.match(cmds[0], /\$\{GSD_SIBLING:\+--sibling\}\)$/);
-    assert.match(WORKFLOW, /^case " \$GSD_ARGS " in \*" --sibling "\*\) GSD_SIBLING=1;;/m);
     assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
+    const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
+    assert.match(fence, /^GSD_ARGS=\$\{GSD_ARGS%\$'\\n'\}$/m, 'the insert fence captures GSD_ARGS itself');
+    assert.match(fence, /^GSD_SIBLING=; /m, 'the insert fence derives GSD_SIBLING itself');
+    assert.match(fence, /"\$\{GSD_DESC\}"/, 'the description reaches the CLI through a quoted heredoc variable');
   });
+
+  // Run the shipped detection line: the flag counts only directly after the first argument.
+  const sibLine = read(WF).match(/^GSD_SIBLING=; .*$/m)[0];
+  const sibling = (args) => spawnSync('bash', ['-c', `${sibLine}; printf %s "$GSD_SIBLING"`], { env: { ...process.env, GSD_ARGS: args }, encoding: 'utf8' }).stdout;
+  for (const [args, want] of [
+    ['15.2 --sibling x', '1'],
+    ['--insert 15.2 --sibling x', '1'],
+    ['15.2\t--sibling x', '1'],
+    ['15.2 x', ''],
+    ['15.2 x --sibling', ''],
+    ['72 fix the --sibling flag', ''],
+    ['15.2 --siblings x', ''],
+    ['15.2 x--sibling y', ''],
+  ]) {
+    test(`GSD_SIBLING for "${args}" is "${want}"`, () => assert.equal(sibling(args), want));
+  }
 
   test('workflow documents nest-by-default and the top-level fallback', () => {
     const WORKFLOW = read(WF);
@@ -81,15 +100,15 @@ describe('#5583 insert-phase --sibling', () => {
     });
   }
 
-  for (const f of DOCS) {
-    test(`${f} pins --sibling`, () => {
-      assert.match(read(f), /--sibling/);
+  for (const [f, text] of Object.entries(DOCS)) {
+    test(`${f} pins ${text}`, () => {
+      assert.ok(read(f).includes(text));
     });
   }
 
   for (const f of NEST_SITES) {
-    test(`${f} says bracket ids need --sibling`, () => {
-      assert.match(read(f), /bracket[^\n]*--sibling/i);
+    test(`${f} says bracket ids refuse a nested insert after a decimal phase`, () => {
+      assert.match(read(f), /bracket[^\n]*decimal phase[^\n]*--sibling/i);
     });
   }
 

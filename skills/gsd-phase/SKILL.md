@@ -30,7 +30,7 @@ Mode routing:
 | Flag | Action | Workflow |
 |------|--------|----------|
 | (none) | Add new integer phase at end of milestone | add-phase |
-| --insert | Insert decimal phase (e.g., 72.1) after specified phase; after a decimal phase it nests by default (15.2 -> 15.2.1), `--sibling` joins the parent level (15.3); bracket phase ids need `--sibling` | insert-phase |
+| --insert | Insert decimal phase (e.g., 72.1) after specified phase; after a decimal phase it nests by default (15.2 -> 15.2.1), `--sibling` joins the parent level (15.3); bracket phase ids refuse a nested insert after a decimal phase (use `--sibling`) | insert-phase |
 | --remove | Remove future phase, renumber subsequent | remove-phase |
 | --edit | Edit fields of existing phase in place | edit-phase |
 
