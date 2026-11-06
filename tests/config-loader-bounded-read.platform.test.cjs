@@ -1577,7 +1577,17 @@ describe('#5759 review round: another process\'s descriptors and unresolvable di
     const link = path.join(tmpDir, 'odd.txt');
     fs.symlinkSync('/dev/null/../fd/5', link);
 
-    assert.notStrictEqual(code(() => platformWriteSync(link, 'x', { verbatim: true })), 'ENXIO');
+    // realpath(3) is platform-dependent here: Linux fails ENOTDIR on `/dev/null/..` (the spelling
+    // is not an alias, so the write proceeds); macOS resolves it to /dev/fd, so the link IS the
+    // descriptor alias /dev/fd/5 and must be refused. Classification follows the OS answer.
+    let physicalDir = null;
+    try { physicalDir = fs.realpathSync.native('/dev/null/../fd'); } catch { /* unresolvable: not an alias */ }
+    const outcome = code(() => platformWriteSync(link, 'x', { verbatim: true }));
+    if (physicalDir === '/dev/fd') {
+      assert.strictEqual(outcome, 'ENXIO');
+    } else {
+      assert.notStrictEqual(outcome, 'ENXIO');
+    }
   });
 
   test('a plain path to a file this process holds open is still written (no descriptor-alias false positive)', () => {
