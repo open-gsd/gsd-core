@@ -33,7 +33,9 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   const WAVE = 'gsd-worktree-wave-aBc123';
   const BOM = String.fromCharCode(0xfeff);
   // The exit code of each halt #5531 adds: the typed value that tells them apart. The older guards keep exit 1.
-  const EXIT = { mkdir: 73, leftover: 74, mktemp: 73, symlink: 73, noneOrTwo: 69, nul: 65, unreadable: 77, guard: 1 };
+  // The exit codes of docs/reference/exit-codes.md: 69 UNAVAILABLE, 66 NO_INPUT, 70 INTERNAL. Several halts share one, so each case below
+  // is a separate input that only its own guard catches.
+  const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 66, two: 70, nul: 70, unreadable: 69, guard: 1 };
   // The two markers the read-and-check guards need, so a payload after them reaches the last guard.
   const GUARDED = '<required_reading>\nskipped_gitignored\n';
 
@@ -121,29 +123,33 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     );
   });
 
-  test('#5531: block 1 halts with its own exit code when the directory, the leftover removal or mktemp fails', (t) => {
+  test('#5531: block 1 halts with the unavailable code when the directory, the leftover removal or mktemp fails', (t) => {
     const dir = tempDir(t);
+    // The directory halt and the later mktemp halt share exit 69: a stubbed mktemp leaves a mark, so a halt before it shows the directory guard fired.
     const cases = {
-      mkdir: [(root) => fs.writeFileSync(path.join(root, '.claude'), 'a file where the directory should be'), ''],
+      mkdir: [(root) => fs.writeFileSync(path.join(root, '.claude'), 'a file where the directory should be'), 'mktemp() { : > "$MARK"; return 1; }\n'],
       leftover: [() => {}, 'find() { return 1; }\n'],
-      symlink: [(root) => fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, '.claude')), ''],
+      symlink: [(root) => fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, '.claude')), 'mktemp() { : > "$MARK"; return 1; }\n'],
       mktemp: [() => {}, 'mktemp() { return 1; }\n'],
     };
-    for (const [name, [setup, prelude]] of Object.entries(cases)) {
+    for (const [name, [setup, stub]] of Object.entries(cases)) {
       const root = path.join(dir, name);
+      const mark = path.join(dir, `${name}-mktemp-ran`);
+      const prelude = stub.replace('"$MARK"', `"${mark}"`);
       fs.mkdirSync(root, { recursive: true });
       setup(root);
       const r = runBlock(root, `gsd_run() { echo false; }\n${prelude}${createBlock(content)}`);
-      assert.equal(r.exitCode, EXIT[name], `${name} must halt with its own code: ${r.stderr}`);
+      if (stub.includes('MARK')) assert.ok(!fs.existsSync(mark), `${name}: the directory guard halts before mktemp`);
+      assert.equal(r.exitCode, EXIT[name], `${name} must halt with its code: ${r.stderr}`);
     }
   });
 
-  test('#5531: the read-and-check block removes the matched file and halts for no match, two matches (exit 69), a NUL byte (exit 65) and, with the shared exit 1, an empty file, a truncated or unmarked file and each unfinished-template marker', (t) => {
+  test('#5531: the read-and-check block removes the matched file and halts for no match (exit 66), two matches and a NUL byte (exit 70) and, with the shared exit 1, an empty file, a truncated or unmarked file and each unfinished-template marker', (t) => {
     const dir = tempDir(t);
     const put = (text) => (root) => [place(root, `${STEM}-aaaaaa`, text)];
     const cases = {
-      none: [() => [], EXIT.noneOrTwo],
-      two: [(root) => [place(root, `${STEM}-aaaaaa`, GUARDED), place(root, `${STEM}-bbbbbb`, GUARDED)], EXIT.noneOrTwo],
+      none: [() => [], EXIT.none],
+      two: [(root) => [place(root, `${STEM}-aaaaaa`, GUARDED), place(root, `${STEM}-bbbbbb`, GUARDED)], EXIT.two],
       empty: [put(''), EXIT.guard],
       nul: [put(`${GUARDED}a\0b`), EXIT.nul],
       truncated: [put('objective only'), EXIT.guard],
@@ -156,11 +162,14 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     for (const [name, [setup, code]] of Object.entries(cases)) {
       const root = path.join(dir, name);
       const files = setup(root);
-      const r = readAndCheck(root);
+      // A stubbed grep leaves a mark, so a halt before the first marker check shows the empty guard itself fired and not a later one.
+      const mark = path.join(dir, `${name}-grep-ran`);
+      const prelude = name === 'empty' ? `grep() { : > "${mark}"; return 1; }\n` : '';
+      const r = runBlock(root, `${prelude}${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
       assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
-      assert.equal(r.exitCode, code, `${name} must halt with its own code: ${r.stderr}`);
+      assert.equal(r.exitCode, code, `${name} must halt with its code: ${r.stderr}`);
       assert.equal(r.stdout, '', `${name}: no prompt printed`);
-      if (name === 'empty') assert.ok(r.stderr.includes('executor prompt is empty'), 'the empty guard itself halts, not a later guard');
+      if (name === 'empty') assert.ok(!fs.existsSync(mark), 'the empty guard itself halts, before any marker check');
       for (const f of files) assert.ok(!fs.existsSync(f) && fs.readdirSync(path.dirname(f)).length === 0, `${name}: every match removed`);
     }
   });
@@ -190,7 +199,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const root = path.join(tempDir(t), 'orch');
     const others = [place(root, `${PREFIX}-${WAVE}-${PHASE}-30-abcdef`, GUARDED), place(root, `${PREFIX}-${WAVE}-${PHASE}-9-abcdef`, GUARDED), place(root, `${PREFIX}-gsd-worktree-wave-zZ9876-${PHASE}-${PLAN}-abcdef`, GUARDED)];
     const r = readAndCheck(root);
-    assert.equal(r.exitCode, EXIT.noneOrTwo, 'plan 3 finds no file when only other plans have one');
+    assert.equal(r.exitCode, EXIT.none, 'plan 3 finds no file when only other plans have one');
     for (const f of others) assert.ok(fs.existsSync(f), 'the halt removes only this plan\'s matches');
     const leftover = place(root, `${STEM}-abcdef`, 'old');
     const leftoverDir = path.join(root, '.claude', `${STEM}-ghijkl`);
@@ -247,7 +256,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
       return file;
     });
     const r = readAndCheck(root);
-    assert.equal(r.exitCode, EXIT.noneOrTwo, r.stderr);
+    assert.equal(r.exitCode, EXIT.two, r.stderr);
     assert.ok(two.every((f) => !fs.existsSync(f)), 'the halt removal reaches through the link');
   });
 
