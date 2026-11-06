@@ -2252,9 +2252,11 @@ function publishViaTempFile(
       try { fs.closeSync(fd); } catch { /* already closed */ }
     }
     hooks.checkParent?.();
-    if (identity !== undefined) hooks.onCreated?.(identity);
     const renameErr = atomicRenameWithRetry(tmpPath, filePath);
     if (renameErr !== null) throw renameErr;
+    // Identity is captured from the open fd before the rename, but reported only once the rename
+    // succeeded: a failed rename unlinks the temp, freeing that inode, so nothing was published.
+    if (identity !== undefined) hooks.onCreated?.(identity);
   } catch (err) {
     // After a parent swap this path resolves through the swapped parent, so the real temp may be
     // orphaned in the original directory (accepted residual); nothing is ever published or left in the attacker's.
