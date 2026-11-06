@@ -93,12 +93,12 @@ function interpolate(command: string, ctx: PredicateContext): string {
 /**
  * `prefix` + `text` capped at COMMAND_MAX_OUTPUT_CHARS in total, keeping the TAIL (errors land last;
  * ADR-2008) or the HEAD (a command's program name). The cap counts UTF-16 units, so a cut can orphan
- * half a surrogate pair (renders as U+FFFD in JSON); drop it, only when a cut happened.
- * Not shared with capAtCodeUnits (runtime-artifact-conversion.cts): this module is a pure leaf (node:path only)
- * and exporting that helper would add a heavy import for a one-line head cut.
+ * half a surrogate pair (renders as U+FFFD in JSON); drop that half, only when a cut happened.
+ * A prefix that alone fills the cap leaves no room for text: the prefix is cut to the cap.
  */
 function prefixedCap(prefix: string, text: string, keep: 'head' | 'tail'): string {
   const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
+  if (budget <= 0) return prefix.slice(0, COMMAND_MAX_OUTPUT_CHARS);
   if (text.length <= budget) return prefix + text;
   return prefix + (keep === 'tail'
     ? text.slice(-budget).replace(/^[\uDC00-\uDFFF]/, '')
