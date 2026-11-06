@@ -38,7 +38,7 @@ const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.c
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 // In process: the limits rows below sit on either side of, and the Bash
 // leg with a count of the span readers' work.
-const { checkBashCommand, readerSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = require(HOOK_PATH);
+const { checkBashCommand, spanReaderSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = require(HOOK_PATH);
 
 function runHook(payload, { cwd } = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
@@ -1227,16 +1227,16 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   // deny it before a reader took a step.
   //
   // Two were quadratic in the readers' own loops, so those loops count their
-  // iterations (readerSteps) and the tests below run in process and bound the
+  // iterations (spanReaderSteps) and the tests below run in process and bound the
   // count: a few passes over the text, plus the `((` read-ahead cap for each
   // scan, which is MAX_COMMAND_LENGTH and is refilled per scan. Either old
   // fault exceeds the bound several times over at these sizes (measured
   // below); the fixed reader stays well under it.
   const linearSteps = (cmd) => 16 * cmd.length + 4 * MAX_COMMAND_LENGTH;
   const scanCounted = (cmd) => {
-    const before = readerSteps();
+    const before = spanReaderSteps();
     const verdict = checkBashCommand(cmd);
-    return { verdict, steps: readerSteps() - before };
+    return { verdict, steps: spanReaderSteps() - before };
   };
 
   test('nested arithmetic probes take reader steps linear in the command', () => {
