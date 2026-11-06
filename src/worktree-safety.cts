@@ -3359,7 +3359,7 @@ function parseValidWaveNumber(wave: number | string): number {
   // rejected so a manifest the commit pathspec does not exclude cannot be created.
   // Leading zeros stay accepted: "007" is wave 7, the same normalization as before.
   if (!/^\d+$/.test(rawStr) || !Number.isSafeInteger(num) || num < 1 || num > MAX_WAVE_NUMBER) {
-    throw new Error(`Invalid wave "${wave}": wave must be a positive integer from 1 to 999`);
+    throw new Error(`Invalid wave "${wave}": wave must be a positive integer from 1 to ${MAX_WAVE_NUMBER}`);
   }
   return num;
 }
