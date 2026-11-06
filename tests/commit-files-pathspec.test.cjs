@@ -3343,10 +3343,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     // allow-test-rule: architectural-invariant (#5211)
     const hook = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), 'utf8');
     const hookRe = hook.match(/const DASH_C_RE = (\/.{1,60}\/);/)[1];
-    // allow-test-rule: architectural-invariant (#5211)
-    const scanSrc = fs.readFileSync(path.join(__dirname, 'helpers', 'shipped-command-scan.cjs'), 'utf8');
-    // allow-test-rule: architectural-invariant (#5211)
-    assert.ok(scanSrc.includes(hookRe), `shellDashCPayloads must use ${hookRe}`);
+    assert.ok(shellDashCPayloads.toString().includes(hookRe), `shellDashCPayloads must use ${hookRe}`);
     const set = hook.match(/const GIT_GLOBAL_VALUE_OPTIONS = new Set\(\[([^\]]{1,400})\]\)/)[1].match(/'[^']{1,40}'/g).map((s) => s.slice(1, -1));
     // The scanner also knows `--super-prefix`, which the hook fails closed on; it must never know less than the hook.
     assert.deepEqual(set.filter((o) => !GIT_VALUE_FLAGS.has(o)), []);
