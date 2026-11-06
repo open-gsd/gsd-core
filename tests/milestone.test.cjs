@@ -20,7 +20,7 @@ const { runGsdTools, createTempProject, cleanup, parseFrontmatter, TOOLS_PATH, T
 const { runNode } = require('./helpers/process-seam.cjs');
 const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { skipUnless } = require('./helpers/bash-probe.cjs');
+const { have, skipUnless } = require('./helpers/bash-probe.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -1788,12 +1788,13 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     );
   }
 
-  function runExtractedExecutorBash(cwd, envOverrides = {}, scriptPrefix = '', shell = 'bash') {
+  function runExtractedExecutorBash(cwd, envOverrides = {}, scriptPrefix = '', shell = 'bash', scriptSuffix = '') {
     const bashSnippet = extractExecutorReadyIdsBash();
     const fullScript = [
       `gsd_run() { node "${TOOLS_PATH}" "$@"; }`,
       scriptPrefix,
       bashSnippet,
+      scriptSuffix,
       'echo "RESOLVED_PLAN_PATH=$PLAN_PATH"',
     ].filter(Boolean).join('\n');
 
@@ -1829,6 +1830,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Execute the extracted prompt bash directly
     const res1 = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan1,
+      PLAN: '01',
       REQ_IDS: 'SHARED-01',
     });
     assert.strictEqual(res1.status, 0, `extracted bash failed: ${res1.stderr || res1.stdout}`);
@@ -1845,6 +1847,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Execute the extracted prompt bash for Plan 2
     const res2 = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan2,
+      PLAN: '02',
       REQ_IDS: 'SHARED-01 ONLY2-01',
     });
     assert.strictEqual(res2.status, 0, `extracted bash failed: ${res2.stderr || res2.stdout}`);
@@ -1915,6 +1918,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PLAN: '01',
       REQ_IDS: 'SOLO-01',
       PATH: `${noJqDir}:${process.env.PATH}`,
     });
@@ -1937,6 +1941,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     const failingGsdRunPrefix = `gsd_run() { if [ "$2" = "requirements.ready-ids" ]; then return 1; fi; node "${TOOLS_PATH}" "$@"; }`;
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PLAN: '01',
       REQ_IDS: 'SOLO-01',
     }, failingGsdRunPrefix);
     assert.strictEqual(res.status, 0, `extracted bash should exit 0 on fail-close: ${res.stderr || res.stdout}`);
@@ -2300,6 +2305,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Pass bracketed ID as given in executor prompt examples: [ONLY1-01]
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PLAN: '01',
       REQ_IDS: '[ONLY1-01]',
     });
     assert.strictEqual(res.status, 0, `extracted bash failed: ${res.stderr || res.stdout}`);
@@ -2371,25 +2377,90 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
 
-    const unparseablePlan = path.join(phaseDir, '05-01-notes.md');
-    fs.writeFileSync(unparseablePlan, '---\nrequirements: [ONLY1-01]\n---\nNotes without plan key\n');
+    // The filename matches the plan-01 glob. Rejection has to come from frontmatter,
+    // not from the name failing to match.
+    const planPath = path.join(phaseDir, '05-01-PLAN.md');
+    const bodies = [
+      '---\nrequirements: [ONLY1-01]\n---\nNotes without plan key\n',
+      '---\nplan:\nrequirements: [ONLY1-01]\n---\nEmpty plan key\n',
+      '---\nplan: ""\nrequirements: [ONLY1-01]\n---\nQuoted empty plan\n',
+    ];
+    for (const body of bodies) {
+      writeRequirements(tmpDir, REQUIREMENTS);
+      fs.writeFileSync(planPath, body);
+      const res = runExtractedExecutorBash(tmpDir, {
+        PLAN_PATH: planPath,
+        INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+        PHASE: '5',
+        PLAN: '1',
+        REQ_IDS: 'ONLY1-01',
+      });
+      assert.strictEqual(res.status, 0, res.stderr || res.stdout);
+      assert.match(res.stdout, /RESOLVED_PLAN_PATH=\s*$/, 'Must reject a file with no plan value and fail closed');
+      const content = readRequirements(tmpDir);
+      assert.ok(content.includes('- [ ] **ONLY1-01**'), 'ONLY1-01 must not be marked complete');
+    }
+  });
+
+  test('negative control: empty PLAN does not keep an unchecked preset PLAN_PATH (#4944)', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const plan = path.join(phaseDir, '05-01-PLAN.md');
+    fs.writeFileSync(plan, '---\nphase: 5\nplan: 1\nrequirements: [ONLY1-01]\n---\nPlan\n');
+    fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), 'done\n');
 
     const res = runExtractedExecutorBash(tmpDir, {
-      PLAN_PATH: unparseablePlan,
+      PLAN_PATH: plan,
+      INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
+      PHASE: '5',
+      PLAN: '',
+      REQ_IDS: 'ONLY1-01',
+    });
+    assert.strictEqual(res.status, 0, res.stderr || res.stdout);
+    assert.match(res.stdout, /RESOLVED_PLAN_PATH=\s*$/, 'Empty PLAN must not keep a preset path');
+    assert.match(res.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/);
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **ONLY1-01**'), 'ONLY1-01 must stay unchecked when PLAN is empty');
+  });
+
+  test('plan resolution restores the caller nullglob state (#4944)', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '05-01-PLAN.md'), '---\nphase: 5\nplan: 1\nrequirements: []\n---\nPlan\n');
+    const env = {
+      PLAN_PATH: '',
       INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
       PHASE: '5',
       PLAN: '1',
-      REQ_IDS: 'ONLY1-01',
-    });
-    assert.strictEqual(res.status, 0);
-    assert.match(res.stdout, /RESOLVED_PLAN_PATH=\s*$/, 'Must reject file without plan key and fail closed');
+      REQ_IDS: '',
+    };
+    const bashProbe = 'if shopt -q nullglob; then echo NULLGLOB=on; else echo NULLGLOB=off; fi';
+    const off = runExtractedExecutorBash(tmpDir, env, '', 'bash', bashProbe);
+    assert.strictEqual(off.status, 0, off.stderr || off.stdout);
+    assert.match(off.stdout, /NULLGLOB=off/, 'nullglob that started off must stay off');
+    assert.match(off.stdout, /05-01-PLAN\.md/);
+    const on = runExtractedExecutorBash(tmpDir, env, 'shopt -s nullglob', 'bash', bashProbe);
+    assert.strictEqual(on.status, 0, on.stderr || on.stdout);
+    assert.match(on.stdout, /NULLGLOB=on/, 'nullglob that started on must stay on');
 
-    const content = readRequirements(tmpDir);
-    assert.ok(content.includes('- [ ] **ONLY1-01**'), 'ONLY1-01 must not be marked complete');
+    if (!have('zsh')) return;
+    const zshProbe = '[[ -o nullglob ]] && echo NULLGLOB=on || echo NULLGLOB=off';
+    const zOff = runExtractedExecutorBash(tmpDir, env, '', 'zsh', zshProbe);
+    assert.strictEqual(zOff.status, 0, zOff.stderr || zOff.stdout);
+    assert.match(zOff.stdout, /NULLGLOB=off/);
+    const zOn = runExtractedExecutorBash(tmpDir, env, 'setopt NULL_GLOB', 'zsh', zshProbe);
+    assert.strictEqual(zOn.status, 0, zOn.stderr || zOn.stdout);
+    assert.match(zOn.stdout, /NULLGLOB=on/);
   });
 
   test('behavioral: ready-ids gate splits requirement IDs and marks multiple complete under zsh (#4944)', (t) => {
-    const skipReason = skipUnless('zsh', 'jq'); if (skipReason) return t.skip(skipReason);
+    // zsh is not on the ubuntu or windows CI images. skipUnless would fail those
+    // lanes; the review asks for the two-ID run where zsh is installed (macOS CI).
+    const skipReason = skipUnless('jq'); if (skipReason) return t.skip(skipReason);
+    if (!have('zsh')) return t.skip('zsh is not installed');
     writeRequirements(tmpDir, REQUIREMENTS);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2424,11 +2495,10 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       targetPlan: fc.integer({ min: 1, max: 25 }),
       padPhase: fc.boolean(),
       padPlan: fc.boolean(),
-      includeDecoy: fc.boolean(),
     });
 
     fc.assert(
-      fc.property(planGen, ({ phaseNum, planIds, targetPlan, padPhase, padPlan, includeDecoy }) => {
+      fc.property(planGen, ({ phaseNum, planIds, targetPlan, padPhase, padPlan }) => {
         const pRoot = path.join(tmpDir, `prop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
         const padPh = String(phaseNum).padStart(2, '0');
         const phaseRelDir = path.join('.planning', 'phases', `${padPh}-prop`);
@@ -2444,14 +2514,17 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
             createdFiles.set(pid, filePath);
           }
 
-          let decoyFile = null;
-          if (includeDecoy && !createdFiles.has(targetPlan + 100)) {
-            // Sibling whose filename slug contains the target plan digits (#4944 decoy shape)
-            // but frontmatter declares plan: targetPlan + 100
-            const decoyP = String(targetPlan + 100);
-            decoyFile = path.join(pPhaseDir, `${padPh}-01-${targetPlan}-decoy-PLAN.md`);
-            fs.writeFileSync(decoyFile, `---\nphase: ${phaseNum}\nplan: ${decoyP}\nrequirements: []\n---\nDecoy\n`);
-          }
+          const padTarget = String(targetPlan).padStart(2, '0');
+          const decoyPlan = String(targetPlan + 100);
+          // #4944 shape: slug contains the target number, but not in the plan slot
+          // the anchored glob searches (`${phase}-${other}-${target}-decoy-PLAN.md`).
+          const otherPad = String(targetPlan === 1 ? 2 : 1).padStart(2, '0');
+          const slugDecoy = path.join(pPhaseDir, `${padPh}-${otherPad}-${targetPlan}-decoy-PLAN.md`);
+          fs.writeFileSync(slugDecoy, `---\nphase: ${phaseNum}\nplan: ${decoyPlan}\nrequirements: []\n---\nDecoy\n`);
+          // Glob-eligible impostor. `${phase}-${plan}-*-PLAN.md` selects it; frontmatter
+          // does not. Dropping _match_plan makes this the resolved path (or ambiguous).
+          const impostor = path.join(pPhaseDir, `${padPh}-${padTarget}-impostor-PLAN.md`);
+          fs.writeFileSync(impostor, `---\nphase: ${phaseNum}\nplan: ${decoyPlan}\nrequirements: []\n---\nImpostor\n`);
 
           const phaseStr = padPhase ? padPh : String(phaseNum);
           const planStr = padPlan ? String(targetPlan).padStart(2, '0') : String(targetPlan);
@@ -2464,7 +2537,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
             REQ_IDS: '',
           });
 
-          assert.strictEqual(res.status, 0);
+          assert.strictEqual(res.status, 0, res.stderr || res.stdout);
           const match = res.stdout.match(/RESOLVED_PLAN_PATH=(.*)/);
           const resolved = match ? match[1].trim() : '';
           const resolvedAbs = resolved ? path.resolve(pRoot, resolved) : '';
@@ -2474,9 +2547,8 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
           } else {
             assert.strictEqual(resolved, '', 'Target plan not on disk must fail closed with empty path');
           }
-          if (decoyFile) {
-            assert.notStrictEqual(resolvedAbs, decoyFile, 'Resolver must never return a decoy sibling file');
-          }
+          assert.notStrictEqual(resolvedAbs, slugDecoy, 'Resolver must never return a sibling whose slug contains the target plan number');
+          assert.notStrictEqual(resolvedAbs, impostor, 'Resolver must never return a glob match whose frontmatter plan is not the target');
         } finally {
           cleanup(pRoot);
         }
