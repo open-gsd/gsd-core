@@ -845,6 +845,25 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     assertAllowed(runHook(bash(cmd)), cmd);
   });
 
+  // The same aliases set in the environment count the same: scanning the
+  // invoked alias as a definition too must not spend the command's budget.
+  const envForms = {
+    GIT_CONFIG_PARAMETERS: (n) => `GIT_CONFIG_PARAMETERS=${dq(`'alias.q=status' 'alias.top=!${'git q; '.repeat(n - 1)}'`)} git top`,
+    GIT_CONFIG_KEY: (n) => `GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=alias.q GIT_CONFIG_VALUE_0=status GIT_CONFIG_KEY_1=alias.top GIT_CONFIG_VALUE_1=${sq(`!${'git q; '.repeat(n - 1)}`)} git top`,
+  };
+  for (const [form, make] of Object.entries(envForms)) {
+    for (const n of [128, 256]) {
+      test(`${n} alias invocations set through ${form} are allowed`, () => {
+        const cmd = make(n);
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+    test(`257 alias invocations set through ${form} fail closed`, () => {
+      const cmd = make(257);
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
+    });
+  }
+
   // The budget is per git command, however the shell or the hook's other
   // readings of the command reach it.
   const G = flatAliases(100);
