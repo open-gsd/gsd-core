@@ -124,12 +124,15 @@ forcing the shell's final value (`--force-isolation "$ISOLATION"`), so a base-ch
 reaches that line is recorded as `caller` and held while it is fresh. That is deliberate. The
 orchestrator has already committed to dispatching that run sequentially; if HEAD catching up
 underneath it flipped the record back to `harness-worktree`, the guard would start refusing the
-very dispatches the degrade mandated, which is #4222 in reverse. The next forced re-record, which
-re-runs the base check in shell first, or the sentinel's ten-minute freshness window ends the hold;
-past that window the guard falls back to resolving the host capability, as it does for any stale
-record (#3045).
+very dispatches the degrade mandated, which is #4222 in reverse. A gate that follows the hold
+re-records the `none` and keeps its decision time, so the hold lapses ten minutes after the degrade
+was decided, however many gates re-record it, and a forced record of another value replaces it
+sooner. The next query that carries no `--plan` then re-derives the decision, base check included
+(#4222). The guard runs a separate clock: it trusts a record for ten minutes from `written_at`,
+falls back to resolving the host capability on a stale one (#3045), and keeps #5479's rule for an
+aged `none` of its own phase, set out below.
 Live re-evaluation governs the records the resolver writes itself: the plain-query path #4222 was
-reported against (for the base check, the plain queries that name no plan). The hold is consulted on every plain query, including one that derives `none`
+reported against (for the base check, the plain queries that carry no `--plan`). The hold is consulted on every plain query, including one that derives `none`
 itself; writing that `none` as `resolver` would re-own the caller's record, and on a repository
 where both degrades apply the caller's decision would be lost when HEAD caught up.
 
@@ -221,7 +224,7 @@ to every plan of the phase. The #4561 hold reads the same empty value as no scop
 answer different questions, which scope a held record must match and whether this write is a
 plan's record. Where the harness forks from `origin/HEAD`, a flagged dispatch on that base is
 still stopped by the worktree branch check's `exit 42`, as it is without this decision. Every
-query that names no plan, at phase level or unscoped, still re-derives the base check. Its
+unheld query that carries no `--plan`, at phase level or unscoped, still re-derives the base check. Its
 residual is its own: one made mid-run after HEAD moved records `none` for the phase or the run,
 and until the next record the guard reads it for every plan. No shipped flow dispatches against
 it while its shell state is intact: execute-phase makes no such query after its resolve and

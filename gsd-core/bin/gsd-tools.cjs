@@ -2508,12 +2508,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // plain re-query (the orchestrator's own `--json` harnessFlag read, a
     // subagent's gsd_run traffic, a wave transition) re-persisted the host
     // capability over it — the guard then denied the sequential dispatch
-    // the degrade had mandated. Now every write goes through the same
-    // in-process evaluation the shell's `worktree base-check` runs, so a
-    // plain re-query re-derives `none` instead of overwriting it, and a
-    // fresh run on a repo whose HEAD matches its fork base still records the
-    // natural capability (nothing is sticky: the evaluation reads live git
-    // state on every call).
+    // the degrade had mandated. Now every unheld write that carries no
+    // `--plan` goes through the same in-process evaluation the shell's
+    // `worktree base-check` runs, so a plain re-query re-derives `none` instead
+    // of overwriting it, and a fresh run on a repo whose HEAD matches its fork
+    // base still records the natural capability (nothing is sticky: the
+    // evaluation reads live git state each time it runs).
     //
     // Applied to the sentinel ONLY, deliberately NOT to stdout. The
     // resolver's stdout is the host CAPABILITY the workflow's decision tree
@@ -2601,7 +2601,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // host's descriptors (`harnessFlag`, `exec`) from the sentinel-free
     // `inspect-dispatch-isolation`, which no hold reaches. The #4222
     // base-check degrade above stays sentinel-only: it is re-derived from
-    // live git state on every call that names no plan, and the shell
+    // live git state on every unheld call that carries no `--plan`, and the shell
     // computes the same check itself.
     //
     // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so a
