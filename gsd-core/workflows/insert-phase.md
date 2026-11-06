@@ -20,7 +20,7 @@ Example: `/gsd:phase --insert 72 Fix critical auth bug`
 -> after = 72
 -> description = "Fix critical auth bug"
 
-Allocation: inserting after an integer phase creates the next decimal (72.1). Inserting after a decimal phase nests by default (`--insert 15.2 "x"` -> 15.2.1); add `--sibling` to join the parent level instead (`--insert 15.2 --sibling "x"` -> 15.3). A top-level after-phase with `--sibling` falls back to nested. Under bracket phase ids a nested insert after a decimal phase is refused: use `--sibling`.
+Allocation: inserting after an integer phase creates the next decimal (72.1). Inserting after a decimal phase nests by default (`--insert 15.2 "x"` -> 15.2.1); add `--sibling` to join the parent level instead (`--insert 15.2 --sibling "x"` -> 15.3). A top-level after-phase with `--sibling` falls back to nested. Under bracket phase ids a nested insert after a decimal phase is refused; use `--sibling` to insert at the parent level.
 
 If arguments missing:
 
