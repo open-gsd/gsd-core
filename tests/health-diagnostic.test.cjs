@@ -7,9 +7,11 @@
  * Test matrix:  .gsd/phase/refactor-3309-health-diagnostic-rule-table/50-test-matrix.md
  *
  * Covers test-matrix section 2 (rows 9-16) against the FULLY WIRED rule
- * table (`RULES` now carries all 31 rules — see the "RULES" describe block
- * below for the exact count and why it is 31, not 32 — extracted from
- * `cmdValidateHealth`, `src/verify.cts:1616-2577`). Rows 15-16 (the
+ * table (`RULES` now carries all 35 rules — see the "RULES" describe block
+ * below for the exact per-group count — 31 extracted from
+ * `cmdValidateHealth`, `src/verify.cts:1616-2577`, which is one fewer than
+ * the design doc's own prose figure of "32" (that doc flags its table and
+ * prose counts as inconsistent), plus the new W028/W029/W030/W031). Rows 15-16 (the
  * DESTRUCTIVE-refusal proof and the NONE-risk apply proof) run against REAL
  * diagnostics emitted by REAL rules over a REAL `buildPlanningSnapshot`
  * projection of a temp fixture, not hand-constructed fakes — the
