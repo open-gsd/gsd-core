@@ -701,7 +701,7 @@ Toggle at project setup (`/gsd-new-project` asks during workflow preferences) or
 > "Fix the login button not responding on mobile Safari"
 ```
 
-`/gsd-quick` and `/gsd-fast` log each task to STATE.md's "Quick Tasks Completed" table as a one-line title; the detail stays in the task's SUMMARY.md (or, for `/gsd-fast`, its commit message). A description over 240 characters is still logged in full, with a warning. `/gsd-health` adds the advisory warning `W031` when STATE.md grows past three times its 100-line target. See [`quick-tasks-append`](CLI-TOOLS.md) and [`/gsd-health`](COMMANDS.md#gsd-health).
+`/gsd-quick` and `/gsd-fast` log each task to STATE.md's "Quick Tasks Completed" table as a one-line title; the detail stays in the task's SUMMARY.md (or, for `/gsd-fast`, its commit message). A description over 240 characters is still logged in full, with a warning. `/gsd-health` adds the advisory warning `W031` when STATE.md grows past three times its 100-line target. See [`quick-tasks-append`](CLI-TOOLS.md#utility-commands) and [`/gsd-health`](COMMANDS.md#gsd-health).
 
 ### Resuming After a Break
 
