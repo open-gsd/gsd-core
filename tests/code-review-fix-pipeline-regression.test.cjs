@@ -281,8 +281,8 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   ].join('\n');
 
   // #5527: the converged REVIEW.md must be committed even when the fix report is invalid or
-  // missing, else a tracked rewritten REVIEW.md stays dirty and /gsd-ship asks to commit or stash. The fence is
-  // EXECUTED with a stub gsd_run that records its argv.
+  // missing, else a tracked rewritten REVIEW.md stays dirty and /gsd-ship asks to commit or
+  // stash. The fence is EXECUTED with a stub gsd_run that records its argv.
   test('T7 — commit_fix_report EXECUTED: --auto REVIEW.md committed when fix report is invalid/missing/valid', { skip: !HAS_BASH }, (t) => {
     const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
     const fence = stepFence(src, 'commit_fix_report');
