@@ -27,6 +27,7 @@
  */
 
 import path from 'node:path';
+import { capCodeUnits } from './code-unit-cap.cjs';
 
 // ─── Public constants ─────────────────────────────────────────────────────────
 
@@ -88,21 +89,6 @@ function interpolate(command: string, ctx: PredicateContext): string {
     if (name === 'PHASE_REQ_IDS') return ctx.phaseReqIds ?? '';
     return '';
   });
-}
-
-/**
- * Cut `text` to at most `max` UTF-16 code units, keeping the head or the tail,
- * without leaving half a surrogate pair: when the cut orphans a high surrogate
- * (head) or a low surrogate (tail), that half is dropped too. Text that fits is
- * returned whole; a non-positive `max` keeps nothing. Shared by `prefixedCap`,
- * the Pi description cap and the raw-status token cut (#5639).
- */
-function capCodeUnits(text: string, max: number, keep: 'head' | 'tail'): string {
-  if (text.length <= max) return text;
-  if (max <= 0) return '';
-  return keep === 'tail'
-    ? text.slice(-max).replace(/^[\uDC00-\uDFFF]/, '')
-    : text.slice(0, max).replace(/[\uD800-\uDBFF]$/, '');
 }
 
 /**
@@ -304,7 +290,6 @@ function evaluatePredicate(predicate: unknown, context: unknown, deps: unknown):
 export = {
   evaluatePredicate,
   evaluateCommandExitZero,
-  capCodeUnits,
   interpolate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,

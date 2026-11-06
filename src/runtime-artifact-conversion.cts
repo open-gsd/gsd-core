@@ -35,7 +35,7 @@ const { getDirName, hostBehaviorsFor } = runtimeNamePolicy;
 import capabilityRegistry = require('./capability-registry.cjs');
 import hostIntegration = require('./host-integration.cjs');
 import { posixNormalize } from './shell-command-projection.cjs';
-import gatePredicateEvaluator = require('./gate-predicate-evaluator.cjs');
+import { capCodeUnits } from './code-unit-cap.cjs';
 import frontmatterModule = require('./frontmatter.cjs');
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { escapeRegex as escapeRegExp } from './pattern.cjs';
@@ -967,7 +967,7 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
     convertGsdCommandReferencesToSkillInvocations(frontmatter ? body : content, names),
   );
 
-  const cappedDescription = gatePredicateEvaluator.capCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX, 'head');
+  const cappedDescription = capCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX, 'head');
   const unsupportedReason = Object.prototype.hasOwnProperty.call(PI_UNSUPPORTED_SKILLS, piSkillName)
     ? PI_UNSUPPORTED_SKILLS[piSkillName]
     : null;

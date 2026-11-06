@@ -45,8 +45,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 import { splitLines, joinLines } from './text-lines.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- gate-predicate-evaluator.cjs is an export= CommonJS module
-import gatePredicateEvaluator = require('./gate-predicate-evaluator.cjs');
+import { capCodeUnits } from './code-unit-cap.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
@@ -170,7 +169,7 @@ function describeRawStatus(raw: unknown): string {
   if (partialEscape) {
     cut -= partialEscape[0].length;
   } else {
-    cut = gatePredicateEvaluator.capCodeUnits(rendered, cut, 'head').length;
+    cut = capCodeUnits(rendered, cut, 'head').length;
   }
   // JSON also emits two-character escapes (`\n`, `\t`, `\"`, `\\`): an odd
   // trailing run of backslashes is the first half of one, so drop it too.

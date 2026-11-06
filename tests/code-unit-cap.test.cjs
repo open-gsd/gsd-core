@@ -3,7 +3,7 @@
 /**
  * Behaviour of the shared surrogate-safe UTF-16 cap (#5639).
  *
- * `capCodeUnits` in `src/gate-predicate-evaluator.cts` serves `prefixedCap` (gate-predicate-evaluator),
+ * `capCodeUnits` in `src/code-unit-cap.cts` serves `prefixedCap` (gate-predicate-evaluator),
  * the Pi description cap (runtime-artifact-conversion) and the raw-status token cut (verification).
  * Caller behaviour is covered by tests/verification-status.test.cjs, tests/pi-workflow-handoff.test.cjs
  * and tests/install-runtime-artifacts.test.cjs.
@@ -13,7 +13,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { capCodeUnits } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
+const { capCodeUnits } = require('../gsd-core/bin/lib/code-unit-cap.cjs');
 
 const isLoneSurrogateFree = (s) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
 
