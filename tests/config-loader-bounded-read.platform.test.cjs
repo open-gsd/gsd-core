@@ -2301,6 +2301,80 @@ describe('#5759 allowSpecialTarget on Windows device names', {
       assert.deepStrictEqual(fs.readdirSync(cwd), []);
     } finally { cleanup(cwd); }
   });
+
+  test('NUL with allowSpecialTarget creates no file named NUL in the working directory', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-nulcwd-'));
+    try {
+      const script = 'require(process.argv[1]).platformWriteSync("NUL", "hello\\n", { allowSpecialTarget: true });';
+      const r = runNode(['-e', script, SHELL_PROJECTION_PATH], {
+        cwd, env: installSpawnEnv({}), timeoutMs: PROBE_TIMEOUT_MS,
+      });
+
+      assertExitedByItself(r);
+      assert.deepStrictEqual(fs.readdirSync(cwd).filter((n) => n.toLowerCase() === 'nul'), []);
+      assert.deepStrictEqual(fs.readdirSync(cwd), []);
+    } finally { cleanup(cwd); }
+  });
+
+  // On Windows 11 a reserved-looking name can be an ordinary file. The device branch must not
+  // write into it in place: a partial overwrite would leave "xRIGINAL..." behind.
+  const ORIGINAL = 'ORIGINAL-CONTENT-ORIGINAL-CONTENT';
+  const writeChild = (cwd, target) => {
+    const script = [
+      'try { require(process.argv[1]).platformWriteSync(process.argv[2], "x", { allowSpecialTarget: true, verbatim: true }); process.stdout.write("ok"); }',
+      'catch (e) { process.stdout.write(String(e.code)); }',
+    ].join('\n');
+    return runNode(['-e', script, SHELL_PROJECTION_PATH, target], {
+      cwd, env: installSpawnEnv({}), timeoutMs: PROBE_TIMEOUT_MS,
+    });
+  };
+  const assertNotWrittenInPlace = (file) => {
+    const after = fs.readFileSync(file, 'utf-8');
+    assert.ok(after === ORIGINAL || after === 'x', `not partially overwritten in place: ${JSON.stringify(after)}`);
+  };
+
+  test('a regular file named con.txt is not written in place by the device branch', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-con-'));
+    try {
+      const file = '\\\\?\\' + path.join(dir, 'con.txt');
+      fs.writeFileSync(file, ORIGINAL);
+
+      const r = writeChild(dir, file);
+
+      assertExitedByItself(r);
+      assertNotWrittenInPlace(file);
+    } finally { cleanup(dir); }
+  });
+
+  test('a symlink with a reserved-looking name is not written through to a regular file', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-conlink-'));
+    try {
+      const real = path.join(dir, 'real.txt');
+      const link = path.join(dir, 'con.txt');
+      fs.writeFileSync(real, ORIGINAL);
+      try { fs.symlinkSync(real, link, 'file'); } catch (err) {
+        if (err.code === 'EPERM') { t.skip('symlink creation needs privileges'); return; }
+        throw err;
+      }
+
+      const r = writeChild(dir, '\\\\?\\' + link);
+
+      assertExitedByItself(r);
+      assertNotWrittenInPlace(real);
+    } finally { cleanup(dir); }
+  });
+});
+
+// Runs on every OS: the classifier decides only whether the device branch may be TRIED.
+describe('#5759 isWindowsReservedDeviceName', () => {
+  const { isWindowsReservedDeviceName } = require(SHELL_PROJECTION_PATH);
+
+  for (const name of ['NUL', 'nul', 'con', 'CON.txt', 'prn', 'aux.log', 'com1', 'COM9', 'lpt1', 'LPT9.x', 'nul .txt']) {
+    test(`${name} is reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), true); });
+  }
+  for (const name of ['null', 'console', 'com0', 'lpt10', 'com', 'config.json', 'nul2', 'xcon', '']) {
+    test(`${name || '(empty)'} is not reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), false); });
+  }
 });
 
 // Runs on every OS: a directory at the config path is unusable everywhere. POSIX reports
