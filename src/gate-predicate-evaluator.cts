@@ -91,18 +91,31 @@ function interpolate(command: string, ctx: PredicateContext): string {
 }
 
 /**
+ * Cut `text` to at most `max` UTF-16 code units, keeping the head or the tail,
+ * without leaving half a surrogate pair: when the cut orphans a high surrogate
+ * (head) or a low surrogate (tail), that half is dropped too. Text that fits is
+ * returned whole; a non-positive `max` keeps nothing. Sole owner of the
+ * surrogate-safe cap (#5639); the Pi description cap and the raw-status token cut
+ * import it from here.
+ */
+function capCodeUnits(text: string, max: number, keep: 'head' | 'tail'): string {
+  if (text.length <= max) return text;
+  if (max <= 0) return '';
+  return keep === 'tail'
+    ? text.slice(-max).replace(/^[\uDC00-\uDFFF]/, '')
+    : text.slice(0, max).replace(/[\uD800-\uDBFF]$/, '');
+}
+
+/**
  * `prefix` + `text` capped at COMMAND_MAX_OUTPUT_CHARS in total, keeping the TAIL (errors land last;
- * ADR-2008) or the HEAD (a command's program name). The cap counts UTF-16 units, so a cut can orphan
- * half a surrogate pair (renders as U+FFFD in JSON); drop that half, only when a cut happened.
+ * ADR-2008) or the HEAD (a command's program name). `capCodeUnits` owns the surrogate-safe cut: the
+ * cap counts UTF-16 units, so a plain cut can orphan half a surrogate pair (U+FFFD in JSON).
  * A prefix that alone fills the cap leaves no room for text: the prefix is cut to the cap.
  */
 function prefixedCap(prefix: string, text: string, keep: 'head' | 'tail'): string {
   const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
-  if (budget <= 0) return prefix.slice(0, COMMAND_MAX_OUTPUT_CHARS);
-  if (text.length <= budget) return prefix + text;
-  return prefix + (keep === 'tail'
-    ? text.slice(-budget).replace(/^[\uDC00-\uDFFF]/, '')
-    : text.slice(0, budget).replace(/[\uD800-\uDBFF]$/, ''));
+  if (budget <= 0) return capCodeUnits(prefix, COMMAND_MAX_OUTPUT_CHARS, 'head');
+  return prefix + capCodeUnits(text, budget, keep);
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -292,6 +305,7 @@ function evaluatePredicate(predicate: unknown, context: unknown, deps: unknown):
 export = {
   evaluatePredicate,
   evaluateCommandExitZero,
+  capCodeUnits,
   interpolate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,
