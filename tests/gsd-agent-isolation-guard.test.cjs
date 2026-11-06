@@ -3508,7 +3508,8 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
         else if (e.name.endsWith('.md')) {
           const rel = path.relative(path.join(__dirname, '..'), full).split(path.sep).join('/');
           // Inside a fenced block, anywhere on the line: an assignment or an `if` is
-          // a site too, while a prose line that quotes the command is not.
+          // a site too. A line outside a fence is not, live instruction or not
+          // (execute-plan.md's Pattern A), and is held to none of this.
           let fenced = false;
           splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
             if (/^\s*```/.test(line)) fenced = !fenced;
