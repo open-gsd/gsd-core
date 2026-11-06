@@ -80,7 +80,7 @@ fi
 # a denied one. `--renew-held` passes the held answer's own decision time, so the
 # re-record refreshes the guard's record without restarting the hold: it still
 # lapses ten minutes after the degrade was decided.
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 **Carry the gate's values into later tool calls.** These blocks set `ISOLATION`,
@@ -154,7 +154,7 @@ as a dropped isolation flag and **denies the dispatch with exit 2**. The task do
 unisolated; it does not run at all.
 
 ```bash
-gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held "$_RENEW_HELD"} >/dev/null 2>&1 || true
+gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 ```
 
 `--force-isolation` pushes the final, shell-computed value through the same single write path
@@ -162,7 +162,7 @@ gsd_run query dispatch-isolation --raw --force-isolation "$ISOLATION" ${_RENEW_H
 idempotent and last-write-wins among forced records, so a site that degrades more than once
 simply calls it again — record immediately before dispatch so the sentinel is always fresh.
 `_RENEW_HELD` is set only by the resolve block above, when it followed a held `none`, to that
-answer's `decidedAt`; the expansion then adds `--renew-held <decidedAt>`, so the re-record keeps
+answer's `decidedAt`; the expansions then add `--renew-held <decidedAt>` as two words, so the re-record keeps
 the decision time of the hold this site followed instead of restarting it.
 Best-effort by design: a write failure must never fail the dispatch, since the guards'
 sentinel-absent fallback is safe, just less precise.

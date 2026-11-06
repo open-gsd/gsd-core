@@ -3447,9 +3447,69 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
       'gsd-core/workflows/quick-batch/steps/worktree-dispatch.md',
       'gsd-core/workflows/quick.md',
     ], 'the re-records that can follow a held answer: a new one is added here with its own check');
-    const missing = following.filter((s) => !s.line.includes('${_RENEW_HELD:+--renew-held "$_RENEW_HELD"}'));
+    const missing = following.filter((s) => !s.line.includes('${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"}'));
     assert.deepEqual(missing.map((s) => s.at), [], 'a re-record that restarts a held degrade');
   });
+
+  // zsh does not split an unquoted expansion, so `${X:+--flag "$X"}` reaches the
+  // resolver there as ONE word: it reads no flag, and a re-record restarts the hold with
+  // nothing reporting it. Two expansions give two words in bash and zsh alike.
+  const shippedRecordLines = () => {
+    const root = path.join(__dirname, '..');
+    const found = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) {
+          let fenced = false;
+          splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
+            if (/^\s*```/.test(line)) fenced = !fenced;
+            else if (fenced && /^\s*gsd_run query dispatch-isolation .*\$\{\w+:\+/.test(line)) {
+              found.push({ at: `${path.relative(root, full).split(path.sep).join('/')}:${i + 1}`, line });
+            }
+          });
+        }
+      }
+    };
+    [path.join(root, 'gsd-core', 'workflows'), path.join(root, 'gsd-core', 'references')].forEach(walk);
+    return found;
+  };
+
+  test('no shipped dispatch-isolation record joins a flag and its value in one expansion', () => {
+    const lines = shippedRecordLines();
+    assert.ok(lines.length > 0, 'the scan found the record sites');
+    assert.deepEqual(lines.filter((s) => /\$\{\w+:\+[^}]*\s[^}]*\}/.test(s.line)).map((s) => s.at), []);
+  });
+
+  for (const shell of ['bash', 'zsh']) {
+    const missing = process.platform === 'win32' || runHookSeam('-c', ['exit 0'], { interpreter: shell, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode !== 0;
+    test(`under ${shell}, each record site passes --renew-held and its value as two words, and nothing when there is none`, { skip: missing && `${shell} is not available` }, (t) => {
+      const dir = createTempProject('gsd-4904-argv-');
+      t.after(() => cleanup(dir));
+      const log = path.join(dir, 'argv.log');
+      const lines = shippedRecordLines().filter((s) => s.line.includes('_RENEW_HELD'));
+      assert.ok(lines.length > 0, 'the scan found the renewing sites');
+      const run = (value) => {
+        const script = path.join(dir, 'sites.sh');
+        fs.writeFileSync(script, [
+          `gsd_run() { printf '[%s]\\n' "$@" >> ${JSON.stringify(log)}; printf 'END\\n' >> ${JSON.stringify(log)}; }`,
+          `ISOLATION=none; PHASE_NUMBER=7; plan_id=plan-a; _RENEW_HELD=${JSON.stringify(value)}`,
+          ...lines.map((s) => s.line),
+        ].join('\n'));
+        fs.writeFileSync(log, '');
+        const r = runHookSeam(script, [], { interpreter: shell, cwd: dir, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+        assert.equal(r.exitCode, 0, r.stderr);
+        return fs.readFileSync(log, 'utf8').split('END\n').slice(0, -1).map((call) => call.trim().split('\n'));
+      };
+      for (const argv of run('1234')) {
+        assert.equal(argv[argv.indexOf('[--renew-held]') + 1], '[1234]', argv.join(' '));
+      }
+      for (const argv of run('')) {
+        assert.equal(argv.some((a) => a === '[]' || a.includes('renew-held')), false, argv.join(' '));
+      }
+    });
+  }
 
   // Shell state is lost between tool calls, so a site that reads `_RENEW_HELD`
   // outside the bash block that set it must restore it first, or its re-record
