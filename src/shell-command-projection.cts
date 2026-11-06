@@ -1984,6 +1984,19 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
   if (opts.allowSpecialTarget === true) {
     // A user-chosen destination such as /dev/stdout: written in place, no temp file, no restore.
+    // Windows reserved device names (NUL, CON, PRN, AUX, COM1-9, LPT1-9, with or without an
+    // extension, in any directory, or in the \\.\ form) are devices, not files: realpath cannot
+    // resolve them, so they are their own class, written in place before any physical resolution.
+    // Only a path whose final component is such a name is opened this way.
+    if (process.platform === 'win32' && /^(?:nul|con|prn|aux|com[1-9]|lpt[1-9])(?:[. ].*)?$/i.test(path.win32.basename(filePath))) {
+      const deviceFd = fs.openSync(filePath, fs.constants.O_WRONLY);
+      try {
+        fs.writeFileSync(deviceFd, normalized, encoding);
+      } finally {
+        try { fs.closeSync(deviceFd); } catch { /* already closed */ }
+      }
+      return;
+    }
     let special: fs.Stats | null = null;
     try { special = fs.statSync(filePath); } catch { /* absent: the ordinary path below */ }
     // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
