@@ -1156,8 +1156,10 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
       assertAllowed(runHook(bash(shape(12000))), '12000 tags');
     });
   }
-  test('a read in front of 5000 nested "$(: blocks', () => {
-    assertBlocked(runHook(bash(`cat .env; echo "$(${'"$('.repeat(5000)}`)), '5000 "$(', { tool: 'Bash', path: '.env' });
+  // The counting scan's limit depends on the platform's stack: under 5,000 on CI's macOS
+  // leg, about 5,600 on Linux. This row stays well inside both.
+  test('a read in front of 4000 nested "$(: blocks', () => {
+    assertBlocked(runHook(bash(`cat .env; echo "$(${'"$('.repeat(4000)}`)), '4000 "$(', { tool: 'Bash', path: '.env' });
   });
   test('a read in front of 12000 nested "$( runs out of stack, as before #5267: allows', () => {
     assertAllowed(runHook(bash(`cat .env; echo "$(${'"$('.repeat(12000)}`)), '12000 "$(');
