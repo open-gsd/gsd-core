@@ -566,9 +566,9 @@ git commit -m "{type}({phase}-{plan}): {concise task description}
 
 - {key change 1}
 - {key change 2}
-" -- ":(literal){step-2 path}" ...
+" -- ':(literal){step-2 path}' ...
 ```
-`--` commits only those paths' working-tree content, each one quoted as `":(literal){path}"` so `[` and `*` are not globs and a space does not split the path: list every step-2 path (both old and new path of a rename); `git add` new files first.
+`--` commits only those paths' working-tree content, each one quoted as `':(literal){path}'` so `[` and `*` are not globs and a space does not split the path (a `'` in a path becomes `'\''`): list every step-2 path (both old and new path of a rename); `git add` new files first.
 
 **5. Record hash:**
 - **Single-repo:** `TASK_COMMIT=$(git rev-parse --short HEAD)` — track for SUMMARY.
