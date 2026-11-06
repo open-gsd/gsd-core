@@ -385,7 +385,7 @@ describe('evaluatePredicate — message trimming', () => {
     assert.equal(run({ exitCode: 1, stderr: ' \n', stdout: 'real error' }).message, `${exitPrefix(1)}real error`);
   });
 
-  test('whitespace-only stderr falls back to stdout on timeout', () => {
+  test('whitespace-only stderr on timeout shows the command head, not stdout', () => {
     assert.equal(
       run({ timedOut: true, exitCode: null, stderr: '\t\n', stdout: 'ignored' }, 'myprog').message,
       `${TIMEOUT_PREFIX}myprog`,
