@@ -28,14 +28,9 @@ export function excludeFromGit(dir: string, filename: string): void {
   try {
     // gitignore cannot express a newline in a pattern, and git's line output could not be split.
     if (/[\r\n]/.test(dir)) return;
-    // cwd must pick the repo: drop inherited repository-location variables (e.g. inside a git hook).
-    const env = { GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined };
     // The prefix goes last: stdout is trimmed, and a non-empty prefix ends in `/`, so only an
     // empty prefix (dir is the git root) loses its line; a leading space survives.
-    const revParse = execGit(['rev-parse', '--git-path', 'info/exclude', '--show-prefix'], {
-      cwd: dir,
-      env: env as unknown as Record<string, string>,
-    });
+    const revParse = execGit(['rev-parse', '--git-path', 'info/exclude', '--show-prefix'], { cwd: dir });
     const [excludeRel, prefix = ''] = splitLines(String(revParse.stdout));
     if (revParse.exitCode !== 0 || !excludeRel) return;
     const exclude = path.resolve(dir, excludeRel);
