@@ -1,7 +1,8 @@
 /**
  * #5583 — `/gsd-phase --insert` must document and forward `--sibling`
  * (#4569), accept a decimal <after> phase, and say that inserting after a
- * decimal phase nests by default. Text pins on the shipped prompt files (docs prose is covered by the docs-guard registry).
+ * decimal phase nests by default. Text pins on the shipped prompt files and
+ * the four docs pages the docs-guard registry maps to this test.
  */
 
 const { describe, test } = require('node:test');
@@ -19,6 +20,21 @@ const ROUTERS = [
   'pi/package-skills/gsd-phase/SKILL.md',
 ];
 
+const DOCS = [
+  'docs/COMMANDS.md',
+  'docs/USER-GUIDE.md',
+  'docs/FEATURES.md',
+  'docs/features/phase-management.md',
+];
+const NEST_SITES = [
+  WF,
+  ...ROUTERS,
+  'gsd-core/workflows/help/modes/full.md',
+  'gsd-core/workflows/help/modes/full.compact.md',
+  'docs/COMMANDS.md',
+  '.changeset/kind-deer-travel.md',
+];
+
 describe('#5583 insert-phase --sibling', () => {
   test('workflow accepts a decimal <after> phase', () => {
     const WORKFLOW = read(WF);
@@ -34,9 +50,10 @@ describe('#5583 insert-phase --sibling', () => {
     assert.match(WORKFLOW, /Usage: \/gsd:phase --insert <after> \[--sibling\] <description>/);
     assert.match(WORKFLOW, /never part of the description/);
     const cmds = WORKFLOW.match(/^RESULT=\$\(gsd_run query phase\.insert .*$/gm) || [];
-    assert.equal(cmds.length, 2);
-    assert.equal(cmds.filter((c) => /--sibling\)$/.test(c)).length, 1);
-    assert.doesNotMatch(WORKFLOW, /sibling_flag/);
+    assert.equal(cmds.length, 1, 'one phase.insert call per run');
+    assert.match(cmds[0], /\$\{GSD_SIBLING:\+--sibling\}\)$/);
+    assert.match(WORKFLOW, /^case " \$GSD_ARGS " in \*" --sibling "\*\) GSD_SIBLING=1;;/m);
+    assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
   });
 
   test('workflow documents nest-by-default and the top-level fallback', () => {
@@ -47,7 +64,7 @@ describe('#5583 insert-phase --sibling', () => {
   });
 
   for (const file of ['commands/gsd/phase.md', 'skills/gsd-phase/SKILL.md']) {
-    test(`${file} argument-hint carries [--insert [--sibling]`, () => {
+    test(`${file} argument-hint carries --insert [--sibling]`, () => {
       assert.match(read(file), /argument-hint: "\[--insert \[--sibling\] \|/);
     });
   }
@@ -61,6 +78,18 @@ describe('#5583 insert-phase --sibling', () => {
   for (const f of ['gsd-core/workflows/help/modes/full.md', 'gsd-core/workflows/help/modes/full.compact.md']) {
     test(`${f} pins --sibling`, () => {
       assert.match(read(f), /--insert <after> \[--sibling\] <description>/);
+    });
+  }
+
+  for (const f of DOCS) {
+    test(`${f} pins --sibling`, () => {
+      assert.match(read(f), /--sibling/);
+    });
+  }
+
+  for (const f of NEST_SITES) {
+    test(`${f} says bracket ids need --sibling`, () => {
+      assert.match(read(f), /bracket[^\n]*--sibling/i);
     });
   }
 
