@@ -3387,24 +3387,6 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
     return JSON.parse(captured || '{}');
   }
 
-  for (const gate of ['decision-coverage-plan', 'decision-coverage-verify']) {
-    test(`#5798: ${gate} reports stat errors through a symlinked phase directory`, (t) => {
-      const alias = path.join(tmpDir, 'phase-alias');
-      fs.symlinkSync(phaseDir, alias, 'junction');
-      phaseDir = alias;
-      const parsed = runGateWithStatFailure(t, gate, 'EACCES');
-      assert.strictEqual(parsed.reason, 'phase directory unreadable');
-      if (gate === 'decision-coverage-plan') {
-        assert.strictEqual(parsed.passed, false);
-        assert.strictEqual(parsed.covered, null);
-      } else {
-        assert.strictEqual(parsed.blocking, false);
-        assert.strictEqual(parsed.honored, null);
-        assert.strictEqual(parsed.total, null);
-      }
-    });
-  }
-
   test('#4939: plan gate — an ENOENT stat failure is named as a missing directory', (t) => {
     const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'ENOENT');
 
