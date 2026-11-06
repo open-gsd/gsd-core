@@ -34,7 +34,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   // The wave id the blocks take from $WAVE_WORKTREE_MANIFEST, so one wave's file is another wave's stranger.
   const WAVE = 'gsd-worktree-wave-aBc123';
   const BOM = String.fromCharCode(0xfeff);
-  // Every halt #5531 adds exits 69 UNAVAILABLE (docs/reference/exit-codes.md), so the exit code does not tell them apart: each case below
+  // Every halt #5531 adds exits 69 UNAVAILABLE (the exit-code registry doc), so the exit code does not tell them apart: each case below
   // is a separate input, and a stub mark or a payload check shows that its own guard fired. The older guards keep exit 1.
   const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 69, two: 69, nul: 69, unreadable: 69, guard: 1 };
   // The two markers the read-and-check guards need, so a payload after them reaches the last guard.
