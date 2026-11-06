@@ -51,7 +51,7 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
 
     // These rows echo a caller-supplied directory. An explicit --config-dir is
     // path.join(explicitDir, 'agents'); a global or legacy manifest falls through
-    // to expandTilde(CLAUDE_CONFIG_DIR). Neither resolves symlinks, so the
+    // to expandTilde(CLAUDE_CONFIG_DIR). Neither calls realpath, so the
     // expectation stays the raw path.join spelling. The preview and apply rows
     // above compare the module loader's spelling of __dirname instead.
     const emptyExplicit = run(['effort', 'sync', '--dry-run', '--config-dir', globalDir]);
