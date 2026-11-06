@@ -1650,9 +1650,10 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
   test('#4222: a PLAN-SCOPED plain re-record does not re-derive the base check — HEAD moving mid-run keeps the plan on harness-worktree', (t) => {
     // The run's base check is taken at the phase-level resolve (and between
     // waves, #1369). HEAD can still move after a plan was decided `true`: in a
-    // mixed wave a sequential plan commits on the main tree first. The per-plan
-    // gate's plain re-record for the worktree plan must still record the
-    // capability, or the guard allows that plan's flag-less spawn.
+    // mixed wave a sequential plan commits on the main tree first. A plain query
+    // scoped to the plan, which is what the per-plan gate runs when it cannot read
+    // the capability, must still record it, or the guard allows that plan's
+    // flag-less spawn.
     const { dir } = projectWithOrigin(t, 'gsd-4222-planscope-');
     const hookEnv = { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') };
     const dispatch = (plan) => agentPayload({
@@ -1680,6 +1681,27 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     const flagless = runHook(dispatch('01-02'), dir, hookEnv);
     assert.equal(flagless.status, 2, `the guard must refuse the flag-less spawn of a plan decided harness-worktree: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
     assert.equal(JSON.parse(flagless.stdout).decision, 'block');
+  });
+
+  test('#4222: a FORCED plan-scoped record does not re-derive the base check either — the per-plan gate\'s `true` branch on a moved HEAD', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-planscope-');
+    diverge(dir);
+
+    const unscoped = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1', '--force-isolation', 'harness-worktree'], dir, env(dir));
+    assert.equal(unscoped.success, true, unscoped.error);
+    assert.equal(readSentinelRaw(dir).isolation, 'none', 'control: with no --plan the degrade wins over a force');
+
+    const forced = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1', '--plan', '01-02', '--force-isolation', 'harness-worktree'], dir, env(dir));
+    assert.equal(forced.success, true, forced.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'the plan keeps the capability its gate forced');
+    assert.equal(sentinel.harness_flag, 'isolation="worktree"');
+    assert.equal(sentinel.plan, '01-02');
+
+    const flagless = runHook(agentPayload({
+      tool_input: { subagent_type: 'gsd-executor', prompt: '[gsd:dispatch phase="1" plan="01-02"] Execute the plan.' },
+    }), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
+    assert.equal(flagless.status, 2, `the guard must refuse the flag-less spawn of a plan decided harness-worktree: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
   });
 
   test('#4222: an EMPTY --plan value (the per-plan gate\'s `"$plan_id"` after a lost shell) is still a plan-scoped write — no `none` for the whole phase', (t) => {
@@ -2437,7 +2459,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     assert.equal(sentinel.plan, 'plan-a');
   });
 
-  test('a plain re-query naming a DIFFERENT plan still writes — the per-plan gate\'s fresh record for the next plan is not held hostage by the last plan\'s degrade', (t) => {
+  test('a plain re-query naming a DIFFERENT plan still writes — a fresh record for the next plan is not held hostage by the last plan\'s degrade', (t) => {
     // per-plan-worktree-gate.md: "a plan-level submodule degrade elsewhere in
     // the wave could leave a stale `none` sentinel that a LATER, genuinely
     // harness-worktree plan's own dispatch could be misread against."
@@ -3108,12 +3130,11 @@ describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a
     assert.equal(dispatch(dir, T0 + 3000).action, 'allow', 'the forced re-record makes the plan\'s record the newest again');
   });
 
-  test('a plan that decides `true` inside its own ten minutes stays held, so the guard allows a flag-less dispatch until a forced record replaces it', (t) => {
+  test('a plain query at a plan\'s own scope stays held, so only a forced record replaces its `none`', (t) => {
     const dir = guardProject(t);
     force(dir, T0, 'none', A);
     const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
 
-    // The per-plan gate's `true` branch: a plain query, scoped to the plan.
     const answer = plain(dir, T0 + 1000, A);
 
     assert.equal(answer.held, true);
@@ -3123,6 +3144,67 @@ describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a
     force(dir, T0 + 2000, 'harness-worktree', A);
     assert.equal(dispatch(dir, T0 + 2000).reasonCode, 'harness_flag_missing', 'a forced record at the plan\'s scope replaces it');
   });
+
+  // The per-plan gate's record block as shipped, on the pinned clock.
+  const runPlanRecord = (dir, now, planId, gsdRun) => {
+    const gate = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'per-plan-worktree-gate.md');
+    const lines = splitLines(fs.readFileSync(gate, 'utf8'));
+    const marker = lines.findIndex((l) => l.includes('if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then'));
+    assert.notEqual(marker, -1, 'the per-plan record block is where this test expects it');
+    let open = marker; while (open > 0 && lines[open].trim() !== '```bash') open--;
+    let close = marker; while (close < lines.length && lines[close].trim() !== '```') close++;
+    const tools = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const script = path.join(dir, 'plan-record.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      gsdRun || `gsd_run() { node ${JSON.stringify(tools)} "$@"; }`,
+      `plan_id=${JSON.stringify(planId)}; USE_WORKTREES_FOR_PLAN=true; PHASE_NUMBER=${JSON.stringify(A.phase)}`,
+      ...lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')),
+    ].join('\n'));
+    const childEnv = { ...process.env, ...env(dir, now) };
+    delete childEnv.CLAUDE_ENV_FILE;
+    const run = runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.equal(run.exitCode, 0, run.stderr);
+  };
+  const noBash = process.platform === 'win32';
+
+  test('a plan that decides `true` inside its own ten minutes is not held: its gate forces the capability, so the guard demands the flag', { skip: noBash }, (t) => {
+    const dir = guardProject(t);
+    force(dir, T0, 'none', A);
+
+    runPlanRecord(dir, T0 + 1000, A.plan);
+
+    const record = readKeyed(dir, `${A.phase}--${A.plan}`);
+    assert.equal(record.isolation, 'harness-worktree');
+    assert.equal(record.decided_at, T0 + 1000, 'the capability is this plan\'s own decision');
+    assert.equal(dispatch(dir, T0 + 1000).reasonCode, 'harness_flag_missing', 'a dispatch that omits the flag is refused');
+    assert.equal(dispatch(dir, T0 + 1000, { isolation: 'worktree' }).action, 'allow');
+    assert.equal(plain(dir, T0 + 2000, A).held, false, 'nothing is left to hold');
+  });
+
+  test('an empty plan id stays a plain query, so the override never reaches the whole phase', { skip: noBash }, (t) => {
+    const dir = guardProject(t);
+    force(dir, T0, 'none', { phase: A.phase });
+    const recordOfPhase = readKeyed(dir, A.phase);
+
+    runPlanRecord(dir, T0 + 1000, '');
+
+    assert.deepEqual(readKeyed(dir, A.phase), recordOfPhase, 'the held phase record stands');
+    assert.equal(dispatch(dir, T0 + 1000).action, 'allow', 'and a sequential plan of that phase still dispatches');
+  });
+
+  for (const [name, inspect] of [
+    ['declares `none`', 'printf none'],
+    ['cannot be read', 'return 1'],
+    ['read fails after printing a mode', 'printf harness-worktree; return 1'],
+  ]) {
+    test(`a host whose capability ${name} stays a plain query, so the gate decides nothing itself`, { skip: noBash }, (t) => {
+      const dir = guardProject(t);
+      const tools = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+      runPlanRecord(dir, T0, A.plan, `gsd_run() { case "$2" in inspect-dispatch-isolation) ${inspect} ;; *) node ${JSON.stringify(tools)} "$@" ;; esac; }`);
+      assert.equal(readKeyed(dir, `${A.phase}--${A.plan}`).decided_by, 'resolver');
+    });
+  }
 
   test('a held query spends no git on the base check, and an unheld one does (GIT_TRACE)', (t) => {
     const dir = createTempGitProject('gsd-4904-order-');
@@ -3407,12 +3489,14 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
   // alive on its own. The scan covers every forced re-record, not only the
   // `$ISOLATION` ones: the per-plan gate forces a literal `none` when it
   // inherits a held USE_WORKTREES=false. Three
-  // literal sites are new decisions by construction, each named with why.
+  // sites are new decisions by construction, each named with why.
   const FRESH_DECISION_SITES = {
     // only on an orchestrator-worktree host, which a held answer never is
     'gsd-core/references/dispatch-isolation-gate.md': /--force-isolation none >\/dev\/null/,
     // Pattern B segments never run a resolve block; Pattern A's is prose, not a shell line
     'gsd-core/workflows/execute-plan.md': /--force-isolation none >\/dev\/null/,
+    // the `true` branch forces a worktree mode, never a `none`, so it follows no hold
+    'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md': /\$\{_PLAN_CAPABILITY:\+--force-isolation\}/,
   };
   test('every shipped forced re-record that can follow a held answer passes back its decidedAt', () => {
     const roots = [path.join(__dirname, '..', 'gsd-core', 'workflows'), path.join(__dirname, '..', 'gsd-core', 'references')];
@@ -3428,7 +3512,7 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
           let fenced = false;
           splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
             if (/^\s*```/.test(line)) fenced = !fenced;
-            else if (fenced && /\bgsd_run query dispatch-isolation .*--force-isolation /.test(line)) sites.push({ rel, at: `${rel}:${i + 1}`, line });
+            else if (fenced && /\bgsd_run query dispatch-isolation .*--force-isolation[ }]/.test(line)) sites.push({ rel, at: `${rel}:${i + 1}`, line });
           });
         }
       }
@@ -3465,7 +3549,7 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
           let fenced = false;
           splitLines(fs.readFileSync(full, 'utf8')).forEach((line, i) => {
             if (/^\s*```/.test(line)) fenced = !fenced;
-            else if (fenced && /^\s*gsd_run query dispatch-isolation .*\$\{\w+:\+/.test(line)) {
+            else if (fenced && /\bgsd_run query dispatch-isolation .*\$\{\w+:\+/.test(line)) {
               found.push({ at: `${path.relative(root, full).split(path.sep).join('/')}:${i + 1}`, line });
             }
           });
