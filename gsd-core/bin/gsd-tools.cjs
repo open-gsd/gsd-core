@@ -2566,8 +2566,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //   plain, otherwise → recorded as before.
     //
     // Scope: an identifier the query omits is unconstrained, one it names
-    // must equal the record's. So an unscoped or same-phase re-query holds a
-    // plan-scoped degrade, while the per-plan gate's plain `--plan <other>`
+    // must equal the record's. So a same-phase re-query holds a plan-scoped
+    // degrade, and an unscoped re-query, which has no keyed record to name,
+    // holds whatever the legacy slot carries, another orchestrator's degrade
+    // included: at worst it runs sequentially for the rest of that record's
+    // ten minutes. Meanwhile the per-plan gate's plain `--plan <other>`
     // re-resolve — a new record request for a different plan — still writes,
     // exactly as per-plan-worktree-gate.md requires ("a stale `none` … a
     // LATER, genuinely harness-worktree plan"). Stale (the reader's 10-minute
@@ -2587,9 +2590,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // live git state on every call that names no plan, and the shell
     // computes the same check itself.
     //
-    // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so
-    // "fresh and well-formed" here is byte-for-byte what the guard will
-    // honour at dispatch time — a second definition would let the two drift.
+    // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so a
+    // record is fresh and well-formed here exactly when it is for the guard —
+    // a second definition would let the two drift. The windows differ on
+    // purpose: this hold lapses ten minutes after `decided_at`, while the guard
+    // also honours an aged `none` for its own phase for up to
+    // `AGED_NONE_MAX_MS` (#5479).
     const forcedApplied = Boolean(forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
     const heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
@@ -3289,10 +3295,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   /**
    * #4561 — the degrade record a PLAIN `dispatch-isolation` query must not
-   * overwrite, or `null`. Reads the sentinel at exactly the path
-   * `writeDispatchIsolationSentinel` writes (`<cwd>/.gsd/…`, `cwd` already
-   * resolved by main()) through the guards' shared reader, so freshness and
-   * shape are judged by the one definition the guard itself applies.
+   * overwrite, or `null`. Reads the records `writeDispatchIsolationSentinel`
+   * writes (under `<cwd>/.gsd/`, `cwd` already resolved by main()) through the
+   * guards' shared reader, so freshness and shape are judged by the one
+   * definition the guard itself applies. #5682 gave each dispatch its own keyed
+   * record, because a parallel orchestrator's write replaces the legacy slot:
+   * the hold reads the newest fresh record at the query's own scope
+   * (`ownScope`), so that write can neither hide the record nor outrank it.
    *
    * Returns the record only when ALL hold: present, fresh, well-formed,
    * decided less than the freshness window ago (`holdExpired`, measured from
@@ -3306,7 +3315,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * the installs that have no guard hook to deny the dispatch.
    */
   function heldDegradeRecord(cwd, { phase, plan }) {
-    const held = readDegradeRecord(cwd);
+    const held = readDegradeRecord(cwd, { phase, plan });
     if (!held || !held.present || held.stale || held.holdExpired || held.malformed) return null;
     if (held.isolation !== 'none') return null;
     // #4630 ADR Phase 2. Pre-fix this held ANY fresh in-scope `none`, which
@@ -3320,9 +3329,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     return held;
   }
 
-  // The shared reader at the resolver's own path and clock, or null when the
-  // reader cannot be loaded or throws (see heldDegradeRecord).
-  function readDegradeRecord(cwd) {
+  // The shared reader at the resolver's own path and clock, for the query's
+  // own scope, or null when the reader cannot be loaded or throws (see
+  // heldDegradeRecord).
+  function readDegradeRecord(cwd, dispatchIds) {
     let readSentinelAt;
     let realClock;
     try {
@@ -3332,7 +3342,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       return null;
     }
     try {
-      return readSentinelAt(cwd, { clock: realClock });
+      return readSentinelAt(cwd, { clock: realClock, dispatchIds, ownScope: true });
     } catch {
       return null;
     }
