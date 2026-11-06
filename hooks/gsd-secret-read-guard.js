@@ -710,6 +710,8 @@ let probeBudget = MAX_COMMAND_LENGTH;
 // its quotes, its body runs to the end of the input, and the scans that ran first have
 // already said what they found.
 let unquoteBudget = 0;
+// What the retries after a stack overflow may read in one grammar scan.
+let retryBudget = 0;
 
 // Iterations of the span readers' loops, summed over the process: the work
 // the tests hold linear in the length of a command (module.exports).
@@ -752,12 +754,16 @@ let spanSeen = false;
 // and leave the next `$(` to start the same climb, once per level, which is
 // quadratic. A reader already running around a heredoc tag that overflowed reads on
 // by the grammar, which errs toward a deny. If the counter overflows too, the throw
-// is scanByGrammar's to catch.
+// is scanByGrammar's to catch. Each reader further up then retries the same text, with
+// more stack to do it in, which is what saves a read in front of a nest. retryBudget
+// caps that, because a long command would otherwise be read once per level.
 function readSpanClose(str, i) {
   try {
     return readParenClose(str, i, { orphans: [], depth: 0 });
   } catch (err) {
-    if (!(err instanceof RangeError)) throw err;
+    if (!(err instanceof RangeError) || retryBudget < str.length - i) throw err;
+    retryBudget -= str.length - i;
+    spanReaderSteps += str.length - i;
     closeByCount = true;
     return findParenClose(str, i);
   }
@@ -1848,6 +1854,7 @@ function scanByGrammar(scan, command) {
   closeByCount = false;
   probeBudget = MAX_COMMAND_LENGTH;
   unquoteBudget = command.length;
+  retryBudget = 4 * MAX_COMMAND_LENGTH;
   try {
     return scan(command, 0);
   } catch (err) {
