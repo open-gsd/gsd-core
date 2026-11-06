@@ -218,7 +218,8 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
       return file;
     };
     const over = aged('gsd-worktree-wave-oLd111', 1441);
-    const under = aged('gsd-worktree-wave-oLd222', 1439);
+    // Just under the limit (a file exactly at it is a little older by the time find runs, so it is not a stable input).
+    const under = aged('gsd-worktree-wave-oLd222', 1439.5);
     const fresh = aged('gsd-worktree-wave-zZ9876', 0);
     create(root);
     assert.ok(!fs.existsSync(over), 'a file just over a day old is swept');
@@ -228,16 +229,18 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   test('#5531: block 1 halts with the create code when .claude is read-only', (t) => {
     // root ignores the mode bits, so the case cannot fail for it.
     if (process.getuid?.() === 0 || process.platform === 'win32') return t.skip('the mode bits do not bind this user');
-    const root = path.join(tempDir(t), 'orch');
+    const dir = createTempDir('gsd-5531-');
+    const root = path.join(dir, 'orch');
     const claude = path.join(root, '.claude');
+    // The mode is restored before the directory is removed, which a read-only directory would block.
+    t.after(() => {
+      fs.chmodSync(claude, 0o755);
+      cleanup(dir);
+    });
     fs.mkdirSync(claude, { recursive: true });
     fs.chmodSync(claude, 0o555);
-    try {
-      const r = runBlock(root, `gsd_run() { echo false; }\n${createBlock(content)}`);
-      assert.equal(r.exitCode, EXIT.mktemp, r.stderr);
-    } finally {
-      fs.chmodSync(claude, 0o755);
-    }
+    const r = runBlock(root, `gsd_run() { echo false; }\n${createBlock(content)}`);
+    assert.equal(r.exitCode, EXIT.mktemp, r.stderr);
   });
 
   test('#5531: a .claude that is a symlink to a directory is followed: the prompt file lands in the target', (t) => {
@@ -247,7 +250,20 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     fs.mkdirSync(target, { recursive: true });
     fs.mkdirSync(root, { recursive: true });
     fs.symlinkSync(target, path.join(root, '.claude'));
+    // A leftover of this wave and plan, and a crashed wave's day-old file, both sit in the target.
+    const leftover = path.join(target, `${STEM}-abcdef`);
+    fs.writeFileSync(leftover, 'old');
+    const crashed = path.join(target, `gsd-executor-prompt-gsd-worktree-wave-oLd111-${PHASE}-${PLAN}-abcdef`);
+    fs.writeFileSync(crashed, 'old');
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(crashed, twoDaysAgo, twoDaysAgo);
     const file = create(root);
     assert.equal(path.dirname(fs.realpathSync(file)), fs.realpathSync(target));
+    assert.ok(!fs.existsSync(leftover) && !fs.existsSync(crashed), 'the leftover removal and the sweep reach through the link');
+    const prompt = `${GUARDED}through a link\n`;
+    fs.writeFileSync(file, prompt);
+    const r = readAndCheck(root);
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(r.stdout, prompt, 'the read-and-check block finds the file through the link');
   });
 });

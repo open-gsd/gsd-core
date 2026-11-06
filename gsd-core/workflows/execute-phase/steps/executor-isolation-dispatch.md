@@ -197,10 +197,11 @@ TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 # of ADR-3889, so the caller can tell which one fired: 73 cannot create the directory or the file,
 # 74 cannot remove a leftover, 69 no file or more than one (the registered UNAVAILABLE), 65 NUL
 # byte, 77 unreadable. Only 69 is registered. The guards that were already here keep exit 1.
-_PROMPT_STEM="gsd-executor-prompt-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}"
+_PROMPT_PREFIX='gsd-executor-prompt'
+_PROMPT_STEM="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}"
 mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 73; }
-find "${ORCH_ROOT}/.claude" -maxdepth 1 -name 'gsd-executor-prompt-*' -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || :
-find "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 74; }
+find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_PREFIX}-*" -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || :
+find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 74; }
 PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 73; } # XXXXXX path-final on BSD/macOS (#1520)
 echo "PROMPT_FILE=$PROMPT_FILE"
 ```
@@ -286,11 +287,11 @@ Then read it back and check it:
 # glob error under bash or zsh. No match, or more than one, halts. The exit codes of
 # these halts are listed in block 1.
 _PROMPT_NAME="gsd-executor-prompt-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}-??????"
-PROMPT_FILE=$(find "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null || :)
+PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null || :)
 case "$PROMPT_FILE" in
   ''|*'
 '*)
-    find "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
+    find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
     echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
     exit 69 ;;
 esac
