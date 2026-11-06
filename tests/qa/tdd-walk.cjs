@@ -5,7 +5,8 @@
  * resolves correctly END-TO-END, mirroring the discipline `tests/qa/loop-walk.cjs`
  * brings to the loop subsystem: invoke the REAL shipped mechanism against a
  * REAL temp project, never reimplement or grep-simulate it (#4298, Phase 5 of
- * epic #4272).
+ * epic #4272). It also holds the getters of the executor-prompt compose blocks
+ * (#5531), described at the end of this header.
  *
  * WHAT'S EXECUTABLE VS WHAT ISN'T (see
  * `.gsd/phase/chore-4298-tdd-walk-qa-harness/40-design.md`): the two TDD
@@ -23,7 +24,7 @@
  *     the file's FIRST fenced block, which is not just the shim: it is the
  *     whole ISOLATION resolution (its own independent fail-closed branches),
  *     ahead of a LATER fenced block that contains the `_TDD_APPLICABLE_RAW=...`
- *     resolution, followed in the same block by the `PROMPT_FILE`
+ *     resolution; that block also holds the `PROMPT_FILE`
  *     mktemp creation, which this harness does not need. A standalone
  *     execution must concatenate the first block (for its `gsd_run`
  *     definition) with just the TDD resolution lines sliced out of the second.
@@ -35,6 +36,10 @@
  * a Windows CI runner for 32 minutes), substitutes the plan's placeholders,
  * and executes the result via a real `bash -c` subprocess against a real
  * fixture project built with `tests/helpers.cjs`'s `createTempProject`.
+ *
+ * The #5531 getters (`createBlock`, `readBlock`) give the executor-prompt
+ * integration test one owner for the compose-block markers; they extract by the
+ * same `indexOf`/`slice`.
  */
 
 const fs = require('fs');
@@ -128,6 +133,14 @@ function extractFencedBashBlockContaining(content, marker) {
     searchFrom = closeIdx + FENCE_CLOSE.length;
   }
 }
+
+// The markers of the two executor-prompt compose blocks (#5531): the block that
+// creates PROMPT_FILE and the block that reads it back. One owner for the
+// markers and for the block getters; the dispatch integration test imports them.
+const PROMPT_CREATE_MARKER = 'PROMPT_FILE=$(mktemp';
+const PROMPT_READ_MARKER = 'EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE"';
+const createBlock = (content) => extractFencedBashBlockContaining(content, PROMPT_CREATE_MARKER);
+const readBlock = (content) => extractFencedBashBlockContaining(content, PROMPT_READ_MARKER);
 
 /**
  * From executor-isolation-dispatch.md's later fenced block (the one that creates
@@ -334,6 +347,8 @@ module.exports = {
   TddWalk,
   extractFencedBashBlock,
   extractFencedBashBlockContaining,
+  createBlock,
+  readBlock,
   sliceTddResolution,
   buildBackendScript,
   executeBackendScript,
