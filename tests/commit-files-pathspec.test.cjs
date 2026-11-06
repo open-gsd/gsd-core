@@ -3339,14 +3339,19 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     for (const c of ['bash -lc "git commit -m x -- a"', 'git commit -m x -- "$FILES"', "git commit -m x -- '$FILES'", 'git commit -m x -- $A b', 'git commit -m x -- a$B','git commit -m x -- "$A" "$B"']) assert.equal(unscopedGitCommits(c).length, 0, c);
   });
 
-  test('parity: the scanner reads the secret guard\'s -c cluster regex and git value-option set', () => {
-    // allow-test-rule: architectural-invariant (#5211)
-    const hook = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), 'utf8');
-    const hookRe = hook.match(/const DASH_C_RE = (\/.{1,60}\/);/)[1];
-    assert.ok(shellDashCPayloads.toString().includes(hookRe), `shellDashCPayloads must use ${hookRe}`);
-    const set = hook.match(/const GIT_GLOBAL_VALUE_OPTIONS = new Set\(\[([^\]]{1,400})\]\)/)[1].match(/'[^']{1,40}'/g).map((s) => s.slice(1, -1));
-    // The scanner also knows `--super-prefix`, which the hook fails closed on; it must never know less than the hook.
-    assert.deepEqual(set.filter((o) => !GIT_VALUE_FLAGS.has(o)), []);
+  test('parity: the scanner sees every -c cluster and git value option the secret guard sees', () => {
+    const hook = (command) => runHook(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), [], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } }), env: { ...process.env }, timeoutMs: PROBE_TIMEOUT_MS,
+    }).exitCode;
+    for (const flag of ['-c', '-lc', '-ec', '-euc', '-xec']) {
+      assert.equal(hook(`bash ${flag} 'cat .env'`), 2, `hook blocks bash ${flag}`);
+      assert.equal(shellDashCPayloads(`bash ${flag} 'git commit -m x'`).length, 1, `scanner reads bash ${flag}`);
+    }
+    // A value option the hook skips (exit 0) must be a value option of the scanner too; `--super-prefix` fails closed in the hook.
+    for (const opt of ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix']) {
+      if (hook(`git ${opt} '-calias.x=!cat .env' status`) === 0) assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
+    }
+    assert.ok(GIT_VALUE_FLAGS.has('-C'));
   });
 
   test('git -C / -c global options do not hide a commit', () => {
