@@ -287,7 +287,6 @@ describe('evaluatePredicate — message trimming', () => {
         const out = 'a'.repeat(len - 1) + 'Z';
         const { message } = run(mk(out));
         assert.equal(message.length, Math.min(prefix.length + len, COMMAND_MAX_OUTPUT_CHARS));
-        assert.ok(message.endsWith('Z'));
         assert.equal(message, prefix + out.slice(-(COMMAND_MAX_OUTPUT_CHARS - prefix.length)));
       });
     }
@@ -316,7 +315,6 @@ describe('evaluatePredicate — message trimming', () => {
       const { message } = run({ timedOut: true, exitCode: null, stderr: '' }, command);
       assert.equal(message, prefix + command.slice(0, COMMAND_MAX_OUTPUT_CHARS - prefix.length));
       assert.equal(message.length, Math.min(prefix.length + len, COMMAND_MAX_OUTPUT_CHARS));
-      assert.ok(message.startsWith(`${prefix}A`));
     });
   }
 
@@ -396,9 +394,9 @@ describe('evaluatePredicate — message trimming', () => {
   });
 
   test('oversized prefix never pushes the message over the cap', () => {
-    const { message } = run({ exitCode: 'x'.repeat(COMMAND_MAX_OUTPUT_CHARS + 5), stderr: 'boom' });
-    assert.ok(message.length <= COMMAND_MAX_OUTPUT_CHARS);
-    assert.ok(!message.includes('boom'));
+    const code = 'x'.repeat(COMMAND_MAX_OUTPUT_CHARS + 5);
+    const { message } = run({ exitCode: code, stderr: 'boom' });
+    assert.equal(message, `command exited ${code}: `.slice(0, COMMAND_MAX_OUTPUT_CHARS));
   });
 
   test('prefix at cap-1, cap and cap+1 units: one text unit, prefix whole, prefix cut', () => {
