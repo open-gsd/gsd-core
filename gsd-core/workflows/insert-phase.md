@@ -1,7 +1,7 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
 <purpose>
-Insert a decimal phase for urgent work discovered mid-milestone between existing integer phases. Uses decimal numbering (72.1, 72.2, etc.) to preserve the logical sequence of planned phases while accommodating urgent insertions without renumbering the entire roadmap.
+Insert a decimal phase for urgent work discovered mid-milestone between existing phases (after an integer or a decimal phase). Uses decimal numbering (72.1, 72.2, etc.) to preserve the logical sequence of planned phases while accommodating urgent insertions without renumbering the entire roadmap.
 </purpose>
 
 <required_reading>
@@ -12,24 +12,27 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 <step name="parse_arguments">
 Parse the command arguments:
-- First argument: integer phase number to insert after
+- First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description; the insert_phase step drops a leading `--insert`, word-splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh), drops the double quotes around each word and forwards every word as typed; the CLI router owns `--sibling` and `--ws <name>`
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
 -> after = 72
 -> description = "Fix critical auth bug"
 
+Allocation: inserting after an integer phase creates the next decimal (72.1). Inserting after a decimal phase nests by default (`--insert 15.2 "x"` -> 15.2.1); add `--sibling` to join the parent level instead (`--insert 15.2 --sibling "x"` -> 15.3). A top-level after-phase with `--sibling` falls back to nested. Under bracket phase ids a nested insert after a decimal phase is refused; use `--sibling` to insert at the parent level.
+
 If arguments missing:
 
 ```
 ERROR: Both phase number and description required
-Usage: /gsd:phase --insert <after> <description>
+Usage: /gsd:phase --insert <after> [--sibling] <description>
 Example: /gsd:phase --insert 72 Fix critical auth bug
 ```
 
 Exit.
 
-Validate first argument is an integer.
+Validate first argument is a phase number (integer or dotted decimal).
 </step>
 
 <step name="init_context">
@@ -57,12 +60,17 @@ Exit.
 **Delegate the phase insertion to `gsd_run query phase.insert`:**
 
 ```bash
-RESULT=$(gsd_run query phase.insert "${after_phase}" "${description}")
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_F=1; set --; while IFS= read -r GSD_T; do GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue; [ "$GSD_F$GSD_T" = 1--insert ] || set -- "$@" "$GSD_T"; GSD_F=; done <<<"$(printf '%s\n' "$GSD_ARGS" | tr -s '[:space:]' '\n')"
+RESULT=$(gsd_run query phase.insert "$@")
 ```
 
 The CLI handles:
 - Verifying target phase exists in ROADMAP.md
-- Calculating next decimal phase number (checking existing decimals on disk)
+- Calculating next decimal phase number (checking existing decimals on disk; nested by default, parent level with `--sibling`; bracket phase ids refuse the nested form after a decimal phase)
 - Generating slug from description
 - Creating the phase directory (`.planning/phases/{N.M}-{slug}/`)
 - Inserting the phase entry into ROADMAP.md after the target phase with (INSERTED) marker
@@ -128,7 +136,7 @@ Project state updated: .planning/STATE.md
 ---
 
 **Also available:**
-- Review insertion impact: Check if Phase {next_integer} dependencies still make sense
+- Review insertion impact: Check if the dependencies of the phase that follows {after_phase} still make sense
 - Review roadmap
 
 ---

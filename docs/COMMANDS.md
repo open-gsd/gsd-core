@@ -605,7 +605,8 @@ CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases with a sin
 | Flag | Description |
 |------|-------------|
 | (none) | Append a new integer phase to the end of the current milestone |
-| `--insert <N>` | Insert urgent work as a decimal phase (e.g., 3.1) after phase N |
+| `--insert <N>` | Insert urgent work as a decimal phase (e.g., 3.1) after phase N. After a decimal phase N it nests by default (`15.2` → `15.2.1`); bracket phase ids refuse a nested insert after a decimal phase (use `--sibling`) |
+| `--sibling` | With `--insert`, join the parent level instead of nesting (`--insert 15.2 --sibling` → `15.3`) |
 | `--remove <N>` | Remove a future phase and renumber subsequent phases |
 | `--edit <N>` | Edit any field of an existing phase in place |
 | `--force` | Allow editing in-progress or completed phases (used with `--edit`) |
@@ -616,6 +617,7 @@ CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases with a sin
 ```bash
 /gsd-phase "Add authentication system"          # Append new phase with description
 /gsd-phase --insert 3 "Fix auth race condition" # Insert between phase 3 and 4 → creates 3.1
+/gsd-phase --insert 15.2 --sibling "x"          # After a decimal phase: peer 15.3 (default nests as 15.2.1; bracket phase ids refuse that nested form)
 /gsd-phase --remove 7               # Remove phase 7, renumber 8→7, 9→8, etc.
 /gsd-phase --edit 5                 # Edit any field of phase 5
 /gsd-phase --edit 5 --force         # Edit phase 5 even if in-progress or completed

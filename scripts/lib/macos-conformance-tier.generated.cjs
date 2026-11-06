@@ -119,6 +119,7 @@ module.exports = {
   "tests/hooks-opt-in.test.cjs",
   "tests/host-integration.test.cjs",
   "tests/init-manager.test.cjs",
+  "tests/insert-phase-sibling-docs.test.cjs",
   "tests/install-minimal-hooks.test.cjs",
   "tests/install-path-detection.test.cjs",
   "tests/install-regressions.test.cjs",
