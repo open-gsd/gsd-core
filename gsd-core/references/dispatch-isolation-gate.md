@@ -178,9 +178,11 @@ then re-records `none` at its own scope with `--renew-held <decidedAt>`: the gua
 against the record present at that instant, and the held one may name another phase or plan,
 or lapse before this site dispatches. The host's descriptors (`harnessFlag`,
 `exec`) are read from `inspect-dispatch-isolation`, which no hold reaches. A forced record
-always writes, a plain query scoped to a *different* plan writes (the per-plan gate's fresh
-record for the next plan), and a record past the reader's freshness window is replaced as
-before. The record carries `decided_at`, when the degrade was decided, beside `written_at`. A
+always writes, a plain query scoped to a *different* plan writes (a fresh record for the next
+plan), and a record past the reader's freshness window is replaced as before. A plan that decides
+`true` is not held by its own earlier `none`: when the plan id is non-empty and
+`inspect-dispatch-isolation` answers a worktree mode, the per-plan gate forces that mode.
+The record carries `decided_at`, when the degrade was decided, beside `written_at`. A
 `--renew-held <ms>` re-record refreshes `written_at` for the guard and records the `decidedAt` of
 the answer the site followed (never later than the write), and the hold measures its ten minutes
 from `decided_at`. The value comes from the answer, not from the file at write time, which may by

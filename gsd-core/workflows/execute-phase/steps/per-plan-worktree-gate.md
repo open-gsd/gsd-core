@@ -136,9 +136,20 @@ if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then
   # already false, so its own degrade is always a new decision.
   gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" --force-isolation none ${_RENEW_HELD:+--renew-held} ${_RENEW_HELD:+"$_RENEW_HELD"} >/dev/null 2>&1 || true
 elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
-  # No plan-level override — re-resolve normally, still scoped to this plan,
-  # so the sentinel's `plan` field always matches the plan about to dispatch.
-  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" >/dev/null 2>&1 || true
+  # No plan-level override — re-resolve, still scoped to this plan, so the
+  # sentinel's `plan` field always matches the plan about to dispatch. This plan
+  # decided `true`, so an earlier `none` of its own must not stand: a plain query
+  # would hold it, and the guard would then allow a dispatch that omits the flag.
+  # Force the host's declared capability, read from `inspect-dispatch-isolation`,
+  # which no hold reaches. Only with a plan id: an empty one records at phase
+  # level, where the override would reach every plan of the phase. A failed read,
+  # or a host that declares `none`, stays a plain query.
+  _PLAN_CAPABILITY=""
+  if [ -n "${plan_id:-}" ]; then
+    _PLAN_CAPABILITY=$(gsd_run query inspect-dispatch-isolation --raw 2>/dev/null) || _PLAN_CAPABILITY=""
+    [ "$_PLAN_CAPABILITY" = "none" ] && _PLAN_CAPABILITY=""
+  fi
+  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" ${_PLAN_CAPABILITY:+--force-isolation} ${_PLAN_CAPABILITY:+"$_PLAN_CAPABILITY"} >/dev/null 2>&1 || true
 fi
 # An EMPTY value (the plan state was lost with an earlier tool call's shell) writes
 # nothing, so a recorded phase-level degrade is never re-persisted as harness-worktree (#5479).

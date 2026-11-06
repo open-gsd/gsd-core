@@ -2527,7 +2527,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // at the phase-level resolve and again between waves (#1369), and a
     // degrade at either turns worktrees off for the rest of the run, so every
     // later plan takes the per-plan gate's forced-`none` branch. A plan reaches
-    // the gate's plain re-record only when neither degraded, and the record it
+    // the gate's `true` branch only when neither degraded, and the record it
     // writes is the per-plan decision the guard holds the dispatch to. HEAD can
     // still move after that decision: a sequential plan of a mixed wave commits
     // on the main tree before a worktree plan of the same wave dispatches, or a
@@ -2574,10 +2574,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // degrade, and an unscoped re-query, which has no keyed record to name,
     // holds whatever the legacy slot carries, another orchestrator's degrade
     // included: at worst it runs sequentially for the rest of that record's
-    // ten minutes. Meanwhile the per-plan gate's plain `--plan <other>`
-    // re-resolve — a new record request for a different plan — still writes,
-    // exactly as per-plan-worktree-gate.md requires ("a stale `none` … a
-    // LATER, genuinely harness-worktree plan"). Stale (the reader's 10-minute
+    // ten minutes. Meanwhile a plain `--plan <other>` re-resolve — a new
+    // record request for a different plan — still writes, and the per-plan
+    // gate forces the host's capability for a plan that decided `true`, when it
+    // has a plan id and reads a worktree mode, so its own earlier `none` does not
+    // hold it (per-plan-worktree-gate.md: "a stale `none` … a LATER,
+    // genuinely harness-worktree plan"). Stale (the reader's 10-minute
     // window) or malformed records are never held, so nothing is permanently
     // sticky, and a fresh run with no sentinel records the natural
     // capability as it always did.
