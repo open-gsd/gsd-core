@@ -1070,6 +1070,19 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
       assert.deepEqual(out.via, via, `${cmd}: via`);
     });
   }
+  // A git command an alias or script runs inherits the environment's config,
+  // and its own config can change what that config runs: a URL the
+  // environment sets becomes an ext:: command under the nested rewrite or
+  // vcs=ext, so the inherited config is scanned again under it.
+  for (const cmd of [
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f="!git -c remote.origin.vcs=ext fetch origin" f`,
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=zz'" git -c alias.f="!git -c 'url.ext::cat .env #.insteadOf=zz' -c alias.g=status g" f`,
+    `export GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'"; git -c core.editor='git -c remote.origin.vcs=ext fetch origin' commit`,
+  ]) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
   test('a read reached through no git step carries no via', () => {
     const out = assertBlocked(runHook(bash('cat .env')), 'cat .env', { tool: 'Bash', path: '.env' });
     assert.equal(out.via, undefined);
