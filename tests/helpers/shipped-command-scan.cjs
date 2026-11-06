@@ -327,7 +327,7 @@ const shellDashCPayloads = (str) => {
       || NON_COMMAND_PREFIX.has(t.value);
     const gi = group.findIndex((t) => !skippable(t));
     if (gi !== -1 && SHELL_INVOKER_RE.test(bareCommandName(group[gi]))) {
-      const ci = group.findIndex((t, k) => k > gi && !t.redir && t.value === '-c');
+      const ci = group.findIndex((t, k) => k > gi && !t.redir && /^-[A-Za-z]*c$/.test(t.value));
       const payload = ci !== -1 ? group.slice(ci + 1).find((t) => !t.redir) : undefined;
       if (payload) payloads.push(payload.value);
     }
@@ -379,16 +379,20 @@ const unscopedGitCommits = (raw, inline = false) => {
     const c = gitSubcommandIdx(toks, i);
     if (c === -1 || toks[c].value !== 'commit') continue;
     const argv = [];
+    const argvTok = [];
     let prev = toks[c];
     for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
       if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
-      if (!toks[j].redir) argv.push(toks[j].value);
+      if (!toks[j].redir) { argv.push(toks[j].value); argvTok.push(toks[j]); }
       prev = toks[j];
       skipTo = j;
     }
     const dd = argv.indexOf('--');
     const spec = dd === -1 ? [] : argv.slice(dd + 1).filter((a) => !isExcludeMagic(a));
-    const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree));
+    // An unquoted `$`-word may split to nothing, so a pathspec made only of those can commit the whole index.
+    const unquotedVar = (t) => t.value[0] === '$' && t.qmask[0] === '0';
+    const onlyUnquotedVars = dd !== -1 && dd < argv.length - 1 && argvTok.slice(dd + 1).every(unquotedVar);
+    const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree) || onlyUnquotedVars);
     // -i/--include, also bundled as in -qi, commits the whole index plus the named paths.
     const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a) => (a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a));
     const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
@@ -412,6 +416,7 @@ module.exports = {
   tokenize,
   shellDashCPayloads,
   SHELL_INVOKER_RE,
+  GIT_VALUE_FLAGS,
   commentPortion,
   ISSUE_REF_RE,
   declarationReason,

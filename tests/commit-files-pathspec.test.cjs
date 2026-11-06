@@ -28,7 +28,7 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_VALUE_FLAGS,
 } = require('./helpers/shipped-command-scan.cjs');
 const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
 
@@ -3332,6 +3332,21 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   test('blind spots: -i/--include, .. and :(icase) whole-tree specs, separate-value --attr-source/--config-env, multi-line bash -c and quoted eval are unscoped', () => {
     for (const c of ['git commit -i -m x -- a', 'git commit --include -m x -- a', 'git commit --inc -m x -- a', 'git commit -qi -m x -- a', 'git commit -m x -- ..', 'git commit -m x -- ../', 'git commit -m x -- ../..', "git commit -m x -- ':(icase).'", 'git --attr-source HEAD commit -m x', 'git --config-env k=V commit -m x', 'git --shallow-file f commit -m x', 'bash -c "cd a\ngit commit -m x"', 'eval "git commit -m x"']) assert.equal(unscopedGitCommits(c).length, 1, c);
     for (const c of ['git commit -m x -- a', 'git commit --in -m x -- a', 'git commit -m x -- ...', "git commit -m x -- ':(icase)src'", 'git commit -m x -- -i', 'bash -c "cd a\ngit commit -m x -- a"', 'eval "git commit -m x -- a"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+  });
+
+  test('every shell -<cluster>c spelling and an unquoted $-word pathspec are unscoped', () => {
+    for (const c of ['bash -lc "git commit -m x"', 'bash -ec "git commit -m x"', 'sh -euc "git commit -m x"', 'git commit -m x -- $FILES', 'git commit -m x -- $A $B']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['bash -lc "git commit -m x -- a"', 'git commit -m x -- "$FILES"', "git commit -m x -- '$FILES'", 'git commit -m x -- $A b', 'git commit -m x -- a$B','git commit -m x -- "$A" "$B"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+  });
+
+  test('parity: the scanner reads the secret guard\'s -c cluster regex and git value-option set', () => {
+    const hook = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), 'utf8');
+    const hookRe = hook.match(/const DASH_C_RE = (\/.*\/);/)[1];
+    const scanSrc = fs.readFileSync(path.join(__dirname, 'helpers', 'shipped-command-scan.cjs'), 'utf8');
+    assert.ok(scanSrc.includes(hookRe), `shellDashCPayloads must use ${hookRe}`);
+    const set = hook.match(/const GIT_GLOBAL_VALUE_OPTIONS = new Set\(\[([^\]]*)\]\)/)[1].match(/'[^']+'/g).map((s) => s.slice(1, -1));
+    // The scanner also knows `--super-prefix`, which the hook fails closed on; it must never know less than the hook.
+    assert.deepEqual(set.filter((o) => !GIT_VALUE_FLAGS.has(o)), []);
   });
 
   test('git -C / -c global options do not hide a commit', () => {
