@@ -776,32 +776,33 @@ function readParenClose(str, i, ctx) {
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early. Under
 // scanByGrammar the readers above close it instead.
-// `j` is one slot for three skips, which keeps this frame smaller than it was:
-// the scans here recurse once per nested `"$(` until the stack runs out, so what
-// they deny depends on that, and calls added above them must not cost a level.
 function findParenClose(str, i) {
   if (!closeByCount) return readSpanClose(str, i);
   spanSeen = true;
+  return countParenClose(str, i);
+}
+
+// The counting reader, unchanged from before #5267 apart from its name. The scans here
+// recurse once per nested `"$(` until the stack runs out, so what they deny depends on
+// this frame, and how it compiles is not something a comment can hold: leave it alone.
+function countParenClose(str, i) {
   let depth = 1;
   let heredocTags = [];
-  let j;
   while (i < str.length) {
-    spanReaderSteps++;
     const ch = str[i];
     if (ch === '\\') { i += 2; continue; }
     if (ch === "'") {
-      j = str.indexOf("'", i + 1);
+      const j = str.indexOf("'", i + 1);
       i = j === -1 ? str.length : j + 1;
       continue;
     }
     if (ch === '"') {
       i++;
       while (i < str.length && str[i] !== '"') {
-        spanReaderSteps++;
         if (str[i] === '\\') { i += 2; continue; }
-        if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2) + 1; continue; }
+        if (str[i] === '$' && str[i + 1] === '(') { i = countParenClose(str, i + 2) + 1; continue; }
         if (str[i] === '`') {
-          j = str.indexOf('`', i + 1);
+          const j = str.indexOf('`', i + 1);
           i = j === -1 ? str.length : j + 1;
           continue;
         }
@@ -811,7 +812,7 @@ function findParenClose(str, i) {
       continue;
     }
     if (ch === '`') {
-      j = str.indexOf('`', i + 1);
+      const j = str.indexOf('`', i + 1);
       i = j === -1 ? str.length : j + 1;
       continue;
     }
@@ -1149,7 +1150,7 @@ function readHeredocTag(str, i) {
     while (i < str.length && !(heredocTagsAsWords ? /[ \t\n;&|<>()]/ : /[\s;&|<>()]/).test(str[i])) {
       if (!heredocTagsAsWords) { tag += str[i++]; continue; }
       if (str[i] === '$' && str[i + 1] === '(') {
-        const e = findParenClose(str, i + 2);
+        const e = countParenClose(str, i + 2);
         tag += str.slice(i, e + 1);
         i = e + 1;
         continue;
@@ -1225,7 +1226,6 @@ function readDelimiterWord(str, i) {
     if (ch === '`') close = skipQuoted(str, i, ctx) - 1;
     else if ((ch === '$' || ch === '<' || ch === '>') && str[i + 1] === '(') close = readSpanClose(str, i + 2);
     else if (ch === '$' && str[i + 1] === '{') close = findBraceClose(str, i + 2, ctx);
-    else if (ch === '$' && str[i + 1] === '[') close = str.indexOf(']', i);
     if (close !== -1) {
       word += str.slice(i, close + 1);
       i = close + 1;
