@@ -2257,9 +2257,17 @@ describe('#3302: the workflow-backend-dispatch doc bridges Workflow results into
 
   test('C2. instructs creating WAVE_WORKTREE_MANIFEST before invoking the tool (step 3 is skipped)', () => {
     const c = fragContent();
-    assert.match(c, /orchestrator_root/, 'creation block must persist the orchestrator root (#630)');
-    assert.match(c, /mktemp/, 'same mktemp pattern as inline step 3');
-    assert.match(c, /worktrees:\[\]/, 'initialised empty — then populated from outcomes');
+    assert.match(c, /Create the manifest BEFORE invoking the tool/);
+    assert.match(c, /executor-isolation-dispatch\.md/, 'the creation script has one copy, in the step file');
+    assert.match(c, /Durable wave manifest/);
+    assert.match(c, /orchestrator_root/, 'the pointer must still name the #630 field');
+    const step = fs.readFileSync(
+      path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md'),
+      'utf8',
+    );
+    assert.match(step, /worktrees:\[\]/, 'initialised empty — then populated from outcomes');
+    assert.match(step, /orchestrator_root/);
+    assert.doesNotMatch(step, /mktemp/, 'durable manifests are phase-scoped files, not mktemp');
   });
 
   test('C3. mandates a HALT on uncapturable metadata — never a silently-empty manifest', () => {
