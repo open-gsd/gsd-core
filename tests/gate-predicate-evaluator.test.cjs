@@ -230,6 +230,9 @@ describe('evaluatePredicate — message trimming', () => {
     { runBoundedShell: fakeShell(shellResult).run },
   );
 
+  const exitPrefix = (code) => `command exited ${code}: `;
+  const TIMEOUT_PREFIX = 'command timed out after 30s: ';
+
   const assertCappedTail = (res, prefix) => {
     assert.ok(res.message.startsWith(prefix));
     assert.ok(res.message.endsWith('MARKER'));
@@ -237,34 +240,34 @@ describe('evaluatePredicate — message trimming', () => {
   };
 
   test('non-zero exit keeps the stderr tail and the exit prefix within the cap', () => {
-    assertCappedTail(run({ exitCode: 3, stderr: 'E'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }), 'command exited 3: ');
+    assertCappedTail(run({ exitCode: 3, stderr: 'E'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }), exitPrefix(3));
   });
 
   test('non-zero exit keeps the stdout tail when stderr is empty', () => {
     assertCappedTail(
       run({ exitCode: 2, stderr: '', stdout: 'O'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }),
-      'command exited 2: ',
+      exitPrefix(2),
     );
   });
 
   test('timeout keeps the stderr tail and the timeout prefix within the cap', () => {
     assertCappedTail(
       run({ timedOut: true, exitCode: null, stderr: 'E'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }),
-      'command timed out after ',
+      TIMEOUT_PREFIX,
     );
   });
 
   test('timeout with empty stderr keeps the HEAD of a long command (program name survives)', () => {
     const command = 'myprog --flag ' + 'a'.repeat(COMMAND_MAX_OUTPUT_CHARS) + ' TAILEND';
     const res = run({ timedOut: true, exitCode: null, stderr: '' }, command);
-    assert.ok(res.message.startsWith('command timed out after '));
+    assert.ok(res.message.startsWith(TIMEOUT_PREFIX));
     assert.ok(res.message.includes(': myprog --flag '));
     assert.ok(!res.message.includes('TAILEND'));
     assert.equal(res.message.length, COMMAND_MAX_OUTPUT_CHARS);
   });
 
   test('tail cut between an emoji surrogate pair drops the orphaned low surrogate', () => {
-    const prefix = 'command exited 3: ';
+    const prefix = exitPrefix(3);
     const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
     // slice(-budget) starts exactly on the emoji's low surrogate.
     const stderr = 'E'.repeat(10) + '\u{1F600}' + 'T'.repeat(budget - 7) + 'MARKER';
@@ -276,8 +279,8 @@ describe('evaluatePredicate — message trimming', () => {
 
   // prefix.length + output.length at {cap-1, cap, cap+1}: only cap+1 may cut, and by exactly one char.
   for (const [label, prefix, mk] of [
-    ['non-zero exit', 'command exited 3: ', (stderr) => ({ exitCode: 3, stderr })],
-    ['timeout', 'command timed out after 30s: ', (stderr) => ({ timedOut: true, exitCode: null, stderr })],
+    ['non-zero exit', exitPrefix(3), (stderr) => ({ exitCode: 3, stderr })],
+    ['timeout', TIMEOUT_PREFIX, (stderr) => ({ timedOut: true, exitCode: null, stderr })],
   ]) {
     for (const delta of [-1, 0, 1]) {
       test(`${label}: prefix + output length = cap${delta >= 0 ? '+' : ''}${delta}`, () => {
@@ -292,7 +295,7 @@ describe('evaluatePredicate — message trimming', () => {
   }
 
   test('timeout with empty stderr does not end on a lone high surrogate', () => {
-    const prefix = 'command timed out after 30s: ';
+    const prefix = TIMEOUT_PREFIX;
     const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
     const command = 'a'.repeat(budget - 1) + '\u{1F600}tail';
     const { message } = run({ timedOut: true, exitCode: null, stderr: '' }, command);
@@ -302,13 +305,13 @@ describe('evaluatePredicate — message trimming', () => {
 
   test('timeout with empty stderr keeps a short command that genuinely ends in a lone high surrogate', () => {
     const command = 'echo \uD83D';
-    assert.equal(run({ timedOut: true, exitCode: null, stderr: '' }, command).message, `command timed out after 30s: ${command}`);
+    assert.equal(run({ timedOut: true, exitCode: null, stderr: '' }, command).message, `${TIMEOUT_PREFIX}${command}`);
   });
 
   // Head branch (timeout, empty stderr): prefix + command length at {cap-1, cap, cap+1}; only cap+1 may cut.
   for (const delta of [-1, 0, 1]) {
     test(`timeout head: prefix + command length = cap${delta >= 0 ? '+' : ''}${delta}`, () => {
-      const prefix = 'command timed out after 30s: ';
+      const prefix = TIMEOUT_PREFIX;
       const len = COMMAND_MAX_OUTPUT_CHARS - prefix.length + delta;
       const command = 'A' + 'a'.repeat(len - 1);
       const { message } = run({ timedOut: true, exitCode: null, stderr: '' }, command);
@@ -325,9 +328,9 @@ describe('evaluatePredicate — message trimming', () => {
         fc.integer({ min: 1, max: 255 }),
         (output, exitCode) => {
           const { message } = run({ exitCode, stderr: output });
-          const prefix = `command exited ${exitCode}: `;
+          const prefix = exitPrefix(exitCode);
           if (message.length > COMMAND_MAX_OUTPUT_CHARS) return false;
-          if (output === '') return message === `command exited ${exitCode}`;
+          if (output.trim() === '') return message === `command exited ${exitCode}`;
           const kept = message.slice(prefix.length);
           // a cut may drop one orphaned low surrogate, never more
           return output.endsWith(kept) && (kept.length === output.length || kept.length >= COMMAND_MAX_OUTPUT_CHARS - prefix.length - 1);
@@ -362,22 +365,45 @@ describe('evaluatePredicate — message trimming', () => {
 
   test('property: timeout stderr and stdout fallback keep the output tail within the cap', () => {
     fc.assert(
-      fc.property(fc.string({ unit: 'binary', minLength: 1, maxLength: COMMAND_MAX_OUTPUT_CHARS + 200 }), (output) => {
+      fc.property(fc.string({ unit: 'binary', minLength: 1, maxLength: COMMAND_MAX_OUTPUT_CHARS + 200 }).filter((o) => o.trim() !== ''), (output) => {
         for (const [shell, prefix] of [
-          [{ timedOut: true, exitCode: null, stderr: output }, 'command timed out after 30s: '],
-          [{ exitCode: 3, stderr: '', stdout: output }, 'command exited 3: '],
+          [{ timedOut: true, exitCode: null, stderr: output }, TIMEOUT_PREFIX],
+          [{ exitCode: 3, stderr: '', stdout: output }, exitPrefix(3)],
         ]) {
           const { message } = run(shell);
           const kept = message.slice(prefix.length);
           if (message.length > COMMAND_MAX_OUTPUT_CHARS || !message.startsWith(prefix) || !output.endsWith(kept)) return false;
+          // the whole tail that fits is kept (a cut may drop one orphaned low surrogate)
+          if (kept.length !== output.length && kept.length < COMMAND_MAX_OUTPUT_CHARS - prefix.length - 1) return false;
         }
         return true;
       }),
     );
   });
 
+  test('whitespace-only stderr falls back to stdout on exit', () => {
+    assert.equal(run({ exitCode: 1, stderr: ' \n', stdout: 'real error' }).message, `${exitPrefix(1)}real error`);
+  });
+
+  test('whitespace-only stderr falls back to stdout on timeout', () => {
+    assert.equal(
+      run({ timedOut: true, exitCode: null, stderr: '\t\n', stdout: 'ignored' }, 'myprog').message,
+      `${TIMEOUT_PREFIX}myprog`,
+    );
+  });
+
+  test('whitespace-only stderr and stdout give the bare exit message', () => {
+    assert.equal(run({ exitCode: 1, stderr: ' ', stdout: '\n' }).message, 'command exited 1');
+  });
+
+  test('oversized prefix never pushes the message over the cap', () => {
+    const { message } = run({ exitCode: 'x'.repeat(COMMAND_MAX_OUTPUT_CHARS + 5), stderr: 'boom' });
+    assert.ok(message.length <= COMMAND_MAX_OUTPUT_CHARS);
+    assert.ok(!message.includes('boom'));
+  });
+
   test('short output is kept whole after the prefix', () => {
-    assert.equal(run({ exitCode: 1, stderr: 'boom' }).message, 'command exited 1: boom');
+    assert.equal(run({ exitCode: 1, stderr: 'boom' }).message, `${exitPrefix(1)}boom`);
   });
 
   test('empty output yields no colon', () => {
