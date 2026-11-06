@@ -170,7 +170,15 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
     return yamlLoad(segment, { json: true, schema: FAILSAFE_SCHEMA, ...refuseAnchors });
   });
   if (failureTypeWrites === null || failureTypeWrites > 1) return null;
-  return tolerant as Record<string, unknown>;
+  // #5721: a `not ok N - <file>` diagnostic whose error is 'test failed' with
+  // ERR_TEST_FAILURE asserted nothing — a file that crashed at load is load failure,
+  // never RED. The assert handler flags that signature from the PARSED diagnostic;
+  // a recovered block bypasses that channel (its diag is null), so the same signature
+  // in the recovered map refuses the recovery here instead of letting the file-named
+  // entry prove RED.
+  const recovered = tolerant as Record<string, unknown>;
+  if (recovered['error'] === 'test failed' && recovered['code'] === 'ERR_TEST_FAILURE') return null;
+  return recovered;
 }
 
 function parseTap(output: string): TestReport {

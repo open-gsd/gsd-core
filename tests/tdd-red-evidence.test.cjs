@@ -1704,6 +1704,44 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     }
   });
 
+  test('a recovered block still re-applies #5721 file-level load-failure refusal (merge review)', () => {
+    // Emergent combination gap found by the independent review of the #5721 merge:
+    // upstream flags `not ok N - <file>` with error 'test failed' + ERR_TEST_FAILURE
+    // (asserted nothing) from the PARSED diagnostic; a block whose only defect is
+    // repeated keys goes through this PR's recovery path, where that parsed channel
+    // is absent. The recovery must refuse a block whose recovered map carries the
+    // same signature instead of letting the file-named entry prove RED.
+    const loadFailureDup = [
+      '  duration_ms: 28.3',
+      "  type: 'test'",
+      "  location: 'crash.test.cjs:1:1'",
+      "  failureType: 'testCodeFailure'",
+      '  exitCode: 1',
+      "  error: 'test failed'",
+      "  code: 'ERR_TEST_FAILURE'",
+      "  error: 'test failed'",
+      "  stack: 'frame one'",
+      "  stack: 'frame two'",
+    ];
+    const output = [
+      'TAP version 13',
+      '# Subtest: crash.test.cjs',
+      'not ok 1 - crash.test.cjs',
+      '  ---',
+      ...loadFailureDup,
+      '  ...',
+      '1..1',
+      '',
+    ].join('\n');
+    const result = classifyRedEvidence({
+      command: 'node --test crash.test.cjs', exitCode: 1, output,
+      targetTest: 'crash.test.cjs',
+    });
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'),
+      JSON.stringify(result.evidence.report_errors));
+  });
+
   test('repeated keys alongside another YAML error stay refused', () => {
     const diag = [...THROWS_REGEXP_DIAG, '  code: [unclosed'];
     const result = classifyRedEvidence(validRedInput({
