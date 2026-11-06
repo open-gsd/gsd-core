@@ -549,15 +549,18 @@ Commit the REQUIREMENTS.md deletion (archive files and ROADMAP.md were already c
 
 ```bash
 # `git rm` in reorganize_roadmap_and_delete_originals staged the deletion; read the path back from the index (init reports null once the file is gone).
-# --relative: cwd-relative paths, matching the `git commit --` pathspec below (project may sit in a repo subdir).
+# Diff and commit run from the repo top, so the paths match whatever directory this step starts in.
 # --no-renames: a staged add with identical content turns the deletion into a rename entry that --diff-filter=D hides.
 # -z prints raw paths (git quotes non-ASCII, backslash and quote characters otherwise); `:(literal)` stops glob characters in the path expanding.
-ANY=$(git diff --cached --name-only -z --relative --no-renames --diff-filter=D | tr '\0' '\n' | grep -E '(^|/)REQUIREMENTS\.md$')
+# A newline in a staged deletion path cannot be told apart from two paths once the list is split into lines, so the step refuses.
+TOP=$(git rev-parse --show-toplevel) || exit 1
+[ "$(git -C "$TOP" diff --cached --name-only -z --no-renames --diff-filter=D | tr -cd '\n' | wc -c)" -eq 0 ] || { echo "a staged deletion has a newline in its path: not committing it" >&2; exit 1; }
+ANY=$(git -C "$TOP" diff --cached --name-only -z --no-renames --diff-filter=D | grep -zE '(^|/)REQUIREMENTS\.md$' | tr '\0' '\n')
 REQUIREMENTS_PATH=$(printf '%s\n' "$ANY" | grep -E '(^|/)\.planning/(.*/)?REQUIREMENTS\.md$')
 [ -n "$ANY" ] || { echo "no staged REQUIREMENTS.md deletion: nothing to commit here (expected when .planning is gitignored)" >&2; exit 0; }
 [ -n "$REQUIREMENTS_PATH" ] || { echo "staged REQUIREMENTS.md deletion is outside .planning/: not committing it: $ANY" >&2; exit 1; }
 [ "$(printf '%s\n' "$REQUIREMENTS_PATH" | wc -l)" -eq 1 ] || { echo "expected exactly one staged .planning REQUIREMENTS.md deletion, found: $REQUIREMENTS_PATH" >&2; exit 1; }
-git commit -m "chore: remove REQUIREMENTS.md for v[X.Y] milestone" -- ":(literal)$REQUIREMENTS_PATH"
+git -C "$TOP" commit -m "chore: remove REQUIREMENTS.md for v[X.Y] milestone" -- ":(literal)$REQUIREMENTS_PATH"
 ```
 
 When the commit ran, confirm: "Committed: chore: remove REQUIREMENTS.md for v[X.Y] milestone"; when the fence skipped it (exit 0), report its skip note instead; when it refused (exit 1), stop and report its message: the staged deletion stays staged and uncommitted.

@@ -3567,6 +3567,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
   // allow-test-rule: source-text-is-the-product (#5211)
+  test('async-external-jobs recipe commits the manifest with a pathspec', () => {
+    const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
+    const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
+    assert.ok(commits.length > 0);
+    for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
+  });
+  // allow-test-rule: source-text-is-the-product (#5211)
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
       const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
@@ -3653,6 +3660,16 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
 
     test('foreign REQUIREMENTS.md deletion outside .planning/ is never committed', () => {
       const r = run(['.docs/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+    });
+
+    test('run from a subdirectory (cwd=src/): the repo-root deletion is still committed alone', () => {
+      const r = run(['.planning/REQUIREMENTS.md'], 'src');
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('a newline in a staged deletion path cannot fake a .planning path: refuses, commits nothing', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
+      const r = run(['x\n.planning/REQUIREMENTS.md']);
       assert.deepStrictEqual([r.status, r.commits], [1, 1]);
     });
 
