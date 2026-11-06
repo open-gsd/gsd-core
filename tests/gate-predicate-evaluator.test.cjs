@@ -163,20 +163,34 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
 // ─── interpolation ────────────────────────────────────────────────────────────
 
 describe('evaluatePredicate — interpolation', () => {
-  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} are substituted', () => {
+  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} reach the shell as environment values; inert values are also pasted', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
       { kind: 'command-exit-zero', command: 'check ${PHASE_DIR} ${PHASE_NUMBER} ${PHASE_REQ_IDS}' },
       baseCtx,
       { runBoundedShell: shell.run },
     );
-    assert.equal(
-      shell.calls[0].command,
-      'check /proj/.planning/phases/03-x 03 R-1',
-    );
+    assert.equal(shell.calls[0].command, 'check /proj/.planning/phases/03-x 03 R-1');
+    assert.deepEqual(shell.calls[0].env, {
+      PHASE_DIR: '/proj/.planning/phases/03-x',
+      PHASE_NUMBER: '03',
+      PHASE_REQ_IDS: 'R-1',
+    });
   });
 
-  test('undefined context var => empty string (no leftover placeholder)', () => {
+  test('a value with a shell-significant character is never pasted: the shell expands it from the environment', () => {
+    const shell = fakeShell({ exitCode: 0 });
+    const phaseDir = '/proj/.planning/phases/01-$(touch pwned) x';
+    evaluatePredicate(
+      { kind: 'command-exit-zero', command: 'check "${PHASE_DIR}" ${PHASE_NUMBER}' },
+      { ...baseCtx, phaseDir },
+      { runBoundedShell: shell.run },
+    );
+    assert.equal(shell.calls[0].command, 'check "${PHASE_DIR}" 03');
+    assert.equal(shell.calls[0].env.PHASE_DIR, phaseDir);
+  });
+
+  test('undefined context var => empty string, in the text and in the environment', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
       { kind: 'command-exit-zero', command: 'check ${PHASE_REQ_IDS}' },
@@ -184,6 +198,7 @@ describe('evaluatePredicate — interpolation', () => {
       { runBoundedShell: shell.run },
     );
     assert.equal(shell.calls[0].command, 'check ');
+    assert.deepEqual(shell.calls[0].env, { PHASE_DIR: '', PHASE_NUMBER: '', PHASE_REQ_IDS: '' });
   });
 
   test('foreign ${HOME} placeholder left untouched (shell interprets)', () => {
@@ -334,17 +349,18 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
     );
   });
 
-  test('every placeholder is fully replaced (no leftover ${PHASE_*})', () => {
+  test('every placeholder is gone from the text or left as ${PHASE_*} for sh: a hostile value is never pasted', () => {
     fc.assert(
-      fc.property(fc.string({ maxLength: 20 }), (noise) => {
-        const cmd = `${noise} ${noise}`;
+      fc.property(fc.string({ maxLength: 20 }), (value) => {
         const shell = fakeShell({ exitCode: 0 });
         evaluatePredicate(
-          { kind: 'command-exit-zero', command: `\${PHASE_DIR}${cmd}\${PHASE_NUMBER}` },
-          baseCtx,
+          { kind: 'command-exit-zero', command: 'x "${PHASE_DIR}"' },
+          { ...baseCtx, phaseDir: value },
           { runBoundedShell: shell.run },
         );
-        assert.doesNotMatch(shell.calls[0].command, /\$\{PHASE_(DIR|NUMBER|REQ_IDS)\}/);
+        const inert = /^[A-Za-z0-9._/@+=:,-]*$/.test(value);
+        assert.equal(shell.calls[0].command, inert ? `x "${value}"` : 'x "${PHASE_DIR}"');
+        assert.equal(shell.calls[0].env.PHASE_DIR, value);
       }),
       { numRuns: 100 },
     );

@@ -70,8 +70,13 @@ contract.
 | `command` | string | yes | — | The shell command. Non-empty, ≤ 4096 chars |
 | `timeout` | number | no | `30` | Positive finite number, seconds |
 
-**Interpolation.** Before execution, three placeholders are substituted from
-the gate context; all others are left untouched for `sh` to interpret:
+**Interpolation.** Three placeholders come from the gate context; all others
+are left untouched for `sh` to interpret. Each reaches `sh` as an environment
+variable of the same name, so `"${PHASE_DIR}"` expands to the exact value even
+when it holds shell syntax. A value made only of letters, digits and `. _ / @ + = : , -`
+is also pasted into the command text, so a gate that single-quotes it
+(`'${PHASE_NUMBER}'`) still receives it. Double-quote every placeholder in the
+command: an unquoted value splits at spaces.
 
 | Placeholder | Source | Workflow flag |
 |---|---|---|

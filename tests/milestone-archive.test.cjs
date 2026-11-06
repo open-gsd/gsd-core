@@ -1375,6 +1375,8 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
 // capabilities cannot leak in.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// NOT a subprocess spawn timeout: the declarative `timeout` (seconds) of a gate predicate, short so the sleeping gate is killed at once.
+const PREDICATE_TIMEOUT_SECONDS = 0.2;
 const EXIT3 = { kind: 'command-exit-zero', exitCode: 3, signal: null };
 
 describe('milestone complete re-checks blocking ship:pre predicate gates per milestone phase (#5482)', () => {
@@ -1384,7 +1386,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   const complete = (extra = '') =>
     runGsdTools(`--json-errors milestone complete v1.0 --name MVP --confirm ${extra}`, tmpDir, env());
   const archived = () => fs.existsSync(path.join(tmpDir, '.planning', 'milestones'));
-  const parseErr = (r) => JSON.parse(r.error.trim().split('\n').pop());
+  const parseErr = (r) => JSON.parse(splitLines(r.error.trim()).pop());
   // A refused close: typed reason, raw output in the failure message so a red run is diagnosable.
   const refusal = (r) => {
     assert.equal(r.success, false, `expected refusal, got: ${r.output}`);
@@ -1429,7 +1431,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 01 || { echo 2 open items >&2; exit 3; }' });
     const before = snapshot();
     const err = refusal(complete());
-    assert.deepEqual(err.blocked, [{ cap_id: 'open-work', phase: '01', gate_message: 'command exited 3: 2 open items', details: EXIT3 }]);
+    assert.deepEqual(err.blocked, [{ cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', gate_message: 'command exited 3: 2 open items', details: EXIT3 }]);
     assert.match(err.message, /Nothing has been changed\. Resolve or waive in that capability; --force does not bypass it\.$/);
     assert.deepEqual(snapshot(), before, 'a refused close must leave the project tree byte-identical');
   });
@@ -1445,6 +1447,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   test('G3 malformed predicate: onError halt refuses, skip archives with warning', () => {
     writeGateCap(home, { predicate: { kind: 'command-exit-zero' } });
     const err = refusal(complete());
+    assert.equal(err.blocked[0].reason, 'unevaluable');
     assert.equal(err.blocked[0].gate_message, 'gate predicate evaluation failed: command-exit-zero predicate requires a non-empty string "command"');
     assert.equal(archived(), false);
 
@@ -1463,8 +1466,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const preview = wouldRefuse();
     assert.equal(archived(), false);
     assert.deepEqual(preview, [
-      { cap_id: 'open-work', phase: '01', gate_message: 'command exited 3', details: EXIT3 },
-      { cap_id: 'open-work', phase: '02', gate_message: 'command exited 3', details: EXIT3 },
+      { cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', gate_message: 'command exited 3', details: EXIT3 },
+      { cap_id: 'open-work', phase: '02', reason: 'predicate_blocked', gate_message: 'command exited 3', details: EXIT3 },
     ]);
   });
 
@@ -1484,7 +1487,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const r = runGsdTools('milestone complete v1.0 --name MVP --confirm', tmpDir, env());
     assert.equal(r.success, false);
     assert.ok(!r.error.includes('\x1b'), 'raw ESC must not reach stderr');
-    assert.equal(r.error.trim().split('\n').length, 1, 'newline in gate output must not forge a second line');
+    assert.equal(splitLines(r.error.trim()).length, 1, 'newline in gate output must not forge a second line');
   });
 
   test('G8 query-kind blocking gate is prose-only: the engine skips it with a warning', () => {
@@ -1536,7 +1539,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
 
   test('G13 two blocked phases both appear in the error details and in would_refuse', () => {
     writeGateCap(home, { command: 'echo open >&2; exit 3' });
-    const expected = ['01', '02'].map((phase) => ({ cap_id: 'open-work', phase, gate_message: 'command exited 3: open', details: EXIT3 }));
+    const expected = ['01', '02'].map((phase) => ({ cap_id: 'open-work', phase, reason: 'predicate_blocked', gate_message: 'command exited 3: open', details: EXIT3 }));
     assert.deepEqual(wouldRefuse(), expected);
     const err = refusal(complete());
     assert.deepEqual(err.blocked, expected);
@@ -1587,7 +1590,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   test('G16 UNREADABLE window scope: a blocking halt gate that cannot run refuses the close, --force does not bypass it', () => {
     seedUnreadable();
     writeGateCap(home, { command: 'exit 3' });
-    assert.deepEqual(gateResult(), { blocked: [{ cap_id: 'open-work', phase: '*', gate_message: UNREADABLE_MSG, details: null }], warnings: [] });
+    assert.deepEqual(gateResult(), { blocked: [{ cap_id: 'open-work', phase: '*', reason: 'window_unreadable', gate_message: UNREADABLE_MSG, details: null }], warnings: [] });
     const before = snapshot();
     assert.deepEqual(refusal(complete()).blocked.map((b) => b.phase), ['*']);
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['*']);
@@ -1624,7 +1627,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     // The loop-resolver owns the stderr line; the engine adds none for the same capability.
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
-    const lines = r.stderr.split('\n');
+    const lines = splitLines(r.stderr);
     assert.equal(lines.filter((l) => /open-work/.test(l) && /failed to load/.test(l)).length, 1, r.stderr);
     assert.ok(!lines.some((l) => /not re-checked: the capability failed to load/.test(l)), r.stderr);
   });
@@ -1658,20 +1661,14 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(wouldRefuse().map((b) => b.phase), ['01', '01.1']);
   });
 
-  test('G22 a shell-hostile phase dir name never reaches sh -c: halt gate blocks, skip gate warns', () => {
-    const marker = path.join(tmpDir, 'pwned');
+  test('G22 a shell-hostile phase dir name is data: the gate runs on it and no command in the name executes', () => {
     // relative marker: a path separator or ':' in a dir name is invalid on Windows
     fs.mkdirSync(phaseDir('03-$(touch pwned)'), { recursive: true });
+    fs.writeFileSync(path.join(phaseDir('03-$(touch pwned)'), 'OPEN_WORK'), '');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
-    writeGateCap(home, { command: 'true ${PHASE_NUMBER}' });
-    const halted = gateResult();
-    assert.equal(halted.blocked.length, 1);
-    assert.match(halted.blocked[0].gate_message, /gate not run/);
-    writeGateCap(home, { command: 'true ${PHASE_NUMBER}', onError: 'skip' });
-    const skipped = gateResult();
-    assert.deepEqual(skipped.blocked, []);
-    assert.equal(skipped.warnings[0].kind, 'skipped_phase');
-    assert.equal(fs.existsSync(marker), false);
+    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
+    assert.deepEqual(wouldRefuse().map((b) => [b.phase, b.reason, b.gate_message]), [['03', 'predicate_blocked', 'command exited 3']]);
+    assert.equal(fs.existsSync(path.join(tmpDir, 'pwned')), false);
   });
 
   test('G21b each gated dir carries the phase_number init.phase-op reports for its roadmap phase', () => {
@@ -1717,35 +1714,40 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     return root;
   };
 
-  test('G22b a shell-hostile project root never reaches sh -c: every phase reads gate not run', (t) => {
+  test('G22b a shell-hostile project root is data: every phase runs the gate and no command in the root executes', (t) => {
     const root = projectAt(t, 'r$(touch pwned)');
-    writeGateCap(home, { command: 'true "${PHASE_DIR}"' });
+    for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(root, '.planning', 'phases', d, 'OPEN_WORK'), '');
+    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
     const { blocked } = gateResult('', root);
-    assert.deepEqual(blocked.map((b) => b.phase), ['01', '02']);
-    for (const b of blocked) assert.match(b.gate_message, /gate not run/);
+    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.gate_message]), [['01', 'predicate_blocked', 'command exited 3'], ['02', 'predicate_blocked', 'command exited 3']]);
     assert.equal(fs.existsSync(path.join(root, 'pwned')), false);
   });
 
-  test('G22c ordinary roots still run command gates; hostile roots and dirs read gate not run, never a pass', (t) => {
+  test('G22c roots and phase dirs holding shell characters run the gate; other predicate kinds are unaffected', (t) => {
     writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
     for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(phaseDir(d), 'OPEN_WORK'), '');
-    for (const name of ['r with space', 'ré café', "o'brien"]) {
-      for (const b of gateResult('', projectAt(t, name)).blocked) assert.match(b.gate_message, /^command exited 3/, name);
+    for (const name of ['r with space', 'ré café', "o'brien", 'r#1', 'r (x)']) {
+      const { blocked } = gateResult('', projectAt(t, name));
+      assert.deepEqual(blocked.map((b) => b.reason), ['predicate_blocked', 'predicate_blocked'], name);
+      for (const b of blocked) assert.equal(b.gate_message, 'command exited 3', name);
     }
-    for (const b of gateResult('', projectAt(t, 'r#1')).blocked) assert.match(b.gate_message, /gate not run/);
 
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
     fs.mkdirSync(phaseDir('03-x #y'), { recursive: true });
-    const byPhase = Object.fromEntries(wouldRefuse().map((b) => [b.phase, b.gate_message]));
-    assert.match(byPhase['03'], /gate not run/);
-    assert.match(byPhase['01'], /^command exited 3/);
+    fs.writeFileSync(path.join(phaseDir('03-x #y'), 'OPEN_WORK'), '');
+    assert.deepEqual(wouldRefuse().map((b) => b.phase), ['01', '02', '03']);
 
-    // Other predicate kinds are not shell-interpolated: a root with parentheses still evaluates.
     fs.writeFileSync(path.join(phaseDir('01-foundation'), '01-OPEN-WORK.md'), '---\nstatus: open\n---\n');
     writeGateCap(home, { predicate: { kind: 'artifact-frontmatter-equals', artifact: 'OPEN-WORK.md', field: 'status', equals: 'closed' } });
     const blocked = gateResult('', projectAt(t, 'r (x)')).blocked;
     assert.ok(blocked.length > 0);
-    for (const b of blocked) assert.doesNotMatch(b.gate_message, /gate not run/);
+    for (const b of blocked) assert.equal(b.reason, 'predicate_blocked');
+  });
+
+  test('G22d a gate that outlives its predicate timeout refuses with details.timedOut', () => {
+    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 30', timeout: PREDICATE_TIMEOUT_SECONDS } });
+    const { blocked } = gateResult();
+    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.kind, b.details.timedOut]), [['01', 'predicate_blocked', 'command-exit-zero', true], ['02', 'predicate_blocked', 'command-exit-zero', true]]);
   });
 
   test('G28 the workflow previews the close and stops on would_refuse before PROJECT.md, tags or archive', () => {

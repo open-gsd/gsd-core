@@ -1,15 +1,15 @@
 'use strict';
 
 /**
- * Property-based test for the #5482 shell guard in `milestone complete`.
+ * Property-based test for the #5482 shell boundary in `milestone complete`.
  *
- * A command-exit-zero ship:pre gate interpolates ${PHASE_DIR} and ${PHASE_NUMBER} textually into
- * `sh -c`, so a phase directory whose name holds a shell-significant character must never reach the
- * shell, and every other name must run the gate.
+ * A command-exit-zero ship:pre gate sees ${PHASE_DIR} as data. Whatever characters the phase directory
+ * name holds, the double-quoted placeholder must name that directory: the gate finds the OPEN_WORK file
+ * inside it, exits 3, and no command hidden in the name runs.
  *
- * Property: for a phase dir `01-<s>`, the dry-run's would_refuse entry for phase 01 reads
- * `gate not run` exactly when `s` holds a shell-significant character, and `command exited 3`
- * otherwise; no file appears in the project root. Boundary: no length cap (200 and 201 characters).
+ * Property: for a phase dir `01-<s>` holding OPEN_WORK, the dry-run's would_refuse entry for phase 01 has
+ * reason `predicate_blocked` and gate_message `command exited 3`, and no file appears in the project root.
+ * Boundary: no length cap (200 and 201 characters).
  */
 
 const { describe, test, before, after } = require('node:test');
@@ -20,10 +20,10 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { writeGateCap, cleanEnv } = require('./helpers/ship-gate-fixture.cjs');
 
-const SAFE = [...'abcXYZ019._-~ é\''];
-const HOSTILE = [...'$`;&|<>()#*?['];
+const ORDINARY = [...'abcXYZ019._-~ é\''];
+const SHELL_SYNTAX = [...'$`;&|<>()#*?[\\"'];
 
-describe('ship:pre command gate refuses shell-significant phase directory names (#5482)', () => {
+describe('ship:pre command gate treats the phase directory name as data (#5482)', () => {
   let tmpDir;
   let home;
   let rootEntries;
@@ -33,13 +33,13 @@ describe('ship:pre command gate refuses shell-significant phase directory names 
     home = createTempDir('gsd-5482-prop-home-');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n\n**Status:** In progress\n');
-    writeGateCap(home, { command: 'exit 3' });
+    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
     rootEntries = fs.readdirSync(tmpDir).sort();
   });
   after(() => { cleanup(tmpDir); cleanup(home); });
 
-  // Phase 01's gate_message for a phase dir named `name`, or null when the file system cannot hold that name.
-  function gateMessageFor(name) {
+  // The would_refuse entry for phase 01 of a phase dir named `name`, or null when the file system cannot hold that name.
+  function entryFor(name) {
     const dir = path.join(tmpDir, '.planning', 'phases', name);
     try {
       fs.mkdirSync(dir);
@@ -47,24 +47,26 @@ describe('ship:pre command gate refuses shell-significant phase directory names 
       return null;
     }
     try {
+      fs.writeFileSync(path.join(dir, 'OPEN_WORK'), '');
       const r = runGsdTools('milestone complete v1.0 --name MVP --dry-run', tmpDir, cleanEnv(home));
       assert.equal(r.success, true, r.error);
-      const entry = JSON.parse(r.output).would_refuse.find((b) => b.phase === '01');
+      const out = JSON.parse(r.output);
+      assert.ok(Array.isArray(out.would_refuse), `dry-run JSON lacks would_refuse: ${r.output}`);
+      const entry = out.would_refuse.find((b) => b.phase === '01');
       assert.ok(entry, `phase 01 must be gated: ${r.output}`);
-      return entry.gate_message;
+      return entry;
     } finally {
       cleanup(dir);
     }
   }
 
-  test('property: gate not run iff the name holds a shell-significant character; otherwise the gate runs', () => {
+  test('property: any phase directory name is data, so the gate runs on it and nothing else runs', () => {
     fc.assert(
-      fc.property(fc.string({ unit: fc.constantFrom(...SAFE, ...HOSTILE), minLength: 1, maxLength: 12 }), (s) => {
-        const message = gateMessageFor(`01-${s}`);
-        if (message === null) return;
-        const hostile = [...s].some((c) => HOSTILE.includes(c));
-        if (hostile) assert.match(message, /gate not run/, `01-${s} must not reach the shell`);
-        else assert.match(message, /^command exited 3/, `01-${s} must run the gate`);
+      fc.property(fc.string({ unit: fc.constantFrom(...ORDINARY, ...SHELL_SYNTAX), minLength: 1, maxLength: 12 }), (s) => {
+        const entry = entryFor(`01-${s}`);
+        if (entry === null) return;
+        assert.equal(entry.reason, 'predicate_blocked', `01-${s} must run the gate: ${JSON.stringify(entry)}`);
+        assert.equal(entry.gate_message, 'command exited 3', `01-${s}`);
         assert.deepEqual(fs.readdirSync(tmpDir).sort(), rootEntries, 'no file may appear in the project root');
       }),
       { numRuns: 15 },
@@ -73,8 +75,10 @@ describe('ship:pre command gate refuses shell-significant phase directory names 
 
   for (const total of [200, 201]) {
     test(`boundary: a clean ${total}-character directory name runs the gate (no length cap)`, () => {
-      const message = gateMessageFor('01-'.padEnd(total, 'a'));
-      assert.ok(message === null || message.startsWith('command exited 3'), message);
+      const entry = entryFor('01-'.padEnd(total, 'a'));
+      assert.ok(entry, 'the file system must hold the name');
+      assert.equal(entry.reason, 'predicate_blocked');
+      assert.equal(entry.gate_message, 'command exited 3');
     });
   }
 });
