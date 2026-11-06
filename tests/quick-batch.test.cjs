@@ -765,7 +765,7 @@ describe('quick-batch: exactly-once STATE completion', () => {
 // additionally check for an on-disk SUMMARY.md via filterAlreadyExecuted.
 // Real fixture (real BATCH.json via createBatch, real SUMMARY.md file on
 // disk, real resumeBatch call), not a prose/structural proxy — see
-// `.gsd/phase/feat-3677-quick-batch-hardening-acceptance/40-design.md` §1.
+// the #3677 design (PR #4240) §1.
 
 describe('quick-batch: crash-window duplicate-dispatch guard (#3677) — SUMMARY.md written but BATCH.json still pending', () => {
   test('resumeBatch alone still reports the crashed item eligible; filterAlreadyExecuted (fed a REAL on-disk SUMMARY.md check) excludes it from spawnEligible', () => {
