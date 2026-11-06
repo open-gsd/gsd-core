@@ -525,11 +525,6 @@ if [ "$AUTO_MODE" = "true" ]; then
     rm -f "${REVIEW_PATH%.md}.iter"*.md "${FIX_REPORT_PATH%.md}.iter"*.md 2>/dev/null || true
   else
     echo "Iteration backups retained (final review status: ${FINAL_STATUS}) — post-mortem trail."
-    # Untracked backups keep the tree dirty for /gsd:ship, whatever happened to the fix report.
-    ITER_DIRTY=$(git status --porcelain -- "${REVIEW_PATH%.md}.iter"*.md "${FIX_REPORT_PATH%.md}.iter"*.md 2>/dev/null || true)
-    if [ -n "$ITER_DIRTY" ]; then
-      echo "The working tree stays dirty: /gsd:ship will ask you to commit or stash until the retained .iterN.md backups are committed or deleted."
-    fi
   fi
 fi
 ```

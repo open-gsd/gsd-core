@@ -380,30 +380,4 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     const valid = drive(VALID_FIX_REPORT);
     assert.strictEqual(valid.status, '', 'valid report: both committed, tree clean');
   });
-
-  // #5527: retained .iterN.md backups are untracked, so they keep the tree dirty for /gsd-ship even
-  // when the fix report is valid or missing. The cleanup fence must say so (and only when it retains).
-  test('T8b — cleanup fence EXECUTED against real git: retained .iterN.md backups trigger the dirty-tree warning', { skip: !HAS_BASH }, (t) => {
-    const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'cleanup_iteration_backups');
-    const drive = (status) => {
-      const dir = createTempGitProject('gsd-5527-');
-      t.after(() => cleanup(dir));
-      fs.writeFileSync(path.join(dir, '.planning', '01-REVIEW.md'), '---\nstatus: ' + status + '\n---\n');
-      git(dir, 'add', '-A');
-      git(dir, 'commit', '-q', '-m', 'seed');
-      fs.writeFileSync(path.join(dir, '.planning', '01-REVIEW.iter2.md'), 'scratch');
-      const script = fenceScript(fence, {
-        AUTO_MODE: 'true',
-        REVIEW_PATH: '.planning/01-REVIEW.md',
-        FIX_REPORT_PATH: '.planning/01-REVIEW-FIX.md',
-      }, ['cd ' + JSON.stringify(dir)]);
-      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
-      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
-      return res.stdout;
-    };
-    const git = (cwd, ...args) => gitOrThrow(args, { cwd });
-
-    assert.match(drive('issues_found'), /working tree stays dirty.*\.iterN\.md/, 'degraded: retained backups warn');
-    assert.doesNotMatch(drive('clean'), /working tree stays dirty/, 'converged: backups removed, no warning');
-  });
 });
