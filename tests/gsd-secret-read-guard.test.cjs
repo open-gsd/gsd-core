@@ -1018,9 +1018,9 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     ['a config-file variable with many values, read by many git commands',
       `export ${rep(10000, (i) => `GIT_CONFIG=v${i} `)}; ${'git status; '.repeat(10000)}cat .env`, 'secret-read', '.env'],
     ['an editor script of git commands, rescanned by each of them',
-      `export GIT_EDITOR='${'git log; '.repeat(20000)}'; git log; cat .env`, 'command-too-complex', ''],
+      `export GIT_EDITOR='${'git log; '.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
     ['an editor script of short segments, rescanned by its git commands',
-      `export GIT_EDITOR='${'git log; '.repeat(30)}${'x;'.repeat(20000)}'; git log; cat .env`, 'command-too-complex', ''],
+      `export GIT_EDITOR='${'git log; '.repeat(30)}${'x;'.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
   ];
   for (const [shape, cmd, code, expectedPath] of blocks) {
     test(`decides ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
