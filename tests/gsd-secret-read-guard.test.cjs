@@ -32,13 +32,21 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fc = require('fast-check');
-const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { runHook: runHookSeam, runNode } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 // In process: the limits rows below sit on either side of, and the Bash
 // leg with a count of the span readers' work.
-const { checkBashCommand, spanReaderSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = require(HOOK_PATH);
+// A hook with no `require.main` guard runs when required, and its stdin handler exits this
+// process at rc 0 with the file unfinished. The Self-test report runs this file against
+// the base as well, so ask a throwaway process first. The in-process rows then fail on
+// such a base rather than ending the run.
+const inProcess = runNode(['-p', `typeof require(${JSON.stringify(HOOK_PATH)}).checkBashCommand`], {
+  input: '',
+  timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+}).stdout.trim() === 'function';
+const { checkBashCommand, spanReaderSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = inProcess ? require(HOOK_PATH) : {};
 
 function runHook(payload, { cwd } = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
@@ -1011,11 +1019,13 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     // pattern, so that quote takes the end of the string, and the read after the span
     // looks quoted to it. Only a span that ends at the case's own `)` sees the read,
     // and only a tag that ends at its own line gets there: one that never matches
-    // takes the rest of the input for the body.
+    // takes the rest of the input for the body. A word with a `"` of its own flips
+    // that parity, so `\"E`, `"E\"F"`, `${a:-"}"}F` and `${"}"}` are denied either way.
     test(`delimiter ${JSON.stringify(word)} ends at its own line: blocks a read after the span`, () => {
       const cmd = `x="$(case x in y) cat <<${word} ;;\n"\n${end}\nx) echo ok;; esac)"; cat .env`;
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
+    // A regression row: that `"` leaves this read bare to the counting scan too.
     test(`delimiter ${JSON.stringify(word)}: blocks a read in the arm after it`, () => {
       const cmd = `echo "$(case x in y) cat <<${word} ;;\n"\n${end}\nx) cat .env;; esac)"`;
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
@@ -1252,6 +1262,29 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
       // reads it again, which for 2,000 of them is several times this bound.
       const { steps } = scanCounted(cmd);
       assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+    });
+  }
+
+  test('the retries after an overflow read a bounded amount of a long command', () => {
+    // Each level up retries the same text. For a long command that is one read per level.
+    // A command gets two grammar scans, the read check and the gsd-debugger check, and
+    // each has its own retry budget of four command caps.
+    const nest = 'cat <<E$('.repeat(1100);
+    const cmd = `echo $(${nest}cat <<${'a'.repeat(100000)}$(${nest}`;
+    const { steps } = scanCounted(cmd);
+    const bound = linearSteps(cmd) + 4 * MAX_COMMAND_LENGTH;
+    assert.ok(steps <= bound, `${steps} reader steps for ${cmd.length} characters`);
+  });
+
+  // What the retries are for: each of these is short, and only the case in front reads.
+  const front = 'echo "$(case x in x) cat .env;; esac)"; ';
+  const deep = `${'$('.repeat(1001)}x${')'.repeat(1001)}`;
+  for (const [where, cmd] of [
+    ['two nests past the depth limit in a delimiter', `${front}cat <<E${deep}F${deep}\nE\n`],
+    ['a nest of 1,200 heredoc tags', `${front}echo $(${'cat <<E$('.repeat(1200)}`],
+  ]) {
+    test(`a read in front of ${where} is still found: blocks`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
   }
 
