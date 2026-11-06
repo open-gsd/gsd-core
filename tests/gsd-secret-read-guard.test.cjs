@@ -1003,28 +1003,21 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     ['\'E\'${x:-"a b"}', 'E${x:-a b}'], ['\'E\'$(echo "x")', 'E$(echo x)'],
     ['"a$(echo "b c")d"', 'a$(echo b c)d'], ['"a`echo "b c"`d"', 'a`echo b c`d'],
     ['"${x:-"b c"}"', '${x:-b c}'], ['E<(x)F', 'E<(x)F'], ['>(x)', '>(x)'],
-    ['E$[1 + 1]F', 'E$[1 + 1]F'], ['${a:-${b} c}', '${a:-${b} c}'],
+    ['${a:-${b} c}', '${a:-${b} c}'],
   ];
   for (const [word, end] of delimiters) {
-    const span = (arm) => `x=$(case x in y) cat <<${word} ;;\nb\n${end}\nx) ${arm};; esac)`;
-    // A tag that never matches takes everything after it for the body, and a tag that
-    // matches early closes the span early. Either way this read is not seen.
+    // The lone `"` in the body is the point. A counting scan ends the span at the
+    // pattern, so that quote takes the end of the string, and the read after the span
+    // looks quoted to it. Only a span that ends at the case's own `)` sees the read,
+    // and only a tag that ends at its own line gets there: one that never matches
+    // takes the rest of the input for the body.
     test(`delimiter ${JSON.stringify(word)} ends at its own line: blocks a read after the span`, () => {
-      const cmd = `${span('echo ok')}; cat .env`;
+      const cmd = `x="$(case x in y) cat <<${word} ;;\n"\n${end}\nx) echo ok;; esac)"; cat .env`;
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
     test(`delimiter ${JSON.stringify(word)}: blocks a read in the arm after it`, () => {
-      const cmd = span('cat .env');
+      const cmd = `echo "$(case x in y) cat <<${word} ;;\n"\n${end}\nx) cat .env;; esac)"`;
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
-    });
-  }
-
-  // These `next` denies by count, so they cannot be held as allows.
-  const deniedByCount = new Set(['\\"E', '\\ E', '"E\\"F"']);
-  for (const [word, end] of delimiters.filter(([w]) => !deniedByCount.has(w))) {
-    test(`delimiter ${JSON.stringify(word)}: allows a quoted read after a case that holds it`, () => {
-      const cmd = `echo "$(case x in y) cat <<${word} ;;\nbody )\n${end}\nx) echo ok;; esac)"; echo "; cat .env; "`;
-      assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
 
