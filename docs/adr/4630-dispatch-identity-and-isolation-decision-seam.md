@@ -149,7 +149,26 @@ decision. The time travels with the answer rather than being read from the file 
 which by then can hold another plan's record. A forced `none` without the flag is a new decision
 with its own ten minutes, and the sites that decide one themselves (`execute-plan` Pattern B, the
 gate's orchestrator-worktree fallback) keep a query naming no phase or plan at `none` while they
-recur less than ten minutes apart. The host's *descriptors* — the harness flag and the orchestrator exec — are not
+recur less than ten minutes apart.
+
+Since [#5682](https://github.com/open-gsd/gsd-core/issues/5682) each dispatch also keeps its own
+keyed record (`.gsd/dispatch-isolation/<phase>--<plan>.json`, or `<phase>.json` for a plan-less
+decision), because a parallel orchestrator's write replaces the single legacy slot. The hold reads
+the newest fresh record at the query's own scope: a plan query reads its own record, a phase query
+reads its phase-level record and that phase's plan records, and either reads the legacy slot only
+when it names that scope. Another orchestrator's later write can therefore neither hide the record
+nor outrank it, unscoped writes included, which the guards count as applying to every dispatch. A
+query naming neither a phase nor a plan has no keyed record to read: it reads the legacy slot,
+whatever scope that carries, so it can hold another orchestrator's degrade and run sequentially for
+the rest of that record's window. That is the safe direction, and it is bounded.
+
+Two windows apply, and they differ on purpose. The hold lapses ten minutes after `decided_at`. The
+guard's trust in a fresh record lasts ten minutes from `written_at`, and it also honours an aged
+`none` for its own phase for up to 24 hours (`AGED_NONE_MAX_MS`,
+[#5479](https://github.com/open-gsd/gsd-core/issues/5479)), so a dispatch the hold no longer answers
+for can still be allowed to run sequentially.
+
+The host's *descriptors* — the harness flag and the orchestrator exec — are not
 decisions and are read from `inspect-dispatch-isolation`, which records nothing and holds
 nothing; read through the deciding query, a degrade recorded for one plan would answer for
 another plan's dispatch.

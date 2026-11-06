@@ -268,16 +268,18 @@ describe('the per-plan worktree gate records the isolation sentinel per dispatch
   test('#2772 submodule degrade: each plan is dispatched on its own stored decision', (t) => {
     const skip = harnessSkipReason();
     if (skip) { t.skip(skip); return; }
+    // The project is shared and a fresh caller `none` for a plan is held, so this test
+    // needs a plan id the #683 test above did not record `none` for.
     const extra = { USE_WORKTREES: 'true', SUBMODULE_PATHS: 'vendor/lib' };
-    const wave = [decide(planJson('03-01-vendor', ['vendor/lib/x.c']), extra), decide(planJson('03-02-docs', ['lib/y.js']), extra)];
+    const wave = [decide(planJson('03-01-vendor', ['vendor/lib/x.c']), extra), decide(planJson('03-03-docs', ['lib/y.js']), extra)];
     assert.deepEqual(wave.map((d) => d.value), ['false', 'true'], 'the submodule plan is sequential, the other keeps worktree isolation');
     record(wave[0]);
     assert.equal(recordedPlan(), '03-01-vendor');
     assert.equal(dispatch('03-01-vendor', false), 'allow');
     record(wave[1]);
-    assert.equal(recordedPlan(), '03-02-docs');
-    assert.equal(dispatch('03-02-docs', true), 'allow', 'the isolated plan carries isolation="worktree"');
-    assert.equal(dispatch('03-02-docs', false), 'block', 'and is still denied without it: the record did not weaken the guard');
+    assert.equal(recordedPlan(), '03-03-docs');
+    assert.equal(dispatch('03-03-docs', true), 'allow', 'the isolated plan carries isolation="worktree"');
+    assert.equal(dispatch('03-03-docs', false), 'block', 'and is still denied without it: the record did not weaken the guard');
   });
 
   // #5682: each plan keeps its own keyed record, so recording every plan before the first
