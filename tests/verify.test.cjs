@@ -2707,10 +2707,10 @@ describe('bug-967 verify key-links strict file-path contract', () => {
   });
 }
 
-// ── 7. Doc-contract guard #4946: gsd-planner.md & planner-guidance.md schema contracts ──
+// ── 7. Doc-contract guard #4946: planner Step 5 must load the shared guidance, and the guidance carries the key_links contract ──
 // Markdown prompt files are runtime contracts executed by LLM agents.
 // No per-line allow-test-rule markers needed since eslint-rules/no-source-grep.cjs inspects only .cjs/.cts/.js/.mjs/.mts/.ts source files, not markdown reads.
-describe('bug #4946: planner key_links schema contract in prompt and guidance', () => {
+describe('bug #4946: planner Step 5 must load the shared guidance, and the guidance carries the key_links contract', () => {
   function verifyAuthoringReference(content) {
     const step = content.match(/\*\*Step 5: Identify Key Links\*\*([\s\S]*?)<\/goal_backward>/);
     assert.ok(step, 'planner must expose the key-link authoring block');
@@ -2718,6 +2718,11 @@ describe('bug #4946: planner key_links schema contract in prompt and guidance', 
       step[1],
       /@~\/\.claude\/gsd-core\/references\/planner-guidance\.md/,
       'key-link authoring must load the shared planner guidance',
+    );
+    assert.match(
+      step[1],
+      /`key_links` field contract \(`from`\/`to` are project-relative file paths; symbols and endpoints go in `via:`\)/,
+      'key-link authoring must name the key_links field contract (from/to are project-relative file paths; symbols and endpoints go in via:)',
     );
   }
 
@@ -2782,6 +2787,16 @@ describe('bug #4946: planner key_links schema contract in prompt and guidance', 
     assert.throws(
       () => verifyAuthoringReference(content.replaceAll('@~/.claude/gsd-core/references/planner-guidance.md', '')),
       /key-link authoring must load the shared planner guidance/,
+    );
+  });
+
+  test('#4946: key-link authoring without the field contract is rejected', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
+    verifyAuthoringReference(content);
+    const clause = '`key_links` field contract (`from`/`to` are project-relative file paths; symbols and endpoints go in `via:`)';
+    assert.throws(
+      () => verifyAuthoringReference(content.replace(clause, 'other notes')),
+      /key_links field contract/,
     );
   });
 
@@ -2879,6 +2894,35 @@ describe('bug #4946: planner key_links schema contract in prompt and guidance', 
     assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /@~\/\.claude\/gsd-core\/templates\/phase-prompt\.md/i);
   });
 
+  test('#4946: guidance from/to rows match phase-prompt and the via row is a prefix', () => {
+    const guidance = fs.readFileSync(guidancePath, 'utf-8');
+    const template = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md'), 'utf-8');
+
+    function fieldRow(content, field) {
+      const row = content.split('\n').find((line) => {
+        const trimmed = line.trim();
+        return trimmed.startsWith('|') && trimmed.includes('`' + field + '`');
+      });
+      assert.ok(row, `missing ${field} table row`);
+      return row.trim();
+    }
+
+    assert.equal(fieldRow(guidance, 'key_links[].from'), fieldRow(template, 'key_links[].from'));
+    assert.equal(fieldRow(guidance, 'key_links[].to'), fieldRow(template, 'key_links[].to'));
+
+    // The guidance via row ends its shortened sentence where phase-prompt.md continues into an example.
+    const guidanceVia = fieldRow(guidance, 'key_links[].via');
+    const templateVia = fieldRow(template, 'key_links[].via');
+    const guidanceViaPrefix = guidanceVia.replace(/\.\s*\|\s*$/, '');
+    assert.ok(
+      templateVia.startsWith(guidanceViaPrefix),
+      'guidance key_links[].via row must be a prefix of the phase-prompt via row',
+    );
+    assert.ok(
+      templateVia.length > guidanceVia.length,
+      'phase-prompt via row must continue past the shortened guidance via row',
+    );
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────
