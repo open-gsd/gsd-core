@@ -198,7 +198,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   test('#5531: a root path with a space, quotes, $(...) and a backtick is data: compose and read-and-check run no command and keep the prompt', (t) => {
     const dir = tempDir(t);
     const marker = path.join(dir, 'ran');
-    const root = path.join(dir, `or ch's $(touch ${marker}) \`touch ${marker}\``);
+    const root = path.join(dir, `or ch's \n\u00fc $(touch ${marker}) \`touch ${marker}\``);
     const prompt = `${GUARDED}the user's vision\n`;
     const file = create(root);
     assert.equal(path.dirname(file), path.join(root, '.claude'), 'the prompt file sits under the hostile root');
@@ -218,8 +218,8 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
       return file;
     };
     const over = aged('gsd-worktree-wave-oLd111', 1441);
-    // Just under the limit (a file exactly at it is a little older by the time find runs, so it is not a stable input).
-    const under = aged('gsd-worktree-wave-oLd222', 1439.5);
+    // A minute under the limit; a file exactly at it is a little older by the time find runs, so it is no stable input.
+    const under = aged('gsd-worktree-wave-oLd222', 1439);
     const fresh = aged('gsd-worktree-wave-zZ9876', 0);
     create(root);
     assert.ok(!fs.existsSync(over), 'a file just over a day old is swept');
@@ -257,9 +257,13 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     fs.writeFileSync(crashed, 'old');
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     fs.utimesSync(crashed, twoDaysAgo, twoDaysAgo);
+    const unrelated = path.join(target, 'notes.txt');
+    fs.writeFileSync(unrelated, 'keep');
+    fs.utimesSync(unrelated, twoDaysAgo, twoDaysAgo);
     const file = create(root);
     assert.equal(path.dirname(fs.realpathSync(file)), fs.realpathSync(target));
     assert.ok(!fs.existsSync(leftover) && !fs.existsSync(crashed), 'the leftover removal and the sweep reach through the link');
+    assert.ok(fs.existsSync(unrelated), 'a file of no wave in the target stays');
     const prompt = `${GUARDED}through a link\n`;
     fs.writeFileSync(file, prompt);
     const r = readAndCheck(root);

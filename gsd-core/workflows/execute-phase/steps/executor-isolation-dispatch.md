@@ -286,15 +286,16 @@ Then read it back and check it:
 # `find` takes the pattern as an argument: an unmatched pattern is not a shell
 # glob error under bash or zsh. No match, or more than one, halts. The exit codes of
 # these halts are listed in block 1.
-_PROMPT_NAME="gsd-executor-prompt-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}-??????"
-PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null || :)
-case "$PROMPT_FILE" in
-  ''|*'
-'*)
-    find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
-    echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
-    exit 69 ;;
-esac
+_PROMPT_PREFIX='gsd-executor-prompt'
+_PROMPT_NAME="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}-??????"
+# Count the matches, not the lines of the output, so a newline in a path cannot read as two files.
+_PROMPT_HITS=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec printf x \; 2>/dev/null || :)
+if [ "${#_PROMPT_HITS}" -ne 1 ]; then
+  find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
+  echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
+  exit 69
+fi
+PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null)
 _PROMPT_BYTES=$(wc -c < "$PROMPT_FILE" 2>/dev/null || :)
 _PROMPT_NONNUL=$(tr -d '\000' < "$PROMPT_FILE" 2>/dev/null | wc -c || :)
 if [ -n "$_PROMPT_BYTES" ] && [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
@@ -346,7 +347,7 @@ The prompt reaches the shell only as file contents read by `cat`, so apostrophes
 
 Run the blocks in one shell, each as its own command: `$ORCH_ROOT`, `$EXPECTED_BASE` and `$WAVE_WORKTREE_MANIFEST` stay set, and `$EXECUTOR_PROMPT` from the read-and-check block reaches the spawn block. No path text is handed from block 1 to the read-and-check block: it finds the file by the same plan-keyed name pattern block 1 created it with.
 
-The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes the file on every halt after the read, so the file is already gone when the block halts. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -rf --` on the path block 1 printed before halting.
+The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes the file on every halt after the read, so the file is already gone when the block halts. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -rf --` on the path block 1 printed before halting. A file such a halt leaves behind is removed anyway by the leftover removal of the next dispatch of the same plan, or by the one-day sweep of block 1.
 
 Then create the worktree and resolve the spawn:
 

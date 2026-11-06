@@ -122,3 +122,14 @@ test('#5531: the template carries the two markers that only the read-and-check g
     assert.ok(body.includes(marker), `the template carries ${marker}, so a skipped compose step leaves it for a guard to find`);
   }
 });
+
+test('#5531: the two compose blocks declare the same prompt file name prefix', () => {
+  // The blocks run as separate commands, so each declares the prefix; a run of one block cannot show they agree.
+  const lines = content.split('\n');
+  const prefixes = scanFencedBlocks(lines)
+    .filter((b) => b.infoString === 'bash')
+    .flatMap((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx))
+    .filter((l) => l.startsWith('_PROMPT_PREFIX='));
+  assert.equal(prefixes.length, 2, 'block 1 and the read-and-check block each declare the prefix');
+  assert.equal(new Set(prefixes).size, 1, 'both declare the same prefix');
+});
