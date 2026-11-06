@@ -749,6 +749,46 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     assert.deepStrictEqual(siblings(), ['ARCHIVE.md']);
   });
 
+  // onCreated reports a published file only: a failed rename unlinks the temp and frees its inode.
+  test('onCreated is not called when the rename fails', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    const seen = [];
+    mock.method(fs, 'renameSync', () => { throw errno('EIO'); });
+    assert.throws(
+      () => scp.platformWriteSync(target, '# New\n', { atomic: true, onCreated: (id) => seen.push(id) }),
+      (err) => err.code === 'EIO',
+    );
+    mock.restoreAll();
+    assert.strictEqual(seen.length, 0);
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md']);
+  });
+
+  test('onCreated is not called when the parent-directory check refuses the publish', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    const seen = [];
+    const swappedAway = `${dir}.swapped`;
+    const createTemp = (basePath, _suffix, mode) => {
+      const tmpPath = `${basePath}.swap.${process.pid}.tmp`;
+      const fd = fs.openSync(tmpPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode);
+      // Replace the parent directory with a different one after the walk recorded its identity.
+      fs.renameSync(dir, swappedAway);
+      fs.mkdirSync(dir);
+      return { fd, tmpPath };
+    };
+    try {
+      assert.throws(() => scp.platformWriteSync(target, '# New\n', {
+        atomic: true,
+        onCreated: (id) => seen.push(id),
+        writeSeams: { createTemp },
+      }));
+      assert.strictEqual(seen.length, 0);
+    } finally {
+      cleanup(dir);
+      fs.renameSync(swappedAway, dir);
+    }
+  });
+
   // ── platformRestoreFileSync ────────────────────────────────────────────
 
   test('a restore puts back the exact bytes, unnormalized', () => {
