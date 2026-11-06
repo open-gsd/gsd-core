@@ -60,7 +60,7 @@ describe('#5583 insert-phase --sibling', () => {
     assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
     const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
     assert.match(fence, /^GSD_ARGS=\$\{GSD_ARGS%\$'\\n'\}$/m, 'the insert fence captures GSD_ARGS itself');
-    assert.match(fence, /^GSD_A=\(\); GSD_WSV=; set -f; set -- \$\{GSD_ARGS#--insert\[\[:space:\]\]\}; set \+f$/m);
+    assert.match(fence, /^GSD_A=\(\); GSD_WSV=; read -rd "" -a GSD_W <<<"\$\{GSD_ARGS#--insert\[\[:space:\]\]\}" \|\| true; set -- "\$\{GSD_W\[@\]\}"$/m);
     assert.doesNotMatch(fence, /GSD_SIBLING/, 'the CLI router owns --sibling');
     assert.doesNotMatch(WORKFLOW, /GSD_DESC_END/, 'GSD_ARGS_END stays the only capture terminator');
   });
