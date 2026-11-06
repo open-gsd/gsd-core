@@ -1371,16 +1371,28 @@ function withGitConfigs(ctx, index, hops, scan) {
   }
 }
 
+// The config layers in force, innermost first, each once: a nested git
+// command pushes the environment's layers again, over the ones its outer
+// command already has in force.
+function gitIndexesInForce(ctx) {
+  const seen = new Set();
+  for (let scope = ctx.gitScope; scope; scope = scope.parent) {
+    for (let index = scope.index; index; index = index.next) {
+      charge(ctx, 1);
+      seen.add(index);
+    }
+  }
+  return seen;
+}
+
 // Every value of `key` in force, innermost first.
 function gitConfigsNamed(ctx, key) {
   const found = [];
-  for (let scope = ctx.gitScope; scope; scope = scope.parent) {
-    for (let index = scope.index; index; index = index.next) {
-      const configs = index.byKey.get(key);
-      if (!configs) continue;
-      charge(ctx, configs.length);
-      for (let i = configs.length - 1; i >= 0; i--) found.push(configs[i]);
-    }
+  for (const index of gitIndexesInForce(ctx)) {
+    const configs = index.byKey.get(key);
+    if (!configs) continue;
+    charge(ctx, configs.length);
+    for (let i = configs.length - 1; i >= 0; i--) found.push(configs[i]);
   }
   return found;
 }
@@ -1389,12 +1401,10 @@ function gitConfigsNamed(ctx, key) {
 function gitRewritesInForce(ctx) {
   const rewrites = [];
   let vcsExt = false;
-  for (let scope = ctx.gitScope; scope; scope = scope.parent) {
-    for (let index = scope.index; index; index = index.next) {
-      charge(ctx, index.rewrites.length);
-      for (const rewrite of index.rewrites) rewrites.push(rewrite);
-      vcsExt = vcsExt || index.vcsExt;
-    }
+  for (const index of gitIndexesInForce(ctx)) {
+    charge(ctx, index.rewrites.length);
+    for (const rewrite of index.rewrites) rewrites.push(rewrite);
+    vcsExt = vcsExt || index.vcsExt;
   }
   return { rewrites, vcsExt };
 }
@@ -1784,16 +1794,25 @@ function scanGitInvocation(operands, depth, ctx) {
   const frame = ctx.shellVars;
   const memo = env !== null && depth === 0 && ctx.gitScope === null && own.length === 0;
   const invoked = name === null ? null : `alias.${name.toLowerCase()}`;
+  // A git command an alias or script runs inherits the environment's layers
+  // its outer command already scanned; only the layers new here are scanned.
+  const held = env === null ? null : gitIndexesInForce(ctx);
   return withGitConfigs(ctx, own.length ? gitConfigIndex(own, env) : env, ctx.aliasHops, () => {
     if (env !== null && !(memo && frame.gitEnvScanned)) {
       const inForce = gitRewritesInForce(ctx);
+      // The invoked alias is scanned below with the words after it, as with
+      // -c, so it is not scanned here as a definition too; a frame that skipped
+      // it is not marked scanned, since a later command may not invoke it.
+      let skipped = false;
       for (let layer = env; layer; layer = layer.next) {
+        if (held.has(layer)) continue;
+        if (invoked !== null && layer.byKey.has(invoked)) skipped = true;
         const hit = scanGitConfigValues(layer.entries, depth, ctx)
-          ?? scanGitAliasDefinitions(layer.entries, null, depth, ctx)
+          ?? scanGitAliasDefinitions(layer.entries, invoked, depth, ctx)
           ?? scanGitExtUrls(layer.entries.map((config) => config.value), inForce, depth, ctx);
         if (hit !== null) return hit;
       }
-      if (memo) frame.gitEnvScanned = true;
+      if (memo && !skipped) frame.gitEnvScanned = true;
     }
     let hit = scanGitConfigValues(own, depth, ctx);
     if (hit !== null) return hit;
