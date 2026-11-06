@@ -45,6 +45,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 import { splitLines, joinLines } from './text-lines.cjs';
+import { capCodeUnits } from './code-unit-cap.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
@@ -168,8 +169,7 @@ function describeRawStatus(raw: unknown): string {
   if (partialEscape) {
     cut -= partialEscape[0].length;
   } else {
-    const last = rendered.charCodeAt(cut - 1);
-    if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+    cut = capCodeUnits(rendered, cut, 'head').length;
   }
   // JSON also emits two-character escapes (`\n`, `\t`, `\"`, `\\`): an odd
   // trailing run of backslashes is the first half of one, so drop it too.

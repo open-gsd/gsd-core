@@ -189,6 +189,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/ui-consideration-probe.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/code-review-depth.cjs',
+      'gsd-core/bin/lib/code-unit-cap.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/broken-windows.cjs',
       'gsd-core/bin/lib/complexity-trigger.cjs',

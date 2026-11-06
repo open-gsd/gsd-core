@@ -133,9 +133,11 @@ gsd_run loop render-hooks ship:pre --raw
   children. (ADR-2008, documented limitation.)
 - **`sh` must be on PATH.** On Windows without git-bash/WSL, the gate fails
   closed (exit 127). This matches the runtime's existing bash dependency.
-- **Output is trimmed.** Only the last 2000 chars of stderr/stdout surface in
-  the gate `message`. Emit a concise diagnostic; don't rely on grepping long
-  output downstream.
+- **Output is trimmed.** The whole gate `message` (including the
+  `command exited N:` prefix) is capped at 2000 chars; for stderr/stdout the
+  last chars are kept. A timeout with empty stderr shows the head of the command
+  instead. Emit a concise diagnostic; don't rely on grepping long output
+  downstream.
 - **Env is inherited.** The command sees the full GSD process environment. Do
   not put secrets in the command string; read them from env or a file like any
   shell script.
