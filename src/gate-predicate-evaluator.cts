@@ -135,8 +135,8 @@ function evaluateCommandExitZero(
 
   const interpolated = interpolate(command, ctx);
   const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
-
   const hasStderr = isNonEmptyString(res.stderr);
+
   if (res.timedOut) {
     const prefix = `command timed out after ${Math.round(timeoutMs / 1000)}s: `;
     return {
