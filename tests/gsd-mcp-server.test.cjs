@@ -65,8 +65,7 @@ for (const subcommand of [undefined, '']) {
       { cwd: dir },
     );
     assert.notEqual(res.result.isError, true, 'the family-only command must reach the CLI through MCP');
-    const mcpPath = res.result.content[0].text.trim();
-    assert.equal(mcpPath, cli.output);
+    assert.equal(res.result.content[0].text.trim(), cli.output);
   });
 }
 

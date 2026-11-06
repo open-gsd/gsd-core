@@ -2908,23 +2908,23 @@ describe('#2627 dispatch-isolation CLI route', () => {
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
-  function query(runtimeId, extraArgs = [], generation = '1', execOpts = {}) {
-    const env = { ...process.env, GSD_RUNTIME: runtimeId, ...execOpts.env };
+  // generation pins OpenCode: 1 or 2, or 'unset' to drop an inherited value.
+  // path replaces PATH and Path together. cwd defaults to the repo root.
+  function query(runtimeId, extraArgs = [], { generation = 1, path: pathOverride, cwd = REPO_ROOT } = {}) {
+    const env = { ...process.env, GSD_RUNTIME: runtimeId };
     if (runtimeId === 'opencode') {
-      if (generation !== null) {
-        env.GSD_OPENCODE_GENERATION = generation;
-      } else {
+      if (generation === 'unset') {
         delete env.GSD_OPENCODE_GENERATION;
+      } else {
+        env.GSD_OPENCODE_GENERATION = String(generation);
       }
     }
-    if (execOpts.env && ('PATH' in execOpts.env || 'Path' in execOpts.env)) {
-      const p = execOpts.env.PATH ?? execOpts.env.Path;
+    if (pathOverride !== undefined) {
       delete env.PATH;
       delete env.Path;
-      env.PATH = p;
-      env.Path = p;
+      env.PATH = pathOverride;
+      env.Path = pathOverride;
     }
-    const cwd = execOpts.cwd || REPO_ROOT;
     const r = runNode(
       [GSD_TOOLS, 'query', 'dispatch-isolation', ...extraArgs],
       { cwd, env, timeoutMs: PROBE_TIMEOUT_MS },
@@ -2984,7 +2984,7 @@ describe('#2627 dispatch-isolation CLI route', () => {
     const tempDir = createCanonicalTempDir('gsd-opencode2-');
     try {
       const result = JSON.parse(
-        query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], '2', { cwd: tempDir }),
+        query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], { generation: 2, cwd: tempDir }),
       );
       assert.deepEqual(result.exec.args, ['run', 'P']);
       assert.equal(result.exec.cwd, '/tmp/wt');
@@ -2993,23 +2993,19 @@ describe('#2627 dispatch-isolation CLI route', () => {
     }
   });
 
-  test('absent OpenCode generation retains --dir on the CLI route', () => {
+  test('absent OpenCode generation retains --dir on the CLI route', (t) => {
     const tempDir = createCanonicalTempDir('gsd-opencode-absent-');
+    t.after(() => cleanup(tempDir));
     const emptyBinDir = path.join(tempDir, 'empty-bin');
     fs.mkdirSync(emptyBinDir, { recursive: true });
-    try {
-      const result = JSON.parse(
-        query(
-          'opencode',
-          ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'],
-          null,
-          { cwd: tempDir, env: { PATH: emptyBinDir, Path: emptyBinDir, GSD_OPENCODE_GENERATION: '2' } },
-        ),
-      );
-      assert.deepEqual(result.exec.args, ['run', '--dir', '/tmp/wt', 'P']);
-    } finally {
-      cleanup(tempDir);
-    }
+    const result = JSON.parse(
+      query(
+        'opencode',
+        ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'],
+        { generation: 'unset', cwd: tempDir, path: emptyBinDir },
+      ),
+    );
+    assert.deepEqual(result.exec.args, ['run', '--dir', '/tmp/wt', 'P']);
   });
 
   test('a cwd target with no prompt still resolves (prompt is optional at this seam)', () => {
