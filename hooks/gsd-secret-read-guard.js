@@ -1795,8 +1795,10 @@ function scanGitInvocation(operands, depth, ctx) {
   const memo = env !== null && depth === 0 && ctx.gitScope === null && own.length === 0;
   const invoked = name === null ? null : `alias.${name.toLowerCase()}`;
   // A git command an alias or script runs inherits the environment's layers
-  // its outer command already scanned; only the layers new here are scanned.
-  const held = env === null ? null : gitIndexesInForce(ctx);
+  // its outer command already scanned, under the same config: unless it sets
+  // config of its own (a rewrite or vcs=ext turns an inherited URL into an
+  // ext:: command), only the layers new here are scanned.
+  const held = env === null || own.length ? new Set() : gitIndexesInForce(ctx);
   return withGitConfigs(ctx, own.length ? gitConfigIndex(own, env) : env, ctx.aliasHops, () => {
     if (env !== null && !(memo && frame.gitEnvScanned)) {
       const inForce = gitRewritesInForce(ctx);
