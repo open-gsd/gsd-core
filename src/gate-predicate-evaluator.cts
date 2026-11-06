@@ -136,12 +136,15 @@ function evaluateCommandExitZero(
   const interpolated = interpolate(command, ctx);
   const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
 
+  const hasStderr = isNonEmptyString(res.stderr);
   if (res.timedOut) {
     const prefix = `command timed out after ${Math.round(timeoutMs / 1000)}s: `;
     return {
       block: true,
       // The command's head (program name, leading args) identifies it; only stderr is tail-capped.
-      message: prefixedCap(prefix, res.stderr || interpolated, res.stderr ? 'tail' : 'head'),
+      message: hasStderr
+        ? prefixedCap(prefix, res.stderr, 'tail')
+        : prefixedCap(prefix, interpolated, 'head'),
       details: { kind: 'command-exit-zero', timedOut: true, signal: res.signal },
     };
   }
@@ -156,7 +159,7 @@ function evaluateCommandExitZero(
 
   // Non-zero (incl. null exit from a signal kill) => block. Surface code + stderr/stdout tail.
   const code = res.exitCode === null ? '<none>' : String(res.exitCode);
-  const output = res.stderr || res.stdout || '';
+  const output = hasStderr ? res.stderr : isNonEmptyString(res.stdout) ? res.stdout : '';
   return {
     block: true,
     message: output ? prefixedCap(`command exited ${code}: `, output, 'tail') : `command exited ${code}`,
