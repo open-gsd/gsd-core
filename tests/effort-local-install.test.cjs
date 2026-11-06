@@ -49,6 +49,11 @@ test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
     assert.match(fs.readFileSync(agentPath, 'utf8'), /^effort: low$/m);
     assert.equal(run(['resolve-execution', 'gsd-planner']).effort_effective, 'low');
 
+    // These rows echo a caller-supplied directory. An explicit --config-dir is
+    // path.join(explicitDir, 'agents'); a global or legacy manifest falls through
+    // to expandTilde(CLAUDE_CONFIG_DIR). Neither resolves symlinks, so the
+    // expectation stays the raw path.join spelling. The preview and apply rows
+    // above compare the module loader's spelling of __dirname instead.
     const emptyExplicit = run(['effort', 'sync', '--dry-run', '--config-dir', globalDir]);
     assert.equal(emptyExplicit.agents_dir, path.join(globalDir, 'agents'));
     assert.equal(emptyExplicit.reason, 'no GSD agent files found');
