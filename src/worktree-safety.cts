@@ -3054,7 +3054,7 @@ function findUnregisteredResidue(
     // another sweep's removal in flight: left alone, as a young residue is, and
     // reclaimed by a later sweep once the window has passed (#4941 review). That
     // a rename advances the ctime is pinned by a real-rename row in
-    // tests/worktree-safety-reap.test.cjs, run on the Linux, macOS and Windows lanes.
+    // tests/worktree-safety.test.cjs, run on the Linux, macOS and Windows lanes.
     if (stranded) {
       const ctime = ctimeSafe(p);
       if (!ctime) {
