@@ -358,7 +358,6 @@ describe('gsd-secret-read-guard: Bash blocks', () => {
     ['cat <.env', '.env'],
     ['cat 0< .env', '.env'],
     ['cat 2>/dev/null .env', '.env'],
-    ['node --env-file=.env app.js', '--env-file=.env'],
     ['grep -f.env pat f', '-f.env'],
     // #5046: a value-taking short option bundled behind other short flags.
     ['grep -if.env pat f', '-if.env'],
@@ -803,6 +802,48 @@ describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => 
     // gap. Documented in the hook header's documented-gaps list.
     allow("docker run --env-file .env alpine printenv");
     allow("docker compose --env-file=.env config");
+  });
+
+  // #5885: the same flag under node, bun, deno and `uv run` stays denied,
+  // next to the container allow rows above on purpose. The container
+  // exemption unblocks an operational invocation (a rebuild, a service
+  // start); under node the program that runs is usually one the agent just
+  // wrote, and it can print `process.env`. The denial carries its own code,
+  // `env-file-secret`, so its message names that policy instead of a read,
+  // and `path` is the file the flag names, in both the bare and the `=` form.
+  const envFileDenied = (command, file) =>
+    assertBlocked(runHook(bash(command)), command, { code: 'env-file-secret', tool: 'Bash', path: file });
+
+  test('node --env-file <secret> stays denied, with the env-file policy code', () => {
+    envFileDenied('node --env-file=.env app.js', '.env');
+    envFileDenied('node --env-file=.env.local scripts/check.mjs', '.env.local');
+    envFileDenied('node --env-file .env.local scripts/check.mjs', '.env.local');
+  });
+
+  test('bun, deno and uv run --env-file <secret> stay denied, with the env-file policy code', () => {
+    envFileDenied('bun --env-file=.env.local run check', '.env.local');
+    envFileDenied('deno run --env-file=.env.local check.ts', '.env.local');
+    envFileDenied('uv run --env-file .env.local python check.py', '.env.local');
+  });
+
+  test('node --env-file with a non-secret template is allowed (control)', () => {
+    allow('node --env-file=.env.example scripts/check.mjs');
+    allow('node --env-file .env.example scripts/check.mjs');
+  });
+
+  test('a secret read elsewhere in a node --env-file segment keeps the secret-read code', () => {
+    const out = block('node --env-file .env.example app.js .env.local');
+    assert.equal(out.path, '.env.local');
+  });
+
+  test('a template --env-file cannot launder a read: && cat <secret> keeps the secret-read code', () => {
+    const out = block('node --env-file .env.example x.js && cat .env');
+    assert.equal(out.path, '.env');
+  });
+
+  test('--env-file under a command outside both runtime sets keeps the secret-read code', () => {
+    const out = block('cat --env-file=.env.foundation');
+    assert.equal(out.path, '--env-file=.env.foundation');
   });
 
   test("nerdctl and docker-compose (hyphenated) are in the runtime set", () => {
