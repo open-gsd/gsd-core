@@ -13,7 +13,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
-- `--sibling` (optional, the token directly after the first argument): a flag, not part of the description; the insert_phase step reads it from `GSD_ARGS` into `GSD_SIBLING`. The same word later in the description is description text.
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description; the insert_phase step splits `GSD_ARGS` into the after-phase, the description and `GSD_SIBLING`, and skips a `--ws <name>` pair
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
@@ -64,12 +64,9 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-IFS= read -rd '' GSD_DESC <<'GSD_DESC_END' || true
-{description}
-GSD_DESC_END
-GSD_DESC=${GSD_DESC%$'\n'}
-GSD_SIBLING=; [[ " $GSD_ARGS " =~ ^(\ +--insert)?\ +[^[:space:]]+[[:space:]]+--sibling[[:space:]] ]] && GSD_SIBLING=1
-RESULT=$(gsd_run query phase.insert "${after_phase}" "${GSD_DESC}" ${GSD_SIBLING:+--sibling})
+GSD_AFTER=; GSD_DESC=; GSD_SIBLING=; set -f; set -- $GSD_ARGS; set +f
+while [ $# -gt 0 ]; do case $1 in --sibling) GSD_SIBLING=1;; --ws) shift;; *) if [ -z "$GSD_AFTER" ]; then GSD_AFTER=$1; else GSD_DESC="${GSD_DESC:+$GSD_DESC }$1"; fi;; esac; shift; done
+RESULT=$(gsd_run query phase.insert "$GSD_AFTER" "$GSD_DESC" ${GSD_SIBLING:+--sibling})
 ```
 
 The CLI handles:

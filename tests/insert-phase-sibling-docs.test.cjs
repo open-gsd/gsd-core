@@ -8,13 +8,14 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { spawnSync } = require('node:child_process');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
+const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 
+const SKIP = skipUnless('bash');
 const WF = 'gsd-core/workflows/insert-phase.md';
 const ROUTERS = [
   'commands/gsd/phase.md',
@@ -46,35 +47,48 @@ describe('#5583 insert-phase --sibling', () => {
     assert.match(WORKFLOW, /Validate first argument is a phase number \(integer or dotted decimal\)/);
   });
 
-  test('workflow parses --sibling out of the description and forwards it', () => {
+  test('workflow splits GSD_ARGS in the insert fence and forwards --sibling', () => {
     const WORKFLOW = read(WF);
     assert.match(WORKFLOW, /Usage: \/gsd:phase --insert <after> \[--sibling\] <description>/);
-    assert.match(WORKFLOW, /the token directly after the first argument/);
+    assert.match(WORKFLOW, /\(optional, any position, like the CLI router\)/);
     const cmds = WORKFLOW.match(/^RESULT=\$\(gsd_run query phase\.insert .*$/gm) || [];
     assert.equal(cmds.length, 1, 'one phase.insert call per run');
-    assert.match(cmds[0], /\$\{GSD_SIBLING:\+--sibling\}\)$/);
+    assert.match(cmds[0], /"\$GSD_AFTER" "\$GSD_DESC" \$\{GSD_SIBLING:\+--sibling\}\)$/);
     assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
     const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
     assert.match(fence, /^GSD_ARGS=\$\{GSD_ARGS%\$'\\n'\}$/m, 'the insert fence captures GSD_ARGS itself');
-    assert.match(fence, /^GSD_SIBLING=; /m, 'the insert fence derives GSD_SIBLING itself');
-    assert.match(fence, /"\$\{GSD_DESC\}"/, 'the description reaches the CLI through a quoted heredoc variable');
+    assert.match(fence, /^GSD_AFTER=; GSD_DESC=; GSD_SIBLING=; set -f; set -- \$GSD_ARGS; set \+f$/m);
+    assert.doesNotMatch(WORKFLOW, /GSD_DESC_END/, 'GSD_ARGS_END stays the only capture terminator');
   });
 
-  // Run the shipped detection line: the flag counts only directly after the first argument.
-  const sibLine = read(WF).match(/^GSD_SIBLING=; .*$/m)[0];
-  const sibling = (args) => spawnSync('bash', ['-c', `${sibLine}; printf %s "$GSD_SIBLING"`], { env: { ...process.env, GSD_ARGS: args }, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }).stdout;
-  for (const [args, want] of [
-    ['15.2 --sibling x', '1'],
-    ['--insert 15.2 --sibling x', '1'],
-    ['15.2\t--sibling x', '1'],
-    ['15.2 x', ''],
-    ['15.2 x --sibling', ''],
-    ['72 fix the --sibling flag', ''],
-    ['15.2 --siblings x', ''],
-    ['15.2 x--sibling y', ''],
-  ]) {
-    test(`GSD_SIBLING for "${args}" is "${want}"`, () => assert.equal(sibling(args), want));
-  }
+  // Run the shipped split of the insert fence over typed arguments.
+  describe('insert fence argument split', { skip: SKIP }, () => {
+    const split = (args) => {
+      const quoted = "'" + args.replace(/'/g, "'\\''") + "'";
+      const r = runBash(
+        span(WF, 'GSD_AFTER=;', 'RESULT=$(gsd_run query phase.insert'),
+        { stdout: '', rc: 0 },
+        { setE: false, preamble: ['GSD_ARGS=' + quoted, "gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'printf "%s\\n" "$RESULT"' },
+      );
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.split('\n').slice(2, -1);
+    };
+    for (const [args, want] of [
+      ['15.2 --sibling x', ['[15.2]', '[x]', '[--sibling]']],
+      ['15.2 x --sibling', ['[15.2]', '[x]', '[--sibling]']],
+      ['--sibling 15.2 x', ['[15.2]', '[x]', '[--sibling]']],
+      ['15.2\t--sibling x', ['[15.2]', '[x]', '[--sibling]']],
+      ['15.2 --ws feature --sibling x', ['[15.2]', '[x]', '[--sibling]']],
+      ['--ws feature 15.2 x --sibling', ['[15.2]', '[x]', '[--sibling]']],
+      ['15.2 x', ['[15.2]', '[x]']],
+      ['72 fix the --siblings flag', ['[72]', '[fix the --siblings flag]']],
+      ['72 x--sibling y', ['[72]', '[x--sibling y]']],
+      ['72 *', ['[72]', '[*]']],
+      ['72 $(touch pwned) "q" GSD_ARGS_END', ['[72]', '[$(touch pwned) "q" GSD_ARGS_END]']],
+    ]) {
+      test('split of "' + args + '"', () => assert.deepEqual(split(args), want));
+    }
+  });
 
   test('workflow documents nest-by-default and the top-level fallback', () => {
     const WORKFLOW = read(WF);
