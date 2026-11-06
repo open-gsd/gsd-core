@@ -770,7 +770,7 @@ _match_plan() {
   _fp=$(sed -n '/^---$/,/^---$/p' "$1" 2>/dev/null | sed -n 's/^plan:[[:space:]]*["'"'"']\{0,1\}\([^"'"'"'[:space:]]*\).*/\1/p' | head -n 1)
   [ -n "$_fp" ] && { [ "$_fp" = "$PLAN" ] || [ "$_fp" = "$P" ] || { _v="$_fp"; case "$_v" in ""|*[!0-9]*) ;; *) _v=$((10#$_v)); [ "$_v" -lt 10 ] && _v=$(printf "%02d" "$_v");; esac; [ "$_v" = "$P" ]; }; }
 }
-[ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ -n "$PLAN" ] && { _match_plan "$PLAN_PATH" || PLAN_PATH=""; }
+[ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && { _match_plan "$PLAN_PATH" || PLAN_PATH=""; }
 if [ -z "$PLAN_PATH" ] || [ ! -f "$PLAN_PATH" ]; then
   D="${PHASE_DIR:-$(printf '%s' "${INIT:-}" | jq -r '.phase_dir // empty' 2>/dev/null)}"
   if [ -z "$D" ] || [ ! -d "$D" ]; then
