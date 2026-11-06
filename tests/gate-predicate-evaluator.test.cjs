@@ -271,9 +271,7 @@ describe('evaluatePredicate — message trimming', () => {
     // slice(-budget) starts exactly on the emoji's low surrogate.
     const stderr = 'E'.repeat(10) + '\u{1F600}' + 'T'.repeat(budget - 7) + 'MARKER';
     const tail = run({ exitCode: 3, stderr }).message.slice(prefix.length);
-    assert.ok(!/^[\uDC00-\uDFFF]/.test(tail));
-    assert.ok(tail.endsWith('MARKER'));
-    assert.ok(prefix.length + tail.length <= COMMAND_MAX_OUTPUT_CHARS);
+    assert.equal(tail, 'T'.repeat(budget - 7) + 'MARKER');
   });
 
   // prefix.length + output.length at {cap-1, cap, cap+1}: only cap+1 may cut, and by exactly one char.
