@@ -7437,20 +7437,18 @@ function publishPrunedToArchive(
   if (existing !== null && lastPruneRunMarker(existing) === run) return null;
 
   const plan = planStateArchiveAppend(existing, sections, { date: realClock.localToday(), cutoff, keepRecent, run });
-  try {
-    platformWriteSync(archivePath, renderStateArchiveAppend(plan), { atomic: true });
-  } catch (writeErr) {
-    restoreArchiveAfterFailedWrite(archivePath, archiveBytes, writeErr);
-    throw writeErr;
-  }
-
-  // The file this run just created, by identity: a rollback to "absent" removes only that file,
-  // never one another process put at the path since.
+  // The file this run created, by the identity the write reports just before it publishes: a
+  // rollback to "absent" removes only that file, never one another process put at the path.
   let created: { dev: number; ino: number } | undefined;
   try {
-    const st = fs.lstatSync(archivePath);
-    created = { dev: st.dev, ino: st.ino };
-  } catch { /* gone already: nothing to remove on rollback */ }
+    platformWriteSync(archivePath, renderStateArchiveAppend(plan), {
+      atomic: true,
+      onCreated: (id) => { created = id; },
+    });
+  } catch (writeErr) {
+    restoreArchiveAfterFailedWrite(archivePath, archiveBytes, writeErr, created);
+    throw writeErr;
+  }
 
   return {
     restore(stateErr: unknown): void {
@@ -7503,15 +7501,24 @@ function publishPrunedToArchive(
  * earlier entries against any write path that damages the file and then
  * throws. A failed check or restore is reported alongside the write error.
  */
-function restoreArchiveAfterFailedWrite(archivePath: string, archiveBytes: Buffer | null, writeErr: unknown): void {
+function restoreArchiveAfterFailedWrite(
+  archivePath: string,
+  archiveBytes: Buffer | null,
+  writeErr: unknown,
+  created?: { dev: number; ino: number },
+): void {
   try {
     const now = platformReadBytesSync(archivePath);
     if (archiveBytes === null && now !== null) {
-      // No archive existed and this run's write failed, so whatever is there now is not ours.
-      throw Object.assign(
-        new Error(`ESTALE: ${archivePath} appeared during the failed write and was not created by this run — left in place`),
-        { code: 'ESTALE' },
-      );
+      // No archive existed: remove the file only if it is the one this run created.
+      if (created === undefined) {
+        throw Object.assign(
+          new Error(`ESTALE: ${archivePath} appeared during the failed write and was not created by this run — left in place`),
+          { code: 'ESTALE' },
+        );
+      }
+      platformRestoreFileSync(archivePath, null, { unlinkOnlyIf: created });
+      return;
     }
     const unchanged = now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
     if (!unchanged) platformRestoreFileSync(archivePath, archiveBytes);

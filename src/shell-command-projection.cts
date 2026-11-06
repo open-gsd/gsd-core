@@ -1429,6 +1429,12 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * holds data that exists nowhere else.
    */
   atomic?: boolean;
+  /**
+   * #5831: with `atomic`, called with the device and inode of the file about to be
+   * renamed into place, immediately before the rename. The renamed file keeps that
+   * identity, so a caller can later remove exactly the file this write created.
+   */
+  onCreated?: (id: { dev: number; ino: number }) => void;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -2123,6 +2129,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     publishViaTempFile(filePath, normalized, encoding, 'tmp', {
       checkParent: () => { if (parentChanged()) refuseParentSwap(); },
       createTemp: opts.writeSeams?.createTemp,
+      onCreated: opts.onCreated,
     });
     return;
   }
@@ -2216,6 +2223,7 @@ function publishViaTempFile(
   hooks: {
     checkParent?: () => void;
     createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
+    onCreated?: (id: { dev: number; ino: number }) => void;
   } = {},
 ): void {
   let mode = 0o666;
@@ -2232,13 +2240,19 @@ function publishViaTempFile(
     try { fs.fchmodSync(fd, mode); } catch { /* no permission bits on this platform */ }
   }
   try {
+    let identity: { dev: number; ino: number } | undefined;
     try {
       if (typeof data === 'string') fs.writeFileSync(fd, data, encoding);
       else fs.writeFileSync(fd, data);
+      if (hooks.onCreated !== undefined) {
+        const st = fs.fstatSync(fd);
+        identity = { dev: st.dev, ino: st.ino };
+      }
     } finally {
       try { fs.closeSync(fd); } catch { /* already closed */ }
     }
     hooks.checkParent?.();
+    if (identity !== undefined) hooks.onCreated?.(identity);
     const renameErr = atomicRenameWithRetry(tmpPath, filePath);
     if (renameErr !== null) throw renameErr;
   } catch (err) {
