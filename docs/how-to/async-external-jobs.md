@@ -50,7 +50,7 @@ The manifest is durable state — commit it:
 
 ```bash
 git add .planning/async-jobs/<job_id>.json
-git commit -m "chore: externalize plan 3.1 to SLURM job <job_id>"
+git commit -m "chore: externalize plan 3.1 to SLURM job <job_id>" -- ':(literal).planning/async-jobs/<job_id>.json'
 ```
 
 The executor then returns `external_job_waiting` and **does not** write
