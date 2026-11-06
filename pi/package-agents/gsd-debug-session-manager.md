@@ -355,7 +355,7 @@ back to Step 3.
    step before the summary is returned:
    ```bash
    git add <files the fix touched>
-   git diff --cached --quiet -- ':(literal)<file fix touched>' ... || git commit -m "fix: {brief description}" -- ':(literal)<file fix touched>' ...
+   git diff HEAD --quiet -- ':(literal)<file fix touched>' ... || git commit -m "fix: {brief description}" -- ':(literal)<file fix touched>' ...
    ```
    A `'` in a path becomes `'\''`.
 2. **Session doc.** Commit via the CLI, which already gates on `commit_docs` and returns
