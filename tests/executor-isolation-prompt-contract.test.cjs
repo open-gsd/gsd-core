@@ -21,6 +21,7 @@
 
 const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { readFileNormalized } = require('./helpers.cjs');
 const { DISPATCH_STEP_PATH } = require('./qa/tdd-walk.cjs');
 const { substitutePlaceholders } = require('../scripts/lint-workflow-shellcheck.cjs');
@@ -145,4 +146,13 @@ test('#5531: the two compose blocks derive the wave-keyed prompt file name the s
   assert.equal(stem.length, 1, 'block 1 derives the stem once');
   assert.equal(name.length, 1, 'the read-and-check block derives the name once');
   assert.equal(name[0].replace('_PROMPT_NAME=', ''), stem[0].replace('_PROMPT_STEM=', '').replace(/"$/, '-??????"'), 'the name is the stem plus the random suffix');
+  // Block 1 builds the file from the same stem: the sweep and leftover patterns and the mktemp template share it, with a 6-wide suffix.
+  assert.ok(bash.some((l) => l.includes('-name "${_PROMPT_STEM}-??????"')), 'the leftover removal matches the stem plus the 6-wide suffix');
+  assert.ok(bash.some((l) => l.includes('mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX"')), 'mktemp creates the stem plus a 6-wide suffix');
+});
+
+test('#5531: the wave name the prompt file carries is the one execute-phase.md gives the manifest', () => {
+  // The integration test builds wave names of this shape by hand.
+  const executePhase = readFileNormalized(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'));
+  assert.ok(executePhase.includes('mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX"'), 'the manifest is named gsd-worktree-wave-XXXXXX');
 });

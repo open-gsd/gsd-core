@@ -347,7 +347,7 @@ The prompt reaches the shell only as file contents read by `cat`, so apostrophes
 
 Run the blocks in one shell, each as its own command: `$ORCH_ROOT`, `$EXPECTED_BASE` and `$WAVE_WORKTREE_MANIFEST` stay set, and `$EXECUTOR_PROMPT` from the read-and-check block reaches the spawn block. No path text is handed from block 1 to the read-and-check block: it finds the file by the same plan-keyed name pattern block 1 created it with.
 
-The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes the file on every halt after the read, so the file is already gone when the block halts. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -rf --` on the path block 1 printed before halting. A file such a halt leaves behind is removed by the leftover removal of the next dispatch of the same plan in the same wave. A later wave names its files with its own manifest, so only the one-day sweep of block 1 removes the file for it.
+The read-and-check block halts, after removing every match, when the name pattern matches no file or more than one. It reads the file without letting an unreadable file stop it before the FATAL message, and removes the file on every halt after the read, so the file is already gone when the block halts. On any other halt before the read-and-check block (an unreadable embed source, a failed write of `PROMPT_FILE`, a wave halt), run `rm -rf --` on the path block 1 printed before halting.
 
 Then create the worktree and resolve the spawn:
 

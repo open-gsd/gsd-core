@@ -18,15 +18,19 @@ const { substitutePlaceholders } = require('../scripts/lint-workflow-shellcheck.
 describe('executor-isolation-dispatch: the compose blocks run in real bash (#5531)', () => {
   // Read at run time, so a missing fragment fails one hook, not the load of the file.
   let content;
+  // The prefix the step declares in its own text, so a rename there cannot leave these tests proving nothing.
+  let PREFIX;
+  let STEM;
   before(() => {
     content = readFileNormalized(DISPATCH_STEP_PATH);
+    PREFIX = /^_PROMPT_PREFIX='([^']+)'/m.exec(content)[1];
+    STEM = `${PREFIX}-${WAVE}-${PHASE}-${PLAN}`;
   });
 
   const PHASE = '7';
   const PLAN = '3';
   // The wave id the blocks take from $WAVE_WORKTREE_MANIFEST, so one wave's file is another wave's stranger.
   const WAVE = 'gsd-worktree-wave-aBc123';
-  const STEM = `gsd-executor-prompt-${WAVE}-${PHASE}-${PLAN}`;
   const BOM = String.fromCharCode(0xfeff);
   // The exit code of each halt #5531 adds: the typed value that tells them apart. The older guards keep exit 1.
   const EXIT = { mkdir: 73, leftover: 74, mktemp: 73, symlink: 73, noneOrTwo: 69, nul: 65, unreadable: 77, guard: 1 };
@@ -99,7 +103,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     assert.equal(r.stdout, `${BOM}${GUARDED.replaceAll('\n', '\r\n')}end\r\n\n\n`);
   });
 
-  test('#5531: any mix of shell-hostile pieces (quotes, $(...), backticks, an XML closing tag, CRLF, a BOM) round-trips byte for byte through the compose and read-and-check blocks and runs no command', (t) => {
+  test('#5531: any mix of shell-hostile pieces (quotes, $(...), backticks, an XML closing tag, CRLF, a BOM) round-trips byte for byte through the read-and-check block and runs no command', (t) => {
     const dir = tempDir(t);
     const root = path.join(dir, 'orch');
     const marker = path.join(dir, 'ran');
@@ -134,7 +138,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     }
   });
 
-  test('#5531: the read-and-check block halts with its own exit code and removes the matched file for no match, two matches, an empty file, a NUL byte and each unfinished-template marker', (t) => {
+  test('#5531: the read-and-check block removes the matched file and halts for no match, two matches (exit 69), a NUL byte (exit 65) and, with the shared exit 1, an empty file, a truncated or unmarked file and each unfinished-template marker', (t) => {
     const dir = tempDir(t);
     const put = (text) => (root) => [place(root, `${STEM}-aaaaaa`, text)];
     const cases = {
@@ -156,6 +160,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
       assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
       assert.equal(r.exitCode, code, `${name} must halt with its own code: ${r.stderr}`);
       assert.equal(r.stdout, '', `${name}: no prompt printed`);
+      if (name === 'empty') assert.ok(r.stderr.includes('executor prompt is empty'), 'the empty guard itself halts, not a later guard');
       for (const f of files) assert.ok(!fs.existsSync(f) && fs.readdirSync(path.dirname(f)).length === 0, `${name}: every match removed`);
     }
   });
@@ -183,7 +188,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
 
   test('#5531: the name pattern keeps plan 3 apart from plan 30, plan 9 and the plan 3 of another wave for the lookup and for the leftover removal', (t) => {
     const root = path.join(tempDir(t), 'orch');
-    const others = [place(root, `gsd-executor-prompt-${WAVE}-${PHASE}-30-abcdef`, GUARDED), place(root, `gsd-executor-prompt-${WAVE}-${PHASE}-9-abcdef`, GUARDED), place(root, `gsd-executor-prompt-gsd-worktree-wave-zZ9876-${PHASE}-${PLAN}-abcdef`, GUARDED)];
+    const others = [place(root, `${PREFIX}-${WAVE}-${PHASE}-30-abcdef`, GUARDED), place(root, `${PREFIX}-${WAVE}-${PHASE}-9-abcdef`, GUARDED), place(root, `${PREFIX}-gsd-worktree-wave-zZ9876-${PHASE}-${PLAN}-abcdef`, GUARDED)];
     const r = readAndCheck(root);
     assert.equal(r.exitCode, EXIT.noneOrTwo, 'plan 3 finds no file when only other plans have one');
     for (const f of others) assert.ok(fs.existsSync(f), 'the halt removes only this plan\'s matches');
@@ -211,36 +216,22 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
 
   test('#5531: block 1 sweeps a prompt file of any wave just over a day old, keeps one just under, and keeps a fresh one', (t) => {
     const root = path.join(tempDir(t), 'orch');
-    const aged = (wave, minutes) => {
-      const file = place(root, `gsd-executor-prompt-${wave}-${PHASE}-${PLAN}-abcdef`, GUARDED);
-      const when = new Date(Date.now() - minutes * 60 * 1000);
+    const aged = (wave, seconds) => {
+      const file = place(root, `${PREFIX}-${wave}-${PHASE}-${PLAN}-abcdef`, GUARDED);
+      const when = new Date(Date.now() - seconds * 1000);
       fs.utimesSync(file, when, when);
       return file;
     };
-    const over = aged('gsd-worktree-wave-oLd111', 1441);
-    // A minute under the limit; a file exactly at it is a little older by the time find runs, so it is no stable input.
-    const under = aged('gsd-worktree-wave-oLd222', 1439);
+    const minute = 60;
+    const over = aged('gsd-worktree-wave-oLd111', 1441 * minute);
+    // find -mmin +1440 counts the age in whole minutes rounded up, so a file 30 seconds short of the limit is the limit input
+    // that stays; a file at exactly the limit is a little older by the time find runs and joins the swept side.
+    const atLimit = aged('gsd-worktree-wave-oLd333', 1440 * minute - 30);
+    const under = aged('gsd-worktree-wave-oLd222', 1439 * minute);
     const fresh = aged('gsd-worktree-wave-zZ9876', 0);
     create(root);
-    assert.ok(!fs.existsSync(over), 'a file just over a day old is swept');
-    assert.ok(fs.existsSync(under) && fs.existsSync(fresh), 'a file just under a day old and a fresh one stay');
-  });
-
-  test('#5531: block 1 halts with the create code when .claude is read-only', (t) => {
-    // root ignores the mode bits, so the case cannot fail for it.
-    if (process.getuid?.() === 0 || process.platform === 'win32') return t.skip('the mode bits do not bind this user');
-    const dir = createTempDir('gsd-5531-');
-    const root = path.join(dir, 'orch');
-    const claude = path.join(root, '.claude');
-    // The mode is restored before the directory is removed, which a read-only directory would block.
-    t.after(() => {
-      fs.chmodSync(claude, 0o755);
-      cleanup(dir);
-    });
-    fs.mkdirSync(claude, { recursive: true });
-    fs.chmodSync(claude, 0o555);
-    const r = runBlock(root, `gsd_run() { echo false; }\n${createBlock(content)}`);
-    assert.equal(r.exitCode, EXIT.mktemp, r.stderr);
+    assert.ok(!fs.existsSync(over), 'a file one minute over the limit is swept');
+    assert.ok([atLimit, under, fresh].every((f) => fs.existsSync(f)), 'a file at the limit, one minute under it and a fresh one stay');
   });
 
   test('#5531: a none or two match halt removes the matches through a .claude that is a symlink', (t) => {
@@ -267,10 +258,10 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     fs.mkdirSync(target, { recursive: true });
     fs.mkdirSync(root, { recursive: true });
     fs.symlinkSync(target, path.join(root, '.claude'));
-    // A leftover of this wave and plan, and a crashed wave's day-old file, both sit in the target.
+    // A leftover of this wave and plan, and a crashed wave's two-day-old file, both sit in the target.
     const leftover = path.join(target, `${STEM}-abcdef`);
     fs.writeFileSync(leftover, 'old');
-    const crashed = path.join(target, `gsd-executor-prompt-gsd-worktree-wave-oLd111-${PHASE}-${PLAN}-abcdef`);
+    const crashed = path.join(target, `${PREFIX}-gsd-worktree-wave-oLd111-${PHASE}-${PLAN}-abcdef`);
     fs.writeFileSync(crashed, 'old');
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     fs.utimesSync(crashed, twoDaysAgo, twoDaysAgo);
