@@ -401,23 +401,28 @@ Key design decisions for --auto (addresses ALL review HIGH concerns):
 1. **Re-review scope**: Uses REVIEW_FILES_ARRAY from original REVIEW.md frontmatter, falling back to full phase scope. Scope is NOT lost between iterations. Uses portable while-read loop (bash 3.2+ compatible, handles spaces in paths).
 2. **Artifact semantics**: REVIEW.md is overwritten by each re-review (latest review state). REVIEW-FIX.md is overwritten by each fixer iteration (latest fix state with iteration count). There is ONE final version of each artifact, not per-iteration copies.
    Backup files (.iterN.md) preserve history for post-mortem analysis if iterations degrade. On successful convergence (#3190) the backups are spent scratch and removed; on degradation (hit MAX_ITERATIONS / fixer failure) they are retained for post-mortem. The removal happens in `cleanup_iteration_backups`, after `record_disposition` has read them — they are the only surviving record of what an earlier iteration fixed, since this artifact keeps one final version rather than per-iteration copies.
-3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration. In --auto, REVIEW.md is also committed when the fix report is invalid or missing (#5527); the malformed report is never staged.
+3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration. In --auto, REVIEW.md is also committed when the fix report is invalid or missing (#5527); the malformed report is never staged, and neither is a REVIEW.md without a frontmatter `status:`.
 </step>
 
 <step name="commit_fix_report">
 After ALL iterations complete (or single pass in non-auto mode), validate and commit REVIEW-FIX.md:
 
 ```bash
+# One owner for "this file has a frontmatter status:" (REVIEW-FIX.md and REVIEW.md); prints valid or invalid.
+# #3190: export STATUS_PATH (the var the body reads). A missing file prints nothing.
+has_status() {
+  STATUS_PATH="$1" node -e "
+    const fs = require('fs');
+    const content = fs.readFileSync(process.env.STATUS_PATH, 'utf-8');
+    const match = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
+    if (match && /status:/.test(match[1])) { console.log('valid'); } else { console.log('invalid'); }
+  " 2>/dev/null
+}
+
 HAS_STATUS=invalid
 if [ -f "${FIX_REPORT_PATH}" ]; then
   # Validate REVIEW-FIX.md has valid YAML frontmatter with status field
-  # #3190: export FIX_REPORT_PATH (the var the body reads), not REVIEW_PATH.
-  HAS_STATUS=$(FIX_REPORT_PATH="${FIX_REPORT_PATH}" node -e "
-    const fs = require('fs');
-    const content = fs.readFileSync(process.env.FIX_REPORT_PATH, 'utf-8');
-    const match = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
-    if (match && /status:/.test(match[1])) { console.log('valid'); } else { console.log('invalid'); }
-  " 2>/dev/null)
+  HAS_STATUS=$(has_status "${FIX_REPORT_PATH}")
   
   if [ "$HAS_STATUS" = "valid" ]; then
     echo "REVIEW-FIX.md created at ${FIX_REPORT_PATH}"
@@ -452,7 +457,15 @@ if [ "$COMMIT_DOCS" = "true" ]; then
     COMMIT_MSG="docs(${PADDED_PHASE}): add code review fix report"
   fi
   if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
-    COMMIT_FILES+=("${REVIEW_PATH}")
+    if [ "$(has_status "${REVIEW_PATH}")" = "valid" ]; then
+      COMMIT_FILES+=("${REVIEW_PATH}")
+    else
+      # code-review.md never commits a REVIEW.md without a status; say what stays dirty.
+      REVIEW_DIRTY=$(git status --porcelain -- "${REVIEW_PATH}" 2>/dev/null)
+      if [ -n "$REVIEW_DIRTY" ]; then
+        echo "Warning: ${REVIEW_PATH} has no frontmatter status field. Not committing it. The working tree stays dirty: /gsd:ship will ask you to commit or stash until it is fixed and committed."
+      fi
+    fi
   fi
   if [ "${#COMMIT_FILES[@]}" -gt 0 ]; then
     gsd_run query commit "$COMMIT_MSG" --files "${COMMIT_FILES[@]}"
