@@ -627,7 +627,9 @@ describe('W031 remedy under bash (#5505)', () => {
     t.after(() => cleanup(cwd));
     // '*' is a legal POSIX project name: unquoted-literal, its pathspec would also match the unrelated intel/state.json.
     // Names Windows rejects ('*', newline) run only where the filesystem accepts them.
-    const projects = ['my proj', "it's", 'a\nb', 'plain', '*'].filter(isFsLegalName);
+    // A backtick would end the markdown code span around the command; a format character (here RLO) could reorder the shown path.
+    const rlo = String.fromCodePoint(0x202e);
+    const projects = ['my proj', "it's", 'a\nb', 'plain', '*', 'back`tick', `rlo${rlo}name`].filter(isFsLegalName);
     const rels = [];
     for (const name of projects) {
       for (const file of ['state.json', 'STATE.md']) {
@@ -652,5 +654,10 @@ describe('W031 remedy under bash (#5505)', () => {
     assert.deepEqual(tracked.filter((f) => f.endsWith('/state.json')), ['.planning/intel/state.json'], `still tracked: ${tracked}`);
     assert.equal(tracked.filter((f) => f.endsWith('/STATE.md')).length, projects.length);
     for (const rel of rels) assert.ok(fs.existsSync(path.join(cwd, rel)), `${rel} stays on disk`);
+    // Parity with the quoting owner: the remedy's arguments are exactly what quoteShellArg gives per path.
+    const { quoteShellArg } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    assert.ok(!diagnostic.message.includes(rlo), 'the message escapes the format character');
+    if (projects.includes(`rlo${rlo}name`)) assert.ok(command.includes(quoteShellArg(`.planning/rlo${rlo}name/state.json`)));
+    assert.ok(!/[`]/.test(command.slice('git --literal-pathspecs rm '.length)), 'no raw backtick can end the code span');
   });
 });

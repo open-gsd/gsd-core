@@ -23,6 +23,7 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { matchLines, writeScope, type WriteScope } from './markdown-line-diff.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 import { readOnlyGitEnv } from './read-only-git-env.cjs';
+import { sanitizeLabel } from './security.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -480,6 +481,25 @@ export function escapeSingleQuotedShellLiteral(value: unknown): string {
  */
 export function shellSingleQuote(value: string): string {
   return "'" + escapeSingleQuotedShellLiteral(value) + "'";
+}
+
+const ANSI_C_BYTES = /[\p{Cf}\p{Zl}\p{Zp}\u0080-\u009f`]/u;
+
+/**
+ * #5505: one shell token for text that comes from the repository (a tracked file name) and sits in a
+ * command printed for a person to paste, as the health remedies do. Plain when it holds only
+ * `[\w./-]`; POSIX single quotes otherwise; ANSI-C `$'..'` when it holds a control character, a
+ * format character (Cf, U+2028/2029: invisible, or able to reorder the displayed text) or a backtick
+ * (ends the markdown code span around the command). In `$'..'`, `\` and `'` are backslashed, Cf,
+ * U+2028/2029, C1 and backtick become their UTF-8 bytes, and C0/DEL keep their `\n`, `\t`, `\x1b`
+ * forms through `sanitizeLabel`.
+ */
+export function quoteShellArg(value: string): string {
+  if (/^[\w./-]+$/.test(value)) return value;
+  if (!/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}`]/u.test(value)) return shellSingleQuote(value);
+  const bytes = (ch: string): string => [...Buffer.from(ch)].map((b) => `\\x${b.toString(16).padStart(2, '0')}`).join('');
+  const escape = (ch: string): string => (ch === '\\' || ch === "'" ? `\\${ch}` : ANSI_C_BYTES.test(ch) ? bytes(ch) : sanitizeLabel(ch));
+  return `$'${[...value].map(escape).join('')}'`;
 }
 
 /**

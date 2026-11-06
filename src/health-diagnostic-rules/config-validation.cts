@@ -62,7 +62,7 @@ type Rule = healthDiagnosticMod.Rule;
 
 import { VALID_PROFILES, VALID_TIERS, VALID_PHASE_TYPES } from '../model-catalog.cjs';
 import { sanitizeLabel } from '../security.cjs';
-import { escapeSingleQuotedShellLiteral } from '../shell-command-projection.cjs';
+import { quoteShellArg } from '../shell-command-projection.cjs';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('../planning-scope.cjs');
@@ -317,36 +317,42 @@ function checkW029(snapshot: PlanningSnapshot): Diagnostic[] {
 // publishStateContract rewrites state.json at every boundary command and lists
 // it in .git/info/exclude, but an exclude cannot hide a tracked file: a copy
 // committed earlier is left modified, so /gsd-ship's clean-tree preflight
-// refuses. ADVISE-only, like W029: GSD never untracks files for you. The fix
-// uses --ignore-unmatch so rerunning it is a no-op, and --literal-pathspecs so a tracked
-// directory named with `*`, `?` or `[` untracks only itself, never a sibling's state.json.
+// refuses. publishStateContract untracks such a copy itself (staged, file kept) when commit_docs
+// keeps planning in git and the repo owns the project; W031 reports the copies it left: a
+// commit_docs false project, an enclosing repo, a user `!` rule, or a git call that failed.
+// ADVISE-only, like W029, because `--repair` never edits an index. The fix uses --ignore-unmatch
+// so rerunning it is a no-op, and --literal-pathspecs so a tracked directory named with `*`, `?`
+// or `[` untracks only itself, never a sibling's state.json.
+
+// The message names at most this many tracked paths, each cut at this many characters; the
+// command keeps every path.
+const W031_MAX_PATHS = 5;
+const W031_MAX_NAME = 120;
+
+// A tracked name is repository content and health output is read by agents and people: cut it,
+// escape control characters (sanitizeLabel) and format characters (Cf, U+2028/2029), which can
+// reorder the displayed path.
+function w031Label(name: string): string {
+  const chars = [...name];
+  const cut = chars.length > W031_MAX_NAME ? `${chars.slice(0, W031_MAX_NAME).join('')}…` : name;
+  return sanitizeLabel(cut).replace(/[\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${(c.codePointAt(0) as number).toString(16)}}`);
+}
 
 function checkW031(snapshot: PlanningSnapshot): Diagnostic[] {
   const field = snapshot.stateJsonTracked;
   // A listing git could not answer is not "nothing tracked": it stays silent like W029's unreadable scope.
   if (!field || field.scope !== SCOPE.COMPLETE || field.value.length === 0) return [];
   const paths = field.value;
-  // ANSI-C quoting: `\\` and `'` backslashed, C1 characters as their UTF-8 bytes (what git tracks),
-  // every other character through sanitizeLabel so C0/DEL keep their `\n`, `\t`, `\x1b` forms.
-  const c1Bytes = (ch: string): string => [...Buffer.from(ch)].map((b) => `\\x${b.toString(16)}`).join('');
-  const ansiCChar = (ch: string): string => (ch === '\\' || ch === "'" ? `\\${ch}` : /[\u0080-\u009f]/.test(ch) ? c1Bytes(ch) : sanitizeLabel(ch));
-  const ansiC = (p: string): string => `$'${[...p].map(ansiCChar).join('')}'`;
-  // Tracked names are repository content and health output is read by agents: escape control
-  // characters in the message, and quote the pasted command (POSIX single quotes; `$'..'` for a
-  // name with control characters) so it pastes as-is.
-  const quote = (p: string): string => {
-    if (/^[\w./-]+$/.test(p)) return p;
-    if (/\p{Cc}/u.test(p)) return ansiC(p);
-    return `'${escapeSingleQuotedShellLiteral(p)}'`;
-  };
-  const args = paths.map(quote).join(' ');
+  const more = paths.length - W031_MAX_PATHS;
+  const listed = `${paths.slice(0, W031_MAX_PATHS).map(w031Label).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+  const args = paths.map(quoteShellArg).join(' ');
   return [
     {
       code: 'W031',
       severity: SEVERITY.WARNING,
-      message: `Tracked by git: ${paths.map(sanitizeLabel).join(', ')}. state.json is a derived cache rewritten at every boundary command, so a tracked copy stays modified and /gsd-ship refuses the dirty tree`,
+      message: `Tracked by git: ${listed}. state.json is a derived cache rewritten at every boundary command, so a tracked copy stays modified and /gsd-ship refuses the dirty tree`,
       remedy: adviseRemedy(
-        `From the project directory (the one holding \`.planning/\`), run \`git --literal-pathspecs rm --cached --ignore-unmatch -- ${args}\` once and commit the removal; the file stays on disk, and with commit_docs on GSD's .git/info/exclude entry keeps it ignored from then on`,
+        `From the project directory (the one holding \`.planning/\`), run \`git --literal-pathspecs rm --cached --ignore-unmatch -- ${args}\` once and commit the removal; the file stays on disk, and with commit_docs on GSD's .git/info/exclude entry keeps it ignored from then on. GSD runs this itself at the next boundary command when commit_docs is on and the repo owns the project`,
       ),
     },
   ];

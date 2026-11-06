@@ -1017,10 +1017,23 @@ describe('W031 — derived state.json still tracked by git', () => {
         gitOrThrow(['add', '-f', '--', '.planning'], { cwd });
         const listed = gitOrThrow(['ls-files', '-z', '--', ...STATE_JSON_PATHSPECS], { cwd }).split('\0').filter(Boolean).sort();
         gitOrThrow(['rm', '-rq', '--cached', '--', '.planning'], { cwd });
-        return JSON.stringify(listed) === JSON.stringify(chosen.filter((rel) => isStateJsonPublishPath(cwd, rel)).sort());
+        // `.planning/workstreams/state.json` is the one path the pathspec lists and the matcher refuses on purpose (GSD's own directory)
+        const reserved = '.planning/workstreams/state.json';
+        return JSON.stringify(listed.filter((rel) => rel !== reserved)) === JSON.stringify(chosen.filter((rel) => rel !== reserved && isStateJsonPublishPath(cwd, rel)).sort());
       }),
       { numRuns: 25, seed: 5505 },
     );
+  });
+
+  test('W031 grammar: a directory GSD owns is never a project, however many markers it holds', (t) => {
+    const { isStateJsonPublishPath } = require('../../gsd-core/bin/lib/core-utils.cjs');
+    const cwd = createTempDir('gsd-5505-w031-reserved-');
+    t.after(() => cleanup(cwd));
+    for (const dir of ['workstreams', 'phases']) fs.mkdirSync(path.join(cwd, '.planning', dir, 'phases'), { recursive: true });
+    fs.mkdirSync(path.join(cwd, '.planning', 'workstreams', 'workstreams'), { recursive: true });
+    assert.equal(isStateJsonPublishPath(cwd, '.planning/workstreams/state.json'), false);
+    assert.equal(isStateJsonPublishPath(cwd, '.planning/phases/state.json'), false);
+    assert.equal(isStateJsonPublishPath(cwd, '.planning/workstreams/workstreams/state.json'), true, 'a workstream named workstreams is still a workstream');
   });
 
   // Property: the quoted remedy argument is read back by bash as exactly the tracked name
@@ -1030,7 +1043,7 @@ describe('W031 — derived state.json still tracked by git', () => {
     const { spawnSync } = require('node:child_process');
     const bash = resolveInterpreter('bash');
     if (bash === null || spawnSync(bash, ['-c', 'true'], { timeout: GIT_TIMEOUT_MS }).status !== 0) { t.skip('bash unavailable'); return; }
-    const alphabet = ['a', 'Z', '0', ' ', "'", '\\', '"', '$', '\n', '\t', '\x1b', '\x7f', '\u0080', '\u0085', '\u009f', '\x01', 'é', '-', '/'];
+    const alphabet = ['a', 'Z', '0', ' ', "'", '\\', '"', '$', '\n', '\t', '\x1b', '\x7f', '\u0080', '\u0085', '\u009f', '\x01', 'é', '-', '/', '`', String.fromCodePoint(0x202e), String.fromCodePoint(0x200d), String.fromCodePoint(0x2028)];
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...alphabet), { minLength: 1, maxLength: 8 }), (chars) => {
         const name = chars.join('');
@@ -1042,6 +1055,28 @@ describe('W031 — derived state.json still tracked by git', () => {
       }),
       { numRuns: 100, seed: 5505 },
     );
+  });
+
+  test('W031 message escapes format characters, cuts a long name and caps the list; the command keeps every path', () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const check = (value) => ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } })[0];
+
+    const escaped = check([`.planning/a${rlo}b/state.json`, '.planning/x`y/state.json']);
+    assert.ok(!escaped.message.includes(rlo), escaped.message);
+    assert.ok(escaped.message.includes('\\u{202e}'), escaped.message);
+    assert.ok(escaped.remedy.args.command.includes('\\xe2\\x80\\xae'), 'the command passes the character as its UTF-8 bytes');
+    assert.ok(escaped.remedy.args.command.includes('\\x60'), 'a backtick cannot end the markdown code span');
+
+    const long = `.planning/${'n'.repeat(300)}/state.json`;
+    const cut = check([long]);
+    assert.ok(cut.message.includes('…') && !cut.message.includes(long), cut.message);
+    assert.ok(cut.remedy.args.command.includes(long), 'the command keeps the full name');
+
+    const many = Array.from({ length: 8 }, (_, i) => `.planning/p${i}/state.json`);
+    const capped = check(many);
+    assert.ok(capped.message.includes('and 3 more'), capped.message);
+    assert.ok(!capped.message.includes('p5/state.json'), capped.message);
+    for (const p of many) assert.ok(capped.remedy.args.command.includes(p), p);
   });
 
   test('W031 is silent when git could not list the tracked files (a failed listing is not a finding)', () => {
