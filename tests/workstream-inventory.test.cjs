@@ -9,7 +9,7 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempProject, canonicalizePath } = require('./helpers.cjs');
 const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
 const { buildWorkstreamInventory, isCompletedInventory, pickRollupWinners } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');
 const { inspectWorkstream } = require('../gsd-core/bin/lib/workstream-inventory.cjs');
@@ -1967,5 +1967,83 @@ describe('#3057 B3: inspectWorkstream — verification staleness-check indetermi
     assert.ok(inv);
     assert.equal(inv.completed_phases, 1);
     assert.strictEqual(calls.length, 0, 'a completed, non-stale check must not write any diagnostic');
+  });
+});
+
+// The alias cases live here, not in decisions.test.cjs. This file is already in
+// the Windows and macOS conformance tiers; adding the same signal to
+// decisions.test.cjs pushed the Windows tier over its 33% ceiling.
+describe('#5798: decision-coverage stat injection follows an alias of the phase directory', () => {
+  const { routeCheckCommand } = require('../gsd-core/bin/lib/check-command-router.cjs');
+
+  function runAliasedGate(t, subcommand) {
+    const tmpDir = createTempProject('gsd-5798-alias-');
+    t.after(() => cleanup(tmpDir));
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), [
+      '# Context',
+      '',
+      '<decisions>',
+      '',
+      '- **D-01: The list shows one row per contact.** Nothing else changes.',
+      '- **D-02: Contacts render as cards.** One pair, one card.',
+      '',
+      '</decisions>',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), '# Plan\n## Objective\nImplement D-01 and D-02.\n');
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const alias = path.join(tmpDir, 'phase-alias');
+    fs.symlinkSync(phaseDir, alias, 'junction');
+
+    const realStatSync = fs.statSync;
+    const resolvedPhaseDir = canonicalizePath(alias);
+    t.mock.method(fs, 'statSync', (p, ...rest) => {
+      if (typeof p === 'string') {
+        let resolvedPath;
+        try {
+          resolvedPath = canonicalizePath(p);
+        } catch {
+          return realStatSync.call(fs, p, ...rest);
+        }
+        if (resolvedPath !== resolvedPhaseDir) return realStatSync.call(fs, p, ...rest);
+        const err = new Error(`EACCES: injected stat failure, stat '${p}'`);
+        err.code = 'EACCES';
+        throw err;
+      }
+      return realStatSync.call(fs, p, ...rest);
+    });
+    let captured = '';
+    const realWriteSync = fs.writeSync;
+    t.mock.method(fs, 'writeSync', (fd, ...args) => {
+      if (fd === 1) {
+        const buf = args[0];
+        captured += Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
+        return Buffer.isBuffer(buf) ? buf.length : Buffer.byteLength(String(buf));
+      }
+      return realWriteSync.call(fs, fd, ...args);
+    });
+    try {
+      routeCheckCommand({ args: ['check', subcommand, alias, contextPath], cwd: tmpDir, raw: false });
+    } finally {
+      t.mock.restoreAll();
+    }
+    return JSON.parse(captured || '{}');
+  }
+
+  test('#5798: decision-coverage-plan reports stat errors through an aliased phase directory', (t) => {
+    const parsed = runAliasedGate(t, 'decision-coverage-plan');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable');
+    assert.strictEqual(parsed.passed, false);
+    assert.strictEqual(parsed.covered, null);
+  });
+
+  test('#5798: decision-coverage-verify reports stat errors through an aliased phase directory', (t) => {
+    const parsed = runAliasedGate(t, 'decision-coverage-verify');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable');
+    assert.strictEqual(parsed.blocking, false);
+    assert.strictEqual(parsed.honored, null);
+    assert.strictEqual(parsed.total, null);
   });
 });
