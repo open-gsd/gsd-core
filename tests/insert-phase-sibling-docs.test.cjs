@@ -9,6 +9,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -61,7 +62,7 @@ describe('#5583 insert-phase --sibling', () => {
 
   // Run the shipped detection line: the flag counts only directly after the first argument.
   const sibLine = read(WF).match(/^GSD_SIBLING=; .*$/m)[0];
-  const sibling = (args) => spawnSync('bash', ['-c', `${sibLine}; printf %s "$GSD_SIBLING"`], { env: { ...process.env, GSD_ARGS: args }, encoding: 'utf8', timeout: 10000 }).stdout;
+  const sibling = (args) => spawnSync('bash', ['-c', `${sibLine}; printf %s "$GSD_SIBLING"`], { env: { ...process.env, GSD_ARGS: args }, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS }).stdout;
   for (const [args, want] of [
     ['15.2 --sibling x', '1'],
     ['--insert 15.2 --sibling x', '1'],
