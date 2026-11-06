@@ -1018,6 +1018,9 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
       `export ${rep(10000, (i) => `GIT_CONFIG=v${i} `)}; ${'git status; '.repeat(10000)}cat .env`, 'secret-read', '.env'],
     ['an editor script of git commands, rescanned by each of them',
       `export GIT_EDITOR='${'git log; '.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
+    ['a long ext:: rewrite base that decodes to nothing, under many git commands',
+      `export GIT_CONFIG_PARAMETERS="'url.ext::%G${'a'.repeat(500000)}.insteadOf='"; ${'git a; '.repeat(70000)}cat .env`,
+      'command-too-complex', ''],
     ['an editor script of short segments, rescanned by its git commands',
       `export GIT_EDITOR='${'git log; '.repeat(30)}${'x;'.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
   ];
@@ -1078,6 +1081,12 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f="!git -c remote.origin.vcs=ext fetch origin" f`,
     `GIT_CONFIG_PARAMETERS="'remote.origin.url=zz'" git -c alias.f="!git -c 'url.ext::cat .env #.insteadOf=zz' -c alias.g=status g" f`,
     `export GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'"; git -c core.editor='git -c remote.origin.vcs=ext fetch origin' commit`,
+    // ... or under config a variable of its own sets, or a variable --config-env reads ...
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f="!GIT_CONFIG_PARAMETERS=\\"'remote.origin.vcs=ext'\\" git fetch origin" f`,
+    `GIT_EDITOR='git --config-env=core.fsmonitor=E status' git rebase -x "E='cat .env' git commit" HEAD`,
+    // ... or under the -c a plain alias carries.
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f='-c remote.origin.vcs=ext fetch origin' f`,
+    `GIT_EDITOR="git fetch 'zzsh -c cat% .env'" git -c alias.f='-c url.ext::.insteadOf=zz commit' f`,
   ]) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
