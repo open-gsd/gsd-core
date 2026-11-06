@@ -77,6 +77,9 @@ describe('#5758 readSentinel: regular-file bounds', () => {
       phase: h.PHASE,
       plan: h.PLAN,
       writtenAt: now,
+      decidedBy: 'caller',
+      decidedAt: now,
+      holdExpired: false,
     });
   });
 

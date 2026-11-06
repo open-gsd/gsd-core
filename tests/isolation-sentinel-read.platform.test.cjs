@@ -20,6 +20,7 @@ const { execFileSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const h = require('./helpers/isolation-sentinel-read.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
 
 const SKIP = process.platform === 'win32' ? 'POSIX-only: mkfifo and symlinks' : false;
 
@@ -105,6 +106,23 @@ describe('#5758 readSentinel: hostile records read as absent and return', { skip
       assert.deepEqual(r.result, { present: false });
     });
   }
+
+  // #4904: a phase query lists its plans' records itself, so that read needs the same
+  // parent check as the keyed reads above: the hold must not read through a linked directory.
+  test('row 8: the hold\'s phase-scope read of plan records refuses a linked keyed directory', () => {
+    outsideRecord(outside, path.join('keyed', `${h.PHASE}--${h.PLAN}.json`));
+    fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+    link(path.join(outside, 'keyed'), path.join(root, h.KEYED_DIR_REL));
+    const read = readSentinelAt(root, { dispatchIds: { phase: h.PHASE, plan: null }, ownScope: true });
+    assert.deepEqual(read, { present: false });
+  });
+
+  test('control: the same read finds that record in a real keyed directory', () => {
+    outsideRecord(root, path.join(h.KEYED_DIR_REL, `${h.PHASE}--${h.PLAN}.json`));
+    const read = readSentinelAt(root, { dispatchIds: { phase: h.PHASE, plan: null }, ownScope: true });
+    assert.equal(read.present, true);
+    assert.equal(read.plan, h.PLAN);
+  });
 });
 
 describe('#5758 hooks: a hostile record leaves both hooks at the no-sentinel decision', { skip: SKIP }, () => {
