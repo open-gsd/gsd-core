@@ -595,11 +595,15 @@ const STATE_JSON_SCOPES = [false, true].flatMap((project) =>
     const glob = `.planning/${project ? '*/' : ''}${workstream ? 'workstreams/*/' : ''}state.json`;
     return {
       project,
+      workstream,
       pathspec: `:(glob)${glob}`,
+      // the committed rule file beside it (`ignoreInTree`), which the migration stages and `cmdCommit` carries
+      ignorePathspec: `:(glob)${glob.replace(/state\.json$/, '.gitignore')}`,
       matcher: new RegExp(`^${escapeRegex(glob).replace(/\\\*/g, '[^/]+')}$`),
     };
   }));
 const STATE_JSON_PATHSPECS = STATE_JSON_SCOPES.map((scope) => scope.pathspec);
+const STATE_JSON_IGNORE_PATHSPECS = STATE_JSON_SCOPES.map((scope) => scope.ignorePathspec);
 
 /**
  * True when `rel` (a path relative to `cwd`) is a file `publishStateContract` writes (see
@@ -613,6 +617,9 @@ function isStateJsonPublishPath(cwd: string, rel: string): boolean {
   if (!scope) return false;
   if (!scope.project) return true;
   const project = posix.split('/')[1];
+  // `.planning/workstreams/state.json` and `.planning/phases/state.json` sit in directories GSD itself owns: never a project
+  // (their own `workstreams`/`phases` child would otherwise make them look like one)
+  if (!scope.workstream && (project === 'workstreams' || project === 'phases')) return false;
   return PLANNING_PROJECT_MARKERS.some((x) =>
     fs.existsSync(path.join(cwd, '.planning', project, x)));
 }
@@ -631,6 +638,7 @@ export = {
   toPosixPath,
   isStateJsonPublishPath,
   STATE_JSON_PATHSPECS,
+  STATE_JSON_IGNORE_PATHSPECS,
   PLANNING_PROJECT_MARKERS,
   normalizeLineEndings,
   detectSubRepos,

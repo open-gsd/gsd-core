@@ -36,7 +36,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
       const before = fs.readFileSync(exclude, 'utf8');
       publishStateContract(tmpDir, fixedDeps());
       assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before, 'publish');
-      excludeFromGit(planningDirOf(tmpDir), 'state.json');
+      excludeFromGit(tmpDir, planningDirOf(tmpDir), 'state.json');
       assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before, 'excludeFromGit');
     });
 
@@ -68,6 +68,27 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     const before = fs.readFileSync(exclude, 'utf8');
     assert.strictEqual(publishStateContract(sub, fixedDeps()).published, true);
     assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  // The ownership gate lives in excludeFromGit, so the claim obeys it like the publisher (m1).
+  test('milestone claim honours repo ownership', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const sub = path.join(tmpDir, 'sub');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    const exclude = excludeOf(tmpDir);
+    const before = fs.readFileSync(exclude, 'utf8');
+    claimMilestonePhase(sub, '1');
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before, 'an enclosing repo tracking nothing under the project is left alone');
+    fs.writeFileSync(path.join(sub, 'tracked.txt'), 'x');
+    git(tmpDir, 'add', '--', path.join(sub, 'tracked.txt'));
+    claimMilestonePhase(sub, '1');
+    assert.ok(splitLines(fs.readFileSync(exclude, 'utf8')).includes('/sub/.planning/milestone.lock'));
+  });
+
+  test('CONTEXT.md names the exclude owner and both callers', () => {
+    const context = fs.readFileSync(path.join(__dirname, '..', 'CONTEXT.md'), 'utf8');
+    for (const word of ['git-info-exclude', 'excludeFromGit', 'ignoreInTree']) assert.ok(context.includes(word), word);
   });
 
   test('aProjectNestedInAnEnclosingRepoThatTracksItGetsTheEntry', (t) => {

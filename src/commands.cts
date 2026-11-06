@@ -22,10 +22,10 @@ const { output, ERROR_REASON } = ioMod;
 const error: typeof ioMod.error = ioMod.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
-const { loadConfig, isGitIgnored } = configLoaderMod;
+const { loadConfig, isGitIgnored, resolveCommitDocsTiers, CHECK_IGNORE_TIMEOUT_MS } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath } = coreUtilsMod;
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
@@ -1567,11 +1567,9 @@ function detectPhaseNumberFromFiles(files: string[] | undefined): string | null 
   return null;
 }
 
-type CommitDocsSource = 'phase' | 'config' | 'gitignore' | 'default';
-interface CommitDocsResolution {
-  resolved: boolean;
-  source: CommitDocsSource;
-}
+// The tier resolver (config-loader) owns the shape; the source union is read off it, never restated.
+type CommitDocsResolution = ReturnType<typeof resolveCommitDocsTiers>;
+type CommitDocsSource = CommitDocsResolution['source'];
 
 /**
  * #3587: resolve the `phase_commit_docs.<phase-id>` override for `phaseNum`
@@ -1622,7 +1620,7 @@ function resolveCommitDocsPolicy(
   phaseNum: string | null,
   isPlanningGitIgnored: () => boolean,
 ): CommitDocsResolution {
-  return configLoaderMod.resolveCommitDocsTiers(resolvePhaseCommitDocsOverride(config, phaseNum), config['commit_docs'], isPlanningGitIgnored);
+  return resolveCommitDocsTiers(resolvePhaseCommitDocsOverride(config, phaseNum), config['commit_docs'], isPlanningGitIgnored);
 }
 
 // Reason string per commit_docs-resolution source, for the tier-1/tier-2 skip
@@ -2260,7 +2258,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         explicitFiles &&
         // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
         isStateJsonPublishPath(cwd, path.relative(cwd, fullPath)) &&
-        execGit(['check-ignore', '-q', '--', file], { cwd }).exitCode === 0
+        execGit(['check-ignore', '-q', '--', file], { cwd, timeout: CHECK_IGNORE_TIMEOUT_MS }).exitCode === 0
       ) {
         // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing
         // file it is skipped and recorded, not a failure. Any other ignored path still fails
@@ -2279,6 +2277,21 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     }
   }
 
+  // #5505: the state.json migration (publishStateContract) stages a removal and a `.gitignore` rule.
+  // A scoped commit (`git commit -- <paths>`) would leave them staged and the tree dirty, and a path
+  // list cannot carry the removal: git re-adds a listed path from the work tree, where the file stays.
+  // So when nothing but those paths was staged before this call, the commit takes the index as it is.
+  // The git call runs only when something was pre-staged. Names come from git's own output and may
+  // hold glob characters, so they are literal pathspecs downstream.
+  const migrationStaged = explicitFiles && preStaged.size > 0
+    ? execGit(
+        ['diff', '--cached', '--name-only', '-z', '--diff-filter=AD', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
+        { cwd, timeout: CHECK_IGNORE_TIMEOUT_MS },
+      ).stdout.split('\0').filter(Boolean)
+    : [];
+  const carried = [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
+  stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));
+
   // #4208: caller-declared removals -- see stageDeclaredRemovals.
   const declaredRemovals = stageDeclaredRemovals(cwd, removedDeclared);
   const removedEntries = declaredRemovals.removedEntries;
@@ -2292,7 +2305,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // later. Driven. Only the removal-derived entries are literalised: `--files`
   // entries keep whatever pathspec behaviour they have today, which is not this
   // change's to alter.
-  const removalPathspecs = new Set(declaredRemovals.removedPathspec);
+  const removalPathspecs = new Set([...declaredRemovals.removedPathspec, ...carried]);
   const asPathspec = (p: string): string => (removalPathspecs.has(p) ? `:(literal)${p}` : p);
 
   // Put every entry this call removed back, exactly — mode and blob. Called
@@ -2676,7 +2689,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     return;
   }
   const canScope = explicitFiles && stagedPaths.length > 0 && !amend
-    && !isMergeInProgress;
+    && !isMergeInProgress && carried.length === 0;
   const commitArgs = amend
     ? ['commit', '--amend', '--no-edit']
     : ['commit', '-m', sanitizedMessage as string];

@@ -1539,12 +1539,15 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
       });
     }
     assert.strictEqual(publishStateContract(tmpDir).published, true);
-    const GIT_CALL_BUDGET = 6;
-    assert.strictEqual(gitCalls, GIT_CALL_BUDGET);
-    // the two calls every boundary command pays for (the commit_docs ignore check and the exclude rev-parse) are bounded
-    const hot = calls.filter(({ args }) => args.includes('check-ignore') || args.includes('info/exclude'));
-    assert.strictEqual(hot.length, 2);
-    assert.ok(hot.every(({ timeout }) => timeout > 0 && timeout <= 5_000), JSON.stringify(hot));
+    // the documented ceiling (docs/features/machine-readable-state-contract-planningstatejson.md): a fixture with no
+    // upstream and no STATE.md head spawns fewer, so the budget is an upper bound
+    const GIT_CALL_BUDGET = 8;
+    assert.ok(gitCalls <= GIT_CALL_BUDGET, `${gitCalls} git calls: ${JSON.stringify(calls.map(({ args }) => args.join(' ')))}`);
+    // the calls this change adds to every boundary command (the ignore probes, the exclude rev-parse and the tracked-copy
+    // listing) are bounded by an explicit timeout
+    const added = calls.filter(({ args }) => args.includes('check-ignore') || args.includes('info/exclude') || args.includes('ls-files'));
+    assert.ok(added.length >= 2);
+    assert.ok(added.every(({ timeout }) => timeout > 0 && timeout <= 10_000), JSON.stringify(added));
   });
 
   test('publishLeavesALegacyConfigUnrewritten', (t) => {
@@ -1572,7 +1575,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   });
 
   test('aNestedProjectOwnershipProbeIsBounded', (t) => {
-    const { OWNERSHIP_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/state-contract.cjs');
+    const { OWNERSHIP_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
     assert.ok(OWNERSHIP_PROBE_TIMEOUT_MS > 0 && OWNERSHIP_PROBE_TIMEOUT_MS <= 5_000);
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
@@ -1587,7 +1590,8 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
       return real.call(this, cmd, args, opts, ...rest);
     });
     publishStateContract(sub, fixedDeps());
-    assert.deepStrictEqual(probes, [OWNERSHIP_PROBE_TIMEOUT_MS]);
+    // the ownership probe, then the tracked-copy listing of the migration: both on the 5 s class
+    assert.deepStrictEqual(probes, [OWNERSHIP_PROBE_TIMEOUT_MS, 5_000]);
   });
 
   test('publishStaysSilentOnStderrWithAMalformedConfig', (t) => {
@@ -1639,17 +1643,54 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     }
   });
 
-  test('preTrackedCopyIsLeftTrackedAndStageable', (t) => {
+  test('preTrackedCopyIsMigratedOnceAndStaged', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(statePathOf(tmpDir), '{}\n');
     git(tmpDir, 'add', '-f', '.planning/state.json');
     git(tmpDir, 'commit', '-q', '-m', 'track');
     publishStateContract(tmpDir, fixedDeps());
-    // The index is never touched: migrating a tracked copy is the user's call.
+    // The removal and the committed rule are staged; the file stays on disk.
+    const staged = () => git(tmpDir, 'status', '--porcelain');
+    assert.match(staged(), /^D {2}\.planning\/state\.json$/m);
+    assert.match(staged(), /^A {2}\.planning\/\.gitignore$/m);
+    assert.ok(fs.existsSync(statePathOf(tmpDir)));
+    assert.strictEqual(fs.readFileSync(path.join(planningDirOf(tmpDir), '.gitignore'), 'utf8'), '/state.json\n');
+    // Idempotent: a second publish changes nothing.
+    const before = staged();
+    publishStateContract(tmpDir, fixedDeps());
+    assert.strictEqual(staged(), before);
+    assert.strictEqual(fs.readFileSync(path.join(planningDirOf(tmpDir), '.gitignore'), 'utf8'), '/state.json\n');
+  });
+
+  test('preTrackedCopyWithAUserNegationStaysTracked', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(statePathOf(tmpDir), '{}\n');
+    git(tmpDir, 'add', '-f', '.planning/state.json');
+    git(tmpDir, 'commit', '-q', '-m', 'track');
+    fs.appendFileSync(excludeOf(tmpDir), '!/.planning/*.json\n');
+    publishStateContract(tmpDir, fixedDeps());
     assert.match(git(tmpDir, 'ls-files', '-v', '--', '.planning/state.json'), /^H \.planning\/state\.json$/m);
-    git(tmpDir, 'add', '--', '.planning/state.json');
-    assert.match(git(tmpDir, 'status', '--porcelain'), /^M {2}\.planning\/state\.json$/m);
+    assert.ok(!fs.existsSync(path.join(planningDirOf(tmpDir), '.gitignore')));
+  });
+
+  test('aGlobNegationOfTheFileIsRespected', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.appendFileSync(excludeOf(tmpDir), '!/.planning/*.json\n');
+    const before = fs.readFileSync(excludeOf(tmpDir), 'utf8');
+    publishStateContract(tmpDir, fixedDeps());
+    assert.strictEqual(fs.readFileSync(excludeOf(tmpDir), 'utf8'), before);
+  });
+
+  test('aCommittedRuleThatAlreadyHidesTheFileAddsNoExcludeEntry', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), '.gitignore'), '/state.json\n');
+    const before = fs.readFileSync(excludeOf(tmpDir), 'utf8');
+    publishStateContract(tmpDir, fixedDeps());
+    assert.strictEqual(fs.readFileSync(excludeOf(tmpDir), 'utf8'), before);
   });
 });
 

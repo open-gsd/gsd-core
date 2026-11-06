@@ -692,6 +692,10 @@ as not chosen: its key is still checked, and it takes the value it would have ha
 choice (the built-in or user default). That is the creation-time counterpart of `config-set
 <key> null`, which removes the key from an existing config.
 
+Unless the choices set `commit_docs` to `false`, it also writes `.planning/.gitignore` with a
+`/state.json` line (the derived state contract file is never project content), so a new project
+ignores that file from its first commit. Commit the two files together.
+
 An object is read as a section whenever settings live under its key, and its entries are
 checked one by one. An empty section sets nothing (`"workflow":{}`, `"agent_skills":{}`), with
 one exception: below the first level of a dynamic key family

@@ -57,6 +57,27 @@ describe('isGitIgnored (#5505)', () => {
     });
   }
 
+  // loadConfig's own commit_docs (no explicit value) is tiers 2-4 of the one resolver, with the manifest default as tier 2.
+  for (const [name, config, ignored] of [
+    ['defaultOnNotIgnored', {}, false],
+    ['defaultOnIgnored', {}, true],
+    ['explicitTrueIgnoredStaysTrue', { commit_docs: true }, true],
+    ['explicitFalseNotIgnored', { commit_docs: false }, false],
+    ['nestedPlanningFalse', { planning: { commit_docs: false } }, false],
+  ]) {
+    test(`loadConfigCommitDocsMatchesTheTierResolver:${name}`, (t) => {
+      const tmpDir = createTempGitProject();
+      t.after(() => cleanup(tmpDir));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(config));
+      if (ignored) fs.appendFileSync(excludeOf(tmpDir), '.planning\n');
+      const { loadConfig, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+      const explicit = config.commit_docs ?? config.planning?.commit_docs;
+      // an explicit value wins as written (no ignore probe); otherwise the resolver decides
+      const expected = explicit !== undefined ? explicit : resolveCommitDocsTiers(undefined, CONFIG_DEFAULTS.commit_docs, () => isGitIgnored(tmpDir, '.planning/')).resolved;
+      assert.strictEqual(loadConfig(tmpDir, { persist: false, quiet: true }).commit_docs, expected);
+    });
+  }
+
   test('aTimedOutCheckIgnoreIsNotCached', (t) => {
     const childProcess = require('node:child_process');
     const tmpDir = createTempGitProject();

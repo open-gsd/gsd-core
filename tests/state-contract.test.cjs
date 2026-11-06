@@ -456,9 +456,11 @@ describe('state.json never dirties the tree (#5505)', () => {
   const STATE_MD = '# Project State\n\n**Current Phase:** 2\n**Current Phase Name:** Hardening\n**Total Phases:** 3\n**Current Plan:** 0\n**Total Plans in Phase:** 0\n**Status:** Ready to plan\n**Last Activity:** 2024-01-01\n';
 
   // Seeds a committed repo, runs one boundary command, returns paths.
-  function boundary(t, { wsName, preTracked } = {}) {
+  function boundary(t, { wsName, preTracked, commitDocs } = {}) {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
+    // commit_docs false keeps GSD from touching the index, so a tracked copy stays tracked (what W031 reports)
+    if (commitDocs === false) fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{"commit_docs": false}\n');
     const dir = wsName ? path.join(tmpDir, '.planning', 'workstreams', wsName) : path.join(tmpDir, '.planning');
     fs.mkdirSync(dir, { recursive: true });
     const rel = path.relative(tmpDir, dir).split(path.sep).join('/');
@@ -480,15 +482,72 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
   });
 
-  test('pre-tracked state.json stays committable: GSD never edits the index', (t) => {
-    const { tmpDir, rel } = boundary(t, { preTracked: true });
-    const c = runGsdTools(['commit', 'docs: state', '--files', `${rel}/state.json`], tmpDir);
-    assert.ok(c.success, `commit of the tracked copy must succeed: ${c.error}`);
-    assert.match(git(tmpDir, 'ls-files', '-v', '--', `${rel}/state.json`), /^H /, 'no skip-worktree or other index flag');
+  // A scoped commit and a default-mode commit must both carry the migration (the staged removal and the rule file).
+  for (const [mode, files] of [['scoped final commit', (rel) => ['--files', `${rel}/STATE.md`]], ['default-mode commit', () => []]]) {
+    test(`tracked modified state.json migrates (${mode})`, (t) => {
+      const { tmpDir, rel } = boundary(t, { preTracked: true });
+      assert.strictEqual(git(tmpDir, 'ls-files', '--', `${rel}/state.json`), '', 'the boundary untracked the copy');
+      assert.ok(fs.existsSync(path.join(tmpDir, rel, 'state.json')), 'the file stays on disk');
+      fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+      const c = runGsdTools(['commit', 'docs: final', ...files(rel)], tmpDir);
+      assert.ok(c.success, `final commit must succeed: ${c.error}`);
+      assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '', 'no GSD-written file is left behind');
+      assert.strictEqual(git(tmpDir, 'ls-files', '--', `${rel}/state.json`), '', 'the removal was committed');
+      assert.strictEqual(git(tmpDir, 'ls-files', '--', `${rel}/.gitignore`).trim(), `${rel}/.gitignore`, 'the committed rule was carried');
+      const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
+      assert.strictEqual(publishStateContract(tmpDir).published, true);
+      assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '', 'a second boundary is a no-op');
+    });
+  }
+
+  test('tracked modified state.json migrates for a workstream copy too', (t) => {
+    const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
+    const c = runGsdTools(['commit', 'docs: ws', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
+  test('a user negation keeps a tracked state.json tracked', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), STATE_MD);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'state.json'), '{}\n');
+    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '!/.planning/state.json\n');
+    git(tmpDir, 'add', '-A');
+    git(tmpDir, 'commit', '-q', '-m', 'seed');
+    assert.ok(runGsdTools(BEGIN, tmpDir).success);
+    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/state.json').trim(), '.planning/state.json');
+  });
+
+  test('new-project ignore rule: written before any boundary command', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    cleanup(path.join(tmpDir, '.planning', 'config.json'));
+    const r = runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    assert.ok(r.success, r.error || r.output);
+    git(tmpDir, 'check-ignore', '-q', '.planning/state.json');
+    const exclude = path.join(tmpDir, '.git', 'info', 'exclude');
+    assert.ok(!fs.existsSync(exclude) || !/state\.json/.test(fs.readFileSync(exclude, 'utf8')), 'the rule is committed content, not a per-clone exclude');
+    assert.match(fs.readFileSync(path.join(tmpDir, '.planning', '.gitignore'), 'utf8'), /^\/state\.json$/m);
+  });
+
+  test('new-project ignore rule: a fresh clone keeps the tree clean before any boundary command', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    cleanup(path.join(tmpDir, '.planning', 'config.json'));
+    assert.ok(runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir }).success);
+    const c = runGsdTools(['commit', 'chore: add project config', '--files', '.planning/config.json', '.planning/.gitignore'], tmpDir);
+    assert.ok(c.success && JSON.parse(c.output).committed, `config commit: ${c.error || c.output}`);
+    const cloneRoot = createTempDir('gsd-clone-');
+    t.after(() => cleanup(cloneRoot));
+    const clone = path.join(cloneRoot, 'clone');
+    gitOrThrow(['clone', '-q', tmpDir, clone], { cwd: cloneRoot });
+    fs.writeFileSync(path.join(clone, '.planning', 'state.json'), '{}\n');
+    assert.strictEqual(git(clone, 'status', '--porcelain'), '');
   });
 
   test('Case B: health W031 names a tracked state.json a boundary left modified, and is silent for an untracked excluded copy', (t) => {
-    const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
+    const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true, commitDocs: false });
     const p = `${rel}/state.json`;
     assert.match(git(tmpDir, 'status', '--porcelain', '--', p), /M .*state\.json/, 'the boundary left the tracked copy modified');
     const w031 = (cwd) => JSON.parse(runGsdTools(['validate', 'health'], cwd).output).warnings.find((w) => w.code === 'W031');
@@ -610,4 +669,14 @@ describe('publisher output satisfies isStateJsonPublishPath (#5505)', () => {
       assert.strictEqual(isStateJsonPublishPath(tmpDir, path.relative(tmpDir, written)), true);
     });
   }
+
+  test('aStateJsonNextToNoProjectFilesOrInGsdsOwnDirectoryIsNotAPublishPath', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'intel'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'workstreams'), { recursive: true });
+    for (const rel of ['.planning/intel/state.json', '.planning/workstreams/state.json']) {
+      assert.strictEqual(isStateJsonPublishPath(tmpDir, rel), false, rel);
+    }
+  });
 });

@@ -42,7 +42,8 @@
  * module answers "where is this project right now" and nothing else — a
  * request for document *contents* belongs to `planning.inspect`. (Its one side
  * effect beyond the snapshot: `excludeFromGit` (git-info-exclude.cts) keeps
- * state.json out of git via `.git/info/exclude`, REQ-SC-05.)
+ * state.json out of git via `.git/info/exclude`, REQ-SC-05, and a copy that is already
+ * tracked is untracked once, staged, with a committed `.gitignore` rule, #5505.)
  *
  * REQUIRE-CYCLE HAZARD (the single most important implementation
  * constraint). `src/state.cts` imports THIS module, and `src/smart-entry.cts`
@@ -137,6 +138,8 @@ interface Owners {
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
   excludeFromGit: typeof import('./git-info-exclude.cjs')['excludeFromGit'];
+  ignoreInTree: typeof import('./git-info-exclude.cjs')['ignoreInTree'];
+  buildStateJsonTracked: typeof import('./planning-snapshot.cjs')['buildStateJsonTracked'];
   loadConfig: typeof import('./config-loader.cjs')['loadConfig'];
   isGitIgnored: typeof import('./config-loader.cjs')['isGitIgnored'];
   resolveCommitDocsTiers: typeof import('./config-loader.cjs')['resolveCommitDocsTiers'];
@@ -176,12 +179,15 @@ function owners(): Owners {
   const configLoaderMod = require('./config-loader.cjs') as typeof import('./config-loader.cjs');
   const gitInfoExcludeMod = require('./git-info-exclude.cjs') as typeof import('./git-info-exclude.cjs');
   const smartEntryMod = require('./smart-entry.cjs') as typeof import('./smart-entry.cjs');
+  const planningSnapshotMod = require('./planning-snapshot.cjs') as typeof import('./planning-snapshot.cjs');
   /* eslint-enable @typescript-eslint/no-require-imports */
   _owners = {
     planningPaths: planningWorkspaceMod.planningPaths,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
     excludeFromGit: gitInfoExcludeMod.excludeFromGit,
+    ignoreInTree: gitInfoExcludeMod.ignoreInTree,
+    buildStateJsonTracked: planningSnapshotMod.buildStateJsonTracked,
     loadConfig: configLoaderMod.loadConfig,
     isGitIgnored: configLoaderMod.isGitIgnored,
     resolveCommitDocsTiers: configLoaderMod.resolveCommitDocsTiers,
@@ -408,25 +414,31 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
   };
 }
 
-// Bound for the ownership probe's one `git ls-files` (same 5 s class as the other hot-path git calls).
-export const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+// Bound for the migration's `git rm` and `git add` (same 5 s class as the other hot-path git calls).
+const MIGRATION_GIT_TIMEOUT_MS = 5_000;
 
-/** True when the repo that git-ignores via info/exclude owns the project: a `.git` entry between `stateDir` and the project root, else a tracked file outside `.planning/`. */
-function repoOwnsProject(cwd: string, stateDir: string): boolean {
-  const root = path.resolve(cwd);
-  for (let d = path.resolve(stateDir); ; d = path.dirname(d)) {
-    if (fs.existsSync(path.join(d, '.git'))) return true;
-    if (d === root || d === path.dirname(d)) break;
-  }
-  const r = owners().execGit(['ls-files', '-z', '--', '.', ':(exclude).planning'], { cwd, timeout: OWNERSHIP_PROBE_TIMEOUT_MS });
-  return (r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (r.exitCode === 0 && r.stdout.length > 0);
+/**
+ * #5505: untrack every tracked publish path (the set W031 lists), staged and with the file kept on
+ * disk, and write the committed `.gitignore` rule beside each. `--ignore-unmatch` and the rule
+ * writer are idempotent, so rerunning is a no-op. `cmdCommit` carries the staged removals and
+ * rules into the next scoped commit. A listing git cannot answer is empty here: nothing to do.
+ */
+function untrackTrackedStateJson(cwd: string): void {
+  const tracked = owners().buildStateJsonTracked(cwd, MIGRATION_GIT_TIMEOUT_MS).value;
+  if (tracked.length === 0) return;
+  const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...tracked], { cwd, timeout: MIGRATION_GIT_TIMEOUT_MS });
+  if (rm.exitCode !== 0) return;
+  const rules = [...new Set(tracked.map((f) => path.dirname(path.resolve(cwd, f))))]
+    .filter((dir) => owners().ignoreInTree(dir, 'state.json'))
+    .map((dir) => path.join(dir, '.gitignore'));
+  if (rules.length > 0) owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: MIGRATION_GIT_TIMEOUT_MS });
 }
 
-/** Append the derived-file exclude entry when the commit policy keeps planning in git and the repo owns the project (the publisher passes no phase override: it has no phase context, D13). */
+/** Hide the derived file when the commit policy keeps planning in git: append the per-clone exclude entry (the owner applies the repo-ownership gate), then migrate a tracked copy (the publisher passes no phase override: it has no phase context, D13). */
 function excludeWhenGitOwns(cwd: string, stateDir: string): void {
   const commitDocs = owners().loadConfig(cwd, { persist: false, quiet: true })['commit_docs'];
   if (!owners().resolveCommitDocsTiers(undefined, commitDocs, () => owners().isGitIgnored(cwd, '.planning')).resolved) return;
-  if (repoOwnsProject(cwd, stateDir)) owners().excludeFromGit(stateDir, 'state.json');
+  if (owners().excludeFromGit(cwd, stateDir, 'state.json')) untrackTrackedStateJson(cwd);
 }
 
 /**
@@ -441,7 +453,7 @@ function excludeWhenGitOwns(cwd: string, stateDir: string): void {
  *
  * Side effect (#5505): after a successful write it may append `/<prefix>state.json` to the
  * enclosing repo's `.git/info/exclude` (best-effort, see `excludeFromGit`), gated on the commit
- * policy and on that repo owning the project.
+ * policy and on that repo owning the project, and then untrack a copy git already tracks.
  *
  * `withPlanningLock` is deliberately NOT taken here — see the module-doc
  * "REQUIRE-CYCLE HAZARD" section's sibling note: it is not re-entrant and

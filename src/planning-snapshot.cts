@@ -599,7 +599,11 @@ function buildWorktreeHealthField(cwd: string): { value: ReturnType<typeof inspe
 // `buildPlanningSnapshot`, which every health path calls.
 const PLANNING_TRACKED_GIT_TIMEOUT_MS = 10_000;
 
-/** Why a failed `ls-files` failed: a `rev-parse` asks git whether `cwd` is a work tree at all. */
+/**
+ * Why a failed `ls-files` failed: a `rev-parse` asks git whether `cwd` is a work tree at all.
+ * #5505: W029's listing and W031's (`buildStateJsonTracked`, also the publisher's migration) share
+ * it, so a listing git could not answer means the same in both; W029's behaviour is unchanged.
+ */
 function classifyLsFilesFailure(cwd: string): string {
   const probe = execGit(['rev-parse', '--is-inside-work-tree'], { cwd, timeout: PLANNING_TRACKED_GIT_TIMEOUT_MS });
   if (probe.timedOut) return 'git_timed_out';
@@ -692,9 +696,9 @@ function buildPlanningTrackedField(cwd: string): { value: { tracked: boolean; ig
 }
 
 /** Tracked copies of the derived state.json (#5505); a listing git cannot answer is UNREADABLE, not empty. */
-function buildStateJsonTracked(cwd: string): { value: string[]; scope: Scope; reason: string } {
+function buildStateJsonTracked(cwd: string, timeout: number = PLANNING_TRACKED_GIT_TIMEOUT_MS): { value: string[]; scope: Scope; reason: string } {
   try {
-    const r = execGit(['ls-files', '-z', '--', ...STATE_JSON_PATHSPECS], { cwd, timeout: PLANNING_TRACKED_GIT_TIMEOUT_MS });
+    const r = execGit(['ls-files', '-z', '--', ...STATE_JSON_PATHSPECS], { cwd, timeout });
     if (r.timedOut) return { value: [], scope: SCOPE.UNREADABLE, reason: 'git_timed_out' };
     if (r.exitCode !== 0) return { value: [], scope: SCOPE.UNREADABLE, reason: classifyLsFilesFailure(cwd) };
     return { value: r.stdout.split('\0').filter((f) => f && isStateJsonPublishPath(cwd, f)), scope: SCOPE.COMPLETE, reason: 'ok' };
@@ -1391,5 +1395,6 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
 
 export = {
   buildPlanningSnapshot,
+  buildStateJsonTracked,
   worstScope,
 };
