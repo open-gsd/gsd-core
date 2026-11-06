@@ -28,7 +28,7 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_VALUE_FLAGS,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_VALUE_FLAGS,
 } = require('./helpers/shipped-command-scan.cjs');
 const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
 
@@ -3324,19 +3324,19 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('scanner flags whole-tree pathspecs and echo after a redirection; accepts --pathspec-from-file', () => {
-    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- *', 'git commit -m x -- **', 'git commit -m x -- /', 'git commit -m x -- ./*', "git commit -m x -- '**/*'", "git commit -m x -- ':(glob)**/*'",'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
     assert.equal(unscopedGitCommits('>&2 echo "git commit -m x"').length, 1);
     assert.equal(unscopedGitCommits('git commit -m x --pathspec-from-file=list.txt').length, 0);
   });
 
   test('blind spots: -i/--include, .. and :(icase) whole-tree specs, separate-value --attr-source/--config-env, multi-line bash -c and quoted eval are unscoped', () => {
     for (const c of ['git commit -i -m x -- a', 'git commit --include -m x -- a', 'git commit --inc -m x -- a', 'git commit -qi -m x -- a', 'git commit -m x -- ..', 'git commit -m x -- ../', 'git commit -m x -- ../..', "git commit -m x -- ':(icase).'", 'git --attr-source HEAD commit -m x', 'git --config-env k=V commit -m x', 'git --shallow-file f commit -m x', 'bash -c "cd a\ngit commit -m x"', 'eval "git commit -m x"']) assert.equal(unscopedGitCommits(c).length, 1, c);
-    for (const c of ['git commit -m x -- a', 'git commit --in -m x -- a', 'git commit -m x -- ...', "git commit -m x -- ':(icase)src'", 'git commit -m x -- -i', 'bash -c "cd a\ngit commit -m x -- a"', 'eval "git commit -m x -- a"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+    for (const c of ['git commit -m x -- a', 'git commit --in -m x -- a', 'git commit -m x -- ...', 'git commit -m "- fix item" -- a', "git commit -m x -- ':(icase)src'", 'git commit -m x -- -i', 'bash -c "cd a\ngit commit -m x -- a"', 'eval "git commit -m x -- a"']) assert.equal(unscopedGitCommits(c).length, 0, c);
   });
 
   test('every shell -<cluster>c spelling and an unquoted $-word pathspec are unscoped', () => {
     for (const c of ['bash -lc "git commit -m x"', 'bash -ec "git commit -m x"', 'sh -euc "git commit -m x"', 'git commit -m x -- $FILES', 'git commit -m x -- $A $B']) assert.equal(unscopedGitCommits(c).length, 1, c);
-    for (const c of ['bash -lc "git commit -m x -- a"', 'git commit -m x -- "$FILES"', "git commit -m x -- '$FILES'", 'git commit -m x -- $A b', 'git commit -m x -- a$B','git commit -m x -- "$A" "$B"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+    for (const c of ['bash -lc "git commit -m x -- a"', 'git commit -m x -- "$FILES"', "git commit -m x -- '$FILES'", 'git commit -m x -- $A b', 'git commit -m x -- a$B', 'git commit -m x -- "$A" "$B"']) assert.equal(unscopedGitCommits(c).length, 0, c);
   });
 
   test('parity: the scanner sees every -c cluster and git value option the secret guard sees', () => {
@@ -3348,10 +3348,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(shellDashCPayloads(`bash ${flag} 'git commit -m x'`).length, 1, `scanner reads bash ${flag}`);
     }
     // A value option the hook skips (exit 0) must be a value option of the scanner too; `--super-prefix` fails closed in the hook.
-    for (const opt of ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix']) {
-      if (hook(`git ${opt} '-calias.x=!cat .env' status`) === 0) assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
-    }
-    assert.ok(GIT_VALUE_FLAGS.has('-C'));
+    const skipped = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix']
+      .filter((opt) => hook(`git ${opt} '-calias.x=!cat .env' status`) === 0);
+    for (const opt of skipped) assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
+    assert.ok(skipped.includes('-C') && skipped.includes('--git-dir'), `the hook skips -C and --git-dir (got ${skipped})`);
   });
 
   test('git -C / -c global options do not hide a commit', () => {
@@ -3428,11 +3428,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
 
   const word = fc.stringMatching(/^[a-z0-9][a-z0-9._/]{0,7}$/);
   const msg = fc.oneof(
-    word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`),
+    word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`), word.map((w) => `"- ${w}"`),
   );
+  // Literal spellings, not the scanner's own list: a spelling the scanner misses must be able to fail here (fixture provenance, #2371).
+  const GIT_PREFIXES = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice',
+    'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
 
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
-    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
+    const prefix = fc.constantFrom(...GIT_PREFIXES);
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
       const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
       assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
@@ -3440,11 +3443,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('property: a widening option, a whole-tree pathspec, or a bash -c / eval wrapper keeps the verdict for every git prefix', () => {
-    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
+    const prefix = fc.constantFrom(...GIT_PREFIXES);
     fc.assert(fc.property(prefix, msg, fc.constantFrom('-i', '--include', '--inc', '-qi'), fc.array(word, { minLength: 1, maxLength: 3 }), (pre, m, opt, paths) => {
       assert.equal(unscopedGitCommits(`${pre} commit ${opt} -m ${m} -- ${paths.join(' ')}`).length, 1);
     }), { seed: 5211, numRuns: 100 });
-    fc.assert(fc.property(prefix, msg, fc.constantFrom('.', './', '..', '../', '../..', ':/', ':(icase).', ':(top,icase)'), (pre, m, t) => {
+    fc.assert(fc.property(prefix, msg, fc.constantFrom('.', './', '..', '../', '../..', ':/', ':(icase).', ':(top,icase)', '*', '**', '/', './*', '**/*', ':(glob)**/*'), (pre, m, t) => {
       assert.equal(unscopedGitCommits(`${pre} commit -m ${m} -- ${t}`).length, 1);
     }), { seed: 5211, numRuns: 100 });
     const wrap = fc.constantFrom((c) => `bash -c 'cd x\n${c}'`, (c) => `eval '${c}'`);

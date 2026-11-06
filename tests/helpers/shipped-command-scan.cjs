@@ -357,7 +357,7 @@ const gitSubcommandIdx = (toks, gi) => {
   }
   return -1;
 };
-const isWholeTree = (a) => /^(?::\((?:top|literal|glob|icase)[^)]*\)|:\/)?(?:\.\.?(?:\/+\.\.?)*\/*|\*+|\/?)$/.test(a);
+const isWholeTree = (a) => /^(?::\((?:top|literal|glob|icase)[^)]*\)|:\/)?(?:\.\.?(?:\/+\.\.?)*\/*|\/?)(?:\*+(?:\/+\*+)*)?$/.test(a);
 const isExcludeMagic = (a) => a.startsWith(':!') || a.startsWith(':^') || a.startsWith(':(exclude)');
 // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
 // An `echo`/`printf` word that holds `git ... commit` (recovery advice), or an `eval` word, is scanned as a script; other quoted prose is not.
@@ -394,7 +394,8 @@ const unscopedGitCommits = (raw, inline = false) => {
     const onlyUnquotedVars = dd !== -1 && dd < argv.length - 1 && argvTok.slice(dd + 1).every(unquotedVar);
     const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree) || onlyUnquotedVars);
     // -i/--include, also bundled as in -qi, commits the whole index plus the named paths.
-    const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a) => (a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a));
+    // A word after -m, -F, -C, -c or -t is that option's value (a message may start with `- `), not an option.
+    const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a, n, all) => !/^-[mFCct]$/.test(all[n - 1] ?? '') && ((a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a)));
     const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
     if ((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree || include) out.push(text.slice(toks[i].start, prev.end));
   }
