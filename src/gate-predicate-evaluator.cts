@@ -42,7 +42,7 @@ const COMMAND_MAX_LENGTH = 4096;
 /** Predicate kinds this evaluator recognises (extensible — add to KIND_TABLE). */
 const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatter-equals']);
 
-/** Placeholders interpolated into a declared command, in addition to sh's own vars. */
+/** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
 const INTERPOLATION_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
 
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
@@ -64,7 +64,8 @@ interface BoundedShellResult {
 }
 
 interface PredicateDeps {
-  runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): BoundedShellResult;
+  /** `env` holds PHASE_NUMBER, PHASE_DIR and PHASE_REQ_IDS: the shell expands `${PHASE_*}` from it, so a value that is not shell-inert never becomes command text. */
+  runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): BoundedShellResult;
   /** All distinct matches for the artifact, in any order; `[]` when absent. Entries must be realpaths: the evaluator dedupes by string, so a symlink to one file counts once only if both names resolve to the same path. */
   findPhaseArtifact(phaseDir: string, artifactSuffix: string): string[];
   readFrontmatter(filePath: string): Record<string, unknown>;
@@ -79,14 +80,18 @@ interface PredicateResult {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const INTERPOLATION_RE = /\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/g;
+// Characters that no shell treats as syntax, bare or quoted. A value made of these only is safe as command text.
+const SHELL_INERT_RE = /^[A-Za-z0-9._/@+=:,-]*$/;
 
-/** Replace the three known ${PHASE_*} placeholders with context values (undefined => ''). */
-function interpolate(command: string, ctx: PredicateContext): string {
-  return command.replace(INTERPOLATION_RE, (_whole, name: string): string => {
-    if (name === 'PHASE_NUMBER') return ctx.phaseNumber ?? '';
-    if (name === 'PHASE_DIR') return ctx.phaseDir ?? '';
-    if (name === 'PHASE_REQ_IDS') return ctx.phaseReqIds ?? '';
-    return '';
+/**
+ * Paste a placeholder's value into the command text only when the value is shell-inert, so a gate that
+ * single-quotes it ('${PHASE_NUMBER}') still receives it. Any other value stays a `${...}` for `sh` to
+ * expand from the environment, where it is data and never parsed as command text.
+ */
+function interpolate(command: string, env: Record<string, string>): string {
+  return command.replace(INTERPOLATION_RE, (whole, name: string): string => {
+    const value = env[name] ?? '';
+    return SHELL_INERT_RE.test(value) ? value : whole;
   });
 }
 
@@ -123,8 +128,10 @@ function evaluateCommandExitZero(
     timeoutMs = Math.floor(rawTimeout * 1000);
   }
 
-  const interpolated = interpolate(command, ctx);
-  const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
+  // Every value reaches `sh` as an environment value (unset => ''); see interpolate for what is also pasted.
+  const env = { PHASE_NUMBER: ctx.phaseNumber ?? '', PHASE_DIR: ctx.phaseDir ?? '', PHASE_REQ_IDS: ctx.phaseReqIds ?? '' };
+  const interpolated = interpolate(command, env);
+  const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs, env });
 
   if (res.timedOut) {
     return {

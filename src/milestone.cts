@@ -532,7 +532,8 @@ function applyQuickTasksReset(content: string): { content: string; warning: { fi
   return { content, warning: null };
 }
 
-type ShipGateBlock = { cap_id: string; phase: string; gate_message: string; details: Record<string, unknown> | null };
+// reason: why the close refuses. Tests and callers branch on it, never on gate_message (raw gate output).
+type ShipGateBlock = { cap_id: string; phase: string; reason: 'unevaluable' | 'window_unreadable' | 'predicate_blocked'; gate_message: string; details: Record<string, unknown> | null };
 type ShipGateWarning =
   | { kind: 'not_check_predicate'; capId: string }
   | { kind: 'skipped_phase'; capId: string; phase: string; detail: string }
@@ -545,11 +546,6 @@ function renderShipGateWarning(w: Exclude<ShipGateWarning, { kind: 'capability_l
   if (w.kind === 'skipped_phase') return `warning: ship:pre gate of ${formatDiagnosticToken(w.capId)} skipped for phase ${formatDiagnosticToken(w.phase)}: ${formatDiagnosticToken(w.detail)}\n`;
   return `warning: ship:pre gates not re-checked: milestone window scope is "${SCOPE.UNREADABLE}"\n`;
 }
-
-// Characters that let an interpolated value start a command in `sh -c`, bare or inside double quotes:
-// substitution ($ `), separators (; & | CR LF), redirection (< >), subshell ( ), a comment that truncates
-// the gate (#), and pathname expansion that tests another phase's path (* ? [).
-const SAFE_PHASE_DIR_RE = /^[^$`;&|<>()#*?[\r\n]+$/;
 
 // ship.md step 6 owns these two: their bespoke fail-closed branches are not the declared predicate.
 const SHIP_MD_OWNED_GATE_CAPS: ReadonlySet<string> = new Set(['security', 'broken-windows']);
@@ -582,7 +578,7 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
   if (scope === SCOPE.UNREADABLE) {
     for (const hook of gates) {
       if ((hook.check as { predicate?: unknown } | undefined)?.predicate === undefined) warnings.push({ kind: 'not_check_predicate', capId: hook.capId });
-      else if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase: '*', gate_message: `milestone window scope is "${SCOPE.UNREADABLE}": the phase set cannot be resolved, so this gate was not run`, details: null });
+      else if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase: '*', reason: 'window_unreadable', gate_message: `milestone window scope is "${SCOPE.UNREADABLE}": the phase set cannot be resolved, so this gate was not run`, details: null });
       else if (!warnings.some((w) => w.kind === 'scope_unreadable')) warnings.push({ kind: 'scope_unreadable' });
     }
     return { blocked, warnings };
@@ -611,15 +607,9 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
       const phaseDirPath = path.join(phasesDir, dir);
       // An unevaluable gate blocks under onError:'halt', else warns.
       const failGate = (detail: string): void => {
-        if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase, gate_message: detail, details: null });
+        if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase, reason: 'unevaluable', gate_message: detail, details: null });
         else warnings.push({ kind: 'skipped_phase', capId: hook.capId, phase, detail });
       };
-      // Only command-exit-zero substitutes ${PHASE_DIR}/${PHASE_NUMBER} textually into `sh -c` (a path like
-      // `01-$(cmd)` would execute); other predicate kinds read the path as data. Treat such a gate as unevaluable.
-      if ((predicate as { kind?: unknown }).kind === 'command-exit-zero' && !(SAFE_PHASE_DIR_RE.test(phaseDirPath) && SAFE_PHASE_DIR_RE.test(phase))) {
-        failGate('phase directory path or token contains a shell-significant character ($ ` ; & | < > ( ) # * ? [ or a line break); gate not run');
-        continue;
-      }
       const result = evaluateCheckPredicate({
         projectDir: cwd,
         args: ['--predicate', JSON.stringify(predicate), '--phase-dir', phaseDirPath, '--phase-number', phase],
@@ -631,6 +621,7 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
         blocked.push({
           cap_id: hook.capId,
           phase,
+          reason: 'predicate_blocked',
           gate_message: typeof message === 'string' && message !== '' ? message : 'gate blocked without a message',
           details: (result.payload['details'] as Record<string, unknown> | undefined) ?? null,
         });
