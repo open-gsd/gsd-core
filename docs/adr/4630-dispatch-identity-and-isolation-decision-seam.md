@@ -169,11 +169,17 @@ with its gate's forced re-record, which makes its record the newest again. Nothi
 write to the dispatch, so another unscoped write between them blocks the dispatch, which fails
 closed. A plan stored as `true` dispatches with the flag, and the guard allows it.
 
-A plan that decides `true` within ten minutes of its own sequential decision also stays held: its
-re-record is a plain query, which answers `none` and writes nothing. Unless a newer record applies,
-the guard still reads `none`, so the flagged dispatch runs in a worktree but one that omits the flag
-is allowed. Records carry no run identity, so the hold cannot tell an earlier run's degrade from
-this run's.
+A plan that decides `true` within ten minutes of its own sequential decision is not held. The
+per-plan gate's `true` branch reads the host's capability from `inspect-dispatch-isolation`, which
+no hold reaches, and forces it at the plan's scope, so the record carries that capability and, on a
+harness-worktree host, the guard demands the flag. It forces only when the plan id is non-empty: an empty id records at phase level, where the
+override would reach every plan of the phase, so that case stays a plain query and is held as before.
+A failed read, or a host that declares `none`, stays a plain query too. A plain query at the plan's
+own scope still holds; records carry no run identity, so it cannot tell an earlier run's degrade from
+this run's. For the same reason two runs sharing a plan id can cross: the force replaces a `none` the
+other run recorded for that plan after this run decided `true`. That run's gate records `none` again
+right before its own dispatch, and if the force lands between the two, a harness-worktree host's guard
+refuses that dispatch, which fails closed.
 
 Two windows apply, and they differ on purpose. The hold lapses ten minutes after `decided_at`. The
 guard's trust in a fresh record lasts ten minutes from `written_at`, and it also honours an aged
@@ -204,7 +210,7 @@ still recorded, because failing closed on an indeterminate answer is #3050's rul
 even with an empty value, records the per-plan decision, and the base check is not one.
 Execute-phase takes it at the phase-level resolve and again between waves (#1369), and a
 degrade at either turns worktrees off for the rest of the run, so every later plan records a
-forced `none`. A plan reaches the per-plan gate's plain re-record only when neither degraded.
+forced `none`. A plan reaches the per-plan gate's `true` branch only when neither degraded.
 HEAD can still move after that plan was decided: in a mixed wave a sequential plan commits on
 the main tree before a worktree plan of the same wave dispatches, and a wave can merge back
 while the between-wave check did not run. Re-deriving there would record `none` for a plan
