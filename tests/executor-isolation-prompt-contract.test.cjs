@@ -133,3 +133,16 @@ test('#5531: the two compose blocks declare the same prompt file name prefix', (
   assert.equal(prefixes.length, 2, 'block 1 and the read-and-check block each declare the prefix');
   assert.equal(new Set(prefixes).size, 1, 'both declare the same prefix');
 });
+
+test('#5531: the two compose blocks derive the wave-keyed prompt file name the same way', () => {
+  // The blocks run as separate commands, so each derives the name; a run of one block cannot show they agree.
+  const lines = content.split('\n');
+  const bash = scanFencedBlocks(lines)
+    .filter((b) => b.infoString === 'bash')
+    .flatMap((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx));
+  const stem = bash.filter((l) => l.startsWith('_PROMPT_STEM='));
+  const name = bash.filter((l) => l.startsWith('_PROMPT_NAME='));
+  assert.equal(stem.length, 1, 'block 1 derives the stem once');
+  assert.equal(name.length, 1, 'the read-and-check block derives the name once');
+  assert.equal(name[0].replace('_PROMPT_NAME=', ''), stem[0].replace('_PROMPT_STEM=', '').replace(/"$/, '-??????"'), 'the name is the stem plus the random suffix');
+});

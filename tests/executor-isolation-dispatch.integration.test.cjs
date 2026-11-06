@@ -174,7 +174,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   test('#5531: the read-and-check block removes a regular prompt file whose read fails and halts with the unreadable code', (t) => {
     const root = path.join(tempDir(t), 'orch');
     const file = place(root, `${STEM}-aaaaaa`, GUARDED);
-    // Failing `wc` and `cat` stand in for a mode-000 file without mode bits, so the case also runs as root: the byte-count compare gets an empty operand, errors, and the block falls through to the cat FATAL, as it does for a file nobody can read.
+    // Failing `wc` and `cat` stand in for a mode-000 file without mode bits, so the case also runs as root: the empty byte count skips the NUL check, and the block falls through to the cat FATAL, as it does for a file nobody can read.
     const r = runBlock(root, `wc() { return 1; }\ncat() { return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
     assert.equal(r.exitCode, EXIT.unreadable, r.stderr);
@@ -195,7 +195,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     assert.ok(fs.existsSync(file) && others.every((f) => fs.existsSync(f)), 'block 1 creates its file and keeps the other plans\'');
   });
 
-  test('#5531: a root path with a space, quotes, $(...) and a backtick is data: compose and read-and-check run no command and keep the prompt', (t) => {
+  test('#5531: a root path with a space, quotes, a newline, a non-ASCII character, $(...) and a backtick is data: compose and read-and-check run no command and keep the prompt', (t) => {
     const dir = tempDir(t);
     const marker = path.join(dir, 'ran');
     const root = path.join(dir, `or ch's \n\u00fc $(touch ${marker}) \`touch ${marker}\``);
@@ -241,6 +241,23 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     fs.chmodSync(claude, 0o555);
     const r = runBlock(root, `gsd_run() { echo false; }\n${createBlock(content)}`);
     assert.equal(r.exitCode, EXIT.mktemp, r.stderr);
+  });
+
+  test('#5531: a none or two match halt removes the matches through a .claude that is a symlink', (t) => {
+    const dir = tempDir(t);
+    const root = path.join(dir, 'orch');
+    const target = path.join(dir, 'elsewhere');
+    fs.mkdirSync(target, { recursive: true });
+    fs.mkdirSync(root, { recursive: true });
+    fs.symlinkSync(target, path.join(root, '.claude'));
+    const two = ['aaaaaa', 'bbbbbb'].map((n) => {
+      const file = path.join(target, `${STEM}-${n}`);
+      fs.writeFileSync(file, GUARDED);
+      return file;
+    });
+    const r = readAndCheck(root);
+    assert.equal(r.exitCode, EXIT.noneOrTwo, r.stderr);
+    assert.ok(two.every((f) => !fs.existsSync(f)), 'the halt removal reaches through the link');
   });
 
   test('#5531: a .claude that is a symlink to a directory is followed: the prompt file lands in the target', (t) => {
