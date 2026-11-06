@@ -2998,6 +2998,181 @@ describe('#4561/#4630 — the hold\'s freshness window at both boundaries (readS
 // ten minutes apart kept a degrade alive indefinitely and a base-check degrade
 // outlived HEAD catching up. The record now carries `decided_at`; a
 // `--renew-held` re-record keeps it, and the hold lapses ten minutes after it.
+// #5682 gave each dispatch its own keyed record because a parallel orchestrator's
+// write replaces the single legacy slot. The hold has to read those records too:
+// a query that still read only the legacy slot would miss its own `none`, record
+// the host's capability, and overwrite that keyed record, which is the #4561 race
+// on the records #5682 added to keep. Every row drives the real CLI on a pinned
+// clock (GSD_NOW_MS) and reads the files it wrote.
+describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a parallel orchestrator cannot clobber it', () => {
+  const A = { phase: '21', plan: '21-13' };
+  const B = { phase: '23', plan: '23-15' };
+  const T0 = 1_000_000_000_000;
+  const env = (dir, now) => ({ GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+  const scope = ({ phase, plan } = {}) => [...(phase ? ['--phase', phase] : []), ...(plan ? ['--plan', plan] : [])];
+  const query = (dir, now, args) => {
+    const r = runGsdTools(['query', 'dispatch-isolation', ...args], dir, env(dir, now));
+    assert.equal(r.success, true, r.error);
+    return r;
+  };
+  const force = (dir, now, mode, s, extra = []) => query(dir, now, ['--raw', ...scope(s), '--force-isolation', mode, ...extra]);
+  const plain = (dir, now, s) => JSON.parse(query(dir, now, ['--json', ...scope(s)]).output);
+  const keyedFile = (dir, name) => path.join(dir, '.gsd', 'dispatch-isolation', `${name}.json`);
+  const readKeyed = (dir, name) => JSON.parse(fs.readFileSync(keyedFile(dir, name), 'utf8'));
+  const project = (t) => {
+    const dir = createTempProject('gsd-5682-hold-');
+    t.after(() => cleanup(dir));
+    return dir;
+  };
+
+  test('A/B interleaving at plan scope: B\'s forced write does not end A\'s hold, and A\'s keyed none survives A\'s plain query', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', B);
+    const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
+
+    const answer = plain(dir, T0 + 2000, A);
+
+    assert.equal(answer.held, true, 'A is held though the legacy slot now carries B');
+    assert.equal(answer.isolation, 'none');
+    assert.equal(answer.decidedAt, T0);
+    assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA, 'A\'s keyed record is not rewritten');
+    assert.equal(readSentinelRaw(dir).phase, B.phase, 'a held query writes nothing, so the legacy slot stays B\'s');
+    const guardReads = readSentinel(dir, { clock: { now: () => T0 + 2000 }, dispatchIds: A });
+    assert.equal(guardReads.isolation, 'none', 'the record the guard reads for A still says sequential');
+  });
+
+  test('A/B interleaving at phase scope: the phase-level keyed record is held the same way', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', { phase: A.phase });
+    force(dir, T0 + 1000, 'harness-worktree', { phase: B.phase });
+    const recordOfA = readKeyed(dir, A.phase);
+
+    const answer = plain(dir, T0 + 2000, { phase: A.phase });
+
+    assert.equal(answer.held, true);
+    assert.deepEqual(readKeyed(dir, A.phase), recordOfA);
+  });
+
+  test('a phase query holds a plan-scoped degrade the legacy slot lost, so "a same-phase re-query holds it" stays true under interleaving', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', B);
+
+    const answer = plain(dir, T0 + 2000, { phase: A.phase });
+
+    assert.equal(answer.held, true);
+    assert.equal(fs.existsSync(keyedFile(dir, A.phase)), false, 'a held query records no phase-level capability over the plan\'s degrade');
+  });
+
+  test('a NEWER unscoped write cannot outrank the query\'s own keyed record: it applies to every dispatch, but it is not at this scope', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', {});
+    const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
+
+    const answer = plain(dir, T0 + 2000, A);
+
+    assert.equal(answer.held, true);
+    assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA);
+  });
+
+  test('a NEWER phase-level record cannot outrank a plan query\'s own keyed record', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', { phase: A.phase });
+    const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
+
+    const answer = plain(dir, T0 + 2000, A);
+
+    assert.equal(answer.held, true);
+    assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA);
+  });
+
+  test('a query for ANOTHER plan of the phase is not held by a sibling\'s keyed record, and leaves it alone', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', B);
+    const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
+
+    const answer = plain(dir, T0 + 2000, { phase: A.phase, plan: '21-14' });
+
+    assert.equal(answer.held, false);
+    assert.equal(answer.isolation, 'harness-worktree');
+    assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA);
+    assert.equal(readKeyed(dir, `${A.phase}--21-14`).isolation, 'harness-worktree');
+  });
+
+  test('an UNSCOPED query names no keyed record: it holds whatever the legacy slot carries, another orchestrator\'s degrade included', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+
+    const answer = plain(dir, T0 + 1000, {});
+
+    assert.equal(answer.held, true, 'sequential, the safe direction, for the rest of that record\'s window');
+    assert.equal(answer.decidedAt, T0);
+    assert.equal(readSentinelRaw(dir).written_at, T0, 'held means not rewritten');
+  });
+
+  test('an UNSCOPED query once the legacy slot moved on is not held, and does not touch A\'s keyed record', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', B);
+    const recordOfA = readKeyed(dir, `${A.phase}--${A.plan}`);
+
+    const answer = plain(dir, T0 + 2000, {});
+
+    assert.equal(answer.held, false);
+    assert.deepEqual(readKeyed(dir, `${A.phase}--${A.plan}`), recordOfA);
+  });
+
+  test('a resolver-owned keyed `none` is not held: only a decision the resolver cannot re-derive is', (t) => {
+    const dir = project(t);
+    fs.mkdirSync(path.dirname(keyedFile(dir, 'x')), { recursive: true });
+    fs.writeFileSync(keyedFile(dir, `${A.phase}--${A.plan}`), JSON.stringify({
+      isolation: 'none', harness_flag: null, phase: A.phase, plan: A.plan, decided_by: 'resolver', decided_at: T0, written_at: T0,
+    }));
+
+    assert.equal(plain(dir, T0 + 1000, A).held, false);
+  });
+
+  test('a phase that is not a safe key has no keyed record, so the hold falls back to the legacy slot and nothing lands outside .gsd', (t) => {
+    const dir = project(t);
+    const unsafe = { phase: '../escape' };
+    force(dir, T0, 'none', unsafe);
+
+    assert.equal(plain(dir, T0 + 1000, unsafe).held, true);
+    assert.equal(fs.existsSync(path.join(dir, '.gsd', 'dispatch-isolation', '..', 'escape.json')), false);
+  });
+
+  test('--renew-held over a keyed record refreshes what the guard reads and does not extend the hold', (t) => {
+    const dir = project(t);
+    force(dir, T0, 'none', A);
+    force(dir, T0 + 1000, 'harness-worktree', B);
+    force(dir, T0 + 60000, 'none', A, ['--renew-held', String(T0)]);
+
+    const record = readKeyed(dir, `${A.phase}--${A.plan}`);
+    assert.equal(record.written_at, T0 + 60000);
+    assert.equal(record.decided_at, T0);
+    assert.equal(plain(dir, T0 + SENTINEL_STALE_MS - 1, A).held, true);
+    assert.equal(plain(dir, T0 + SENTINEL_STALE_MS, A).held, false, 'the hold lapses ten minutes after the decision, not after the renewal');
+  });
+
+  for (const [label, delta, held] of [
+    ['limit-1', SENTINEL_STALE_MS - 1, true],
+    ['limit', SENTINEL_STALE_MS, false],
+    ['limit+1', SENTINEL_STALE_MS + 1, false],
+  ]) {
+    test(`a keyed record at SENTINEL_STALE_MS ${label} ${held ? 'is' : 'is not'} held`, (t) => {
+      const dir = project(t);
+      force(dir, T0, 'none', A);
+      force(dir, T0 + 1000, 'harness-worktree', B);
+
+      assert.equal(plain(dir, T0 + delta, A).held, held);
+    });
+  }
+});
+
 describe('#4904: a renewed hold lapses ten minutes after the degrade was decided, however many gates renew it', () => {
   const { readSentinelAt } = require('../hooks/lib/isolation-sentinel.js');
   // A fixed epoch for every timestamp, pinned in gsd-tools through the clock

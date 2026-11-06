@@ -230,8 +230,18 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
  * fresh degrade record is standing before it overwrites one). Kept in this module
  * so the resolver and the guards share ONE definition of "fresh, well-formed,
  * applicable".
+ *
+ * `ownScope` narrows the candidates to records AT `dispatchIds`' own scope, for
+ * the resolver's hold. The guards' `sentinelAppliesToDispatch` treats a record
+ * that names no phase as "cannot compare", so another orchestrator's newer
+ * unscoped write would win `latestWritten` and hide this query's own record, and
+ * the query would then overwrite it. Here a record counts only when every
+ * identifier `dispatchIds` names equals the record's, and a phase with no plan
+ * also reads that phase's plan records, which the legacy slot may have lost to
+ * another orchestrator's write. A query naming neither has no keyed record to
+ * read, so only the legacy slot is read, whatever scope it carries.
  */
-function readSentinelAt(root, { clock = Date, dispatchIds = null } = {}) {
+function readSentinelAt(root, { clock = Date, dispatchIds = null, ownScope = false } = {}) {
   // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
   // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
   // well-formed and its contents agree with its own filename key; the legacy slot only when it
@@ -246,15 +256,23 @@ function readSentinelAt(root, { clock = Date, dispatchIds = null } = {}) {
       const c = parseSentinelFile(planFile, clock, keyedDirs);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
     }
-    const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
+    const phaseFile = ownScope && dispatchIds.plan ? null : phaseSentinelPath(root, dispatchIds.phase);
     if (phaseFile) {
       const c = parseSentinelFile(phaseFile, clock, keyedDirs);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
     }
+    if (ownScope && !dispatchIds.plan) {
+      for (const planFile of planRecordsOfPhase(root, dispatchIds.phase)) {
+        const c = parseSentinelFile(planFile, clock, keyedDirs);
+        if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan &&
+            keyedSentinelPath(root, c.phase, c.plan) === planFile) keyedCandidates.push(c);
+      }
+    }
   }
 
   const legacy = parseSentinelFile(sentinelPath(root), clock, [gsdDir]);
-  const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+  const legacyApplies = legacy.present && !legacy.malformed &&
+    (ownScope ? recordIsAtScope(legacy, dispatchIds) : sentinelAppliesToDispatch(legacy, dispatchIds));
 
   const fresh = keyedCandidates.filter((c) => !c.stale);
   if (legacyApplies && !legacy.stale) fresh.push(legacy);
@@ -264,6 +282,25 @@ function readSentinelAt(root, { clock = Date, dispatchIds = null } = {}) {
   // slot is returned exactly as before.
   if (keyedCandidates.length > 0) return latestWritten(keyedCandidates);
   return legacy;
+}
+
+/** Paths of the `<phase>--<plan>.json` records under `root`, or none unless the phase is a safe key. */
+function planRecordsOfPhase(root, phase) {
+  if (!isSafeSentinelKey(phase)) return [];
+  const dir = path.join(root, KEYED_SENTINEL_DIR);
+  try {
+    return fs.readdirSync(dir)
+      .filter((name) => name.startsWith(`${phase}--`) && name.endsWith('.json'))
+      .map((name) => path.join(dir, name));
+  } catch {
+    return [];
+  }
+}
+
+/** Does `record` carry every identifier `ids` names? An omitted identifier is unconstrained. */
+function recordIsAtScope(record, ids) {
+  if (!ids) return true;
+  return (!ids.phase || record.phase === ids.phase) && (!ids.plan || record.plan === ids.plan);
 }
 
 /** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
