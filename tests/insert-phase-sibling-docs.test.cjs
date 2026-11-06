@@ -1,8 +1,9 @@
 /**
  * #5583 — `/gsd-phase --insert` must document and forward `--sibling`
  * (#4569), accept a decimal <after> phase, and say that inserting after a
- * decimal phase nests by default. Text pins on the shipped prompt files and
- * the four docs pages the docs-guard registry maps to this test.
+ * decimal phase nests by default, except under bracket phase ids, which
+ * refuse the nested insert and need `--sibling`. Text pins on the shipped
+ * prompt files and the four docs pages the docs-guard registry maps to this test.
  */
 
 const { describe, test } = require('node:test');
