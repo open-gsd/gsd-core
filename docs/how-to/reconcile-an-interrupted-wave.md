@@ -68,9 +68,9 @@ Once `cleanup-wave` reports success and unlinks the manifest, re-run `/gsd-execu
   git rm --cached "<path-to-manifest>"
   ```
 - **`FATAL: cannot resolve wave number before worktree dispatch`:**
-  Occurs when neither `CURRENT_WAVE` nor incomplete plans with a defined wave could be resolved from `.planning/phases/`. Set `CURRENT_WAVE=<N>` explicitly or ensure phase plans carry valid `wave: <N>` frontmatter.
+  Occurs when neither `CURRENT_WAVE` nor incomplete plans with a defined wave could be resolved from `.planning/phases/`, or the resolved wave is outside `1..999`. Set `CURRENT_WAVE=<N>` explicitly or ensure phase plans carry valid `wave: <N>` frontmatter.
 - **`unmanifested_worktrees_present` (`Residual agent worktrees remain on disk that are not recorded in manifest`):**
-  Occurs when an executor worktree was created (or an empty manifest was left after a crash before recording) but is not recorded in the manifest. Inspect registered worktrees with `git worktree list`. If an abandoned agent worktree remains, review or remove it with `git worktree remove --force "<path>"` before re-running cleanup.
+  Occurs when an executor worktree that names this wave (a delimited `wave-<N>` in its branch or path, and the phase-directory name when the manifest lives in a phase directory) is not recorded in the manifest. A detached-HEAD agent matches on its path. A listed worktree that names the wave but cannot be resolved counts as present. An agent under the same repo that does not name this wave does not block. Inspect registered worktrees with `git worktree list`. If an abandoned agent worktree remains, review or remove it with `git worktree remove --force "<path>"` before re-running cleanup.
 - **`manifest_symlink_refused`:**
   Wave manifests must be regular files, not symbolic links. Remove or replace the symlink with a regular file.
 - **`manifest_check_failed`:**
