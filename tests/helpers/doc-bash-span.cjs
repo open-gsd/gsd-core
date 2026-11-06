@@ -6,7 +6,7 @@
  * The workflows tell an agent to run a shell block; whether that block survives an exit status the CLI
  * now reports (1 = negative verdict, 66 = empty scope, 69 = could not look) is a property of the
  * block's TEXT. These helpers pull the block's lines out by their first words (so a reflow of the
- * prose around it does not break the test) and run them under bash with a stub `gsd_run` that returns
+ * prose around it does not break the test) and run them under `shell` (default bash) with a stub `gsd_run` that returns
  * a chosen stdout and status, optionally under `set -e`, which is how an agent shell may run them.
  */
 
@@ -36,7 +36,7 @@ function span(relFile, from, through) {
  * Run `lines` under bash with `gsd_run` stubbed to print `stdout` and return `rc`. `setE` runs them
  * under `set -e`; `preamble` lines (variable seeds) run first; `probe` runs last (read variables).
  */
-function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '' } = {}) {
+function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '', shell = 'bash' } = {}) {
   // A real `jq` on PATH is used as is. Where there is none (the Tester Image has no jq, and a block that
   // calls it dies with exit 127 before the logic under test runs) `jq` is the subset stub, which knows ONLY
   // the filters the gate handler's blocks use (tests/helpers/jq-subset-stub.cjs). Shadowing a real jq with
@@ -51,7 +51,7 @@ function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = ''
     probe,
     '',
   ].join('\n');
-  const r = spawnSync('bash', ['-c', script], {
+  const r = spawnSync(shell, ['-c', script], {
     encoding: 'utf8',
     timeout: PROBE_TIMEOUT_MS,
     env: {

@@ -13,7 +13,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
-- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description; the insert_phase step drops a leading `--insert`, word-splits `GSD_ARGS` with `read -a`, drops the double quotes around each word, forwards a `--ws <name>` pair as `--ws=<name>` and leaves `--sibling` to the CLI router
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description; the insert_phase step drops a leading `--insert`, word-splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh), drops the double quotes around each word and forwards every word as typed; the CLI router owns `--sibling` and `--ws <name>`
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
@@ -64,9 +64,8 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_A=(); GSD_WSV=; read -rd "" -a GSD_W <<<"$GSD_ARGS" || true; [ "${GSD_W[0]-}" = --insert ] && GSD_W=("${GSD_W[@]:1}"); set -- "${GSD_W[@]}"
-while [ $# -gt 0 ]; do case $1 in --ws) GSD_WSV=${2:-}; [ $# -gt 1 ] && shift;; *) GSD_T=${1#\"}; GSD_A+=("${GSD_T%\"}");; esac; shift; done
-RESULT=$(gsd_run query phase.insert "${GSD_A[@]}" ${GSD_WSV:+--ws="$GSD_WSV"})
+GSD_F=1; set --; while IFS= read -r GSD_T; do GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue; [ "$GSD_F$GSD_T" = 1--insert ] || set -- "$@" "$GSD_T"; GSD_F=; done <<<"$(printf '%s\n' "$GSD_ARGS" | tr -s '[:space:]' '\n')"
+RESULT=$(gsd_run query phase.insert "$@")
 ```
 
 The CLI handles:

@@ -9,7 +9,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { skipUnless } = require('./helpers/bash-probe.cjs');
+const { have, skipUnless } = require('./helpers/bash-probe.cjs');
 const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const path = require('node:path');
 const fc = require('fast-check');
@@ -37,7 +37,6 @@ const NEST_SITES = [
   'gsd-core/workflows/help/modes/full.md',
   'gsd-core/workflows/help/modes/full.compact.md',
   'docs/COMMANDS.md',
-  '.changeset/kind-deer-travel.md',
 ];
 
 describe('#5583 insert-phase --sibling', () => {
@@ -56,23 +55,24 @@ describe('#5583 insert-phase --sibling', () => {
     assert.match(WORKFLOW, /\(optional, any position, like the CLI router\)/);
     const cmds = WORKFLOW.match(/^RESULT=\$\(gsd_run query phase\.insert .*$/gm) || [];
     assert.equal(cmds.length, 1, 'one phase.insert call per run');
-    assert.match(cmds[0], /"\$\{GSD_A\[@\]\}" \$\{GSD_WSV:\+--ws="\$GSD_WSV"\}\)$/);
+    assert.match(cmds[0], / "\$@"\)$/);
     assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
     const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
     assert.match(fence, /^GSD_ARGS=\$\{GSD_ARGS%\$'\\n'\}$/m, 'the insert fence captures GSD_ARGS itself');
-    assert.match(fence, /^GSD_A=\(\); GSD_WSV=; read -rd "" -a GSD_W <<<"\$GSD_ARGS" \|\| true; \[ "\$\{GSD_W\[0\]-\}" = --insert \] && GSD_W=\("\$\{GSD_W\[@\]:1\}"\); set -- "\$\{GSD_W\[@\]\}"$/m);
+    assert.match(fence, /^GSD_F=1; set --; while IFS= read -r GSD_T; do .* done <<<"\$\(printf '%s\\n' "\$GSD_ARGS" \| tr -s '\[:space:\]' '\\n'\)"$/m);
+    assert.doesNotMatch(fence, /read -a|GSD_WSV|\[0\]/, 'no array read or index: zsh counts from 1 and spells read -A');
     assert.doesNotMatch(fence, /GSD_SIBLING/, 'the CLI router owns --sibling');
     assert.doesNotMatch(WORKFLOW, /GSD_DESC_END/, 'GSD_ARGS_END stays the only capture terminator');
   });
 
   // Run the shipped split of the insert fence over typed arguments.
   describe('insert fence argument split', { skip: SKIP }, () => {
-    const split = (args) => {
+    const split = (args, shell = 'bash') => {
       const quoted = "'" + args.replace(/'/g, "'\\''") + "'";
       const r = runBash(
-        span(WF, 'GSD_A=();', 'RESULT=$(gsd_run query phase.insert'),
+        span(WF, 'GSD_F=1;', 'RESULT=$(gsd_run query phase.insert'),
         { stdout: '', rc: 0 },
-        { setE: false, preamble: ['GSD_ARGS=' + quoted, "gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'printf "%s\\n" "$RESULT"' },
+        { shell, setE: false, preamble: ['GSD_ARGS=' + quoted, "gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'printf "%s\\n" "$RESULT"' },
       );
       assert.equal(r.status, 0, r.stderr);
       return r.stdout.split('\n').slice(2, -1);
@@ -82,9 +82,13 @@ describe('#5583 insert-phase --sibling', () => {
       ['15.2 x --sibling', ['[15.2]', '[x]', '[--sibling]']],
       ['--sibling 15.2 x', ['[--sibling]', '[15.2]', '[x]']],
       ['15.2\t--sibling x', ['[15.2]', '[--sibling]', '[x]']],
-      ['15.2 --ws feature --sibling x', ['[15.2]', '[--sibling]', '[x]', '[--ws=feature]']],
-      ['--ws feature 15.2 x --sibling', ['[15.2]', '[x]', '[--sibling]', '[--ws=feature]']],
-      ['15.2 x --ws', ['[15.2]', '[x]']],
+      ['15.2 --ws feature --sibling x', ['[15.2]', '[--ws]', '[feature]', '[--sibling]', '[x]']],
+      ['--ws feature 15.2 x --sibling', ['[--ws]', '[feature]', '[15.2]', '[x]', '[--sibling]']],
+      ['15.2 x --ws', ['[15.2]', '[x]', '[--ws]']],
+      ['15.2 --ws "feature" x', ['[15.2]', '[--ws]', '[feature]', '[x]']],
+      ['  --insert 15.2 x', ['[15.2]', '[x]']],
+      ['15.2 x\ny', ['[15.2]', '[x]', '[y]']],
+      ['5 fix "" x', ['[5]', '[fix]', '[x]']],
       ['15.2 x', ['[15.2]', '[x]']],
       ['--insert 15.2 --sibling x', ['[15.2]', '[--sibling]', '[x]']],
       ['--insert 5 fix --insert flag', ['[5]', '[fix]', '[--insert]', '[flag]']],
@@ -96,16 +100,15 @@ describe('#5583 insert-phase --sibling', () => {
       ['72 *', ['[72]', '[*]']],
       ['72 $(touch pwned) "q" GSD_ARGS_END', ['[72]', '[$(touch]', '[pwned)]', '[q]', '[GSD_ARGS_END]']],
     ]) {
-      test('split of "' + args + '"', () => assert.deepEqual(split(args), want));
+      test('split of "' + args.replace(/\n/g, '\\n') + '"', () => assert.deepEqual(split(args), want));
+      test('zsh split of "' + args.replace(/\n/g, '\\n') + '"', { skip: !have('zsh') && 'zsh is not installed' }, () => assert.deepEqual(split(args, 'zsh'), want));
     }
 
-    // Every typed word reaches the router in order; only a --ws pair and edge double quotes go.
-    test('property: words keep their order, --ws moves to the end, --sibling passes through', () => {
-      const word = fc.constantFrom('15.2', 'x', '--sibling', '"q"', 'a-b', '*', '--siblings');
-      fc.assert(fc.property(fc.array(word, { minLength: 1, maxLength: 6 }), fc.option(fc.constantFrom('feature', 'ws1'), { nil: undefined }), (words, ws) => {
-        const typed = ws ? [...words, '--ws', ws] : words;
-        const want = words.map((w) => '[' + w.replace(/^"|"$/g, '') + ']').concat(ws ? ['[--ws=' + ws + ']'] : []);
-        assert.deepEqual(split(typed.join(' ')), want);
+    // Every typed word reaches the router in order; only edge double quotes go.
+    test('property: words keep their order and --ws, --sibling pass through', () => {
+      const word = fc.constantFrom('15.2', 'x', '--sibling', '"q"', 'a-b', '*', '--siblings', '--ws', 'feature');
+      fc.assert(fc.property(fc.array(word, { minLength: 1, maxLength: 6 }), (words) => {
+        assert.deepEqual(split(words.join(' ')), words.map((w) => '[' + w.replace(/^"|"$/g, '') + ']'));
       }), { numRuns: 25 });
     });
   });
