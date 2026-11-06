@@ -3424,8 +3424,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             worktreeSafety.cmdWorktreeCreate(cwd, args.slice(2));
           } else if (subcommand === 'manifest-path') {
             worktreeSafety.cmdWorktreeManifestPath(cwd, raw ? [...args.slice(2), '--raw'] : args.slice(2));
+          } else if (subcommand === 'residual-owned') {
+            worktreeSafety.cmdWorktreeResidualOwned(cwd, raw ? [...args.slice(2), '--raw'] : args.slice(2));
           } else {
-            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create, worker-record, worker-status, worker-complete, manifest-path', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref, create, worker-record, worker-status, worker-complete, manifest-path, residual-owned', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 

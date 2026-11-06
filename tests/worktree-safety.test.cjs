@@ -9299,27 +9299,7 @@ describe('durable wave worktree manifests (#4853)', () => {
   const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
   function extractManifestCreationBash() {
-    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
-    const content = readFileNormalized(wfPath);
-    const marker = '**Worktree mode**';
-    const markerIdx = content.indexOf(marker);
-    if (markerIdx === -1) {
-      throw new Error(`extractManifestCreationBash: could not find "${marker}" in ${wfPath}`);
-    }
-    const afterMarker = content.slice(markerIdx + marker.length);
-    const lines = splitLines(afterMarker);
-    const fence = scanFencedBlocks(lines).find(
-      (b) => b.closeLineIdx !== -1 && ['bash', 'sh'].includes((b.infoString || '').trim()),
-    );
-    if (!fence) {
-      throw new Error(`extractManifestCreationBash: could not find \`\`\`bash fence after "${marker}"`);
-    }
-    const block = lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
-    const ifIdx = block.indexOf('if [ "${USE_WORKTREES');
-    if (ifIdx === -1) {
-      throw new Error('extractManifestCreationBash: could not find if [ "${USE_WORKTREES in block');
-    }
-    return block.slice(ifIdx).trim();
+    return require('./helpers/extract-manifest-creation-bash.cjs').extractManifestCreationBash();
   }
 
   function extractInitParsingBash() {
@@ -9397,7 +9377,7 @@ describe('durable wave worktree manifests (#4853)', () => {
     test('property: any safe positive integer round-trips through resolveWaveManifestPath; invalid values are rejected', () => {
       fc.assert(
         fc.property(
-          fc.integer({ min: 1, max: Number.MAX_SAFE_INTEGER }),
+          fc.integer({ min: 1, max: 999 }),
           (w) => {
             const derived = resolveWaveManifestPath('/test/phase', w);
             assert.equal(derived, `/test/phase/wave-${w}-manifest.json`);
@@ -9412,8 +9392,8 @@ describe('durable wave worktree manifests (#4853)', () => {
       // Verify that strings not matching /^\d+$/ or above MAX_SAFE_INTEGER are rejected
       const invalidCandidates = [
         '0', '-1', '1.5', '1e5', 'abc', '', '   ', '01a', '1/2',
-        'Infinity', 'NaN', '9007199254740992', '999999999999999999999999999999',
-        0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1,
+        '1000', '1001', 'Infinity', 'NaN', '9007199254740992', '999999999999999999999999999999',
+        0, -1, 1.5, 1000, 1001, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1,
       ];
       for (const invalid of invalidCandidates) {
         assert.throws(
@@ -9469,6 +9449,9 @@ describe('durable wave worktree manifests (#4853)', () => {
     test('discovers and sorts wave manifests in numeric ascending order, excluding irrelevant files', () => {
       const dir = createTempDir('find-wave-sort-');
       try {
+        fs.writeFileSync(path.join(dir, 'wave-999-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-1000-manifest.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'wave-1001-manifest.json'), '{}');
         fs.writeFileSync(path.join(dir, 'wave-10-manifest.json'), '{}');
         fs.writeFileSync(path.join(dir, 'wave-2-manifest.json'), '{}');
         fs.writeFileSync(path.join(dir, 'wave-1-manifest.json'), '{}');
@@ -9482,7 +9465,10 @@ describe('durable wave worktree manifests (#4853)', () => {
           'wave-1-manifest.json',
           'wave-2-manifest.json',
           'wave-10-manifest.json',
+          'wave-999-manifest.json',
         ]);
+        assert.ok(!basenames.includes('wave-1000-manifest.json'));
+        assert.ok(!basenames.includes('wave-1001-manifest.json'));
 
         // Negative control: wave-2 must come before wave-10 (numeric sort, not lexicographic '10' < '2')
         assert.equal(basenames[1], 'wave-2-manifest.json');
@@ -9495,7 +9481,7 @@ describe('durable wave worktree manifests (#4853)', () => {
     test('property: for any set of positive integer waves, findPhaseWaveManifests returns resolveWaveManifestPath in numeric order', () => {
       fc.assert(
         fc.property(
-          fc.uniqueArray(fc.integer({ min: 1, max: 10000 }), { minLength: 1, maxLength: 25 }),
+          fc.uniqueArray(fc.integer({ min: 1, max: 999 }), { minLength: 1, maxLength: 25 }),
           fc.array(fc.integer(), { minLength: 35, maxLength: 35 }),
           (waves, sortKeys) => {
             const phaseDir = '/mock/phase/dir';
@@ -9673,15 +9659,30 @@ describe('durable wave worktree manifests (#4853)', () => {
       assert.equal(out2.trim(), `${expectedPhaseDir}/wave-2-manifest.json`);
     });
 
-    test('accepts boundary wave Number.MAX_SAFE_INTEGER under --raw', () => {
+    test('accepts boundary wave 999 under --raw and rejects 1000 and 1001', () => {
       let out = '';
       const fakeCwd = '/fake/cwd';
       const expectedPhaseDir = path.resolve(fakeCwd, '.planning/phases/01').replace(/\\/g, '/');
-      cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', '.planning/phases/01', '--wave', String(Number.MAX_SAFE_INTEGER), '--raw'], {
+      cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', '.planning/phases/01', '--wave', '999', '--raw'], {
         write: (s) => { out += s; },
         writeErr: () => {},
       });
-      assert.equal(out.trim(), `${expectedPhaseDir}/wave-${Number.MAX_SAFE_INTEGER}-manifest.json`);
+      assert.equal(out.trim(), `${expectedPhaseDir}/wave-999-manifest.json`);
+      for (const wave of ['1000', '1001']) {
+        let stderrOutput = '';
+        const origExitCode = process.exitCode;
+        try {
+          process.exitCode = 0;
+          cmdWorktreeManifestPath(fakeCwd, ['--phase-dir', '.planning/phases/01', '--wave', wave, '--raw'], {
+            write: () => {},
+            writeErr: (s) => { stderrOutput += s; },
+          });
+          assert.equal(process.exitCode, 1, `wave ${wave} must be rejected`);
+          assert.match(stderrOutput, /invalid_wave/);
+        } finally {
+          process.exitCode = origExitCode;
+        }
+      }
     });
 
     test('rejects unsafe integer wave (MAX_SAFE_INTEGER + 1) with code 1 under --raw', () => {
@@ -10228,8 +10229,8 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
 
         // Create an unmanifested agent worktree
-        const agentWtDir = path.join(repoDir, 'agent-wt');
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-leak', agentWtDir, 'HEAD'], { cwd: repoDir });
+        const agentWtDir = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-leak');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wave-1-leak', agentWtDir, 'HEAD'], { cwd: repoDir });
 
         const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
         fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -10264,9 +10265,9 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         const baseSha = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repoDir }).trim();
 
         const wt1 = path.join(repoDir, 'agent-wt1');
-        const wt2 = path.join(repoDir, 'agent-wt2');
+        const wt2 = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-wt2');
         gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wt1', wt1, 'HEAD'], { cwd: repoDir });
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wt2', wt2, 'HEAD'], { cwd: repoDir });
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wave-1-wt2', wt2, 'HEAD'], { cwd: repoDir });
 
         // Manifest records ONLY wt1 (partial manifest from crash after 1st agent)
         const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
@@ -10355,7 +10356,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
         gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
 
-        const agentWtDir = path.join(repoDir, 'worktree-agent-detached');
+        const agentWtDir = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-detached');
         gitOrThrow(['worktree', 'add', '--detach', agentWtDir, 'HEAD'], { cwd: repoDir });
 
         const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
@@ -10374,6 +10375,102 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       } finally {
         cleanup(repoDir);
       }
+    });
+
+    test('cleanup-wave ignores a foreign agent worktree under the same repo root', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-foreign-in-root-'));
+      try {
+        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
+        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
+        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
+        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
+
+        // Primary orchestrator is the main checkout. A quick-task agent under
+        // .claude/worktrees/ is contained in that root but does not name wave 1.
+        const foreign = path.join(repoDir, '.claude', 'worktrees', 'agent-quick-foreign');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-quick-foreign', foreign, 'HEAD'], { cwd: repoDir });
+
+        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
+        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
+
+        const cleanupRes = childProcess.spawnSync('node', [
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
+
+        assert.equal(cleanupRes.status, 0, `foreign in-root agent must not block. stderr: ${cleanupRes.stderr?.toString()}`);
+        const parsed = JSON.parse(cleanupRes.stdout);
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.manifest_unlinked, true);
+        assert.equal(fs.existsSync(foreign), true, 'foreign agent worktree is left in place');
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('cleanup-wave ignores an agent that names the wave but not this phase directory', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-other-phase-'));
+      try {
+        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
+        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
+        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
+        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
+        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
+        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
+
+        const other = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-other');
+        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wave-1-other', other, 'HEAD'], { cwd: repoDir });
+
+        const phaseDir = path.join(repoDir, '.planning', 'phases', '01-foundation');
+        const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
+        fs.mkdirSync(phaseDir, { recursive: true });
+        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
+
+        const cleanupRes = childProcess.spawnSync('node', [
+          GSD_TOOLS, 'worktree', 'cleanup-wave',
+          '--manifest', manifestPath,
+        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
+
+        assert.equal(cleanupRes.status, 0, `other-phase agent must not block. stderr: ${cleanupRes.stderr?.toString()}`);
+        assert.equal(fs.existsSync(manifestPath), false);
+        assert.equal(fs.existsSync(other), true);
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('an unresolvable listed agent worktree counts as present', () => {
+      const ghost = path.join(os.tmpdir(), `worktree-agent-wave-1-ghost-${Date.now()}`);
+      const manifestPath = path.join(os.tmpdir(), '.planning', 'wave-1-manifest.json');
+      const porcelain = `worktree ${ghost}\nHEAD abc\ndetached\n`;
+      const result = executeWorktreeWaveCleanupPlan({
+        ok: true,
+        repoRoot: os.tmpdir(),
+        manifestPath,
+        action: 'cleanup_wave',
+        discovery: 'manifest',
+        reason: 'ok',
+        entries: [],
+      }, {
+        execGit: (args) => {
+          if (args.join(' ') === 'worktree list --porcelain') {
+            return { exitCode: 0, stdout: porcelain, stderr: '' };
+          }
+          throw new Error(`unexpected git call: ${args.join(' ')}`);
+        },
+        statSync: () => {
+          const err = new Error('eacces');
+          err.code = 'EACCES';
+          throw err;
+        },
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'unmanifested_worktrees_present');
     });
 
     test('cleanup-wave ignores stale prunable worktree whose directory is gone', () => {

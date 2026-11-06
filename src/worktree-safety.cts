@@ -43,11 +43,14 @@ const WORKTREE_AGENT_BRANCH_PATTERN = WORKTREE_AGENT_BRANCH_RE.source;
 
 // #4853: Single authoritative pattern and exclude pathspec for durable wave worktree manifests.
 // Both the git pathspec and JS basename regex govern wave manifest coordination files.
-// Basename requires positive integer wave number (1, 2, ...): wave-[1-9][0-9]*-manifest.json
+// Basename requires wave 1–999: wave-[1-9][0-9]{0,2}-manifest.json
 // Git glob uses bounded digit segments anchored to repository top level (:(top,...))
 // to avoid matching non-manifest files (such as wave-12-notes-manifest.json or wave-10x-manifest.json)
 // or nested .planning directories outside the project root.
-const WAVE_MANIFEST_BASENAME_RE = /^wave-[1-9][0-9]*-manifest\.json$/;
+// Waves 1–999. Git's pathspec excludes are 1–3 digits; a wider parser would
+// recognise wave-1000-manifest.json and then fail to keep it out of commits.
+const MAX_WAVE_NUMBER = 999;
+const WAVE_MANIFEST_BASENAME_RE = /^wave-[1-9][0-9]{0,2}-manifest\.json$/;
 const WAVE_MANIFEST_PATHSPEC_EXCLUDES: readonly string[] = Object.freeze([
   ':(top,exclude,glob).planning/**/wave-[1-9]-manifest.json',
   ':(top,exclude,glob).planning/**/wave-[1-9][0-9]-manifest.json',
@@ -583,6 +586,8 @@ interface WaveCleanupPlan {
   ok: boolean;
   repoRoot: string;
   orchestratorRoot?: string | null;
+  /** Absolute manifest path. Ownership of unmanifested agents is derived from its wave number and parent directory. */
+  manifestPath?: string;
   action: string;
   discovery: string;
   reason: string;
@@ -1162,6 +1167,116 @@ interface WaveCleanupResult {
   warnings: WaveCleanupWarning[];
 }
 
+/** Resolve a path, reporting when both realpath attempts fail. The unresolved path is returned either way. */
+function realpathOrSelf(target: string): { path: string; realpathFailed: boolean } {
+  try {
+    const resolved = fs.realpathSync.native ? fs.realpathSync.native(target) : fs.realpathSync(target);
+    return { path: resolved, realpathFailed: false };
+  } catch {
+    try {
+      return { path: fs.realpathSync(target), realpathFailed: false };
+    } catch {
+      return { path: target, realpathFailed: true };
+    }
+  }
+}
+
+/** Path equality. Case and separator folding run only on win32. */
+function samePath(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (process.platform !== 'win32') return false;
+  const fold = (p: string) => p.replace(/\//g, '\\').toLowerCase();
+  return fold(a) === fold(b);
+}
+
+function waveNumberFromManifestPath(manifestPath: string | undefined | null): number | null {
+  if (!manifestPath) return null;
+  const match = path.basename(manifestPath).match(/^wave-([1-9][0-9]{0,2})-manifest\.json$/);
+  if (!match) return null;
+  const num = Number(match[1]);
+  return num >= 1 && num <= MAX_WAVE_NUMBER ? num : null;
+}
+
+/** Phase-directory basename, or null when the manifest sits directly under `.planning`. */
+function phaseTokenFromManifestPath(manifestPath: string | undefined | null): string | null {
+  if (!manifestPath) return null;
+  const parent = path.basename(path.dirname(manifestPath));
+  if (!parent || parent === '.planning' || parent === '.') return null;
+  return parent;
+}
+
+/**
+ * True when `branch` or `worktreePath` names this phase's wave: a delimited
+ * `wave-<N>` token (so wave-1 does not match wave-10) and, when the manifest
+ * lives in a phase directory, that directory's name.
+ */
+function worktreeNamesPhaseWave(
+  branch: string | null,
+  worktreePath: string,
+  wave: number,
+  phaseToken: string | null,
+): boolean {
+  const haystack = `${branch || ''}\n${worktreePath}`;
+  const waveRe = new RegExp(`(?:^|[^A-Za-z0-9])wave-${wave}(?![0-9])`);
+  if (!waveRe.test(haystack)) return false;
+  if (!phaseToken) return true;
+  if (haystack.split(/[/\\]/).includes(phaseToken)) return true;
+  if (!/^[A-Za-z0-9._-]+$/.test(phaseToken)) return false;
+  const phaseRe = new RegExp(`(?:^|[^A-Za-z0-9._-])${phaseToken}(?:[^A-Za-z0-9._-]|$)`);
+  return phaseRe.test(haystack);
+}
+
+function isAgentWorktreeIdentity(branch: string | null, worktreePath: string): boolean {
+  if (branch && WORKTREE_AGENT_BRANCH_RE.test(branch)) return true;
+  const baseName = path.basename(worktreePath);
+  if (WORKTREE_AGENT_BRANCH_RE.test(baseName)) return true;
+  const parts = worktreePath.split(/[/\\]/);
+  return parts.includes('worktrees')
+    && (baseName.startsWith('agent-') || baseName.startsWith('worktree-agent-') || baseName.startsWith('worktree-wf_'));
+}
+
+/**
+ * Count registered agent worktrees whose branch or path names the wave encoded
+ * in `manifestPath`. Used by the cleanup-tail retention check. Prunable and
+ * confirmed-missing entries are skipped. An unresolvable listed worktree that
+ * names the wave counts as present.
+ */
+function countOwnedAgentWorktrees(
+  repoRoot: string,
+  manifestPath: string,
+  deps: { execGit?: ExecGitFn } = {},
+): number {
+  const wave = waveNumberFromManifestPath(manifestPath);
+  if (wave == null) return 0;
+  const phaseToken = phaseTokenFromManifestPath(manifestPath);
+  const execGit = deps.execGit || execGitDefault;
+  const listed = readWorktreeList(repoRoot, { execGit });
+  if (!listed.ok) {
+    throw new Error(listed.reason || 'git_list_failed');
+  }
+  let count = 0;
+  for (const entry of listed.entries) {
+    if (entry.prunable) continue;
+    const resolved = path.resolve(repoRoot, entry.path);
+    if (!isAgentWorktreeIdentity(entry.branch, resolved)) continue;
+    const real = realpathOrSelf(resolved);
+    const names = worktreeNamesPhaseWave(entry.branch, resolved, wave, phaseToken)
+      || worktreeNamesPhaseWave(entry.branch, real.path, wave, phaseToken);
+    // A listed agent whose path will not resolve is present: skipping it would
+    // drop the manifest while the checkout is still there. A readable agent that
+    // does not name this wave is someone else's.
+    if (!names && !real.realpathFailed) continue;
+    try {
+      const st = fs.statSync(resolved);
+      if (!st.isDirectory()) continue;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
 function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: WorktreeDeps = {}): WaveCleanupResult {
   const execGit = deps.execGit || execGitDefault;
   const entries = Array.isArray(plan?.entries) ? plan.entries : [];
@@ -1178,10 +1293,13 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
 
   // #4853: check for unmanifested agent worktrees on disk before proceeding.
   // Entries in git worktree list are compared against the manifest's worktree_path set on every run.
-  // Scoped to this orchestrator's root (or plan.repoRoot) to avoid refusing cleanup when
-  // foreign lanes (#630) or quick tasks are active.
-  // Stale/prunable entries and confirmed-gone worktrees are ignored.
-  // Detached-HEAD agent worktrees (branch === null) are detected by worktree path/basename.
+  // Scoped by ownership, not by containment in the orchestrator root: agent worktrees live under
+  // <repo>/.claude/worktrees/, so a primary orchestrator in the main checkout contains every
+  // foreign-lane and quick-task worktree. A listed worktree counts only when its branch or path
+  // names this manifest's wave (delimited `wave-<N>`, plus the phase-directory name when the
+  // manifest lives in a phase directory). Stale/prunable entries and confirmed-gone worktrees
+  // are ignored. Detached-HEAD agents (branch === null) are detected by path. A listed worktree
+  // that names this wave but cannot be realpath'd is treated as present.
   let listResult: WorktreeListResult;
   try {
     listResult = readWorktreeList(plan.repoRoot, { execGit });
@@ -1202,75 +1320,43 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
 
   if (listResult.ok) {
     const manifestPaths = new Set<string>();
+    const rememberManifestPath = (p: string) => {
+      manifestPaths.add(p);
+      if (process.platform === 'win32') manifestPaths.add(p.toLowerCase());
+    };
     for (const entry of entries) {
       const raw = path.resolve(plan.repoRoot, entry.worktree_path);
-      manifestPaths.add(raw);
-      if (process.platform === 'win32') manifestPaths.add(raw.toLowerCase());
-      try {
-        const nativeReal = fs.realpathSync.native ? fs.realpathSync.native(raw) : fs.realpathSync(raw);
-        manifestPaths.add(nativeReal);
-        if (process.platform === 'win32') manifestPaths.add(nativeReal.toLowerCase());
-      } catch {
-        try {
-          const standardReal = fs.realpathSync(raw);
-          manifestPaths.add(standardReal);
-          if (process.platform === 'win32') manifestPaths.add(standardReal.toLowerCase());
-        } catch {
-          // ignore
-        }
-      }
+      rememberManifestPath(raw);
+      const real = realpathOrSelf(raw);
+      if (!real.realpathFailed) rememberManifestPath(real.path);
     }
+    const listedInManifest = (p: string) => manifestPaths.has(p)
+      || (process.platform === 'win32' && manifestPaths.has(p.toLowerCase()));
 
-    const effectiveOrchRoot = plan.orchestratorRoot
-      ? path.resolve(plan.repoRoot, plan.orchestratorRoot)
-      : path.resolve(plan.repoRoot);
-    let realOrchRoot: string;
-    try {
-      realOrchRoot = fs.realpathSync.native ? fs.realpathSync.native(effectiveOrchRoot) : fs.realpathSync(effectiveOrchRoot);
-    } catch {
-      try {
-        realOrchRoot = fs.realpathSync(effectiveOrchRoot);
-      } catch {
-        realOrchRoot = effectiveOrchRoot;
-      }
-    }
+    const waveNum = waveNumberFromManifestPath(plan.manifestPath);
+    const phaseToken = phaseTokenFromManifestPath(plan.manifestPath);
 
     const unmanifestedAgentWorktrees = listResult.entries.filter((e) => {
       if (e.prunable) return false;
+      if (waveNum == null) return false;
       const resolvedPath = path.resolve(plan.repoRoot, e.path);
-      let realPath: string;
-      try {
-        realPath = fs.realpathSync.native ? fs.realpathSync.native(resolvedPath) : fs.realpathSync(resolvedPath);
-      } catch {
-        try {
-          realPath = fs.realpathSync(resolvedPath);
-        } catch {
-          realPath = resolvedPath;
-        }
-      }
-      if (manifestPaths.has(resolvedPath) || manifestPaths.has(realPath) ||
-          (process.platform === 'win32' && (manifestPaths.has(resolvedPath.toLowerCase()) || manifestPaths.has(realPath.toLowerCase())))) {
-        return false;
-      }
+      const real = realpathOrSelf(resolvedPath);
+      if (listedInManifest(resolvedPath) || listedInManifest(real.path)) return false;
+      if (!isAgentWorktreeIdentity(e.branch, resolvedPath)) return false;
 
-      const isAgentBranch = Boolean(e.branch && WORKTREE_AGENT_BRANCH_RE.test(e.branch));
-      const baseName = path.basename(resolvedPath);
-      const isAgentPath = WORKTREE_AGENT_BRANCH_RE.test(baseName)
-        || (resolvedPath.split(path.sep).includes('worktrees') && (baseName.startsWith('agent-') || baseName.startsWith('worktree-agent-') || baseName.startsWith('worktree-wf_')));
-      if (!isAgentBranch && !isAgentPath) {
-        return false;
-      }
+      const names = worktreeNamesPhaseWave(e.branch, resolvedPath, waveNum, phaseToken)
+        || worktreeNamesPhaseWave(e.branch, real.path, waveNum, phaseToken);
+      // Unresolvable listed agent: present. A readable agent that does not name
+      // this wave belongs to another lane or a quick task.
+      if (!names && !real.realpathFailed) return false;
 
       try {
         const st = (deps.statSync || fs.statSync)(resolvedPath);
         if (!st.isDirectory()) return false;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-          return false;
-        }
+        if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
       }
-
-      return isContainedIn(realPath, realOrchRoot) || isContainedIn(resolvedPath, effectiveOrchRoot);
+      return true;
     });
 
     if (unmanifestedAgentWorktrees.length > 0) {
@@ -1353,35 +1439,15 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
   const resolveAgainstRepoRoot = (worktreePath: string): string => path.resolve(plan.repoRoot, worktreePath);
   const findRegistered = (listed: WorktreeListResult, target: string): WorktreeEntry | undefined => {
     if (!listed.ok) return undefined;
-    const exact = listed.entries.find((listedEntry) => {
-      const p = resolveAgainstRepoRoot(listedEntry.path);
-      return p === target || (process.platform === 'win32' && p.toLowerCase() === target.toLowerCase());
-    });
+    const exact = listed.entries.find((listedEntry) => samePath(resolveAgainstRepoRoot(listedEntry.path), target));
     if (exact) return exact;
-    let realTarget: string;
-    try {
-      realTarget = fs.realpathSync.native ? fs.realpathSync.native(target) : fs.realpathSync(target);
-    } catch {
-      try {
-        realTarget = fs.realpathSync(target);
-      } catch {
-        realTarget = target;
-      }
-    }
+    const realTarget = realpathOrSelf(target);
     return listed.entries.find((listedEntry) => {
       const resolved = resolveAgainstRepoRoot(listedEntry.path);
-      if (resolved === realTarget || (process.platform === 'win32' && resolved.toLowerCase() === realTarget.toLowerCase())) return true;
-      try {
-        const realResolved = fs.realpathSync.native ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved);
-        return realResolved === realTarget || (process.platform === 'win32' && realResolved.toLowerCase() === realTarget.toLowerCase());
-      } catch {
-        try {
-          const standardResolved = fs.realpathSync(resolved);
-          return standardResolved === realTarget || (process.platform === 'win32' && standardResolved.toLowerCase() === realTarget.toLowerCase());
-        } catch {
-          return false;
-        }
-      }
+      if (samePath(resolved, realTarget.path)) return true;
+      const realResolved = realpathOrSelf(resolved);
+      if (realResolved.realpathFailed || realTarget.realpathFailed) return false;
+      return samePath(realResolved.path, realTarget.path);
     });
   };
 
@@ -1965,6 +2031,7 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
   }
 
   const plan = planWorktreeWaveCleanup(cwd, manifest);
+  plan.manifestPath = resolvedManifestPath;
   const result = executeWorktreeWaveCleanupPlan(plan);
   let manifestUnlinked = false;
   if (result.ok) {
@@ -3288,8 +3355,11 @@ function cmdWorktreeWorkerComplete(cwd: string, args: string[] = [], deps: Recor
 function parseValidWaveNumber(wave: number | string): number {
   const rawStr = String(wave).trim();
   const num = typeof wave === 'number' ? wave : Number(rawStr);
-  if (!/^\d+$/.test(rawStr) || !Number.isInteger(num) || !Number.isSafeInteger(num) || num <= 0) {
-    throw new Error(`Invalid wave "${wave}": wave must be a positive integer`);
+  // 1–999 matches WAVE_MANIFEST_PATHSPEC_EXCLUDES (1–3 digit globs). 1000+ is
+  // rejected so a manifest the commit pathspec does not exclude cannot be created.
+  // Leading zeros stay accepted: "007" is wave 7, the same normalization as before.
+  if (!/^\d+$/.test(rawStr) || !Number.isSafeInteger(num) || num < 1 || num > MAX_WAVE_NUMBER) {
+    throw new Error(`Invalid wave "${wave}": wave must be a positive integer from 1 to 999`);
   }
   return num;
 }
@@ -3346,6 +3416,39 @@ function findPhaseWaveManifests(
  * #4853: CLI verb: derive or locate durable wave worktree manifest(s).
  * Usage: worktree manifest-path (--phase-dir <dir> | --phase <phase-id>) [--wave <n>] [--raw]
  */
+function cmdWorktreeResidualOwned(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const isRaw = args.includes('--raw');
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+  const idx = args.indexOf('--manifest');
+  const manifestArg = idx >= 0 && idx + 1 < args.length ? args[idx + 1] : '';
+  if (!manifestArg || manifestArg.startsWith('--')) {
+    writeErr('Usage: worktree residual-owned --manifest <path> [--raw]\n');
+    if (!isRaw) {
+      write(`${JSON.stringify({ ok: false, reason: 'missing_manifest', error: 'Usage: worktree residual-owned --manifest <path> [--raw]' }, null, 2)}\n`);
+    }
+    process.exitCode = 2;
+    return;
+  }
+  const resolved = path.resolve(cwd, manifestArg);
+  try {
+    const execGit = (deps.execGit as ExecGitFn | undefined) || execGitDefault;
+    const count = countOwnedAgentWorktrees(cwd, resolved, { execGit });
+    if (isRaw) {
+      write(`${count}\n`);
+      return;
+    }
+    write(`${JSON.stringify({ ok: true, residual_owned: count }, null, 2)}\n`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    writeErr(`[gsd] worktree.residual-owned: ${message}\n`);
+    if (!isRaw) {
+      write(`${JSON.stringify({ ok: false, reason: message || 'git_list_failed' }, null, 2)}\n`);
+    }
+    process.exitCode = 1;
+  }
+}
+
 function cmdWorktreeManifestPath(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
   const flag = (name: string): string => {
     const i = args.indexOf(name);
@@ -3534,6 +3637,7 @@ export = {
   pruneOrphanedWorktrees,
   resolveWaveManifestPath,
   findPhaseWaveManifests,
+  cmdWorktreeResidualOwned,
   cmdWorktreeManifestPath,
   WAVE_MANIFEST_BASENAME_RE,
   WAVE_MANIFEST_PATHSPEC_EXCLUDES,
