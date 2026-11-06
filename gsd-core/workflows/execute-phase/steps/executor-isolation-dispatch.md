@@ -304,7 +304,7 @@ if [ -n "$_PROMPT_BYTES" ] && [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
   echo "FATAL: executor prompt file for plan {plan_number} holds a NUL byte, which a shell variable cannot carry. Halting." >&2
   exit 69
 fi
-if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE" && printf x); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
+if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE" 2>/dev/null && printf x); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
 EXECUTOR_PROMPT=${EXECUTOR_PROMPT%x}
 rm -rf -- "$PROMPT_FILE" || :
 [ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 69; }

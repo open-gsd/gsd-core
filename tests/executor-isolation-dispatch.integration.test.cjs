@@ -23,7 +23,9 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   let STEM;
   before(() => {
     content = readFileNormalized(DISPATCH_STEP_PATH);
-    PREFIX = /^_PROMPT_PREFIX='([^']+)'/m.exec(content)[1];
+    const declared = /^_PROMPT_PREFIX='([^']+)'/m.exec(content);
+    assert.ok(declared, 'the step declares _PROMPT_PREFIX');
+    PREFIX = declared[1];
     STEM = `${PREFIX}-${WAVE}-${PHASE}-${PLAN}`;
   });
 
@@ -32,8 +34,8 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   // The wave id the blocks take from $WAVE_WORKTREE_MANIFEST, so one wave's file is another wave's stranger.
   const WAVE = 'gsd-worktree-wave-aBc123';
   const BOM = String.fromCharCode(0xfeff);
-  // The exit code of each halt #5531 adds: the typed value that tells them apart. The older guards keep exit 1.
-  // Every added halt exits 69 UNAVAILABLE (docs/reference/exit-codes.md), so each case below is a separate input that only its own guard catches.
+  // Every halt #5531 adds exits 69 UNAVAILABLE (docs/reference/exit-codes.md), so the exit code does not tell them apart: each case below
+  // is a separate input, and a stub mark or a payload check shows that its own guard fired. The older guards keep exit 1.
   const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 69, two: 69, nul: 69, unreadable: 69, guard: 1 };
   // The two markers the read-and-check guards need, so a payload after them reaches the last guard.
   const GUARDED = '<required_reading>\nskipped_gitignored\n';
@@ -161,14 +163,16 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     for (const [name, [setup, code]] of Object.entries(cases)) {
       const root = path.join(dir, name);
       const files = setup(root);
-      // A stubbed grep leaves a mark, so a halt before the first marker check shows the empty guard itself fired and not a later one.
-      const mark = path.join(dir, `${name}-grep-ran`);
-      const prelude = name === 'empty' ? `grep() { : > "${mark}"; return 1; }\n` : '';
+      // A stub leaves a mark when a later step runs: grep for the empty guard, cat for the no-match guard (without its guard the empty
+      // path would fail inside cat and still exit 69).
+      const mark = path.join(dir, `${name}-stub-ran`);
+      const stub = { empty: 'grep', none: 'cat' }[name];
+      const prelude = stub ? `${stub}() { : > "${mark}"; return 1; }\n` : '';
       const r = runBlock(root, `${prelude}${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
       assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
       assert.equal(r.exitCode, code, `${name} must halt with its code: ${r.stderr}`);
       assert.equal(r.stdout, '', `${name}: no prompt printed`);
-      if (name === 'empty') assert.ok(!fs.existsSync(mark), 'the empty guard itself halts, before any marker check');
+      if (stub) assert.ok(!fs.existsSync(mark), `${name}: the guard itself halts, before the ${stub} step`);
       for (const f of files) assert.ok(!fs.existsSync(f) && fs.readdirSync(path.dirname(f)).length === 0, `${name}: every match removed`);
     }
   });
