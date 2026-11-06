@@ -3,7 +3,8 @@
 // The audit-milestone workflow text and its step 5.6 (Open Work, #5482), shared by the tests that pin it.
 const fs = require('node:fs');
 const path = require('node:path');
-const { collectSection } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { collectSection, scanInlineCodeSpans } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../../gsd-core/bin/lib/text-lines.cjs');
 
 const AUDIT_MD = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'audit-milestone.md');
 
@@ -17,7 +18,15 @@ function openWorkStep() {
 
 // The entry field names step 5.6 tells the agent to report.
 function openWorkStepFields() {
-  return openWorkStep().match(/Report each entry \(([^)]*)\)/)[1].match(/`([a-z_]+)`/g).map((f) => f.slice(1, -1));
+  const sentence = splitLines(openWorkStep()).find((l) => l.includes('Report each entry ('));
+  const list = sentence.slice(sentence.indexOf('Report each entry (') + 'Report each entry ('.length);
+  return scanInlineCodeSpans(list.slice(0, list.indexOf(')'))).map((span) => span.content);
 }
 
-module.exports = { auditMilestoneMd, openWorkStep, openWorkStepFields };
+// The lines between <success_criteria> and </success_criteria> of the workflow.
+function successCriteria() {
+  const lines = splitLines(auditMilestoneMd());
+  return lines.slice(lines.indexOf('<success_criteria>') + 1, lines.indexOf('</success_criteria>'));
+}
+
+module.exports = { auditMilestoneMd, openWorkStep, openWorkStepFields, successCriteria };
