@@ -3675,6 +3675,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual([r.status, r.commits], [1, 1]);
     });
 
+    test('an unrelated staged deletion with a newline in its path does not block the REQUIREMENTS.md commit', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
+      const r = run(['.planning/REQUIREMENTS.md', 'a\nb.txt']);
+      assert.deepStrictEqual([r.status, r.commits, r.head], [0, 2, ['.planning/REQUIREMENTS.md']]);
+    });
+
     test('zero staged deletions: exits 0, commits nothing', () => {
       const r = run([]);
       assert.deepStrictEqual([r.status, r.commits], [0, 1]);
