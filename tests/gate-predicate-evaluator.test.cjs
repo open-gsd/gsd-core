@@ -18,7 +18,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const fc = require('fast-check');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
   evaluatePredicate,
@@ -233,20 +233,20 @@ describe('evaluatePredicate — message trimming', () => {
   const exitPrefix = (code) => `command exited ${code}: `;
   const TIMEOUT_PREFIX = 'command timed out after 30s: ';
 
-  const assertCappedTail = (res, prefix) => {
-    assert.ok(res.message.startsWith(prefix));
-    assert.ok(res.message.endsWith('MARKER'));
-    assert.equal(res.message.length, COMMAND_MAX_OUTPUT_CHARS);
+  const assertCappedTail = (res, prefix, filler) => {
+    const tail = filler.repeat(COMMAND_MAX_OUTPUT_CHARS - prefix.length - 'MARKER'.length) + 'MARKER';
+    assert.equal(res.message, prefix + tail);
   };
 
   test('non-zero exit keeps the stderr tail and the exit prefix within the cap', () => {
-    assertCappedTail(run({ exitCode: 3, stderr: 'E'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }), exitPrefix(3));
+    assertCappedTail(run({ exitCode: 3, stderr: 'E'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }), exitPrefix(3), 'E');
   });
 
   test('non-zero exit keeps the stdout tail when stderr is empty', () => {
     assertCappedTail(
       run({ exitCode: 2, stderr: '', stdout: 'O'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }),
       exitPrefix(2),
+      'O',
     );
   });
 
@@ -254,16 +254,15 @@ describe('evaluatePredicate — message trimming', () => {
     assertCappedTail(
       run({ timedOut: true, exitCode: null, stderr: 'E'.repeat(COMMAND_MAX_OUTPUT_CHARS + 50) + 'MARKER' }),
       TIMEOUT_PREFIX,
+      'E',
     );
   });
 
   test('timeout with empty stderr keeps the HEAD of a long command (program name survives)', () => {
     const command = 'myprog --flag ' + 'a'.repeat(COMMAND_MAX_OUTPUT_CHARS) + ' TAILEND';
     const res = run({ timedOut: true, exitCode: null, stderr: '' }, command);
-    assert.ok(res.message.startsWith(TIMEOUT_PREFIX));
-    assert.ok(res.message.includes(': myprog --flag '));
-    assert.ok(!res.message.includes('TAILEND'));
-    assert.equal(res.message.length, COMMAND_MAX_OUTPUT_CHARS);
+    const head = command.slice(0, COMMAND_MAX_OUTPUT_CHARS - TIMEOUT_PREFIX.length);
+    assert.equal(res.message, TIMEOUT_PREFIX + head);
   });
 
   test('tail cut between an emoji surrogate pair drops the orphaned low surrogate', () => {

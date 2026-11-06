@@ -23,6 +23,13 @@ describe('capCodeUnits', () => {
     assert.equal(capCodeUnits('abc', 3, 'tail'), 'abc');
   });
 
+  test('cuts one unit below and above the budget', () => {
+    assert.equal(capCodeUnits('ab', 3, 'head'), 'ab');
+    assert.equal(capCodeUnits('ab', 3, 'tail'), 'ab');
+    assert.equal(capCodeUnits('abc', 2, 'head'), 'ab');
+    assert.equal(capCodeUnits('abc', 2, 'tail'), 'bc');
+  });
+
   test('a non-positive budget keeps nothing', () => {
     assert.equal(capCodeUnits('abc', 0, 'head'), '');
     assert.equal(capCodeUnits('abc', 0, 'tail'), '');

@@ -221,7 +221,7 @@ Leaf module owning `\r?\n` line-terminator splitting and CRLF normalization, per
 
 ### Code Unit Cap Module
 Leaf module (`src/code-unit-cap.cts`, #5639) owning the surrogate-safe UTF-16 length cap: `capCodeUnits(text, max, 'head' | 'tail')` cuts at `max` code units and drops an orphaned surrogate half. Zero imports; shared by `gate-predicate-evaluator`, `runtime-artifact-conversion` and `verification`.
-`SEAM.code-unit-cap.owns=the surrogate-safe cut of a string to at most N UTF-16 code units (head or tail), owned solely by src/code-unit-cap.cts capCodeUnits`
+`SEAM.code-unit-cap.owns=the surrogate-safe cut of a string to at most N UTF-16 code units (head or tail), implemented by src/code-unit-cap.cts capCodeUnits`
 `SEAM.code-unit-cap.enforced-by=test:tests/code-unit-cap.test.cjs`
 
 ### Frontmatter Module
