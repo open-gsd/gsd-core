@@ -617,7 +617,7 @@ CRUD for phases in ROADMAP.md — add, insert, remove, or edit phases with a sin
 ```bash
 /gsd-phase "Add authentication system"          # Append new phase with description
 /gsd-phase --insert 3 "Fix auth race condition" # Insert between phase 3 and 4 → creates 3.1
-/gsd-phase --insert 15.2 --sibling "x"          # After a decimal phase: peer 15.3 (default nests as 15.2.1)
+/gsd-phase --insert 15.2 --sibling "x"          # After a decimal phase: peer 15.3 (default nests as 15.2.1; bracket phase ids refuse that nested form)
 /gsd-phase --remove 7               # Remove phase 7, renumber 8→7, 9→8, etc.
 /gsd-phase --edit 5                 # Edit any field of phase 5
 /gsd-phase --edit 5 --force         # Edit phase 5 even if in-progress or completed
