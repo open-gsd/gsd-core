@@ -1481,7 +1481,7 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
 
   test('a repeated-key block carrying no failureType at all recovers the same way', () => {
     // node:test always writes failureType, but recovery must not depend on it:
-    // the scan for repeated failureType keys runs on a match that can be null.
+    // the decoded-write list simply contains no failureType entry to count.
     const noFailureType = THROWS_REGEXP_DIAG.filter((line) => !line.startsWith('  failureType'));
     const result = classifyRedEvidence(validRedInput({
       output: dupDiagTAP(noFailureType),
@@ -1613,9 +1613,9 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
   });
 
   test('a repeated failureType cannot be hidden behind any YAML key spelling (review finding)', () => {
-    // The ambiguity rule is decided by the YAML parser's decoded keys, not by a text
-    // scan: every spelling js-yaml resolves to failureType counts. The escape and
-    // explicit-key rows are spellings a text count demonstrably missed; the
+    // The ambiguity rule is decided by the YAML parser's decoded writes, not by a
+    // text scan: every spelling js-yaml resolves to failureType counts. The escape and
+    // explicit-key rows are spellings the original text count demonstrably missed; the
     // escaped-line-break row is defense in depth — js-yaml refuses a line-broken
     // implicit key in the whole-body tolerant parse, and the segment parse refuses
     // it again if it is ever spelled as an explicit key.
@@ -1661,9 +1661,9 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
   });
 
   test('a single escape-spelled failureType key recovers like the plain form', () => {
-    // The unescape only feeds the ambiguity count: one failureType key, however
-    // spelled, does not make the signal ambiguous, and the decoded value reaches
-    // the interruption check through the tolerant parse like any other value.
+    // One decoded failureType write, however spelled, does not make the signal
+    // ambiguous, and the decoded value reaches the interruption check through
+    // the per-write judgment like any other value.
     const diag = [
       '  "' + String.fromCharCode(92) + 'x66ailureType": \'testCodeFailure\'',
       "  error: 'first'",
@@ -1740,6 +1740,40 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.equal(result.verdict, 'INVALID_RED');
     assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'),
       JSON.stringify(result.evidence.report_errors));
+    // Re-review finding: judging the signature on the last-wins merge is bypassed by
+    // writing the signature first and a later benign value last — the very repeated
+    // shape this recovery exists for. Every write counts, in any order.
+    const maskedSignature = [
+      '  duration_ms: 28.3',
+      "  failureType: 'testCodeFailure'",
+      "  error: 'test failed'",
+      "  code: 'ERR_TEST_FAILURE'",
+      "  error: 'x'",
+      "  stack: 'frame one'",
+      "  stack: 'frame two'",
+    ].join('\n');
+    const masked = classifyRedEvidence({
+      command: 'node --test crash.test.cjs', exitCode: 1,
+      output: output.replace(loadFailureDup.join('\n'), maskedSignature),
+      targetTest: 'crash.test.cjs',
+    });
+    assert.equal(masked.verdict, 'INVALID_RED');
+    assert.ok(masked.evidence.report_errors.includes('Non-TAP data in report'),
+      JSON.stringify(masked.evidence.report_errors));
+    // Control: a repeated error whose writes are BOTH ordinary values still recovers.
+    const ordinaryDup = classifyRedEvidence({
+      command: 'node --test crash.test.cjs', exitCode: 1,
+      output: output.replace(loadFailureDup.join('\n'), [
+        "  failureType: 'testCodeFailure'",
+        "  error: 'first failure'",
+        "  error: 'second failure'",
+        "  stack: 'frame one'",
+        "  stack: 'frame two'",
+      ].join('\n')),
+      targetTest: 'crash.test.cjs',
+    });
+    assert.equal(ordinaryDup.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(ordinaryDup.evidence.report_errors, []);
   });
 
   test('repeated keys alongside another YAML error stay refused', () => {
@@ -1789,6 +1823,23 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.equal(result.verdict, 'INVALID_RED');
     assert.equal(result.reason, 'invalid_record');
     assert.ok(result.evidence.report_errors.length > 0);
+  });
+
+  test('the framing boundary: an empty body is outside recovery either way it arrives', () => {
+    // Boundary rows for the `---`/`...` framing (CLAUDE.md boundary coverage): an
+    // EMPTY diagnostic block inside a test point carries no keys, so tap-parser's
+    // YAML parse returns nothing and the block is ignored — the report stays valid
+    // with no recovery involved. The same two lines loose in the stream (no test
+    // point owning them) are non-TAP data and the report is refused.
+    const emptyDiag = ['TAP version 13', '# Subtest: t', 'not ok 1 - t', '  ---', '  ...', '1..1', ''].join('\n');
+    const ignored = classifyRedEvidence({ command: 'node --test', exitCode: 1, output: emptyDiag, targetTest: 't' });
+    assert.equal(ignored.verdict, 'RED_EVIDENCE_OK');
+    assert.deepEqual(ignored.evidence.report_errors, []);
+    const strayMarkers = ['TAP version 13', '# Subtest: t', 'not ok 1 - t',
+      '  ---', "  error: 'a'", "  error: 'b'", '  ...', '---', '...', '1..1', ''].join('\n');
+    const refused = classifyRedEvidence({ command: 'node --test', exitCode: 1, output: strayMarkers, targetTest: 't' });
+    assert.equal(refused.verdict, 'INVALID_RED');
+    assert.ok(refused.evidence.report_errors.includes('Non-TAP data in report'));
   });
 
   test('a plan-first report truncated mid-diagnostic is refused even with a complete plan', () => {

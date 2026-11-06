@@ -66,23 +66,25 @@ const INTERRUPTION_ISSUE = 'Test run interrupted by cancellation, hook failure, 
 class AnchorDetectedSignal extends Error {}
 
 /**
- * Count how many top-level mapping keys of a diagnostic-block body decode to `failureType`
- * (#5819 review: the key identity is decided by the YAML parser, never by scanning text).
- * The body is split into one segment per top-level key line — the key line at the block's
- * base indent plus every deeper line belonging to it (values, block scalars, nested maps,
- * explicit-key `: value` lines, quoted-key continuations) — and each segment is parsed on
- * its own: STRICTLY first (a segment that only parses with the duplicate-key relaxation —
- * a flow mapping whose repeated entries collapse to one distinct key, a nested duplicate —
- * carries more entries than distinct keys and the whole block is refused), then with the
- * tolerant, anchor-refusing options, and the single distinct key of the result IS the
- * decoded key. Spellings a text scan misses — `"\U00000066ailureType"`, an explicit
- * `? failureType # c` — decode identically here, and `failureType:` inside a VALUE stays
- * a value. Anything that is not a clean block mapping of single-key segments — a
- * flow-mapping body, a scalar body, a segment that does not parse, content shallower
- * than the base indent, a document marker — returns null: a key set the recovery cannot
- * derive from the parse is an ambiguity it fails closed on.
+ * Decode every top-level mapping write of a diagnostic-block body as (key, value)
+ * pairs, one per segment (#5819 review: key identity is decided by the YAML parser,
+ * never by scanning text; the re-review added that gate-relevant VALUES are judged
+ * per write too, not on the last-wins merge). The body is split into one segment per
+ * top-level key line — the key line at the block's base indent plus every deeper line
+ * belonging to it (values, block scalars, nested maps, explicit-key `: value` lines,
+ * quoted-key continuations) — and each segment is parsed on its own: STRICTLY first
+ * (a segment that only parses with the duplicate-key relaxation — a flow mapping whose
+ * repeated entries collapse to one distinct key, a nested duplicate — carries more
+ * entries than distinct keys and the whole block is refused), then with the tolerant,
+ * anchor-refusing options; the single distinct key of the result IS the decoded key and
+ * its value the decoded value. Spellings a text scan misses — `"\U00000066ailureType"`,
+ * an explicit `? failureType # c` — decode identically here, and `failureType:` inside
+ * a VALUE stays a value. Anything that is not a clean block mapping of single-key
+ * segments — a flow-mapping body, a scalar body, a segment that does not parse, content
+ * shallower than the base indent, a document marker — returns null: a key set the
+ * recovery cannot derive from the parse is an ambiguity it fails closed on.
  */
-function countDecodedFailureTypeKeys(body: string, parseSegment: (segment: string) => unknown): number | null {
+function decodedKeyWrites(body: string, parseSegment: (segment: string) => unknown): Array<{ key: string; value: unknown }> | null {
   const segments: string[][] = [];
   let base: number | null = null;
   for (const line of body.split('\n')) {
@@ -102,7 +104,7 @@ function countDecodedFailureTypeKeys(body: string, parseSegment: (segment: strin
       return null;
     }
   }
-  let writes = 0;
+  const writes: Array<{ key: string; value: unknown }> = [];
   for (const segment of segments) {
     let parsed: unknown;
     try {
@@ -111,9 +113,9 @@ function countDecodedFailureTypeKeys(body: string, parseSegment: (segment: strin
       return null;
     }
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-    const keys = Object.keys(parsed);
-    if (keys.length !== 1) return null;
-    if (keys[0] === 'failureType') writes++;
+    const entries = Object.entries(parsed);
+    if (entries.length !== 1) return null;
+    writes.push({ key: entries[0][0], value: entries[0][1] });
   }
   return writes;
 }
@@ -136,6 +138,11 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
   // Framing: `---`, at least one body line, `...` — the shape tap-parser re-emits for a
   // diagnostic block its YAML refused (emitExtra may indent the whole block by 4 spaces).
   if (lines.at(-1) !== '' || lines.length < 4) return null;
+  // A lone CR: js-yaml breaks lines on a bare \r (readLineBreak, ch === 13) while this
+  // segmentation splits on \n, so the two would disagree on the key set. tap-parser's
+  // own line splitter never passes one through, but the function refuses any \r in the
+  // block so it is fail-closed on its own contract, not on its caller's.
+  if (extra.includes('\r')) return null;
   lines.pop();
   const openIndent = /^(\s*)---$/.exec(lines[0] ?? '')?.[1];
   if (openIndent === undefined || /^(\s*)\.\.\.$/.exec(lines.at(-1) ?? '')?.[1] !== openIndent) return null;
@@ -160,25 +167,29 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
   } catch (err) {
     if (!(err instanceof YAMLException) || !/duplicated mapping key/i.test(err.message)) return null;
   }
-  // The interruption signal must be unambiguous, and its identity is judged the same way
-  // the parser judges it: every top-level key is decoded by a strict-then-tolerant parse
-  // of its own segment (see countDecodedFailureTypeKeys). A body whose key set cannot be
-  // derived that way — flow mappings included — is refused whole rather than counted in
-  // text.
-  const failureTypeWrites = countDecodedFailureTypeKeys(body, (segment) => {
+  // Every gate-relevant signal is judged over its WRITES, not the last-wins merge: the
+  // interruption signal must be unambiguous (failureType written at most once), and the
+  // #5721 load-failure signature must not be maskable by writing a benign value over it.
+  // Each write's key and value are decoded by a strict-then-tolerant parse of its own
+  // segment (see decodedKeyWrites); a body whose key set cannot be derived that way —
+  // flow mappings included — is refused whole rather than counted in text.
+  const writes = decodedKeyWrites(body, (segment) => {
     yamlLoad(segment, { schema: FAILSAFE_SCHEMA, ...refuseAnchors });
     return yamlLoad(segment, { json: true, schema: FAILSAFE_SCHEMA, ...refuseAnchors });
   });
-  if (failureTypeWrites === null || failureTypeWrites > 1) return null;
+  if (writes === null) return null;
+  // The interruption signal: `failureType` written twice, in any spelling, is ambiguous.
+  if (writes.filter((write) => write.key === 'failureType').length > 1) return null;
   // #5721: a `not ok N - <file>` diagnostic whose error is 'test failed' with
   // ERR_TEST_FAILURE asserted nothing — a file that crashed at load is load failure,
-  // never RED. The assert handler flags that signature from the PARSED diagnostic;
-  // a recovered block bypasses that channel (its diag is null), so the same signature
-  // in the recovered map refuses the recovery here instead of letting the file-named
-  // entry prove RED.
-  const recovered = tolerant as Record<string, unknown>;
-  if (recovered['error'] === 'test failed' && recovered['code'] === 'ERR_TEST_FAILURE') return null;
-  return recovered;
+  // never RED. The assert handler flags that signature from the PARSED diagnostic; a
+  // recovered block bypasses that channel (its diag is null), so ANY error write decoding
+  // to 'test failed' together with ANY code write decoding to ERR_TEST_FAILURE refuses
+  // the recovery — a later benign write cannot mask an earlier signature write.
+  const sawLoadFailureError = writes.some((write) => write.key === 'error' && write.value === 'test failed');
+  const sawLoadFailureCode = writes.some((write) => write.key === 'code' && write.value === 'ERR_TEST_FAILURE');
+  if (sawLoadFailureError && sawLoadFailureCode) return null;
+  return tolerant as Record<string, unknown>;
 }
 
 function parseTap(output: string): TestReport {

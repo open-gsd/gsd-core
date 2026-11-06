@@ -107,7 +107,7 @@ const TOP_LEVEL = '<top-level>';
 //     from a package/git-spec tree that may carry no built bin/lib. Pinned to the
 //     owner by the same parity test.
 //   - report-parser.cts `recoverDuplicateKeyDiagnostic` and its helper
-//     `countDecodedFailureTypeKeys` (#5819): their `---` regexes recognize the TAP
+//     `decodedKeyWrites` (#5819): their `---` regexes recognize the TAP
 //     yamlish DOCUMENT delimiter (`---` opens a diagnostic block, `...` closes it —
 //     the YAML spec's document markers, not a Markdown fence) of the block tap-parser
 //     re-emits when its YAML refuses the block, possibly indented by emitExtra's
@@ -120,7 +120,7 @@ const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [path.join('scripts', 'changeset', 'parse.cjs'), new Set(['locateFrontmatterFence'])],
   [path.join('.opencode', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
   [path.join('.kilo', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
-  [path.join('src', 'report-parser.cts'), new Set(['recoverDuplicateKeyDiagnostic', 'countDecodedFailureTypeKeys'])],
+  [path.join('src', 'report-parser.cts'), new Set(['recoverDuplicateKeyDiagnostic', 'decodedKeyWrites', 'countDecodedFailureTypeKeys'])],
 ]);
 
 // FRAGMENT-SCOPED exemptions for DETECTORS (#5105), each pinned to the exact
