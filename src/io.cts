@@ -485,8 +485,8 @@ function formatDiagnosticToken(value: string): string {
 
 /**
  * Map an ERROR_REASON wire value onto a declared outcome name (#3912,
- * ADR-3889 §4). Closed over the 28-member enum: every reason gets an
- * explicit entry below, so a 29th member added without a mapping falls
+ * ADR-3889 §4). Closed over the 31-member enum: every reason gets an
+ * explicit entry below, so a 32nd member added without a mapping falls
  * through to the `?? 'FAIL'` default rather than silently mis-projecting —
  * and tests/A1 iterates `Object.values(ERROR_REASON)`, so that default is
  * exactly what makes an unmapped addition visible instead of invisible.
@@ -548,7 +548,9 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   // as SUMMARY_EXTRACT_UNPARSEABLE just above.
   [ERROR_REASON.VERIFICATION_STATUS_INVALID]: 'UNAVAILABLE',
   // #5482: a prerequisite of the close (no open work reported by a blocking
-  // ship:pre predicate gate) is unmet.
+  // ship:pre predicate gate) is unmet. UNAVAILABLE follows the sibling refusals
+  // PHASE_VERIFICATION_INCOMPLETE and PHASE_PLAN_COVERAGE_INCOMPLETE above: they too
+  // refuse after a check ran.
   [ERROR_REASON.MILESTONE_GATE_BLOCKED]: 'UNAVAILABLE',
 
   // Self-failure: the run itself broke, not its inputs.
