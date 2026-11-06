@@ -124,7 +124,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     );
   });
 
-  test('#5531: block 1 halts with the unavailable code when the directory, the leftover removal or mktemp fails', (t) => {
+  test('#5531: block 1 halts with the unavailable code when the directory, a dangling .claude link, the leftover removal or mktemp fails', (t) => {
     const dir = tempDir(t);
     // The directory halt and the later mktemp halt share exit 69: a stubbed mktemp leaves a mark, so a halt before it shows the directory guard fired.
     const cases = {
