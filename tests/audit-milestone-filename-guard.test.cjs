@@ -18,7 +18,7 @@ const path = require('node:path');
 
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { auditMilestoneMd, openWorkStep, openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
+const { auditMilestoneMd, openWorkStep, openWorkStepFields, successCriteria } = require('./helpers/audit-milestone-step.cjs');
 
 // audit-milestone.md is shipped workflow text — the bytes ARE what the
 // runtime loads; a structural scan over it tests the deployed contract.
@@ -48,6 +48,8 @@ test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passe
   assert.match(step, /milestone complete \{version\} --dry-run/);
   assert.match(step, /would_refuse/);
   assert.match(step, /gaps_found/);
+  // A dry-run that fails for a reason other than a gate (unstarted phase, truncated window) leaves the audit result alone.
+  assert.match(step, /fails for any other reason .*leave the audit result as it was/);
 });
 
 // #5482: the entries step 5.6 reports need a slot in the report: the step-6 YAML, the gaps_found
@@ -55,14 +57,14 @@ test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passe
 test('#5482: open-work entries have a slot in the YAML, the gaps_found output and the success criteria', () => {
   const md = auditMilestoneMd();
   const named = openWorkStepFields();
-  assert.deepEqual(named, ['cap_id', 'phase', 'gate_message', 'details']);
+  assert.deepEqual(named, ['cap_id', 'phase', 'reason', 'gate_message', 'details']);
   const aggregate = collectSection(md, (h) => h.text.startsWith('6.'));
   assert.ok(aggregate, '#5482: step 6 must exist');
   const lines = splitLines(aggregate.body);
-  const slot = lines.findIndex((l) => /^ {2}open_work:/.test(l));
+  const slot = lines.findIndex((l) => l.startsWith('  open_work:'));
   assert.ok(slot >= 0, '#5482: the step-6 YAML gaps: block needs an open_work list');
   const yaml = [];
-  for (let i = slot + 1; i < lines.length && /^ {4}/.test(lines[i]); i++) yaml.push(lines[i]);
+  for (let i = slot + 1; i < lines.length && lines[i].startsWith('    '); i++) yaml.push(lines[i]);
   const section = collectSection(md, (h) => h.text === 'Open Work');
   assert.ok(section, '#5482: the gaps_found output needs an Open Work section');
   for (const f of named) {
@@ -74,7 +76,7 @@ test('#5482: open-work entries have a slot in the YAML, the gaps_found output an
   for (const f of ['gate_message', 'details']) {
     assert.ok(!unfenced.body.includes(`{${f}}`), `{${f}} must sit inside a code fence in the Open Work section`);
   }
-  assert.match(md.match(/<success_criteria>[\s\S]*<\/success_criteria>/)[0], /open work/i);
+  assert.match(successCriteria().join('\n'), /open work/i);
 });
 
 // #5482: a dry-run that evaluated no gate (gate_warnings) must not read as clean, in the audit and in the close preview.
