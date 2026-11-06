@@ -997,15 +997,34 @@ describe('#5831: state prune never loses entries', () => {
     assert.ok(lockReleased(), 'the STATE.md lock is released');
   });
 
-  // With no archive before the run, a file at the path after a failed write cannot be proven to
-  // be this run's (no identity was ever recorded for it): it is never deleted. The error carries
-  // both causes (EIO and ESTALE) and STATE.md, which still holds every entry, is untouched.
-  test('an archive write that creates a damaged archive and then throws leaves it in place and reports both causes (archive absent)', () => {
+  // The write contract: with `onCreated`, the writer reports the identity of the file it
+  // created. A write that creates a damaged archive, reports it, and then throws is undone by
+  // removing exactly that file.
+  test('an archive write that creates a damaged archive and then throws is undone before the error propagates (archive absent)', () => {
     const stateBefore = fs.readFileSync(statePath);
     const realPws = scp.platformWriteSync;
-    mock.method(scp, 'platformWriteSync', (p, ...rest) => {
-      if (p !== archivePath) return realPws.call(scp, p, ...rest);
+    mock.method(scp, 'platformWriteSync', (p, content, opts, ...rest) => {
+      if (p !== archivePath) return realPws.call(scp, p, content, opts, ...rest);
       fs.writeFileSync(archivePath, 'half a bl');
+      const st = fs.statSync(archivePath);
+      opts.onCreated({ dev: st.dev, ino: st.ino });
+      const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
+    });
+    assert.throws(() => prune(3), (err) => err.code === 'EIO' && !(err instanceof AggregateError));
+    mock.restoreAll();
+
+    assert.strictEqual(bytesOrNull(archivePath), null, 'the damaged archive this run created is removed');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
+  test('a failed write leaves in place an archive whose identity is not the one this run created, and reports both causes', () => {
+    const stateBefore = fs.readFileSync(statePath);
+    const realPws = scp.platformWriteSync;
+    mock.method(scp, 'platformWriteSync', (p, content, opts, ...rest) => {
+      if (p !== archivePath) return realPws.call(scp, p, content, opts, ...rest);
+      fs.writeFileSync(archivePath, 'FOREIGN');
+      opts.onCreated({ dev: -1, ino: -1 }); // an identity that is not the file now at the path
       const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
     });
     let thrown = null;
@@ -1014,7 +1033,7 @@ describe('#5831: state prune never loses entries', () => {
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'ESTALE']);
-    assert.strictEqual(fs.readFileSync(archivePath, 'utf-8'), 'half a bl', 'the file that is not provably ours is left in place');
+    assert.strictEqual(fs.readFileSync(archivePath, 'utf-8'), 'FOREIGN', 'the file that is not this run\'s is left in place');
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
     assert.ok(lockReleased(), 'the STATE.md lock is released');
   });

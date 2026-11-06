@@ -699,6 +699,14 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
   });
 
   for (const destination of ['present', 'absent']) {
+    test(`an atomic write reports the dev/ino of the file it published via onCreated (destination ${destination})`, () => {
+      if (destination === 'present') fs.writeFileSync(target, PREVIOUS);
+      const seen = [];
+      scp.platformWriteSync(target, '# New\n', { atomic: true, onCreated: (id) => seen.push(id) });
+      const st = fs.statSync(target);
+      assert.deepStrictEqual(seen, [{ dev: st.dev, ino: st.ino }]);
+    });
+
     test(`a temp-file write that fails partway never falls back to a direct write (destination ${destination})`, () => {
       if (destination === 'present') fs.writeFileSync(target, PREVIOUS);
       const before = destination === 'present' ? fs.readFileSync(target) : null;
