@@ -3805,6 +3805,7 @@ function readGitHeadSha(cwd: string | undefined): string | null {
   // for nested `.git` entries: the declaration is what the workspace asserts
   // about itself, and a probe would spuriously fire on a vendored dependency.
   try {
+    // #5505: the state-contract publisher reaches this read (REQ-SC-04: a publish writes no file and prints nothing beyond state.json).
     const subRepos = (loadConfig(projectRoot, { persist: false, quiet: true }) as { sub_repos?: unknown }).sub_repos;
     if (Array.isArray(subRepos) && subRepos.length > 0) return null;
   } catch {

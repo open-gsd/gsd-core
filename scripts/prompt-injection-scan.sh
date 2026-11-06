@@ -175,6 +175,10 @@ ALLOWLIST=(
   # Same DEFECT.PROMPT-INJECTION-SCAN-COLLISION class as above:
   # RegExp.prototype.exec, not code execution.
   'tests/phase-id.test.cjs'
+  # #5505 — the pre-existing `planRowPattern('47-1').exec('- [ ] **47-1**')` assertion is
+  # RegExp.prototype.exec on a subject string; the state.json publish-path tests this file
+  # now carries (the core-utils mutation shard runs only this file) put it in the changed-file set.
+  'tests/core-utils.test.cjs'
   # #3676 row 11b — quick-batch's task-list parser must treat a
   # prompt-injection-shaped task description as inert data, never
   # interpreted. The fixture has to be a real "ignore all previous
