@@ -94,9 +94,8 @@ function interpolate(command: string, ctx: PredicateContext): string {
  * Cut `text` to at most `max` UTF-16 code units, keeping the head or the tail,
  * without leaving half a surrogate pair: when the cut orphans a high surrogate
  * (head) or a low surrogate (tail), that half is dropped too. Text that fits is
- * returned whole; a non-positive `max` keeps nothing. Sole owner of the
- * surrogate-safe cap (#5639); the Pi description cap and the raw-status token cut
- * import it from here.
+ * returned whole; a non-positive `max` keeps nothing. Shared by `prefixedCap`,
+ * the Pi description cap and the raw-status token cut (#5639).
  */
 function capCodeUnits(text: string, max: number, keep: 'head' | 'tail'): string {
   if (text.length <= max) return text;

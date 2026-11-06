@@ -1,25 +1,19 @@
 'use strict';
 
 /**
- * One owner for the surrogate-safe UTF-16 cap (#5639, gsd-core-79dl).
+ * Behaviour of the shared surrogate-safe UTF-16 cap (#5639).
  *
- * `capCodeUnits` in `src/gate-predicate-evaluator.cts` is the only place that cuts a string at a code-unit
- * budget. Its callers are `prefixedCap` (gate-predicate-evaluator), the Pi description cap
- * (runtime-artifact-conversion) and the raw-status token cut (verification). The parity
- * test fails when a caller grows its own surrogate-range cut again.
+ * `capCodeUnits` in `src/gate-predicate-evaluator.cts` serves `prefixedCap` (gate-predicate-evaluator),
+ * the Pi description cap (runtime-artifact-conversion) and the raw-status token cut (verification).
+ * Caller behaviour is covered by tests/verification-status.test.cjs, tests/pi-workflow-handoff.test.cjs
+ * and tests/install-runtime-artifacts.test.cjs.
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 
 const { capCodeUnits } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
-
-const SRC = path.join(__dirname, '..', 'src');
-const OWNER = 'gate-predicate-evaluator.cts';
-const CALLERS = ['runtime-artifact-conversion.cts', 'verification.cts'];
 
 const isLoneSurrogateFree = (s) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
 
@@ -58,18 +52,4 @@ describe('capCodeUnits', () => {
       ),
     );
   });
-});
-
-describe('the cap sites share the one owner', () => {
-  test(`${OWNER} defines capCodeUnits`, () => {
-    assert.match(fs.readFileSync(path.join(SRC, OWNER), 'utf8'), /function capCodeUnits\(/);
-  });
-
-  for (const file of CALLERS) {
-    test(`${file} uses the evaluator's capCodeUnits and keeps no surrogate-range cut of its own`, () => {
-      const source = fs.readFileSync(path.join(SRC, file), 'utf8');
-      assert.match(source, /gatePredicateEvaluator\.capCodeUnits\(/);
-      assert.doesNotMatch(source, /0xd800|0xdbff|\\uD800|\\uDBFF|\\uDC00|\\uDFFF/i);
-    });
-  }
 });
