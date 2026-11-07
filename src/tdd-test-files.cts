@@ -7,31 +7,47 @@
  * listing only `placement_test.go` was classified behavior-adding — the gate then asked for a RED
  * commit for the task that IS the RED commit.
  *
- * `TEST_FILE_PATHSPECS` is the list in git-pathspec spelling, which is what the workflow passes to
- * `evaluation-scope --pathspec`; `isTestFilePath` evaluates the same list for a task's `<files>`.
- * A test pins the workflow's pathspec flags to this array, so the two cannot drift apart again.
+ * `TEST_FILE_GLOBS` is the list; `TEST_FILE_PATHSPECS` is its git-pathspec spelling, which is what
+ * the workflow passes to `evaluation-scope --pathspec`. `isTestFilePath` evaluates the same list for
+ * a task's `<files>`. A test pins the workflow's pathspec flags to the derived array, so the two
+ * cannot drift apart again.
  */
 
-/** Git-pathspec spelling. A trailing `/` is a directory, anything else a basename glob. */
-export const TEST_FILE_PATHSPECS = [
-  '*.test.*', '*.spec.*', 'tests/', '__tests__/',
+/**
+ * The bare names of the shared list. Each is the `<name>` of a git pathspec spelled
+ * `:(glob,icase)**\/<name>`: `**\/` matches at any depth (root included), `*` stays inside one
+ * path segment, and `icase` matches case-insensitively, so git reads each entry the way
+ * `isTestFilePath` does. A `/**` tail names a directory; any other entry is a file glob matched
+ * against the basename.
+ */
+export const TEST_FILE_GLOBS = [
+  '*.test.*', '*.spec.*', 'tests/**', 'test/**', '__tests__/**',
   '*_test.go', 'test_*.py', '*_test.py', '*_test.exs', '*_spec.rb', '*_test.rb',
 ] as const;
 
-/** Directory names a `<files>` entry may sit under. `test/` is the singular spelling many projects use. */
-const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
-  ...TEST_FILE_PATHSPECS.filter((spec) => spec.endsWith('/')).map((spec) => spec.slice(0, -1)),
-  'test',
-]);
+const GLOB_DEPTH_PREFIX = ':(glob,icase)**/';
+const DIRECTORY_TAIL = '/**';
+
+/** Git-pathspec spelling of {@link TEST_FILE_GLOBS}, as the workflow passes it. */
+export const TEST_FILE_PATHSPECS: readonly string[] =
+  TEST_FILE_GLOBS.map((glob) => `${GLOB_DEPTH_PREFIX}${glob}`);
+
+/** Directory names a `<files>` entry may sit under, from the directory globs above. */
+const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set(
+  TEST_FILE_GLOBS.filter((glob) => glob.endsWith(DIRECTORY_TAIL)).map(
+    (glob) => glob.slice(0, -DIRECTORY_TAIL.length),
+  ),
+);
 
 function escapeRegex(text: string): string {
   return text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** A basename glob where `*` is any run of non-separator characters. */
-const FILE_GLOBS: readonly RegExp[] = TEST_FILE_PATHSPECS
-  .filter((spec) => !spec.endsWith('/'))
-  .map((spec) => new RegExp(`^${spec.split('*').map(escapeRegex).join('[^/]*')}$`, 'i'));
+const FILE_GLOBS: readonly RegExp[] = TEST_FILE_GLOBS
+  .filter((glob) => !glob.endsWith(DIRECTORY_TAIL))
+  .map((glob) => glob.split('*').map(escapeRegex).join('[^/]*'))
+  .map((source) => new RegExp(`^${source}$`, 'i'));
 
 /** True when `file` (either separator) is a test file by the shared convention list. */
 export function isTestFilePath(file: string): boolean {

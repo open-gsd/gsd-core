@@ -26,6 +26,8 @@ const path = require('node:path');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { resolveEvaluationScope, planSubjectPattern } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
+const { isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+const { SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
 
 const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 
@@ -151,7 +153,9 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
       'tests/c.py', '__tests__/d.js',           // directory conventions
       'test_mod.py', 'mod_test.py',             // Python, outside tests/
       'lib_spec.rb', 'x_test.exs',              // Ruby, Elixir
+      ...SHARED_TEST_PATHS,                     // every router-positive path
       'src/impl.go', 'src/lib.rs',              // NOT tests — must never match
+      ...SHARED_NON_TEST_PATHS,                 // NOT tests, nested + root
     ];
     for (const rel of files) {
       const abs = path.join(dir, rel);
@@ -188,6 +192,31 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
     const hits = matched(dir, shippedRedPathspec());
     assert.ok(hits.has('root.test.js'), 'a root-level .test.js must match');
     assert.ok(hits.has('foo_test.go'), 'a root-level _test.go must match');
+  });
+
+  test('no two shared paths spell one directory with different case (case-folding disks)', () => {
+    const spellings = new Map();
+    for (const rel of [...SHARED_TEST_PATHS, ...SHARED_NON_TEST_PATHS]) {
+      const parts = rel.split('/').slice(0, -1);
+      parts.forEach((_, i) => {
+        const dir = parts.slice(0, i + 1).join('/');
+        const seen = spellings.get(dir.toLowerCase());
+        assert.ok(!seen || seen === dir, `${dir} and ${seen} differ only by case`);
+        spellings.set(dir.toLowerCase(), dir);
+      });
+    }
+  });
+
+  test('router and shipped pathspec agree on every shared path, nested included (#5181)', (t) => {
+    // Git and the router must also agree on case (`Tests/`), on `test/`, and on `*` not crossing `/`
+    // (`src/a.test.d/impl.js`): every entry is `:(glob,icase)**/`.
+    const dir = seedRepo(t);
+    const hits = matched(dir, shippedRedPathspec());
+    for (const rel of [...SHARED_TEST_PATHS, ...SHARED_NON_TEST_PATHS]) {
+      const expected = SHARED_TEST_PATHS.includes(rel);
+      assert.equal(hits.has(rel), expected, `${rel} must agree: git`);
+      assert.equal(isTestFilePath(rel), expected, `${rel} must agree: router`);
+    }
   });
 
   test('the existing JS/TS conventions still match (no regression)', (t) => {

@@ -148,7 +148,7 @@ describe('execute-mvp-tdd.md — load condition decoupled from MVP (#4011)', () 
 
 describe('#5106: test-file conventions are one definition', () => {
   const { isBehaviorAddingTaskContent } = require('../gsd-core/bin/lib/task-command-router.cjs');
-  const { TEST_FILE_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+  const { TEST_FILE_GLOBS, TEST_FILE_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
   const task = (...files) => `<task tdd="true"><behavior>It does the thing</behavior><files>\n${files.map(f => `- ${f}`).join('\n')}\n</files></task>`;
@@ -178,11 +178,28 @@ describe('#5106: test-file conventions are one definition', () => {
     const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
     assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
       'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
-    // And every entry means the same thing to the router: a path built from the spec is a test file.
-    for (const spec of TEST_FILE_PATHSPECS) {
-      const sample = spec.endsWith('/') ? `${spec}x.js` : spec.replace(/\*/g, 'sample');
-      assert.equal(isTestFilePath(sample), true, `${spec} (as ${sample}) must be recognised as a test file`);
+    // The reference doc's "Create first test file" list names every glob of the owner list
+    // (a directory glob as `name/`). Read the list alone: other paragraphs mention `tests/` too.
+    const ref = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
+    const listStart = ref.indexOf('**5. Create first test file:**');
+    const list = ref.slice(listStart, ref.indexOf('**Cost of the broad pathspec', listStart));
+    assert.ok(listStart >= 0 && list.length > 0, 'references/tdd.md has no "Create first test file" list');
+    // Only the leading part of a bullet (before ` — `) names globs; a mention in a note does not count.
+    const named = new Set(list.split(/\r?\n/).filter(l => l.startsWith('- `'))
+      .flatMap(l => [...l.split(' — ')[0].matchAll(/`([^`]+)`/g)].map(m => m[1])));
+    for (const glob of TEST_FILE_GLOBS) {
+      const documented = glob.endsWith('/**') ? glob.slice(0, -2) : glob;
+      assert.ok(named.has(documented), `references/tdd.md list bullets must name ${documented}`);
     }
-    assert.equal(isTestFilePath('placement.go'), false);
+    // And the router recognizes a literal root and nested sample of every convention.
+    const { SAMPLES_BY_SPEC: samples, SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
+    assert.deepEqual(Object.keys(samples).sort(), [...TEST_FILE_GLOBS].sort(),
+      'a root and a nested sample per TEST_FILE_GLOBS entry, keyed by glob');
+    for (const sample of SHARED_TEST_PATHS) {
+      assert.equal(isTestFilePath(sample), true, `${sample} must be recognized as a test file`);
+    }
+    for (const notTest of SHARED_NON_TEST_PATHS) {
+      assert.equal(isTestFilePath(notTest), false, `${notTest} must not be recognized as a test file`);
+    }
   });
 });
