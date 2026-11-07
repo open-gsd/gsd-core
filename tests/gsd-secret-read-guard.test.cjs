@@ -1369,6 +1369,58 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     });
   }
 
+  // n double-quoted `${ … }` nested in each other, then a read (#5523 form A).
+  // bash before 5.3 pairs the `"` and `}` inside a `${…}` word as it pairs
+  // them in the word, so the first line is one word that fails as a bad
+  // substitution, and bash 5.2.37 and 3.2.57 run a read on the next line. The
+  // scan as it stood toggled its quoting at each inner `"` and, at an odd
+  // count of them, read the read as quoted text: next allows it at odd n from
+  // 3, and the head before this change at odd n from 5. With every level
+  // closed by `; }` or a newline `}`, bash 5.3.20 runs the read after `;` too.
+  // With a bare ` }` it reads to the end of the input, and bash 5.2 drops the
+  // whole line, so a read after `;` runs nowhere; that case is left out.
+  const nestedDoubleQuoted = (closers, sep) => {
+    let s = 'true;';
+    for (const c of closers) s = '"${ ' + s + c + '"';
+    return ('echo ' + s + sep + 'cat .env').replace(/;; \}/g, '; }');
+  };
+  for (let n = 1; n <= 33; n++) {
+    test(`blocks: a read on the line after ${n} nested double-quoted \`\${ … }\` closed by \` }\``, () => {
+      const command = nestedDoubleQuoted(Array(n).fill(' }'), '\n');
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // More of #5523 form A, each a read every bash runs (the bash 5.3 row aside)
+  // that next allowed and that one part of the parameter-pairing reading
+  // reaches: the tokenizer's double-quoted `${` (a `"` in single quotes in the
+  // word), its top-level `${` (a heredoc tag word holding a blank inside a
+  // nested expansion), the double-quote skipper in findParamClose (a quoted
+  // `"` one level down), and its pass under bash 5.3's reading (a quoted `}`
+  // in a parameter expansion inside a function substitution, read by bash
+  // 5.3.20 only; 5.2 and 3.2 read the whole as one bad word).
+  const PAIRED = [
+    ['a `"` in single quotes in a double-quoted expansion\'s word', `echo "\${x:-'"'}"\ncat .env`],
+    ['a heredoc tag word holding a blank inside a nested expansion', 'cat <<E${x:-${y} z}F\nbody\nE${x:-${y} z}F\ncat .env'],
+    ['a quoted `"` in a double-quoted expansion inside an expansion\'s word', `echo \${x:-"\${y:-'"'}"}\ncat .env`],
+    ['a quoted `}` in an expansion inside a function substitution', "echo ${ echo ${x:-'}'}; cat .env; }"],
+  ];
+  for (const [label, command] of PAIRED) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // The debugger-spawn scan shares the tokenizer, so it takes the same reading.
+  test('blocks a gsd-debugger spawn on the line after 5 nested double-quoted `${ … }`', () => {
+    const command = 'echo "${ "${ "${ "${ "${ true; }" }" }" }" }"\nclaude --agent gsd-debugger -p x';
+    assertBlocked(runHook(bash(command)), command, { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+  test('blocks a read after 1 to 33 nested double-quoted `${ … }` whatever closes each level', () => {
+    const shape = fc.constantFrom('\n', '; ').chain((sep) => fc.integer({ min: 1, max: 33 }).chain((n) =>
+      fc.array(fc.constantFrom(...(sep === '\n' ? [' }', '; }', '\n}'] : ['; }', '\n}'])), { minLength: n, maxLength: n })
+        .map((closers) => nestedDoubleQuoted(closers, sep))));
+    fc.assert(fc.property(shape, (command) => runHook(bash(command)).status === 2), PROPERTY_RUNS);
+  });
+
   // The scan's reach, pinned as #5478's git config rows pin it: a deny at
   // the limit and an allow one past it, where bash still runs the read, so
   // closing a gap flips its allow row. MAX_NESTING_DEPTH (3) bounds every
@@ -1395,20 +1447,31 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // the 35 row fails. bash 5.3 runs the read at every depth.
   reach("the scan's reach, denied to MAX_FUNSUB_DEPTH + MAX_NESTING_DEPTH levels, over a read after a chain n deep", [[34, true], [35, true], [36, false]], funsubChainThenRead);
   // A heredoc left pending by a substitution k deep, in a chain the shell
-  // never expands (`false &&`): bash runs the lines after the outermost `}`,
-  // and the scan reads them k - 1 levels deeper (funsubTags), so a read there
-  // is denied up to k = MAX_NESTING_DEPTH + 1. bash 5.3, 5.2 and 3.2 run it.
-  reach("the scan's reach over a read after a heredoc left pending k deep", [[3, true], [4, true], [5, false]], pendingChainThenRead);
+  // never expands (`false &&`): bash runs the lines after the outermost `}`.
+  // bash 5.3, 5.2 and 3.2 run the read. The bash 5.3 reading reads those lines
+  // k - 1 levels deeper (funsubTags) and stops at k = MAX_NESTING_DEPTH + 1,
+  // but the parameter-pairing reading (scanPairingParams) reads the chain as
+  // one pre-5.3 word, as bash 5.2 does, and the read as the next command, so
+  // the read is denied at every k (measured to 40). That reading closed the
+  // gap the 5 row pinned as an allow; the bash 5.3 reading's own edge is no
+  // longer visible through the hook.
+  reach("the scan's reach over a read after a heredoc left pending k deep", [[3, true], [4, true], [5, true]], pendingChainThenRead);
 
-  // Two gaps neither reading reaches, pinned the same way. bash 5.2.37 and
-  // 3.2.57 run the read in both and bash 5.3.20 in neither; next allows both.
-  // The tokenizer's `${` branch ends a pre-5.3 expansion at the first `}`,
-  // here the one in double quotes (#5523 form A), and reads `<<` in a
-  // top-level `((` as a heredoc (#5523 form G). A failed `((` once duplicated
-  // the pending heredoc tags, and the copies made the bash 5.3 reading deny
-  // both by accident; closing either form flips its row.
+  // #5523 form A, which the parameter-pairing reading closes: the tokenizer's
+  // `${` branch ended a pre-5.3 expansion at the first `}`, here the one in
+  // double quotes. bash 5.2.37 and 3.2.57 run the read and bash 5.3.20 does
+  // not; next allows it, and so did this change until the pairing reading.
+  test('blocks: #5523 form A, a `}` in double quotes that no longer ends the pre-5.3 expansion', () => {
+    const command = 'echo ${ (( x << "${ <<E ; }" ) ) }\nE\ncat .env\n';
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+
+  // A gap neither reading reaches, pinned the same way. bash 5.2.37 and 3.2.57
+  // run the read and bash 5.3.20 does not; next allows it. The tokenizer reads
+  // `<<` in a top-level `((` as a heredoc (#5523 form G). A failed `((` once
+  // duplicated the pending heredoc tags, and the copies made the bash 5.3
+  // reading deny it by accident; closing the form flips its row.
   const NOT_REACHED = [
-    ['#5523 form A, a `}` in double quotes ending the pre-5.3 expansion', 'echo ${ (( x << "${ <<E ; }" ) ) }\nE\ncat .env\n'],
     ['#5523 form G, a top-level arithmetic shift read as a heredoc', 'x=${ (( ${ <<E ; } ) }; (( y = 1 << 2 ))\nE\ncat .env\n'],
   ];
   for (const [label, command] of NOT_REACHED) {
@@ -1488,18 +1551,20 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
 
   // The count's floor on one input, so the meter cannot quietly stop counting
   // span records: 512 KiB of unclosed `${`, then a read on the next line,
-  // takes 16 steps a byte, about a quarter of them span records, which cost a
-  // step each even with no heredoc tag pending (recordSpan). At 14 a byte the
-  // budget denies; with the records uncounted the scan takes 12 and passes. It
-  // catches the charge lost on every record, not on about half of them (only
-  // at MAX_FUNSUB_DEPTH): that count stays above the floor. A legitimate
-  // saving above about 12 % of this input's count turns it red until the
-  // floor is set again.
+  // takes 33 steps a byte, about a quarter of them span records, which cost a
+  // step each even with no heredoc tag pending (recordSpan). The
+  // parameter-pairing reading scans a command holding `${` again, which
+  // doubles this input's count, so the floor is set for both readings: at 29 a
+  // byte the budget denies; with the records uncounted the scan takes 25 and
+  // passes. It catches the charge lost on every record, not on about half of
+  // them (in one reading alone, or only at MAX_FUNSUB_DEPTH): that count stays
+  // above the floor. A legitimate saving above about 12 % of this input's
+  // count turns it red until the floor is set again.
   // No bash runs the read: bash 3.2.57 reports an unexpected EOF, and 5.2.37
   // and 5.3.20 overflow their stack at the default 8 MiB (exit 139).
-  test('the step budget counts span records: 512 KiB of unclosed `${` passes 14 steps a byte', () => {
+  test('the step budget counts span records: 512 KiB of unclosed `${` passes 29 steps a byte', () => {
     const command = '${ '.repeat(33) + '${'.repeat(262000) + '\ncat .env';
-    assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: String(14 * command.length) }), 'unclosed 512 KiB', { code: 'scan-step-budget', tool: 'Bash', path: '' });
+    assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: String(29 * command.length) }), 'unclosed 512 KiB', { code: 'scan-step-budget', tool: 'Bash', path: '' });
   });
 
   test('the step budget is no cap outside test mode', () => {

@@ -602,6 +602,16 @@ function consumeHeredocBodies(str, i, tags, eof) {
 // script included, since only then can the two readings differ.
 let readFunsubs = true;
 let funsubSeen = false;
+// Set only by scanPairingParams (#5523 form A). The scan as it stood pairs a
+// parameter expansion `${…}` at the first `}` and does not see one inside
+// double quotes at all, so a `}` or `"` in the expansion's word ends it early:
+// in `echo "${ "${ true; }" }"` ⏎ `cat .env` bash before 5.3 reads one word
+// that fails as a bad substitution and then runs the next line, while the scan
+// toggled its quoting at every inner `"` and, at an odd count of them, read
+// the read as quoted text. With pairParams the tokenizer and the double-quote
+// skipper find the `}` with findParamClose, which pairs it as bash does:
+// quote-aware, a nested `${` included.
+let pairParams = false;
 // bash removes a line continuation (`\` newline) before it reads anything,
 // so one can split an opener: `${\⏎ cmd; }`, `$\⏎{ cmd; }`.
 function skipContinuations(str, i) {
@@ -814,6 +824,7 @@ function skipDoubleQuoted(str, i) {
     if (str[i] === '\\') { i += 2; continue; }
     if (str[i] === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
     if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
+    if (pairParams && str[i] === '$' && str[i + 1] === '{') { i = findParamClose(str, i + 2) + 1; continue; }
     if (str[i] === '`') {
       const j = str.indexOf('`', i + 1);
       i = j === -1 ? str.length : j + 1;
@@ -1253,6 +1264,12 @@ function tokenize(str) {
           i = funsub(i);
           continue;
         }
+        if (pairParams && c === '$' && str[i + 1] === '{') {
+          const e = findParamClose(str, i + 2);
+          buf += str.slice(i, e + 1);
+          i = e + 1;
+          continue;
+        }
         if (c === '`') {
           const j = str.indexOf('`', i + 1);
           const e = j === -1 ? str.length : j;
@@ -1293,8 +1310,8 @@ function tokenize(str) {
 
     if (ch === '$' && str[i + 1] === '{') {
       hasWord = true;
-      const j = str.indexOf('}', i);
-      const e = j === -1 ? str.length - 1 : j;
+      const j = pairParams ? findParamClose(str, i + 2) : str.indexOf('}', i);
+      const e = j === -1 || j >= str.length ? str.length - 1 : j;
       buf += str.slice(i, e + 1);
       i = e + 1;
       continue;
@@ -1850,6 +1867,33 @@ function beginBashReadings() {
   funsubSeen = false;
   funsubTags = [];
 }
+// A further reading, run after every other one and only for a command that
+// holds `${`: the scan again with parameter expansions paired as bash pairs
+// them (pairParams), under bash 5.3's reading of a `${ ` opener and, when the
+// command holds one, under the earlier reading too. Its hit is returned, so a
+// command it reads differently can gain a denial; it never removes one, as the
+// other readings ran first and decided whatever they found. A throw inside it
+// is dropped for the same reason: without it the hook would not have run it.
+function scanPairingParams(scan, command) {
+  if (!command.includes('${')) return null;
+  pairParams = true;
+  try {
+    for (const funsubs of [true, false]) {
+      readFunsubs = funsubs;
+      funsubSeen = false;
+      funsubTags = [];
+      let hit = null;
+      try { hit = scan(command, 0); } catch { hit = null; }
+      if (hit !== null) return hit;
+      if (!funsubSeen) break;
+    }
+    return null;
+  } finally {
+    pairParams = false;
+    readFunsubs = true;
+    funsubTags = [];
+  }
+}
 function secondBashReading(scan, command, firstError, otherReadings) {
   if (!funsubSeen && firstError !== null) throw firstError;
   readFunsubs = false;
@@ -2206,6 +2250,7 @@ process.stdin.on('end', () => {
     if (hit === null) {
       try { hit = secondBashReading(findSecretRead, command, firstError, findSecretReadUnderOtherReadings); } catch (e) { secretError = e; }
     }
+    if (hit === null) hit = scanPairingParams(findSecretRead, command);
     if (hit !== null) emitBlock('secret-read', tool, hit);
     // A secret-read scan that threw still lets the debugger-spawn scan run: on a
     // deep chain only the bash 5.3 reading can throw, and the base reading of the
@@ -2215,6 +2260,7 @@ process.stdin.on('end', () => {
     beginBashReadings();
     try { spawn = findDebuggerCliSpawn(command, 0); } catch (e) { firstError = e; }
     if (spawn === null) spawn = secondBashReading(findDebuggerCliSpawn, command, firstError, null);
+    if (spawn === null) spawn = scanPairingParams(findDebuggerCliSpawn, command);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
     if (secretError !== null) throw secretError;
     allow(undefined);
