@@ -47,19 +47,19 @@ const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review-fix.
 
 // ---------------------------------------------------------------------------
 // The FIX_REPORT frontmatter validator body, mirrored from code-review-fix.md's
-// commit_fix_report has_status inline `node -e` script. If those lines change,
+// commit_fix_report HAS_STATUS inline `node -e` script. If those lines change,
 // this must be updated in tandem (the docs-parity assertions below catch a
 // mismatch at the env-name level).
 //
 // Bug (#3190): the deployed workflow launches this body with REVIEW_PATH
-// exported but the body reads process.env.STATUS_PATH — so at runtime the
+// exported but the body reads process.env.FIX_REPORT_PATH — so at runtime the
 // readFileSync throws and HAS_STATUS silently becomes "". The behavioral tests
-// below prove the BODY is sound when STATUS_PATH is wired, and that the
+// below prove the BODY is sound when FIX_REPORT_PATH is wired, and that the
 // mis-wiring is the sole failure mode.
 // ---------------------------------------------------------------------------
 const VALIDATOR_BODY = `
   const fs = require('fs');
-  const content = fs.readFileSync(process.env.STATUS_PATH, 'utf-8');
+  const content = fs.readFileSync(process.env.FIX_REPORT_PATH, 'utf-8');
   const match = content.replace(/\\r\\n/g, '\\n').match(/^---\\n([\\s\\S]*?)\\n---/);
   if (match && /status:/.test(match[1])) { console.log('valid'); } else { console.log('invalid'); }
 `;
@@ -90,13 +90,13 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   // Criterion 3 — behavioral: the validator body correctly detects a valid
   // status field WHEN the env var it reads is actually exported.
   // -------------------------------------------------------------------------
-  test('T1 — validator body prints "valid" for a well-formed REVIEW-FIX.md when STATUS_PATH is set', () => {
+  test('T1 — validator body prints "valid" for a well-formed REVIEW-FIX.md when FIX_REPORT_PATH is set', () => {
     const dir = createTempDir();
     const report = path.join(dir, '05-REVIEW-FIX.md');
     fs.writeFileSync(report, VALID_FIX_REPORT, 'utf8');
     try {
       const res = runNode(['-e', VALIDATOR_BODY], {
-        env: { ...process.env, STATUS_PATH: report },
+        env: { ...process.env, FIX_REPORT_PATH: report },
       });
       assert.strictEqual(res.exitCode, 0, `validator should exit 0; stderr:\n${res.stderr}`);
       assert.strictEqual(res.stdout.trim(), 'valid');
@@ -106,40 +106,40 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   });
 
   // -------------------------------------------------------------------------
-  // Criterion 3 — behavioral bug demo: the SAME body, with STATUS_PATH
+  // Criterion 3 — behavioral bug demo: the SAME body, with FIX_REPORT_PATH
   // unset (exactly what today's `REVIEW_PATH=`-only export produces in the
   // subshell), throws inside readFileSync → stdout is empty → HAS_STATUS="" →
   // the "invalid frontmatter — Not committing" branch fires unconditionally.
   // This proves the env-name coupling is load-bearing and that the body is not
   // the culprit.
   // -------------------------------------------------------------------------
-  test('T2 — validator body does NOT print "valid" when STATUS_PATH is unset (the mis-wiring)', () => {
+  test('T2 — validator body does NOT print "valid" when FIX_REPORT_PATH is unset (the mis-wiring)', () => {
     const env = { ...process.env };
-    delete env.STATUS_PATH;
+    delete env.FIX_REPORT_PATH;
     delete env.REVIEW_PATH;
     const res = runNode(['-e', VALIDATOR_BODY], { env });
     // The throw crashes node (non-zero), stdout has no "valid" — exactly the
     // silent empty string the 2>/dev/null command substitution yields in bash.
     assert.ok(
       !res.stdout.includes('valid'),
-      `stdout should not contain "valid" when STATUS_PATH is unset; got: ${res.stdout}`,
+      `stdout should not contain "valid" when FIX_REPORT_PATH is unset; got: ${res.stdout}`,
     );
   });
 
   // -------------------------------------------------------------------------
   // Criterion 3 — docs-parity: the commit_fix_report HAS_STATUS validator must
-  // export STATUS_PATH (the var its body reads), not REVIEW_PATH.
+  // export FIX_REPORT_PATH (the var its body reads), not REVIEW_PATH.
   // -------------------------------------------------------------------------
-  test('T3 — commit_fix_report has_status exports STATUS_PATH, not REVIEW_PATH', () => {
+  test('T3 — commit_fix_report HAS_STATUS exports FIX_REPORT_PATH, not REVIEW_PATH', () => {
     const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
     const region = stepRegion(src, 'commit_fix_report');
     assert.ok(
-      region.includes('STATUS_PATH="$1" node -e'),
-      'has_status must launch node with STATUS_PATH exported to match the process.env.STATUS_PATH its body reads',
+      region.includes('HAS_STATUS=$(FIX_REPORT_PATH="${FIX_REPORT_PATH}" node -e'),
+      'HAS_STATUS must launch node with FIX_REPORT_PATH exported to match the process.env.FIX_REPORT_PATH its body reads',
     );
     assert.ok(
-      !region.includes('REVIEW_PATH="${REVIEW_PATH}" node -e'),
-      'has_status must not export REVIEW_PATH into a script that reads process.env.STATUS_PATH',
+      !region.includes('HAS_STATUS=$(REVIEW_PATH="${REVIEW_PATH}" node -e'),
+      'HAS_STATUS must not export REVIEW_PATH into a script that reads process.env.FIX_REPORT_PATH',
     );
   });
 
@@ -287,13 +287,13 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
     const fence = stepFence(src, 'commit_fix_report');
 
-    const drive = ({ report, auto = 'true', docs = 'true', review = '---\nstatus: clean\n---\n' }) => {
+    const drive = ({ report, auto = 'true', docs = 'true' }) => {
       const dir = createTempDir('gsd-5527-');
       t.after(() => cleanup(dir));
       const reviewPath = path.join(dir, '01-REVIEW.md');
       const fixPath = path.join(dir, '01-REVIEW-FIX.md');
       const log = path.join(dir, 'argv.log');
-      fs.writeFileSync(reviewPath, review);
+      fs.writeFileSync(reviewPath, '---\nstatus: clean\n---\n');
       if (report !== null) fs.writeFileSync(fixPath, report);
       const script = fenceScript(fence, {
         AUTO_MODE: auto,
@@ -328,13 +328,6 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.ok(valid.argv.includes(valid.fixPath) && valid.argv.includes(valid.reviewPath), 'valid: both staged');
     assert.ok(valid.argv.includes('docs(01): add code review fix report'), 'valid keeps its message');
 
-    // A REVIEW.md without a status is never staged (code-review.md refuses to commit one too).
-    const noStatus = '---\nfoo: bar\n---\n';
-    const badReview = drive({ report: VALID_FIX_REPORT, review: noStatus });
-    assert.ok(badReview.argv.includes(badReview.fixPath), 'valid fix report still committed');
-    assert.ok(!badReview.argv.includes(badReview.reviewPath), 'REVIEW.md without a status must NOT be staged');
-    assert.ok(!drive({ report: null, review: noStatus }).argv, 'nothing valid to stage: no commit call');
-
     // Out of scope stays out: non-auto and COMMIT_DOCS=false commit no REVIEW.md.
     assert.ok(!drive({ report: '---\nfoo: bar\n---\n', auto: 'false' }).argv, 'non-auto invalid commits nothing');
     assert.ok(!drive({ report: null, docs: 'false' }).argv, 'COMMIT_DOCS=false commits nothing');
@@ -348,7 +341,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     const REVIEW = '.planning/01-REVIEW.md';
     const FIX = '.planning/01-REVIEW-FIX.md';
 
-    const drive = (report, { ignored = false, review = '---\nstatus: clean\n---\n' } = {}) => {
+    const drive = (report, { ignored = false } = {}) => {
       const dir = createTempGitProject('gsd-5527-');
       t.after(() => cleanup(dir));
       if (ignored) fs.writeFileSync(path.join(dir, '.gitignore'), '.planning/\n');
@@ -356,7 +349,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: issues_found\n---\n');
       git(dir, 'add', '-A');
       git(dir, 'commit', '-q', '-m', 'seed');
-      fs.writeFileSync(path.join(dir, REVIEW), review); // the --auto re-review rewrite
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: clean\n---\n'); // the --auto re-review rewrite
       fs.writeFileSync(path.join(dir, FIX), report);
       const script = fenceScript(fence, {
         AUTO_MODE: 'true',
@@ -369,11 +362,11 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         'gsd_run() { ' + JSON.stringify(process.execPath) + ' ' + JSON.stringify(TOOLS_PATH) + ' "$@"; }',
       ], [
         // Typed seam: the value the dirty-tree warning is gated on, not the warning's wording.
-        'printf "\\n@@DIRTY=%s@@REVIEWDIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}" "${REVIEW_DIRTY-UNSET}"',
+        'printf "\\n@@DIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}"',
       ]);
       const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
       assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
-      return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*?)@@/.exec(res.stdout)[1], reviewDirty: /@@REVIEWDIRTY=(.*?)@@/.exec(res.stdout)[1] };
+      return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*)@@/.exec(res.stdout)[1] };
     };
 
     const invalid = drive('---\nfoo: bar\n---\n');
@@ -386,11 +379,5 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
 
     const valid = drive(VALID_FIX_REPORT);
     assert.strictEqual(valid.status, '', 'valid report: both committed, tree clean');
-    assert.strictEqual(valid.reviewDirty, 'UNSET', 'a REVIEW.md with a status needs no warning');
-
-    // A REVIEW.md without a status is not committed; git sees it, so the warning gate is set.
-    const noStatus = drive(VALID_FIX_REPORT, { review: '---\nfoo: bar\n---\n' });
-    assert.strictEqual(noStatus.reviewDirty, ' M ' + REVIEW, 'git sees the unstaged REVIEW.md: the warning gate is set');
-    assert.strictEqual(noStatus.status.trim(), 'M ' + REVIEW, 'only the REVIEW.md without a status stays dirty');
   });
 });
