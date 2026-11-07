@@ -2303,7 +2303,6 @@ describe('#5759 allowSpecialTarget on Windows device names', {
     } finally { cleanup(cwd); }
   });
 
-
   // On Windows 11 a reserved-looking name can be an ordinary file. The device branch must not
   // write into it in place: a partial overwrite would leave "xRIGINAL..." behind.
   const ORIGINAL = 'ORIGINAL-CONTENT-ORIGINAL-CONTENT';
