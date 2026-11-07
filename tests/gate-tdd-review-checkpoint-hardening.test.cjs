@@ -259,7 +259,11 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(r.payload.rows, []);
   });
 
-  for (const [label, text] of [['plans a string', '{"plans":"x"}'], ['plans an array', '{"plans":[{"red":"a"}]}'], ['null', 'null'], ['an array', '[]'], ['a string', '"s"'], ['no plans member', '{"foo":1}'], ['a plan entry a string', '{"plans":{"01-01":"x"}}'], ['a plan entry with a numeric red', '{"plans":{"01-01":{"red":1}}}']]) {
+  // Hostile seal shapes live as files that do not know the gate (tests/fixtures/adversarial/tdd-review-seal/README.md).
+  const SEAL_FIXTURES = path.join(__dirname, 'fixtures', 'adversarial', 'tdd-review-seal');
+  for (const file of fs.readdirSync(SEAL_FIXTURES).filter((f) => f.endsWith('.json')).sort()) {
+    const label = file.replace(/\.json$/, '');
+    const text = fs.readFileSync(path.join(SEAL_FIXTURES, file), 'utf8');
     test(`a wrong-shape seal (${label}) is unreadable and --record does not overwrite it`, () => {
       const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
       w(dir, `${PHASE}/TDD-REVIEW-SEAL.json`, text);
@@ -615,6 +619,41 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
   });
 
+  test('a partial write of the temp file leaves the prior seal byte for byte and no temp file', (t) => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const prior = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
+    w(dir, SEAL, prior);
+    const real = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (f, data, ...rest) => {
+      if (!String(f).includes('.tmp')) return real(f, data, ...rest);
+      real(f, String(data).slice(0, 10), ...rest);
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    });
+    assert.equal(run(dir, '--record').outcome, 'unreadable');
+    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), prior);
+    assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
+  });
+
+  test('a dangling symlink at the seal path is refused and its target is never created', posix, () => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const target = path.join(dir, 'not-there.json');
+    fs.symlinkSync(target, path.join(dir, SEAL));
+    const r = run(dir, '--record');
+    assert.equal(r.outcome, 'unreadable');
+    assert.equal(fs.existsSync(target), false);
+  });
+
+  test('--record seals a plan in a phase directory whose name has a space and a non-ASCII letter', () => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const odd = '.planning/phases/01-ünï phase';
+    fs.renameSync(path.join(dir, PHASE), path.join(dir, odd));
+    sealGit(dir, 'add', '-A');
+    sealGit(dir, 'commit', '-m', 'docs: rename phase dir');
+    assert.equal(run(dir, '--record').payload.violations, 0);
+    const seal = JSON.parse(fs.readFileSync(path.join(dir, odd, 'TDD-REVIEW-SEAL.json'), 'utf8'));
+    assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
+  });
+
   for (const [label, size, status] of [['limit-1', SEAL_CAP - 1, 'Pass'], ['limit', SEAL_CAP, 'Pass'], ['limit+1', SEAL_CAP + 1, 'unreadable']]) {
     test(`seal size ${label} (${size} bytes) -> ${status}`, () => {
       const { dir } = fixture([], { summary: false });
@@ -655,11 +694,22 @@ describe('#5354 tdd review checkpoint seal', () => {
     }), { numRuns: 50 });
   });
 
-  test('a __proto__ seal key credits nothing and does not crash', () => {
-    const { dir } = fixture([], { summary: false });
+  // The seal is looked up by own key only: a plan named like an Object.prototype member has no inherited entry, so it stays NotEvaluable.
+  for (const planId of ['constructor', 'toString', '__proto__']) {
+    test(`a plan named ${planId} does not inherit a seal entry from Object.prototype`, () => {
+      const { dir } = fixture([], { summary: false, plan: false });
+      w(dir, `${PHASE}/${planId}-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+      w(dir, `${PHASE}/${planId}-SUMMARY.md`, `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${'d'.repeat(40)}\`\n`);
+      w(dir, SEAL, '{"plans":{}}');
+      assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
+    });
+  }
+
+  test('a seal entry keyed __proto__ is its own entry for a plan named __proto__ and is credited', () => {
+    const { dir } = fixture([], { summary: false, plan: false });
+    w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
     w(dir, SEAL, `{"plans":{"__proto__":{"red":"${sha('a')}","green":"${sha('b')}"}}}`);
-    const r = run(dir, '--record');
-    assert.equal(r.payload.rows[0].status, 'FAIL');
+    assert.equal(run(dir).payload.rows[0].status, 'Pass');
   });
 
   test('the no-TDD skip is keyed on the picked tddPlans field', () => {
