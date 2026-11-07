@@ -32,7 +32,7 @@ TARGET=${1:-$(gsd_run query git.base-branch)}
 
 Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `BASE`, `PR_BRANCH`, `*_REF`, `refkey`, `shq`, `pr_merged`); run them all in one shell session, in order:
 - Must be on a feature branch (not main/master)
-- Must have commits ahead of target
+- Must have commits since the last published tip (or ahead of target when nothing was published)
 - Working tree must be clean
 
 ```bash
@@ -67,7 +67,7 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 _to() { gsd_run run-with-timeout 10 -- "$@"; }
 pr_merged() {
   local _sha _fork _top _g
-  _top=$(git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
+  _top=$(_to git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
   _to git merge-base --is-ancestor "$1" "$TARGET" 2>/dev/null && return 0
   _sha=$(_to git rev-parse -q --verify "$1") || return 1
   if _fork=$(_to git merge-base "$_sha" "$TARGET" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only --no-renames "$_fork" "$_sha")" ] &&
@@ -103,7 +103,7 @@ if [ -n "$PENDING_TIP" ]; then
   # The verdict is only recorded here; settle_pending applies it once no refusal can follow.
   if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
   elif [ -z "$PR_BRANCH_TIP" ]; then PENDING_VERDICT=drop
-  elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
+  elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(_to git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
   fi
 fi
 settle_pending() {
@@ -121,7 +121,7 @@ BASE="$TARGET"
 MARKER_TIP=$(git rev-parse -q --verify "$MARKER_REF")
 [ "$PENDING_VERDICT" = promote ] && MARKER_TIP=$PENDING_TIP
 if [ -n "$MARKER_TIP" ]; then
-  if git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
+  if _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
     BASE="$MARKER_TIP"
   else
     # History rewritten: the newest commit here with the same patch as a published one is the base, but only
@@ -131,9 +131,9 @@ if [ -n "$MARKER_TIP" ]; then
     # left to replay and $TARGET is the base without a warning.
     REBASED_TIP=
     ALL_IN_TARGET=
-    PUBLISHED=$(git log --no-merges --cherry-mark --left-only --format=%m "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null)
+    PUBLISHED=$(_to git log --no-merges --cherry-mark --left-only --format=%m "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null)
     if [ -n "$PUBLISHED" ] && [ "$(printf '%s\n' "$PUBLISHED" | grep -c '^<')" = 0 ]; then
-      HERE=$(git log --topo-order --no-merges --cherry-mark --right-only --format='%m %H' "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null)
+      HERE=$(_to git log --topo-order --no-merges --cherry-mark --right-only --format='%m %H' "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null)
       REBASED_TIP=$(printf '%s\n' "$HERE" | awk '$1=="="&&!e{e=$2} $1==">"&&e{b=1} END{if(e&&!b)print e}')
       printf '%s\n' "$HERE" | grep -q '^=' || ALL_IN_TARGET=1
     fi
@@ -167,7 +167,7 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   exit 1
 fi
 settle_pending
-AHEAD=$(git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
+AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
 if [ "$AHEAD" = "0" ]; then
   echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
   exit 0
