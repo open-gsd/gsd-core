@@ -30,7 +30,7 @@ CURRENT_BRANCH=$(git branch --show-current)
 TARGET=${1:-$(gsd_run query git.base-branch)}
 ```
 
-Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `BASE`, `PR_BRANCH`, `*_REF`, `refkey`, `shq`, `pr_merged`); run them all in one shell session, in order:
+Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `BASE`, `TIP`, `PR_BRANCH`, `PR_STRICT`, `PR_MODE`, `*_REF`, `shq`); run them all in one shell session, in order:
 - Must be on a feature branch (not main/master)
 - Must have commits since the last published tip (or ahead of target when nothing was published)
 - Working tree must be clean
@@ -60,11 +60,12 @@ for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${T
 # shq STR — STR shell-quoted for the recovery commands printed below (branch names may hold ; $ ( ) & `).
 shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
 
+# _to CMD... — CMD capped at 10s by gsd_run run-with-timeout (no timeout binary needed), so a hung git cannot stall the run.
+_to() { gsd_run run-with-timeout 10 -- "$@"; }
+
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or (squash/rebase merge) $TARGET holds TIP's
 # content for every path TIP changed since it forked from $TARGET, or (once $TARGET has since
 # edited those paths) GitHub reports a PR for $PR_BRANCH merged into the target whose head was TIP.
-# _to CMD... — CMD capped at 10s by gsd_run run-with-timeout (no timeout binary needed), so a hung git cannot stall the run.
-_to() { gsd_run run-with-timeout 10 -- "$@"; }
 pr_merged() {
   local _sha _fork _top _g
   _top=$(_to git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
@@ -79,7 +80,7 @@ pr_merged() {
   # Base-filtered: markers are keyed per target ($PR_BASE).
   _g=$(command -v gh) || return 1
   case $_g in /*) ;; *) return 1 ;; esac
-  gsd_run run-with-timeout 10 -- gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
+  _to gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
 }
 
 # The last build counts as published only once its -pr tip (PR_TIP_REF) is merged, even if
