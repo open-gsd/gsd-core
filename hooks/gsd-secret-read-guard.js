@@ -1098,7 +1098,8 @@ function tokenize(str) {
 }
 
 const SHELL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const NAMED_FD_RE = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+// bash takes `{name}` and `{name[sub]}` before a redirection as a named fd.
+const NAMED_FD_RE = /^\{[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\}$/;
 
 // Whether `name` is the whole raw word in front of `i`: the same characters,
 // starting the word (at the start, or after a blank, `;`, `&`, `|`, `(`, `<`
