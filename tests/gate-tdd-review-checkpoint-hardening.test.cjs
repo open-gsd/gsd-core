@@ -1008,3 +1008,31 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(bare).payload.rows[0].status, 'FAIL');
   });
 });
+
+describe('#5354 seal module: commitReachability and isFullSha', () => {
+  const { commitReachability, isFullSha } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+
+  test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
+    const dir = createTempGitProject('gate-5354-reach-');
+    try {
+      const base = git(dir, 'rev-parse', 'HEAD').trim();
+      git(dir, 'checkout', '-q', '-b', 'side');
+      git(dir, 'commit', '-q', '--allow-empty', '-m', 'side');
+      const side = git(dir, 'rev-parse', 'HEAD').trim();
+      git(dir, 'checkout', '-q', '-');
+      assert.equal(commitReachability(dir, base, 'HEAD'), 'reachable');
+      assert.equal(commitReachability(dir, side, 'HEAD'), 'unreachable');
+      assert.equal(commitReachability(dir, 'f'.repeat(40), 'HEAD'), 'missing');
+      assert.equal(commitReachability(dir, '--all', 'HEAD'), null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('isFullSha accepts exactly 40 lowercase hex characters', () => {
+    assert.equal(isFullSha('a'.repeat(40)), true);
+    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
+      assert.equal(isFullSha(bad), false, String(bad));
+    }
+  });
+});

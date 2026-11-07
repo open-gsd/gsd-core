@@ -36,8 +36,8 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from
 import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
 import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFromError, evidenceNone } from './gate-evidence.cjs';
-import { resolveEvaluationScope, commitIsAncestor, commitReachability, isFullSha } from './gate-evaluation-scope.cjs';
-import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, commitIsGone, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
+import { resolveEvaluationScope, commitIsAncestor } from './gate-evaluation-scope.cjs';
+import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, commitIsGone, commitReachability, isFullSha, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;

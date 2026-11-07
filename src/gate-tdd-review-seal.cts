@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
-import { extractTaskCommitRefs, commitReachability, type CommitReachability } from './gate-evaluation-scope.cjs';
+import { extractTaskCommitRefs, commitIsAncestor, isSafeRefArgument } from './gate-evaluation-scope.cjs';
 import { execGit } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
@@ -70,6 +70,24 @@ export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>,
 export function historyIsComplete(projectDir: string): boolean {
   const shallow = execGit(['rev-parse', '--is-shallow-repository'], { cwd: projectDir });
   return !shallow.timedOut && shallow.exitCode === 0 && shallow.stdout === 'false';
+}
+
+/** True for a full 40-character lowercase hex object name. */
+export const isFullSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+
+export type CommitReachability = 'reachable' | 'unreachable' | 'missing';
+
+/**
+ * Where commit `sha` stands against `of`: `reachable` or `unreachable` as the scope owner's `commitIsAncestor`
+ * answers it, and `missing` when that answer is `null` and git does not know the object. `null` means git could
+ * not answer (a timeout, no git, an unsafe argument): not a "no".
+ */
+export function commitReachability(projectDir: string, sha: string, of: string): CommitReachability | null {
+  const ancestor = commitIsAncestor(projectDir, sha, of);
+  if (ancestor !== null) return ancestor ? 'reachable' : 'unreachable';
+  if (!isSafeRefArgument(sha)) return null;
+  const known = execGit(['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], { cwd: projectDir });
+  return !known.timedOut && known.exitCode === 1 ? 'missing' : null;
 }
 
 /**
