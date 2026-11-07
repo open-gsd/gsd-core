@@ -146,9 +146,13 @@ export function isBoxCharChecked(boxChar: string): boolean {
 /**
  * #5824: `phase insert` writes `(INSERTED)` into the heading text as
  * bookkeeping; it is not part of the phase's name. The single place that
- * removes it: the first `(INSERTED)` (case-insensitive), then a trim. Every
- * phase-name reader goes through here so none can drift from the others.
+ * removes it: only a TRAILING `(INSERTED)` (case-insensitive) is dropped, then
+ * a trim — `phase insert` always appends it last, and a `(INSERTED)` inside the
+ * user's own text is kept. A name that is only the marker is returned as
+ * written rather than reduced to an empty name. Every phase-name reader goes
+ * through here so none can drift from the others.
  */
 export function stripInsertedMarker(name: string): string {
-  return name.replace(/\(INSERTED\)/i, '').trim();
+  const stripped = name.replace(/\s*\(INSERTED\)\s*$/i, '').trim();
+  return stripped === '' ? name.trim() : stripped;
 }
