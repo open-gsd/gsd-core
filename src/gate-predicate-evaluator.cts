@@ -95,6 +95,21 @@ function interpolate(command: string, env: Record<string, string>): string {
   });
 }
 
+/**
+ * Throw when a single-quoted segment holds a placeholder whose value is not shell-inert: `sh` never expands
+ * inside single quotes, so the gate would test the literal text `${PHASE_DIR}` and pass on a path that does not exist.
+ * A quote-pair scan, not a shell lexer; the throw is the gate's existing "unevaluable" path (onError).
+ */
+function assertNoSingleQuotedNonInert(command: string, env: Record<string, string>): void {
+  for (const [segment] of command.matchAll(/'[^']*'/g)) {
+    for (const [, name] of segment.matchAll(INTERPOLATION_RE)) {
+      if (!SHELL_INERT_RE.test(env[name] ?? '')) {
+        throw new Error(`gate command single-quotes \${${name}}, whose value is not shell-inert: double-quote the placeholder`);
+      }
+    }
+  }
+}
+
 /** Cap a string at COMMAND_MAX_OUTPUT_CHARS so gate messages stay context-bounded. */
 function trimToMax(s: string): string {
   return s.length > COMMAND_MAX_OUTPUT_CHARS ? s.slice(0, COMMAND_MAX_OUTPUT_CHARS) : s;
@@ -130,6 +145,7 @@ function evaluateCommandExitZero(
 
   // Every value reaches `sh` as an environment value (unset => ''); see interpolate for what is also pasted.
   const env = { PHASE_NUMBER: ctx.phaseNumber ?? '', PHASE_DIR: ctx.phaseDir ?? '', PHASE_REQ_IDS: ctx.phaseReqIds ?? '' };
+  assertNoSingleQuotedNonInert(command, env);
   const interpolated = interpolate(command, env);
   const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs, env });
 

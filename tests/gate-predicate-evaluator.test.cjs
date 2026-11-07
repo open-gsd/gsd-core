@@ -192,6 +192,15 @@ describe('evaluatePredicate — interpolation', () => {
     assert.equal(shell.calls[0].env.PHASE_DIR, phaseDir);
   });
 
+  test('every placeholder single-quoted with a non-inert value throws; inert or double-quoted does not', () => {
+    for (const name of INTERPOLATION_VAR_NAMES) {
+      const ctx = { cwd: '/proj', phaseNumber: '1 x', phaseDir: '/a b', phaseReqIds: '(' };
+      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+      assert.throws(() => run(`test -n '\${${name}}'`), /not shell-inert/);
+      assert.doesNotThrow(() => run(`test -n "\${${name}}"`));
+    }
+  });
+
   test('undefined context var => empty string, in the text and in the environment', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
