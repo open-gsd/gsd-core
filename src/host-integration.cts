@@ -13,6 +13,12 @@
  * Per-CLI sourced axis VALUES (with citations) live in docs/reference/host-integration-capability-matrix.md — every value is documented or explicitly 'undocumented'.
  */
 
+// #4561: the dispatch-isolation vocabulary has ONE owner, src/dispatch-isolation.cts.
+// The `isolation` axis below is that tuple, not a restatement of it, and the
+// `DispatchIsolation` type is derived from the same tuple.
+import { DISPATCH_ISOLATION_MODES } from './dispatch-isolation.cjs';
+import type { DispatchIsolation } from './dispatch-isolation.cjs';
+
 // ---------------------------------------------------------------------------
 // Protocol version
 // ---------------------------------------------------------------------------
@@ -68,8 +74,9 @@ const HOST_INTEGRATION_AXES = Object.freeze({
   // Mechanism-specific ("worktree"), not abstract — same "name only what a
   // host actually has" rule that kept effortSurface from guessing a
   // config-file member above. A future non-worktree isolation mechanism adds a
-  // `*-container` member then, evidence-backed.
-  isolation:       Object.freeze(['harness-worktree', 'orchestrator-worktree', 'none'] as const),
+  // `*-container` member then, evidence-backed — to src/dispatch-isolation.cts,
+  // the single owner this axis consumes (#4561).
+  isolation:       DISPATCH_ISOLATION_MODES,
 });
 
 const INTERFACE_POINTS = Object.freeze(['command', 'dispatch', 'model', 'hooks', 'state', 'artifact'] as const);
@@ -87,7 +94,8 @@ type Transport        = 'mcp' | 'native-extension';
 type HostRuntime      = 'node' | 'bun' | 'sandboxed-web' | 'python' | 'go' | 'rust' | 'electron' | 'other';
 type SubagentToolkit  = 'full' | 'read-only';
 type EffortSurface    = 'argv' | 'none';
-type DispatchIsolation = 'harness-worktree' | 'orchestrator-worktree' | 'none';
+// `DispatchIsolation` is imported from src/dispatch-isolation.cts (#4561) — derived
+// from the same tuple `HOST_INTEGRATION_AXES.isolation` is, never restated here.
 type DegradationLevel = 'full' | 'degraded' | 'absent';
 type InterfacePoint   = 'command' | 'dispatch' | 'model' | 'hooks' | 'state' | 'artifact';
 
