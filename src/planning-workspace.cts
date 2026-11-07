@@ -206,14 +206,15 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  * That is the one place this read and config-get part ways — for a scoped
  * config.json that exists but cannot be read or parsed, config-get fails
  * with CONFIG_PARSE_FAILED instead of reporting a value.
+ * `project` names the scope when the caller reads a scope other than the env's (omitted: the env's `GSD_PROJECT`).
  * The value is returned uncoerced; each caller applies its own strict
  * comparison. Never throws: planningDir/planningRoot reject a
  * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
  * that shape resolves to "not present".
  */
-function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
+function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null, project?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
+    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream, project), 'config.json'), keyPath);
     if (scoped.present) return scoped;
     if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
       return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
@@ -726,7 +727,6 @@ function findPhaseSpecIn(files: readonly string[]): string | null {
 export = {
   worktreesOptedOut,
   readScopedConfigValue,
-  ownConfigValue,
   createPlanningWorkspace,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,

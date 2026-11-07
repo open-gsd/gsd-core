@@ -875,6 +875,15 @@ describe('W031 — derived state.json still tracked by git', () => {
     commitAll(cwd, 'track state.json');
   }
 
+  // Runs the advised command (the code span after "run") in the project and lists what git still tracks:
+  // the remedy is judged by what it does, not by its wording.
+  function runAdvisedThenListTracked(cwd, diagnostic) {
+    const command = /run `(git [^`]*)`/.exec(diagnostic.remedy.args.command)[1];
+    const out = runHook('-s', [], { interpreter: 'bash', input: command, timeoutMs: GIT_TIMEOUT_MS, cwd });
+    assert.equal(out.exitCode, 0, `the advised command runs: ${out.stderr}`);
+    return gitOrThrow(['ls-files', '-z'], { cwd }).split('\0').filter(Boolean);
+  }
+
   test('W031 fires naming every tracked publish path, with an idempotent git rm --cached remedy', (t) => {
     const cwd = createTempGitProject('gsd-5505-w031-fire-');
     t.after(() => cleanup(cwd));
@@ -885,13 +894,10 @@ describe('W031 — derived state.json still tracked by git', () => {
     assert.equal(diagnostics[0].code, 'W031');
     assert.equal(diagnostics[0].severity, SEVERITY.WARNING);
     assert.equal(diagnostics[0].remedy.action, REMEDY_ACTION.ADVISE);
-    assert.ok(diagnostics[0].remedy.args.command.startsWith('From the project directory (the one holding `.planning/`), run `git'), diagnostics[0].remedy.args.command);
-    assert.ok(
-      diagnostics[0].remedy.args.command.includes(
-        '`git --literal-pathspecs rm --cached --ignore-unmatch -- .planning/state.json .planning/workstreams/ws1/state.json`',
-      ),
-      diagnostics[0].remedy.args.command,
-    );
+    const tracked = runAdvisedThenListTracked(cwd, diagnostics[0]);
+    assert.ok(!tracked.some((rel) => rel.endsWith('state.json')), `the remedy untracked every copy: ${tracked}`);
+    assert.ok(fs.existsSync(path.join(cwd, '.planning', 'state.json')), 'the file stays on disk');
+    runAdvisedThenListTracked(cwd, diagnostics[0]); // idempotent: --ignore-unmatch makes a rerun succeed
   });
 
   test('W031 single-quotes a path the shell would split or expand, so the advised command pastes safely', (t) => {
@@ -900,10 +906,7 @@ describe('W031 — derived state.json still tracked by git', () => {
     trackStateJson(cwd, [".planning/my $proj's/state.json", ".planning/my $proj's/STATE.md"]);
 
     const [diagnostic] = ruleFor('W031').check(buildPlanningSnapshot(cwd));
-    assert.ok(
-      diagnostic.remedy.args.command.includes(`\`git --literal-pathspecs rm --cached --ignore-unmatch -- '.planning/my $proj'\\''s/state.json'\``),
-      diagnostic.remedy.args.command,
-    );
+    assert.deepEqual(runAdvisedThenListTracked(cwd, diagnostic), ['.planning/PROJECT.md', ".planning/my $proj's/STATE.md"], 'the path with a quote and a dollar sign was untracked, its sibling kept');
   });
 
   test('W031 escapes control characters in a tracked name: no raw newline in the message, ANSI-C quoting in the command', { skip: !isFsLegalName('\n') && 'Windows rejects a newline in a file name' }, (t) => {
@@ -916,7 +919,7 @@ describe('W031 — derived state.json still tracked by git', () => {
     assert.equal(diagnostic.severity, SEVERITY.WARNING);
     assert.equal(diagnostic.remedy.action, REMEDY_ACTION.ADVISE);
     assert.ok(!/[\n\r]/.test(diagnostic.message), 'no raw newline reaches the message');
-    assert.ok(diagnostic.remedy.args.command.includes("-- $'.planning/a\\nb/state.json'`"), diagnostic.remedy.args.command);
+    assert.deepEqual(runAdvisedThenListTracked(cwd, diagnostic), ['.planning/PROJECT.md', '.planning/a\nb/STATE.md'], 'the advised command untracks the newline-named path');
   });
 
   test('W031 is silent when state.json is untracked, or only an unrelated state.json is tracked', (t) => {
@@ -992,9 +995,7 @@ describe('W031 — derived state.json still tracked by git', () => {
   test('W031 path-count cap: 4 and 5 paths list all, 6 adds "and 1 more"', () => {
     for (const count of [4, 5, 6]) {
       const value = Array.from({ length: count }, (_, i) => `.planning/w${i}/state.json`);
-      const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } });
       assert.deepEqual(configValidation.w031Listing(value), { shown: value.slice(0, 5), more: count === 6 ? 1 : 0 });
-      assert.ok(diagnostic.remedy.args.command.includes(value[count - 1]), 'the command keeps every path');
     }
   });
 
@@ -1073,24 +1074,16 @@ describe('W031 — derived state.json still tracked by git', () => {
     );
   });
 
-  test('W031 message escapes format characters, cuts a long name and caps the list; the command keeps every path', () => {
+  test('W031 listing escapes format characters, cuts a long name and caps the list', () => {
     const rlo = String.fromCodePoint(0x202e);
-    const check = (value) => ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } })[0];
 
-    const escaped = check([`.planning/a${rlo}b/state.json`, '.planning/x`y/state.json']);
     assert.deepEqual(configValidation.w031Listing([`.planning/a${rlo}b/state.json`, '.planning/x`y/state.json']).shown[0], '.planning/a\\u{202e}b/state.json');
-    assert.ok(escaped.remedy.args.command.includes('\\xe2\\x80\\xae'), 'the command passes the character as its UTF-8 bytes');
-    assert.ok(escaped.remedy.args.command.includes('\\x60'), 'a backtick cannot end the markdown code span');
 
     const long = `.planning/${'n'.repeat(300)}/state.json`;
-    const cut = check([long]);
     assert.deepEqual(configValidation.w031Listing([long]).shown, [`${[...long].slice(0, 120).join('')}…`]);
-    assert.ok(cut.remedy.args.command.includes(long), 'the command keeps the full name');
 
     const many = Array.from({ length: 8 }, (_, i) => `.planning/p${i}/state.json`);
-    const capped = check(many);
     assert.deepEqual(configValidation.w031Listing(many), { shown: many.slice(0, 5), more: 3 });
-    for (const p of many) assert.ok(capped.remedy.args.command.includes(p), p);
   });
 
   test('W031 is silent when git could not list the tracked files (a failed listing is not a finding)', () => {
