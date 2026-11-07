@@ -1394,7 +1394,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   };
   const wouldRefuse = () => gateResult().blocked;
   // A block without its prose gate_message: the typed fields are the contract, the message is for people.
-  const typed = ({ gate_message, ...rest }) => rest;
+  const typed = (b) => ({ cap_id: b.cap_id, phase: b.phase, reason: b.reason, details: b.details });
   // Raw spawn (stderr visible on success) for the warning assertions.
   const completeRaw = (cwd = tmpDir) => runNode(
     [TOOLS_PATH, 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
