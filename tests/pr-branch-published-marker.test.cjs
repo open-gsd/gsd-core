@@ -802,6 +802,25 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git merge-base --is-ancestor/m, 'git ran bounded');
   });
 
+  test('the printed discard command and a drop verdict forget the same refs', () => {
+    const refs = (dir) => git(dir, 'for-each-ref', '--format=%(refname)', 'refs/gsd');
+    const dropped = repo();
+    commitRound(dropped, 1);
+    assert.equal(publish(dropped).status, 0);
+    git(dropped, 'branch', '-D', 'feature-pr');
+    // afterPre stands in for the outward steps: it records the refs once the preconditions have settled the drop.
+    const r = publish(dropped, 'main', { afterPre: "git for-each-ref --format='%(refname)' refs/gsd > .git/after-drop.txt; exit 0" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /dropped the pending build/);
+    const discarded = repo();
+    commitRound(discarded, 1);
+    assert.equal(publish(discarded).status, 0);
+    const refused = publish(discarded);
+    assert.notEqual(refused.status, 0);
+    assert.equal(runSh(printedCmd(refused.stderr, 'discard'), discarded).status, 0);
+    assert.equal(refs(discarded), fs.readFileSync(path.join(dropped, '.git', 'after-drop.txt'), 'utf-8').trim(), 'both leave the same refs/gsd set');
+  });
+
   test('promote then refuse: an unmerged -pr that lacks the merged built tip leaves refs untouched', () => {
     const dir = repo();
     commitRound(dir, 1);
