@@ -2350,6 +2350,24 @@ describe('#5759 allowSpecialTarget on Windows device names', {
     } finally { cleanup(cwd); }
   });
 
+  // `nul.txt` is not an exact reserved stem, so it is never routed to the device. Windows 11 treats
+  // it as an ordinary creatable file (written, with the data); older Windows normalizes it to the
+  // device (nothing is created). Both outcomes are accepted; the seam describe below pins that the
+  // code itself never opens \\.\NUL for it.
+  test('a nul.txt in the cwd is written as an ordinary file (Windows 11) or absorbed by the device (older Windows)', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-nultxt-'));
+    try {
+      const r = writeChild(cwd, 'nul.txt');
+
+      assertExitedByItself(r);
+      assert.strictEqual(r.stdout, 'ok');
+      const entries = fs.readdirSync(cwd);
+      if (entries.length === 0) return;
+      assert.deepStrictEqual(entries, ['nul.txt']);
+      assert.strictEqual(fs.readFileSync(path.join(cwd, 'nul.txt'), 'utf-8'), 'x');
+    } finally { cleanup(cwd); }
+  });
+
   // On Windows 11 a reserved-looking name can be an ordinary file. The device branch must not
   // write into it in place: a partial overwrite would leave "xRIGINAL..." behind.
   const ORIGINAL = 'ORIGINAL-CONTENT-ORIGINAL-CONTENT';
@@ -2463,14 +2481,18 @@ describe('#5759 Windows device branch via the deviceSeams seam', () => {
     assert.deepStrictEqual(fs.readdirSync(dir), []);
   });
 
-  test('a non-character-device handle is closed untouched and the checked path writes the file', () => {
-    fs.writeFileSync(path.join(dir, 'con.txt'), 'ORIGINAL');
+  // The bare stem reaches the device branch; on a real Windows the checked-path fall-through for a
+  // bare `con` would write to the real console device, so these rows run on POSIX/macOS only.
+  const SKIP_REAL_RESERVED = process.platform === 'win32' ? 'a bare reserved stem reaches the real device on Windows' : false;
+
+  test('a non-character-device handle is closed untouched and the checked path writes the file', { skip: SKIP_REAL_RESERVED }, () => {
+    fs.writeFileSync(path.join(dir, 'con'), 'ORIGINAL');
     const seam = scripted({ charDevice: false });
 
-    inDir(() => write('con.txt', seam));
+    inDir(() => write('con', seam));
 
     assert.deepStrictEqual(kinds(seam), ['open', 'fstat', 'close']);
-    assert.strictEqual(fs.readFileSync(path.join(dir, 'con.txt'), 'utf-8'), 'x');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'con'), 'utf-8'), 'x');
   });
 
   // Routing: which spellings reach the device open, and with which device-namespace path.
@@ -2479,14 +2501,12 @@ describe('#5759 Windows device branch via the deviceSeams seam', () => {
     ['nul', '\\\\.\\NUL'],
     ['.\\NUL', '\\\\.\\NUL'],
     ['./NUL', '\\\\.\\NUL'],
-    ['nul.txt', '\\\\.\\NUL'],
-    ['NUL.', '\\\\.\\NUL'],
-    ['NUL:stream', '\\\\.\\NUL'],
-    ['com1', '\\\\.\\COM1'],
-    ['LPT9.log', '\\\\.\\LPT9'],
     ['\\\\.\\nul', '\\\\.\\NUL'],
-    ['\\\\.\\COM3', '\\\\.\\COM3'],
     ['\\\\?\\NUL', '\\\\.\\NUL'],
+    ['COM1', '\\\\.\\COM1'],
+    ['LPT9', '\\\\.\\LPT9'],
+    ['CON', '\\\\.\\CON'],
+    ['CONIN$', '\\\\.\\CONIN$'],
   ];
   for (const [target, device] of DEVICE_ROWS) {
     test(`${JSON.stringify(target)} opens ${JSON.stringify(device)} and never lstats or walks the path`, (t) => {
@@ -2505,12 +2525,31 @@ describe('#5759 Windows device branch via the deviceSeams seam', () => {
     });
   }
 
-  const CHECKED_ROWS = ['sub\\NUL', 'D:\\x\\NUL', 'C:NUL', '\\\\?\\C:\\x\\NUL', '.\\sub\\con.txt', 'sub/NUL', '..\\NUL', '\\\\.\\C:', '\\\\.\\NUL.txt'];
-  for (const target of CHECKED_ROWS) {
-    test(`${JSON.stringify(target)} never opens a device and takes the checked path`, () => {
+  // Spellings that must never open the device. Every target stays inside the test's temp `dir`
+  // (a bare name resolves against the cwd, which `inDir` sets to `dir`); the checked path's own
+  // outcome is not asserted, only that the device seam saw no open. Spellings that cannot be
+  // rooted in `dir` (`D:\x\NUL`, `C:NUL`, `..\NUL`, `\\.\C:`, `\\.\NUL.txt`) are classified by the
+  // direct windowsDeviceNamespacePath table below instead of being written.
+  const CHECKED_ROWS = [
+    ['nul.txt', () => 'nul.txt'],
+    ['NUL.', () => 'NUL.'],
+    ['NUL:stream', () => 'NUL:stream'],
+    ['COM\u00B9', () => 'COM\u00B9'],
+    ['con.txt', () => 'con.txt'],
+    ['NUL.txt', () => 'NUL.txt'],
+    ['<dir>\\sub\\NUL', (d) => path.join(d, 'sub', 'NUL')],
+    ['sub/NUL', () => 'sub/NUL'],
+    ['<dir>\\sub\\con.txt', (d) => path.join(d, 'sub', 'con.txt')],
+    ['\\\\?\\<dir>\\sub\\NUL', (d) => '\\\\?\\' + path.join(d, 'sub', 'NUL')],
+  ];
+  for (const [label, build] of CHECKED_ROWS) {
+    test(`${JSON.stringify(label)} never opens a device and takes the checked path`, () => {
       const seam = scripted({ charDevice: true });
+      fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
 
-      inDir(() => write(target, seam));
+      inDir(() => {
+        try { write(build(dir), seam); } catch { /* the checked path may refuse the name on some platforms */ }
+      });
 
       assert.deepStrictEqual(seam.log, []);
     });
@@ -2527,20 +2566,20 @@ describe('#5759 Windows device branch via the deviceSeams seam', () => {
   });
 
   for (const code of ['ENOENT', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY', 'EINVAL']) {
-    test(`an open failing with ${code} falls through to the checked path`, () => {
+    test(`an open failing with ${code} falls through to the checked path`, { skip: SKIP_REAL_RESERVED }, () => {
       const seam = scripted({ openError: code });
 
-      inDir(() => write('con.txt', seam));
+      inDir(() => write('con', seam));
 
       assert.deepStrictEqual(kinds(seam), ['open']);
-      assert.strictEqual(fs.readFileSync(path.join(dir, 'con.txt'), 'utf-8'), 'x');
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'con'), 'utf-8'), 'x');
     });
   }
 
   test('any other open failure is surfaced', () => {
     const seam = scripted({ openError: 'EIO' });
 
-    assert.throws(() => inDir(() => write('con.txt', seam)), { code: 'EIO' });
+    assert.throws(() => inDir(() => write('con', seam)), { code: 'EIO' });
   });
 
   test('a non-reserved name or a non-win32 platform never touches the seam fs', () => {
@@ -2560,14 +2599,36 @@ describe('#5759 Windows device branch via the deviceSeams seam', () => {
 describe('#5759 windowsDeviceNamespacePath', () => {
   const { windowsDeviceNamespacePath } = require(SHELL_PROJECTION_PATH);
 
-  test('bare and namespace spellings map to \\\\.\\NAME; anything with a directory maps to null', () => {
+  test('exact reserved stems map to \\\\.\\STEM; every other spelling maps to null', () => {
     assert.strictEqual(windowsDeviceNamespacePath('nul'), '\\\\.\\NUL');
-    assert.strictEqual(windowsDeviceNamespacePath('.\\com2.txt'), '\\\\.\\COM2');
+    assert.strictEqual(windowsDeviceNamespacePath('NUL'), '\\\\.\\NUL');
+    assert.strictEqual(windowsDeviceNamespacePath('.\\com2'), '\\\\.\\COM2');
+    assert.strictEqual(windowsDeviceNamespacePath('./LPT9'), '\\\\.\\LPT9');
     assert.strictEqual(windowsDeviceNamespacePath('\\\\.\\lpt1'), '\\\\.\\LPT1');
-    assert.strictEqual(windowsDeviceNamespacePath('D:\\x\\NUL'), null);
-    assert.strictEqual(windowsDeviceNamespacePath('sub\\NUL'), null);
-    assert.strictEqual(windowsDeviceNamespacePath('config.json'), null);
-    assert.strictEqual(windowsDeviceNamespacePath('com10'), null);
+    assert.strictEqual(windowsDeviceNamespacePath('\\\\?\\Con'), '\\\\.\\CON');
+    assert.strictEqual(windowsDeviceNamespacePath('conin$'), '\\\\.\\CONIN$');
+    assert.strictEqual(windowsDeviceNamespacePath('CONOUT$'), '\\\\.\\CONOUT$');
+    assert.strictEqual(windowsDeviceNamespacePath('prn'), '\\\\.\\PRN');
+    assert.strictEqual(windowsDeviceNamespacePath('aux'), '\\\\.\\AUX');
+  });
+
+  for (const target of [
+    'nul.txt', 'NUL.', 'NUL ', 'NUL:stream', 'con.txt', 'NUL.txt', '.\\com2.txt', 'LPT9.log', 'COM\u00B9', 'LPT\u00B2',
+    'D:\\x\\NUL', 'sub\\NUL', 'sub/NUL', 'C:NUL', '\\\\?\\C:\\x\\NUL', '..\\NUL', '\\\\.\\C:', '\\\\.\\NUL.txt',
+    '\\\\.\\NUL:s', 'config.json', 'com10', 'com0', 'lpt0', 'null', '',
+  ]) {
+    test(`${JSON.stringify(target)} maps to null`, () => {
+      assert.strictEqual(windowsDeviceNamespacePath(target), null);
+    });
+  }
+
+  test('property: a reserved stem followed by a non-empty suffix maps to null', () => {
+    fc.assert(fc.property(
+      fc.constantFrom('nul', 'con', 'prn', 'aux', 'com1', 'lpt9'),
+      fc.stringMatching(/^[A-Za-z0-9_. :-]{1,8}$/),
+      fc.boolean(),
+      (stem, suffix, upper) => windowsDeviceNamespacePath((upper ? stem.toUpperCase() : stem) + suffix) === null,
+    ));
   });
 });
 
