@@ -30,18 +30,222 @@ CURRENT_BRANCH=$(git branch --show-current)
 TARGET=${1:-$(gsd_run query git.base-branch)}
 ```
 
-Check preconditions:
+Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `BASE`, `TIP`, `PR_BRANCH`, `PR_STRICT`, `PR_MODE`, `*_REF`, `shq`); run them all in one shell session, in order:
 - Must be on a feature branch (not main/master)
-- Must have commits ahead of target
+- Must have commits since the last published tip (or ahead of target when nothing was published)
 - Working tree must be clean
 
 ```bash
-AHEAD=$(git rev-list --count "$TARGET".."$CURRENT_BRANCH" 2>/dev/null)
-if [ "$AHEAD" = "0" ]; then
-  echo "No commits ahead of $TARGET — nothing to filter."
-  exit 0
-fi
+# Resolve the filter mode from config. A non-zero exit or an unset key means the default
+# mode; only the literal string `true` selects strict.
+PR_STRICT=$(gsd_run query config-get planning.pr_strict --raw 2>/dev/null)
+if [ "$PR_STRICT" = "true" ]; then PR_MODE="strict"; else PR_MODE="default"; PR_STRICT="false"; fi
+```
 
+**Canonical path declarations.** These three lines are the single source of truth for the
+whole command. `create_pr_branch` derives *which paths it removes* from them, and `verify`
+derives *which paths must not appear* from the same three lines — so the two steps cannot
+disagree about what the filter promised. Declare them exactly once; do not restate either
+list anywhere else in this file. Their literal values are drift-guarded (`npm run lint:ci`,
+`scripts/lint-pr-branch-pattern-drift.cjs`) against the canonical `src/pr-branch-patterns.cts`
+constants — change one side and update the other, or the guard fails.
+
+```bash
+# Transient planning subdirectories — reviewer noise (PLAN.md, SUMMARY.md, CONTEXT.md,
+# RESEARCH.md, and friends). Filtered out in BOTH modes.
+TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"
+
+# Structural planning files — repository planning state. Preserved in default mode,
+# filtered out in strict mode. Anchored on both alternatives so `.planning/STATEX.md`
+# and `.planning/STATE.md.bak` are NOT treated as structural. The milestones
+# alternative matches only FILES directly under `.planning/milestones/` (e.g.
+# `v1.0-ROADMAP.md`) — not a `<milestone>-phases/` subdirectory nested there. That
+# subdirectory is reviewer noise, not structural state (#4605); it falls through to
+# `$MILESTONE_PHASES_RE` below instead.
+STRUCTURAL_RE="^\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\.md$|^\.planning/milestones/[^/]+\.md$"
+
+# Milestone-scoped phase-plan directories — the same reviewer noise as
+# `$TRANSIENT_DIRS`'s `phases` entry, but nested per-milestone once a project has
+# passed at least one milestone: `.planning/milestones/<milestone>-phases/`. The
+# milestone slug (`v1.0`, `m2`, ...) varies per project, so this is declared as a
+# shape, not a literal path — a single path segment standing in for the slug,
+# anchored the same way `$STRUCTURAL_RE`'s alternatives are (#4605).
+MILESTONE_PHASES_RE="^\.planning/milestones/[^/]+-phases/"
+```
+
+Derive the mode's two projections — `FILTER_PATHS` (what `create_pr_branch` removes from
+each cherry-picked commit) and `FORBIDDEN_RE` (what `verify` asserts is absent):
+
+```bash
+if [ "$PR_STRICT" = "true" ]; then
+  FILTER_PATHS=".planning/"
+  FORBIDDEN_RE="^\.planning/"
+else
+  # One path per LINE, not per space (#4605) — see create_pr_branch's consumption
+  # loop: a discovered `<milestone>-phases/` directory can contain a space, so
+  # whitespace cannot be the delimiter. Rewrapped through unquoted command
+  # substitution (gsd-core#4109): a bare `$VAR` word-splits under bash but not
+  # zsh, collapsing every element onto one iteration there.
+  FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/\n' "$d"; done)
+  FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/|$MILESTONE_PHASES_RE"
+
+  # $MILESTONE_PHASES_RE is a shape, not a path — create_pr_branch's filter loop
+  # needs concrete paths to `git rm`, so resolve which `<milestone>-phases/`
+  # directories actually exist in this worktree (#4605). A project with no
+  # milestones yet (`.planning/milestones/` absent) yields nothing here, same as
+  # any other empty FILTER_PATHS entry. `-exec printf ... \;` rather than
+  # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
+  # milestone slug containing a space into two spurious entries (ShellCheck
+  # SC2044) — the exact class of bug #4109 already fixed once in this file.
+  # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
+  # `.planning/milestones/`), not just the expected-absent case — the unsafe
+  # direction, since a real failure then silently leaves those paths
+  # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
+  # still asserts their absence downstream in `verify`, catching what this
+  # step misses.
+  MILESTONE_PHASE_DIRS=$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/\n' {} \; 2>/dev/null)
+  # Appended as its own LINE, and only when non-empty so no blank entry is
+  # introduced. The separator is a literal newline inside the quotes — `$(...)`
+  # has already stripped the trailing one off each side.
+  if [ -n "$MILESTONE_PHASE_DIRS" ]; then
+    FILTER_PATHS="${FILTER_PATHS}
+${MILESTONE_PHASE_DIRS}"
+  fi
+fi
+```
+
+The preconditions below read the filter projections above, so they come first.
+
+```bash
+PR_BRANCH="${CURRENT_BRANCH}-pr"
+TIP=$(git rev-parse "$CURRENT_BRANCH")
+# Keyed by mode: strict skips commits default publishes, so one mode's marker is wrong for the other.
+# refkey STR — one ref component: "%", "/", control and non-ASCII bytes, and every char git forbids in ref
+# names encoded as %XX (so "HEAD~3" is valid, "..", "@{" and ".lock" cannot occur, no ref is a directory
+# prefix of another, and the key is injective for any TARGET).
+refkey() { printf %s "$1" | od -An -v -tu1 | LC_ALL=C awk 'BEGIN{ORS=""}{for(i=1;i<=NF;i++){b=$i;c=sprintf("%c",b);if(b<32||b>126||index("%/ ~^:?*[\\.@",c))printf "%%%02X",b;else printf "%s",c}}'; }
+REF_KEY="$PR_MODE/$(refkey "$TARGET")/$(refkey "$CURRENT_BRANCH")"
+MARKER_REF="refs/gsd/pr-published/$REF_KEY"
+PENDING_REF="refs/gsd/pr-built/$REF_KEY"
+PR_TIP_REF="refs/gsd/pr-built-head/$REF_KEY"
+PR_BRANCH_TIP=$(git rev-parse -q --verify "refs/heads/$PR_BRANCH")
+# gh --base value: TARGET without its leading remote name (any configured remote, not only origin).
+PR_BASE=$TARGET
+for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${TARGET#"$_r"/}; break; }; done
+
+# shq STR — STR shell-quoted for the recovery commands printed below (branch names may hold ; $ ( ) & `).
+shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
+
+# _to CMD... — CMD capped at 10s by gsd_run run-with-timeout (no timeout binary needed), so a hung git cannot stall the run.
+_to() { gsd_run run-with-timeout 10 -- "$@"; }
+
+# pr_merged TIP — TIP is in $TARGET: an ancestor, or (squash/rebase merge) $TARGET holds TIP's
+# content for every path TIP changed since it forked from $TARGET, or (once $TARGET has since
+# edited those paths) GitHub reports a PR for $PR_BRANCH merged into the target whose head was TIP.
+pr_merged() {
+  local _sha _fork _top _g
+  _top=$(_to git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
+  _to git merge-base --is-ancestor "$1" "$TARGET" 2>/dev/null && return 0
+  _sha=$(_to git rev-parse -q --verify "$1") || return 1
+  if _fork=$(_to git merge-base "$_sha" "$TARGET" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only --no-renames "$_fork" "$_sha")" ] &&
+    _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET" --; then
+    return 0
+  fi
+  # Last proof: gh, run only as an executable (a shell function or alias cannot be bounded) and capped at 10s.
+  # No answer from gh counts as "not merged", so a merge the run cannot confirm is never published by guess.
+  # Base-filtered: markers are keyed per target ($PR_BASE).
+  _g=$(command -v gh) || return 1
+  case $_g in /*) ;; *) return 1 ;; esac
+  _to gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
+}
+
+# The last build counts as published only once its -pr tip (PR_TIP_REF) is merged, even if
+# the local -pr branch was since deleted; an unmerged build whose -pr branch is gone was
+# discarded, so its commits must be replayed.
+PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
+# One verdict for the leftover -pr branch (each lookup may call gh); the refusal below reads it.
+PR_BRANCH_MERGED=
+PENDING_VERDICT=
+[ -n "$PR_BRANCH_TIP" ] && pr_merged "$PR_BRANCH_TIP" && PR_BRANCH_MERGED=1
+# Forgetting a pending build removes both refs; DISCARD_PENDING is the same pair as a printed recovery command.
+drop_pending() { git update-ref -d "$PENDING_REF"; git update-ref -d "$PR_TIP_REF" 2>/dev/null; }
+DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"
+if [ -n "$PENDING_TIP" ]; then
+  # The recorded built tip must itself be merged. The leftover branch's verdict stands in for it only when that
+  # proof fails and the branch still contains the built tip (amended since); a -pr reset to the target says nothing about the build.
+  PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
+  BUILT_MERGED=
+  if pr_merged "$PR_TIP_REF"; then BUILT_MERGED=1
+  elif [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; fi
+  # The verdict is only recorded here; settle_pending applies it once no refusal can follow.
+  if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
+  elif [ -z "$PR_BRANCH_TIP" ]; then PENDING_VERDICT=drop
+  elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(_to git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
+  fi
+fi
+settle_pending() {
+  case $PENDING_VERDICT in
+    promote) git update-ref "$MARKER_REF" "$PENDING_TIP" && drop_pending ;;
+    drop)
+      drop_pending
+      echo "WARNING: dropped the pending build $PENDING_TIP: $PR_BRANCH is gone and its tip is not merged into $TARGET, so its commits will be replayed. If it was squash/rebase merged and $TARGET changed those files since, re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2 ;;
+  esac
+}
+
+# BASE bounds every commit range below: the last published tip when still an ancestor
+# (repeat publish picks only new commits), else $TARGET.
+BASE="$TARGET"
+MARKER_TIP=$(git rev-parse -q --verify "$MARKER_REF")
+[ "$PENDING_VERDICT" = promote ] && MARKER_TIP=$PENDING_TIP
+if [ -n "$MARKER_TIP" ]; then
+  if _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
+    BASE="$MARKER_TIP"
+  else
+    # History rewritten (rebase, reword): match commits by patch-id over the paths outside $FILTER_PATHS (what
+    # the -pr keeps), so a rewritten mixed commit still matches its -pr copy. A published commit with no equal
+    # patch counts when the files it touched are unchanged between the published tip and $TARGET (squash
+    # merge, then a rebase). BASE ends the leading run of published-equivalent commits; $TARGET when none.
+    # Warn on an unmatched published commit (folded, conflict-resolved), a matched commit above an unpublished
+    # one (reordered), or a failed or timed-out git lookup (a missing patch would read as published).
+    # rw_git GIT-ARGS... — git run bounded, limited to the paths outside $FILTER_PATHS.
+    rw_git() {
+      set -- "$@" -- ':/'
+      while IFS= read -r _p; do [ -n "$_p" ] && set -- "$@" ":(exclude,top)$_p"; done <<RW_PATHS_EOF
+$FILTER_PATHS
+RW_PATHS_EOF
+      _to git "$@"
+    }
+    RW_TMP=$(mktemp)
+    REWRITE=WARN
+    if RW_L=$(_to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
+      RW_R=$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null) &&
+      RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET" 2>/dev/null) &&
+      RW_F=$(rw_git log --full-history --no-merges --name-only --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
+      rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" >"$RW_TMP" 2>/dev/null &&
+      RW_P=$(git patch-id --stable <"$RW_TMP"); then
+      REWRITE=$(printf 'L\n%s\nR\n%s\nD\n%s\nF\n%s\nP\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" |
+        awk '/^L$/{s=1;next} /^R$/{s=2;next} /^D$/{s=3;next} /^F$/{s=4;next} /^P$/{s=5;next}
+          s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{dif[$0]=1}
+          s==4&&/^commit [0-9a-f]+$/{cur=$2;next} s==4&&NF&&($0 in dif){nd[cur]++}
+          s==5&&NF{pid[$2]=$1}
+          END{ if(!nl){print "WARN";exit}
+            for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
+            for(c in L) if((c in pid)&&!(pid[c] in here)&&nd[c]>0){print "WARN";exit}
+            for(i=n;i>=1;i--){ c=R[i]
+              if(!stop && (!(c in pid) || (pid[c] in lp))){tip=c;continue}
+              stop=1; if((c in pid)&&(pid[c] in lp)){print "WARN";exit} }
+            print "OK", (tip==""?"-":tip) }')
+    fi
+    rm -f "$RW_TMP"
+    case $REWRITE in
+      "OK -") ;;
+      OK\ *) BASE=${REWRITE#OK } ;;
+      *) echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2 ;;
+    esac
+  fi
+elif [ -n "$PR_BRANCH_MERGED" ]; then
+  echo "WARNING: $PR_BRANCH is merged into $TARGET but nothing is recorded as published for $CURRENT_BRANCH in $PR_MODE mode, so every commit is picked again. If an earlier publish is merged, re-anchor: git update-ref $(shq "$MARKER_REF") <last published commit on $CURRENT_BRANCH>" >&2
+fi
 # The filter below removes files from the index AND the working tree before each
 # commit lands, and this command switches branches underneath the user's own
 # checkout. An uncommitted edit to a tracked file would be destroyed by that, and
@@ -53,14 +257,26 @@ if [ -n "$DIRTY" ]; then
   echo "$DIRTY" >&2
   exit 1
 fi
-```
 
-Resolve the filter mode from config. A non-zero exit or an unset key means the default
-mode; only the literal string `true` selects strict.
-
-```bash
-PR_STRICT=$(gsd_run query config-get planning.pr_strict --raw 2>/dev/null)
-if [ "$PR_STRICT" = "true" ]; then PR_MODE="strict"; else PR_MODE="default"; PR_STRICT="false"; fi
+# A leftover -pr branch is reset only when already merged. Refuse here, before handle_sub_repos
+# pushes branches and opens PRs, so a refused run has no outward effects.
+if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDICT" = unproven ]; }; then
+  if [ -z "$PR_BRANCH_MERGED" ]; then echo "$PR_BRANCH exists and is not merged into $TARGET. Choose one, then re-run:" >&2
+  else echo "$PR_BRANCH is merged into $TARGET but no longer holds the pending build $PENDING_TIP. Choose one, then re-run:" >&2; fi
+  if [ "$PENDING_VERDICT" != promote ] && git rev-parse -q --verify "$PENDING_REF" >/dev/null; then
+    echo "  published (re-anchor): git update-ref $(shq "$MARKER_REF") \$(git rev-parse $(shq "$PENDING_REF")) && git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
+    echo "  discard: git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
+  else
+    echo "  discard: git branch -D $(shq "$PR_BRANCH")" >&2
+  fi
+  exit 1
+fi
+settle_pending
+AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
+if [ "$AHEAD" = "0" ]; then
+  echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
+  exit 0
+fi
 ```
 
 Display:
@@ -236,80 +452,10 @@ After processing all selected sub-repos, remove the temp file and continue to
 Classify commits:
 
 ```bash
-# Get all commits ahead of target
-git log --oneline "$TARGET".."$CURRENT_BRANCH" --no-merges
-```
-
-**Canonical path declarations.** These three lines are the single source of truth for the
-whole command. `create_pr_branch` derives *which paths it removes* from them, and `verify`
-derives *which paths must not appear* from the same three lines — so the two steps cannot
-disagree about what the filter promised. Declare them exactly once; do not restate either
-list anywhere else in this file. Their literal values are drift-guarded (`npm run lint:ci`,
-`scripts/lint-pr-branch-pattern-drift.cjs`) against the canonical `src/pr-branch-patterns.cts`
-constants — change one side and update the other, or the guard fails.
-
-```bash
-# Transient planning subdirectories — reviewer noise (PLAN.md, SUMMARY.md, CONTEXT.md,
-# RESEARCH.md, and friends). Filtered out in BOTH modes.
-TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"
-
-# Structural planning files — repository planning state. Preserved in default mode,
-# filtered out in strict mode. Anchored on both alternatives so `.planning/STATEX.md`
-# and `.planning/STATE.md.bak` are NOT treated as structural. The milestones
-# alternative matches only FILES directly under `.planning/milestones/` (e.g.
-# `v1.0-ROADMAP.md`) — not a `<milestone>-phases/` subdirectory nested there. That
-# subdirectory is reviewer noise, not structural state (#4605); it falls through to
-# `$MILESTONE_PHASES_RE` below instead.
-STRUCTURAL_RE="^\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\.md$|^\.planning/milestones/[^/]+\.md$"
-
-# Milestone-scoped phase-plan directories — the same reviewer noise as
-# `$TRANSIENT_DIRS`'s `phases` entry, but nested per-milestone once a project has
-# passed at least one milestone: `.planning/milestones/<milestone>-phases/`. The
-# milestone slug (`v1.0`, `m2`, ...) varies per project, so this is declared as a
-# shape, not a literal path — a single path segment standing in for the slug,
-# anchored the same way `$STRUCTURAL_RE`'s alternatives are (#4605).
-MILESTONE_PHASES_RE="^\.planning/milestones/[^/]+-phases/"
-```
-
-Derive the mode's two projections — `FILTER_PATHS` (what `create_pr_branch` removes from
-each cherry-picked commit) and `FORBIDDEN_RE` (what `verify` asserts is absent):
-
-```bash
-if [ "$PR_STRICT" = "true" ]; then
-  FILTER_PATHS=".planning/"
-  FORBIDDEN_RE="^\.planning/"
-else
-  # One path per LINE, not per space (#4605) — see create_pr_branch's consumption
-  # loop: a discovered `<milestone>-phases/` directory can contain a space, so
-  # whitespace cannot be the delimiter. Rewrapped through unquoted command
-  # substitution (gsd-core#4109): a bare `$VAR` word-splits under bash but not
-  # zsh, collapsing every element onto one iteration there.
-  FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/\n' "$d"; done)
-  FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/|$MILESTONE_PHASES_RE"
-
-  # $MILESTONE_PHASES_RE is a shape, not a path — create_pr_branch's filter loop
-  # needs concrete paths to `git rm`, so resolve which `<milestone>-phases/`
-  # directories actually exist in this worktree (#4605). A project with no
-  # milestones yet (`.planning/milestones/` absent) yields nothing here, same as
-  # any other empty FILTER_PATHS entry. `-exec printf ... \;` rather than
-  # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
-  # milestone slug containing a space into two spurious entries (ShellCheck
-  # SC2044) — the exact class of bug #4109 already fixed once in this file.
-  # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
-  # `.planning/milestones/`), not just the expected-absent case — the unsafe
-  # direction, since a real failure then silently leaves those paths
-  # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
-  # still asserts their absence downstream in `verify`, catching what this
-  # step misses.
-  MILESTONE_PHASE_DIRS=$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/\n' {} \; 2>/dev/null)
-  # Appended as its own LINE, and only when non-empty so no blank entry is
-  # introduced. The separator is a literal newline inside the quotes — `$(...)`
-  # has already stripped the trailing one off each side.
-  if [ -n "$MILESTONE_PHASE_DIRS" ]; then
-    FILTER_PATHS="${FILTER_PATHS}
-${MILESTONE_PHASE_DIRS}"
-  fi
-fi
+# Get all commits ahead of the base: these are the only candidates to pick
+git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET"
+# Default pick list, oldest first; drop commits classified as skip.
+INCLUDED_COMMITS=$(git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET")
 ```
 
 For each commit, check what it touches:
@@ -355,10 +501,8 @@ Mixed planning commits: {N} ({included — structural + transient/other, plannin
 
 <step name="create_pr_branch">
 ```bash
-PR_BRANCH="${CURRENT_BRANCH}-pr"
-
-# Create PR branch from target
-git checkout -b "$PR_BRANCH" "$TARGET"
+# Create PR branch from target. A leftover branch here is merged (an unmerged one was refused in the preconditions); -B resets it.
+git checkout -q --no-track -B "$PR_BRANCH" "$TARGET" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
 ```
 
 Cherry-pick the included commits, in order, filtering `$FILTER_PATHS` out of each one.
@@ -474,9 +618,9 @@ UNMERGED_PATHS_EOF
     else
       # Never claim a restore that did not happen — say exactly where they are.
       echo "Could not return to $CURRENT_BRANCH; you are still on $PR_BRANCH." >&2
-      echo "Run: git checkout $CURRENT_BRANCH && git branch -D $PR_BRANCH" >&2
+      echo "Run: git checkout $(shq "$CURRENT_BRANCH") && git branch -D $(shq "$PR_BRANCH")" >&2
     fi
-    echo "Resolve the conflict against $TARGET, then re-run /gsd:pr-branch." >&2
+    echo "Resolve the conflict against $TARGET, then re-run /gsd:pr-branch. If it came from replaying commits already published, re-anchor instead: see the WARNING above." >&2
     exit 1
   fi
 
@@ -532,6 +676,15 @@ value means the PR branch would DELETE planning files the target branch tracks
 (`git diff --name-status --no-renames "$TARGET".."$PR_BRANCH" | grep "^D" | grep "\.planning/"` lists
 them). That is data loss, not filtering — report it, do not tell the user to push, and
 rebuild the branch.
+
+When both gates pass, record the built tip as pending (`$TIP`, never HEAD) and the `$PR_BRANCH` tip
+beside it; the next run promotes pending to published once that tip is merged. A failed write warns; it never aborts:
+
+```bash
+if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ]; then
+  git update-ref "$PR_TIP_REF" "$(git rev-parse "$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PENDING_REF; next run will replay commits." >&2
+fi
+```
 
 Display results:
 ```

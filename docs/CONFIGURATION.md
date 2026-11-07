@@ -886,6 +886,8 @@ Pick by which question you are actually asking:
 
 The two are independent keys and can be set together, but `pr_strict` is inert when `commit_docs` is `false`: with nothing committed, there is nothing for the PR-branch filter to remove.
 
+`/gsd-pr-branch` publishes only the commits added since the last merged `-pr` branch, and `planning.pr_strict` selects its own marker, so switching the key never reuses the other mode's marker. The markers, merge proofs and recovery steps are in [How repeat publishes work](how-to/publish-prs-without-planning-artifacts.md#how-repeat-publishes-work).
+
 See [Publish PRs without planning artifacts](how-to/publish-prs-without-planning-artifacts.md) for the setup.
 
 ### `commit_docs` Pre-Commit Guard (opt-in)

@@ -1928,6 +1928,8 @@ Create a clean PR branch by filtering out `.planning/` commits.
 
 **Prerequisites:** Clean working tree — uncommitted changes are rejected before the PR branch is created.
 
+**Repeat runs:** Each run picks only the commits added since the last merged `-pr` branch. A leftover `{branch}-pr` that is unmerged or unproven is refused by name (exit 1) with the commands to re-anchor or discard it. See [How repeat publishes work](how-to/publish-prs-without-planning-artifacts.md#how-repeat-publishes-work).
+
 **Filter mode:** Set by [`planning.pr_strict`](CONFIGURATION.md#planning-settings). Default (`false`) keeps structural planning state — `STATE.md`, `ROADMAP.md`, `MILESTONES.md`, `PROJECT.md`, `REQUIREMENTS.md`, `milestones/**` — and drops the transient subdirectories. Strict (`true`) drops every `.planning/` path. The active mode is printed in the run header and in the verification summary.
 
 ```bash
