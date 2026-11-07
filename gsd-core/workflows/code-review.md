@@ -981,7 +981,7 @@ Next steps:
 If critical > 0 or warning > 0, list top 3 issues inline:
 ```bash
 echo "Top issues:"
-grep -A 3 "^### CR-\|^### BL-\|^### WR-" "${REVIEW_PATH}" | head -n 12
+grep -A 3 -E "^###[[:space:]]+([A-Z][A-Z0-9]*-)?(CR|BL|WR)-[0-9]+[[:space:]]*:" "${REVIEW_PATH}" | head -n 12
 ```
 
 **Note on tests:** Automated tests for this command and workflow are planned for Phase 4 (Pipeline Integration & Testing, requirement INFR-03). Phase 2 focuses on correct implementation; Phase 4 adds regression coverage across platforms.

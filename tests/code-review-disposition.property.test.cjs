@@ -13,10 +13,10 @@
  * handful of points — id ordering, severity mix, hand-edited source cells with
  * escaped AND bare pipes, carried rows from a review that no longer reports them.
  *
- * Four properties, all over the SHIPPED script (extracted from the step file
- * and executed), never over a model of it. The header said "two" while three
- * were running — the vocabulary property arrived without it, so the count is
- * now stated per property rather than in a lump:
+ * Every property runs over the SHIPPED script (extracted from the step file
+ * and executed), never over a model of it. They are listed, not counted: a
+ * count in this header went stale twice, each time when a property arrived
+ * without it.
  *
  *   idempotency — running the gate twice leaves the ledger byte-identical and
  *                 the second run reports `unchanged`.
@@ -32,6 +32,11 @@
  *                 the same finding, so a lossy round-trip does not corrupt a
  *                 title — it DESTROYS a human's recorded triage, silently. The
  *                 property asserts the consequence, not the JSON.
+ *   reuse       — when a re-review reuses a decided finding's id for a different
+ *                 finding, the earlier row moves to `<id>~N` with its decision,
+ *                 through repeated reuse, and the result is a fixed point.
+ *   console     — a ledger line the step refuses, on either path that names one,
+ *                 is named in printable characters, and the ledger keeps its bytes.
  *
  * Every arbitrary here is built at module scope, not in a `describe` body —
  * the fast-check v4 trap that cancels a whole block.
@@ -231,6 +236,13 @@ function sectionedReviewFor(findings) {
 // that gets weakened rather than believed the first time it goes red.
 const expectedTitle = (t) => String(t).trim();
 
+// Weighted to what the name must not carry: C0, DEL, C1, a bidirectional override, a separator,
+// and an astral character, which the cut at 40 can split.
+const CONSOLE_TEXT = fc.array(fc.constantFrom(0x1b, 0x07, 0x09, 0x7f, 0x9b, 0x202e, 0x2066, 0x200b, 0x2028, 0x41, 0x2d, 0x31, 0x1f600),
+  { minLength: 1, maxLength: 60 }).map((units) => String.fromCodePoint(...units));
+// A first cell that is not an id, and a quoted line naming an id the parse never read.
+const REFUSED_ROW = fc.constantFrom((t2) => '| ~' + t2 + ' | warning | open | x |', (t2) => '> ~' + t2 + '| WR-02 | warning | deferred | x |');
+
 describe('#3829 — the disposition ledger is a render/re-parse fixed point', () => {
   test('re-running the gate rewrites nothing and changes nothing', () => {
     fc.assert(fc.property(FINDINGS, (findings) => {
@@ -392,6 +404,63 @@ describe('#3829 — the disposition ledger is a render/re-parse fixed point', ()
       } finally {
         cleanup(dir);
       }
+    }), RUNS);
+  });
+
+  test('a reused id never loses an earlier decision, however many times it is reused', (t) => {
+    const dirs = [];
+    t.after(() => dirs.forEach(cleanup));
+    fc.assert(fc.property(FINDINGS, DECIDED, fc.integer({ min: 1, max: 3 }), (findings, decision, reuses) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3829-prop-'));
+      dirs.push(dir);
+      const ledgerPath = path.join(dir, '01-REVIEW-DISPOSITION.md');
+      const target = findings[0].id;
+      // Decide the target by editing the rendered ledger in place, so its title is in the
+      // frontmatter and the identity check is actually consulted (see the titles property).
+      const decide = (ledger) => {
+        const next = ledger.replace(new RegExp('^\\| ' + target + ' \\| ([a-z]+) \\| open \\|', 'm'),
+          '| ' + target + ' | $1 | ' + decision + ' |');
+        assert.notStrictEqual(next, ledger, 'the hand-edit must actually change the row');
+        fs.writeFileSync(ledgerPath, next);
+      };
+      fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor(findings));
+      decide(runOnce(dir, '01').ledger);
+      let last = null;
+      for (let k = 1; k <= reuses; k++) {
+        // The same id now names a different finding: no generated title contains this text.
+        const reused = [{ id: target, title: 'reuse number ' + k + ' of ' + target }].concat(findings.slice(1));
+        fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor(reused));
+        last = runOnce(dir, '01');
+        assert.match(last.stdout, new RegExp(target + '=' + decision + ' -> ' + target + '~' + k),
+          'reuse ' + k + ' must move the decided row to ' + target + '~' + k);
+        if (k < reuses) decide(last.ledger);
+      }
+      for (let k = 1; k <= reuses; k++) {
+        const row = last.ledger.split('\n').find((l) => l.startsWith('| ' + target + '~' + k + ' '));
+        assert.ok(row, target + '~' + k + ' must still have a row after ' + reuses + ' reuse(s)');
+        const cells = row.split(/\s\|\s/).map((c) => c.replace(/^\|\s*|\s*\|$/g, '').trim());
+        assert.strictEqual(cells[2], decision, 'and keep its decision');
+      }
+      const again = runOnce(dir, '01');
+      assert.ok(again.unchanged, 'a re-run over the same review rewrites nothing');
+    }), RUNS);
+  });
+
+  test('on either path that names a refused ledger line, the console stays printable', (t) => {
+    const dirs = [];
+    t.after(() => dirs.forEach(cleanup));
+    fc.assert(fc.property(CONSOLE_TEXT, REFUSED_ROW, (text, row) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3829-prop-'));
+      dirs.push(dir);
+      fs.writeFileSync(path.join(dir, '01-REVIEW.md'), reviewFor([]));
+      const prior = ['| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|',
+        row(text), ''].join('\n');
+      fs.writeFileSync(path.join(dir, '01-REVIEW-DISPOSITION.md'), prior);
+      const out = runOnce(dir, '01');
+      assert.match(out.stdout, /NOT rewritten: 1 ledger row\(s\)/);
+      assert.doesNotMatch(out.stdout.trim(), /[\p{C}\p{Zl}\p{Zp}]/u);
+      assert.ok(!out.stdout.includes(String.fromCodePoint(0xfffd)), 'and no half of a split pair');
+      assert.strictEqual(out.ledger, prior, 'the ledger keeps its bytes');
     }), RUNS);
   });
 
