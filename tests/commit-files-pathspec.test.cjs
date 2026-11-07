@@ -31,7 +31,7 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_VALUE_FLAGS,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_PREFIX_ORACLE, GIT_VALUE_FLAGS,
 } = require('./helpers/shipped-command-scan.cjs');
 const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
 
@@ -3435,8 +3435,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   const msg = fc.oneof(
     word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`), word.map((w) => `"- ${w}"`),
   );
-  // Hand-written from git(1) global-option syntax, not from the scanner, so a spelling the scanner omits still reaches the properties (#2371).
-  const GIT_PREFIX_ORACLE = ['git --git-dir=g', 'git --work-tree w', 'git --namespace=n', 'git -p', 'git --bare', 'git --exec-path=e', 'git --literal-pathspecs', 'git -C a -C b'];
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
     const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE);
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {

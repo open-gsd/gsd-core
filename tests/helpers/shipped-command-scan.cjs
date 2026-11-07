@@ -411,6 +411,8 @@ const unscopedGitCommits = (raw, inline = false) => {
 
 // Git prefix spellings the add guard and the commit scanner must both see through to the subcommand.
 const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice', 'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
+// Hand-written from git(1) global-option syntax, not from the list above, so a spelling the scanner omits still reaches the prefix tests (#2371).
+const GIT_PREFIX_ORACLE = ['git --git-dir=g', 'git --work-tree w', 'git --namespace=n', 'git -p', 'git --bare', 'git --exec-path=e', 'git --literal-pathspecs', 'git -C a -C b'];
 
 module.exports = {
   bareCommandName,
@@ -428,4 +430,5 @@ module.exports = {
   gitSubcommandIdx,
   unscopedGitCommits,
   GIT_PREFIX_SPELLINGS,
+  GIT_PREFIX_ORACLE,
 };
