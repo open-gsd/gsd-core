@@ -37,7 +37,8 @@ function repoOwnsProject(projectRoot: string, dir: string): boolean {
     if (fs.existsSync(path.join(d, '.git'))) return true;
     if (d === root || d === path.dirname(d)) break;
   }
-  const r = execGit(['ls-files', '-z', '--', '.'], { cwd: root, timeout: GIT_PROBE_TIMEOUT_MS });
+  // One byte of output answers the question: git is killed at the first tracked path (ENOBUFS), so a large repo costs one path, not a listing.
+  const r = execGit(['ls-files', '-z', '--', '.'], { cwd: root, timeout: GIT_PROBE_TIMEOUT_MS, maxBuffer: 1 });
   return (r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (r.exitCode === 0 && r.stdout.length > 0);
 }
 
