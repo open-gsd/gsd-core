@@ -557,7 +557,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     const ws = (name) => path.join(tmpDir, '.planning', 'workstreams', name);
-    for (const name of ['ws1', 'ws2', 'ws3', 'ws4']) {
+    for (const name of ['ws1', 'ws2', 'ws3', 'ws4', 'ws5', 'ws6']) {
       fs.mkdirSync(ws(name), { recursive: true });
       fs.writeFileSync(path.join(ws(name), 'STATE.md'), STATE_MD);
       fs.writeFileSync(path.join(ws(name), 'state.json'), '{}\n');
@@ -565,11 +565,13 @@ describe('state.json never dirties the tree (#5505)', () => {
     fs.writeFileSync(path.join(ws('ws2'), 'config.json'), '{"commit_docs": false}\n');
     fs.writeFileSync(path.join(ws('ws3'), '.gitignore'), '!/state.json\n');
     fs.writeFileSync(path.join(ws('ws4'), 'config.json'), '{"commit_docs": 0}\n'); // the commit policy reads every falsy value as off
+    fs.writeFileSync(path.join(ws('ws5'), 'config.json'), '{"commit_docs": null}\n');
+    fs.writeFileSync(path.join(ws('ws6'), 'config.json'), '{"commit_docs": ""}\n');
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'seed');
     assert.ok(runGsdTools([...BEGIN, '--ws', 'ws1'], tmpDir).success);
     assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/workstreams/ws1/state.json'), '', 'the active scope migrates');
-    for (const name of ['ws2', 'ws3', 'ws4']) {
+    for (const name of ['ws2', 'ws3', 'ws4', 'ws5', 'ws6']) {
       assert.strictEqual(git(tmpDir, 'ls-files', '--', `.planning/workstreams/${name}/state.json`).trim(), `.planning/workstreams/${name}/state.json`, `${name} keeps its copy tracked`);
     }
   });

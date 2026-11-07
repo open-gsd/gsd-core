@@ -918,7 +918,7 @@ describe('W031 — derived state.json still tracked by git', () => {
     assert.equal(diagnostic.code, 'W031');
     assert.equal(diagnostic.severity, SEVERITY.WARNING);
     assert.equal(diagnostic.remedy.action, REMEDY_ACTION.ADVISE);
-    assert.ok(!/[\n\r]/.test(diagnostic.message), 'no raw newline reaches the message');
+    assert.ok(configValidation.w031Listing(['.planning/a\nb/state.json']).shown.every((label) => !/[\n\r]/.test(label)), 'no raw newline reaches the listing');
     assert.deepEqual(runAdvisedThenListTracked(cwd, diagnostic), ['.planning/PROJECT.md', '.planning/a\nb/STATE.md'], 'the advised command untracks the newline-named path');
   });
 
