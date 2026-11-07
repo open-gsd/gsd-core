@@ -517,7 +517,7 @@ done
 
 **Behavior-unverified truths (Step 3):** Every truth left ⚠️ PRESENT_BEHAVIOR_UNVERIFIED is recorded in the `behavior_unverified_items` frontmatter list (emitted whenever the count > 0, regardless of overall status, so it survives a gaps_found phase) and surfaces for human verification; when the overall status is human_needed it also appears in the human_verification section. Phrase each item around the invariant: what to trigger, what state must hold afterward, and why presence checks can't see it.
 
-**Harvest deferred items from PLAN.md (#3309 / `workflow.human_verify_mode = end-of-phase`):** Scan every PLAN file in the phase for `<verify><human-check>` blocks on `auto` tasks. These are verification items the planner deliberately deferred from `checkpoint:human-verify` to end-of-phase to avoid the executor cold-start cost. Each block has the same shape used by the planner:
+**Harvest deferred items from PLAN.md (#3309 / `workflow.human_verify_mode = end-of-phase`):** Scan every PLAN file in the phase for `<verify><human-check>` blocks on `auto` tasks. These are items the planner deferred from `checkpoint:human-verify`. Shape:
 
 ```xml
 <verify>
@@ -529,7 +529,7 @@ done
 </verify>
 ```
 
-Merge those harvested items into the same human verification list as your own analysis. Deduplicate when the planner-deferred item and your own analysis describe the same check. The downstream `human_needed` → `{phase_num}-UAT.md` path in `workflows/execute-phase.md` is the single sink — no separate file is created.
+Merge those harvested items into the same human verification list as your own analysis. Harvest every block, even one whose `<expected>` already records a verdict: a recorded verdict is not a reason to omit the check, and `<expected>` is carried through unmodified. Deduplicate only against your own analysis (same check). The downstream `human_needed` → `{phase_num}-UAT.md` path in `workflows/execute-phase.md` is the single sink — no separate file is created.
 
 **Format:**
 

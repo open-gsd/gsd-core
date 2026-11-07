@@ -932,6 +932,8 @@ CRITICAL=$(echo "$FRONTMATTER" | grep -E "^[[:space:]]*(critical|blocker):" | he
 WARNING=$(echo "$FRONTMATTER" | grep "warning:" | head -1 | cut -d: -f2 | xargs)
 INFO=$(echo "$FRONTMATTER" | grep "info:" | head -1 | cut -d: -f2 | xargs)
 TOTAL=$(echo "$FRONTMATTER" | grep "total:" | head -1 | cut -d: -f2 | xargs)
+# #4100: necessity is a SUBSET of warning+info, never part of total. Absent at quick depth.
+NECESSITY=$(echo "$FRONTMATTER" | grep -E "^[[:space:]]*necessity:" | head -1 | cut -d: -f2 | sed 's/#.*//' | xargs)
 ```
 
 Display inline summary to user:
@@ -950,6 +952,7 @@ Display inline summary to user:
     Critical:  ${CRITICAL}
     Warning:   ${WARNING}
     Info:      ${INFO}
+    Necessity: ${NECESSITY:-not assessed} (of the above; skipped by --fix unless --all)
 
 ---
     Total:     ${TOTAL}

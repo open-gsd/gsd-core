@@ -29,7 +29,7 @@ const { loadConfig } = configLoaderMod;
 import phaseIdMod = require('./phase-id.cjs');
 const {
   parsePhaseFromProse,
-  PHASE_NUMBER_TOKEN_SOURCE,
+  phaseNumberTokenSource,
   phaseKeyFromToken,
   phaseKeyFromDir,
   phaseHeadingPrefixSrcFor,
@@ -7119,7 +7119,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     if (completion.value.complete) diskCompletedPhases++;
 
     // Track the highest phase with incomplete plans (or any plans)
-    const phaseMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
+    const phaseMatch = dir.match(new RegExp(`^(${phaseNumberTokenSource(syncConvention)})`, 'i'));
     if (phaseMatch && plans > 0) {
       if (summaries < plans) {
         // Incomplete phase — this is likely the current one

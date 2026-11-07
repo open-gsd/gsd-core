@@ -117,6 +117,7 @@ const {
   customPhaseQuery,
   customDirectoryOwner,
   phaseScanTokenSource,
+  phaseNumberTokenSource,
   phaseKeyFromToken,
   phaseDirectoryContext,
   normalizePhaseName,
@@ -3055,7 +3056,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   const phasePattern = new RegExp(
-    `#{2,4}\\s*${phaseHeadingPrefix}(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
+    `#{2,4}\\s*${phaseHeadingPrefix}(${phaseScanTokenSource(directoryContext, phaseIdConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
     'gi',
   );
   const phases: Record<string, unknown>[] = [];
@@ -3082,7 +3083,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const sectionStart = match.index;
     const restOfContent = content.slice(sectionStart);
     const nextHeader = restOfContent.match(new RegExp(
-      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}${phaseScanTokenSource(directoryContext)}`,
+      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}${phaseScanTokenSource(directoryContext, phaseIdConvention)}`,
       'i',
     ));
     const sectionEnd = nextHeader
@@ -3310,7 +3311,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   } else {
     // Preserve the historical greedy non-bracket fallback byte-for-byte.
     const _allCompletedPattern = phaseEntryRegExp(
-      `.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+      `.*${phaseHeadingPrefixNoCapture}(${phaseNumberTokenSource(phaseIdConvention)})[:\\s]`,
       'gi',
     );
     let _allMatch: RegExpExecArray | null;
@@ -3963,12 +3964,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   const roadmapPhaseNums = new Set<string>();
   const roadmapPhaseNames = new Map<string, string>();
   const roadmapCheckboxStates = new Map<string, boolean>();
+  const progressConvention = resolvePhaseIdConvention(cwd);
   try {
     const roadmapContent = extractCurrentMilestone(
       fs.readFileSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'utf-8'),
       cwd,
     );
-    const progressConvention = resolvePhaseIdConvention(cwd);
     // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag, owned by
     // buildPhaseHeadingScanRegex (phase-id.cts) so this scan also recognizes
     // bracket-convention headings instead of hand-rolling a literal `Phase\s+`.
@@ -4007,7 +4008,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // matched (by absorbing the bracket text). This does NOT migrate the site
     // onto phaseHeadingPrefixSrcFor / the bracket convention — that stays
     // out of scope per the comment above (#4984 revert, pinned census).
-    const cbPattern = phaseEntryRegExp(`(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext)})[:\\s]`, 'gim', { state: 'captured' });
+    const cbPattern = phaseEntryRegExp(`(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext, progressConvention)})[:\\s]`, 'gim', { state: 'captured' });
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       const cbKey = cbm[2];
@@ -4031,7 +4032,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
     for (const dir of dirs) {
-      const dirMatch = dir.match(new RegExp(`^(${phaseScanTokenSource(directoryContext)})-?(.*)`, 'i'));
+      const dirMatch = dir.match(new RegExp(`^(${phaseScanTokenSource(directoryContext, progressConvention)})-?(.*)`, 'i'));
       const query = customPhaseQuery(dir, directoryContext);
       const owner = query && customDirectoryOwner(dir, query);
       const phaseNumber = owner ? owner.id : dirMatch ? dirMatch[1] : dir;

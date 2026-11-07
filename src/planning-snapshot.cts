@@ -843,7 +843,7 @@ function buildRoadmapPhaseCheckboxesField(
   // The entry prefix (marker, box, bold token) is the phase-entry grammar's (#5764),
   // the same one `buildNotStartedPhaseVariants` composes; group 1 is the box.
   const checkboxRe = phaseEntryRegExp(
-    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}0*(${convention === 'bracket' ? PHASE_NUMBER_TOKEN_SOURCE : phaseIdMod.phaseScanTokenSource(directoryContext)})${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}0*(${convention === 'bracket' ? PHASE_NUMBER_TOKEN_SOURCE : phaseIdMod.phaseScanTokenSource(directoryContext, convention)})${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
     'gi',
     { state: 'captured' },
   );
@@ -1163,7 +1163,7 @@ function buildCurrentMilestoneRoadmapPhaseIdsField(
   // only pins `phaseHeadingPrefixSrcFor`'s own output, not this regex's tail.
   // Kept as its own composition to preserve this exact byte-for-behavior.
   const phasePattern = new RegExp(
-    `#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, Boolean(bracketGroup))}(${convention !== 'bracket' ? phaseIdMod.phaseScanTokenSource(directoryContext) : PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`,
+    `#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, Boolean(bracketGroup))}(${convention !== 'bracket' ? phaseIdMod.phaseScanTokenSource(directoryContext, convention) : PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`,
     'gi',
   );
   const value: string[] = [];

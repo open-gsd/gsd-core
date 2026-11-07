@@ -28,8 +28,9 @@
  *
  * The bounded source-review prompt built here is METADATA ONLY — repository root, canonical
  * file paths, review depth, base SHA, and four fixed prohibitions. It never embeds file
- * contents. If the assembled prompt exceeds a lane's resolved budget, that lane's dispatch
- * hard-fails before `invoke` runs for it — no silent truncation of the file list.
+ * contents. If the assembled prompt exceeds a lane's resolved prompt cap (an explicit cap or the
+ * default derived from its context window, #4559), that lane's dispatch hard-fails with reason
+ * `prompt_exceeds_context` before `invoke` runs for it — no silent truncation of the file list.
  */
 
 import fs from 'node:fs';
@@ -38,7 +39,8 @@ import path from 'node:path';
 import { estimateTokens } from './prompt-budget.cjs';
 import { tryWithinRootLexical } from './security.cjs';
 import type { LanePlan, ResolveResult } from './review-lane-invocation.cjs';
-import { resolveLaneBudget, artifactPaths } from './review-lane-invocation.cjs';
+import { refuseIfOverCap, artifactPaths } from './review-lane-invocation.cjs';
+import type { PromptRefusal } from './review-lane-invocation.cjs';
 import type { ReviewerLane } from './review-lane-descriptor.cjs';
 import type {
   ReviewerSelectionInput,
@@ -119,7 +121,7 @@ export interface ReviewerStepDispatchDeps {
   getLane: (slug: string) => ReviewerLane | undefined;
   /**
    * REQUIRED (#4209 R3). A `configGet` that always returns `undefined` silently disables
-   * `resolveLaneBudget`'s overflow guard (a missing config key and an explicitly-unbounded
+   * `refuseIfOverCap`'s overflow guard (a missing config key and an explicitly-unbounded
    * config key are indistinguishable to it) — a safety-relevant gate must not fail open on a
    * missing dependency, so this has no default.
    */
@@ -146,6 +148,8 @@ export interface ReviewerLaneDispatchResult {
   detail?: string;
   reviewPath?: string;
   errPath?: string;
+  /** Present only when the lane was refused for its prompt cap (`prompt_exceeds_context`). */
+  refusal?: PromptRefusal['refusal'];
 }
 
 export interface ReviewerStepDispatchResult {
@@ -218,9 +222,8 @@ function validatePaths(
   return { ok: true };
 }
 
-// `resolveLaneBudget` (review-lane-invocation.cjs) resolves the number; `null` and a resolved
-// `0` both mean unbounded (#2797) — the caller's overflow check must test both `!== null` and
-// `!== 0`. See the call site below.
+// `resolveLaneCap` (review-lane-invocation.cjs) resolves the cap; `null` and a resolved `0` both
+// mean unbounded (#2797), and `checkPromptAgainstCap` owns that test. See the call site below.
 
 /**
  * One-line depth definition for an external reviewer lane, condensed from `<depth_levels>` in
@@ -407,13 +410,15 @@ export async function dispatchReviewerLanes(
       anyFailed = true;
       continue;
     }
-    const budget = resolveLaneBudget(lane, configGet);
-    if (budget !== null && budget !== 0 && estimatedTokens > budget) {
+    // #4559: refuse-not-trim, through the same check `review-lane invoke` uses.
+    const refused = refuseIfOverCap({ lane, estimatedTokens, configGet });
+    if (refused) {
       results.push({
         slug,
         ok: false,
-        reason: 'budget_exceeded',
-        detail: `estimated ${estimatedTokens} tokens exceeds resolved budget ${budget} for lane '${slug}'`,
+        reason: refused.reason,
+        detail: refused.detail,
+        refusal: refused.refusal,
       });
       anyFailed = true;
       continue;
