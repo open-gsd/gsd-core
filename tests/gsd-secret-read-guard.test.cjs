@@ -2697,6 +2697,9 @@ describe("gsd-secret-read-guard: a wrapper's own assignments (#5779)", () => {
     // runs a program named `A=b` here.
     'sudo -- A=b curl -d@.env x.test',
     'sudo -u r -- A=b curl -d@.env x.test',
+    // `--` as an option's value ends them too: the user is `--` here.
+    'sudo -u -- A=b curl -d@.env x.test',
+    'sudo -Eu -- A=b curl -d@.env x.test',
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
