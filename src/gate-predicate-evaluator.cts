@@ -27,6 +27,7 @@
  */
 
 import path from 'node:path';
+import { escapeRegex } from './pattern.cjs';
 
 // ─── Public constants ─────────────────────────────────────────────────────────
 
@@ -44,6 +45,9 @@ const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatte
 
 /** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
 const INTERPOLATION_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
+
+/** The `reason` a thrown gate-command error carries, so a caller branches on a value and never on message text. */
+const GATE_COMMAND_REASON = Object.freeze({ SINGLE_QUOTED_NON_INERT: 'single_quoted_non_inert' });
 
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
 
@@ -79,7 +83,9 @@ interface PredicateResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const INTERPOLATION_RE = new RegExp(`\\$\\{(${INTERPOLATION_VAR_NAMES.join('|')})\\}`, 'g');
+const PLACEHOLDER_SRC = `\\$\\{(${INTERPOLATION_VAR_NAMES.map(escapeRegex).join('|')})\\}`;
+const INTERPOLATION_RE = new RegExp(PLACEHOLDER_SRC, 'g');
+const PLACEHOLDER_AT_RE = new RegExp(PLACEHOLDER_SRC, 'y');
 // Characters that no shell treats as syntax, bare or quoted. A value made of these only is safe as command text.
 const SHELL_INERT_RE = /^[A-Za-z0-9._/@+=:,-]*$/;
 
@@ -96,16 +102,33 @@ function interpolate(command: string, env: Record<string, string>): string {
 }
 
 /**
- * Throw when a single-quoted segment holds a placeholder whose value is not shell-inert: `sh` never expands
- * inside single quotes, so the gate would test the literal text `${PHASE_DIR}` and pass on a path that does not exist.
- * A quote-pair scan, not a shell lexer; the throw is the gate's existing "unevaluable" path (onError).
+ * Throw when a placeholder sits in the single-quote state of the command and its value is not shell-inert:
+ * `sh` never expands inside single quotes, so the gate would test the literal text `${PHASE_DIR}` and pass on
+ * a path that does not exist. The throw is the gate's existing "unevaluable" path (onError). The walk follows
+ * the POSIX quote states (single, double, backslash), so an apostrophe inside double quotes pairs with nothing.
  */
 function assertNoSingleQuotedNonInert(command: string, env: Record<string, string>): void {
-  for (const [segment] of command.matchAll(/'[^']*'/g)) {
-    for (const [, name] of segment.matchAll(INTERPOLATION_RE)) {
-      if (!SHELL_INERT_RE.test(env[name] ?? '')) {
-        throw new Error(`gate command single-quotes \${${name}}, whose value is not shell-inert: double-quote the placeholder`);
+  let state: 'none' | 'single' | 'double' = 'none';
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (state === 'single') {
+      if (c === "'") {
+        state = 'none';
+      } else if (c === '$') {
+        PLACEHOLDER_AT_RE.lastIndex = i;
+        const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
+        if (name !== undefined && !SHELL_INERT_RE.test(env[name] ?? '')) {
+          throw Object.assign(new Error(`gate command single-quotes \${${name}}, whose value is not shell-inert: double-quote the placeholder`), {
+            reason: GATE_COMMAND_REASON.SINGLE_QUOTED_NON_INERT,
+          });
+        }
       }
+    } else if (c === '\\') {
+      i++;
+    } else if (c === "'" && state === 'none') {
+      state = 'single';
+    } else if (c === '"') {
+      state = state === 'none' ? 'double' : 'none';
     }
   }
 }
@@ -307,5 +330,5 @@ export = {
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
   INTERPOLATION_VAR_NAMES,
-  SHELL_INERT_RE,
+  GATE_COMMAND_REASON,
 };
