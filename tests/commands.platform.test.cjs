@@ -965,8 +965,30 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     assert.strictEqual(backend.timed_out, true);
   });
 
+  function setTimeoutConfig(ms) {
+    fs.writeFileSync(path.join(rootDir, '.planning', 'config.json'),
+      JSON.stringify({ planning: { sub_repos: ['backend'] }, git: { commit_timeout_ms: ms } }));
+  }
+
+  test('commit-to-subrepo timeout message follows the configured value', () => {
+    setup({ commit_timeout_ms: 60000 });
+    const call = `cmds.cmdCommitToSubrepo(${JSON.stringify(rootDir)}, 'chore: probe', ['backend/seed.js'], false);`;
+    const longer = JSON.parse(runWithTimedOutCommit(call).stdout).repos.backend.error;
+    setTimeoutConfig(30000);
+    const shorter = JSON.parse(runWithTimedOutCommit(call).stdout).repos.backend.error;
+    assert.match(longer, /timed out after 60s \(killed mid-hook/);
+    assert.match(shorter, /timed out after 30s \(killed mid-hook/);
+  });
+
+  test('commit-to-subrepo accepts the 3600000 ceiling', () => {
+    setup({ commit_timeout_ms: 3600000 });
+    const r = runWithTimedOutCommit(`cmds.cmdCommitToSubrepo(${JSON.stringify(rootDir)}, 'chore: probe', ['backend/seed.js'], false);`);
+    assert.strictEqual(r.timeout, 3600000, `stderr: ${r.stderr}`);
+  });
+
   const FALLBACK_CASES = [['unset', undefined], ['0', { commit_timeout_ms: 0 }], ['"abc"', { commit_timeout_ms: 'abc' }],
-    ['1500.5', { commit_timeout_ms: 1500.5 }], ['ceiling+1', { commit_timeout_ms: 3600001 }]];
+    ['1500.5', { commit_timeout_ms: 1500.5 }], ['ceiling+1', { commit_timeout_ms: 3600001 }],
+    ['the quoted number "60000"', { commit_timeout_ms: '60000' }]];
   for (const [label, git] of FALLBACK_CASES) {
     test(`commit-to-subrepo falls back to 30s when git.commit_timeout_ms is ${label}`, () => {
       setup(git);
@@ -1003,6 +1025,15 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-timeout', 'fix: probe', false);`);
     assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
     assert.strictEqual(r.failure.reason, ERROR_REASON.UNKNOWN);
+  });
+
+  test('pr-subrepo timeout message follows the configured value and keeps the "in <repo>" shape', () => {
+    setup({ commit_timeout_ms: 60000 });
+    const longer = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-msg-a', 'fix: probe', false);`);
+    setTimeoutConfig(30000);
+    const shorter = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-msg-b', 'fix: probe', false);`);
+    assert.match(longer.failure.message, /^git commit timed out after 60s in backend \(killed mid-hook; /);
+    assert.match(shorter.failure.message, /^git commit timed out after 30s in backend \(killed mid-hook; /);
   });
 
   test('pr-subrepo leaves a legacy-shaped config byte-identical (persist:false)', () => {
