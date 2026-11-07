@@ -2943,6 +2943,16 @@ describe('#5790: Copilot and Codex agent converters read block-list tools', () =
         assert.match(mod.convertClaudeAgentToCodexAgent(one), /\ntools: Read\npurpose:/);
       });
 
+      test('#5790 boundary: a two-item block list yields exactly those two tools in both converters', () => {
+        const two = agent('tools:\n  - Read\n  - Bash');
+        const copilot = copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(two));
+        assert.strictEqual(copilot, "tools: ['read', 'execute']");
+        assert.doesNotMatch(copilot, /-/);
+        const codex = codexToolsLine(mod.convertClaudeAgentToCodexAgent(two));
+        assert.strictEqual(codex, 'tools: Read, Bash');
+        assert.doesNotMatch(codex, /-/);
+      });
+
       test('#5790 boundary: an empty block list (next key follows) yields no tools', () => {
         const empty = agent('tools:');
         assert.match(mod.convertClaudeAgentToCopilotAgent(empty), /\ntools: \[\]\n/);
@@ -2976,6 +2986,77 @@ describe('#5790: Copilot and Codex agent converters read block-list tools', () =
           assert.strictEqual(copilotToolsLine(copilot), copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(synthetic)), `${f} copilot`);
           assert.doesNotMatch(copilotToolsLine(copilot), /'-/, `${f} copilot list marker`);
           assert.doesNotMatch(codexToolsLine(codex), /^tools: -/, `${f} codex list marker`);
+        }
+      });
+
+      test('#5790 row 9: for every shipped agent only the tools line depends on the list spelling', () => {
+        const dir = path.join(__dirname, '..', 'agents');
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+        assert.ok(files.length > 0);
+        const withoutFirst = (out, isToolsLine) => {
+          const lines = out.split('\n');
+          const idx = lines.findIndex(isToolsLine);
+          assert.ok(idx >= 0, 'converted output has a tools line');
+          lines.splice(idx, 1);
+          return lines;
+        };
+        const toInline = (src) => {
+          const lines = src.split('\n');
+          const out = [];
+          let inFrontmatter = false;
+          for (let i = 0; i < lines.length; i++) {
+            const bare = lines[i].replace(/\r$/, '');
+            if (i === 0 && bare === '---') { inFrontmatter = true; out.push(lines[i]); continue; }
+            if (inFrontmatter && bare.trim() === '---') { inFrontmatter = false; out.push(lines[i]); continue; }
+            if (inFrontmatter && bare === 'tools:') {
+              const names = [];
+              while (i + 1 < lines.length && lines[i + 1].replace(/\r$/, '').trim().startsWith('- ')) {
+                names.push(lines[i + 1].replace(/\r$/, '').trim().slice(2).trim());
+                i++;
+              }
+              out.push(`tools: ${names.join(', ')}`);
+              continue;
+            }
+            out.push(lines[i]);
+          }
+          return out.join('\n');
+        };
+        for (const f of files) {
+          const src = fs.readFileSync(path.join(dir, f), 'utf8');
+          const inlined = toInline(src);
+          assert.deepStrictEqual(
+            withoutFirst(mod.convertClaudeAgentToCopilotAgent(src), (l) => l.startsWith('tools:')),
+            withoutFirst(mod.convertClaudeAgentToCopilotAgent(inlined), (l) => l.startsWith('tools:')),
+            `${f} copilot non-tools lines`,
+          );
+          assert.deepStrictEqual(
+            withoutFirst(mod.convertClaudeAgentToCodexAgent(src), (l) => l.startsWith('tools:') && !l.startsWith('tools: [')),
+            withoutFirst(mod.convertClaudeAgentToCodexAgent(inlined), (l) => l.startsWith('tools:') && !l.startsWith('tools: [')),
+            `${f} codex non-tools lines`,
+          );
+        }
+      });
+
+      test('#5790 allowed-tools parity: Copilot and Codex read tools through the same parser as Antigravity', () => {
+        for (const spelling of ['allowed-tools: Read, Bash, Grep', 'allowed-tools:\n  - Read\n  - Bash\n  - Grep']) {
+          const src = agent(spelling);
+          const declared = moduleJs.parseFrontmatterTools(src.split('---')[1]);
+          assert.deepStrictEqual(declared, ['Read', 'Bash', 'Grep'], 'fixture declares three tools');
+
+          const antigravity = mod.convertClaudeAgentToAntigravityAgent(src)
+            .split('\n')
+            .filter((l) => l.startsWith('- '))
+            .map((l) => l.slice(2));
+          assert.deepStrictEqual(antigravity, declared.map((t) => moduleJs.convertAntigravityToolName(t)).filter(Boolean));
+
+          const copilot = copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(src));
+          assert.strictEqual(copilot, "tools: ['read', 'execute', 'search']");
+          assert.deepStrictEqual(
+            [...copilot.matchAll(/'([^']+)'/g)].map((m) => m[1]),
+            [...new Set(declared.map((t) => moduleJs.convertCopilotToolName(t)))],
+          );
+
+          assert.strictEqual(codexToolsLine(mod.convertClaudeAgentToCodexAgent(src)), `tools: ${declared.join(', ')}`);
         }
       });
     });
