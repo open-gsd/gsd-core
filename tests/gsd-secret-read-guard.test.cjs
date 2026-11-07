@@ -1515,6 +1515,8 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     ['a backtick body as the shell parses it, backslashes removed (bash, dash)', 'echo `\\$${x; cat .env`'],
     ['the same inside double quotes (bash, dash)', 'echo "`\\$${x; cat .env`"'],
     ['the same in an unquoted heredoc body (bash, dash)', 'cat <<E\n`\\$${x; cat .env`\nE'],
+    ['`$$` before `{`, which opens no `${` (bash, dash)', 'echo $${x; cat .env'],
+    ['the same in an assignment, a `}` after a `#` (bash, dash)', 'x=$${y; cat .env #}'],
     ['`#` inside `$((…))` (bash, dash, zsh)', 'echo $((#`cat .env`))'],
     ['the same inside double quotes (bash, dash, zsh)', 'echo "$((#`cat .env`))"'],
     ['the same in an unquoted heredoc body (bash, dash, zsh)', 'cat <<E\n$((#`cat .env`))\nE'],
