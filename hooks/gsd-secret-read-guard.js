@@ -467,11 +467,14 @@ const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until',
 // separator other than a group's own `}`, or after a run of unquoted reserved words that
 // itself starts there (`then ! {cat x}`, `time {cat x}`). `always` follows a group's `}`
 // (`{ a } always {cat x}`). A reserved word after an ordinary word is an argument
-// (`echo then {cat x}`). Each `{` walks back over the reserved words before it, and the
-// group it opens is a separator the next walk stops at, so the walks stay linear.
+// (`echo then {cat x}`). A heredoc body token sits after the newline that ends its
+// terminator line, so the next line's first word is still at command position. Each `{`
+// walks back over the reserved words and bodies before it, and the group it opens is a
+// separator the next walk stops at, so the walks stay linear.
 function zshAtCommandPosition(tokens) {
   let j = tokens.length - 1;
-  while (j >= 0 && tokens[j].kind === 'word' && tokens[j].quoted === 'none' && ZSH_GROUP_AFTER.has(tokens[j].text)) j--;
+  while (j >= 0 && (tokens[j].kind === 'heredoc'
+    || (tokens[j].kind === 'word' && tokens[j].quoted === 'none' && ZSH_GROUP_AFTER.has(tokens[j].text)))) j--;
   if (j < 0) return true;
   if (tokens[j].kind !== 'sep') return false;
   if (tokens[j].text !== '}') return true;
@@ -481,7 +484,7 @@ function zshAtCommandPosition(tokens) {
 // zsh's reading of the brace at str[i]: true when it opens or closes a group (tokenize emits
 // it as a separator), false when it is a word character. A `{` opens one only at command
 // position; a `}` closes one only while a group is open, and only where it ends a word or
-// stands alone. The open-group count rides on the token array so that tokenize, which the
+// stands alone: before a blank, `;`, `&`, `|`, `)`, a redirection's `<` or `>`, or the end. The open-group count rides on the token array so that tokenize, which the
 // plain reading runs, keeps next's locals and stack frame.
 function zshBraceIsSeparator(str, i, tokens, hasWord) {
   const depth = tokens.zshBraceDepth || 0;
@@ -490,7 +493,7 @@ function zshBraceIsSeparator(str, i, tokens, hasWord) {
     tokens.zshBraceDepth = depth + 1;
     return true;
   }
-  if (depth === 0 || !(i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) return false;
+  if (depth === 0 || !(i + 1 >= str.length || /[\s;&|)<>]/.test(str[i + 1]))) return false;
   tokens.zshBraceDepth = depth - 1;
   return true;
 }
@@ -1312,12 +1315,16 @@ const setSpans = (on) => { shellSpans = on; dollarDollarIsAWord = on; };
 const setBash32Spans = (on) => { heredocBodiesSkippedInSpans = !on; };
 const countTrue = (...xs) => xs.filter(Boolean).length;
 // Each construct is read on its own, then in three composed readings for a command mixing
-// several: bash and dash read a CR, a joined heredoc line and these spans in the same script
-// (zsh its grouping with the first two and the arithmetic spans), so `<CR>#;echo $${x; cat y`
-// needs CR and `$$` at once; and bash 3.2 reads them together with #5513's heredoc span, where
-// a `)` in a heredoc body inside `$( )` closes the substitution. A composed reading runs only
-// when two or more of its parts apply; otherwise it would read exactly as one of the single
-// readings, or as #5513's.
+// several. A composed reading runs only when two or more of its parts apply; otherwise it
+// would read exactly as one of the single readings, or as #5513's.
+//  - bash and dash read a CR, a joined heredoc line and these spans in one script, so
+//    `<CR>#;echo $${x; cat y` needs CR and `$$` at once.
+//  - zsh reads its grouping with the CR and join readings and the spans, but without the
+//    `$$` rule: its lexer reads `$$((` as `$` and an arithmetic `$((…))`, whose spans it
+//    runs. So this reading also runs, with no grouping character, for a command holding two
+//    `$` and a span, where it differs from the spans reading only by that rule.
+//  - bash 3.2 reads the bash readings together with #5513's heredoc span, where a `)` in a
+//    heredoc body inside `$( )` closes the substitution.
 const SHELL_READINGS = [
   { applies: needsCr, set: setCr },
   { applies: needsJoin, set: setJoin },
@@ -1328,7 +1335,8 @@ const SHELL_READINGS = [
     set: (on) => { setCr(on); setJoin(on); setSpans(on); },
   },
   {
-    applies: (c) => needsZsh(c) && countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 1,
+    applies: (c) => (needsZsh(c) ? countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 1
+      : dollarCount(c) === 2 && needsSpans(c)),
     set: (on) => { setCr(on); setJoin(on); setZsh(on); shellSpans = on; },
   },
   {
