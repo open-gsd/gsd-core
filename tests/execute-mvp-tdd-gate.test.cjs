@@ -8,7 +8,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 
@@ -148,7 +150,12 @@ describe('execute-mvp-tdd.md — load condition decoupled from MVP (#4011)', () 
 
 describe('#5106: test-file conventions are one definition', () => {
   const { isBehaviorAddingTaskContent } = require('../gsd-core/bin/lib/task-command-router.cjs');
-  const { TEST_FILE_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+  const {
+    TEST_FILE_PATHSPECS,
+    TEST_FILE_GIT_PATHSPECS,
+    GIT_PATHSPEC_ICASE_PREFIX,
+    isTestFilePath,
+  } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
   const task = (...files) => `<task tdd="true"><behavior>It does the thing</behavior><files>\n${files.map(f => `- ${f}`).join('\n')}\n</files></task>`;
@@ -176,13 +183,170 @@ describe('#5106: test-file conventions are one definition', () => {
     const line = splitLines(src).find(l => l.includes('check evaluation-scope') && l.includes('--commits-only') && l.includes('--pathspec'));
     assert.ok(line, 'execute-phase.md has no RED-commit evaluation-scope line');
     const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
-    assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
-      'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
+    // The workflow passes the CASE-INSENSITIVE pathspecs (#5766): git pathspecs are
+    // case-sensitive by default, while the router (`isTestFilePath`) is not. Pinning
+    // the workflow to the icase list is what makes the two answer ONE question.
+    assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_GIT_PATHSPECS].sort(),
+      'the workflow pathspec list and TEST_FILE_GIT_PATHSPECS must be the same set');
+    // Every workflow pathspec must carry git's case-insensitive magic prefix — a
+    // plain pathspec here would silently re-open #5766 while the set comparison
+    // above still passes (the icase list is derived from the same patterns).
+    for (const spec of workflowSpecs) {
+      assert.ok(spec.startsWith(GIT_PATHSPEC_ICASE_PREFIX),
+        `workflow pathspec "${spec}" must carry the ${GIT_PATHSPEC_ICASE_PREFIX} prefix (#5766)`);
+    }
     // And every entry means the same thing to the router: a path built from the spec is a test file.
     for (const spec of TEST_FILE_PATHSPECS) {
       const sample = spec.endsWith('/') ? `${spec}x.js` : spec.replace(/\*/g, 'sample');
       assert.equal(isTestFilePath(sample), true, `${spec} (as ${sample}) must be recognised as a test file`);
     }
     assert.equal(isTestFilePath('placement.go'), false);
+  });
+});
+
+// ─── #5766: the gate's pathspecs are case-insensitive, like the router's ─────
+// `isTestFilePath` matches `Tests/foo.rs`, `__TESTS__/a.js` and `Foo.TEST.js` (the
+// basename globs carry the `i` flag, and directory segments are lowercased). Git
+// pathspecs are case-SENSITIVE unless they carry the `:(icase)` magic prefix, so
+// the gate used to call those paths "not a test file" and ask for a RED commit that
+// already existed. The two consumers must agree, so the GATE side moved.
+
+describe('#5766: the RED-commit gate pathspec is case-insensitive like the router', () => {
+  const {
+    TEST_FILE_PATHSPECS,
+    TEST_FILE_GIT_PATHSPECS,
+    GIT_PATHSPEC_ICASE_PREFIX,
+    toCaseInsensitiveGitPathspec,
+    isTestFilePath,
+  } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+
+  test('the icase list is the canonical list, one prefixed pathspec per entry', () => {
+    assert.deepEqual(
+      [...TEST_FILE_GIT_PATHSPECS],
+      TEST_FILE_PATHSPECS.map((spec) => `${GIT_PATHSPEC_ICASE_PREFIX}${spec}`),
+      'TEST_FILE_GIT_PATHSPECS must be TEST_FILE_PATHSPECS with the icase prefix, in order — '
+        + 'otherwise the two lists can drift apart again (#5766)',
+    );
+    assert.equal(TEST_FILE_GIT_PATHSPECS.length, TEST_FILE_PATHSPECS.length);
+  });
+
+  test('toCaseInsensitiveGitPathspec is the identity plus the magic prefix', () => {
+    for (const spec of TEST_FILE_PATHSPECS) {
+      assert.equal(toCaseInsensitiveGitPathspec(spec), `${GIT_PATHSPEC_ICASE_PREFIX}${spec}`);
+    }
+  });
+
+  test('the router already treats case variants as test files', () => {
+    // The premise of #5766: these ARE test files to the router.
+    for (const file of [
+      'Tests/foo.rs', '__TESTS__/a.js', 'Foo.TEST.js', 'TESTS/Helper.CJS', 'SPEC/models/User_Spec.RB',
+    ]) {
+      assert.equal(isTestFilePath(file), true, `${file} must be recognised as a test file by the router`);
+    }
+    assert.equal(isTestFilePath('placement.go'), false);
+  });
+
+  describe('against a real git repository', () => {
+    let tmpDir;
+
+    beforeEach(() => { tmpDir = createTempGitProject(); });
+    afterEach(() => { cleanup(tmpDir); });
+
+    /**
+     * The shas of the commits whose file set `git log` reports for the given
+     * pathspecs. Empty output means "no commit touched those paths".
+     */
+    function commitsFor(pathspecs) {
+      const args = ['log', '--format=%H', '--name-only', '--', ...pathspecs];
+      return gitOrThrow(args, { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    }
+
+    test('a plain pathspec misses a case-variant test path, the icase pathspec finds it', () => {
+      // A RED commit that touches ONLY a case-variant test path.
+      fs.mkdirSync(path.join(tmpDir, 'Tests'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'Tests', 'foo.rs'), '#[test]\nfn it_works() {}\n');
+      gitOrThrow(['add', '-A'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', 'test: add failing test'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+
+      // The OLD gate pathspec (case-sensitive `tests/`) cannot see `Tests/`.
+      assert.equal(
+        commitsFor(['tests/']).includes('Tests/foo.rs'),
+        false,
+        'a case-sensitive `tests/` pathspec must NOT match `Tests/foo.rs` — this is the #5766 defect',
+      );
+
+      // The NEW gate pathspec does see it.
+      const icase = commitsFor([':(icase)tests/']);
+      assert.ok(
+        icase.includes('Tests/foo.rs'),
+        'the `:(icase)tests/` pathspec must match `Tests/foo.rs` (#5766)',
+      );
+    });
+
+    test('every gate pathspec matches its case variants in a real git repository', () => {
+      // One case-variant sample per convention, covering both shapes the list uses:
+      // a basename glob and a directory.
+      //
+      // The samples sit INSIDE each pathspec's real matching scope: a git pathspec whose
+      // pattern starts with a literal (`test_*.py`) is anchored at the repository root,
+      // so its sample is root-level; the others start with `*` and match the basename at
+      // any depth.
+      const samples = [
+        ['Foo.TEST.js', '*.test.*'],
+        ['Bar.SPEC.ts', '*.spec.*'],
+        ['Tests/foo.rs', 'tests/'],
+        ['__TESTS__/a.js', '__tests__/'],
+        ['pkg/Thing_TEST.go', '*_test.go'],
+        ['Test_thing.py', 'test_*.py'],
+        ['pkg/thing_TEST.py', '*_test.py'],
+        ['lib/thing_TEST.exs', '*_test.exs'],
+        ['spec/models/User_Spec.rb', '*_spec.rb'],
+        ['spec/models/User_TEST.rb', '*_test.rb'],
+      ];
+
+      for (const [sample] of samples) {
+        const target = path.join(tmpDir, ...sample.split('/'));
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, 'test\n');
+      }
+      gitOrThrow(['add', '-A'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', 'test: add case-variant tests'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+
+      for (const [sample, spec] of samples) {
+        const plain = commitsFor([spec]);
+        const icase = commitsFor([toCaseInsensitiveGitPathspec(spec)]);
+        assert.equal(
+          plain.includes(sample),
+          false,
+          `the case-sensitive pathspec "${spec}" must not match "${sample}" — that is the #5766 defect`,
+        );
+        assert.ok(
+          icase.includes(sample),
+          `the pathspec "${toCaseInsensitiveGitPathspec(spec)}" must match "${sample}" (#5766)`,
+        );
+      }
+    });
+
+    test('the whole gate pathspec set finds a RED commit that touches only a case-variant path', () => {
+      // End-to-end shape of the gate: the workflow asks `git log` for the plan's
+      // commits narrowed by EVERY gate pathspec at once.
+      fs.mkdirSync(path.join(tmpDir, 'Tests'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'Tests', 'foo.rs'), '#[test]\nfn it_works() {}\n');
+      gitOrThrow(['add', '-A'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', 'test: add failing test'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+
+      const withOldPathspecs = commitsFor([...TEST_FILE_PATHSPECS]);
+      assert.equal(
+        withOldPathspecs.includes('Tests/foo.rs'),
+        false,
+        'the pre-#5766 pathspec set must not see `Tests/foo.rs` — the gate asked for a RED commit that existed',
+      );
+
+      const withNewPathspecs = commitsFor([...TEST_FILE_GIT_PATHSPECS]);
+      assert.ok(
+        withNewPathspecs.includes('Tests/foo.rs'),
+        'the gate pathspec set must see the `Tests/foo.rs` RED commit (#5766)',
+      );
+    });
   });
 });
