@@ -876,10 +876,10 @@ describe('W031 — derived state.json still tracked by git', () => {
   }
 
   // Runs the advised command in the project and lists what git still tracks: the remedy is judged by what it
-  // does, not by its wording. The command comes from the typed `remedy.args.paths`; the prose must carry it verbatim.
+  // does, not by its wording. The command is the typed `remedy.args.untrack`, built from `remedy.args.paths`.
   function runAdvisedThenListTracked(cwd, diagnostic) {
-    const command = configValidation.w031UntrackCommand(diagnostic.remedy.args.paths);
-    assert.ok(diagnostic.remedy.args.command.includes(`\`${command}\``), 'the advice carries the command');
+    const command = diagnostic.remedy.args.untrack;
+    assert.equal(command, configValidation.w031UntrackCommand(diagnostic.remedy.args.paths));
     const out = runHook('-s', [], { interpreter: 'bash', input: command, timeoutMs: GIT_TIMEOUT_MS, cwd });
     assert.equal(out.exitCode, 0, `the advised command runs: ${out.stderr}`);
     return gitOrThrow(['ls-files', '-z'], { cwd }).split('\0').filter(Boolean);
@@ -1066,9 +1066,9 @@ describe('W031 — derived state.json still tracked by git', () => {
       fc.property(fc.array(fc.constantFrom(...alphabet), { minLength: 1, maxLength: 8 }), (chars) => {
         const name = chars.join('');
         const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value: [name], scope: SCOPE.COMPLETE, reason: 'ok' } });
-        const quoted = /-- (.*)` once/s.exec(diagnostic.remedy.args.command)[1];
+        // A shell function stands in for git and prints the path argument bash parsed out of the advised command.
         // The script goes in on stdin: Windows re-quotes argv for a child process, which mangles a newline next to a backslash.
-        const out = bash(`printf %s ${quoted}`);
+        const out = bash(`git() { shift 5; printf %s "$1"; }\n${diagnostic.remedy.args.untrack}`);
         return out.outcome === OUTCOME.EXITED && out.exitCode === 0 && out.stdout === name;
       }),
       { numRuns: 100, seed: 5505 },

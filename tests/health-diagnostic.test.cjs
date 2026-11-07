@@ -647,8 +647,8 @@ describe('W031 remedy under bash (#5505)', () => {
 
     const w031 = RULES.find((r) => r.code === 'W031');
     const [diagnostic] = w031.check(buildPlanningSnapshot(cwd));
-    const command = configValidation.w031UntrackCommand(diagnostic.remedy.args.paths);
-    assert.ok(diagnostic.remedy.args.command.includes(`\`${command}\``), 'the advice carries the command');
+    const command = diagnostic.remedy.args.untrack;
+    assert.equal(command, configValidation.w031UntrackCommand(diagnostic.remedy.args.paths));
     const run = spawnSync(bash, ['-c', command], { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
     assert.equal(run.status, 0, run.stderr);
 
@@ -658,7 +658,7 @@ describe('W031 remedy under bash (#5505)', () => {
     for (const rel of rels) assert.ok(fs.existsSync(path.join(cwd, rel)), `${rel} stays on disk`);
     // Parity with the quoting owner: the remedy's arguments are exactly what quoteShellArg gives per path.
     const { quoteShellArg } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
-    assert.ok(!diagnostic.message.includes(rlo), 'the message escapes the format character');
+    assert.ok(configValidation.w031Listing(diagnostic.remedy.args.paths).shown.every((label) => !label.includes(rlo)), 'the listing escapes the format character');
     if (projects.includes(`rlo${rlo}name`)) assert.ok(command.includes(quoteShellArg(`.planning/rlo${rlo}name/state.json`)));
     assert.ok(!/[`]/.test(command.slice('git --literal-pathspecs rm '.length)), 'no raw backtick can end the code span');
   });
