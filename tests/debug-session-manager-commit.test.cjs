@@ -210,14 +210,16 @@ for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is
   const guard = line.indexOf('git diff HEAD --quiet -- ');
   const commit = line.indexOf(' || git commit -m ', guard);
   // allow-test-rule: source-text-is-the-product (#5211)
+  // The prompt line is the command the session manager runs, so its guard-then-commit shape is the contract.
   assert.ok(guard !== -1 && commit !== -1 && line.indexOf(' -- ', commit + 1) !== -1,
-    'the fix-code commit must be guarded on staged content — archive_session may have ' +
+    'the fix-code commit must be guarded on the named paths — archive_session may have ' +
       'already committed it, and an unguarded git commit exits non-zero on an empty diff',
   );
   // #5211: guard and commit must name the SAME paths, or the guard tests different files than the commit records.
   const guardPaths = line.slice(guard + 'git diff HEAD --quiet -- '.length, line.indexOf(' || ', guard));
   const commitPaths = line.slice(line.indexOf(' -- ', commit) + 4);
   // allow-test-rule: source-text-is-the-product (#5211)
+  // Guard and commit paths come from the same prompt line the manager runs, so their equality is the contract.
   assert.ok(guardPaths.length > 0 && guardPaths === commitPaths,
     `guard and commit must carry the same pathspec, got ${JSON.stringify(guardPaths)} vs ${JSON.stringify(commitPaths)}`);
 });

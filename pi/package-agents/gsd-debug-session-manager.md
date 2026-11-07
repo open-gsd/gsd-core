@@ -349,7 +349,7 @@ back to Step 3.
 1. **In-session fix code.** If a fix was applied during this session and its code changes are
    still uncommitted, commit them first. Stage **specific files only** — the files the fix
    touched. Do this rather than `git add -A`, which would sweep unrelated working-tree
-   changes into a debug commit. Guard on staged content: `gsd-debugger.md`'s
+   changes into a debug commit. Guard on the named paths: `gsd-debugger.md`'s
    `archive_session` step may already have committed this fix on the confirmed-checkpoint
    path, and a bare `git commit` with nothing staged exits non-zero and would abort this
    step before the summary is returned:
