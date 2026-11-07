@@ -66,17 +66,17 @@ was merged into the target, so earlier rounds are not replayed. A plain merge al
 Requirements before it will run:
 
 - **A clean working tree.** Uncommitted changes are rejected up front. Commit or stash first.
-- **Commits ahead of the target.** With none, the command exits without creating a branch.
+- **Commits since the last published tip** (or ahead of the target when nothing was published). With none, the command exits without creating a branch.
 
 ### How repeat publishes work
 
 `/gsd-pr-branch` keeps its repeat-publish state in local refs that are never pushed:
 
-- **Markers.** The last built tip is recorded in `refs/gsd/pr-built/<mode>/<target>/<working-branch>` (plus the `-pr` tip in `refs/gsd/pr-built-head/<mode>/<target>/<working-branch>`) and promoted to `refs/gsd/pr-published/<mode>/<target>/<working-branch>` once that `-pr` tip is merged, even if the local branch was deleted. `<mode>` is `strict` or `default` (`planning.pr_strict`), so switching it between runs starts from the target instead of reusing the other mode's marker. Target and branch names are percent-encoded into one ref component by `refkey` in `gsd-core/workflows/pr-branch.md`, so `feat` and `feat/sub` never collide.
-- **What counts as merged.** The `-pr` tip is an ancestor of the target; or, for a squash or rebase merge, the target holds the `-pr` content for every path it changed; or, when the target has since edited those paths, `gh` reports a merged PR for the `-pr` branch into the target whose head is the `-pr` tip. `gh` is queried only as an executable (never a shell function or alias), bounded to 10s by `gsd_run run-with-timeout`, which needs no `timeout` binary, so this works on stock macOS too. `gh` uses its default repository, so under a fork-first setup set it with `gh repo set-default`; a PR whose head moved after the local `-pr` tip was built, for example by GitHub's Update branch, is not matched.
+- **Markers.** The last built tip is recorded in `refs/gsd/pr-built/<mode>/<target>/<working-branch>` (plus the `-pr` tip in `refs/gsd/pr-built-head/<mode>/<target>/<working-branch>`) and promoted to `refs/gsd/pr-published/<mode>/<target>/<working-branch>` once that `-pr` tip is merged, even if the local branch was deleted. `<mode>` is `strict` or `default` (`planning.pr_strict`), so switching it between runs starts from the target instead of reusing the other mode's marker. Target and branch names are percent-encoded into one ref component by the workflow, so `feat` and `feat/sub` never collide.
+- **What counts as merged.** The `-pr` tip is an ancestor of the target; or, for a squash or rebase merge, the target holds the `-pr` content for every path it changed; or, when the target has since edited those paths, `gh` reports a merged PR for the `-pr` branch into the target whose head is the `-pr` tip. `gh` is queried only as an executable (never a shell function or alias), bounded to 10 seconds with no `timeout` binary needed, so this works on stock macOS too. `gh` uses its default repository, so under a fork-first setup set it with `gh repo set-default`; a PR whose head moved after the local `-pr` tip was built, for example by GitHub's Update branch, is not matched.
 - **A leftover `-pr` branch.** Merged and still holding the build: replaced. Not merged, or merged but no longer holding the pending build (amended or rebased): refused by name with the commands to re-anchor or discard it. Gone and its merge unprovable: announced as dropped, with the re-anchor command.
 - **A rebased working branch.** The base is the newest commit whose patch matches a published commit. When the target already holds the patch of every published commit (a rebase merge, then `git rebase`), the run starts from the target with no warning. If a published commit has no match (reordered, folded or conflict-resolved), the run warns and starts from the target; re-anchor with `git update-ref <published-ref> <rebased commit equivalent to last published tip>`.
-- **Unprovable merges.** Without `gh`, auth or network a discarded `-pr` leaves nothing published and its commits are replayed. Reset with `git update-ref -d <published-ref>`.
+- **Unprovable merges.** Without `gh`, auth or network a discarded `-pr` leaves nothing published and its commits are replayed. Re-anchor with the `git update-ref` that the warning prints; `<published-ref>` is the `refs/gsd/pr-published/...` ref from the Markers bullet.
 
 ## 5. Read the verification summary
 
@@ -103,7 +103,7 @@ allowed population.
 | `WARNING: dropped the pending build` | The previous `-pr` branch is gone and its merge could not be proven (it needs an executable, authenticated, online `gh`), so its commits will be replayed. | If it was squash/rebase merged, run the `git update-ref` the warning prints, re-run, and take the discard command that run prints for the rebuilt `-pr` (a conflict halt already deleted it: then only re-anchor and re-run). |
 | `Conflict outside the .planning/ filter` | A real content conflict between your commits and the target branch. | Resolve it on your working branch, then re-run `/gsd-pr-branch`. If it came from replaying commits you already published, re-anchor instead (the `git update-ref` the earlier WARNING printed). |
 | `Working tree has uncommitted changes` | Step 4's precondition failed. | Commit or stash, then re-run. |
-| `No commits ahead of the last published tip (or <target>)` | There is nothing to filter. | Not an error — you have not committed anything yet, or the target is wrong. |
+| `No commits ahead of the last published tip (or <target>)` | There is nothing to filter. | Not an error — you have not committed anything since the last publish (or since the target, on a first run), or the target is wrong. |
 
 An `ℹ️` advisory listing `.planning/` paths appears only in **default** mode, naming paths that are
 neither transient nor structural (`config.json`, `intel/`, `workstreams/`) and therefore kept. Strict
