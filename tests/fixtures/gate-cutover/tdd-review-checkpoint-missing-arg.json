@@ -5,6 +5,6 @@
   ],
   "fixture": "tdd",
   "stdout": "",
-  "stderr": "Error: tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase>\n",
+  "stderr": "Error: tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase> [--record]\n",
   "exitCode": 1
 }

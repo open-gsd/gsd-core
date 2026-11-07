@@ -806,7 +806,6 @@ describe('#5354 tdd review checkpoint seal', () => {
   function expectBranchWarning({ r, subject, before }, branch) {
     assert.equal(r.exitCode, SEAL_BRANCH[branch].exitCode, r.stderr);
     for (const [name, { marker }] of Object.entries(SEAL_BRANCH)) {
-      // allow-test-rule: source-text-is-the-product #5354 (the warnings are the text ship.md's seal step prints; the markers are taken from that step)
       assert.equal(r.stderr.includes(marker), name === branch, `${branch}: stderr ${name === branch ? 'has' : 'lacks'} "${marker}": ${r.stderr}`);
     }
     assert.equal(subject, before);

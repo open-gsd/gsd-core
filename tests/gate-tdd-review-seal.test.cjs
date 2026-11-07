@@ -8,19 +8,12 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
-const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { commitReachability, commitIsGone } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
 
-function git(dir, ...args) {
-  return execFileSync(
-    'git',
-    ['-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid', '-c', 'commit.gpgsign=false', ...args],
-    { cwd: dir, encoding: 'utf-8', stdio: 'pipe', timeout: GIT_TIMEOUT_MS, windowsHide: true },
-  );
-}
+const git = (dir, ...args) => gitOrThrow(['-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: dir });
 
 describe('commitReachability', () => {
   test('tells a reachable, an unreachable and a missing commit apart', (t) => {

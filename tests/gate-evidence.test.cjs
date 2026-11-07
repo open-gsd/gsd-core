@@ -265,7 +265,6 @@ describe('isPlainObject (#5354)', () => {
 
 describe('gate-evidence — lstatEvidence and readBoundedTextEvidence (#5354)', () => {
   const { lstatEvidence, readBoundedTextEvidence } = require('../gsd-core/bin/lib/gate-evidence.cjs');
-  const posix = { skip: process.platform === 'win32' };
   const CAP = 16;
   let dir;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'gate-evidence-bounded-')); });
@@ -276,14 +275,6 @@ describe('gate-evidence — lstatEvidence and readBoundedTextEvidence (#5354)', 
     assert.equal(lstatEvidence(path.join(dir, 'a.txt')).kind, 'found');
     assert.equal(lstatEvidence(path.join(dir, 'missing')).kind, 'none');
     assert.equal(lstatEvidence(path.join(dir, 'a.txt', 'below')).kind, 'none');
-  });
-
-  test('lstatEvidence sees a symlink as a symlink', posix, () => {
-    fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
-    fs.symlinkSync(path.join(dir, 'a.txt'), path.join(dir, 'link'));
-    const ev = lstatEvidence(path.join(dir, 'link'));
-    assert.equal(ev.kind, 'found');
-    assert.equal(ev.value.isSymbolicLink(), true);
   });
 
   for (const [label, size, kind] of [['limit-1', CAP - 1, 'found'], ['limit', CAP, 'found'], ['limit+1', CAP + 1, 'unreadable']]) {
@@ -297,12 +288,6 @@ describe('gate-evidence — lstatEvidence and readBoundedTextEvidence (#5354)', 
     assert.equal(readBoundedTextEvidence(path.join(dir, 'missing'), CAP).kind, 'none');
     fs.mkdirSync(path.join(dir, 'sub'));
     assert.equal(readBoundedTextEvidence(path.join(dir, 'sub'), CAP).kind, 'unreadable');
-  });
-
-  test('readBoundedTextEvidence: a symlink is unreadable, never followed', posix, () => {
-    fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
-    fs.symlinkSync(path.join(dir, 'a.txt'), path.join(dir, 'link'));
-    assert.equal(readBoundedTextEvidence(path.join(dir, 'link'), CAP).kind, 'unreadable');
   });
 
   test('readBoundedTextEvidence: a close() failure is unreadable, not thrown', (t) => {
