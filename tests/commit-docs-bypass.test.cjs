@@ -29,7 +29,7 @@ const fc = require('fast-check');
 const {
   hasReachingGitAdd, scanText, scanRepo, SCAN_ROOTS,
 } = require('./helpers/planning-add-guard.cjs');
-const { unscopedGitCommits, GIT_PREFIX_SPELLINGS } = require('./helpers/shipped-command-scan.cjs');
+const { unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_PREFIX_ORACLE } = require('./helpers/shipped-command-scan.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -147,7 +147,7 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
     });
 
     test('B10: git prefixes: add guard and commit scanner agree', () => {
-      for (const pre of GIT_PREFIX_SPELLINGS) {
+      for (const pre of [...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE]) {
         assert.equal(hasReachingGitAdd(`${pre} add -A`), true);
         assert.equal(unscopedGitCommits(`${pre} commit -m x`).length, 1);
       }
