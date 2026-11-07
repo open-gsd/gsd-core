@@ -624,4 +624,15 @@ describe('shell scanner (scripts/prompt-injection-scan.sh) — #3175 left-bounda
     assert.equal(result.outcome, 'exited');
     assert.equal(result.exitCode, 1, 'real "DAN mode" payload must still fire');
   });
+
+  // #5904 — test files whose literals tripped the receiver-blind exec pattern or the
+  // instruction-override pattern must scan clean, since any PR touching them runs the scan.
+  for (const rel of ['core-utils.test.cjs', 'antigravity-reviewer.test.cjs', 'no-unbounded-spawn.test.cjs']) {
+    test(`regression #5904: tests/${rel} scans clean`, () => {
+      const target = path.join(PROJECT_ROOT, 'tests', rel);
+      const result = runHook(SCAN_SCRIPT, ['--file', target], { interpreter: 'bash', timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+      assert.equal(result.outcome, 'exited');
+      assert.equal(result.exitCode, 0, `expected clean scan, got:\n${result.stdout}`);
+    });
+  }
 });
