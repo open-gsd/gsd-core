@@ -61,7 +61,7 @@ gh pr create --base main --head <your-branch>-pr
 ```
 
 Run it again after more commits: each run picks only the commits since the last `-pr` branch that
-was merged into the target, so earlier rounds are not replayed. A plain merge always counts; a squash or rebase merge counts when the target still holds the `-pr` content, or when `gh` confirms the merged PR (that proof needs an executable `gh`). It records that point in `refs/gsd/*`, per mode and target.
+was merged into the target, so earlier rounds are not replayed. A plain merge always counts; a squash or rebase merge counts when the target still holds the `-pr` content, or when `gh` confirms the merged PR (that proof needs an executable `gh`). `/gsd-pr-branch` records that point in `refs/gsd/*`, per mode and target.
 
 Requirements before it will run:
 
