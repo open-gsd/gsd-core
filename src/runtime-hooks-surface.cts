@@ -965,12 +965,9 @@ function _installEngineSymlinkGuard(): InstallEngineSymlinkGuard {
   return mod;
 }
 
-function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts: ReconcileCodexOpts = {}): ReconcileResult {
+// Shared by install preflight and the hooks writer; resolving never writes.
+function resolveCodexHooksJsonDestination(targetDir: string): string {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
-  const managedCommand = typeof opts.managedCommand === 'string' ? opts.managedCommand : null;
-  const commandWindows = typeof opts.commandWindows === 'string' ? opts.commandWindows : null;
-  const matcher = typeof opts.matcher === 'string' ? opts.matcher : undefined;
-  const timeout = typeof opts.timeout === 'number' ? opts.timeout : undefined;
   // #2586 Major 2: every Codex hooks.json writer funnels through this one
   // function, and atomicWriteFileSync's final step is a rename(2) onto
   // `hooksJsonPath` — which, when that path is a symlink, REPLACES the
@@ -1006,6 +1003,16 @@ function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts
     // is supposed to mean.
     effectiveHooksJsonPath = fs.realpathSync(hooksJsonPath);
   }
+  return effectiveHooksJsonPath;
+}
+
+function reconcileCodexHooksJsonEvent(targetDir: string, eventName: string, opts: ReconcileCodexOpts = {}): ReconcileResult {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  const managedCommand = typeof opts.managedCommand === 'string' ? opts.managedCommand : null;
+  const commandWindows = typeof opts.commandWindows === 'string' ? opts.commandWindows : null;
+  const matcher = typeof opts.matcher === 'string' ? opts.matcher : undefined;
+  const timeout = typeof opts.timeout === 'number' ? opts.timeout : undefined;
+  const effectiveHooksJsonPath = resolveCodexHooksJsonDestination(targetDir);
   let parsed: Record<string, unknown> = {};
   let currentContent: string | null = null;
   if (fs.existsSync(effectiveHooksJsonPath)) {
@@ -3345,6 +3352,7 @@ export = {
   GSD_COPILOT_HOOK_FILE,
 
   // Codex hooks.json
+  resolveCodexHooksJsonDestination,
   reconcileCodexHooksJsonEvent,
   reconcileCodexHooksJsonSessionStart,
   ensureCodexHooksJsonSessionStart,
