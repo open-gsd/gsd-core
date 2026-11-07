@@ -975,7 +975,8 @@ function tokenize(str) {
 
     if (ch === '<' || ch === '>' || (ch === '&' && str[i + 1] === '>')) {
       let fd = '';
-      if (hasWord && quoted === 'none' && /^\d+$/.test(buf)) {
+      // bash also takes a named fd, `{fd}>file`, under the further reading.
+      if (hasWord && quoted === 'none' && (/^\d+$/.test(buf) || (furtherReading && NAMED_FD_RE.test(buf)))) {
         fd = buf;
         buf = '';
         hasWord = false;
@@ -1066,6 +1067,7 @@ function tokenize(str) {
 }
 
 const SHELL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const NAMED_FD_RE = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 
 // Index of the `]` that closes the subscript bash reads from the `[` at `i`
 // (`a[x y]=1 cmd` is one word to bash), or -1 when none does, which bash
