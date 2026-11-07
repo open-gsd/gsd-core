@@ -307,6 +307,10 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
       ['verify-only resume', 'continue directly at `aggregate_results`'],
       ['blocked exit', 'Phase stuck:'],
       ['filtered-empty exit', 'No matching incomplete plans'],
+      ['2b not-ready exit', 'WAITING on incomplete predecessors'],
+      ['#3684 resume arm', 'resuming at update_roadmap (#3684)'],
+      ['gaps-only refusal STOP', '--gaps-only cannot read gap_closure'],
+      ['wave-safety STOP', 'STOP and tell the user to finish earlier waves first'],
     ];
     for (const [label, marker] of arms) {
       const idx = step.lastIndexOf(marker);
