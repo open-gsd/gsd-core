@@ -206,6 +206,8 @@ for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is
   // path, which is the standard find_and_fix flow. A bare `git commit` with nothing
   // staged exits non-zero and would abort this step before the summary is returned.
   const body = fs.readFileSync(file, 'utf8');
+  // allow-test-rule: source-text-is-the-product (#5211)
+  // The prompt line is the command the session manager runs, so the line itself is the contract.
   const line = splitLines(body).find((l) => l.includes('git diff HEAD --quiet -- ')) ?? '';
   const guard = line.indexOf('git diff HEAD --quiet -- ');
   const commit = line.indexOf(' || git commit -m ', guard);
