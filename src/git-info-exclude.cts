@@ -89,6 +89,11 @@ export function excludeFromGit(projectRoot: string, dir: string, filename: strin
   }
 }
 
+/** The anchored rule line `ignoreInTree` writes: the one builder, so a reader of the rule file (cmdCommit's migration carry) cannot drift from the writer. */
+export function ignoreRuleLine(filename: string, subpath = ''): string {
+  return `/${subpath}${escapeGitignore(filename)}`;
+}
+
 /**
  * Write the committed counterpart of `excludeFromGit`: an anchored `/<filename>` line in
  * `<dir>/.gitignore`, created or extended once (idempotent). `subpath` is a raw glob prefix below
@@ -98,7 +103,7 @@ export function excludeFromGit(projectRoot: string, dir: string, filename: strin
 export function ignoreInTree(dir: string, filename: string, subpath = ''): boolean {
   try {
     const file = path.join(dir, '.gitignore');
-    const line = `/${subpath}${escapeGitignore(filename)}`;
+    const line = ignoreRuleLine(filename, subpath);
     const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     const present = splitLines(existing);
     if (present.includes(`!${line}`)) return false;

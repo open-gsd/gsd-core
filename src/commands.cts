@@ -24,7 +24,7 @@ const error: typeof ioMod.error = ioMod.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, isGitIgnored, resolveCommitDocsTiers } = configLoaderMod;
-import { GIT_PROBE_TIMEOUT_MS } from './git-info-exclude.cjs';
+import { GIT_PROBE_TIMEOUT_MS, ignoreRuleLine } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
 const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
@@ -2315,16 +2315,14 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
         .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
         // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
-        // any other staged line in it is the user's own edit and stays out of this commit
+        // any other staged line in it is the user's own edit and stays out of this commit. The diff, unlike `git show`
+        // output, survives execGit's trimming of a trailing blank line and an empty file.
         .filter((p) => {
           if (!p.endsWith('.gitignore')) return true;
-          const lines = (spec: string): string[] => {
-            const r = execGit(['show', spec], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
-            return r.exitCode === 0 ? r.stdout.replace(/\n$/, '').split('\n') : [];
-          };
-          const staged = lines(`:./${p}`);
-          const before = lines(`HEAD:./${p}`);
-          return staged.length === before.length + 1 && staged.every((l, i) => l === (i < before.length ? before[i] : '/state.json'));
+          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '-U0', '--ignore-space-at-eol', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+          const body = diff.stdout.split('\n');
+          const changed = body.slice(body.findIndex((l) => l.startsWith('@@'))).filter((l) => /^[+-]/.test(l));
+          return diff.exitCode === 0 && changed.length === 1 && changed[0] === `+${ignoreRuleLine('state.json')}`;
         })
     : [];
   const carried = [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];

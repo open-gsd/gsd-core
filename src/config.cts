@@ -742,7 +742,8 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // with config.json); with commit_docs false the whole directory is ignored already.
   if (configLoader.resolveCommitDocsTiers(undefined, config['commit_docs'], () => configLoader.isGitIgnored(cwd, '.planning')).resolved) {
     ignoreInTree(planningBase, 'state.json');
-    ignoreInTree(planningBase, 'state.json', 'workstreams/*/');
+    // the workstream copies' sub-path comes from the layout owner, like the publish globs (STATE_JSON_SCOPES)
+    ignoreInTree(planningBase, 'state.json', `${path.relative(planningBase, planningDir(cwd, '*')).split(path.sep).join('/')}/`);
   }
   // The user defaults rewrite follows the config it was planned for: a
   // creation that fails before here leaves the defaults file as it was.
