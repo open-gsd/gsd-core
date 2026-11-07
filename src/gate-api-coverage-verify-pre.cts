@@ -34,7 +34,7 @@ import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal } = phaseLocatorMod;
+const { phaseDirectoryOptions, findPhaseInternal } = phaseLocatorMod;
 import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapModule = require('./roadmap.cjs');
@@ -187,7 +187,7 @@ export function evaluateApiCoverageVerifyPre(input: { projectDir: string; args: 
   let resolvedDir: string | null = null;
   let phaseNumber = '';
   if (token) {
-    const found = findPhaseInternal(projectDir, token);
+    const found = findPhaseInternal(projectDir, token, undefined, phaseDirectoryOptions(projectDir));
     if (found && found.directory) {
       // findPhaseInternal's `directory` is relative to the project root; anchor it to `projectDir`
       // (not the process cwd) so the gate reads the same files in-process as it does from the CLI.

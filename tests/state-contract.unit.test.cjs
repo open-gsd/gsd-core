@@ -67,7 +67,8 @@ const {
   PUBLISH_REASON,
 } = require('../gsd-core/bin/lib/state-contract.cjs');
 
-const { deriveProgressFromRoadmap, locateProgressTable } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
+const { deriveProgressFromRoadmap } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
+const { locateRoadmapProgress } = require('../gsd-core/bin/lib/roadmap-progress.cjs');
 const { classifyProject } = require('../gsd-core/bin/lib/smart-entry.cjs');
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
@@ -567,7 +568,7 @@ describe('state contract — table location', () => {
       '',
     ]);
     const roadmapContent = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8');
-    const located = locateProgressTable(roadmapContent);
+    const located = locateRoadmapProgress(roadmapContent).table;
     const snapshot = buildStateContract(tmpDir, fixedDeps());
 
     // Whatever the shared locator resolves — or fails to resolve — inside a

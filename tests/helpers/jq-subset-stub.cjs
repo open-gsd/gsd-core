@@ -16,10 +16,10 @@
  * string is truthy); `.a.b` on a document without `a` is `null`; `-e` exits 1 when the last output is
  * `false` or `null`, 0 otherwise; `-r` prints a string without quotes; invalid JSON exits 2.
  *
- * Agreement with jq is PINNED, not asserted in general: the 13 documents x 2 filters in
- * tests/gate-consumer-exit-awareness.test.cjs carry expected values measured from real jq. KNOWN
- * DIVERGENCES (each pinned there; none is reachable from the gate handler's JSON, which is always an
- * object whose `passed` / `message` / `data` are scalars or an object):
+ * Agreement with jq is PINNED, not asserted in general: the 13 documents x 2 filters (plus 5 for
+ * `.reason//""`) in tests/gate-consumer-exit-awareness.test.cjs carry expected values measured from
+ * real jq. KNOWN DIVERGENCES (each pinned there; none is reachable from the gate handler's or
+ * update-plan-progress's JSON, which is always an object whose fields are scalars or an object):
  *   - empty stdin: jq exits 4 under -e (0 and no output without it); the stub exits 2 like invalid JSON;
  *   - a `.data` that is a string or an array, or a top-level array: jq errors (exit 5, "Cannot index ...");
  *     the stub reads the missing field as null (PASSED -> false, MESSAGE -> the default);
@@ -49,6 +49,8 @@ const FILTERS = new Map([
     '(.message // .data.message // "Decision coverage gate failed.")',
     (d) => alt(get(d, 'message'), get(d, 'data', 'message'), 'Decision coverage gate failed.'),
   ],
+  // #5221: roadmap.update-plan-progress completion step (executor, execute-plan, execute-phase).
+  ['.reason//""', (d) => alt(get(d, 'reason'), '')],
 ]);
 
 function main(argv) {

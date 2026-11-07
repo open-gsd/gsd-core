@@ -9,7 +9,8 @@
  * release type (rc / hotfix / final). See issue #1104.
  *
  * Modes:
- *   default     — open + admin-merge a `chore: sync next version` PR (used by
+ *   default     — open + admin-merge a `chore: sync next version` PR, or enqueue it
+ *                 when the base requires the merge queue (#5746) (used by
  *                 release.yml's rc job, which has no next-targeting PR of its
  *                 own). Idempotent: a no-op when `next` is already at the target.
  *   --in-place  — set the version (+ manifests, via the npm `version` hook) in
@@ -27,6 +28,15 @@ const RELEASE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-(rc|beta)\.[0-9]+)?$/;
 /** True iff `v` is a publishable release version: X.Y.Z optionally -rc.N / -beta.N. Rejects -dev and anything else. */
 function isReleaseVersion(v) {
   return typeof v === 'string' && RELEASE_VERSION.test(v);
+}
+
+// The branch syncViaPr opens. scripts/release-pipeline-pr.cjs exempts exactly
+// this shape from the issue-link and PR-title gates (#5890).
+const SYNC_BRANCH_PREFIX = 'chore/sync-next-version-';
+
+/** The head branch of the sync PR for `version`. */
+function syncBranchName(version) {
+  return `${SYNC_BRANCH_PREFIX}${version}`;
 }
 
 /** Read the `version` field out of a package.json text blob. Throws on a missing/non-string version. */
@@ -52,7 +62,19 @@ function applyVersion(version, { run = defaultRun } = {}) {
   run('npm', ['version', version, '--no-git-tag-version', '--allow-same-version'], { timeout: 60000 });
 }
 
-/** Full PR-based sync to the `next` branch. Returns 'noop' | 'synced'. */
+// What `gh pr merge --admin` says when the base branch is behind a merge-queue ruleset.
+const MERGE_QUEUE_REJECTION_RE = /merge queue/i;
+
+// stdin ignored, stdout and stderr captured so a failed `gh` call carries its own text.
+const PIPED_STDERR = ['ignore', 'pipe', 'pipe'];
+
+/** Piped stderr is not visible on its own: write it out, then rethrow. */
+function rethrowWithStderr(err) {
+  if (err && err.stderr) process.stderr.write(String(err.stderr));
+  throw err;
+}
+
+/** Full PR-based sync to the `next` branch. Returns 'noop' | 'synced' | 'queued' (enqueued, not yet merged). */
 function syncViaPr(version, { run = defaultRun } = {}) {
   if (!isReleaseVersion(version)) {
     throw new Error(`refusing to sync next to invalid/non-release version '${version}'`);
@@ -63,7 +85,7 @@ function syncViaPr(version, { run = defaultRun } = {}) {
     process.stdout.write(`next already at ${version} — nothing to sync\n`);
     return 'noop';
   }
-  const branch = `chore/sync-next-version-${version}`;
+  const branch = syncBranchName(version);
   run('git', ['checkout', '-B', branch, 'origin/next'], { timeout: 15000 });
   applyVersion(version, { run });
   run('git', ['add', '-u'], { timeout: 15000 });
@@ -100,11 +122,30 @@ function syncViaPr(version, { run = defaultRun } = {}) {
     /* labels are best-effort; admin-merge below still lands the PR */
   }
   try {
-    run('gh', ['pr', 'merge', '--admin', '--merge', prNum], { timeout: 60000 });
+    // stderr is piped, not inherited: with the default 'inherit' the GitHub text goes
+    // to the terminal and err.stderr is null, so the classification below would only
+    // ever see "Command failed: gh pr merge ..." (#5746).
+    run('gh', ['pr', 'merge', '--admin', '--merge', prNum], { timeout: 60000, stdio: PIPED_STDERR });
   } catch (err) {
-    // tolerate "already merged"; rethrow anything else
     const msg = String((err && (err.stderr || err.message)) || '');
-    if (!/already merged|not mergeable|Merged/i.test(msg)) throw err;
+    if (/already merged/i.test(msg)) {
+      // a PR that is already merged must never be enqueued
+    } else if (MERGE_QUEUE_REJECTION_RE.test(msg)) {
+      // #5746: `next` is governed by a merge-queue ruleset, which --admin cannot bypass.
+      // Enqueue instead; the queue chooses the merge strategy, so no --merge here. A
+      // failed enqueue is a real failure: its text is surfaced and it propagates.
+      try {
+        run('gh', ['pr', 'merge', '--auto', prNum], { timeout: 60000, stdio: PIPED_STDERR });
+      } catch (enqueueErr) {
+        rethrowWithStderr(enqueueErr);
+      }
+      process.stdout.write(`queued sync of next -> ${version} via PR #${prNum}\n`);
+      return 'queued';
+    } else if (!/not mergeable|Merged/i.test(msg)) {
+      // the older tolerance, kept after the queue rule so a queue rejection that happens
+      // to mention "mergeable" is not mistaken for success
+      rethrowWithStderr(err);
+    }
   }
   process.stdout.write(`synced next -> ${version} via PR #${prNum}\n`);
   return 'synced';
@@ -130,4 +171,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main };
+module.exports = { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main, defaultRun, SYNC_BRANCH_PREFIX, syncBranchName };
