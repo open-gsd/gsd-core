@@ -18,7 +18,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
-const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -3463,11 +3464,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
 
   // `onCleanup` receives the teardown callback (t.after or a finally slot).
   function initFixtureRepo(onCleanup, prefix) {
-    const dir = createTempDir(prefix);
+    // The fixture owner inits the repo and makes one empty initial commit.
+    const dir = createFixture({ prefix, git: true, planning: false, projectDoc: false });
     onCleanup(() => cleanup(dir));
     const git = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-    git('init', '-q');
-    git('config', 'user.email', 't@t'); git('config', 'user.name', 't'); git('config', 'commit.gpgsign', 'false');
     return { dir, git };
   }
 
@@ -3552,7 +3552,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       if (foreign) { fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray'); }
       const r = runFence(dir, fence);
       assert.equal(r.exitCode, 0, r.stderr);
-      assert.equal(Number(git('rev-list', '--count', 'HEAD')), foreign ? 1 : 2);
+      assert.equal(Number(git('rev-list', '--count', 'HEAD')), foreign ? 2 : 3);
       assert.equal(git('ls-files', '.planning').trim() === '', !foreign);
     }
   });
@@ -3646,57 +3646,57 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
 
     test('root layout: commits only the REQUIREMENTS.md deletion, stray stays staged', () => {
       const r = run(['.planning/REQUIREMENTS.md']);
-      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['stray']]);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['.planning/REQUIREMENTS.md'], ['stray']]);
     });
 
     test('project nested in a repo subdir (cwd=app/): cwd-relative pathspec still commits', () => {
       const r = run(['app/.planning/REQUIREMENTS.md'], 'app');
-      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['app/.planning/REQUIREMENTS.md'], ['stray']]);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['app/.planning/REQUIREMENTS.md'], ['stray']]);
     });
 
     test('non-ASCII directory in the path: git does not quote it, deletion still committed', () => {
       const r = run(['é/.planning/REQUIREMENTS.md']);
-      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['é/.planning/REQUIREMENTS.md'], ['stray']]);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['é/.planning/REQUIREMENTS.md'], ['stray']]);
     });
 
     test('deletion with identical content staged elsewhere (git reports a rename): still committed alone', () => {
       const r = run(['.planning/REQUIREMENTS.md'], '.', (dir, git) => { fs.writeFileSync(path.join(dir, 'moved.txt'), 'x'); git('add', 'moved.txt'); });
-      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['moved.txt', 'stray']]);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['.planning/REQUIREMENTS.md'], ['moved.txt', 'stray']]);
     });
 
     test('backslash in the directory name: -z keeps the path unquoted, deletion still committed', { skip: process.platform === 'win32' && 'a backslash is a path separator on Windows' }, () => {
       const r = run(['a\\b/.planning/REQUIREMENTS.md']);
-      assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 2, ['stray']]);
+      assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 3, ['stray']]);
     });
 
     test('two staged REQUIREMENTS.md deletions: refuses, commits nothing', () => {
       const r = run(['.planning/REQUIREMENTS.md', '.planning/workstreams/ws1/REQUIREMENTS.md']);
-      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+      assert.deepStrictEqual([r.status, r.commits], [1, 2]);
     });
 
     test('foreign REQUIREMENTS.md deletion outside .planning/ is never committed', () => {
       const r = run(['.docs/REQUIREMENTS.md']);
-      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+      assert.deepStrictEqual([r.status, r.commits], [1, 2]);
     });
 
     test('run from a subdirectory (cwd=src/): the repo-root deletion is still committed alone', () => {
       const r = run(['.planning/REQUIREMENTS.md'], 'src');
-      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 2, ['.planning/REQUIREMENTS.md'], ['stray']]);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['.planning/REQUIREMENTS.md'], ['stray']]);
     });
 
     test('a newline in a staged deletion path cannot fake a .planning path: refuses, commits nothing', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
       const r = run(['x\n.planning/REQUIREMENTS.md']);
-      assert.deepStrictEqual([r.status, r.commits], [1, 1]);
+      assert.deepStrictEqual([r.status, r.commits], [1, 2]);
     });
 
     test('an unrelated staged deletion with a newline in its path does not block the REQUIREMENTS.md commit', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
       const r = run(['.planning/REQUIREMENTS.md', 'a\nb.txt']);
-      assert.deepStrictEqual([r.status, r.commits, r.head], [0, 2, ['.planning/REQUIREMENTS.md']]);
+      assert.deepStrictEqual([r.status, r.commits, r.head], [0, 3, ['.planning/REQUIREMENTS.md']]);
     });
 
     test('zero staged deletions: exits 0, commits nothing', () => {
       const r = run([]);
-      assert.deepStrictEqual([r.status, r.commits], [0, 1]);
+      assert.deepStrictEqual([r.status, r.commits], [0, 2]);
     });
   });
 });
