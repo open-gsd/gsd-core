@@ -454,14 +454,45 @@ let heredocTagsAsWords = true;
 //    line ending in an odd number of backslashes is joined to the next one before the
 //    terminator is looked for.
 //  - zshGrouping: true is zsh's reading of a `#` straight after `(` (no comment starts) and
-//    of a brace group: at command position `{` opens one with no blank after it
-//    (`{cat x}`), and a `}` ending a word closes it.
+//    of a brace group: at command position (zshAtCommandPosition) `{` opens one with no
+//    blank after it (`{cat x}`), and a `}` ending a word closes it.
 //  - shellSpans (with dollarDollarIsAWord): true scans the spans bash and dash run that the
 //    plain reading misses — a backtick body as the shell parses it, backslashes removed; the
 //    `$( )` and backtick spans inside `$((…))`, where `#` starts no comment; the spans of an
 //    unquoted heredoc body found with `\`` read as a literal backtick — and reads `$$` (the
 //    shell's PID) as one unit, so a `{` after it opens no `${` (`$${x; cat y` runs `cat y`).
-const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!']);
+const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', 'time', 'coproc', 'always']);
+// zsh command position for the token about to start: the start of the input, after a
+// separator other than a group's own `}`, or after a run of unquoted reserved words that
+// itself starts there (`then ! {cat x}`, `time {cat x}`). `always` follows a group's `}`
+// (`{ a } always {cat x}`). A reserved word after an ordinary word is an argument
+// (`echo then {cat x}`). Each `{` walks back over the reserved words before it, and the
+// group it opens is a separator the next walk stops at, so the walks stay linear.
+function zshAtCommandPosition(tokens) {
+  let j = tokens.length - 1;
+  while (j >= 0 && tokens[j].kind === 'word' && tokens[j].quoted === 'none' && ZSH_GROUP_AFTER.has(tokens[j].text)) j--;
+  if (j < 0) return true;
+  if (tokens[j].kind !== 'sep') return false;
+  if (tokens[j].text !== '}') return true;
+  const next = tokens[j + 1];
+  return next !== undefined && next.text === 'always';
+}
+// zsh's reading of the brace at str[i]: true when it opens or closes a group (tokenize emits
+// it as a separator), false when it is a word character. A `{` opens one only at command
+// position; a `}` closes one only while a group is open, and only where it ends a word or
+// stands alone. The open-group count rides on the token array so that tokenize, which the
+// plain reading runs, keeps next's locals and stack frame.
+function zshBraceIsSeparator(str, i, tokens, hasWord) {
+  const depth = tokens.zshBraceDepth || 0;
+  if (str[i] === '{') {
+    if (hasWord || !zshAtCommandPosition(tokens)) return false;
+    tokens.zshBraceDepth = depth + 1;
+    return true;
+  }
+  if (depth === 0 || !(i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) return false;
+  tokens.zshBraceDepth = depth - 1;
+  return true;
+}
 let crIsWhitespace = true;
 let heredocLinesJoined = false;
 let zshGrouping = false;
@@ -509,7 +540,7 @@ function findParenClose(str, i) {
       continue;
     }
     if (ch === '\n' && heredocTags.length) {
-      i = consumeHeredocBodies(str, i + 1, heredocTags).end;
+      i = (heredocLinesJoined ? consumeHeredocBodiesJoined : consumeHeredocBodies)(str, i + 1, heredocTags).end;
       heredocTags = [];
       continue;
     }
@@ -583,13 +614,35 @@ function consumeHeredocBodies(str, i, tags) {
     while (i < str.length) {
       const nl = str.indexOf('\n', i);
       const lineEnd = nl === -1 ? str.length : nl;
+      const line = str.slice(i, lineEnd);
+      i = nl === -1 ? str.length : nl + 1;
+      const probe = t.stripTabs ? line.replace(/^\t+/, '') : line;
+      if (probe === t.tag) { terminated = true; break; }
+      body += line + '\n';
+    }
+    bodies.push({ body, quoted: t.quoted, seg: t.seg });
+    if (!terminated) break;
+  }
+  return { bodies, end: i };
+}
+
+// #5523 K (heredocLinesJoined only): consumeHeredocBodies as the shell reads an unquoted
+// body, which removes a backslash-newline before it compares a line with the tag, so
+// `x\` + newline + `E` is the line `xE`. A separate function keeps consumeHeredocBodies,
+// which the plain reading runs, next's code. The joined line's trailing backslash run is
+// counted as each segment is added, never re-walked, so a body of backslash lines costs
+// time linear in its length.
+function consumeHeredocBodiesJoined(str, i, tags) {
+  const bodies = [];
+  for (const t of tags) {
+    let body = '';
+    let terminated = false;
+    while (i < str.length) {
+      const nl = str.indexOf('\n', i);
+      const lineEnd = nl === -1 ? str.length : nl;
       let line = str.slice(i, lineEnd);
       i = nl === -1 ? str.length : nl + 1;
-      // #5523 K: the shell removes a backslash-newline from an unquoted body before it
-      // compares a line with the tag, so `x\` + newline + `E` is the line `xE`. The joined
-      // line's trailing backslash run is counted as each segment is added, never re-walked,
-      // so a body of backslash lines costs time linear in its length.
-      if (heredocLinesJoined && !t.quoted && i < str.length) {
+      if (!t.quoted && i < str.length) {
         let trail = trailingBackslashes(line);
         if (trail % 2 === 1) {
           const parts = [];
@@ -714,7 +767,6 @@ function tokenize(str) {
   let seg = 0;
   let heredocs = [];
   let expectTag = null;
-  let zshBraceDepth = 0;
 
   const flush = () => {
     if (!hasWord) return;
@@ -846,7 +898,7 @@ function tokenize(str) {
       sep('\n');
       i++;
       if (heredocs.length) {
-        const r = consumeHeredocBodies(str, i, heredocs);
+        const r = (heredocLinesJoined ? consumeHeredocBodiesJoined : consumeHeredocBodies)(str, i, heredocs);
         for (const b of r.bodies) {
           // Emit a heredoc token per body (quoted included) — the body is the
           // stdin script only a shell interpreter runs. Kept out of `words`.
@@ -946,23 +998,8 @@ function tokenize(str) {
       continue;
     }
     if (zshGrouping && !expectTag && (ch === '{' || ch === '}')) {
-      // zsh opens a group only at command position, and closes one only at a `}` that ends a
-      // word (or stands alone) while a group is open. Any other brace is a word character.
-      const blankAfter = i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]);
-      // Command position: the start, after a separator other than a group's own `}`, or after
-      // a reserved word that starts its segment (`then {cat x}`, `! {cat x}`).
-      const prev = tokens[tokens.length - 1];
-      const prev2 = tokens[tokens.length - 2];
-      const atCommand = !hasWord && (!prev
-        || (prev.kind === 'sep' && prev.text !== '}')
-        || (prev.kind === 'word' && prev.quoted === 'none' && ZSH_GROUP_AFTER.has(prev.text)
-          && (!prev2 || prev2.kind === 'sep')));
-      if (ch === '{' && atCommand) {
-        sep(ch);
-        zshBraceDepth++;
-      } else if (ch === '}' && blankAfter && zshBraceDepth > 0) {
-        sep(ch); // flushes the word the `}` ends
-        zshBraceDepth--;
+      if (zshBraceIsSeparator(str, i, tokens, hasWord)) {
+        sep(ch); // a `}` flushes the word it ends
       } else {
         hasWord = true;
         buf += ch;
