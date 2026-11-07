@@ -90,6 +90,7 @@ module.exports = {
   "tests/gate-api-coverage-verify-pre-escape.test.cjs",
   "tests/gate-codebase-drift.unit.test.cjs",
   "tests/gate-evaluation-scope.test.cjs",
+  "tests/gate-predicate-phase-env.test.cjs",
   "tests/gate-predicate.unit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",
   "tests/gate-ui-plan.unit.test.cjs",

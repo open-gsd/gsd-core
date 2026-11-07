@@ -472,7 +472,7 @@ Cross-phase audit of all outstanding UAT and verification items.
 
 ### `/gsd-audit-milestone`
 
-Verify milestone met its definition of done.
+Verify milestone met its definition of done. Its open-work step runs `milestone complete --dry-run`, which executes each active capability's blocking `ship:pre` gate command once per milestone phase; a gate it could not evaluate keeps the audit from `passed`.
 
 **Prerequisites:** All phases executed
 **Produces:** Audit report with gap analysis
@@ -541,6 +541,8 @@ The marker never overwrites the artifact's own `status:` field for the eight fro
 > **Truncated-window guard.** Archiving also refuses when the milestone's ROADMAP window is truncated — `Cannot mark milestone complete: the ROADMAP window for "<version>" is truncated`. This is the case where the milestone's heading is found but its section closes before reaching the roadmap's `### Phase N:` region (typically a closed-milestone heading sitting in between), which previously degraded to an over-inclusive filter and archived *every* phase directory in the project rather than the milestone's own. An unreadable ROADMAP.md or a version with no matching section at all are pre-existing, legitimately-handled states and are not refused here. Same override as below: `gsd-tools milestone complete <version> --force --confirm` (#3726: `--confirm` is required for any mutating run; `--force` alone does not imply it). A window that is genuinely empty — a freshly-declared milestone with no phases yet — is *not* affected and still completes normally.
 
 > **Unstarted-phase guard.** Archiving refuses if the milestone's ROADMAP still lists a phase with no phase directory on disk — `Cannot mark milestone complete: ROADMAP lists N unstarted phase(s)`. If a phase was intentionally deferred or merged without a directory, run `gsd-tools milestone complete <version> --force --confirm` (the `/gsd-complete-milestone` workflow runs the underlying command without `--force`, so use the CLI directly to override; `--confirm` is required for any mutating run — #3726). A `STATE.md` `milestone:` value that does not match `<version>` prints a WARNING and still runs the guard (#2946).
+
+> **Ship-gate refusal (#5482).** `--confirm` also re-runs every active capability's blocking `ship:pre` predicate gate (except `security` and `broken-windows`, which `/gsd-ship` enforces itself) once per milestone phase and refuses with `milestone_gate_blocked`, listing each blocking gate, before changing anything. `--force --confirm` does not bypass it. `--dry-run` runs the gate commands too (30 s per gate per phase by default; a predicate's own `timeout` is uncapped) and reports what would refuse as `would_refuse`. See [CLI-TOOLS](CLI-TOOLS.md).
 
 > **Sentinel directories stay put.** Moving phase directories into the archive (the default, unless `--no-archive-phases` is passed) now excludes `999.*` (backlog) and `0-*` (pre-milestone) directories via the same sentinel predicate the unstarted-phase guard already uses. Previously the archive move was scoped only by the milestone window, so a sentinel directory sitting inside that window could be archived along with the milestone's own phases.
 
