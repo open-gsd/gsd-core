@@ -554,12 +554,15 @@ Commit the REQUIREMENTS.md deletion (archive files and ROADMAP.md were already c
 # -z prints raw paths (git quotes non-ASCII, backslash and quote characters otherwise); `:(literal)` stops glob characters in the path expanding.
 # The list stays NUL-delimited and each path is matched whole by bash (`read -d ''`, `[[ =~ ]]`), so a newline in a path cannot fake a second path or a `.planning/` parent. Not `grep -z`: BSD grep on macOS anchors `^` and `$` at embedded newlines.
 TOP=$(git rev-parse --show-toplevel) || exit 1
+LIST=$(mktemp) || exit 1
+trap 'rm -f "$LIST"' EXIT
+git -C "$TOP" diff --cached --name-only -z --no-renames --diff-filter=D > "$LIST" || { echo "git diff failed: cannot list the staged deletions" >&2; exit 1; }
 ANY=0; PLANNING=0; REQUIREMENTS_PATH=
 while IFS= read -r -d '' p; do
   [[ $p =~ (^|/)REQUIREMENTS\.md$ ]] || continue
   ANY=$((ANY + 1))
   [[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]] && { PLANNING=$((PLANNING + 1)); REQUIREMENTS_PATH=$p; }
-done < <(git -C "$TOP" diff --cached --name-only -z --no-renames --diff-filter=D)
+done < "$LIST"
 [ "$ANY" -gt 0 ] || { echo "no staged REQUIREMENTS.md deletion: nothing to commit here (expected when .planning is gitignored)" >&2; exit 0; }
 [ "$PLANNING" -gt 0 ] || { echo "staged REQUIREMENTS.md deletion is outside .planning/: not committing it" >&2; exit 1; }
 [ "$PLANNING" -eq 1 ] || { echo "expected exactly one staged .planning REQUIREMENTS.md deletion, found $PLANNING" >&2; exit 1; }
