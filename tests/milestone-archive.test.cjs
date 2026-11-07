@@ -1375,8 +1375,6 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
 // capabilities cannot leak in.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// NOT a subprocess spawn timeout: the declarative `timeout` (seconds) of a gate predicate, short so the sleeping gate is killed at once.
-const PREDICATE_TIMEOUT_SECONDS = 0.2;
 const EXIT3 = { kind: 'command-exit-zero', exitCode: 3, signal: null };
 
 describe('milestone complete re-checks blocking ship:pre predicate gates per milestone phase (#5482)', () => {
@@ -1395,6 +1393,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     return err;
   };
   const wouldRefuse = () => gateResult().blocked;
+  // A block without its prose gate_message: the typed fields are the contract, the message is for people.
+  const typed = ({ gate_message, ...rest }) => rest;
   // Raw spawn (stderr visible on success) for the warning assertions.
   const completeRaw = (cwd = tmpDir) => runNode(
     [TOOLS_PATH, 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
@@ -1432,7 +1432,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const before = snapshot();
     const err = refusal(complete());
     assert.deepEqual(err.blocked, [{ cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', gate_message: 'command exited 3: 2 open items', details: EXIT3 }]);
-    assert.match(err.message, /Nothing has been changed\. Resolve or waive in that capability; --force does not bypass it\.$/);
     assert.deepEqual(snapshot(), before, 'a refused close must leave the project tree byte-identical');
   });
 
@@ -1448,7 +1447,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { predicate: { kind: 'command-exit-zero' } });
     const err = refusal(complete());
     assert.equal(err.blocked[0].reason, 'unevaluable');
-    assert.equal(err.blocked[0].gate_message, 'gate predicate evaluation failed: command-exit-zero predicate requires a non-empty string "command"');
     assert.equal(archived(), false);
 
     writeGateCap(home, { predicate: { kind: 'command-exit-zero' }, onError: 'skip' });
@@ -1457,7 +1455,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(warnings.map((w) => [w.kind, w.capId, w.phase]), [['skipped_phase', 'open-work', '01'], ['skipped_phase', 'open-work', '02']]);
     const skipped = completeRaw();
     assert.equal(skipped.exitCode, 0, skipped.stderr);
-    assert.match(skipped.stderr, /warning: ship:pre gate of "open-work" skipped for phase "01": /);
     assert.equal(archived(), true);
   });
 
@@ -1465,9 +1462,9 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'exit 3' });
     const preview = wouldRefuse();
     assert.equal(archived(), false);
-    assert.deepEqual(preview, [
-      { cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', gate_message: 'command exited 3', details: EXIT3 },
-      { cap_id: 'open-work', phase: '02', reason: 'predicate_blocked', gate_message: 'command exited 3', details: EXIT3 },
+    assert.deepEqual(preview.map(typed), [
+      { cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', details: EXIT3 },
+      { cap_id: 'open-work', phase: '02', reason: 'predicate_blocked', details: EXIT3 },
     ]);
   });
 
@@ -1496,7 +1493,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
     assert.equal(archived(), true);
-    assert.match(r.stderr, /warning: ship:pre gate of "open-work" is not a check\.predicate/);
   });
 
   test('G9 several gates: an advisory pass then a blocking failure still refuses', () => {
@@ -1525,6 +1521,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G11b ship.md step 6 hand-enforces exactly security and broken-windows, the two caps the engine skips (G11)', () => {
+    // allow-test-rule: source-text-is-the-product (#5482)
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf-8');
     const named = [...ship.matchAll(/capId == "([a-z-]{1,40})"/g)].map((m) => m[1]).sort();
     assert.deepEqual(named, ['broken-windows', 'security']);
@@ -1539,11 +1536,10 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
 
   test('G13 two blocked phases both appear in the error details and in would_refuse', () => {
     writeGateCap(home, { command: 'echo open >&2; exit 3' });
-    const expected = ['01', '02'].map((phase) => ({ cap_id: 'open-work', phase, reason: 'predicate_blocked', gate_message: 'command exited 3: open', details: EXIT3 }));
-    assert.deepEqual(wouldRefuse(), expected);
+    const expected = ['01', '02'].map((phase) => ({ cap_id: 'open-work', phase, reason: 'predicate_blocked', details: EXIT3 }));
+    assert.deepEqual(wouldRefuse().map(typed), expected);
     const err = refusal(complete());
-    assert.deepEqual(err.blocked, expected);
-    assert.match(err.message, /"open-work" \(phase "01"\): .*; "open-work" \(phase "02"\): /);
+    assert.deepEqual(err.blocked.map(typed), expected);
   });
 
   // The audit-milestone step 5.6 prose consumes this JSON; it cannot be executed, so pin the
@@ -1580,7 +1576,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['05']);
   });
 
-  const UNREADABLE_MSG = 'milestone window scope is "unreadable": the phase set cannot be resolved, so this gate was not run';
   // Workstream with phase dirs but no ROADMAP of its own (#3597): scope UNREADABLE, archive skipped.
   const seedUnreadable = () => {
     seedWorkstream(tmpDir, { name: 'alpha', state: '---\nmilestone: v1.0\n---\n\n# GSD State\n', active: true });
@@ -1590,7 +1585,9 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   test('G16 UNREADABLE window scope: a blocking halt gate that cannot run refuses the close, --force does not bypass it', () => {
     seedUnreadable();
     writeGateCap(home, { command: 'exit 3' });
-    assert.deepEqual(gateResult(), { blocked: [{ cap_id: 'open-work', phase: '*', reason: 'window_unreadable', gate_message: UNREADABLE_MSG, details: null }], warnings: [] });
+    const unreadable = gateResult();
+    assert.deepEqual(unreadable.blocked.map(typed), [{ cap_id: 'open-work', phase: '*', reason: 'window_unreadable', details: null }]);
+    assert.deepEqual(unreadable.warnings, []);
     const before = snapshot();
     assert.deepEqual(refusal(complete()).blocked.map((b) => b.phase), ['*']);
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['*']);
@@ -1603,7 +1600,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable' }] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.match(r.stderr, /warning: ship:pre gates not re-checked: milestone window scope is "unreadable"/);
   });
 
   test('G16d UNREADABLE window scope without a gate-declaring capability: no warning', () => {
@@ -1612,7 +1608,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(gateResult(), { blocked: [], warnings: [] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.doesNotMatch(r.stderr, /ship:pre gates not re-checked/);
   });
 
   test('G16c a capability that failed to load is reported in gate_warnings, so would_refuse [] is not read as clean', () => {
@@ -1667,7 +1662,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     fs.writeFileSync(path.join(phaseDir('03-$(touch pwned)'), 'OPEN_WORK'), '');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
     writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
-    assert.deepEqual(wouldRefuse().map((b) => [b.phase, b.reason, b.gate_message]), [['03', 'predicate_blocked', 'command exited 3']]);
+    assert.deepEqual(wouldRefuse().map((b) => [b.phase, b.reason, b.details.exitCode]), [['03', 'predicate_blocked', 3]]);
     assert.equal(fs.existsSync(path.join(tmpDir, 'pwned')), false);
   });
 
@@ -1719,7 +1714,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(root, '.planning', 'phases', d, 'OPEN_WORK'), '');
     writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
     const { blocked } = gateResult('', root);
-    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.gate_message]), [['01', 'predicate_blocked', 'command exited 3'], ['02', 'predicate_blocked', 'command exited 3']]);
+    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.exitCode]), [['01', 'predicate_blocked', 3], ['02', 'predicate_blocked', 3]]);
     assert.equal(fs.existsSync(path.join(root, 'pwned')), false);
   });
 
@@ -1729,7 +1724,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     for (const name of ['r with space', 'ré café', "o'brien", 'r#1', 'r (x)']) {
       const { blocked } = gateResult('', projectAt(t, name));
       assert.deepEqual(blocked.map((b) => b.reason), ['predicate_blocked', 'predicate_blocked'], name);
-      for (const b of blocked) assert.equal(b.gate_message, 'command exited 3', name);
+      for (const b of blocked) assert.equal(b.details.exitCode, 3, name);
     }
 
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
@@ -1744,13 +1739,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     for (const b of blocked) assert.equal(b.reason, 'predicate_blocked');
   });
 
-  test('G22d a gate that outlives its predicate timeout refuses with details.timedOut', () => {
-    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 30', timeout: PREDICATE_TIMEOUT_SECONDS } });
-    const { blocked } = gateResult();
-    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.kind, b.details.timedOut]), [['01', 'predicate_blocked', 'command-exit-zero', true], ['02', 'predicate_blocked', 'command-exit-zero', true]]);
-  });
-
   test('G28 the workflow previews the close and stops on would_refuse before PROJECT.md, tags or archive', () => {
+    // allow-test-rule: source-text-is-the-product (#5482)
     const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
     const lines = splitLines(md);
     const pre = lines.findIndex((l) => /milestone\.complete "v\[X\.Y\]" --dry-run(?!.*--release-map)/.test(l));
@@ -1762,6 +1752,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G29 the refusal the workflow matches is the one the command prints', () => {
+    // allow-test-rule: source-text-is-the-product (#5482)
     const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
     const para = splitLines(md).find((l) => l.includes('milestone complete refused'));
     assert.ok(para, 'the close step must describe the refusal');

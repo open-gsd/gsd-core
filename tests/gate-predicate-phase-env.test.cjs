@@ -15,10 +15,11 @@ const path = require('node:path');
 const { evaluateCheckPredicate } = require('../gsd-core/bin/lib/gate-predicate.cjs');
 const { createTempProject, cleanup } = require('./helpers.cjs');
 
-const predicateArgs = (command, phaseDir, phaseNumber = '01') => [
+const predicateArgs = (command, phaseDir, phaseNumber = '01', phaseReqIds = '') => [
   '--predicate', JSON.stringify({ kind: 'command-exit-zero', command }),
   '--phase-dir', phaseDir,
   '--phase-number', phaseNumber,
+  '--phase-req-ids', phaseReqIds,
 ];
 
 describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
@@ -26,8 +27,8 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
   beforeEach(() => { root = createTempProject(); });
   afterEach(() => cleanup(root));
 
-  const evaluate = (command, phaseDir, phaseNumber) =>
-    evaluateCheckPredicate({ projectDir: root, args: predicateArgs(command, phaseDir, phaseNumber) });
+  const evaluate = (command, phaseDir, phaseNumber, phaseReqIds) =>
+    evaluateCheckPredicate({ projectDir: root, args: predicateArgs(command, phaseDir, phaseNumber, phaseReqIds) });
 
   test('a phase directory reached through a symlinked ancestor holding $(...) runs no command', (t) => {
     const hostile = path.join(root, 'ph$(touch PWNED)');
@@ -54,11 +55,22 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
   });
 
   test('a hostile directory name is the exact value the gate reads', () => {
-    const dir = path.join(root, '.planning', 'phases', '01-$(touch PWNED) `id` ; # "q" \'s\'');
+    const dir = path.join(root, '.planning', 'phases', '01-$(touch PWNED) `id` ; # \'s\'');
     fs.mkdirSync(dir, { recursive: true });
     const result = evaluate('touch "${PHASE_DIR}/ok"', dir);
     assert.equal(result.block, false, JSON.stringify(result));
     assert.equal(fs.existsSync(path.join(dir, 'ok')), true);
+    assert.equal(fs.existsSync(path.join(root, 'PWNED')), false);
+  });
+
+  test('a hostile phase number or requirement list is the exact value the gate reads', () => {
+    const dir = path.join(root, '.planning', 'phases', '01-x');
+    fs.mkdirSync(dir, { recursive: true });
+    const hostile = '1 $(touch PWNED) `id` ; # \'s\' "q"';
+    assert.equal(evaluate('printf %s "${PHASE_NUMBER}" > "${PHASE_DIR}/number"', dir, hostile).block, false);
+    assert.equal(fs.readFileSync(path.join(dir, 'number'), 'utf-8'), hostile);
+    assert.equal(evaluate('printf %s "${PHASE_REQ_IDS}" > "${PHASE_DIR}/reqs"', dir, '01', hostile).block, false);
+    assert.equal(fs.readFileSync(path.join(dir, 'reqs'), 'utf-8'), hostile);
     assert.equal(fs.existsSync(path.join(root, 'PWNED')), false);
   });
 

@@ -485,8 +485,8 @@ function formatDiagnosticToken(value: string): string {
 
 /**
  * Map an ERROR_REASON wire value onto a declared outcome name (#3912,
- * ADR-3889 §4). Closed over the 31-member enum: every reason gets an
- * explicit entry below, so a 32nd member added without a mapping falls
+ * ADR-3889 §4). Closed over the ERROR_REASON enum: every reason gets an
+ * explicit entry below, so a member added without a mapping falls
  * through to the `?? 'FAIL'` default rather than silently mis-projecting —
  * and tests/A1 iterates `Object.values(ERROR_REASON)`, so that default is
  * exactly what makes an unmapped addition visible instead of invisible.

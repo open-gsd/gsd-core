@@ -26,6 +26,8 @@ const {
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
+  INTERPOLATION_VAR_NAMES,
+  SHELL_INERT_RE,
 } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
 
 /**
@@ -349,20 +351,24 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
     );
   });
 
-  test('every placeholder is gone from the text or left as ${PHASE_*} for sh: a hostile value is never pasted', () => {
-    fc.assert(
-      fc.property(fc.string({ maxLength: 20 }), (value) => {
-        const shell = fakeShell({ exitCode: 0 });
-        evaluatePredicate(
-          { kind: 'command-exit-zero', command: 'x "${PHASE_DIR}"' },
-          { ...baseCtx, phaseDir: value },
-          { runBoundedShell: shell.run },
-        );
-        const inert = /^[A-Za-z0-9._/@+=:,-]*$/.test(value);
-        assert.equal(shell.calls[0].command, inert ? `x "${value}"` : 'x "${PHASE_DIR}"');
-        assert.equal(shell.calls[0].env.PHASE_DIR, value);
-      }),
-      { numRuns: 100 },
-    );
-  });
+  // The ctx field behind each placeholder: one loop covers every name, so a new placeholder cannot skip the property.
+  const CTX_FIELD = { PHASE_NUMBER: 'phaseNumber', PHASE_DIR: 'phaseDir', PHASE_REQ_IDS: 'phaseReqIds' };
+
+  for (const name of INTERPOLATION_VAR_NAMES) {
+    test(`${name}: pasted only when shell-inert, otherwise left as \${${name}} for sh; the env always holds the value`, () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 20 }), (value) => {
+          const shell = fakeShell({ exitCode: 0 });
+          evaluatePredicate(
+            { kind: 'command-exit-zero', command: `x "\${${name}}"` },
+            { ...baseCtx, [CTX_FIELD[name]]: value },
+            { runBoundedShell: shell.run },
+          );
+          assert.equal(shell.calls[0].command, SHELL_INERT_RE.test(value) ? `x "${value}"` : `x "\${${name}}"`);
+          assert.equal(shell.calls[0].env[name], value);
+        }),
+        { numRuns: 100 },
+      );
+    });
+  }
 });
