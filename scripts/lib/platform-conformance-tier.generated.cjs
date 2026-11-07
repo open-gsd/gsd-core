@@ -345,7 +345,6 @@ module.exports = {
   "tests/state-todos-render.test.cjs",
   "tests/state.platform.test.cjs",
   "tests/subject-first-line.platform.test.cjs",
-  "tests/summary-status-blocked-3345.test.cjs",
   "tests/tdd-mode.platform.test.cjs",
   "tests/tdd-review-checkpoint-cross-plan.test.cjs",
   "tests/teams-status.test.cjs",
