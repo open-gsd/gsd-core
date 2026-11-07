@@ -276,9 +276,11 @@ describe('bug #222 recurrence: orchestrator self-heals when synthesizer returns 
       assert.match(text, /gsd:write-continue|verify-summary/i,
         `${name} must guard against truncated/invalid SUMMARY.md (sentinel or verify-summary).`);
 
-      // Self-heal must commit ALL research artifacts, not just SUMMARY.md
-      assert.match(text, /--files \.planning\/research\//,
-        `${name} self-heal must commit ALL research artifacts, not just SUMMARY.md.`);
+      // Self-heal must commit ALL research artifacts, not just SUMMARY.md, from the
+      // init-resolved research_dir: a root literal commits the root project's research
+      // while a named project is selected (#5859).
+      assert.match(text, /--files "\{research_dir\}\/"/,
+        `${name} self-heal must commit ALL research artifacts in {research_dir}, not just SUMMARY.md.`);
 
       // Persists inline-returned document via Write rather than trusting the agent
       assert.match(text, /returned[\s\S]{0,200}?document[\s\S]{0,200}?Write tool/i,
