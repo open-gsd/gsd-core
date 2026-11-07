@@ -28,7 +28,7 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_VALUE_FLAGS,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_VALUE_FLAGS,
 } = require('./helpers/shipped-command-scan.cjs');
 const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
 
@@ -3324,12 +3324,12 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('scanner flags whole-tree pathspecs and echo after a redirection; accepts --pathspec-from-file', () => {
-    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- *', 'git commit -m x -- **', 'git commit -m x -- /', 'git commit -m x -- ./*', "git commit -m x -- '**/*'", "git commit -m x -- ':(glob)**/*'",'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- *', 'git commit -m x -- **', 'git commit -m x -- /', 'git commit -m x -- ./*', "git commit -m x -- '**/*'", "git commit -m x -- ':(glob)**/*'", 'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
     assert.equal(unscopedGitCommits('>&2 echo "git commit -m x"').length, 1);
     assert.equal(unscopedGitCommits('git commit -m x --pathspec-from-file=list.txt').length, 0);
   });
 
-  test('blind spots: -i/--include, .. and :(icase) whole-tree specs, separate-value --attr-source/--config-env, multi-line bash -c and quoted eval are unscoped', () => {
+  test('scanner flags -i/--include, .. and :(icase) whole-tree specs, separate-value --attr-source/--config-env, multi-line bash -c and quoted eval commits', () => {
     for (const c of ['git commit -i -m x -- a', 'git commit --include -m x -- a', 'git commit --inc -m x -- a', 'git commit -qi -m x -- a', 'git commit -m x -- ..', 'git commit -m x -- ../', 'git commit -m x -- ../..', "git commit -m x -- ':(icase).'", 'git --attr-source HEAD commit -m x', 'git --config-env k=V commit -m x', 'git --shallow-file f commit -m x', 'bash -c "cd a\ngit commit -m x"', 'eval "git commit -m x"']) assert.equal(unscopedGitCommits(c).length, 1, c);
     for (const c of ['git commit -m x -- a', 'git commit --in -m x -- a', 'git commit -m x -- ...', 'git commit -m "- fix item" -- a', "git commit -m x -- ':(icase)src'", 'git commit -m x -- -i', 'bash -c "cd a\ngit commit -m x -- a"', 'eval "git commit -m x -- a"']) assert.equal(unscopedGitCommits(c).length, 0, c);
   });
@@ -3434,6 +3434,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   const GIT_PREFIXES = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice',
     'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
 
+  test('the property test prefixes match the scanner list, so a spelling added to one is added to the other', () => {
+    assert.deepStrictEqual([...GIT_PREFIXES].sort(), [...GIT_PREFIX_SPELLINGS].sort());
+  });
+
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
     const prefix = fc.constantFrom(...GIT_PREFIXES);
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
@@ -3480,7 +3484,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     const from = all.findIndex((l) => l.includes(marker));
     assert.notEqual(from, -1, `${rel}: ${marker} exists`);
     const rest = all.slice(from);
-    const scope = bounded ? rest.slice(0, rest.findIndex((l) => l.includes('</step>'))) : rest;
+    const end = rest.findIndex((l) => l.includes('</step>'));
+    assert.ok(!bounded || end !== -1, `${rel}: </step> closes the step after ${marker}`);
+    const scope = bounded ? rest.slice(0, end) : rest;
     const blk = scanFencedBlocks(scope).find((b) => b.infoString === 'bash');
     assert.ok(blk, `${rel}: bash fence after ${marker}`);
     return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
@@ -3518,7 +3524,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
-  // allow-test-rule: source-text-is-the-product (#5211)
   test('stop-tracking recipe carries the same four fragments in all six docs', () => {
     const norm = (t) => t.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
@@ -3526,6 +3531,8 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
     for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
       'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
+      // allow-test-rule: source-text-is-the-product (#5211)
+      // The doc text is the recipe a user copies, so its exact fragments are the contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
@@ -3550,9 +3557,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
-  // allow-test-rule: source-text-is-the-product (#5211)
   test('git-integration.md commit examples quote every path as :(literal)', () => {
     for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
+      // allow-test-rule: source-text-is-the-product (#5211)
+      // The example commands are what an agent copies, so their quoting is the shipped contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
       assert.equal(tails.length, 3, f);
@@ -3560,27 +3568,30 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
-  // allow-test-rule: source-text-is-the-product (#5211)
   test('a pasted-path placeholder in a commit pathspec is single-quoted in every shipped prompt, never double-quoted', () => {
     const sites = ['agents/gsd-debug-session-manager.md', 'agents/gsd-debug-session-manager.compact.md', 'agents/gsd-executor.md', 'agents/gsd-debugger.md',
       'pi/package-agents/gsd-debug-session-manager.md', 'pi/package-agents/gsd-executor.md', 'pi/package-agents/gsd-debugger.md', 'pi/package-skills/gsd-debug/SKILL.md',
       'gsd-core/workflows/audit-fix.md', 'gsd-core/workflows/validate-phase.md'];
     for (const f of sites) {
+      // allow-test-rule: source-text-is-the-product (#5211)
+      // The prompt text is what the model pastes a path into, so its quoting is the shipped contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       assert.ok(md.includes(":(literal)"), `${f}: has a literal pathspec`);
       assert.equal(/":\(literal\)[^"]{1,80}[}>]"/.test(md), false, `${f}: double-quoted placeholder`);
     }
   });
-  // allow-test-rule: source-text-is-the-product (#5211)
   test('async-external-jobs recipe commits the manifest with a pathspec', () => {
-    const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
+    // allow-test-rule: source-text-is-the-product (#5211)
+    // The recipe commands are what a user runs, so their pathspec is the shipped contract.
+    const md =fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
     const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
     assert.ok(commits.length > 0);
     for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
   });
-  // allow-test-rule: source-text-is-the-product (#5211)
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
+      // allow-test-rule: source-text-is-the-product (#5211)
+      // The example lines are what the agent runs, so the root note beside `-- .` is the shipped contract.
       const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
       assert.ok(hits.length > 0, f);
       for (const l of hits) {
