@@ -29,6 +29,8 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
+import { RUNTIME_PROFILE_MAP } from './model-catalog.cjs';
+import { resolveActiveRuntime } from './runtime-slash.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
 // #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
@@ -474,12 +476,22 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // #2840: `runtime` is host-specific (written by the installer for whichever
   // runtime's install ran last). On a machine with 2+ runtimes, it poisons every
   // new project config — e.g. a Codex install's `runtime:"codex"` leaks into
-  // Claude Code projects, resolving agents to wrong model IDs. `resolve_model_ids`
-  // already has a per-install guard (#2297); `runtime` gets the same treatment
-  // by excluding it from the defaults spread. Projects detect the runtime from
-  // the install path / .gsd-runtime marker, not from a copied config key.
+  // Claude Code projects, resolving agents to wrong model IDs. Shared
+  // `resolve_model_ids:"omit"` is excluded only when the ACTIVE runtime has a
+  // native model route (#5329): copying it into a Claude/Codex/OpenCode project
+  // makes the resolver treat it as explicit project intent, bypassing the #2297
+  // shared-defaults guard. A runtime with no tier map still needs the shared omit
+  // to avoid receiving a Claude alias it cannot resolve. Preserve boolean defaults
+  // and every explicit choice.
+  // Projects detect the runtime from the install path / .gsd-runtime marker.
   const safeDefaults = { ...userDefaults };
   delete safeDefaults['runtime'];
+  const activeRuntime = resolveActiveRuntime(undefined);
+  const activeRuntimeHasTierMap = Object.keys(RUNTIME_PROFILE_MAP[activeRuntime] ?? {}).length > 0;
+  if (safeDefaults['resolve_model_ids'] === 'omit'
+      && (activeRuntime === 'claude' || activeRuntimeHasTierMap)) {
+    delete safeDefaults['resolve_model_ids'];
+  }
 
   // Three-level deep merge: hardcoded <- userDefaults <- choices
   const config: Record<string, unknown> = {
