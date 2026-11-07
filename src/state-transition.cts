@@ -1833,8 +1833,11 @@ export function readPlanPosition(content: string): { current: number; total: num
 /**
  * The plan total a STATE.md document records, for the `init --validate`
  * plan-count check: a readable `Total Plans in Phase` first, else the
- * plan-position total (`Plan: N of M`, `Current Plan: N of M`). `null` when
- * nothing readable is recorded. #5786.
+ * of-M total read straight from the plan fields: a convertible `Current Plan:
+ * N of M` first, else a convertible `Plan: N of M` (the precedence
+ * `parsePlanFields` applies). The fallback does not go through the legacy
+ * pair, so an unconvertible `Total Plans in Phase` beside `Current Plan: N of
+ * M` still yields M. `null` when neither yields a convertible M. #5786.
  */
 export function readRecordedPlanTotal(content: string): number | null {
   // An explicit `Total Plans in Phase` wins over an `of M` in either plan field.
@@ -1842,8 +1845,10 @@ export function readRecordedPlanTotal(content: string): number | null {
   const match = raw ? PLAN_SHAPE_N.exec(raw) : null;
   const t = match ? planNumberFrom(match[1]) : null;
   if (t !== null) return t;
-  const position = readPlanPosition(content);
-  return position !== null ? position.total : null;
+  const { legacyNofMMatch, planNofMMatch } = parsePlanFields(content);
+  const fromCurrentPlan = legacyNofMMatch ? planNumberFrom(legacyNofMMatch[2]) : null;
+  if (fromCurrentPlan !== null) return fromCurrentPlan;
+  return planNofMMatch ? planNumberFrom(planNofMMatch[2]) : null;
 }
 
 /**
