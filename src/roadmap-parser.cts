@@ -1359,11 +1359,12 @@ function bracketAwareMilestoneSection(
 /**
  * #5038: single owner for classifying a `milestone:` scalar as STATE.md spells
  * it. The frontmatter parser (FAILSAFE_SCHEMA) sees YAML null as text, so every
- * reader classifies it here. The input is an already DECODED scalar (the raw
- * line read decodes its own YAML in `readStateMilestoneScalar`), so only the
- * bare YAML 1.2 core-schema null spellings (`null`, `Null`, `NULL`, `~`) are
- * explicit null; a decoded `"null"` string or `null # x` is a literal version.
- * A blank value is absent, not null.
+ * reader classifies it here. The input is an already DECODED scalar (both the
+ * frontmatter path and the raw line read in `readStateMilestoneScalar` decode
+ * through the same FAILSAFE loader), so a quoted `"null"` is indistinguishable
+ * from a bare `null` after decoding and reads as explicit null. A decoded value
+ * of `null`, `Null`, `NULL` or `~` is explicit null on both paths; `null # x`
+ * is a literal version. A blank value is absent, not null.
  */
 function classifyMilestoneScalar(raw: string | null | undefined): { explicitNull: boolean; version: string | null } {
   if (typeof raw !== 'string') return { explicitNull: false, version: null };
@@ -1371,8 +1372,7 @@ function classifyMilestoneScalar(raw: string | null | undefined): { explicitNull
   if (trimmed === '') return { explicitNull: false, version: null };
   if (/^(?:null|Null|NULL|~)$/.test(trimmed)) return { explicitNull: true, version: null };
   // The input is already a DECODED scalar (#4998): a quote or ` #` inside it is
-  // literal content, so the version is the trimmed text. The raw line read decodes
-  // its own YAML spelling in `readStateMilestoneScalar`.
+  // literal content, so the version is the trimmed text.
   return { explicitNull: false, version: trimmed };
 }
 
@@ -1407,16 +1407,15 @@ function readStateMilestoneScalar(stateRaw: string): string | null {
   // line (the `---` closing the frontmatter), so it reads as absent.
   const m = stateRaw.match(/^milestone:[ \t]*(\S.*)/m);
   if (!m) return null;
-  // #5726: this branch holds on-disk YAML text, so decode it here (trailing
-  // ` # comment`, one pair of surrounding quotes) to match what the frontmatter
-  // parser would have returned. A quoted value is taken quote-first (a ` #`
-  // inside the quotes is content; a comment may follow the closing quote); only
-  // an unquoted value has a ` #` comment stripped.
+  // #5726: this branch holds on-disk YAML text. Decode it with the SAME guarded
+  // FAILSAFE loader the frontmatter path uses (a one-key synthetic frontmatter
+  // block), so quotes, YAML escapes and a trailing ` # comment` decode identically
+  // on both paths by construction. An undecodable or non-string result keeps the
+  // trimmed raw text.
   const text = m[1].trim();
-  const quoted = text.match(/^(['"])(.*?)\1(?:\s+#.*)?$/);
-  if (quoted) return quoted[2];
-  if (/^['"]/.test(text)) return text;
-  return text.replace(/\s+#.*$/, '').trim();
+  const decoded = rawFrontmatterMapping(`---\nmilestone: ${text}\n---\n`);
+  const value = decoded ? decoded['milestone'] : undefined;
+  return typeof value === 'string' ? value : text;
 }
 
 /**
