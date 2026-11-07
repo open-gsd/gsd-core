@@ -86,8 +86,10 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
     fs.mkdirSync(dir, { recursive: true });
     const quoted = evaluate("test ! -f '${PHASE_DIR}/OPEN_WORK'", dir);
     assert.equal(quoted.failure?.code, 'usage', JSON.stringify(quoted));
-    assert.match(quoted.failure.message, /single-quotes \$\{PHASE_DIR\}.*double-quote/);
     assert.equal(evaluate('test ! -f "${PHASE_DIR}/OPEN_WORK"', dir).block, false);
+    // An apostrophe in an earlier double-quoted word must not hide the single-quoted placeholder.
+    assert.equal(evaluate(`echo "it's"; test ! -f '\${PHASE_DIR}/OPEN_WORK'`, dir).failure?.code, 'usage');
+    assert.equal(evaluate(`echo "it's"; test ! -f "\${PHASE_DIR}/OPEN_WORK"; echo 'y'`, dir).block, false);
   });
 
   test('an unset placeholder expands to the empty string and other variables are left for sh', () => {

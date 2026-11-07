@@ -76,7 +76,9 @@ variable of the same name, so `"${PHASE_DIR}"` expands to the exact value even
 when it holds shell syntax. A value made only of letters, digits and `. _ / @ + = : , -`
 is also pasted into the command text, so a gate that single-quotes it
 (`'${PHASE_NUMBER}'`) still receives it. Double-quote every placeholder in the
-command: an unquoted value splits at spaces.
+command: an unquoted value splits at spaces. A placeholder inside single quotes
+whose value holds any other character makes the evaluator throw (`unevaluable`),
+because `sh` does not expand inside single quotes.
 
 | Placeholder | Source | Workflow flag |
 |---|---|---|
@@ -93,7 +95,7 @@ rejected as a usage error rather than evaluated. This applies to both kinds —
 `command-exit-zero` interpolates it into `${PHASE_DIR}` — so an unconfined value
 would let a **blocking** gate return `block: false` on evidence from a directory
 the caller chose (#4354). An absolute path inside the project is still accepted;
-absolute is not a synonym for escaping. `${PHASE_DIR}` always interpolates the
+absolute is not a synonym for escaping. The `PHASE_DIR` environment value is always the
 **resolved absolute path**, even when `--phase-dir` was given as a relative
 value — a command relying on `${PHASE_DIR}` staying relative must not assume
 that.
@@ -117,6 +119,7 @@ model".
 - Missing, non-string, empty, or whitespace-only `command`.
 - `command` longer than 4096 chars.
 - `timeout` present but not a positive finite number.
+- A placeholder inside single quotes whose value is not made only of letters, digits and `. _ / @ + = : , -`.
 - Unknown `kind`.
 
 ### `artifact-frontmatter-equals`
