@@ -233,7 +233,7 @@ describe('execute-phase workflow: #2868 stranded-phase resume on discover_and_gr
 // dispatches nothing (verify-only resume, blocked, not-ready, filtered-empty,
 // finished) used to have rewritten Current Position / Status / Last activity to
 // "Executing, Plan 1 of N" before discovery decided there was nothing to run.
-// allow-test-rule: <runtime-contract-is-the-product> — the workflow .md is the
+// allow-test-rule: <runtime-contract-is-the-product> (see #5843) — the workflow .md is the
 // installed AI instruction; step blocks are parsed structurally by <step name>.
 describe('execute-phase workflow: #5843 phase-start STATE write follows plan discovery', () => {
   function workflow() {
