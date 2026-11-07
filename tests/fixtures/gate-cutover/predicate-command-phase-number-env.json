@@ -3,7 +3,7 @@
     "query",
     "check.predicate",
     "--predicate",
-    "{\"kind\":\"command-exit-zero\",\"command\":\"test \\\"${PHASE_NUMBER}\\\" = \\\"07\\\"\"}",
+    "{\"kind\":\"command-exit-zero\",\"command\":\"test \\\"$GSD_GATE_PHASE_NUMBER\\\" = \\\"07\\\"\"}",
     "--phase-number",
     "07"
   ],
