@@ -38,6 +38,7 @@ const { RULES } = stateConsistency;
 
 const { buildPlanningSnapshot } = require('../../gsd-core/bin/lib/planning-snapshot.cjs');
 const { SEVERITY, REMEDY_ACTION, REMEDY_RISK } = require('../../gsd-core/bin/lib/health-diagnostic.cjs');
+const { SCOPE } = require('../../gsd-core/bin/lib/planning-scope.cjs');
 
 function planningDirOf(cwd) {
   return path.join(cwd, '.planning');
@@ -79,15 +80,15 @@ function ruleFor(code) {
 // ─── RULES shape ────────────────────────────────────────────────────────────
 
 describe('RULES (state-consistency group)', () => {
-  test('exports exactly 5 rules: W024, W002, W011, W021, W026', () => {
+  test('exports exactly 6 rules: W024, W002, W011, W021, W026, W031', () => {
     assert.deepEqual(
       RULES.map((r) => r.code).sort(),
-      ['W002', 'W011', 'W021', 'W024', 'W026'],
+      ['W002', 'W011', 'W021', 'W024', 'W026', 'W031'],
     );
   });
 
   test('every rule is severity WARNING', () => {
-    for (const code of ['W024', 'W002', 'W011', 'W021', 'W026']) {
+    for (const code of ['W024', 'W002', 'W011', 'W021', 'W026', 'W031']) {
       assert.equal(ruleFor(code).severity, SEVERITY.WARNING);
     }
   });
@@ -660,5 +661,138 @@ describe('W026 — STATE milestone-complete/archived but ROADMAP lists a phase w
     const diagnostics = ruleFor('W026').check(snapshot);
     assert.equal(diagnostics.length, 1);
     assert.equal(diagnostics[0].code, 'W026');
+  });
+});
+
+// ─── W031 — STATE.md far over its documented line target (#5830) ──────────
+
+describe('W031 — STATE.md far over its documented line target (#5830)', () => {
+  const { STATE_MD_LINE_TARGET } = require('../../gsd-core/bin/lib/state-md-schema.cjs');
+
+  /**
+   * A realistic STATE.md (template frontmatter + Current Position) whose
+   * Quick Tasks Completed table is grown until the file is exactly `lines`
+   * lines long — the reporter's shape in #5830 (an unbounded quick-task
+   * history), not an invented one.
+   */
+  function stateOfLines(lines, eol = '\n') {
+    const head = [
+      '---', 'gsd_state_version: \'1.0\'', 'milestone: v1.0', 'status: executing', '---',
+      '', '# Project State', '', '## Current Position', '', 'Phase: 1 of 2 (Foo)', 'Status: In progress', '',
+      '### Quick Tasks Completed', '',
+      '| # | Description | Date | Commit | Directory |',
+      '|---|-------------|------|--------|-----------|',
+    ];
+    const rows = [];
+    for (let i = 0; head.length + rows.length < lines; i++) {
+      rows.push(`| ${i + 1} | Quick task ${i + 1} | 2026-10-01 | abc1234 | — |`);
+    }
+    return [...head, ...rows].join(eol) + eol;
+  }
+
+  const threshold = () => STATE_MD_LINE_TARGET * 3;
+
+  test('W031: the documented target is 100 lines (templates/state.md <size_constraint>)', () => {
+    assert.equal(STATE_MD_LINE_TARGET, 100);
+  });
+
+  // Parity: the drift #5830 fixed was prose (execute-plan.md said 150), so
+  // the shipped documents that state the target are pinned to the constant,
+  // not to a literal. The text of a template/workflow is what the runtime
+  // loads, so it is read here as data.
+  for (const rel of ['gsd-core/templates/state.md', 'gsd-core/workflows/execute-plan.md']) {
+    test(`W031 parity: ${rel} states the same line target as STATE_MD_LINE_TARGET`, () => {
+      const text = fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+      const targets = [...text.matchAll(/^Keep STATE\.md under (\d+) lines\.$/gm)].map((m) => Number(m[1]));
+      assert.deepEqual(targets, [STATE_MD_LINE_TARGET], `${rel} must state the target exactly once`);
+    });
+  }
+
+  test('W031 is a non-repairable WARNING', () => {
+    const rule = ruleFor('W031');
+    assert.equal(rule.severity, SEVERITY.WARNING);
+    assert.equal(rule.repairable, false);
+  });
+
+  test('W031 does not fire one line below 3x the target', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-0-');
+    t.after(() => cleanup(cwd));
+    writeState(cwd, stateOfLines(threshold() - 1));
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(snapshot.stateLineCount.value, threshold() - 1);
+    assert.deepEqual(ruleFor('W031').check(snapshot), []);
+  });
+
+  test('W031 does not fire at exactly 3x the target', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-1-');
+    t.after(() => cleanup(cwd));
+    writeState(cwd, stateOfLines(threshold()));
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(snapshot.stateLineCount.value, threshold());
+    assert.deepEqual(ruleFor('W031').check(snapshot), []);
+  });
+
+  test('W031 fires one line above 3x the target, naming size, target and both remedies', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-2-');
+    t.after(() => cleanup(cwd));
+    writeState(cwd, stateOfLines(threshold() + 1));
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    const diagnostics = ruleFor('W031').check(snapshot);
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].code, 'W031');
+    assert.equal(diagnostics[0].severity, SEVERITY.WARNING);
+    assert.match(diagnostics[0].message, new RegExp(`\\b${threshold() + 1} lines\\b`));
+    assert.match(diagnostics[0].message, new RegExp(`\\b${STATE_MD_LINE_TARGET}\\b`));
+    assert.equal(diagnostics[0].remedy.action, REMEDY_ACTION.ADVISE);
+    assert.equal(diagnostics[0].remedy.risk, REMEDY_RISK.NONE);
+    assert.match(diagnostics[0].remedy.args.command, /state prune/);
+    assert.match(diagnostics[0].remedy.args.command, /milestone archive-quick <version>/);
+    // The remedy must not promise more than the tools do (#5830 review):
+    // state prune never touches Quick Tasks, archive-quick needs a task
+    // directory, and /gsd-fast rows have no archive command.
+    assert.match(diagnostics[0].remedy.args.command, /does not touch the Quick Tasks table/);
+    assert.match(diagnostics[0].remedy.args.command, /only when at least one task directory exists/);
+    assert.match(diagnostics[0].remedy.args.command, /\/gsd-fast\) have no archive command/);
+  });
+
+  test('W031 counts CRLF lines the same as LF lines', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-3-');
+    t.after(() => cleanup(cwd));
+    writeState(cwd, stateOfLines(threshold() + 1, '\r\n'));
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(snapshot.stateLineCount.value, threshold() + 1);
+    assert.equal(ruleFor('W031').check(snapshot).length, 1);
+  });
+
+  test('W031 stays silent on a template-sized STATE.md', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-4-');
+    t.after(() => cleanup(cwd));
+    writeState(cwd, stateOfLines(40));
+
+    assert.deepEqual(ruleFor('W031').check(buildPlanningSnapshot(cwd)), []);
+  });
+
+  test('W031 stays silent when STATE.md is absent (unknown is not a finding)', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-5-');
+    t.after(() => cleanup(cwd));
+    fs.mkdirSync(planningDirOf(cwd), { recursive: true });
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(snapshot.stateLineCount.value, null);
+    assert.deepEqual(ruleFor('W031').check(snapshot), []);
+  });
+
+  test('W031 stays silent when STATE.md is unreadable (a directory)', (t) => {
+    const cwd = createTempDir('gsd-5830-w031-6-');
+    t.after(() => cleanup(cwd));
+    fs.mkdirSync(path.join(planningDirOf(cwd), 'STATE.md'), { recursive: true });
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.deepEqual(snapshot.stateLineCount, { value: null, scope: SCOPE.UNREADABLE });
+    assert.deepEqual(ruleFor('W031').check(snapshot), []);
   });
 });

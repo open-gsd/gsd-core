@@ -187,6 +187,10 @@ interface PlanningSnapshot {
   projectSections: { value: string[] | null; scope: Scope; exists: boolean };
   statePhaseTokens: { value: string[]; scope: Scope };
   stateStatus: { value: string | null; scope: Scope };
+  // #5830: STATE.md's whole-file line count (frontmatter included; a final
+  // line terminator does not open an extra line). `null` when STATE.md is
+  // absent or unreadable. Backs W031 (size far over the documented target).
+  stateLineCount: { value: number | null; scope: Scope };
   roadmapDeclaredPhases: { value: { phaseId: string; milestone: string | null }[]; scope: Scope };
   roadmapPhaseCheckboxes: { value: Record<string, boolean>; scope: Scope };
   researchValidationStatus: {
@@ -346,6 +350,18 @@ interface StateFields {
   currentPhaseLabel: { value: string | null; scope: Scope };
   statePhaseTokens: { value: string[]; scope: Scope };
   stateStatus: { value: string | null; scope: Scope };
+  stateLineCount: { value: number | null; scope: Scope };
+}
+
+/**
+ * Line count as an editor shows it: a trailing terminator does not open a new
+ * line. LF and CRLF both terminate a line; `''` is 0 lines. Exported for its
+ * property test (#5830).
+ */
+function countLines(content: string): number {
+  if (content === '') return 0;
+  const parts = content.split(/\r?\n/);
+  return parts[parts.length - 1] === '' ? parts.length - 1 : parts.length;
 }
 
 /**
@@ -402,6 +418,7 @@ function buildStateFields(statePath: string): StateFields {
       currentPhaseLabel: { value: null, scope: SCOPE.UNREADABLE },
       statePhaseTokens: { value: [], scope: SCOPE.UNREADABLE },
       stateStatus: { value: null, scope: SCOPE.UNREADABLE },
+      stateLineCount: { value: null, scope: SCOPE.UNREADABLE },
     };
   }
   if (content === null) {
@@ -409,6 +426,7 @@ function buildStateFields(statePath: string): StateFields {
       currentPhaseLabel: { value: null, scope: SCOPE.UNREADABLE },
       statePhaseTokens: { value: [], scope: SCOPE.UNREADABLE },
       stateStatus: { value: null, scope: SCOPE.UNREADABLE },
+      stateLineCount: { value: null, scope: SCOPE.UNREADABLE },
     };
   }
 
@@ -482,7 +500,9 @@ function buildStateFields(statePath: string): StateFields {
     scope: SCOPE.COMPLETE,
   };
 
-  return { currentPhaseLabel, statePhaseTokens, stateStatus };
+  const stateLineCount = { value: countLines(content), scope: SCOPE.COMPLETE };
+
+  return { currentPhaseLabel, statePhaseTokens, stateStatus, stateLineCount };
 }
 
 /**
@@ -1349,6 +1369,7 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
     projectSections: buildProjectSectionsField(cwd),
     statePhaseTokens: stateFields.statePhaseTokens,
     stateStatus: stateFields.stateStatus,
+    stateLineCount: stateFields.stateLineCount,
     roadmapDeclaredPhases: roadmapDeclared.declared,
     roadmapPhaseCheckboxes: buildRoadmapPhaseCheckboxesField(paths.roadmap, phaseIdConvention, directoryContext),
     researchValidationStatus: buildResearchValidationStatusField(paths.phases, phaseDirs.value, phaseDirs.scope, phaseIdConvention),
@@ -1371,4 +1392,5 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
 export = {
   buildPlanningSnapshot,
   worstScope,
+  countLines,
 };

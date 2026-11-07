@@ -14,6 +14,7 @@ import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
+import { STATE_MD_ENTRY_MAX_CHARS } from './state-md-schema.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
@@ -2584,8 +2585,10 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
 // 240 matches the bound already vetted by maintainer review on the prior
 // attempt at this issue (PR #2662) — re-deriving a different number would be
 // pure bikeshedding, not a correctness improvement. See
-// .gsd/phase/feat-2618-compact-todo-pointers/40-design.md.
-const PENDING_TODO_BULLET_MAX_CHARS = 240;
+// .gsd/phase/feat-2618-compact-todo-pointers/40-design.md. The number lives
+// in state-md-schema as STATE_MD_ENTRY_MAX_CHARS, shared with the Quick Tasks
+// description bound (#5830), so the two cannot drift apart.
+const PENDING_TODO_BULLET_MAX_CHARS = STATE_MD_ENTRY_MAX_CHARS;
 const PENDING_TODO_TITLE_FLOOR = 15;
 const PENDING_TODO_AREA_FLOOR = 3;
 

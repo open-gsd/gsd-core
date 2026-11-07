@@ -674,14 +674,22 @@ escaping the reader (`parseMarkdownTable`) requires, so a `${DESCRIPTION}` conta
 Do NOT use the Edit tool to write this row directly; that raw-interpolation path is the defect this
 step now avoids.
 
+STATE.md is a digest: the row names the task, the task's SUMMARY.md holds the detail (#5830). Set
+`TASK_TITLE` to a one-line title of at most 240 characters — `${DESCRIPTION}` itself when it is
+already one short line, otherwise a summary of it. Never paste the SUMMARY or a multi-sentence
+description into the row. A longer `--task` is still written in full, but the command reports a
+`warnings` entry; if it does, shorten the title next time rather than editing the row.
+
 **If `$VALIDATE_MODE` (or table has Status column):**
 ```bash
-gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${DESCRIPTION}" --status "${VERIFICATION_STATUS}"
+TASK_TITLE="${DESCRIPTION}"  # always this task's text; swap in a one-line summary only if it is long
+gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${TASK_TITLE}" --status "${VERIFICATION_STATUS}"
 ```
 
 **If NOT `$VALIDATE_MODE` (and table has no Status column):**
 ```bash
-gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${DESCRIPTION}"
+TASK_TITLE="${DESCRIPTION}"  # always this task's text; swap in a one-line summary only if it is long
+gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${TASK_TITLE}"
 ```
 
 Both forms emit the row this step previously authored by hand: `--quick-id`/`--slug` derive the same
@@ -696,7 +704,7 @@ a positional ordinal and `Directory` reads `—`.
 
 Use `date` from init:
 ```
-Last activity: ${date} - Completed quick task ${quick_id}: ${DESCRIPTION}
+Last activity: ${date} - Completed quick task ${quick_id}: ${TASK_TITLE}
 ```
 
 Use the Edit tool for 7a/7b/7d (section creation and the Last activity line). 7c above writes through `gsd_run quick-tasks-append`, not the Edit tool.

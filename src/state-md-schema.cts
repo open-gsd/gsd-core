@@ -103,6 +103,26 @@ export const STATUS_LIFECYCLE_ENUM = Object.freeze([
   'completed',
 ] as const);
 
+/**
+ * STATE.md's documented size target, in lines (#5830). The one code-side
+ * copy of the number `gsd-core/templates/state.md`'s `<size_constraint>`,
+ * `gsd-core/workflows/execute-plan.md` and `docs/reference/state-md.md` state
+ * in prose ("Keep STATE.md under 100 lines"). The health rule W031 warns when
+ * STATE.md is more than 3x this target.
+ */
+export const STATE_MD_LINE_TARGET = 100;
+
+/**
+ * The length bound for one STATE.md digest entry, in UTF-16 code units
+ * (JavaScript `string.length`, so an astral-plane emoji counts as 2). Set by
+ * #2618 for "Pending Todos" bullets (`PENDING_TODO_BULLET_MAX_CHARS`,
+ * `src/init.cts`, which truncates to it) and reused by #5830 for the Quick
+ * Tasks `Description` cell (`QUICK_TASK_DESCRIPTION_MAX_CHARS`,
+ * `src/markdown-table.cts`, which only warns past it). Both name this one
+ * constant so the two bounds cannot drift apart.
+ */
+export const STATE_MD_ENTRY_MAX_CHARS = 240;
+
 // ─── The schema row shape ───────────────────────────────────────────────────
 
 export type StateFieldSchema = {

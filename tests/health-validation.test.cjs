@@ -1,3 +1,4 @@
+// docs-guard-exempt: docs/ appears only in ADR citations; the one read call is a temp-fixture STATE.md (#5830).
 /**
  * GSD Tools Tests - Health Validation
  *
@@ -2255,4 +2256,66 @@ describe('W030 repairs a known legacy verification status (#5291)', () => {
     assert.strictEqual(closed.success, false);
     assert.match(closed.error, /pass_with_caveats/);
   });
+});
+
+// #5830: a STATE.md far over its documented line target (3x) is an advisory
+// warning pointing at `state prune` and `milestone archive-quick`. It is never repaired:
+// `--repair` leaves STATE.md byte-identical and the warning in place.
+describe('W031: STATE.md far over its line target (#5830)', () => {
+  const { STATE_MD_LINE_TARGET } = require('../gsd-core/bin/lib/state-md-schema.cjs');
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function seed(totalLines, eol = '\n') {
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalProjectMd(tmpDir);
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-phase-1'), { recursive: true });
+    const head = [
+      '# Session State', '', '## Current Position', '', 'Phase: 1', '',
+      '### Quick Tasks Completed', '',
+      '| # | Description | Date | Commit | Directory |',
+      '|---|-------------|------|--------|-----------|',
+    ];
+    const rows = [];
+    for (let i = 0; head.length + rows.length < totalLines; i++) {
+      rows.push(`| ${i + 1} | Quick task ${i + 1} | 2026-10-01 | abc1234 | — |`);
+    }
+    writeMinimalStateMd(tmpDir, [...head, ...rows].join(eol) + eol);
+  }
+
+  const healthJson = (extra = []) => {
+    const r = runGsdTools(['validate', 'health', ...extra, '--json'], tmpDir);
+    assert.strictEqual(r.success, true, `validate health failed: ${r.error}`);
+    return JSON.parse(r.output);
+  };
+  const w031 = (data) => [...(data.warnings ?? []), ...(data.errors ?? [])].filter((w) => w.code === 'W031');
+  const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+
+  test('W031 is reported as a non-repairable warning above 3x the target', () => {
+    seed(STATE_MD_LINE_TARGET * 3 + 1);
+    const data = healthJson();
+    assert.strictEqual(w031(data).length, 1, JSON.stringify(data.warnings));
+    assert.ok((data.warnings ?? []).some((w) => w.code === 'W031'), 'W031 lands in warnings[]');
+    assert.strictEqual(w031(data)[0].repairable, false);
+  });
+
+  test('W031 is not reported at 3x the target', () => {
+    seed(STATE_MD_LINE_TARGET * 3);
+    assert.strictEqual(w031(healthJson()).length, 0);
+  });
+
+  // Raw bytes, not EOL-normalized text: a repair that rewrote LF<->CRLF would
+  // still be a rewrite.
+  for (const [label, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+    test(`--repair leaves an oversized ${label} STATE.md byte-identical and W031 in place`, () => {
+      seed(STATE_MD_LINE_TARGET * 3 + 1, eol);
+      const before = fs.readFileSync(statePath());
+      assert.strictEqual(before.includes(Buffer.from('\r\n')), eol === '\r\n', `precondition: fixture is ${label}`);
+      healthJson(['--repair']);
+      assert.ok(fs.readFileSync(statePath()).equals(before), `--repair must not rewrite a ${label} STATE.md for W031`);
+      assert.strictEqual(w031(healthJson()).length, 1, 'W031 must survive --repair');
+    });
+  }
 });

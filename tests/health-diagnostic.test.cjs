@@ -7,9 +7,11 @@
  * Test matrix:  .gsd/phase/refactor-3309-health-diagnostic-rule-table/50-test-matrix.md
  *
  * Covers test-matrix section 2 (rows 9-16) against the FULLY WIRED rule
- * table (`RULES` now carries all 31 rules — see the "RULES" describe block
- * below for the exact count and why it is 31, not 32 — extracted from
- * `cmdValidateHealth`, `src/verify.cts:1616-2577`). Rows 15-16 (the
+ * table (`RULES` now carries all 35 rules — see the "RULES" describe block
+ * below for the exact per-group count — 31 extracted from
+ * `cmdValidateHealth`, `src/verify.cts:1616-2577`, which is one fewer than
+ * the design doc's own prose figure of "32" (that doc flags its table and
+ * prose counts as inconsistent), plus the new W028/W029/W030/W031). Rows 15-16 (the
  * DESTRUCTIVE-refusal proof and the NONE-risk apply proof) run against REAL
  * diagnostics emitted by REAL rules over a REAL `buildPlanningSnapshot`
  * projection of a temp fixture, not hand-constructed fakes — the
@@ -276,24 +278,25 @@ describe('evaluateRuleTable — duplicate-code guard (row 13)', () => {
 
 // ─── RULES — the fully wired table ──────────────────────────────────────────
 //
-// 34 rule entries. Counted directly from each rule-group file's own exported
+// 35 rule entries. Counted directly from each rule-group file's own exported
 // `RULES` array: root-existence (4: E002/E003/E004/W001) + state-consistency
-// (5: W024/W002/W011/W021/W026) + config-validation (11: W003/E005/W004/
+// (6: W024/W002/W011/W021/W026/W031 — W031 is #5830's STATE.md size advisory)
+// + config-validation (11: W003/E005/W004/
 // W008/W016/W012/W013/W014/W015/W022/W029) + phase-structure (5: W005/W023/
 // I001/W009/W030 — W030 is #5118's out-of-set verification report status) +
 // agent-install (1: W010) + roadmap-disk-consistency (2: W006/
 // W007) + worktree-health (3: W020/W017/W027) + milestone-archive-hygiene
 // (2: W018/W019) + install-surface-shadowing (1: W028, #2873 epic #2866
-// Phase 4a) = 34. config-validation.cts's W029 (#3586, epic #2292) is
+// Phase 4a) = 35. config-validation.cts's W029 (#3586, epic #2292) is
 // registered there per this batch's brief even though its subject
 // (`.planning/` tracked-but-ignored) is not config.json-sourced. E001 and
 // the home-directory guard (E010/I010) are deliberately NOT rows (design
 // doc, "Two guards that stay OUTSIDE the rule table entirely").
 
 describe('RULES', () => {
-  test('is the full, frozen 34-rule table with every code unique', () => {
+  test('is the full, frozen 35-rule table with every code unique', () => {
     assert.equal(Array.isArray(RULES), true);
-    assert.equal(RULES.length, 34);
+    assert.equal(RULES.length, 35);
     const codes = RULES.map((r) => r.code);
     assert.equal(new Set(codes).size, codes.length, 'every rule code must be unique');
   });
