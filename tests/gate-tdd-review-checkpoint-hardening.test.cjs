@@ -28,7 +28,8 @@ const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
-const { evaluateTddReviewCheckpoint } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
+const { SUMMARY_REFS_MAX, REPO_TEXT_MAX_BYTES } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+const { evaluateTddReviewCheckpoint, TDD_ROW_REASON } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
 
 function git(dir, ...args) {
   return execFileSync(
@@ -230,6 +231,35 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(r.payload.violations, 0);
     assert.equal(r.block, false);
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
+    assert.equal(r.payload.rows[0].reason, 'unsealed_summary_unreachable');
+    assert.match(r.payload.message, /no TDD-REVIEW-SEAL\.json entry exists/);
+  });
+
+  test('two plans in one run probe the shallow-clone state once', (t) => {
+    const { dir } = fixture([], { summary: false });
+    const fake = (c) => `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${c.repeat(40)}\`\n`;
+    w(dir, `${PHASE}/01-01-SUMMARY.md`, fake('a'));
+    w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
+    w(dir, `${PHASE}/01-02-SUMMARY.md`, fake('b'));
+    const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const real = shell.execGit;
+    let probes = 0;
+    t.mock.method(shell, 'execGit', (args, opts) => {
+      if (args.includes('--is-shallow-repository')) probes += 1;
+      return real(args, opts);
+    });
+    const rows = run(dir).payload.rows;
+    assert.deepEqual(rows.map((r) => r.reason), ['unsealed_summary_unreachable', 'unsealed_summary_unreachable']);
+    assert.equal(probes, 1);
+  });
+
+  test('tdd.md names every row reason the gate can emit', () => {
+    const tdd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
+    const owner = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'execute-mvp-tdd.md'), 'utf8');
+    for (const reason of Object.values(TDD_ROW_REASON)) assert.ok(tdd.includes(reason), reason);
+    for (const reason of [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY, TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]) assert.ok(owner.includes(reason), `owner: ${reason}`);
+    assert.ok(owner.includes(`${SUMMARY_REFS_MAX} distinct task commits`), 'owner states SUMMARY_REFS_MAX');
+    assert.ok(owner.includes(`${REPO_TEXT_MAX_BYTES / 1024} KiB`), 'owner states REPO_TEXT_MAX_BYTES');
   });
 
   test('a plan with reachable commits lacking test()/feat() still fails', () => {
@@ -339,11 +369,15 @@ describe('#5354 tdd review checkpoint seal', () => {
     return out;
   }
 
-  test('a hostile seal derived from the gate\'s own seal never crashes the gate and never earns a credit', () => {
+  test('a hostile seal derived from a documented-shape seal never crashes the gate and never earns a credit', () => {
     const { dir, base } = fixture(SEALED_SQUASH);
-    run(dir, '--record');
-    const validText = fs.readFileSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json'), 'utf8');
-    const valid = JSON.parse(validText);
+    // The valid seal is written from git's own answer, in the documented shape (plans.<id>.{red,green} full SHAs),
+    // not read back from the gate's `--record`: the gate's writer is not the source of its own negative fixtures.
+    const [redSha, greenSha] = sealGit(dir, 'rev-list', '--reverse', `${base}..HEAD`).split('\n');
+    const valid = { plans: { '01-01': { red: redSha, green: greenSha } } };
+    const validText = `${JSON.stringify(valid, null, 2)}\n`;
+    fs.mkdirSync(path.join(dir, PHASE), { recursive: true });
+    fs.writeFileSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json'), validText);
     sealGit(dir, 'add', '-A');
     sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
     squash(dir, base);
@@ -372,7 +406,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   const SEAL = path.join(PHASE, 'TDD-REVIEW-SEAL.json');
   const sha = (c) => c.repeat(40);
-  const SEAL_CAP = 64 * 1024;
+  const SEAL_CAP = REPO_TEXT_MAX_BYTES;
   const padTo = (text, size) => text + ' '.repeat(size - Buffer.byteLength(text));
 
   test('fabricated SUMMARY ids (no such object) are NotEvaluable, indistinguishable from a squashed-and-collected commit', () => {
@@ -464,6 +498,9 @@ describe('#5354 tdd review checkpoint seal', () => {
     gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
     const r = run(clone);
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
+    assert.equal(r.payload.rows[0].reason, 'sealed_shallow_history');
+    assert.match(r.payload.message, /sealed commits cannot be verified because the history is incomplete/);
+    assert.doesNotMatch(r.payload.message, /no TDD-REVIEW-SEAL\.json entry exists/);
     assert.equal(r.block, false);
   });
 

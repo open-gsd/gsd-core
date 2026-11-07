@@ -2,4 +2,4 @@
 type: Fixed
 pr: 5457
 ---
-**`tdd.review-checkpoint` no longer fails a TDD phase after a squash merge** — `/gsd-ship` now seals each plan's RED/GREEN evidence in `TDD-REVIEW-SEAL.json` and commits it before push when `commit_docs` allows it, so the credit survives the squash, and a plan squashed away without a seal (no plan commit left, its SUMMARY's 1-64 task commits all unreachable in a complete history) is reported `NotEvaluable` instead of a violation (#5354).
+**`tdd.review-checkpoint` no longer fails a TDD phase after a squash merge** — a squash merge made a passing TDD plan fail the review checkpoint. Now the evidence survives the squash, or the plan shows as not evaluable instead of failing. (#5354)

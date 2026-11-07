@@ -23,9 +23,9 @@ export type SealEntry = { red: string; green: string };
 export type SealPlans = Record<string, Partial<SealEntry>>;
 
 // Cap for repo-controlled text the gate reads (the seal and SUMMARY.md); a real one is a few KiB at most; anything bigger is not read (repo content, so hostile).
-const REPO_TEXT_MAX_BYTES = 64 * 1024;
-/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn and, when git does not know it, one `git rev-parse --verify` (the loop stops at the first id that is not gone), so at most 2 * SUMMARY_REFS_MAX spawns; plus one `git rev-parse --is-shallow-repository` per call; plus, when every id exists, one `git rev-list` per call and one `git show` per id. */
-const SUMMARY_REFS_MAX = 64;
+export const REPO_TEXT_MAX_BYTES = 64 * 1024;
+/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn and, when git does not know it, one `git rev-parse --verify` (the loop stops at the first id that is not gone), so at most 2 * SUMMARY_REFS_MAX spawns; plus, at most once per run (the caller's `historyComplete` memo), one `git rev-parse --is-shallow-repository`; plus, when every id exists, one `git rev-list` per call and one `git show` per id. */
+export const SUMMARY_REFS_MAX = 64;
 
 function parseSeal(text: string): Evidence<SealPlans> {
   try {
@@ -101,21 +101,19 @@ export function commitIsGone(reach: CommitReachability | null, historyComplete: 
  * #5354: a plan was squashed away when it has no live plan commit and no seal entry, and its SUMMARY
  * names task commits none of which is reachable from HEAD (a missing object counts as unreachable only
  * in a complete history). A never-existing id looks the same as a squashed commit that was garbage-collected
- * or never fetched, so it is `NotEvaluable` by rule: the gate stays advisory and the row shows the
- * maintainer the unverifiable ids. No SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct
+ * or never fetched, so it is `NotEvaluable` by rule: the gate stays advisory and the row names the
+ * plan and its reason. No SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct
  * hashes, or any reachable hash is an ordinary failure. When every ref exists and its subject still
  * occurs on a commit reachable from HEAD but not from the refs, the plan was rewritten (rebase/amend),
  * not squashed, so it is not unreachable. Squash evidence for a plan whose task subjects survive is the
  * seal (`--record` before the squash), which `planRow` reads first.
  */
-export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string): boolean {
+export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string, historyComplete: () => boolean): boolean {
   const subjectOf = (id: string): string => {
     const s = execGit(['show', '-s', '--format=%s', id], { cwd: projectDir });
     return !s.timedOut && s.exitCode === 0 ? s.stdout.trim() : '';
   };
   const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
-  let complete: boolean | undefined;
-  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
   for (const candidate of summaryCandidates(rel)) {
     const summary = readBoundedText(path.join(phaseDir, candidate));
     if (summary.kind !== 'found') continue;

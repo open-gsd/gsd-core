@@ -42,23 +42,29 @@ import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIs
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;
 
-interface TddPlanRow {
+interface TddPlanRowBase {
   planId: string;
   red: boolean;
   green: boolean;
   refactor: boolean;
-  status: 'Pass' | 'FAIL' | 'NotEvaluable';
-  missing: string[];
-  /** Set only on an order violation (#5275): both commit kinds exist but no GREEN follows a RED. A missing commit is told by `missing`. */
-  reason?: TddRowReason;
   /** Plans whose `feat(...)` commit supplied this plan's GREEN through `depends_on` (#4867). */
   greenFrom?: string[];
 }
+/** A `NotEvaluable` row always says why (#5354); `reason` on a FAIL row is set only on an order violation (#5275), a missing commit is told by `missing`. */
+type TddRowVerdict =
+  | { status: 'NotEvaluable'; missing: string[]; reason: NotEvaluableReason }
+  | { status: 'Pass'; missing: string[] }
+  | { status: 'FAIL'; missing: string[]; reason?: typeof TDD_ROW_REASON.GREEN_BEFORE_RED };
+type TddPlanRow = TddPlanRowBase & TddRowVerdict;
 
 export const TDD_ROW_REASON = {
   GREEN_BEFORE_RED: 'green_before_red',
+  /** NotEvaluable: a sealed plan, but a shallow clone lacks the sealed commits (#5354). */
+  SEALED_SHALLOW_HISTORY: 'sealed_shallow_history',
+  /** NotEvaluable: no seal entry, and every SUMMARY task commit is unreachable (#5354). */
+  UNSEALED_SUMMARY_UNREACHABLE: 'unsealed_summary_unreachable',
 } as const;
-type TddRowReason = (typeof TDD_ROW_REASON)[keyof typeof TDD_ROW_REASON];
+type NotEvaluableReason = typeof TDD_ROW_REASON.SEALED_SHALLOW_HISTORY | typeof TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE;
 
 /**
  * True when the plan's frontmatter declares `type: tdd` (CRLF included, #2449). The block is the
@@ -168,13 +174,14 @@ function unreadableReview(phase: string, tddPlans: number, unreadable: Unreadabl
   });
 }
 
-/** One TDD plan's row, plus the evidence `--record` seals when it passes (live hashes stay preferred over the seal's). */
+/** One TDD plan's row, plus the evidence `--record` seals when it passes (the GREEN prefers live hashes over the seal's, the RED is the seal's when the seal supplied it). */
 function planRow(
   projectDir: string,
   phaseDir: string,
   planPath: string,
   seal: SealPlans,
   dependents: ReadonlyMap<string, string[]>,
+  historyComplete: () => boolean,
 ): { row: TddPlanRow; evidence?: SealEntry } {
   const planId = path.basename(planPath, '-PLAN.md');
   const commits = planCommits(projectDir, planId);
@@ -182,12 +189,10 @@ function planRow(
   // #5354: the seal stands in once the plan was squashed away, and the seal tells it: its RED (else its GREEN) is gone,
   // that is no longer reachable from HEAD (an absent object counts only in a complete history). A live `test(<plan>):`
   // commit proves nothing, since a squash may carry that title or be followed by one. A seal whose RED is still reachable
-  // was not squashed, so it credits nothing. It credits each kind no live commit credits; live hashes stay preferred for
-  // the evidence.
+  // was not squashed, so it credits nothing. It credits each kind no live commit credits; the evidence keeps a live GREEN, and the seal's
+  // RED when the seal supplied the credit.
   const entry = Object.hasOwn(seal, planId) ? seal[planId] : undefined;
   const probe = isFullSha(entry?.red) ? entry.red : entry?.green;
-  let complete: boolean | undefined;
-  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
   const squashed = isFullSha(probe) && commitIsGone(commitReachability(projectDir, probe, 'HEAD'), historyComplete);
   const sealed = squashed && entry !== undefined && entry.red !== entry.green ? entry : {};
   const sealedRed = isFullSha(sealed.red);
@@ -220,27 +225,27 @@ function planRow(
   // #5354: credit incomplete and no live plan commit: a plan squashed away. With nothing sealed, its SUMMARY's task commits
   // are all gone. With a complete-looking seal that did not apply, a shallow clone cannot tell (it lacks the sealed commits).
   const sealedPair = entry !== undefined && isFullSha(entry.red) && isFullSha(entry.green) && entry.red !== entry.green;
-  const notEvaluable = missing.length > 0 && commits.length === 0 && (Object.hasOwn(seal, planId)
-    ? sealedPair && !squashed && !historyComplete()
-    : summaryCommitsAllUnreachable(projectDir, phaseDir, planPath));
-  const status: TddPlanRow['status'] = notEvaluable ? 'NotEvaluable' : missing.length === 0 && green ? 'Pass' : 'FAIL';
+  const squashedAway = missing.length > 0 && commits.length === 0;
+  const notEvaluableReason: NotEvaluableReason | undefined = !squashedAway ? undefined
+    : entry !== undefined
+      ? (sealedPair && !historyComplete() ? TDD_ROW_REASON.SEALED_SHALLOW_HISTORY : undefined)
+      : (summaryCommitsAllUnreachable(projectDir, phaseDir, planPath, historyComplete) ? TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE : undefined);
   // Both commit kinds exist but no GREEN follows a RED: its own reason. A row that fails for a
   // missing commit keeps the exact shape it always had (`missing` already says why).
-  const reason: TddRowReason | undefined = status === 'FAIL' && missing.length === 0
-    ? TDD_ROW_REASON.GREEN_BEFORE_RED
-    : undefined;
+  const verdict: TddRowVerdict = notEvaluableReason !== undefined ? { status: 'NotEvaluable', missing, reason: notEvaluableReason }
+    : missing.length === 0 && green ? { status: 'Pass', missing }
+      : { status: 'FAIL', missing, ...(missing.length === 0 ? { reason: TDD_ROW_REASON.GREEN_BEFORE_RED } : {}) };
   // A credit the seal supplied is written back as the seal has it: a live `test(<plan>):` commit left by the squash is
   // reachable, and sealing it would make the next run read the plan as not squashed and drop the seal's GREEN.
   const redSha = sealedRed ? sealed.red : reds[0];
   const greenSha = (ownOk ? ownGreens[0] : dependentGreens.find((d) => inOrder(d.greens))?.greens[0]) ?? sealed.green;
-  const sealEvidence = status === 'Pass' && isFullSha(redSha) && isFullSha(greenSha) ? { red: redSha, green: greenSha } : undefined;
+  const sealEvidence = verdict.status === 'Pass' && isFullSha(redSha) && isFullSha(greenSha) ? { red: redSha, green: greenSha } : undefined;
 
+  // Key order (status, missing, reason, greenFrom) is part of the payload contract.
+  const head = { planId, red, green, refactor };
+  const greenFromKey = greenFrom.length > 0 ? { greenFrom } : {};
   return {
-    row: {
-      planId, red, green, refactor, status, missing,
-      ...(reason ? { reason } : {}),
-      ...(greenFrom.length > 0 ? { greenFrom } : {}),
-    },
+    row: { ...head, ...verdict, ...greenFromKey },
     ...(sealEvidence ? { evidence: sealEvidence } : {}),
   };
 }
@@ -316,8 +321,11 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   if (sealRead.kind === 'unreadable') return unreadableReview(phase, tddPlanFiles.length, [{ source: sealRead.span ?? SEAL_FILE, reason: sealRead.reason }]);
   const seal: SealPlans = sealRead.kind === 'found' ? sealRead.value : {};
   const evidence: Record<string, SealEntry> = {};
+  // One shallow-clone probe per run: history completeness is the same for every plan.
+  let complete: boolean | undefined;
+  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
   for (const planPath of tddPlanFiles) {
-    const { row, evidence: sealEvidence } = planRow(projectDir, phaseDir, planPath, seal, dependents);
+    const { row, evidence: sealEvidence } = planRow(projectDir, phaseDir, planPath, seal, dependents, historyComplete);
     rows.push(row);
     if (sealEvidence) evidence[row.planId] = sealEvidence;
   }
@@ -346,9 +354,13 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += `\n\nPlan ${r.planId} GREEN is supplied by dependent plan ${(r.greenFrom ?? []).join(', ')}.`;
   }
 
-  const notEvaluableRows = rows.filter(r => r.status === 'NotEvaluable');
+  const notEvaluableRows = rows.filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable');
+  const notEvaluableWhy: Record<NotEvaluableReason, string> = {
+    [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY]: 'its sealed commits cannot be verified because the history is incomplete (shallow clone or git unavailable); fetch full history. Not counted as a violation.',
+    [TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]: `its SUMMARY task commits are unreachable and no ${SEAL_FILE} entry exists (squashed?); not counted as a violation.`,
+  };
   for (const r of notEvaluableRows) {
-    table += `\n\nPlan ${r.planId} not evaluable: its SUMMARY task commits are unreachable and no ${SEAL_FILE} entry exists (squashed?); not counted as a violation.`;
+    table += `\n\nPlan ${r.planId} not evaluable: ${notEvaluableWhy[r.reason]}`;
   }
 
   if (violations > 0) {
