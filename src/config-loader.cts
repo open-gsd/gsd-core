@@ -6,6 +6,8 @@
  * merges built-in defaults (`CONFIG_DEFAULTS`/`CANONICAL_CONFIG_DEFAULTS`),
  * normalizes legacy keys, applies the active-workstream overlay, validates
  * against the config schema, and warns on unknown keys/profile overrides.
+ * A present non-object section blocks inherited projections from that section;
+ * fail-safe projections such as the planner watchdog remain default-on.
  * Behaviour is preserved byte-for-behaviour from the prior location; only
  * the module boundary moved. The core.cjs re-export spine was retired in
  * epic #1267; callers import loadConfig from config-loader.cjs directly.
@@ -126,6 +128,42 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
     return (sec as Record<string, unknown>)[field];
   }
   return undefined;
+}
+
+/**
+ * A present non-object section is an explicit inheritance barrier. Remove every
+ * projection the assembled loader would otherwise repopulate from defaults so
+ * its effective object agrees with per-key resolution (#5096 Major 2).
+ */
+const BLOCKED_SECTION_PROJECTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  workflow: [
+    'workflow', 'research', 'plan_checker', 'verifier', 'nyquist_validation',
+    'ai_integration_phase', 'api_coverage_gate', 'post_planning_gaps',
+    'research_before_questions', 'mvp_mode', 'tdd_mode', 'text_mode',
+    'compact_content', 'auto_advance', '_auto_chain_active', 'subagent_timeout',
+    'security_enforcement', 'security_asvs_level', 'security_block_on',
+    'smart_zone_tokens', 'inline_plan_threshold',
+  ],
+  git: [
+    'git', 'branching_strategy', 'base_branch', 'protected_branches',
+    'allow_default_branch_commits', 'repo_tagging', 'phase_branch_template',
+    'milestone_branch_template', 'quick_branch_template',
+  ],
+  planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
+  // #4570 fail-safe exception: a malformed planner section must not disable
+  // the watchdog merely because consumers read an absent projection as falsy.
+  planner: ['planner'],
+  review: ['review', 'max_prompt_tokens'],
+});
+
+function _removeBlockedSectionDefaults(
+  parsed: Record<string, unknown>,
+  assembled: Record<string, unknown>,
+): void {
+  for (const [section, projections] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
+    for (const projection of projections) delete assembled[projection];
+  }
 }
 
 const CONFIG_DEFAULTS = {
@@ -573,6 +611,8 @@ const CONFIG_REASON = Object.freeze({
   CONFIG_UNPARSEABLE: 'config_unparseable',
   /** The file exists but could not be read (EACCES/EIO/…) — NOT applied. */
   CONFIG_UNREADABLE: 'config_unreadable',
+  /** A configured federated value has the wrong declared type or enum member. */
+  CONFIG_TYPE_MISMATCH: 'config_type_mismatch',
 } as const);
 
 type ConfigReason = (typeof CONFIG_REASON)[keyof typeof CONFIG_REASON];
@@ -1011,6 +1051,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // Defensive: keep no-throw contract
     }
 
+    _removeBlockedSectionDefaults(parsed, _baseConfig);
+
     // A1 vs A2: disambiguate by whether a real workstream was requested.
     // Fix 4: empty-string ws ('') resolves the root path → source:'root'.
     const source: ConfigSource = wsRequested ? 'workstream' : 'root';
@@ -1141,11 +1183,14 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
         model_policy: (globalDefaults['model_policy']) || null,
       };
       // Branch D: global-defaults
+      let globalConfig: Record<string, unknown>;
       try {
-        return fallback({ config: _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd), source: 'global-defaults', degraded: false });
+        globalConfig = _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd);
       } catch {
-        return fallback({ config: _globalBaseCfg, source: 'global-defaults', degraded: false });
+        globalConfig = _globalBaseCfg;
       }
+      _removeBlockedSectionDefaults(globalDefaults, globalConfig);
+      return fallback({ config: globalConfig, source: 'global-defaults', degraded: false });
     } catch {
       // Branch E: no global defaults
       try {
