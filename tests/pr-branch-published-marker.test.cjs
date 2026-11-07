@@ -1012,7 +1012,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
     mergePr(dir);
-    for (const ref of [MARKER, PENDING, BUILT]) git(dir, 'update-ref', '-d', ref).toString();
+    for (const ref of [MARKER, PENDING, BUILT]) git(dir, 'update-ref', '-d', ref);
     commitRound(dir, 2, 'two.txt');
     const r = publish(dir);
     assert.match(r.stderr, /feature-pr is merged into main but nothing is recorded as published for feature in strict mode/);
