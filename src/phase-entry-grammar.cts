@@ -142,3 +142,13 @@ export function isPhaseEntryChecked(entryText: string): boolean {
 export function isBoxCharChecked(boxChar: string): boolean {
   return boxChar.toLowerCase() === 'x';
 }
+
+/**
+ * #5824: `phase insert` writes `(INSERTED)` into the heading text as
+ * bookkeeping; it is not part of the phase's name. The single place that
+ * removes it: the first `(INSERTED)` (case-insensitive), then a trim. Every
+ * phase-name reader goes through here so none can drift from the others.
+ */
+export function stripInsertedMarker(name: string): string {
+  return name.replace(/\(INSERTED\)/i, '').trim();
+}

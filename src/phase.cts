@@ -80,7 +80,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
-import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
@@ -5708,7 +5708,7 @@ function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: st
   if (!matchedHeading) return null;
   const heading = matchedHeading.text.match(headingPattern);
   if (!heading) return null;
-  const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
+  const name = stripInsertedMarker(heading[1]);
   return name || null;
 }
 
@@ -7693,9 +7693,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             if (comparePhaseNum(pmNum, phaseNum, directoryContext) > 0
               && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum, directoryContext) < 0)) {
               roadmapNextNum = pmNum;
-              roadmapNextName = pmName
-                .replace(/\(INSERTED\)/i, '')
-                .trim()
+              roadmapNextName = stripInsertedMarker(pmName)
                 .toLowerCase()
                 .replace(/\s+/g, '-');
             }
@@ -7780,7 +7778,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num, directoryContext) < 0) {
                 lowestOutstanding = {
                   num: cbm[2],
-                  name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
+                  name: stripInsertedMarker(cbm[3]).toLowerCase().replace(/\s+/g, '-'),
                 };
               }
             }

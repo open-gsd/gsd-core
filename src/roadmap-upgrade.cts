@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, retryRenameSync } from './shell-command-projection.cjs';
-import { phaseEntryPrefixSrc } from './phase-entry-grammar.cjs';
+import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
 const { readConfigFileBounded } = configFileReadMod;
@@ -1370,7 +1370,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // that created the directory refused two-milestone roadmaps the
   // tooling's own commands produced.
   const slugify = (text: string): string => (
-    coreUtilsMod.generateSlugInternal(text.replace(/\(INSERTED\)/i, '').trim()) ?? ''
+    coreUtilsMod.generateSlugInternal(stripInsertedMarker(text)) ?? ''
   );
 
   // #4144 round 7 W2, corrected round 8 B1: a plan-level ambiguity check
