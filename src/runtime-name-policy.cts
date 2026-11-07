@@ -166,7 +166,7 @@ export const LEGACY_NON_REGISTRY_RUNTIME_IDS: ReadonlySet<string> = new Set(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type HostBehaviors = Record<string, any>;
 
-type RegistryRuntimes = Record<string, { runtime?: { hostBehaviors?: Record<string, unknown> } } | undefined>;
+type RegistryRuntimes = Record<string, { runtime?: { hostBehaviors?: Record<string, unknown>; spawnEffortParam?: unknown } } | undefined>;
 
 /** The capability registry's `runtimes` map, or `null` when it fails to load. */
 function loadRegistryRuntimes(): RegistryRuntimes | null {
@@ -269,6 +269,25 @@ export function hostBehaviorsFor(
     return declared ? declared : floor();
   }
   return {};
+}
+
+/**
+ * #5330 — the host's per-spawn effort parameter
+ * (capabilities/<runtime>/capability.json -> runtime.spawnEffortParam), or `null`
+ * when the host declares none. `null` is the answer for every runtime that is not
+ * registered and when the registry fails to load: the parameter is only ever
+ * emitted for a host that declared it, so an unknown host gets no argument rather
+ * than Claude Code's. `registry` is injectable for the load-failure branch.
+ */
+export function spawnEffortParamFor(
+  runtime: unknown,
+  registry?: { runtimes?: RegistryRuntimes } | null,
+): string | null {
+  if (typeof runtime !== 'string' || runtime.length === 0) return null;
+  const runtimes = registry === undefined ? loadRegistryRuntimes() : (registry && registry.runtimes) || null;
+  if (runtimes === null || !Object.prototype.hasOwnProperty.call(runtimes, runtime)) return null;
+  const declared = runtimes[runtime]?.runtime?.spawnEffortParam;
+  return typeof declared === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(declared) ? declared : null;
 }
 
 const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {

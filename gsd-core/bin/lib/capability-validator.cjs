@@ -1770,6 +1770,20 @@ function validateRuntimeBody(cap) {
     );
   }
 
+  // spawnEffortParam — ADR-443 / ADR-1239 amendments (#5330). OPTIONAL
+  // top-level field naming the host's per-spawn effort parameter on its
+  // subagent spawn call (claude: effort). Workflows carry an `{<role>_effort_arg}`
+  // placeholder that renders `<param>="<effort>"` on a host that declares one and
+  // empty on every other host, so shared workflows never hard-code a host's
+  // argument. Same descriptor-data rule as harnessIsolationFlag above. A bare
+  // identifier: it is rendered verbatim as an argument name.
+  if (r.spawnEffortParam !== undefined
+    && (typeof r.spawnEffortParam !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(r.spawnEffortParam))) {
+    errors.push(
+      'runtime.spawnEffortParam must be an identifier string (got: ' + JSON.stringify(r.spawnEffortParam) + ')',
+    );
+  }
+
   // GATE A: installSurface ↔ hooksSurface consistency (DEFECT.GENERATIVE-FIX)
   // Only check if both fields are valid strings (individual field validators above report type errors).
   if (typeof r.installSurface === 'string' && typeof r.hooksSurface === 'string') {

@@ -83,7 +83,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS_MAPPER=$(gsd_run query agent-skills gsd-codebase-mapper ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
-Extract from init JSON: `mapper_model`, `commit_docs`, `codebase_dir`, `existing_maps`, `has_maps`, `codebase_dir_exists`, `subagent_timeout`, `date`.
+Extract from init JSON: `mapper_model`, `mapper_effort_arg`, `commit_docs`, `codebase_dir`, `existing_maps`, `has_maps`, `codebase_dir_exists`, `subagent_timeout`, `date`.
 </step>
 
 <step name="check_existing">
@@ -168,7 +168,7 @@ Spawn 4 parallel gsd-codebase-mapper agents.
 
 > **Model omission (#2517).** Omit the `model` parameter entirely when the value it would carry (`mapper_model`) is `"inherit"` or empty. An empty value 404s on runtimes without native tier aliases — the default on non-Claude runtimes. Omitting it inherits the orchestrator's model. See @gsd-core/references/model-profile-resolution.md.
 
-Use Agent tool with `subagent_type="gsd-codebase-mapper"`, `model="{mapper_model}"`, and `run_in_background=true` for parallel execution.
+Use Agent tool with `subagent_type="gsd-codebase-mapper"`, `model="{mapper_model}"` and `{mapper_effort_arg}` (omitted when empty), and `run_in_background=true` for parallel execution.
 
 **CRITICAL:** Use the dedicated `gsd-codebase-mapper` agent, NOT `Explore` or `browser_subagent`. The mapper agent writes documents directly.
 
@@ -180,6 +180,7 @@ Print: "Spawning 4 parallel codebase mapper agents (each runs in a subagent — 
 Agent(
   subagent_type="gsd-codebase-mapper",
   model="{mapper_model}",
+  {mapper_effort_arg},
   run_in_background=true,
   description="Map codebase tech stack",
   prompt="Focus: tech
@@ -206,6 +207,7 @@ ${AGENT_SKILLS_MAPPER}"
 Agent(
   subagent_type="gsd-codebase-mapper",
   model="{mapper_model}",
+  {mapper_effort_arg},
   run_in_background=true,
   description="Map codebase architecture",
   prompt="Focus: arch
@@ -232,6 +234,7 @@ ${AGENT_SKILLS_MAPPER}"
 Agent(
   subagent_type="gsd-codebase-mapper",
   model="{mapper_model}",
+  {mapper_effort_arg},
   run_in_background=true,
   description="Map codebase conventions",
   prompt="Focus: quality
@@ -258,6 +261,7 @@ ${AGENT_SKILLS_MAPPER}"
 Agent(
   subagent_type="gsd-codebase-mapper",
   model="{mapper_model}",
+  {mapper_effort_arg},
   run_in_background=true,
   description="Map codebase concerns",
   prompt="Focus: concerns

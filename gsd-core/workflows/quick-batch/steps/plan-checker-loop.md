@@ -62,6 +62,7 @@ that require a ROADMAP phase goal.
 ",
   subagent_type="gsd-plan-checker",
   model="{checker_model}",
+  {checker_effort_arg},
   description="Check ${quick_id}: ${description}"
 )
 ```
@@ -109,6 +110,7 @@ frontmatter current with the revised plan. Return what changed.
 ",
   subagent_type="gsd-planner",
   model="{planner_model}",
+  {planner_effort_arg},
   description="Revise ${quick_id}: ${description}"
 )
 ```

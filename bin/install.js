@@ -3354,6 +3354,12 @@ function _maskStringsAndComments(text) {
   return maskStringLiterals(text).replace(/#[^\n]*/g, (m) => ' '.repeat(m.length));
 }
 
+// #5330: a per-spawn effort placeholder as a call argument. Inside a call a `$`
+// prefix changes nothing: it is still an argument the host has no parameter for.
+const EFFORT_ARG_PLACEHOLDER_RE = /\$?\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
+// Outside a call `${X_EFFORT_ARG}` is a shell expansion in a bash block, not a placeholder.
+const EFFORT_ARG_MENTION_RE = /(?<!\$)\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}/;
+
 /**
  * Normalize ONE `Agent(...)`/`Agent({...})` call span (already isolated by
  * `findDispatchCallSpans`) onto the target's real dispatch primitive. Every
@@ -3422,6 +3428,19 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
     const mm = modelRe.exec(_maskStringsAndComments(text));
     if (mm) {
       text = _stripCallArgument(text, mm.index, mm.index + mm[0].length, { consumeLeadingComments: true });
+    }
+  }
+
+  // 2b. #5330: the per-spawn effort placeholder (`{<role>_effort_arg}`) — stripped
+  //     when the target primitive has no per-call effort parameter. On such a host
+  //     the placeholder would render empty anyway (its descriptor declares no
+  //     `spawnEffortParam`), so removing it leaves no dangling argument slot in a
+  //     call whose other host-inapplicable arguments were removed above.
+  if (toolConfig.supportsPerCallEffort !== true) {
+    for (;;) {
+      const em = EFFORT_ARG_PLACEHOLDER_RE.exec(_maskStringsAndComments(text));
+      if (!em) break;
+      text = _stripCallArgument(text, em.index, em.index + em[0].length);
     }
   }
 
@@ -3609,6 +3628,27 @@ function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
       }
     }
   }
+
+  if (toolConfig.supportsPerCallEffort !== true) {
+    // Inside a call, masked like the strip in _normalizeDispatchCallSpan: a placeholder
+    // in a quoted value or a comment is text, and both leave it alone. Everywhere else
+    // nothing projects it, so a survivor is a wording the prose strip does not know, and
+    // the host would read a raw `{x_effort_arg}` it can never render.
+    const spans = findDispatchCallSpans(content, toolName).sort((a, b) => b.start - a.start);
+    let outsideCalls = content;
+    let leftInCall = false;
+    for (const span of spans) {
+      const call = content.slice(span.start, span.end);
+      if (EFFORT_ARG_PLACEHOLDER_RE.test(_maskStringsAndComments(call))) leftInCall = true;
+      outsideCalls = outsideCalls.slice(0, span.start) + outsideCalls.slice(span.end);
+    }
+    if (leftInCall || EFFORT_ARG_MENTION_RE.test(outsideCalls)) {
+      throw new Error(
+        `${runtime} workflow install: projection left a per-spawn effort placeholder ` +
+        '— refusing to install (fail-closed post-projection guard, #5330)',
+      );
+    }
+  }
 }
 
 /**
@@ -3685,6 +3725,12 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
   //    execute-phase.md) + inline backtick-quoted model-mention prose
   //    examples (not live call sites) — only rewritten when the target
   //    primitive has no per-call model parameter at all.
+  // #5330: prose mentions of the effort placeholder, written in the one form
+  // "and `{<role>_effort_arg}` (omitted when empty)". Runs before the model
+  // strip below, whose `(?:and\s+)?` would otherwise consume the "and ".
+  if (toolConfig.supportsPerCallEffort !== true) {
+    converted = converted.replace(/ and `\{[A-Za-z0-9_]+_(?:effort_arg|EFFORT_ARG)\}` \(omitted when empty\)/g, '');
+  }
   if (!toolConfig.supportsPerCallModel) {
     const modelResolutionRe = /\*\*Model resolution:\*\* If `executor_model` is `"inherit"`, omit the `model=` parameter from all `Agent\(\)` calls — do NOT pass `model="inherit"` to Agent\. Omitting the `model=` parameter causes [^.]+\. Only set `model=` when `executor_model` is an explicit model name \(e\.g\., `"claude-sonnet-5"`, `"claude-opus-4-8"`\)\./;
     converted = converted.replace(
@@ -3778,6 +3824,7 @@ const HERMES_DISPATCH_TOOL_CONFIG = Object.freeze({
   leafRoleValue: 'leaf',
   backgroundParam: 'background',
   supportsPerCallModel: false,
+  supportsPerCallEffort: false,
 });
 
 /**
@@ -3820,6 +3867,7 @@ const PI_DISPATCH_TOOL_CONFIG = Object.freeze({
   leafRoleValue: 'leaf',
   backgroundParam: 'background',
   supportsPerCallModel: false,
+  supportsPerCallEffort: false,
   rolePromptResolution: 'tool',
 });
 

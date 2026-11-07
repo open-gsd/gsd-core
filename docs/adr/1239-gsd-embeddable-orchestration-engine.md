@@ -445,3 +445,34 @@ Recorded as a dated section, since ADRs here are append-only. The **OpenCode bin
 - **The plugin runtime.** The "Bun vs Node" open question is answered: the plugin runs inside the host, and GSD's hook scripts are Node child processes started with `node` from `PATH` (never the OpenCode binary).
 - **A terminal-client surface exists** (CLI plugins, `plugins/<name>/tui.tsx`): GSD uses it for the statusline and update banner, the one Claude Code surface the 1.x bus could not carry.
 
+
+## Amendment (2026-10-29): `runtime.spawnEffortParam`, the per-spawn effort channel (#5330)
+
+Recorded as a dated section, since ADRs here are append-only.
+
+**Why this is not an `effortSurface` value.** The 2026-07-21 amendment's `effortSurface` axis
+(`argv` | `none`) describes how reasoning effort reaches a host **invocation**: an argument on the
+command line that starts the host as a subprocess (claude `--effort`, opencode `--variant`, codex
+`-c model_reasoning_effort=`). Claude Code's per-call Agent `effort` argument is a different
+channel: it reaches a subagent spawned **inside** a running session, at interface point 2
+(Dispatch), not point 3's invocation. Adding it to `effortSurface` would make one axis mean two
+channels with different consumers, and the claude descriptor's `effortSurface: "argv"` stays
+correct for the subprocess case. So the vocabulary is unchanged.
+
+**The field.** An optional top-level `runtime.spawnEffortParam` names the host's per-spawn effort
+parameter on its subagent spawn call (claude: `effort`). It follows `harnessIsolationFlag` (the
+Codex-binding amendment, #2584): per-host dispatch syntax is descriptor data, not a scheduler or
+workflow branch. The validator accepts an identifier string or an absent field. One accessor reads
+it, `spawnEffortParamFor` (`src/runtime-name-policy.cts`), and returns `null` for an unregistered or
+retired id, a prototype key, or a registry that failed to load, so no host ever receives Claude
+Code's argument by default. `resolveEffortArgInternal` renders `<param>="<effort>"` from
+[ADR-443](443-opus48-unified-effort-and-fast-mode-routing.md)'s cascade; workflows carry it as
+`{<role>_effort_arg}`, empty on every host that declares no parameter.
+
+**Absent means no channel.** The field is optional like `harnessIsolationFlag`, so absence is the
+safe floor and needs no `undocumented` sentinel: a host with no declared parameter gets no argument
+and keeps its install-time effort. Only `claude` declares one: the parameter is in the Agent tool's
+schema as observed on Claude Code 2.1.312 (the issue reports it on 2.1.296, and its triage names
+2.1.292 as the first build that has it). Other hosts were not researched for this field. Codex's
+agent conversion already carries its own `reasoning_effort` route (#4270, #3706), outside this
+amendment.

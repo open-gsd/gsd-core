@@ -233,10 +233,14 @@ the next spawn. `effort` (claude runtime) has its own cascade
 (`agent_overrides` → `routing_tier_defaults` → `default`; see
 `docs/CONFIGURATION.md` § "Where effort actually reaches") and is baked at
 install time into the `effort:` frontmatter key of
-`~/.claude/agents/gsd-*.md` — Claude Code's Agent tool has no per-spawn
-effort parameter, so per-agent frontmatter is the only channel. An effort
-config change has no effect until `gsd_run effort sync --apply`
-re-syncs the agent files. Codex agents instead pin
+`~/.claude/agents/gsd-*.md`. Where the runtime descriptor declares a per-spawn
+effort parameter (`spawnEffortParam`; today only the `claude` runtime, from build
+2.1.292, for non-fork subagents, and its effort environment variable takes
+precedence), workflows also pass the resolved effort on each spawn that passes a
+resolved model, as `{<role>_effort_arg}` (#5330), when the loaded config has an
+`effort` block, so a project's own `effort` settings apply on the next spawn.
+Otherwise, and on older builds, the frontmatter decides, and an effort config change has no effect on it
+until `gsd_run effort sync --apply` re-syncs the agent files. Codex agents instead pin
 `model_reasoning_effort` in `~/.codex/agents/*.toml` at install time.
 
 ## Per-Agent Overrides

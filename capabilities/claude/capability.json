@@ -96,6 +96,7 @@
       "effortSurface": "argv"
     },
     "harnessIsolationFlag": "isolation=\"worktree\"",
+    "spawnEffortParam": "effort",
     "hostBehaviors": {
       "attributionSource": "settings-json-commit",
       "authorsCanonicalWorkflow": true,

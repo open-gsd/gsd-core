@@ -121,6 +121,7 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
    ",
      subagent_type="gsd-executor",
      model="{executor_model}",
+     {executor_effort_arg},
      {harnessFlag}
      description="Execute ${quick_id}: ${description}"
    )

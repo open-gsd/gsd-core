@@ -118,6 +118,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
    ",
      subagent_type="gsd-planner",
      model="{planner_model}",
+     {planner_effort_arg},
      description="Plan ${quick_id}: ${description}"
    )
    ```

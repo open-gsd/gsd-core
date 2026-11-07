@@ -74,7 +74,7 @@ AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=$
 AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
-Parse `$INIT` for: `planner_model`, `executor_model`, `checker_model`, `verifier_model`, `researcher_model`, `commit_docs`, `quick_dir`, `quick_batches_dir`, `roadmap_exists`, `planning_exists`.
+Parse `$INIT` for: `planner_model`, `planner_effort_arg`, `executor_model`, `executor_effort_arg`, `checker_model`, `checker_effort_arg`, `verifier_model`, `verifier_effort_arg`, `researcher_model`, `researcher_effort_arg`, `commit_docs`, `quick_dir`, `quick_batches_dir`, `roadmap_exists`, `planning_exists`.
 
 <!-- #2517 model-omit-on-inherit -->
 

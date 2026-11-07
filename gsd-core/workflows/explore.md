@@ -84,6 +84,7 @@ runtime-substituted name (`gpt-5.6-luna` on codex) where a tier map exists. `--r
 ```bash
 RESEARCHER_TIER=$(gsd_run query resolve-model gsd-phase-researcher --pick tier 2>/dev/null || true)
 RESEARCHER_MODEL=$(gsd_run query resolve-model gsd-phase-researcher --pick model 2>/dev/null || true)
+RESEARCHER_EFFORT_ARG=$(gsd_run query resolve-model gsd-phase-researcher --pick effort_arg 2>/dev/null || true)
 ```
 
 Print: `◆ Spawning explorer... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
@@ -91,7 +92,8 @@ Print: `◆ Spawning explorer... (runs in a subagent — no output until it retu
 Agent(
   prompt="Quick research: {specific_question}. Return 3-5 key findings, no more than 200 words. For EACH finding, first try to REFUTE it against a primary source, then label it [admit: <source>] (survives refute AND grounded), [refute: <source>] (a source AUTHORITATIVE FOR THIS CLAIM contradicts it), or [abstain: <why>] (unverifiable, a non-authoritative disagreement, or a source conflicting with a strong prior). Every finding MUST carry exactly one of those three tags.",
   subagent_type="gsd-phase-researcher",
-  model="{RESEARCHER_MODEL}"
+  model="{RESEARCHER_MODEL}",
+  {RESEARCHER_EFFORT_ARG}
 )
 ```
 

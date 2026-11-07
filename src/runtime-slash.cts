@@ -217,11 +217,24 @@ export function resolveActiveRuntime(
   config: Record<string, unknown> | null | undefined,
   env: Record<string, string | undefined> = process.env,
 ): string {
+  return resolveDeclaredRuntime(config, env) || 'claude';
+}
+
+/**
+ * The chain `resolveActiveRuntime` walks, without its `'claude'` default: `null`
+ * when no rung names a runtime. For a caller that must not act on a guess: a
+ * per-spawn effort argument (#5330) is only ever emitted for a host that declared
+ * the parameter, so "unknown" has to stay distinguishable from Claude Code.
+ */
+export function resolveDeclaredRuntime(
+  config: Record<string, unknown> | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
   return resolveRuntimeNameFromCandidates(
     env['GSD_RUNTIME'],
     config ? config['runtime'] : undefined,
     readInstallRuntimeMarker(),
-  ) || 'claude';
+  );
 }
 
 /**
