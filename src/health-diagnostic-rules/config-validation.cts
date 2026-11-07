@@ -338,13 +338,18 @@ function w031Label(name: string): string {
   return sanitizeLabel(cut).replace(/[\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${(c.codePointAt(0) as number).toString(16)}}`);
 }
 
+/** The labels the W031 message names and how many tracked paths it leaves out (typed, so tests assert on values, not prose). */
+function w031Listing(paths: readonly string[]): { shown: string[]; more: number } {
+  return { shown: paths.slice(0, W031_MAX_PATHS).map(w031Label), more: Math.max(0, paths.length - W031_MAX_PATHS) };
+}
+
 function checkW031(snapshot: PlanningSnapshot): Diagnostic[] {
   const field = snapshot.stateJsonTracked;
   // A listing git could not answer is not "nothing tracked": it stays silent like W029's unreadable scope.
   if (!field || field.scope !== SCOPE.COMPLETE || field.value.length === 0) return [];
   const paths = field.value;
-  const more = paths.length - W031_MAX_PATHS;
-  const listed = `${paths.slice(0, W031_MAX_PATHS).map(w031Label).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+  const { shown, more } = w031Listing(paths);
+  const listed = `${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
   const args = paths.map(quoteShellArg).join(' ');
   return [
     {
@@ -430,4 +435,4 @@ const RULES: Rule[] = [
   },
 ];
 
-export = { RULES };
+export = { RULES, w031Listing };
