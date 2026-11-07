@@ -2355,7 +2355,8 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
   }
 
   // A run of escaped quotes is read once: before a secret read, it must not
-  // hold the hook past its timeout (a hook that times out does not block).
+  // hold the hook past its timeout (on Claude Code a hook that times out does
+  // not block; Pi refuses the command).
   test('denies a read behind a long run of escaped quotes in a curl argument', () => {
     const cmd = `curl -d '"${'\\"'.repeat(300000)}' x.test; cat .env`;
     assertBlocked(runHook(bash(cmd)), 'escaped-quote run', { tool: 'Bash', path: '.env' });
