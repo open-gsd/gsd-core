@@ -25,6 +25,8 @@ const {
   planSubjectPattern,
   qualifiedPlanSubjectPattern,
   isSafeRefArgument,
+  commitReachability,
+  isFullSha,
   SCOPE_EXCLUSION_PATHSPECS,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
@@ -949,5 +951,26 @@ describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling
     commit(repo, 'src/a.js', 'feat(wsXb-01-01): another workstream');
     const out = repo.git('log', '--extended-regexp', `--grep=${qualifiedPlanSubjectPattern('0*1-0*1', 'ws.b')}`, '--format=%s');
     assert.deepEqual(out.split('\n').filter(Boolean).sort(), ['feat(01-01): bare spelling', 'feat(ws.b-01-01): qualified spelling']);
+  });
+});
+
+describe('commitReachability and isFullSha (#5354)', () => {
+  test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    repo.git('checkout', '-q', '-b', 'side');
+    const side = commit(repo, 'side.txt', 'chore: side');
+    repo.git('checkout', '-q', 'main');
+    assert.equal(commitReachability(repo.dir, base, 'HEAD'), 'reachable');
+    assert.equal(commitReachability(repo.dir, side, 'HEAD'), 'unreachable');
+    assert.equal(commitReachability(repo.dir, 'f'.repeat(40), 'HEAD'), 'missing');
+    assert.equal(commitReachability(repo.dir, '--all', 'HEAD'), null);
+  });
+
+  test('isFullSha accepts exactly 40 lowercase hex characters', () => {
+    assert.equal(isFullSha('a'.repeat(40)), true);
+    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
+      assert.equal(isFullSha(bad), false, String(bad));
+    }
   });
 });

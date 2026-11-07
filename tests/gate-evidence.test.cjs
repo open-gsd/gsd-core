@@ -254,3 +254,11 @@ describe('gate-evidence › unreadable arm cannot return pass', () => {
     );
   });
 });
+
+describe('isPlainObject (#5354)', () => {
+  test('is an object that is neither null nor an array', () => {
+    const { isPlainObject } = require('../gsd-core/bin/lib/gate-evidence.cjs');
+    assert.equal(isPlainObject({}), true);
+    for (const bad of [null, [], 'x', 1, undefined]) assert.equal(isPlainObject(bad), false, String(bad));
+  });
+});
