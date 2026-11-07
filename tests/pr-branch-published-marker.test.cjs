@@ -898,7 +898,44 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
-    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git log .*--cherry-mark/m, 'the patch comparison ran bounded');
+    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git log -p /m, 'the patch comparison ran bounded');
+  });
+
+  test('default mode: published code-only commits rebase-merged, then `git rebase main`: no warning, only round 2 is replayed', () => {
+    const dir = repo();
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code only 1');
+    assert.equal(publish(dir, 'main', { mode: 'false' }).status, 0);
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir, 'main', { mode: 'false' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.ok(changed(dir).includes('two.txt'));
+  });
+
+  test('published mixed commit rebase-merged, then `git rebase main`: no warning, only round 2 is replayed', () => {
+    const dir = repo();
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code only');
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
   });
 
   test('published code-only commits rebase-merged onto a moved target, then `git rebase main` drops them: no warning, only round 2 is replayed', () => {
@@ -921,13 +958,13 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
   });
 
-  test('rebased working branch with an unpublished commit reordered below the published tip: warns and uses the target', () => {
+  test('rebased working branch with an unpublished commit reordered below a published code commit: warns and uses the target', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     write(dir, 'u.txt', 'u\n');
     commitAll(dir, 'feat: unpublished');
     const [c1, d1, u] = git(dir, 'log', '--reverse', '--format=%H', 'feature', '--not', 'main').split(/\r?\n/);
     git(dir, 'checkout', '-q', '-B', 'tmp', 'main');
-    git(dir, 'cherry-pick', c1, u, d1);
+    git(dir, 'cherry-pick', u, c1, d1);
     git(dir, 'checkout', '-q', 'feature');
     git(dir, 'reset', '-q', '--hard', 'tmp');
     const r = publish(dir, 'main', { prelude });
@@ -955,13 +992,13 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(probe, 'UNMERGED');
   });
 
-  test('rebased working branch whose newest published commit was conflict-resolved (changed patch): warns, never replays it silently', () => {
+  test('rebased working branch whose published code commit was conflict-resolved (changed patch): warns, never replays it silently', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     git(dir, 'checkout', '-q', 'main');
-    write(dir, '.planning/STATE.md', 's-main\n');
-    commitAll(dir, 'chore: main edits state');
+    write(dir, 'code.txt', 'v-main\n');
+    commitAll(dir, 'chore: main edits code');
     git(dir, 'checkout', '-q', 'feature');
-    const rb = runSh("git rebase -q main || { printf 's-resolved\\n' > .planning/STATE.md; git add -A; git -c core.editor=true rebase --continue; }", dir);
+    const rb = runSh("git rebase -q main || { printf 'v-resolved\\n' > code.txt; git add -A; git -c core.editor=true rebase --continue; }", dir);
     assert.equal(rb.status, 0, rb.stderr);
     commitRound(dir, 2, 'two.txt');
     const r = publish(dir, 'main', { prelude });
