@@ -2591,12 +2591,19 @@ process.stdin.on('end', () => {
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
-    // Last, so that a throw or a timeout in it leaves the verdict above.
+    // Last, so that a throw in it leaves the verdict above. What a timeout here
+    // does is the adapter's: Claude Code reads a hook that times out as no
+    // decision, so the verdict above stands; Pi fails this guard closed on a
+    // timeout and refuses the command.
     furtherReading = true;
-    const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-    if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
-    const furtherSpawn = findDebuggerCliSpawn(command, 0);
-    if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
+    try {
+      const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+      if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
+      const furtherSpawn = findDebuggerCliSpawn(command, 0);
+      if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
+    } finally {
+      furtherReading = false;
+    }
     allow(undefined);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.
