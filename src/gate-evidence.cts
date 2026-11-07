@@ -43,6 +43,9 @@ export type Evidence<T> =
  */
 export type Observed<T> = Exclude<Evidence<T>, { readonly kind: 'none' }>;
 
+/** A JSON object: not null, not an array. Gate modules check parsed repo content with this. */
+export const isPlainObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
 export function evidenceFound<T>(value: T): Found<T> {
   return { kind: 'found', value };
 }

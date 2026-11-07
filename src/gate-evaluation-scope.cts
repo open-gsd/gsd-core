@@ -378,6 +378,26 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
   }
 }
 
+export type CommitReachability = 'reachable' | 'unreachable' | 'missing';
+
+/**
+ * Where commit `sha` stands against `of`: `reachable` (an ancestor), `unreachable` (the object exists
+ * but is not an ancestor, `merge-base` exit 1) or `missing` (git does not know the object, exit 128).
+ * `null` means git could not answer (a timeout, no git, an unsafe argument): not a "no".
+ */
+export function commitReachability(projectDir: string, sha: string, of: string, execGit?: GitRunner): CommitReachability | null {
+  if (!isSafeRefArgument(sha) || !isSafeRefArgument(of)) return null;
+  try {
+    return isAncestor(makeGit(projectDir, execGit ?? execGitSeam), sha, of) ? 'reachable' : 'unreachable';
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return error.exitCode === 128 ? 'missing' : null;
+    throw error;
+  }
+}
+
+/** True for a full 40-character lowercase hex object name. */
+export const isFullSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+
 // ─── The resolver ─────────────────────────────────────────────────────────────
 
 function emptyScope(unit: ScopeUnit): EvaluationScope {
@@ -442,7 +462,7 @@ function parseLog(out: string, withBody: boolean): ScopeCommit[] {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
     const [sha, subject, body] = trimmed.split('\x1f');
-    if (!sha || !/^[0-9a-f]{40}$/.test(sha)) continue;
+    if (!isFullSha(sha)) continue;
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
     if (withBody) commit.body = (body ?? '').trim();
     commits.push(commit);

@@ -864,3 +864,37 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(bare).payload.rows[0].status, 'FAIL');
   });
 });
+
+describe('#5354 shared owners used by the seal gate', () => {
+  const scope = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
+
+  test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
+    const dir = createTempGitProject('gate-5354-reach-');
+    try {
+      const base = git(dir, 'rev-parse', 'HEAD').trim();
+      git(dir, 'checkout', '-q', '-b', 'side');
+      git(dir, 'commit', '-q', '--allow-empty', '-m', 'side');
+      const side = git(dir, 'rev-parse', 'HEAD').trim();
+      git(dir, 'checkout', '-q', '-');
+      assert.equal(scope.commitReachability(dir, base, 'HEAD'), 'reachable');
+      assert.equal(scope.commitReachability(dir, side, 'HEAD'), 'unreachable');
+      assert.equal(scope.commitReachability(dir, 'f'.repeat(40), 'HEAD'), 'missing');
+      assert.equal(scope.commitReachability(dir, '--all', 'HEAD'), null);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('isFullSha accepts exactly 40 lowercase hex characters', () => {
+    assert.equal(scope.isFullSha('a'.repeat(40)), true);
+    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
+      assert.equal(scope.isFullSha(bad), false, String(bad));
+    }
+  });
+
+  test('isPlainObject is an object that is neither null nor an array', () => {
+    const { isPlainObject } = require('../gsd-core/bin/lib/gate-evidence.cjs');
+    assert.equal(isPlainObject({}), true);
+    for (const bad of [null, [], 'x', 1, undefined]) assert.equal(isPlainObject(bad), false, String(bad));
+  });
+});
