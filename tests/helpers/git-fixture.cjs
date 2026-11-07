@@ -188,12 +188,13 @@ function isFsLegalName(name) {
  * Watch (and optionally fake) every `git` child the code under test spawns, through the
  * `child_process` module object, restored by the test context. `intercept(args, opts, fn)`
  * returns a fake `spawnSync` result to replace the call, or `undefined` to run it for real.
- * Kept here so a test file that only needs this does not carry a raw `child_process` signal.
+ * `childProcess` defaults to the real module; a file that has Windows-sensitive branches passes
+ * its own `require('node:child_process')`, so the conformance-tier classifier still sees it spawn git.
  * @param {{mock: {method: Function}}} t - the node:test context
  * @param {(args: string[], opts: object|undefined, fn: string) => (object|undefined)} intercept
+ * @param {typeof import('node:child_process')} [childProcess]
  */
-function interceptGit(t, intercept) {
-  const childProcess = require('node:child_process');
+function interceptGit(t, intercept, childProcess = require('node:child_process')) {
   for (const fn of ['spawnSync', 'execFileSync']) {
     const real = childProcess[fn];
     t.mock.method(childProcess, fn, function (cmd, args, opts, ...rest) {

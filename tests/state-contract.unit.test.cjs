@@ -1229,7 +1229,9 @@ describe('state contract — write mechanics', () => {
 
 describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
   const { createTempGitProject, withTempGitProject } = require('./helpers.cjs');
-  const { gitOrThrow, interceptGit, isFsLegalName } = require('./helpers/git-fixture.cjs');
+  const { gitOrThrow, interceptGit: interceptGitIn, isFsLegalName } = require('./helpers/git-fixture.cjs');
+  // this file runs real git and has Windows-only branches: it passes its own child_process so the conformance tier keeps it
+  const interceptGit = (t, intercept) => interceptGitIn(t, intercept, require('node:child_process'));
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const git = (cwd, ...args) => gitOrThrow(args, { cwd });
   const excludeOf = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
