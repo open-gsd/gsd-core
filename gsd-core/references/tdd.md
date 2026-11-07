@@ -200,15 +200,6 @@ RED commits go unseen:
 - `*_test.exs` — Elixir
 - `*_spec.rb` / `*_test.rb` — Ruby
 
-**Cost of the broad pathspec (#4379).** `*.spec.*` can match a non-test file that happens to carry
-the word — `api.spec.json`, `openapi.spec.yaml` — which lets the RED gate pass on a commit touching
-only that. This is not new: the earlier `**/*.spec.*` matched those at any nested path too (#4379
-dropped the `**/` prefix, #5181 restored it as `:(glob,icase)**/`). The directory entries
-`tests/`, `test/` and `__tests__/` carry the same class: a fixture or vendored copy under
-`docs/tests/` counts as a test commit. It is accepted rather than narrowed, because narrowing
-it is a behaviour change to the currently-supported case and not part of making other languages
-visible.
-
 **Known gap — Rust inline unit tests (#4379).** Rust integration tests under `tests/` (including
 `crates/*/tests/`) match. An inline `#[test]` conventionally lives inside the implementation file, so
 such a RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
