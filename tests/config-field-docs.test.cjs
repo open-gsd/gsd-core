@@ -376,20 +376,6 @@ describe('capability-enum doc parity (#3303)', () => {
     );
   });
 
-  test('git.commit_timeout_ms default and ceiling in both reference tables equal the exported constants (#5231)', () => {
-    const { COMMIT_TIMEOUT_DEFAULT_MS, COMMIT_TIMEOUT_MAX_MS } = require('../gsd-core/bin/lib/git-commit-timeout.cjs');
-    const rows = {
-      'planning-config.md': docRow('git.commit_timeout_ms'),
-      'CONFIGURATION.md': tableRowForKey(fs.readFileSync(DOCS_CONFIG_PATH, 'utf8'), 'git.commit_timeout_ms'),
-    };
-    for (const [name, cells] of Object.entries(rows)) {
-      assert.ok(cells, `${name} must document git.commit_timeout_ms`);
-      const text = cells.join(' | ');
-      assert.ok(text.includes(`\`${COMMIT_TIMEOUT_DEFAULT_MS}\``), `${name} default must be ${COMMIT_TIMEOUT_DEFAULT_MS}`);
-      assert.ok(text.includes(String(COMMIT_TIMEOUT_MAX_MS)), `${name} range must end at ${COMMIT_TIMEOUT_MAX_MS}`);
-    }
-  });
-
   test('agent_skills row documents the array-of-strings form (#3303)', () => {
     const cells = docRow('agent_skills');
     const allowedCell = cells[4];
@@ -656,3 +642,24 @@ describe('planning-config.md documents #1494 keys', () => {
 });
   });
 }
+
+describe('git.commit_timeout_ms doc parity (#5231)', () => {
+  const { COMMIT_TIMEOUT_DEFAULT_MS, COMMIT_TIMEOUT_MAX_MS } = require('../gsd-core/bin/lib/git-commit-timeout.cjs');
+  const KEY = 'git.commit_timeout_ms';
+  const rowsOf = (file) => fs.readFileSync(file, 'utf8').split(/\r?\n/)
+    .filter(l => l.trim().startsWith('|')).map(splitTableRow).filter(cells => cells[0] === `\`${KEY}\``);
+
+  test('every planning-config.md and CONFIGURATION.md table row states the exported default and ceiling', () => {
+    const rows = [...rowsOf(REFERENCE_PATH), ...rowsOf(DOCS_CONFIG_PATH)];
+    assert.strictEqual(rows.length, 3, 'planning-config.md documents the key twice and CONFIGURATION.md once');
+    for (const cells of rows) {
+      assert.ok(cells.includes(`\`${COMMIT_TIMEOUT_DEFAULT_MS}\``), `default cell must be ${COMMIT_TIMEOUT_DEFAULT_MS}: ${cells.join(' | ')}`);
+      assert.ok(cells.join(' | ').includes(String(COMMIT_TIMEOUT_MAX_MS)), `range must end at ${COMMIT_TIMEOUT_MAX_MS}: ${cells.join(' | ')}`);
+    }
+  });
+
+  test('the CONFIGURATION.md config.json example carries the exported default', () => {
+    const [, value] = /"commit_timeout_ms":\s*(\d+)/.exec(fs.readFileSync(DOCS_CONFIG_PATH, 'utf8')) || [];
+    assert.strictEqual(Number(value), COMMIT_TIMEOUT_DEFAULT_MS);
+  });
+});
