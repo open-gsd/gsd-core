@@ -68,6 +68,7 @@ smaller route under Step 2 and report it as addressed.
 | key_links_planned | Add wiring task or update action |
 | scope_sanity | Split into multiple plans |
 | must_haves_derivation | Derive and add must_haves to frontmatter |
+| research_resolution | Cite a `D-NN` already under CONTEXT.md `<decisions>`, outside Claude's Discretion, on the question it answers in RESEARCH.md, and add RESEARCH.md to the Step 6 commit. With no such `D-NN`, return `## REVISION_CONFLICT` with `/gsd:discuss-phase` and `/gsd:plan-phase --research` as the alternatives: never add a decision, and never mark the question closed |
 
 Each strategy is the usual route, not the only one. Any change that makes the issue's
 `required_property` true is a valid strategy.
