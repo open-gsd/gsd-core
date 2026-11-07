@@ -2296,6 +2296,10 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
     ['no frontmatter key and a fenced body example', '---\nstatus: active\n---\n# State\n\n```\nmilestone: v9.9\n```\n'],
     ['a version spelled without the leading v', '---\nmilestone: 1.0\nstatus: active\n---\n# State\n'],
     ['a no-frontmatter line with a trailing comment', 'milestone: v1.0 # current\n# State\n'],
+    ['a no-frontmatter double-quoted version (#5726)', 'milestone: "v1.0"\n# State\n'],
+    ['a no-frontmatter single-quoted version (#5726)', "milestone: 'v1.0'\n# State\n"],
+    ['a no-frontmatter empty quoted string reads as absent (#5726)', 'milestone: ""\n# State\n'],
+    ['a no-frontmatter quoted version with a trailing comment (#5726)', 'milestone: "v1.0" # note\n# State\n'],
   ]) {
     test(`no WARNING is emitted for ${label}`, () => {
       fs.writeFileSync(
@@ -2311,6 +2315,29 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
       assert.ok(
         !result.error.includes('WARNING:'),
         `no WARNING expected for ${label}; got: ${result.error}`,
+      );
+    });
+  }
+
+  // #5726: a `#` inside quotes is literal content, and a quoted `"null"` is the
+  // string null, not YAML explicit null. Both name a version that is not v1.0.
+  for (const [label, stateText, named] of [
+    ['a no-frontmatter quoted version containing a hash', 'milestone: "v1.0 # x"\n# State\n', 'v1.0 # x'],
+    ['a frontmatter quoted "null" (a string, not explicit null)', '---\nmilestone: "null"\nstatus: active\n---\n# State\n', 'null'],
+  ]) {
+    test(`the mismatch WARNING names the decoded value for ${label} (#5726)`, () => {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'ROADMAP.md'),
+        '# Roadmap v1.0\n\n### Phase 2: Real Work\n**Goal:** Not started\n',
+      );
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateText);
+      const result = runGsdTools(
+        ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--dry-run'],
+        tmpDir,
+      );
+      assert.ok(
+        result.error.includes('WARNING:') && result.error.includes(named),
+        `expected a WARNING naming ${named}; got: ${result.error}`,
       );
     });
   }
