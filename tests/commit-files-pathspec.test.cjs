@@ -3754,6 +3754,15 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       }
     });
 
+    test('property: any directory name (newline, backslash, glob, space, non-ASCII) still commits its .planning deletion alone', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
+      const piece = fc.constantFrom('a', ' ', '\n', '\\', '[', ']', '*', '?', 'é', '"');
+      fc.assert(fc.property(fc.array(piece, { minLength: 1, maxLength: 4 }), (parts) => {
+        const rel = `d${parts.join('')}/.planning/REQUIREMENTS.md`;
+        const r = run([rel]);
+        assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 3, ['stray']]);
+      }), { seed: 5211, numRuns: 12 });
+    });
+
     test('zero staged deletions: exits 0, commits nothing', () => {
       const r = run([]);
       assert.deepStrictEqual([r.status, r.commits], [0, 2]);
