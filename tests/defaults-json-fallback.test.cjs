@@ -373,10 +373,17 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     const read = (name) => fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', name), 'utf-8');
     const STORE = '${GSD_HOME:-$HOME}/.gsd/defaults.json';
 
-    test('settings.md writes the saved defaults to the GSD_HOME store, not a literal ~/.gsd path, in its shell steps', () => {
+    // #5681: the save goes through config-save-defaults, which resolves the
+    // store with resolveGsdHome; the workflow no longer writes the file itself.
+    test('settings.md saves the defaults through config-save-defaults and names the GSD_HOME store', () => {
       const text = read('settings.md');
-      assert.ok(text.includes('mkdir -p "${GSD_HOME:-$HOME}/.gsd"'), 'the mkdir must target the resolved store root');
-      assert.ok(text.includes(STORE), 'the write instruction must name the resolved store path');
+      assert.ok(text.includes('gsd_run query config-save-defaults "$DEFAULTS_JSON"'), 'the save must go through the merging command');
+      // The step assigns the variable it passes, through a quoted heredoc so a
+      // quote or $ in a saved value reaches the command unchanged.
+      assert.ok(text.includes("DEFAULTS_JSON=$(cat <<'JSON'"), 'the step must assign $DEFAULTS_JSON with a quoted heredoc');
+      assert.ok(text.indexOf("DEFAULTS_JSON=$(cat <<'JSON'") < text.indexOf('gsd_run query config-save-defaults'), 'the assignment must come before the call');
+      assert.ok(!text.includes(`Write \`${STORE}\` with`), 'the workflow must not hand-write the store, which replaced it');
+      assert.ok(text.includes(STORE), 'the step must still name the resolved store path');
     });
 
     test('new-project.md reads the saved defaults from the GSD_HOME store', () => {

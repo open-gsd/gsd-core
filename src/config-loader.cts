@@ -106,6 +106,40 @@ function _getNestedConfigDefault(section: string, field: string): unknown {
   return undefined;
 }
 
+/**
+ * The legacy flat spellings `loadConfig` still reads, each with the nested key it
+ * falls back to. The loader's own `get()` looks the nested key up here, so this
+ * table is the only list of these pairs; `config-save-defaults` reads it to drop
+ * a saved setting's legacy spelling (#5681).
+ */
+const LEGACY_FLAT_KEYS: Readonly<Record<string, { readonly section: string; readonly field: string }>> = Object.freeze({
+  _auto_chain_active: { section: 'workflow', field: '_auto_chain_active' },
+  auto_advance: { section: 'workflow', field: 'auto_advance' },
+  base_branch: { section: 'git', field: 'base_branch' },
+  branching_strategy: { section: 'git', field: 'branching_strategy' },
+  commit_docs: { section: 'planning', field: 'commit_docs' },
+  max_prompt_tokens: { section: 'review', field: 'max_prompt_tokens' },
+  milestone_branch_template: { section: 'git', field: 'milestone_branch_template' },
+  mvp_mode: { section: 'workflow', field: 'mvp_mode' },
+  nyquist_validation: { section: 'workflow', field: 'nyquist_validation' },
+  phase_branch_template: { section: 'git', field: 'phase_branch_template' },
+  plan_checker: { section: 'workflow', field: 'plan_check' },
+  post_planning_gaps: { section: 'workflow', field: 'post_planning_gaps' },
+  pr_strict: { section: 'planning', field: 'pr_strict' },
+  quick_branch_template: { section: 'git', field: 'quick_branch_template' },
+  research: { section: 'workflow', field: 'research' },
+  search_gitignored: { section: 'planning', field: 'search_gitignored' },
+  sub_repos: { section: 'planning', field: 'sub_repos' },
+  subagent_timeout: { section: 'workflow', field: 'subagent_timeout' },
+  text_mode: { section: 'workflow', field: 'text_mode' },
+  verifier: { section: 'workflow', field: 'verifier' },
+});
+
+/** The nested key a legacy flat key falls back to, or undefined when it has none. */
+function legacyNestedSpelling(key: string): { section: string; field: string } | undefined {
+  return Object.prototype.hasOwnProperty.call(LEGACY_FLAT_KEYS, key) ? LEGACY_FLAT_KEYS[key] : undefined;
+}
+
 /** Shared flat-then-nested config lookup; exported for parity tests. */
 function _getConfigValue(
   parsed: Record<string, unknown>,
@@ -893,8 +927,9 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
 
     _warnUnknownProfileOverrides(parsed, '.planning/config.json');
 
-    const get = (key: string, nested?: { section: string; field: string }): unknown =>
-      _getConfigValue(parsed, key, nested);
+    // A key with a legacy nested twin falls back to it (LEGACY_FLAT_KEYS).
+    const get = (key: string): unknown =>
+      _getConfigValue(parsed, key, legacyNestedSpelling(key));
 
     /**
      * Nested-ONLY read — no top-level fallback (#3648).
@@ -920,42 +955,42 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     const _baseConfig: Record<string, unknown> = {
       model_profile: get('model_profile') ?? defaults.model_profile,
       commit_docs: (() => {
-        const explicit = get('commit_docs', { section: 'planning', field: 'commit_docs' });
+        const explicit = get('commit_docs');
         if (explicit !== undefined) return explicit;
         if (isGitIgnored(cwd, '.planning/')) return false;
         return defaults.commit_docs;
       })(),
-      search_gitignored: get('search_gitignored', { section: 'planning', field: 'search_gitignored' }) ?? defaults.search_gitignored,
-      branching_strategy: get('branching_strategy', { section: 'git', field: 'branching_strategy' }) ?? defaults.branching_strategy,
-      base_branch: get('base_branch', { section: 'git', field: 'base_branch' }),
+      search_gitignored: get('search_gitignored') ?? defaults.search_gitignored,
+      branching_strategy: get('branching_strategy') ?? defaults.branching_strategy,
+      base_branch: get('base_branch'),
       protected_branches: getNested('git', 'protected_branches'),
       allow_default_branch_commits: getNested('git', 'allow_default_branch_commits'),
       repo_tagging: resolveRepoTagging(getNested('git', 'repo_tagging')),
-      phase_branch_template: get('phase_branch_template', { section: 'git', field: 'phase_branch_template' }) ?? defaults.phase_branch_template,
-      milestone_branch_template: get('milestone_branch_template', { section: 'git', field: 'milestone_branch_template' }) ?? defaults.milestone_branch_template,
-      quick_branch_template: get('quick_branch_template', { section: 'git', field: 'quick_branch_template' }) ?? defaults.quick_branch_template,
-      research: get('research', { section: 'workflow', field: 'research' }) ?? defaults.research,
-      plan_checker: get('plan_checker', { section: 'workflow', field: 'plan_check' }) ?? defaults.plan_checker,
-      verifier: get('verifier', { section: 'workflow', field: 'verifier' }) ?? defaults.verifier,
-      nyquist_validation: get('nyquist_validation', { section: 'workflow', field: 'nyquist_validation' }) ?? defaults.nyquist_validation,
-      post_planning_gaps: get('post_planning_gaps', { section: 'workflow', field: 'post_planning_gaps' }) ?? defaults.post_planning_gaps,
+      phase_branch_template: get('phase_branch_template') ?? defaults.phase_branch_template,
+      milestone_branch_template: get('milestone_branch_template') ?? defaults.milestone_branch_template,
+      quick_branch_template: get('quick_branch_template') ?? defaults.quick_branch_template,
+      research: get('research') ?? defaults.research,
+      plan_checker: get('plan_checker') ?? defaults.plan_checker,
+      verifier: get('verifier') ?? defaults.verifier,
+      nyquist_validation: get('nyquist_validation') ?? defaults.nyquist_validation,
+      post_planning_gaps: get('post_planning_gaps') ?? defaults.post_planning_gaps,
       parallelization,
       brave_search: get('brave_search') ?? defaults.brave_search,
       firecrawl: get('firecrawl') ?? defaults.firecrawl,
       exa_search: get('exa_search') ?? defaults.exa_search,
-      mvp_mode: get('mvp_mode', { section: 'workflow', field: 'mvp_mode' }) ?? false,
+      mvp_mode: get('mvp_mode') ?? false,
       tdd_mode: getNested('workflow', 'tdd_mode') ?? false,
-      text_mode: get('text_mode', { section: 'workflow', field: 'text_mode' }) ?? defaults.text_mode,
-      auto_advance: get('auto_advance', { section: 'workflow', field: 'auto_advance' }) ?? false,
-      _auto_chain_active: get('_auto_chain_active', { section: 'workflow', field: '_auto_chain_active' }) ?? false,
+      text_mode: get('text_mode') ?? defaults.text_mode,
+      auto_advance: get('auto_advance') ?? false,
+      _auto_chain_active: get('_auto_chain_active') ?? false,
       mode: get('mode') ?? 'interactive',
-      sub_repos: get('sub_repos', { section: 'planning', field: 'sub_repos' }) ?? defaults.sub_repos,
-      pr_strict: get('pr_strict', { section: 'planning', field: 'pr_strict' }) ?? defaults.pr_strict,
+      sub_repos: get('sub_repos') ?? defaults.sub_repos,
+      pr_strict: get('pr_strict') ?? defaults.pr_strict,
       resolve_model_ids: get('resolve_model_ids') ?? defaults.resolve_model_ids,
       context_window: get('context_window') ?? defaults.context_window,
       phase_naming: get('phase_naming') ?? defaults.phase_naming,
       project_code: get('project_code') ?? defaults.project_code,
-      subagent_timeout: get('subagent_timeout', { section: 'workflow', field: 'subagent_timeout' }) ?? defaults.subagent_timeout,
+      subagent_timeout: get('subagent_timeout') ?? defaults.subagent_timeout,
       planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
         getNested('planner', 'stall_detection_enabled'),
       ),
@@ -990,7 +1025,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // `review.*` per-lane keys the federated overlay below adds land as SIBLINGS
       // on this same object rather than being clobbered by it.
       review: {
-        max_prompt_tokens: get('max_prompt_tokens', { section: 'review', field: 'max_prompt_tokens' }) ?? defaults.max_prompt_tokens,
+        max_prompt_tokens: get('max_prompt_tokens') ?? defaults.max_prompt_tokens,
       },
     };
 
@@ -1221,6 +1256,7 @@ export = {
   _getNestedConfigDefault,
   _getConfigValue,
   _getConfigNested,
+  LEGACY_FLAT_KEYS,
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,

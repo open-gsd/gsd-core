@@ -681,6 +681,9 @@ node gsd-tools.cjs config-set-model-profile <profile>
 
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
+
+# Merge settings into the global defaults store ($GSD_HOME/.gsd/defaults.json)
+node gsd-tools.cjs config-save-defaults '<settings-json>'
 ```
 
 `config-new-project` takes the chosen settings as one JSON object, nested by section
@@ -728,6 +731,27 @@ so a refused choice, malformed JSON included, fails even when `config.json` alre
 with valid choices and an existing `config.json`, the command reports `already_exists` and
 leaves it untouched. The user defaults file is read only to build a new config, so a problem in
 it is not reported when the config already exists.
+
+`config-save-defaults` is the write behind `/gsd-settings` "save as global defaults" (#5681).
+It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.json` unless
+`GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
+replaces. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+`resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
+`config-set` key and value rules first, as `config-new-project` choices are, so a key must be
+spelled the way `config-set` accepts it: `git.branching_strategy`, not `branching_strategy`
+(a few flat spellings, such as `commit_docs`, are accepted). Saving either spelling of a
+setting removes the other from the store (`research` for `workflow.research`,
+`planning.commit_docs` for `commit_docs`, `depth` for `granularity`), so a stale value cannot
+keep winning or be copied into new projects. A missing file is created, and a store kept as a
+symlink is written through to its target, so the link survives; a link whose target is missing
+is refused. The search flags that new
+projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
+`tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. A store that is not
+valid JSON, or not a JSON object, is refused and left as it was.
+
+A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
+so two saves, or a save and an install, run one after the other and neither loses the other's
+keys.
 
 ---
 
