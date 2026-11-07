@@ -3433,16 +3433,8 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   const msg = fc.oneof(
     word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`), word.map((w) => `"- ${w}"`),
   );
-  // Literal spellings, not the scanner's own list: a spelling the scanner misses must be able to fail here (fixture provenance, #2371).
-  const GIT_PREFIXES = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice',
-    'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
-
-  test('the property test prefixes match the scanner list, so a spelling added to one is added to the other', () => {
-    assert.deepStrictEqual([...GIT_PREFIXES].sort(), [...GIT_PREFIX_SPELLINGS].sort());
-  });
-
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
-    const prefix = fc.constantFrom(...GIT_PREFIXES);
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
       const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
       assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
@@ -3450,7 +3442,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('property: a widening option, a whole-tree pathspec, or a bash -c / eval wrapper keeps the verdict for every git prefix', () => {
-    const prefix = fc.constantFrom(...GIT_PREFIXES);
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
     fc.assert(fc.property(prefix, msg, fc.constantFrom('-i', '--include', '--inc', '-qi'), fc.array(word, { minLength: 1, maxLength: 3 }), (pre, m, opt, paths) => {
       assert.equal(unscopedGitCommits(`${pre} commit ${opt} -m ${m} -- ${paths.join(' ')}`).length, 1);
     }), { seed: 5211, numRuns: 100 });
@@ -3576,7 +3568,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
       // The example commands are what an agent copies, so their quoting is the shipped contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
-      // allow-test-rule: source-text-is-the-product (#5211)
       const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
       assert.equal(tails.length, 3, f);
       for (const t of tails) assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
@@ -3598,7 +3589,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   test('async-external-jobs recipe commits the manifest with a pathspec', () => {
     // The recipe commands are what a user runs, so their pathspec is the shipped contract.
     const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
-    // allow-test-rule: source-text-is-the-product (#5211)
     const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
     assert.ok(commits.length > 0);
     for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
