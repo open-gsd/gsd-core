@@ -1498,3 +1498,143 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
   });
 });
+
+describe('gsd-secret-read-guard: constructs the tokenizer read differently from the shell (#5523)', () => {
+  // Each command below runs `cat .env` in the shells named (bash 3.2, 5.2 and 5.3, dash
+  // 0.5.12 and zsh 5.9 measured), and the guard allowed it: the tokenizer read one construct
+  // differently from the shell, and the read sat in text it did not scan. `\n` is a newline,
+  // `\r` a CR.
+  const DENIED = [
+    ['a CR before `#` (bash, dash, zsh)', '\r#;cat .env'],
+    ['a CR as a heredoc tag (bash, dash, zsh)', '<<\r cat .env'],
+    ['an escaped backtick in an unquoted heredoc body (bash, dash, zsh)', 'cat <<E\n\\``cat .env`\nE'],
+    ['`#` straight after `(` (zsh)', 'x (#;cat .env'],
+    ['`#` after a word and `(` (zsh)', 'E(#$(cat .env)'],
+    ['a brace group with no blank after `{` (zsh)', '{cat .env}'],
+    ['a brace group closed by the `}` ending a word (zsh)', '{ cat .env}'],
+    ['a brace group after `then` (zsh)', 'if true; then {cat .env}; fi'],
+    ['a brace group after `!` (zsh)', '! {cat .env}'],
+    ['a brace group after `then !` (zsh)', 'if true; then ! {cat .env}; fi'],
+    ['a brace group after `time` (zsh)', 'time {cat .env}'],
+    ['a brace group after `coproc` (zsh)', 'coproc {cat .env}; wait'],
+    ['a brace group after a group\'s `always` (zsh)', '{ true } always {cat .env}'],
+    ['a brace group on the line after a heredoc (zsh)', 'cat <<E\nx\nE\n{cat .env}'],
+    ['a brace group after an fd duplication (zsh)', '2>&1 {cat .env}'],
+    ['a brace group after a redirection and its target (zsh)', '</dev/null {cat .env}'],
+    ['a brace group after `then` and a redirection (zsh)', 'if true; then >&2 {cat .env}; fi'],
+    ['a brace group closed by a `}` before a redirection (zsh)', '{cat .env}<&-'],
+    ['the same before an output redirection (zsh)', '{cat .env}>&2'],
+    ['`$$((`, which zsh reads as `$` and an arithmetic span (zsh)', "echo $$((1+'`cat .env`'))"],
+    ['the same with the backtick first (zsh)', "echo $$(('`cat .env`'))"],
+    ['a CR before `#` and a `$$` before `{` in one command (bash, dash)', '\r#;echo $${x; cat .env'],
+    ['a CR before `#` and a brace group with no blank in one command (zsh)', '\r#;{cat .env}'],
+    ['a CR before `#` and a `)` in a heredoc body inside `$( )` (bash 3.2)', '\r#;echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"'],
+    ['a `$$` before `{` and a `)` in a heredoc body inside `$( )` (bash 3.2)', 'echo $${x; echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"'],
+    ['the CR row, its `<<` assembled by eval from `<\'\'<` (bash 3.2)', "\r#;eval 'echo \"$(cat <''<EOF\n)\"; cat .env; \"\nEOF\n)\"'"],
+    ['a backtick body parsed and a `)` in a heredoc body inside `$( )` (bash 3.2)', 'echo `\\$${x; echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"`'],
+    ['a backtick body as the shell parses it, backslashes removed (bash, dash)', 'echo `\\$${x; cat .env`'],
+    ['the same inside double quotes (bash, dash)', 'echo "`\\$${x; cat .env`"'],
+    ['the same in an unquoted heredoc body (bash, dash)', 'cat <<E\n`\\$${x; cat .env`\nE'],
+    ['`$$` before `{`, which opens no `${` (bash, dash)', 'echo $${x; cat .env'],
+    ['the same in an assignment, a `}` after a `#` (bash, dash)', 'x=$${y; cat .env #}'],
+    ['`#` inside `$((…))` (bash, dash, zsh)', 'echo $((#`cat .env`))'],
+    ['the same inside double quotes (bash, dash, zsh)', 'echo "$((#`cat .env`))"'],
+    ['the same in an unquoted heredoc body (bash, dash, zsh)', 'cat <<E\n$((#`cat .env`))\nE'],
+    ['`#` after a blank inside `$((…))` (dash, zsh)', 'echo $((1 #`cat .env`))'],
+    ['the same inside double quotes (dash, zsh)', 'echo "$((1 #`cat .env`))"'],
+    ['the same in an unquoted heredoc body (dash, zsh)', 'cat <<E\n$((1 #`cat .env`))\nE'],
+    ['a body line joined to the tag line by a backslash-newline (bash, dash, zsh)', 'cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF'],
+    ['the same, the read then hidden by a quote (bash, dash, zsh)', "cat <<E\nx\\\nE\n'\nE\ncat .env\n'"],
+    ['the same inside `$( )` (bash, dash, zsh)', 'echo $(cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF\n)'],
+    ['the same, assembled by eval from `\\\'\'` and a newline (bash, dash, zsh)', "eval 'cat <<E\nx\\''\nE\ncat <<F\nE\ncat .env\nF'"],
+    ['`$$` assembled by eval from `$\'\'$` (bash, dash)', "eval '$''${x; cat .env'"],
+  ];
+  for (const [label, cmd] of DENIED) {
+    test(`denies the read in ${label}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    // The same command reading a file that is not a secret stays allowed.
+    const twin = cmd.split('.env').join('README.md');
+    test(`allows the twin reading README.md in ${label}`, () => {
+      assertAllowed(runHook(bash(twin)), twin);
+    });
+  }
+
+  // Controls: no shell runs a read in any of these.
+  for (const [label, cmd] of [
+    ['a `{` in argument position (zsh opens no group there)', 'echo {cat .env}'],
+    ['a `{` in an assignment', 'x={cat .env}'],
+    ['a `}` that does not end a word', '{cat .env}x'],
+    ['a `{` after an argument-position `{`', 'echo { {cat .env} x'],
+    ['a `{` straight after a closed group (zsh rejects the line)', '{a} {cat .env} x'],
+    ['a reserved word in argument position', 'echo then {cat .env}'],
+    ['an argument-position `{` before a redirection', 'echo {cat .env}>x'],
+    ['a redirection after a command word', 'echo >&2 {cat .env}'],
+    ['a redirection after an assignment', 'x=1 >&2 {cat .env}'],
+    ['`$$((` with no span in it', 'echo $$((1+2))'],
+    ['an even run of backslashes, which joins nothing', 'cat <<E\nx\\\\\nE\ncat <<F\nE\ncat .env\nF'],
+    ['a quoted tag, whose body joins nothing', "cat <<'E'\nx\\\nE\ncat <<F\nE\ncat .env\nF"],
+    ['arithmetic, a parameter expansion and the PID', 'echo $((1+2)) ${HOME} $$'],
+  ]) {
+    test(`still allows ${label}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The earlier readings stay readings: the body below holds two escaped backticks, so no
+  // shell runs the read, but the span between them was denied before and stays denied.
+  test('a span between escaped backticks in a heredoc body stays denied', () => {
+    const cmd = 'cat <<E\n\\`cat .env\\`\nE';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // The added readings run after the plain one, each under its own catch, so a command that
+  // overflows the stack in an added reading keeps the plain reading's denial. A backtick body
+  // of 6,000 nested `"\$(` reads harmlessly as written; the body the shell parses, `"$(` nested
+  // 6,000 deep, overflows the span finder.
+  const deepEscapedBacktick = 'echo `' + '"\\$('.repeat(6000) + ')"'.repeat(6000) + '`';
+  test('a read after a deep escaped backtick body stays denied', () => {
+    const cmd = `${deepEscapedBacktick}; cat .env`;
+    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then cat .env', { tool: 'Bash', path: '.env' });
+  });
+  test('a debugger spawn after a deep escaped backtick body stays denied', () => {
+    const cmd = `${deepEscapedBacktick}; claude --agent gsd-debugger -p hi`;
+    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then a debugger spawn', { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+
+  // A heredoc body of 64,000 lines of three backslashes is one joined line under the join
+  // reading. The run's length is counted once per line, so the hook answers within the file's
+  // spawn backstop (QUICK_SPAWN_TIMEOUT_MS) rather than re-walking the run at every join.
+  test('a long run of joined heredoc lines is allowed within the spawn backstop', () => {
+    const cmd = 'cat <<E\n' + '\\\\\\\n'.repeat(64000) + 'E';
+    assertAllowed(runHook(bash(cmd)), '64,000 joined backslash lines');
+  });
+
+  // Property: behind each construct, a read is denied exactly when it names a secret.
+  const HIDERS = [
+    (c) => `\r#;${c}`,
+    (c) => `cat <<E\n\\\`\`${c}\`\nE`,
+    (c) => `x (#;${c}`,
+    (c) => `{${c}}`,
+    (c) => `echo \`\\$\${x; ${c}\``,
+    (c) => `echo $((#\`${c}\`))`,
+    (c) => `echo $((1 #\`${c}\`))`,
+    (c) => `cat <<E\nx\\\nE\ncat <<F\nE\n${c}\nF`,
+  ];
+  const READER = fc.constantFrom('cat', 'grep KEY', 'head -1');
+  const BENIGN = fc.constantFrom('README.md', 'src/a.js', 'notes.txt', '.envrc');
+  test('a read behind each construct is denied when it names a secret, allowed when not', () => {
+    fc.assert(fc.property(
+      fc.nat(HIDERS.length - 1), READER, fc.oneof(
+        SECRET.map((name) => ({ name, secret: true })),
+        BENIGN.map((name) => ({ name, secret: false })),
+      ),
+      (h, reader, { name, secret }) => {
+        const cmd = HIDERS[h](`${reader} ${name}`);
+        const r = runHook(bash(cmd));
+        if (secret) assertBlocked(r, cmd, { tool: 'Bash' });
+        else assertAllowed(r, cmd);
+      },
+    ), PROPERTY_RUNS);
+  });
+});
