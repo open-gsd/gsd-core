@@ -1276,6 +1276,7 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
       error(`Invalid git.commit_timeout_ms '${val}'. Must be a positive integer (milliseconds) up to ${COMMIT_TIMEOUT_MAX_MS}.`, ERROR_REASON.USAGE);
     }
   }
+
   // #5706 (epic #3628): per-repository milestone tagging mode, enum only.
   if (kp === 'git.repo_tagging') assertEnumValue(parsedValue, val, VALID_REPO_TAGGING_MODES, 'git.repo_tagging');
 
@@ -1536,6 +1537,7 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   if (kp === 'planner.stall_detection_enabled') {
     current = resolvePlannerStallDetectionEnabled(current);
   }
+
   // Never echo plaintext for sensitive keys via config-get. Plaintext lives
   // in config.json on disk; the CLI surface always shows the masked form.
   if (isSecretKey(kp)) {
