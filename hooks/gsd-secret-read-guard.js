@@ -633,10 +633,14 @@ let heredocTagsAsWords = true;
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
-// quoted string or a heredoc body never closes the span early.
-function findParenClose(str, i) {
+// quoted string or a heredoc body never closes the span early. Given a Map
+// `closes`, it also records, keyed by the index after each nested `(` it
+// passes, the index of that paren's `)` (str.length when unterminated), so a
+// caller asking for many nested parens scans the string once.
+function findParenClose(str, i, closes) {
   let depth = 1;
   let heredocTags = [];
+  const opens = closes ? [] : null;
   while (i < str.length) {
     const ch = str[i];
     if (ch === '\\') { i += 2; continue; }
@@ -676,13 +680,17 @@ function findParenClose(str, i) {
       heredocTags = [];
       continue;
     }
-    if (ch === '(') depth++;
-    else if (ch === ')') {
+    if (ch === '(') {
+      depth++;
+      if (opens) opens.push(i + 1);
+    } else if (ch === ')') {
       depth--;
       if (depth === 0) return i;
+      if (opens) closes.set(opens.pop(), i);
     }
     i++;
   }
+  if (opens) for (const o of opens) closes.set(o, str.length);
   return str.length;
 }
 
@@ -805,6 +813,8 @@ function tokenize(str) {
   let afterTime = 0; // 1 after `time`, 2 after `time -p`
   let redirectTarget = false;
   let subscriptsOpen = true;
+  // The `)` closing each `((`'s inner paren, filled by findParenClose.
+  const dparenCloses = new Map();
 
   const flush = () => {
     if (!hasWord) return;
@@ -995,8 +1005,10 @@ function tokenize(str) {
 
     if (ch === '<' || ch === '>' || (ch === '&' && str[i + 1] === '>')) {
       let fd = '';
-      // bash also takes a named fd, `{fd}>file`, under the further reading.
-      if (hasWord && quoted === 'none' && (/^\d+$/.test(buf) || (furtherReading && NAMED_FD_RE.test(buf)))) {
+      // bash also takes a named fd, `{fd}>file`, under the further reading, and
+      // only right before `<` or `>` (`{fd}&>f` keeps `{fd}` a word).
+      if (hasWord && quoted === 'none'
+          && (/^\d+$/.test(buf) || (furtherReading && ch !== '&' && isNamedFd(buf)))) {
         fd = buf;
         buf = '';
         hasWord = false;
@@ -1058,12 +1070,15 @@ function tokenize(str) {
     if (ch === '(' || ch === ')') {
       sep(ch);
       i++;
-      // `((` opens arithmetic, where bash reads no assignment. The tokens are
-      // the same two seps either way.
+      // `((` opens arithmetic, where bash reads no assignment, when a `))`
+      // closes it; otherwise bash reads two subshells (parse_dparen), and a
+      // command starts after them. The tokens are the same two seps either way.
       if (ch === '(' && furtherReading && str[i] === '(') {
         sep('(');
         i++;
-        atCommandStart = false;
+        let close = dparenCloses.get(i);
+        if (close === undefined) close = findParenClose(str, i, dparenCloses);
+        if (str[close + 1] === ')') atCommandStart = false;
       }
       continue;
     }
@@ -1100,16 +1115,54 @@ function tokenize(str) {
 }
 
 const SHELL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-// bash takes `{name}` and `{name[sub]}` before a redirection as a named fd.
-const NAMED_FD_RE = /^\{[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\}$/;
+// Whether a word is a named fd to bash: `{name}`, or `{name[sub]}` with a
+// non-empty subscript whose `]` is the last one (valid_array_reference), so
+// `{a[]}`, `{a[0]]}` and `{a[0][1]}` are words.
+function isNamedFd(word) {
+  const m = /^\{([A-Za-z_][A-Za-z0-9_]*)(\[[\s\S]*\])?\}$/.exec(word);
+  if (!m) return false;
+  if (!m[2]) return true;
+  const sub = m[2];
+  if (sub.length < 3) return false;
+  let depth = 0;
+  for (let k = 0; k < sub.length; k++) {
+    if (sub[k] === '[') depth++;
+    else if (sub[k] === ']' && --depth === 0) return k === sub.length - 1;
+  }
+  return false;
+}
 
 // Whether `name` is the whole raw word in front of `i`: the same characters,
-// starting the word (at the start, or after a blank, `;`, `&`, `|`, `(`, `<`
-// or `>`).
+// with any backslash-newline (removed before bash reads a word; the backslash
+// itself unescaped) skipped, and starting the word (at the start, or after a
+// blank, `;`, `&`, `|`, `(`, `<` or `>`).
 function isRawWordBefore(str, i, name) {
-  const start = i - name.length;
-  if (start < 0 || str.slice(start, i) !== name) return false;
-  return start === 0 || /[\s;&|(<>]/.test(str[start - 1]);
+  let k = i;
+  let n = name.length;
+  const continuation = () => {
+    if (k < 2 || str[k - 1] !== '\n') return false;
+    let j = k - 2;
+    while (j >= 0 && str[j] === '\\') j--;
+    return (k - 2 - j) % 2 === 1;
+  };
+  while (n > 0) {
+    if (continuation()) { k -= 2; continue; }
+    if (k < 1 || str[k - 1] !== name[n - 1]) return false;
+    k--;
+    n--;
+  }
+  while (continuation()) k -= 2;
+  return k === 0 || /[\s;&|(<>]/.test(str[k - 1]);
+}
+
+// Index of the backquote closing a backquote span whose body starts at `k`,
+// or -1: a backslash escapes the next character, a backquote included.
+function backquoteClose(str, k) {
+  for (; k < str.length; k++) {
+    if (str[k] === '\\') k++;
+    else if (str[k] === '`') return k;
+  }
+  return -1;
 }
 
 // Index of the `'` closing an ANSI-C quote `$'…'` whose body starts at `k`, or
@@ -1135,8 +1188,11 @@ function subscriptClose(str, i) {
     } else if (c === '$' && str[k + 1] === "'") {
       k = ansiCQuoteClose(str, k + 2);
       if (k === -1) return -1;
-    } else if (c === "'" || c === '`') {
+    } else if (c === "'") {
       k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '`') {
+      k = backquoteClose(str, k + 1);
       if (k === -1) return -1;
     } else if (c === '"') {
       k = doubleQuoteClose(str, k + 1);
@@ -1167,8 +1223,11 @@ function braceClose(str, k) {
     } else if (c === '$' && str[k + 1] === "'") {
       k = ansiCQuoteClose(str, k + 2);
       if (k === -1) return -1;
-    } else if (c === "'" || c === '`') {
+    } else if (c === "'") {
       k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '`') {
+      k = backquoteClose(str, k + 1);
       if (k === -1) return -1;
     } else if (c === '"') {
       k = doubleQuoteClose(str, k + 1);
@@ -1187,7 +1246,7 @@ function braceClose(str, k) {
 }
 
 // Index of the `"` closing a double-quoted span that starts at `k`, or -1.
-// `$(…)` and backquotes hide a `"`.
+// `$(…)`, `${…}` and backquotes hide a `"`.
 function doubleQuoteClose(str, k) {
   while (k < str.length) {
     const c = str[k];
@@ -1196,8 +1255,12 @@ function doubleQuoteClose(str, k) {
       k += 2;
     } else if (c === '$' && str[k + 1] === '(') {
       k = findParenClose(str, k + 2) + 1;
+    } else if (c === '$' && str[k + 1] === '{') {
+      const j = braceClose(str, k + 2);
+      if (j === -1) return -1;
+      k = j + 1;
     } else if (c === '`') {
-      const j = str.indexOf('`', k + 1);
+      const j = backquoteClose(str, k + 1);
       if (j === -1) return -1;
       k = j + 1;
     } else {
