@@ -87,7 +87,10 @@ function defaultBudget(): number {
 export function readSmartZoneBudget(cwd: string): number {
   try {
     const configPath = path.join(planningDir(cwd), 'config.json');
-    const parsed: unknown = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    // Bounded read (#5759): null (absent) and any throw (FIFO, device, oversized) keep the default.
+    const raw = configLoader.readConfigFileBounded(configPath);
+    if (raw === null) return defaultBudget();
+    const parsed: unknown = JSON.parse(raw);
     if (parsed !== null && typeof parsed === 'object') {
       const workflow = (parsed as Record<string, unknown>)['workflow'];
       if (workflow !== null && typeof workflow === 'object') {

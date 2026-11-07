@@ -1171,13 +1171,15 @@ describe("loadConfigResolved — corrupt config is distinguishable from absent",
     fs.writeFileSync(configPath(tmpDir), '{"model_profile":"budget"}', "utf-8");
     // Deterministic IO fault via fs monkeypatch, restored in t.after() — never
     // chmod 0o000, which root bypasses (CLAUDE.md cross-platform IO rule).
-    const realRead = fs.readFileSync;
-    t.after(() => { fs.readFileSync = realRead; });
-    fs.readFileSync = (f, ...rest) => {
+    // The loader opens config.json with fs.openSync (bounded regular-file read, #5759),
+    // so the fault is injected at open(2), the call that actually fails with EACCES.
+    const realOpen = fs.openSync;
+    t.after(() => { fs.openSync = realOpen; });
+    fs.openSync = (f, ...rest) => {
       if (String(f).endsWith("config.json")) {
         const e = new Error("EACCES: permission denied"); e.code = "EACCES"; throw e;
       }
-      return realRead(f, ...rest);
+      return realOpen(f, ...rest);
     };
     const res = configLoader.loadConfigResolved(tmpDir);
     assert.equal(res.reason, R.CONFIG_UNREADABLE);

@@ -16,6 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 import { realClock } from './clock.cjs';
 import type { Clock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -181,7 +184,11 @@ const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, v
 function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedConfigValue {
   let node: unknown;
   try {
-    node = JSON.parse(String(fs.readFileSync(configPath, 'utf8')));
+    // Bounded read (#5759): null (absent) and any throw (FIFO, device, directory, oversized,
+    // errno) both mean this file sets nothing — never a block.
+    const raw = readConfigFileBounded(configPath);
+    if (raw === null) return CONFIG_VALUE_ABSENT;
+    node = JSON.parse(raw);
   } catch {
     return CONFIG_VALUE_ABSENT;
   }
@@ -293,10 +300,11 @@ function worktreesOptedOut(cwd: string): boolean {
  */
 function resolvePhaseIdConvention(cwd: string, ws?: string | null): string | null {
   const readFrom = (dir: string): string | null => {
-    const configPath = path.join(dir, 'config.json');
-    if (!fs.existsSync(configPath)) return null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      // Bounded read (#5759): null is an absent file, a throw is an unreadable one; both mean "unset".
+      const raw = readConfigFileBounded(path.join(dir, 'config.json'));
+      if (raw === null) return null;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
       const value = parsed['phase_id_convention'];
       return typeof value === 'string' && value !== '' ? value : null;
     } catch {
