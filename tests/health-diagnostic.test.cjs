@@ -146,12 +146,11 @@ describe('SEVERITY', () => {
 
 // ─── Rows 11-12 — applyRepairs risk-gating, hand-constructed diagnostics ───
 //
-// No real rule exists yet to emit these remedies (RULES is empty in this
-// skeleton). These diagnostics are hand-built using the risk harvested from
-// health.md's published table (design doc, "Risk assignment" section):
-// resetConfig/regenerateState are DESTRUCTIVE; every other real action is
-// NONE. This proves applyRepairs's gating logic is correct independent of
-// whether any real rule exists to produce these shapes yet.
+// These diagnostics are hand-built rather than produced by running RULES, so
+// the gating test exercises each remedy/risk combination independently of
+// which real rules emit them. Risks follow health.md's published table
+// (design doc, "Risk assignment" section): resetConfig/regenerateState are
+// DESTRUCTIVE; every other real action is NONE.
 
 function fakeDiagnostic(code, action, risk) {
   return {
