@@ -81,6 +81,15 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
     assert.equal(evaluate("test '${PHASE_NUMBER}' = 02", dir).block, true);
   });
 
+  test('a single-quoted placeholder whose value holds a space fails closed instead of testing literal text', () => {
+    const dir = path.join(root, '.planning', 'phases', '01 x');
+    fs.mkdirSync(dir, { recursive: true });
+    const quoted = evaluate("test ! -f '${PHASE_DIR}/OPEN_WORK'", dir);
+    assert.equal(quoted.failure?.code, 'usage', JSON.stringify(quoted));
+    assert.match(quoted.failure.message, /single-quotes \$\{PHASE_DIR\}.*double-quote/);
+    assert.equal(evaluate('test ! -f "${PHASE_DIR}/OPEN_WORK"', dir).block, false);
+  });
+
   test('an unset placeholder expands to the empty string and other variables are left for sh', () => {
     assert.equal(evaluate('test -z "${PHASE_REQ_IDS}" && test -n "${PATH}"', path.join(root, '.planning', 'phases')).block, false);
   });
