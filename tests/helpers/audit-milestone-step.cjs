@@ -16,10 +16,10 @@ function openWorkStep() {
   return collectSection(auditMilestoneMd(), (h) => h.text.startsWith('5.6.'))?.body;
 }
 
-// The entry field names step 5.6 tells the agent to report.
+// The entry field names step 5.6 reports: the parenthesised list of the sentence that names `gaps.open_work`.
 function openWorkStepFields() {
-  const sentence = splitLines(openWorkStep()).find((l) => l.includes('Report each entry ('));
-  const list = sentence.slice(sentence.indexOf('Report each entry (') + 'Report each entry ('.length);
+  const sentence = splitLines(openWorkStep()).join(' ').split('. ').find((s) => s.includes('`gaps.open_work`'));
+  const list = sentence.slice(sentence.indexOf('(') + 1);
   return scanInlineCodeSpans(list.slice(0, list.indexOf(')'))).map((span) => span.content);
 }
 
