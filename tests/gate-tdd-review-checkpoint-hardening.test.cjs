@@ -10,7 +10,7 @@
  *       can no longer satisfy RED/GREEN with an unrelated commit, while an ordinary id like
  *       `03.1-02` still matches its own commits.
  *   #5354 the seal (`TDD-REVIEW-SEAL.json`, `--record`), the `NotEvaluable` row for a squashed-away plan,
- *       the SUMMARY task-commit heuristic, hostile seal files, write-path faults and the `ship.md` seal step.
+ *       the SUMMARY task-commit heuristic, hostile seals derived from a valid one, write-path faults and the `ship.md` seal step.
  *       The owners it uses are tested in their own files: `commitReachability` / `commitIsGone` in gate-tdd-review-seal.test.cjs, `isFullSha` in
  *       gate-evaluation-scope.test.cjs, `readSmallRegularFile` strict in capability-ledger.test.cjs and
  *       `isPlainObject` in gate-evidence.test.cjs.
@@ -264,19 +264,111 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(r.payload.rows, []);
   });
 
-  // Hostile seal shapes live as files that do not know the gate (tests/fixtures/adversarial/tdd-review-seal/README.md).
-  const SEAL_FIXTURES = path.join(__dirname, 'fixtures', 'adversarial', 'tdd-review-seal');
-  for (const file of fs.readdirSync(SEAL_FIXTURES).filter((f) => f.endsWith('.json')).sort()) {
-    const label = file.replace(/\.json$/, '');
-    const text = fs.readFileSync(path.join(SEAL_FIXTURES, file), 'utf8');
-    test(`a wrong-shape seal (${label}) is unreadable and --record does not overwrite it`, () => {
-      const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-      w(dir, `${PHASE}/TDD-REVIEW-SEAL.json`, text);
-      assert.equal(run(dir).outcome, 'unreadable');
-      assert.equal(run(dir, '--record').outcome, 'unreadable');
-      assert.equal(fs.readFileSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json'), 'utf8'), text);
-    });
+  // Hostile seals (CONTRIBUTING.md "Parser and project-file inputs"): none is written by hand. A valid seal is taken from the gate's
+  // own --record output, every key path of it is walked, and the checklist is applied to each path: a scalar where an object is
+  // expected and an object where a string is expected, an array, null, a missing and an emptied member, a duplicated key, a NUL
+  // or replacement character in a value or a key, a path-traversal-like key, and a truncated text. No key name is typed here.
+  const SEALED_SQUASH = ['test(01-01): red', 'feat(01-01): green'];
+  const pathsOf = (node, prefix = []) => [prefix, ...(node !== null && typeof node === 'object'
+    ? Object.keys(node).flatMap((k) => pathsOf(node[k], [...prefix, k]))
+    : [])];
+  const at = (root, p) => p.reduce((n, k) => n[k], root);
+  const withValue = (root, p, value) => {
+    if (p.length === 0) return value;
+    const copy = structuredClone(root);
+    at(copy, p.slice(0, -1))[p[p.length - 1]] = value;
+    return copy;
+  };
+  const withoutKey = (root, p) => {
+    const copy = structuredClone(root);
+    delete at(copy, p.slice(0, -1))[p[p.length - 1]];
+    return copy;
+  };
+  const withRenamedKey = (root, p, name) => {
+    const copy = structuredClone(root);
+    const parent = at(copy, p.slice(0, -1));
+    const entries = Object.entries(parent).map(([k, v]) => [k === p[p.length - 1] ? name : k, v]);
+    for (const k of Object.keys(parent)) delete parent[k];
+    for (const [k, v] of entries) parent[k] = v;
+    return copy;
+  };
+  // JSON text in which the member at `target` appears twice: JSON.parse keeps the last, so `after` decides which one wins.
+  const stringifyDuplicated = (node, target, wrong, after, here = []) => {
+    if (node === null || typeof node !== 'object') return JSON.stringify(node);
+    const parts = [];
+    for (const [k, v] of Object.entries(node)) {
+      const child = [...here, k];
+      const real = `${JSON.stringify(k)}:${stringifyDuplicated(v, target, wrong, after, child)}`;
+      if (child.join('/') === target.join('/')) {
+        const dup = `${JSON.stringify(k)}:${JSON.stringify(wrong)}`;
+        parts.push(after ? real : dup, after ? dup : real);
+      } else {
+        parts.push(real);
+      }
+    }
+    return `{${parts.join(',')}}`;
+  };
+  const kindOf = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
+  const WRONG_TYPES = [1, 'x', true, [], null, {}];
+  const SUFFIXES = ['\u0000', '�'];
+  const TRAVERSAL = ['../../', '..\\'];
+
+  function hostileSeals(valid) {
+    const text = JSON.stringify(valid);
+    const all = pathsOf(valid);
+    const members = all.filter((p) => p.length > 0);
+    const strings = all.filter((p) => typeof at(valid, p) === 'string');
+    const out = [];
+    // `unreadable` is the verdict the rule demands: a member of another type than the valid seal has, or a lost top-level member,
+    // refuses the seal; everything else stays readable and must only never earn a credit.
+    for (const p of all) {
+      for (const wrong of WRONG_TYPES) {
+        const unreadable = p.length === 0 || kindOf(wrong) !== kindOf(at(valid, p));
+        out.push({ cls: 'wrong-type', label: `${p.join('/')} -> ${JSON.stringify(wrong)}`, text: JSON.stringify(withValue(valid, p, wrong)), unreadable });
+      }
+    }
+    for (const p of members) out.push({ cls: 'missing', label: p.join('/'), text: JSON.stringify(withoutKey(valid, p)), unreadable: p.length === 1 });
+    for (const p of strings) for (const suffix of SUFFIXES) out.push({ cls: 'value-char', label: p.join('/'), text: JSON.stringify(withValue(valid, p, at(valid, p) + suffix)) });
+    for (const p of members) {
+      for (const suffix of SUFFIXES) out.push({ cls: 'key-char', label: p.join('/'), text: JSON.stringify(withRenamedKey(valid, p, p[p.length - 1] + suffix)), unreadable: p.length === 1 });
+      for (const prefix of TRAVERSAL) out.push({ cls: 'key-char', label: p.join('/'), text: JSON.stringify(withRenamedKey(valid, p, prefix + p[p.length - 1])), unreadable: p.length === 1 });
+      out.push({ cls: 'duplicate-last-wins', label: p.join('/'), text: stringifyDuplicated(valid, p, 'x', true) });
+      out.push({ cls: 'duplicate-first-loses', label: p.join('/'), text: stringifyDuplicated(valid, p, 'x', false) });
+    }
+    for (let cut = 1; cut < text.length; cut += 7) out.push({ cls: 'truncated', label: `at ${cut}`, text: text.slice(0, cut), unreadable: true });
+    return out;
   }
+
+  test('a hostile seal derived from the gate\'s own seal never crashes the gate and never earns a credit', () => {
+    const { dir, base } = fixture(SEALED_SQUASH);
+    run(dir, '--record');
+    const validText = fs.readFileSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json'), 'utf8');
+    const valid = JSON.parse(validText);
+    sealGit(dir, 'add', '-A');
+    sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+    squash(dir, base);
+    const seal = path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json');
+    fs.writeFileSync(seal, validText);
+    assert.equal(run(dir).payload.rows[0].status, 'Pass', 'the unmutated seal is credited');
+    const seen = new Set();
+    for (const { cls, label, text, unreadable } of hostileSeals(valid)) {
+      seen.add(cls);
+      fs.writeFileSync(seal, text);
+      const r = run(dir);
+      const why = `${cls}: ${label}`;
+      if (cls === 'duplicate-first-loses') {
+        // the real member comes last and wins, so the credit is the valid one
+        assert.equal(r.payload.rows[0].status, 'Pass', why);
+      } else if (r.outcome === 'unreadable') {
+        assert.equal(run(dir, '--record').outcome, 'unreadable', why);
+        assert.equal(fs.readFileSync(seal, 'utf8'), text, `${why}: --record leaves a refused seal untouched`);
+      } else {
+        assert.notEqual(r.payload.rows[0].status, 'Pass', `${why}: a hostile seal must not earn a credit`);
+      }
+      if (unreadable !== undefined) assert.equal(r.outcome === 'unreadable', unreadable, `${why}: unreadable verdict`);
+    }
+    assert.deepEqual([...seen].sort(), ['duplicate-first-loses', 'duplicate-last-wins', 'key-char', 'missing', 'truncated', 'value-char', 'wrong-type']);
+  });
 
   const SEAL = path.join(PHASE, 'TDD-REVIEW-SEAL.json');
   const sha = (c) => c.repeat(40);
@@ -346,17 +438,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(row.status, 'FAIL');
     assert.deepEqual(row.missing, ['RED', 'GREEN']);
   });
-
-  // Readable but unverifiable seals (fixtures/adversarial/tdd-review-seal/readable/): the gate credits only what it can check.
-  for (const [file, missing] of [['duplicate-key.json', ['RED', 'GREEN']], ['nul-in-red.json', ['RED']], ['replacement-char-in-red.json', ['RED']]]) {
-    test(`the ${file} seal is readable and credits only what it can verify`, () => {
-      const { dir } = fixture([], { summary: false });
-      w(dir, SEAL, fs.readFileSync(path.join(SEAL_FIXTURES, 'readable', file), 'utf8'));
-      const row = run(dir).payload.rows[0];
-      assert.equal(row.status, 'FAIL');
-      assert.deepEqual(row.missing, missing);
-    });
-  }
 
   test('a collision on the temp file leaves the prior seal and no temp file', (t) => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
