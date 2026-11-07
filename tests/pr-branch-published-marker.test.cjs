@@ -87,10 +87,11 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
     // run-with-timeout <secs> -- cmd...: log the call, then exec cmd (the real verb bounds it; the log proves it was used).
     `gsd_run() { if [ "$1" = run-with-timeout ]; then echo "$*" >> .git/rwt.log; shift 3; "$@"; else echo ${mode}; fi; }`,
     prelude || `gh() { ${gh}; }`, // hermetic: no network lookup unless a test supplies one
-    b('PR_BRANCH="${CURRENT_BRANCH}-pr"'),
-    afterPre, // stands in for the outward steps (handle_sub_repos) that run between the preconditions and the build
+    b('PR_STRICT=$(gsd_run query config-get'), // the mode and the filter projections come first; the preconditions read them
     b('TRANSIENT_DIRS="phases'),
     b('FILTER_PATHS=$(for d'),
+    b('PR_BRANCH="${CURRENT_BRANCH}-pr"'),
+    afterPre, // stands in for the outward steps (handle_sub_repos) that run between the preconditions and the build
     b('git log --oneline'),
     b('# Create PR branch from target'),
     extractPickLoop(text),
@@ -917,6 +918,42 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.ok(changed(dir).includes('two.txt'));
+  });
+
+  test('two published code commits squash-merged, then `git rebase main` drops them: no warning, only round 2 is replayed', () => {
+    const dir = repo();
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code only 1');
+    write(dir, 'x2.txt', '2\n');
+    commitAll(dir, 'feat: code only 2');
+    assert.equal(publish(dir).status, 0);
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'merge', '-q', '--squash', 'feature-pr');
+    git(dir, 'commit', '-q', '-m', 'feat: squash of the round (#1)');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  test('default mode: a mixed commit with transient planning files, rebase-merged then rebased: no warning, only round 2 is replayed', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir, 'main', { mode: 'false' }).status, 0);
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir, 'main', { mode: 'false' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.ok(changed(dir).includes('two.txt') && !changed(dir).includes('r1.txt'), 'round 1 is not replayed');
   });
 
   test('published mixed commit rebase-merged, then `git rebase main`: no warning, only round 2 is replayed', () => {

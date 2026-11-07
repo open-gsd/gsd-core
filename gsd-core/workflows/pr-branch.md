@@ -40,7 +40,83 @@ Check preconditions. The bash blocks of this step and of the later steps share v
 # mode; only the literal string `true` selects strict.
 PR_STRICT=$(gsd_run query config-get planning.pr_strict --raw 2>/dev/null)
 if [ "$PR_STRICT" = "true" ]; then PR_MODE="strict"; else PR_MODE="default"; PR_STRICT="false"; fi
+```
 
+**Canonical path declarations.** These three lines are the single source of truth for the
+whole command. `create_pr_branch` derives *which paths it removes* from them, and `verify`
+derives *which paths must not appear* from the same three lines — so the two steps cannot
+disagree about what the filter promised. Declare them exactly once; do not restate either
+list anywhere else in this file. Their literal values are drift-guarded (`npm run lint:ci`,
+`scripts/lint-pr-branch-pattern-drift.cjs`) against the canonical `src/pr-branch-patterns.cts`
+constants — change one side and update the other, or the guard fails.
+
+```bash
+# Transient planning subdirectories — reviewer noise (PLAN.md, SUMMARY.md, CONTEXT.md,
+# RESEARCH.md, and friends). Filtered out in BOTH modes.
+TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"
+
+# Structural planning files — repository planning state. Preserved in default mode,
+# filtered out in strict mode. Anchored on both alternatives so `.planning/STATEX.md`
+# and `.planning/STATE.md.bak` are NOT treated as structural. The milestones
+# alternative matches only FILES directly under `.planning/milestones/` (e.g.
+# `v1.0-ROADMAP.md`) — not a `<milestone>-phases/` subdirectory nested there. That
+# subdirectory is reviewer noise, not structural state (#4605); it falls through to
+# `$MILESTONE_PHASES_RE` below instead.
+STRUCTURAL_RE="^\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\.md$|^\.planning/milestones/[^/]+\.md$"
+
+# Milestone-scoped phase-plan directories — the same reviewer noise as
+# `$TRANSIENT_DIRS`'s `phases` entry, but nested per-milestone once a project has
+# passed at least one milestone: `.planning/milestones/<milestone>-phases/`. The
+# milestone slug (`v1.0`, `m2`, ...) varies per project, so this is declared as a
+# shape, not a literal path — a single path segment standing in for the slug,
+# anchored the same way `$STRUCTURAL_RE`'s alternatives are (#4605).
+MILESTONE_PHASES_RE="^\.planning/milestones/[^/]+-phases/"
+```
+
+Derive the mode's two projections — `FILTER_PATHS` (what `create_pr_branch` removes from
+each cherry-picked commit) and `FORBIDDEN_RE` (what `verify` asserts is absent):
+
+```bash
+if [ "$PR_STRICT" = "true" ]; then
+  FILTER_PATHS=".planning/"
+  FORBIDDEN_RE="^\.planning/"
+else
+  # One path per LINE, not per space (#4605) — see create_pr_branch's consumption
+  # loop: a discovered `<milestone>-phases/` directory can contain a space, so
+  # whitespace cannot be the delimiter. Rewrapped through unquoted command
+  # substitution (gsd-core#4109): a bare `$VAR` word-splits under bash but not
+  # zsh, collapsing every element onto one iteration there.
+  FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/\n' "$d"; done)
+  FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/|$MILESTONE_PHASES_RE"
+
+  # $MILESTONE_PHASES_RE is a shape, not a path — create_pr_branch's filter loop
+  # needs concrete paths to `git rm`, so resolve which `<milestone>-phases/`
+  # directories actually exist in this worktree (#4605). A project with no
+  # milestones yet (`.planning/milestones/` absent) yields nothing here, same as
+  # any other empty FILTER_PATHS entry. `-exec printf ... \;` rather than
+  # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
+  # milestone slug containing a space into two spurious entries (ShellCheck
+  # SC2044) — the exact class of bug #4109 already fixed once in this file.
+  # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
+  # `.planning/milestones/`), not just the expected-absent case — the unsafe
+  # direction, since a real failure then silently leaves those paths
+  # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
+  # still asserts their absence downstream in `verify`, catching what this
+  # step misses.
+  MILESTONE_PHASE_DIRS=$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/\n' {} \; 2>/dev/null)
+  # Appended as its own LINE, and only when non-empty so no blank entry is
+  # introduced. The separator is a literal newline inside the quotes — `$(...)`
+  # has already stripped the trailing one off each side.
+  if [ -n "$MILESTONE_PHASE_DIRS" ]; then
+    FILTER_PATHS="${FILTER_PATHS}
+${MILESTONE_PHASE_DIRS}"
+  fi
+fi
+```
+
+The preconditions below read the filter projections above, so they come first.
+
+```bash
 PR_BRANCH="${CURRENT_BRANCH}-pr"
 TIP=$(git rev-parse "$CURRENT_BRANCH")
 # Keyed by mode: strict skips commits default publishes, so one mode's marker is wrong for the other.
@@ -125,27 +201,36 @@ if [ -n "$MARKER_TIP" ]; then
   if _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
     BASE="$MARKER_TIP"
   else
-    # History rewritten (rebase, reword): compare commits by patch-id. Strict mode ignores .planning/, which
-    # the -pr drops entirely, so a mixed commit rewritten by the rebase still matches its -pr copy and a
-    # planning-only commit has nothing to publish; default mode compares whole patches. The base is the
-    # commit that ends the leading run of published-equivalent commits here (an equal patch, or nothing to
-    # publish); $TARGET when none of them is here. Warn instead when a published commit has no match
-    # (folded, conflict-resolved), when a matched commit sits above an unpublished one (reordered, that
-    # commit would be skipped for good), or when any git lookup fails or times out (a missing patch would
-    # read as "nothing to publish").
-    PICK_EXCL=; [ "$PR_MODE" = strict ] && PICK_EXCL=':(exclude,top).planning'
+    # History rewritten (rebase, reword): match commits by patch-id over the paths outside $FILTER_PATHS (what
+    # the -pr keeps), so a rewritten mixed commit still matches its -pr copy. A published commit with no equal
+    # patch counts when the files it touched are unchanged between the published tip and $TARGET (squash
+    # merge, then a rebase). BASE ends the leading run of published-equivalent commits; $TARGET when none.
+    # Warn on an unmatched published commit (folded, conflict-resolved), a matched commit above an unpublished
+    # one (reordered), or a failed or timed-out git lookup (a missing patch would read as published).
+    # rw_git GIT-ARGS... — git run bounded, limited to the paths outside $FILTER_PATHS.
+    rw_git() {
+      set -- "$@" -- ':/'
+      while IFS= read -r _p; do [ -n "$_p" ] && set -- "$@" ":(exclude,top)$_p"; done <<RW_PATHS_EOF
+$FILTER_PATHS
+RW_PATHS_EOF
+      _to git "$@"
+    }
     RW_TMP=$(mktemp)
     REWRITE=WARN
     if RW_L=$(_to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
       RW_R=$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null) &&
-      _to git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" -- ':/' ${PICK_EXCL:+"$PICK_EXCL"} >"$RW_TMP" 2>/dev/null &&
+      RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET" 2>/dev/null) &&
+      RW_F=$(rw_git log --full-history --no-merges --name-only --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
+      rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" >"$RW_TMP" 2>/dev/null &&
       RW_P=$(git patch-id --stable <"$RW_TMP"); then
-      REWRITE=$(printf 'L\n%s\nR\n%s\nP\n%s\n' "$RW_L" "$RW_R" "$RW_P" |
-        awk '/^L$/{s=1;next} /^R$/{s=2;next} /^P$/{s=3;next}
-          s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{pid[$2]=$1}
+      REWRITE=$(printf 'L\n%s\nR\n%s\nD\n%s\nF\n%s\nP\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" |
+        awk '/^L$/{s=1;next} /^R$/{s=2;next} /^D$/{s=3;next} /^F$/{s=4;next} /^P$/{s=5;next}
+          s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{dif[$0]=1}
+          s==4&&/^commit [0-9a-f]+$/{cur=$2;next} s==4&&NF&&($0 in dif){nd[cur]++}
+          s==5&&NF{pid[$2]=$1}
           END{ if(!nl){print "WARN";exit}
             for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
-            for(c in L) if((c in pid)&&!(pid[c] in here)){print "WARN";exit}
+            for(c in L) if((c in pid)&&!(pid[c] in here)&&nd[c]>0){print "WARN";exit}
             for(i=n;i>=1;i--){ c=R[i]
               if(!stop && (!(c in pid) || (pid[c] in lp))){tip=c;continue}
               stop=1; if((c in pid)&&(pid[c] in lp)){print "WARN";exit} }
@@ -371,78 +456,6 @@ Classify commits:
 git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET"
 # Default pick list, oldest first; drop commits classified as skip.
 INCLUDED_COMMITS=$(git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET")
-```
-
-**Canonical path declarations.** These three lines are the single source of truth for the
-whole command. `create_pr_branch` derives *which paths it removes* from them, and `verify`
-derives *which paths must not appear* from the same three lines — so the two steps cannot
-disagree about what the filter promised. Declare them exactly once; do not restate either
-list anywhere else in this file. Their literal values are drift-guarded (`npm run lint:ci`,
-`scripts/lint-pr-branch-pattern-drift.cjs`) against the canonical `src/pr-branch-patterns.cts`
-constants — change one side and update the other, or the guard fails.
-
-```bash
-# Transient planning subdirectories — reviewer noise (PLAN.md, SUMMARY.md, CONTEXT.md,
-# RESEARCH.md, and friends). Filtered out in BOTH modes.
-TRANSIENT_DIRS="phases quick research threads todos debug seeds codebase ui-reviews"
-
-# Structural planning files — repository planning state. Preserved in default mode,
-# filtered out in strict mode. Anchored on both alternatives so `.planning/STATEX.md`
-# and `.planning/STATE.md.bak` are NOT treated as structural. The milestones
-# alternative matches only FILES directly under `.planning/milestones/` (e.g.
-# `v1.0-ROADMAP.md`) — not a `<milestone>-phases/` subdirectory nested there. That
-# subdirectory is reviewer noise, not structural state (#4605); it falls through to
-# `$MILESTONE_PHASES_RE` below instead.
-STRUCTURAL_RE="^\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\.md$|^\.planning/milestones/[^/]+\.md$"
-
-# Milestone-scoped phase-plan directories — the same reviewer noise as
-# `$TRANSIENT_DIRS`'s `phases` entry, but nested per-milestone once a project has
-# passed at least one milestone: `.planning/milestones/<milestone>-phases/`. The
-# milestone slug (`v1.0`, `m2`, ...) varies per project, so this is declared as a
-# shape, not a literal path — a single path segment standing in for the slug,
-# anchored the same way `$STRUCTURAL_RE`'s alternatives are (#4605).
-MILESTONE_PHASES_RE="^\.planning/milestones/[^/]+-phases/"
-```
-
-Derive the mode's two projections — `FILTER_PATHS` (what `create_pr_branch` removes from
-each cherry-picked commit) and `FORBIDDEN_RE` (what `verify` asserts is absent):
-
-```bash
-if [ "$PR_STRICT" = "true" ]; then
-  FILTER_PATHS=".planning/"
-  FORBIDDEN_RE="^\.planning/"
-else
-  # One path per LINE, not per space (#4605) — see create_pr_branch's consumption
-  # loop: a discovered `<milestone>-phases/` directory can contain a space, so
-  # whitespace cannot be the delimiter. Rewrapped through unquoted command
-  # substitution (gsd-core#4109): a bare `$VAR` word-splits under bash but not
-  # zsh, collapsing every element onto one iteration there.
-  FILTER_PATHS=$(for d in $(printf '%s' "$TRANSIENT_DIRS"); do printf '.planning/%s/\n' "$d"; done)
-  FORBIDDEN_RE="^\.planning/($(echo "$TRANSIENT_DIRS" | tr ' ' '|'))/|$MILESTONE_PHASES_RE"
-
-  # $MILESTONE_PHASES_RE is a shape, not a path — create_pr_branch's filter loop
-  # needs concrete paths to `git rm`, so resolve which `<milestone>-phases/`
-  # directories actually exist in this worktree (#4605). A project with no
-  # milestones yet (`.planning/milestones/` absent) yields nothing here, same as
-  # any other empty FILTER_PATHS entry. `-exec printf ... \;` rather than
-  # `for D in $(find ...)`: a `for` over unquoted `find` output word-splits a
-  # milestone slug containing a space into two spurious entries (ShellCheck
-  # SC2044) — the exact class of bug #4109 already fixed once in this file.
-  # `2>/dev/null` also swallows a genuine `find` failure (e.g. an unreadable
-  # `.planning/milestones/`), not just the expected-absent case — the unsafe
-  # direction, since a real failure then silently leaves those paths
-  # unfiltered rather than aborting. Accepted here because `$FORBIDDEN_RE`
-  # still asserts their absence downstream in `verify`, catching what this
-  # step misses.
-  MILESTONE_PHASE_DIRS=$(find .planning/milestones -mindepth 1 -maxdepth 1 -type d -name '*-phases' -exec printf '%s/\n' {} \; 2>/dev/null)
-  # Appended as its own LINE, and only when non-empty so no blank entry is
-  # introduced. The separator is a literal newline inside the quotes — `$(...)`
-  # has already stripped the trailing one off each side.
-  if [ -n "$MILESTONE_PHASE_DIRS" ]; then
-    FILTER_PATHS="${FILTER_PATHS}
-${MILESTONE_PHASE_DIRS}"
-  fi
-fi
 ```
 
 For each commit, check what it touches:
