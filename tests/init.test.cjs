@@ -6259,6 +6259,8 @@ describe('init --validate plan-count check (#5786)', () => {
     ['#5786 boundary limit-1: `Plan: 1 of 1` says 1', ['Plan: 1 of 1'], [MISMATCH(1)]],
     ['#5786 boundary limit: `Plan: 1 of 2` matches', ['Plan: 1 of 2'], []],
     ['#5786 boundary limit+1: `Plan: 1 of 3` says 3', ['Plan: 1 of 3'], [MISMATCH(3)]],
+    ['#5786 unconvertible Total beside `Current Plan: 1 of 2` falls back to 2, no warning', ['Current Plan: 1 of 2', 'Total Plans in Phase: 9007199254740993'], []],
+    ['#5786 unconvertible Total beside `Current Plan: 1 of 5` falls back to 5, warns', ['Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'], [MISMATCH(5)]],
   ];
 
   for (const sub of ['execute-phase', 'plan-phase']) {

@@ -5482,6 +5482,18 @@ describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase'
     assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'), 5);
   });
 
+  test('#5786 Total at the safe-integer bound beside `Current Plan: N of M`: limit-1 and limit are read, limit+1 and beyond fall back to M', () => {
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740990'), 9007199254740990);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740991'), 9007199254740991);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740992'), 5);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'), 5);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: ?'), 5);
+  });
+
+  test('#5786 `Current Plan: N of M` wins over `Plan: N of M` when the Total is unreadable', () => {
+    assert.equal(recorded('Current Plan: 1 of 5', 'Plan: 1 of 7', 'Total Plans in Phase: TBD'), 5);
+  });
+
   test('#5786 a lone Total and no fields keep their reads', () => {
     assert.equal(recorded('Total Plans in Phase: 5'), 5);
     assert.equal(recorded('nothing here'), null);
