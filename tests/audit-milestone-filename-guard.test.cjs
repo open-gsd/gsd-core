@@ -49,8 +49,9 @@ test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passe
   assert.match(step, /milestone complete \{version\} --dry-run/);
   assert.match(step, /would_refuse/);
   assert.match(step, /gaps_found/);
-  // A dry-run that fails for a reason other than a gate (unstarted phase, truncated window) is a gap, never a silent skip.
-  assert.match(step, /fails for any other reason .*record a gap "open work not checked: \{error\}" and do not report `passed`/);
+  // Without a capability gate the audit behaves as before: only a gate refusal is a gap, any other dry-run failure leaves the result unchanged.
+  assert.match(step, /fails with reason `milestone_gate_blocked`, record a gap "open work not checked: \{error\}" and do not report `passed`/);
+  assert.match(step, /A failure for any other reason .*leaves the audit result unchanged/);
 });
 
 // #5482: the entries step 5.6 reports need a slot in the report: the step-6 YAML, the gaps_found

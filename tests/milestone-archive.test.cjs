@@ -1431,7 +1431,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 01 || { echo 2 open items >&2; exit 3; }' });
     const before = snapshot();
     const err = refusal(complete());
-    assert.deepEqual(err.blocked, [{ cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', gate_message: 'command exited 3: 2 open items', details: EXIT3 }]);
+    assert.deepEqual(err.blocked.map(typed), [{ cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', details: EXIT3 }]);
     assert.deepEqual(snapshot(), before, 'a refused close must leave the project tree byte-identical');
   });
 
@@ -1641,9 +1641,18 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.equal(r.success, true, r.error);
   });
 
-  test('G19 stdout-only failure surfaces stdout in the refusal', () => {
+  test('G19 a stdout-only failure refuses with the typed reason and its exit code', () => {
     writeGateCap(home, { command: 'echo only-stdout; exit 2' });
-    assert.equal(refusal(complete()).blocked[0].gate_message, 'command exited 2: only-stdout');
+    assert.deepEqual(refusal(complete()).blocked.map(typed), [
+      { cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', details: { ...EXIT3, exitCode: 2 } },
+      { cap_id: 'open-work', phase: '02', reason: 'predicate_blocked', details: { ...EXIT3, exitCode: 2 } },
+    ]);
+  });
+
+  test('G19b a gate that outlives its predicate timeout refuses the close with timedOut details', () => {
+    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 30', timeout: 0.3 } });
+    const blocked = refusal(complete()).blocked;
+    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.timedOut]), [['01', 'predicate_blocked', true], ['02', 'predicate_blocked', true]]);
   });
 
   test('G21 a decimal phase dir yields the token init hands ship.md', () => {
