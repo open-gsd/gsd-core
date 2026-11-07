@@ -50,7 +50,18 @@ export function isContainedIn(
   pathImpl: { sep: string } = path,
 ): boolean {
   if (resolvedTarget === resolvedRoot) return true;
-  return (resolvedTarget + pathImpl.sep).startsWith(resolvedRoot + pathImpl.sep); // allow-handrolled-containment: this IS the canonical comparison every other site routes through
+  if ((resolvedTarget + pathImpl.sep).startsWith(resolvedRoot + pathImpl.sep)) return true; // allow-handrolled-containment: this IS the canonical comparison every other site routes through
+  if (pathImpl.sep === '\\' || (process.platform === 'win32' && pathImpl === path)) {
+    // Normalize before the case-insensitive fallback. A mixed-separator `..`
+    // (`C:\a\b/../../evil`) is not inside `C:\a\b`; replacing slashes alone
+    // used to report that it was. Same-separator `..` still takes the lexical
+    // prefix above — that contract is unchanged.
+    const normTarget = path.win32.normalize(resolvedTarget);
+    const normRoot = path.win32.normalize(resolvedRoot);
+    if (normTarget === normRoot) return true;
+    return (normTarget + '\\').toLowerCase().startsWith((normRoot + '\\').toLowerCase()); // allow-handrolled-containment: Windows case-insensitive containment comparison fallback
+  }
+  return false;
 }
 
 /**

@@ -372,3 +372,67 @@ Merge-back, validation, and cleanup are the **existing** gauntlet, unchanged: th
 
 > **Declared-scope conformance (#2596):** ADR-1239 specifies that *both* isolation adapters route their merge through a check that each plan branch's committed diff stayed inside its declared `files_modified` scope. That check now exists, advisory-first, and is wired into **both** paths: this one passes `--files "$PLAN_FILES"` to `worktree create` above, the harness path passes it to `worktree record-agent`, and `cleanup-wave` runs the one comparison for both. A path outside the declared scope is reported in the result's `warnings` array; it does not block the merge. Promotion to a hard gate is a separate, disclosed change.
 
+## Orchestrator worktree resolution & cleanup guards (#630)
+
+When running wave execution and cleanup guards (both templated cleanup and cleanup-tail), `PRIMARY_WT` must be resolved from `orchestrator_root` persisted in the manifest (`WAVE_WORKTREE_MANIFEST`), not from `git worktree list`'s first entry.
+
+The first entry of `git worktree list` is always the main/primary repository checkout. In parallel workstreams, per-phase lanes, or secondary worktrees, the orchestrator's own worktree is NOT the first entry. Resolving from the first entry would pin a non-primary orchestrator off its own branch, tripping the `#3174` drift assertion. Resolving from `orchestrator_root` recorded at dispatch time ensures cleanup pins back to the orchestrator's own working tree. First-entry resolution survives only as a guarded fallback for legacy pre-#630 manifests.
+
+## Durable wave manifest (#4853)
+
+Keep this section after the isolation preamble. That preamble is the file's
+first bash fence, and readers treat it as the `gsd_run` definition.
+
+Run this block from `execute-phase.md` step 3 (inline dispatch) and from
+`capabilities/claude-orchestration/docs/workflow-backend-dispatch.md` (Workflow-tool
+path) **before** any executor is spawned, when worktrees are in use and
+`WAVE_WORKTREE_MANIFEST` is unset. It is the only copy of the creation script:
+both callers point here so the host file stays under the byte ceiling and the
+two paths cannot drift.
+
+The manifest is `{phase_dir}/wave-{N}-manifest.json` for wave `N` in `1..999`.
+Creation is exclusive (`wx`). A tracked manifest is fatal. A pre-existing
+manifest blocks until `worktree.cleanup-wave` reconciles it. `orchestrator_root`
+is the dispatch-time `git rev-parse --show-toplevel`, so later cleanup pins to
+this orchestrator's worktree rather than `git worktree list`'s first entry (#630).
+
+```bash
+if [ "${USE_WORKTREES:-true}" != "false" ] && [ "${USE_WORKTREES_FOR_PLAN:-true}" != "false" ] && [ -z "${WAVE_WORKTREE_MANIFEST:-}" ]; then
+  _PA="${PHASE_NUMBER:-}"; [ -z "$_PA" ] && [ -n "${PHASE_DIR:-}" ] && { _PD="${PHASE_DIR//\\//}"; _PD="${_PD%/}"; _PA="${_PD##*/}"; }
+  _INDEX=""; [ -n "$_PA" ] && _INDEX=$(gsd_run query phase-plan-index "$_PA" 2>/dev/null || true)
+  WAVE_NUM=$(CURRENT_WAVE="${CURRENT_WAVE:-}" INDEX="$_INDEX" node -e '
+const cw=(process.env.CURRENT_WAVE||"").trim();let wave=cw&&cw!=="{N}"?cw:"",pw="";
+try{const idx=JSON.parse(process.env.INDEX||"{}");const pl=idx.plans||[];
+if(wave&&pl.some(p=>String(p.wave)===wave&&!p.has_summary))pw=wave;
+else{const inc=pl.find(p=>!p.has_summary);if(inc?.wave!=null)pw=String(inc.wave);}
+}catch{}
+if(!wave)wave=pw;else if(pw&&wave!==pw){console.error("FATAL: CURRENT_WAVE ("+wave+") disagrees with phase plan wave ("+pw+")");process.exit(1);}
+if(!wave||!/^[1-9][0-9]{0,2}$/.test(wave)){console.error("FATAL: cannot resolve wave number before worktree dispatch");process.exit(1);}
+process.stdout.write(wave);
+') || exit 1
+  _MP_FLAG="--phase"; _MP_VAL="${PHASE_NUMBER:-}"; [ -n "${PHASE_DIR:-}" ] && { _MP_FLAG="--phase-dir"; _MP_VAL="$PHASE_DIR"; }
+  [ -z "$_MP_VAL" ] && { echo "FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch" >&2; exit 1; }
+  WAVE_WORKTREE_MANIFEST=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --wave "$WAVE_NUM" --raw) || exit 1
+  case "$WAVE_WORKTREE_MANIFEST" in /*|[A-Za-z]:[/\\]*) ;; *)
+    echo "FATAL: worktree.manifest-path returned non-absolute or empty path: '$WAVE_WORKTREE_MANIFEST'" >&2
+    exit 1 ;; esac
+  EXISTING_MANIFESTS=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --raw) || exit 1
+  if [ -n "$EXISTING_MANIFESTS" ]; then
+    while IFS= read -r m; do
+      [ -z "$m" ] && continue
+      if git ls-files --error-unmatch "$m" >/dev/null 2>&1; then
+        echo "FATAL: wave manifest at $m is tracked by git. Untrack: git rm --cached \"$m\"" >&2
+        exit 1
+      fi
+      if [ -f "$m" ]; then
+        echo "BLOCKED: pre-existing wave manifest found at $m from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest \"$m\"" >&2
+        exit 1
+      fi
+    done <<< "$EXISTING_MANIFESTS"
+  fi
+  # Persist dispatch-time orchestrator root to manifest so wave-cleanup pins to orchestrator's OWN worktree (#630).
+  ORCH_ROOT=$(git rev-parse --show-toplevel)
+  ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n",{flag:"wx"})' || exit 1
+  export WAVE_WORKTREE_MANIFEST
+fi
+```

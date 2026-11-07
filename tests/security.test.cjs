@@ -25,6 +25,7 @@ const {
   validatePromptStructure,
   assertWithinRoot,
   tryWithinRoot,
+  isContainedIn,
   PathAcceptance,
 } = require('../gsd-core/bin/lib/security.cjs');
 
@@ -1487,5 +1488,20 @@ describe('assertWithinRoot / tryWithinRoot — narrowed export (#4653)', () => {
       () => assertWithinRoot('../../etc/passwd', base),
       /escapes allowed directory/,
     );
+  });
+
+  test('isContainedIn handles Windows drive casing and separator variations', () => {
+    assert.equal(isContainedIn('C:\\repo\\sub\\file.txt', 'c:\\repo', path.win32), true);
+    assert.equal(isContainedIn('c:\\repo\\sub\\file.txt', 'C:\\repo', path.win32), true);
+    assert.equal(isContainedIn('C:/repo/sub/file.txt', 'c:\\repo', path.win32), true);
+    assert.equal(isContainedIn('C:\\repo2\\sub', 'C:\\repo', path.win32), false);
+    // Same-separator `..` stays inside on the lexical prefix. That contract
+    // predates the normalize-before-fallback fix and must not flip.
+    assert.equal(isContainedIn('C:\\a\\b\\..\\evil', 'C:\\a\\b', path.win32), true);
+    // Mixed separators: normalize both operands before the case-insensitive
+    // fallback. `C:\a\b/../../evil` is `C:\evil`, not inside `C:\a\b`.
+    assert.equal(isContainedIn('C:\\a\\b/../../evil', 'C:\\a\\b', path.win32), false);
+    assert.equal(isContainedIn('C:\\a\\b/c', 'C:\\a\\b', path.win32), true);
+    assert.equal(isContainedIn('C:\\a\\b/../../evil', 'C:\\a\\b', { sep: '\\' }), false);
   });
 });
