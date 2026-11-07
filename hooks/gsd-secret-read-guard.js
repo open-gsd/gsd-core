@@ -464,22 +464,33 @@ let heredocTagsAsWords = true;
 //    shell's PID) as one unit, so a `{` after it opens no `${` (`$${x; cat y` runs `cat y`).
 const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', 'time', 'coproc', 'always']);
 // zsh command position for the token about to start: the start of the input, after a
-// separator other than a group's own `}`, or after a run of unquoted reserved words that
-// itself starts there (`then ! {cat x}`, `time {cat x}`). `always` follows a group's `}`
-// (`{ a } always {cat x}`). A reserved word after an ordinary word is an argument
-// (`echo then {cat x}`). A heredoc body token sits after the newline that ends its
-// terminator line, so the next line's first word is still at command position. Each `{`
-// walks back over the reserved words and bodies before it, and the group it opens is a
-// separator the next walk stops at, so the walks stay linear.
+// separator other than a group's own `}`, or after a run of unquoted reserved words,
+// redirections and heredoc bodies that itself starts there (`then ! {cat x}`,
+// `time {cat x}`, `2>&1 {cat x}`, `</dev/null {cat x}`, and the line after a heredoc,
+// whose body token follows the newline ending its terminator line). `always` follows a
+// group's `}` (`{ a } always {cat x}`). A reserved word or redirection after an ordinary
+// word belongs to that command (`echo then {cat x}`, `echo >&2 {cat x}`).
+// A redirection is an fd duplication (`2>&1`, one token) or an operator and its target
+// word. The walk stays linear over a command: a `{` straight after an operator stops at
+// once, and any other `{` either opens a group (a separator) or ends in an ordinary word,
+// and the next walk stops at either.
 function zshAtCommandPosition(tokens) {
   let j = tokens.length - 1;
-  while (j >= 0 && (tokens[j].kind === 'heredoc'
-    || (tokens[j].kind === 'word' && tokens[j].quoted === 'none' && ZSH_GROUP_AFTER.has(tokens[j].text)))) j--;
-  if (j < 0) return true;
-  if (tokens[j].kind !== 'sep') return false;
-  if (tokens[j].text !== '}') return true;
-  const next = tokens[j + 1];
-  return next !== undefined && next.text === 'always';
+  for (;;) {
+    if (j < 0) return true;
+    const t = tokens[j];
+    if (t.kind === 'heredoc' || (t.kind === 'op' && t.dup)
+      || (t.kind === 'word' && t.quoted === 'none' && ZSH_GROUP_AFTER.has(t.text))) {
+      j--;
+    } else if (t.kind === 'word' && j > 0 && tokens[j - 1].kind === 'op' && !tokens[j - 1].dup) {
+      j -= 2;
+    } else if (t.kind === 'sep' && t.text === '}') {
+      const next = tokens[j + 1];
+      return next !== undefined && next.text === 'always';
+    } else {
+      return t.kind === 'sep';
+    }
+  }
 }
 // zsh's reading of the brace at str[i]: true when it opens or closes a group (tokenize emits
 // it as a separator), false when it is a word character. A `{` opens one only at command
@@ -1324,7 +1335,8 @@ const countTrue = (...xs) => xs.filter(Boolean).length;
 //    runs. So this reading also runs, with no grouping character, for a command holding two
 //    `$` and a span, where it differs from the spans reading only by that rule.
 //  - bash 3.2 reads the bash readings together with #5513's heredoc span, where a `)` in a
-//    heredoc body inside `$( )` closes the substitution.
+//    heredoc body inside `$( )` closes the substitution. Its gate is a `<`, not `<<`: eval
+//    and `bash -c` assemble `<<` from `<''<` or `<\<`, and a single `<` is never assembled.
 const SHELL_READINGS = [
   { applies: needsCr, set: setCr },
   { applies: needsJoin, set: setJoin },
@@ -1340,7 +1352,7 @@ const SHELL_READINGS = [
     set: (on) => { setCr(on); setJoin(on); setZsh(on); shellSpans = on; },
   },
   {
-    applies: (c) => c.includes('<<') && (needsCr(c) || needsJoin(c) || needsSpans(c)),
+    applies: (c) => c.includes('<') && (needsCr(c) || needsJoin(c) || needsSpans(c)),
     set: (on) => { setBash32Spans(on); setCr(on); setJoin(on); setSpans(on); },
   },
 ];
