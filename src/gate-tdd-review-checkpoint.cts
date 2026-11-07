@@ -186,7 +186,9 @@ function planRow(
   // the evidence.
   const entry = Object.hasOwn(seal, planId) ? seal[planId] : undefined;
   const probe = isFullSha(entry?.red) ? entry.red : entry?.green;
-  const squashed = isFullSha(probe) && commitIsGone(commitReachability(projectDir, probe, 'HEAD'), () => historyIsComplete(projectDir));
+  let complete: boolean | undefined;
+  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
+  const squashed = isFullSha(probe) && commitIsGone(commitReachability(projectDir, probe, 'HEAD'), historyComplete);
   const sealed = squashed && entry !== undefined && entry.red !== entry.green ? entry : {};
   const sealedRed = isFullSha(sealed.red);
   const sealedGreen = isFullSha(sealed.green);
@@ -215,8 +217,12 @@ function planRow(
   const missing: string[] = [];
   if (!red) missing.push('RED');
   if (!anyGreenCommit) missing.push('GREEN');
-  // #5354: credit incomplete, no live plan commit, nothing sealed, and the SUMMARY's task commits are all gone = squashed away.
-  const notEvaluable = missing.length > 0 && commits.length === 0 && !Object.hasOwn(seal, planId) && summaryCommitsAllUnreachable(projectDir, phaseDir, planPath);
+  // #5354: credit incomplete and no live plan commit: a plan squashed away. With nothing sealed, its SUMMARY's task commits
+  // are all gone. With a complete-looking seal that did not apply, a shallow clone cannot tell (it lacks the sealed commits).
+  const sealedPair = entry !== undefined && isFullSha(entry.red) && isFullSha(entry.green) && entry.red !== entry.green;
+  const notEvaluable = missing.length > 0 && commits.length === 0 && (Object.hasOwn(seal, planId)
+    ? sealedPair && !squashed && !historyComplete()
+    : summaryCommitsAllUnreachable(projectDir, phaseDir, planPath));
   const status: TddPlanRow['status'] = notEvaluable ? 'NotEvaluable' : missing.length === 0 && green ? 'Pass' : 'FAIL';
   // Both commit kinds exist but no GREEN follows a RED: its own reason. A row that fails for a
   // missing commit keeps the exact shape it always had (`missing` already says why).

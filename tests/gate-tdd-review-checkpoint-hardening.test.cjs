@@ -372,6 +372,31 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
   });
 
+  test('a sealed squashed plan in a shallow clone is not evaluable, not a failure (#5354)', () => {
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    run(dir, '--record');
+    sealGit(dir, 'add', '-A');
+    sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+    squash(dir, base);
+    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow-sealed`);
+    dirs.push(clone);
+    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    const r = run(clone);
+    assert.equal(r.payload.rows[0].status, 'NotEvaluable');
+    assert.equal(r.block, false);
+  });
+
+  test('a shallow marker over a warm object store does not make an existing seal commit gone (#5354)', () => {
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    run(dir, '--record');
+    sealGit(dir, 'add', '-A');
+    sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+    squash(dir, base);
+    assert.equal(run(dir).payload.rows[0].status, 'Pass');
+    w(dir, '.git/shallow', `${sealGit(dir, 'rev-parse', 'HEAD')}\n`);
+    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
+  });
+
   test('a seal holding only a sibling plan entry does not rule out NotEvaluable (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
     squash(dir, base);
@@ -615,7 +640,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(dir).outcome, 'unreadable');
   });
 
-  // Each distinct SUMMARY hash costs one `git merge-base` spawn, so the count is capped (64).
+  // Each distinct SUMMARY hash costs a `git merge-base` spawn and, when git does not know it, a `git rev-parse --verify`: the count is capped (64).
   const REFS_CAP = 64;
   for (const [label, count, status] of [['limit-1', REFS_CAP - 1, 'NotEvaluable'], ['limit', REFS_CAP, 'NotEvaluable'], ['limit+1', REFS_CAP + 1, 'FAIL']]) {
     test(`SUMMARY with ${label} (${count}) distinct unreachable task commits -> ${status}`, () => {

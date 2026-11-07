@@ -24,7 +24,7 @@ export type SealPlans = Record<string, Partial<SealEntry>>;
 
 // Cap for repo-controlled text the gate reads (the seal and SUMMARY.md); a real one is a few KiB at most; anything bigger is not read (repo content, so hostile).
 const REPO_TEXT_MAX_BYTES = 64 * 1024;
-/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn (the loop stops at the first id that is not gone), plus one `git rev-parse --is-shallow-repository` per call when an id is missing, plus, when every id exists, one `git rev-list` and one `git show` per id. */
+/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn and, when git does not know it, one `git rev-parse --verify` (the loop stops at the first id that is not gone), so at most 2 * SUMMARY_REFS_MAX spawns; plus one `git rev-parse --is-shallow-repository` per call; plus, when every id exists, one `git rev-list` per call and one `git show` per id. */
 const SUMMARY_REFS_MAX = 64;
 
 function parseSeal(text: string): Evidence<SealPlans> {
@@ -88,12 +88,13 @@ export function commitReachability(projectDir: string, sha: string, of: string):
 }
 
 /**
- * Whether a commit is gone (squashed away): git knows it but it is not an ancestor of HEAD, or git does not
- * know it in a complete history. `null` (git could not answer) and `reachable` are not gone. The one place
- * that reads a `commitReachability` answer as "squashed", for the seal and for the SUMMARY task commits.
+ * Whether a commit is gone (squashed away): git says it is not an ancestor of HEAD, or does not know it, in a
+ * complete history. A shallow clone cuts reachable commits off too, so there it is never gone. `null` (git could
+ * not answer) and `reachable` are not gone. The one place that reads a `commitReachability` answer as "squashed",
+ * for the seal and for the SUMMARY task commits.
  */
 export function commitIsGone(reach: CommitReachability | null, historyComplete: () => boolean): boolean {
-  return reach === 'unreachable' || (reach === 'missing' && historyComplete());
+  return (reach === 'unreachable' || reach === 'missing') && historyComplete();
 }
 
 /**
