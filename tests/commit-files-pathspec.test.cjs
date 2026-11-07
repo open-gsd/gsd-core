@@ -3516,6 +3516,17 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(runFence(dir, g).exitCode, 1);
     }
   });
+  test('pr-branch.md preflight refuses a staged foreign path before the replay commits', (t) => {
+    const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/pr-branch.md'), 'utf8'));
+    const from = all.findIndex((l) => l.startsWith('DIRTY=$(git status'));
+    assert.notEqual(from, -1, 'the preflight exists');
+    const pre = all.slice(from, from + all.slice(from).findIndex((l) => l === 'fi') + 1).join('\n');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489p-');
+    fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+    assert.equal(runFence(dir, pre).exitCode, 0);
+    fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+    assert.equal(runFence(dir, pre).exitCode, 1);
+  });
   test('ship.md CI-recovery commit records no staged foreign path', (t) => {
     const line = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/ship.md'), 'utf8')).find((l) => l.includes('git commit --allow-empty'));
     // allow-test-rule: source-text-is-the-product (#5211)
@@ -3542,7 +3553,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
   test('stop-tracking recipe carries the same four fragments in all six docs', (t) => {
-    const norm = (t) => t.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
+    const norm = (s) => s.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
     // The W029 message and remedy belong to the health rule, so the docs are compared with the rule's own output.
     const repo = createTempGitProject('gsd-5489-w029-');
