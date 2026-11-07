@@ -1526,6 +1526,8 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     ['a body line joined to the tag line by a backslash-newline (bash, dash, zsh)', 'cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF'],
     ['the same, the read then hidden by a quote (bash, dash, zsh)', "cat <<E\nx\\\nE\n'\nE\ncat .env\n'"],
     ['the same inside `$( )` (bash, dash, zsh)', 'echo $(cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF\n)'],
+    ['the same, assembled by eval from `\\\'\'` and a newline (bash, dash, zsh)', "eval 'cat <<E\nx\\''\nE\ncat <<F\nE\ncat .env\nF'"],
+    ['`$$` assembled by eval from `$\'\'$` (bash, dash)', "eval '$''${x; cat .env'"],
   ];
   for (const [label, cmd] of DENIED) {
     test(`denies the read in ${label}`, () => {
@@ -1557,6 +1559,28 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
   test('a span between escaped backticks in a heredoc body stays denied', () => {
     const cmd = 'cat <<E\n\\`cat .env\\`\nE';
     assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // The added readings run after the plain one, each under its own catch, so a command that
+  // overflows the stack in an added reading keeps the plain reading's denial. A backtick body
+  // of 6,000 nested `"\$(` reads harmlessly as written; the body the shell parses, `"$(` nested
+  // 6,000 deep, overflows the span finder.
+  const deepEscapedBacktick = 'echo `' + '"\\$('.repeat(6000) + ')"'.repeat(6000) + '`';
+  test('a read after a deep escaped backtick body stays denied', () => {
+    const cmd = `${deepEscapedBacktick}; cat .env`;
+    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then cat .env', { tool: 'Bash', path: '.env' });
+  });
+  test('a debugger spawn after a deep escaped backtick body stays denied', () => {
+    const cmd = `${deepEscapedBacktick}; claude --agent gsd-debugger -p hi`;
+    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then a debugger spawn', { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+
+  // A heredoc body of 64,000 lines of three backslashes is one joined line under the join
+  // reading. The run's length is counted once per line, so the hook answers within the file's
+  // spawn backstop (QUICK_SPAWN_TIMEOUT_MS) rather than re-walking the run at every join.
+  test('a long run of joined heredoc lines is allowed within the spawn backstop', () => {
+    const cmd = 'cat <<E\n' + '\\\\\\\n'.repeat(64000) + 'E';
+    assertAllowed(runHook(bash(cmd)), '64,000 joined backslash lines');
   });
 
   // Property: behind each construct, a read is denied exactly when it names a secret.
