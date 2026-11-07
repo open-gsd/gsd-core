@@ -376,6 +376,20 @@ describe('capability-enum doc parity (#3303)', () => {
     );
   });
 
+  test('git.commit_timeout_ms default and ceiling in both reference tables equal the exported constants (#5231)', () => {
+    const { COMMIT_TIMEOUT_DEFAULT_MS, COMMIT_TIMEOUT_MAX_MS } = require('../gsd-core/bin/lib/git-commit-timeout.cjs');
+    const rows = {
+      'planning-config.md': docRow('git.commit_timeout_ms'),
+      'CONFIGURATION.md': tableRowForKey(fs.readFileSync(DOCS_CONFIG_PATH, 'utf8'), 'git.commit_timeout_ms'),
+    };
+    for (const [name, cells] of Object.entries(rows)) {
+      assert.ok(cells, `${name} must document git.commit_timeout_ms`);
+      const text = cells.join(' | ');
+      assert.ok(text.includes(`\`${COMMIT_TIMEOUT_DEFAULT_MS}\``), `${name} default must be ${COMMIT_TIMEOUT_DEFAULT_MS}`);
+      assert.ok(text.includes(String(COMMIT_TIMEOUT_MAX_MS)), `${name} range must end at ${COMMIT_TIMEOUT_MAX_MS}`);
+    }
+  });
+
   test('agent_skills row documents the array-of-strings form (#3303)', () => {
     const cells = docRow('agent_skills');
     const allowedCell = cells[4];
