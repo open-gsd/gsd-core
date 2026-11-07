@@ -235,6 +235,25 @@ Codex UI drives both rather than one following GSD and the other following your 
 > The installer prints a one-time notice when it drops a pin. If you were on a ChatGPT account, this
 > is the change that stops the 400s — nothing to do.
 
+### Choosing or pinning a Codex model
+
+Use `/gsd-config --advanced` Section 7 to change the model resolved for Codex spawn-time
+routing and `codex exec` through `model_profile_overrides.codex.<tier>`. This does not pin the
+model in installed Codex agent files.
+
+To pin a model for a specific installed agent, use `model_overrides` instead:
+
+```json
+{
+  "runtime": "codex",
+  "model_overrides": { "gsd-planner": "gpt-6.1-sol" }
+}
+```
+
+The Codex model catalog is maintained in [the Codex CLI model metadata](https://github.com/openai/codex/blob/126a0ee92ed2c5e73cd8a8f7e37563e8527552d7/codex-rs/models-manager/models.json). The model metadata advertises `ultra` for GPT-6.1 Sol, GPT-6 Astra, and GPT-6 Sol; GSD still rejects `ultra` as an orchestration policy.
+That catalog records GPT-6.1 Sol and GPT-6 Astra from Codex CLI 0.153.0, and GPT-6 Sol and GPT-6 Luna from 0.155.0. Check `codex debug models` and the `/model` selector for your installed CLI and account; availability can still depend on CLI version and account. GSD's orchestration policy
+continues to reject `ultra` even when a model advertises it.
+
 ### Allocating for execution-heavy workflows on Codex
 
 Execution and verification account for most of the model calls in a long GSD run — planning happens

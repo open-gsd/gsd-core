@@ -5631,6 +5631,37 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     assert.doesNotMatch(toml, /^model_reasoning_effort = "xhigh"$/m);
   });
 
+  test('Codex tier overrides do not pin installed agents; model_overrides does (#2313)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_profile: 'quality',
+      model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } },
+    });
+    let resolver = readGsdRuntimeProfileResolver(tmpDir);
+    let toml = generateCodexAgentToml(
+      'gsd-planner',
+      '---\nname: gsd-planner\n---\nBody.\n',
+      null,
+      resolver
+    );
+    assert.doesNotMatch(toml, /^model = "gpt-6\.1-sol"$/m);
+
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_profile: 'quality',
+      model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } },
+      model_overrides: { 'gsd-planner': 'gpt-6.1-sol' },
+    });
+    resolver = readGsdRuntimeProfileResolver(tmpDir);
+    toml = generateCodexAgentToml(
+      'gsd-planner',
+      '---\nname: gsd-planner\n---\nBody.\n',
+      { 'gsd-planner': 'gpt-6.1-sol' },
+      resolver
+    );
+    assert.match(toml, /^model = "gpt-6\.1-sol"$/m);
+  });
+
   test('generated TOML always includes model_reasoning_effort even when model_profile_overrides sets reasoning_effort to empty (#443 unified) (#3241: model now pinned via explicit model_overrides, not the resolver alone)', () => {
     // Under the unified effort design (#443), model_reasoning_effort in the Codex TOML
     // is driven by the unified effort resolver (resolveInstallTimeEffort / effortCfg),
@@ -6001,16 +6032,20 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
 
 // ─── #3007: Codex effort capability is per-model ─────────────────────────────
 //
-// Ground truth (Codex's models.json): gpt-5.6-sol advertises
-// low/medium/high/xhigh/max/ultra; gpt-5.6-luna and gpt-5.6-terra advertise
-// low/medium/high/xhigh/max (no ultra); no Codex model advertises 'minimal'.
-// An unknown/omitted model id falls back to the family baseline
-// (low/medium/high/xhigh/max).
+// Ground truth: Codex CLI model catalog at
+// https://github.com/openai/codex/blob/126a0ee92ed2c5e73cd8a8f7e37563e8527552d7/codex-rs/models-manager/models.json
+// advertises per-model reasoning levels.
+// GSD still rejects 'ultra' as orchestration policy, even for models that list it.
+// An unknown/omitted model id falls back to the family baseline.
 
 const CODEX_MODEL_EFFORT_SETS = {
   'gpt-5.6-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   'gpt-5.6-luna': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
   'gpt-5.6-terra': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+  'gpt-6.1-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  'gpt-6-astra': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  'gpt-6-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  'gpt-6-luna': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
 };
 const CODEX_FAMILY_BASELINE = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 function advertisedCodexEfforts(model) {
@@ -6018,6 +6053,26 @@ function advertisedCodexEfforts(model) {
 }
 
 describe('#3007 — Codex effort capability is per-model, and every clamp is visible', () => {
+  test('#5591 GPT-6 models are registered without replacing the GPT-5.6 defaults', () => {
+    const { CODEX_MODEL_EFFORT, RUNTIME_PROFILE_MAP, renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
+    assert.deepStrictEqual(RUNTIME_PROFILE_MAP.codex, {
+      opus: { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' },
+      sonnet: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+      haiku: { model: 'gpt-5.6-luna', reasoning_effort: 'medium' },
+    });
+    for (const model of Object.keys(CODEX_MODEL_EFFORT_SETS).filter((id) => id.startsWith('gpt-6'))) {
+      assert.ok(Object.hasOwn(CODEX_MODEL_EFFORT, model), model);
+      assert.deepStrictEqual(CODEX_MODEL_EFFORT[model], CODEX_MODEL_EFFORT_SETS[model]);
+      for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+        assert.strictEqual(renderEffortForRuntime('codex', level, model).value, level);
+      }
+      assert.strictEqual(renderEffortForRuntime('codex', 'minimal', model).value, 'low');
+      for (const level of ['ultra']) {
+        assert.strictEqual(renderEffortForRuntime('codex', level, model).value, null);
+      }
+    }
+  });
+
   test('max survives for a model that advertises it', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-sol');
@@ -6877,6 +6932,21 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
         model_profile_overrides: { codex: { opus: 'MPO-CODEX-OPUS' } },
       });
       assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'MPO-CODEX-OPUS');
+    });
+
+    test('GPT-6.1 Sol resolves through a Codex tier override and an agent pin still wins', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6.1-sol');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6.1-sol');
+      cleanup(dir);
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } }, model_overrides: { 'gsd-executor': 'PINNED' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'PINNED');
+    });
+
+    test('GPT-6 Astra resolves through the existing Codex override path', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6-astra' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6-astra');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6-astra');
     });
 
     test('model_overrides still wins over everything', () => {

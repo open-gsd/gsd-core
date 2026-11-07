@@ -54,7 +54,28 @@ const {
   clampEffortForHost,
   nextTier,
   mergeEffortTierDefaults,
+  getCodexModelChoices,
 } = catalog;
+
+describe('#5591 Model Catalog Module selector metadata', () => {
+  test('accessor returns independent selector metadata', () => {
+    const choices = getCodexModelChoices();
+    assert.deepEqual(choices, catalog.catalog.codexModelChoices);
+    choices[0].name = 'changed by caller';
+    choices.pop();
+    assert.deepEqual(getCodexModelChoices(), catalog.catalog.codexModelChoices);
+  });
+
+  test('missing optional choices permits the manual-ID fallback', () => {
+    const saved = catalog.catalog.codexModelChoices;
+    try {
+      delete catalog.catalog.codexModelChoices;
+      assert.deepEqual(getCodexModelChoices(), []);
+    } finally {
+      catalog.catalog.codexModelChoices = saved;
+    }
+  });
+});
 
 describe('model-catalog: exported enums/maps', () => {
   test('VALID_TIERS is opus/sonnet/haiku plus inherit', () => {
@@ -89,12 +110,16 @@ describe('model-catalog: exported enums/maps', () => {
     assert.deepEqual(new Set(RUNTIMES_WITH_FAST_MODE), new Set(['api']));
   });
 
-  test('CODEX_MODEL_EFFORT has a baseline and per-model sets, sol includes ultra', () => {
+  test('CODEX_MODEL_EFFORT preserves GPT-5.6 and registers GPT-6 choices', () => {
     assert.ok(CODEX_MODEL_EFFORT['_baseline'] instanceof Set);
     assert.equal(CODEX_MODEL_EFFORT['_baseline'].has('max'), true);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-sol'].has('ultra'), true);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-terra'].has('ultra'), false);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-luna'].has('ultra'), false);
+    for (const model of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol']) {
+      assert.deepEqual(CODEX_MODEL_EFFORT[model], new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']));
+    }
+    assert.deepEqual(CODEX_MODEL_EFFORT['gpt-6-luna'], new Set(['low', 'medium', 'high', 'xhigh', 'max']));
   });
 
   test('MODEL_ALIAS_MAP maps opus/sonnet/haiku to claude model ids', () => {
@@ -539,4 +564,13 @@ describe('model-catalog: EFFORT_ARGV.pi (#5557)', () => {
     assert.deepEqual(renderEffortArgv('pi', 'high', 'none'), { argv: [], value: null, host: 'pi' });
     assert.deepEqual(renderEffortArgv('pi', 'high', 'undocumented'), { argv: [], value: null, host: 'pi' });
   });
+});
+
+test('#5591 Codex model-aware and argv channels agree on supported effort', () => {
+  for (const model of Object.keys(CODEX_MODEL_EFFORT).filter(id => id !== '_baseline')) {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+      const expected = EFFORT_ARGV.codex.supported.has(level) ? level : null;
+      assert.equal(renderEffortForRuntime('codex', level, model).value, expected, `${model}: ${level}`);
+    }
+  }
 });

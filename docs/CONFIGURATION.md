@@ -1928,14 +1928,14 @@ advertised set:
 | `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-6-astra` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| `gpt-6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
 | any other / unknown id | `low`, `medium`, `high`, `xhigh`, `max` (family baseline) |
 
-Today every shipped Codex model advertises the same usable range, so the same effort resolves
-identically across `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` — `ultra` is sol's only
-differentiator, and GSD rejects it for every model regardless (see below), so no observable output
-currently differs by model. The table is per-model, not per-runtime, because Codex declares
-capability per model and the sets are free to diverge — the previous single per-runtime assumption
-is exactly what went stale and produced this change.
+The listed models and the family baseline pass `low` through `max` to Codex. GSD refuses
+`ultra` regardless of the selected model. Actual availability depends on the runtime and account.
 
 Three consequences:
 
@@ -2241,6 +2241,8 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 
 This resolves `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5.6-terra` (medium), `gsd-codebase-mapper` → `gpt-5.6-luna` (medium). Codex skills pass each resolved `model` and `reasoning_effort` to `spawn_agent` when its visible schema advertises the corresponding field; otherwise they omit the field and inherit the session/static agent configuration.
 
+For Codex model selection and per-agent pinning, see [Choosing or pinning a Codex model](how-to/configure-model-profiles.md#choosing-or-pinning-a-codex-model).
+
 **Claude example** — pin a tier's generation without giving up tier-based profiles (#4192):
 
 ```json
@@ -2254,6 +2256,8 @@ This resolves `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5
 ```
 
 On the Claude runtime, tier resolution stays on Claude Code's adaptive tier aliases (`opus` / `sonnet` / `haiku`) unless you override a tier. An override value that names the current tier default collapses back to its alias (the same model in the always-accepted form); any other value — a pinned older generation such as `claude-opus-4-7`, a bare alias repointing the tier, or a non-Anthropic model id — is resolved verbatim, so `resolve-model` reports exactly what the profile pins. Setting `runtime: "claude"` alone (no overrides) changes nothing: aliases resolve exactly as they do with the key absent. `resolve_model_ids: true` remains the global switch for materializing full IDs on every agent.
+
+For a Codex model override example, see [Configure model profiles](how-to/configure-model-profiles.md#choosing-or-pinning-a-codex-model).
 
 **Per-runtime overrides** — replace one or more tier defaults:
 
