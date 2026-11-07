@@ -112,6 +112,18 @@ function runSh(script, cwd, interpreter = 'bash') {
   } finally { cleanup(tmp); }
 }
 
+// Keys for `inputs`, one per line, through the shipped refkey function `fn`.
+const refKeys = (fn, inputs) => {
+  const tmp = createTempDir('gsd-refkey-');
+  try {
+    const f = path.join(tmp, 'in.txt');
+    fs.writeFileSync(f, inputs.join('\n') + '\n');
+    const r = runSh(`${fn}\nwhile IFS= read -r l; do refkey "$l"; echo; done < '${f.replace(/\\/g, '/')}'`, tmp);
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.split(/\r?\n/).slice(0, inputs.length);
+  } finally { cleanup(tmp); }
+};
+
 // Fast-forward the bare target to the published -pr branch (a merged PR).
 function mergePr(dir, target = 'main') {
   git(dir, 'merge-base', '--is-ancestor', target, 'feature-pr');
@@ -201,21 +213,11 @@ describe('#5469 pr-branch published marker (real git)', () => {
 
   test('refkey is injective and never emits a slash (property)', () => {
     const fn = refkeyFn();
-    const keys = (inputs) => {
-      const tmp = createTempDir('gsd-refkey-');
-      try {
-        const f = path.join(tmp, 'in.txt');
-        fs.writeFileSync(f, inputs.join('\n') + '\n');
-        const r = runSh(`${fn}\nwhile IFS= read -r l; do refkey "$l"; echo; done < '${f.replace(/\\/g, '/')}'`, tmp);
-        assert.equal(r.status, 0, r.stderr);
-        return r.stdout.split(/\r?\n/).slice(0, inputs.length);
-      } finally { cleanup(tmp); }
-    };
     // Every class refkey encodes (`% / space ~^:?*[\ . @`, control, non-ASCII) plus the literals that spell an escape.
     const unit = fc.constantFrom('a', '%', '2', 'F', '/', '.', '@', ' ', '~', '^', ':', '?', '*', '[', '\\', '\x01', '\t', '\x1f', '\x7f', 'é');
     const part = fc.string({ unit, minLength: 1, maxLength: 6 });
     fc.assert(fc.property(fc.uniqueArray(part, { minLength: 2, maxLength: 40 }), (inputs) => {
-      const out = keys(inputs);
+      const out = refKeys(fn, inputs);
       assert.equal(new Set(out).size, inputs.length, 'distinct inputs must give distinct keys');
       assert.ok(out.every((k) => !k.includes('/')));
     }), { numRuns: 20 });
@@ -464,7 +466,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   // An executable gh is bounded by `gsd_run run-with-timeout`, which needs no timeout binary (stock macOS).
-  test('executable gh on a host without `timeout`: the lookup runs through run-with-timeout and proves the merge', () => {
+  test('executable gh: the lookup runs through run-with-timeout and proves the merge', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
@@ -472,8 +474,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const prTip = builtOf(dir);
     squashMerge(dir, { later: true, deletePr: true });
     commitRound(dir, 2, 'two.txt');
-    const noTimeout = "command() { if [ \"$1\" = -v ] && [ \"$2\" = timeout ]; then return 1; fi; builtin command \"$@\"; }";
-    const r = publish(dir, 'main', { prelude: `${ghPrelude(prTip)}\n${noTimeout}` });
+    const r = publish(dir, 'main', { prelude: ghPrelude(prTip) });
     onlyRound2(r, dir);
     assert.equal(markerOf(dir), tip1);
     assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- gh pr list/m, 'gh ran bounded');
@@ -790,14 +791,13 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(markerOf(dir), tip1);
   });
 
-  test('on a host without `timeout`, the git merge proofs run through run-with-timeout', () => {
+  test('the git merge proofs run through run-with-timeout (no timeout binary needed)', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
     mergePr(dir);
     commitRound(dir, 2);
-    const noTimeout = "command() { if [ \"$1\" = -v ] && [ \"$2\" = timeout ]; then return 1; fi; builtin command \"$@\"; }";
-    const r = publish(dir, 'main', { prelude: noTimeout });
+    const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
     assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git merge-base --is-ancestor/m, 'git ran bounded');
   });
@@ -879,6 +879,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git log .*--cherry-mark/m, 'the patch comparison ran bounded');
   });
 
   test('published code-only commits rebase-merged onto a moved target, then `git rebase main` drops them: no warning, only round 2 is replayed', () => {
