@@ -432,13 +432,20 @@ describe('roadmap.update-plan-progress: only a missing_phase_details decline sto
 
   test('gsd-executor: the ROADMAP write comes before every STATE.md write, so a decline halts before STATE moves', () => {
     const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-    const lines = splitLines(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'agents/gsd-executor.md'), 'utf8')).map((l) => l.trim());
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const partPath = 'gsd-core/workflows/execute-plan/steps/executor-state-updates.md';
+    const lines = splitLines(fs.readFileSync(path.join(__dirname, '..', 'agents/gsd-executor.md'), 'utf8')).map((l) => l.trim());
     const roadmap = lines.findIndex((l) => l.startsWith(marker));
     assert.notEqual(roadmap, -1);
+    const delegate = lines.findIndex((l) => l.includes(partPath));
+    assert.notEqual(delegate, -1, 'executor delegates its STATE writes to the shipped part');
+    assert.ok(roadmap < delegate, `STATE-update delegation (line ${delegate}) must follow the ROADMAP write (line ${roadmap})`);
+
+    const stateLines = splitLines(fs.readFileSync(path.join(__dirname, '..', partPath), 'utf8')).map((l) => l.trim());
     for (const verb of ['advance-plan', 'update-progress', 'record-metric', 'add-decision', 'record-session']) {
-      const state = lines.findIndex((l) => l.startsWith(`gsd_run query state.${verb}`) || l.startsWith(`gsd_run query state.${verb} `));
+      const state = stateLines.findIndex((l) => l.startsWith(`gsd_run query state.${verb}`) || l.startsWith(`gsd_run query state.${verb} `));
       assert.notEqual(state, -1, `state.${verb} write present`);
-      assert.ok(roadmap < state, `state.${verb} (line ${state}) must follow the ROADMAP write (line ${roadmap})`);
     }
   });
 

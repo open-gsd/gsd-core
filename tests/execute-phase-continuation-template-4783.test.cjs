@@ -15,6 +15,7 @@ const { readFileNormalized } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..', 'gsd-core');
 const EXECUTE = path.join(ROOT, 'workflows', 'execute-phase.md');
+const EXECUTOR = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
 
 function shippedFileNames(dir, out = new Set()) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -34,11 +35,27 @@ describe('#4783 execute-phase continuation spawn does not point at a missing tem
 
   test('step 6 still states the continuation placeholders and the <completed_tasks> tag itself', () => {
     const text = readFileNormalized(EXECUTE);
-    const step = /\*\*Spawn continuation agent \(NOT resume\)\*\*[\s\S]*?\n7\. /.exec(text);
+    const step = /\*\*Spawn continuation agent \(NOT resume\)[^*\n]*\*\*[\s\S]*?\n7\. /.exec(text);
     assert.ok(step, 'could not locate the continuation spawn step');
-    for (const placeholder of ['{completed_tasks_table}', '{resume_task_number}', '{resume_task_name}', '{user_response}', '{resume_instructions}']) {
+    for (const placeholder of ['{completed_tasks_table}', '{resume_task_number}', '{resume_task_name}', '{user_response}', '{resume_instructions}', '{worktree_path}']) {
       assert.ok(step[0].includes(placeholder), `step 6 must state ${placeholder}`);
     }
     assert.ok(step[0].includes('<completed_tasks>'), 'step 6 must name the <completed_tasks> tag the executor keys on');
+    assert.ok(step[0].includes('original executor worktree'), 'step 6 must preserve the worktree that owns continuation metadata');
+    assert.ok(step[0].includes('main checkout'), 'step 6 must define an empty worktree path as the main checkout');
+    assert.ok(step[0].includes('non-empty') && step[0].includes('fail closed'),
+      'step 6 must refuse only a missing non-empty continuation worktree');
+  });
+
+  test('checkpoint returns carry the worktree metadata consumed by step 6', () => {
+    const text = readFileNormalized(EXECUTOR);
+    const start = text.indexOf('<checkpoint_return_format>');
+    const end = text.indexOf('</checkpoint_return_format>', start);
+    assert.ok(start !== -1 && end > start, 'executor must define checkpoint_return_format');
+    const checkpoint = text.slice(start, end);
+    assert.match(checkpoint, /<worktree_metadata>/);
+    assert.match(checkpoint, /"worktree_path":"\$\{GSD_WORKTREE_PATH:-\}"/);
+    assert.match(checkpoint, /"branch":"\$\{GSD_WORKTREE_BRANCH:-\}"/);
+    assert.match(checkpoint, /"expected_base":"\$\{GSD_WORKTREE_EXPECTED_BASE:-\}"/);
   });
 });

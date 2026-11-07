@@ -97,10 +97,7 @@ Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective,
 </step>
 
 <step name="record_start_time">
-```bash
-PLAN_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-PLAN_START_EPOCH=$(date +%s)
-```
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh` when this prompt has no `<completed_tasks>` payload, or `continuation` when it does. The part's shell guard, not step-skipping prose, decides whether the marker is replaced or preserved (#5212).
 </step>
 
 <worktree_metadata_capture>
@@ -375,9 +372,13 @@ When hitting checkpoint or auth gate, return this structure:
 ### Awaiting
 
 [What user needs to do/provide]
+
+<worktree_metadata>
+{"agent_id":"{phase}-{plan}","worktree_path":"${GSD_WORKTREE_PATH:-}","branch":"${GSD_WORKTREE_BRANCH:-}","expected_base":"${GSD_WORKTREE_EXPECTED_BASE:-}"}
+</worktree_metadata>
 ```
 
-Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point.
+Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point. The worktree block gives the orchestrator the cwd that owns continuation metadata; an empty path means this executor is already in the main checkout.
 </checkpoint_return_format>
 
 <continuation_handling>
@@ -637,6 +638,10 @@ To inspect what is untracked vs. genuinely new, use `git status --short` and eva
 file individually. If a file appears untracked but is not part of your task, leave it alone.
 </destructive_git_prohibition>
 
+<step name="record_completion_time">
+After verification, before SUMMARY, read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work to refresh completion. A continuation must use the original worktree whose Git metadata owns the marker; follow the part's recovery diagnostic instead of creating a new start.
+</step>
+
 <summary_creation>
 After all tasks complete, create `{phase}-{plan}-SUMMARY.md` at `.planning/phases/XX-name/`.
 
@@ -658,6 +663,8 @@ This file is the canonical output of this step. The orchestrator reads `.plannin
 **Use template:** @__GSD_PI_ENGINE_ROOT__/gsd-core/templates/summary.md
 
 **Frontmatter:** phase, plan, subsystem, tags, dependency graph (requires/provides/affects), tech-stack (added/patterns), key-files (created/modified), decisions, metrics (duration, completed date), status (`status: complete` — required so the audit-open scanner recognises the summary as done), and `actuals` (#2632).
+
+**Duration:** copy `record_completion_time`'s printed `duration` to SUMMARY `metrics.duration` and the completion report. State rereads the same result; never estimate (`~` or free text).
 
 **`actuals` (required when the plan carried an `estimate`):** record what the phase ACTUALLY cost, on the SAME scale the estimate used — `estimateTokens` (chars/4) over the realized diff, NOT a harness token count. Mixing scales measures the measurement methods, not the miss.
 ```yaml
@@ -768,31 +775,8 @@ After SUMMARY.md, update ROADMAP.md progress FIRST, then STATE.md. The ROADMAP w
 PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${PLAN} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
 ```
 
-Then update STATE.md using `gsd-tools query` state handlers (named flags):
-
-```bash
-# Advance plan counter (handles edge cases automatically)
-gsd_run query state.advance-plan
-
-# Recalculate progress bar from disk state
-gsd_run query state.update-progress
-
-# Record execution metrics (phase, plan, duration, tasks, files)
-gsd_run query state.record-metric \
-  --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
-  --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
-
-# Add decisions (extract from SUMMARY.md key-decisions)
-# --phase is required here: without it the verb falls back to STATE.md's global
-# pointer, which misattributes decisions when plans execute out of pointer order (#4763).
-for decision in "${DECISIONS[@]}"; do
-  gsd_run query state.add-decision --phase "${PHASE}" --summary "${decision}"
-done
-
-# Update session info (stopped-at, resume-file; timestamp set automatically)
-gsd_run query state.record-session \
-  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
-```
+Then update STATE.md using `gsd-tools query` state handlers (named flags).
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. Replace `{task_count}` and `{file_count}` with the measured completed-task and changed-file counts, and `{summary_path}` with the SUMMARY.md path just written. The part resolves every value it consumes in its own shell, validates the cached duration before the first STATE mutation, then records the metric, SUMMARY decisions, and session. It never relies on `${DECISIONS[@]}`, `${PHASE}`, or other variables from an earlier Bash call.
 
 ```bash
 # Mark completed requirements from PLAN.md frontmatter
@@ -860,6 +844,11 @@ content via `git add -f .planning/...` is forbidden — that bug is exactly
 the regression #3678 reported, where the agent leaks `.planning/` artifacts
 into the user's project history.
 </final_commit>
+
+<step name="clear_plan_timing">
+On successful close-out remove markers; retain them for checkpoint/failure continuation.
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/clear-plan-timing.md`.
+</step>
 
 <completion_format>
 ```markdown
