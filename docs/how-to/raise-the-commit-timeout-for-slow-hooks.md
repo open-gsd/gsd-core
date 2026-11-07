@@ -10,7 +10,7 @@ the repo (it carries no reason code). The default is 30 seconds. This page raise
 
 A timeout reads `git commit timed out after 30s (killed mid-hook; a stale lock may remain at …)`. A hook that
 rejects the commit reads `commit_failed` with the hook's own message. Only the first is fixed by this page.
-`pr-subrepo` reports both cases as plain error messages ("git commit timed out after Ns in <repo>" versus
+`pr-subrepo` reports both cases as plain error messages ("<repo>: git commit timed out after Ns" versus
 "Failed to commit in <repo>: ..."), so tell them apart by the message text.
 
 ## 2. Set the timeout
@@ -31,7 +31,7 @@ A killed commit can leave the hook running and the lock in place. If no git proc
 ## Notes
 
 - The key applies to all three commit sites, including sub-repo commits.
-- Prefer making the hook faster over raising the ceiling; the hour limit exists so a repo-controlled config file
+- Prefer making the hook faster over raising the timeout; the hour limit exists so a repo-controlled config file
   cannot turn the bound off.
 
 See `git.commit_timeout_ms` in [the configuration reference](../CONFIGURATION.md).

@@ -3124,7 +3124,7 @@ function cmdPrSubrepo(
     if (isSpawnTimeout(commitResult)) {
       // #3886 (PR-subrepo counterpart): name the timeout and the stale lock
       // instead of echoing the killed hook's partial stderr.
-      error(commitTimeoutMessage(repoCwd, commitTimeout, '', '', repo));
+      error(`${repo}: ${commitTimeoutHead(repoCwd, commitTimeout)}`);
     }
     error(`Failed to commit in ${repo}: ${commitResult.stderr}`);
   }
@@ -4272,14 +4272,17 @@ function resolveIndexLockPath(cwd: string): string {
   return raw ? (path.isAbsolute(raw) ? raw : path.join(cwd, raw)) : path.join(cwd, '.git', 'index.lock');
 }
 
-/** #3886: shared timeout message shape for all three commit sites. */
-function commitTimeoutMessage(cwd: string, timeoutMs: number, stderr: string, stdout: string, repo?: string): string {
-  // With `repo` (pr-subrepo): name the repo and drop the killed hook's partial stderr.
+/** #3886: the timeout head shared by all three commit sites. */
+function commitTimeoutHead(cwd: string, timeoutMs: number): string {
   return (
-    `git commit timed out after ${timeoutMs / 1000}s${repo ? ` in ${repo}` : ''} (killed mid-hook; a stale lock may remain at ` +
-    `${resolveIndexLockPath(cwd)} — remove it if no git process is running)` +
-    (repo ? '' : `. Partial stderr: ${stderr || stdout || '(none)'}`)
+    `git commit timed out after ${timeoutMs / 1000}s (killed mid-hook; a stale lock may remain at ` +
+    `${resolveIndexLockPath(cwd)} — remove it if no git process is running)`
   );
+}
+
+/** #3886: the head plus the killed hook's partial output (cmdCommit and commit-to-subrepo). */
+function commitTimeoutMessage(cwd: string, timeoutMs: number, stderr: string, stdout: string): string {
+  return `${commitTimeoutHead(cwd, timeoutMs)}. Partial stderr: ${stderr || stdout || '(none)'}`;
 }
 
 /**
