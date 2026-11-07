@@ -318,43 +318,13 @@ describe('#3345 phase-plan-index — blocked plan lands in incomplete', () => {
 
 // ─── #5789: a non-regular SUMMARY must never hang the status predicates ────
 //
-// Every hang row runs in a CHILD process with a hard timeout + SIGKILL, so on
-// unfixed code the row fails by timing out instead of hanging the suite.
-
-const { spawnSync, execFileSync } = require('node:child_process');
-const { TOOLS_PATH } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+// The FIFO and device-file rows (which spawn child processes and need a POSIX
+// filesystem) live in tests/phase.platform.test.cjs; the rows here are
+// platform-neutral and call the predicates in-process.
 
 const SUMMARY_CAP_5789 = 64 * 1024;
-const IS_WIN_5789 = process.platform === 'win32';
-const PLAN_MODULE_5789 = require.resolve('../gsd-core/bin/lib/plan-dependency-graph.cjs');
 
-function runChild5789(args, cwd) {
-  const r = spawnSync(process.execPath, args, {
-    cwd,
-    encoding: 'utf8',
-    timeout: PROBE_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
-  });
-  const timedOut = r.error && r.error.code === 'ETIMEDOUT';
-  return { ...r, timedOut: Boolean(timedOut) };
-}
-
-// Calls one exported predicate on `summaryPath` in a child; returns the boolean.
-function probePredicate5789(name, summaryPath) {
-  const script =
-    'const m = require(process.argv[1]); process.stdout.write(JSON.stringify(m[process.argv[2]](process.argv[3])));';
-  const r = runChild5789(['-e', script, PLAN_MODULE_5789, name, summaryPath], os.tmpdir());
-  assert.equal(r.timedOut, false, `#5789: ${name}(${summaryPath}) did not return within the probe timeout`);
-  assert.equal(r.status, 0, r.stderr);
-  return JSON.parse(r.stdout);
-}
-
-function makeFifo5789(file) {
-  execFileSync('mkfifo', [file], { timeout: PROBE_TIMEOUT_MS });
-}
-
-function writeCliPhase5789(projectDir, { fifo }) {
+function writeCliPhase5789(projectDir) {
   const phaseDir = join(projectDir, '.planning', 'phases', '01-test');
   fs.mkdirSync(phaseDir, { recursive: true });
   const planFm = [
@@ -371,83 +341,8 @@ function writeCliPhase5789(projectDir, { fifo }) {
     '',
   ].join('\n');
   fs.writeFileSync(join(phaseDir, '01-01-PLAN.md'), planFm);
-  if (fifo) makeFifo5789(join(phaseDir, '01-01-SUMMARY.md'));
   return phaseDir;
 }
-
-describe('#5789 FIFO SUMMARY — predicates return promptly', { skip: IS_WIN_5789 }, () => {
-  test('#5789 row 1: isSummaryFileHalted on a FIFO returns false', () => {
-    const dir = tempDir('gsd-5789-r1-');
-    try {
-      const fifo = join(dir, '01-01-SUMMARY.md');
-      makeFifo5789(fifo);
-      assert.equal(probePredicate5789('isSummaryFileHalted', fifo), false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('#5789 row 2: isSummaryFileBlocked on a FIFO returns false', () => {
-    const dir = tempDir('gsd-5789-r2-');
-    try {
-      const fifo = join(dir, '01-01-SUMMARY.md');
-      makeFifo5789(fifo);
-      assert.equal(probePredicate5789('isSummaryFileBlocked', fifo), false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('#5789 row 7: symlink to /dev/zero is not read by either predicate', () => {
-    if (!fs.existsSync('/dev/zero')) return;
-    const dir = tempDir('gsd-5789-r7-');
-    try {
-      const link = join(dir, '01-01-SUMMARY.md');
-      fs.symlinkSync('/dev/zero', link);
-      assert.equal(probePredicate5789('isSummaryFileHalted', link), false);
-      assert.equal(probePredicate5789('isSummaryFileBlocked', link), false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-});
-
-describe('#5789 FIFO SUMMARY — CLI commands exit promptly', { skip: IS_WIN_5789 }, () => {
-  const CLI_ROWS = [
-    { row: 3, args: ['phase-plan-index', '01-test', '--json'] },
-    { row: 4, args: ['init', 'execute-phase', '1'] },
-    { row: 5, args: ['init', 'plan-phase', '1'] },
-  ];
-  for (const { row, args } of CLI_ROWS) {
-    test(`#5789 row ${row}: gsd-tools ${args.slice(0, 2).join(' ')} with a FIFO SUMMARY exits`, () => {
-      const project = createTempProject(`gsd-5789-cli${row}-`);
-      try {
-        writeCliPhase5789(project, { fifo: true });
-        const r = runChild5789([TOOLS_PATH, ...args], project);
-        assert.equal(r.timedOut, false, `#5789: gsd-tools ${args.join(' ')} hung on a FIFO SUMMARY`);
-        assert.equal(r.status, 0, r.stderr || r.stdout);
-      } finally {
-        cleanup(project);
-      }
-    });
-  }
-
-  test('#5789 row 6: phase lookup (searchPhaseInDir) with a FIFO SUMMARY does not hang', () => {
-    const project = createTempProject('gsd-5789-r6-');
-    try {
-      writeCliPhase5789(project, { fifo: true });
-      const r = runChild5789([TOOLS_PATH, 'find-phase', '1'], project);
-      assert.equal(r.timedOut, false, '#5789: find-phase hung on a FIFO SUMMARY');
-      assert.equal(r.status, 0, r.stderr || r.stdout);
-      let found;
-      assert.doesNotThrow(() => { found = JSON.parse(r.stdout); }, `#5789: find-phase stdout must be JSON, got: ${r.stdout}`);
-      assert.equal(found.found, true, `#5789: find-phase must locate the fixture phase, got: ${r.stdout}`);
-      assert.match(found.directory, /(^|\/)01-test$/, `#5789: find-phase must resolve to 01-test, got: ${found.directory}`);
-    } finally {
-      cleanup(project);
-    }
-  });
-});
 
 describe('#5789 regular SUMMARY behaviour is unchanged', () => {
   function withSummary(name, content, fn) {
@@ -485,14 +380,6 @@ describe('#5789 regular SUMMARY behaviour is unchanged', () => {
   test('#5789 row 11: oversized file with halted frontmatter at byte 0 is read as a prefix', () => {
     withSummary('r11', `${summaryWithStatus('halted')}${'x'.repeat(SUMMARY_CAP_5789 * 3)}\n`, (f) => {
       assert.equal(isSummaryFileHalted(f), true);
-    });
-  });
-
-  test('#5789 row 12: symlink to a regular halted file is still followed', { skip: IS_WIN_5789 }, () => {
-    withSummary('r12', summaryWithStatus('halted'), (target, dir) => {
-      const link = join(dir, '01-02-SUMMARY.md');
-      fs.symlinkSync(target, link);
-      assert.equal(isSummaryFileHalted(link), true);
     });
   });
 
@@ -538,7 +425,7 @@ describe('#5789 regular SUMMARY behaviour is unchanged', () => {
   test('#5789 row 14: halt propagation to a dependent is unchanged (phase-plan-index blocked_by)', () => {
     const project = createTempProject('gsd-5789-r14-');
     try {
-      const phaseDir = writeCliPhase5789(project, { fifo: false });
+      const phaseDir = writeCliPhase5789(project);
       fs.writeFileSync(join(phaseDir, '01-01-SUMMARY.md'), summaryWithStatus('halted'));
       fs.writeFileSync(
         join(phaseDir, '01-02-PLAN.md'),
@@ -568,18 +455,16 @@ describe('#5789 parity — both predicates treat every input class the same way'
     { id: 'empty', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, ''); return f; }, halted: false, blocked: false },
     { id: 'directory', make: (dir) => { const f = join(dir, 's.md'); fs.mkdirSync(f); return f; }, halted: false, blocked: false },
     { id: 'missing', make: (dir) => join(dir, 'nope.md'), halted: false, blocked: false },
-    { id: 'dev-zero-symlink', make: (dir) => { const f = join(dir, 's.md'); fs.symlinkSync('/dev/zero', f); return f; }, halted: false, blocked: false, posix: true },
-    // Each predicate runs in a child with a hard timeout + SIGKILL
-    // (probePredicate5789), so a FIFO that blocks the open cannot hang the suite.
-    { id: 'fifo', make: (dir) => { const f = join(dir, 's.md'); makeFifo5789(f); return f; }, halted: false, blocked: false, posix: true },
+    // The device-file and fifo classes are in tests/phase.platform.test.cjs.
   ];
+  const { isSummaryFileHalted, isSummaryFileBlocked } = planDependencyGraph;
   for (const cls of INPUT_CLASSES) {
-    test(`#5789 parity: ${cls.id} — halted and blocked agree on whether the file is read`, { skip: cls.posix && IS_WIN_5789 }, () => {
+    test(`#5789 parity: ${cls.id} — halted and blocked agree on whether the file is read`, () => {
       const dir = tempDir(`gsd-5789-par-${cls.id}-`);
       try {
         const f = cls.make(dir);
-        const halted = probePredicate5789('isSummaryFileHalted', f);
-        const blocked = probePredicate5789('isSummaryFileBlocked', f);
+        const halted = isSummaryFileHalted(f);
+        const blocked = isSummaryFileBlocked(f);
         assert.equal(halted, cls.halted, `#5789 parity: ${cls.id} isSummaryFileHalted`);
         assert.equal(blocked, cls.blocked, `#5789 parity: ${cls.id} isSummaryFileBlocked`);
       } finally {
