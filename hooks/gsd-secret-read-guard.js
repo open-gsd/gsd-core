@@ -345,6 +345,12 @@ const ASSIGNMENT_PREFIX_WORDS = new Set([...SHELL_COMMAND_KEYWORDS, 'time']);
 const LOOP_HEADS = new Set(['for', 'select']);
 
 let furtherReading = false;
+// The further reading runs once without bash's subscript joins (`a[x y]=1` as
+// one word) and, only when that pass allowed and saw a place a join could
+// start (joinCandidate), once more with them. A join swallows text into one
+// word, so it is kept out of the pass whose denials it could otherwise lose.
+let subscriptJoins = false;
+let joinCandidate = false;
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -788,10 +794,13 @@ function tokenize(str) {
   // (subscriptClose): a command's start, after a reserved word, `time -p` or an
   // assignment, and after a redirection only while nothing but redirections
   // came before it (bash's PST_REDIRLIST: `>f a[x y]=1 cmd` joins, `A=b >f
-  // a[x y]=1 cmd` runs `a[x`). An unclosed subscript ends bash's parse.
+  // a[x y]=1 cmd` runs `a[x`). A reserved word counts only before any
+  // assignment or redirection (`x=1 if …` runs a program named `if`). An
+  // unclosed subscript ends bash's parse.
   let atCommandStart = true;
   let onlyRedirects = true;
-  let afterTime = false;
+  let reservedOk = true;
+  let afterTime = 0; // 1 after `time`, 2 after `time -p`
   let redirectTarget = false;
   let subscriptsOpen = true;
 
@@ -813,19 +822,23 @@ function tokenize(str) {
   // The word in `buf`, just pushed, moves the further reading's command position.
   const noteCommandPosition = () => {
     const wasAfterTime = afterTime;
-    afterTime = false;
+    afterTime = 0;
     if (redirectTarget) {
       redirectTarget = false;
+      reservedOk = false;
       if (!onlyRedirects) atCommandStart = false;
     } else if (!atCommandStart) {
       // the command word is behind us
-    } else if (quoted === 'none' && ASSIGNMENT_PREFIX_WORDS.has(buf)) {
+    } else if (reservedOk && quoted === 'none' && ASSIGNMENT_PREFIX_WORDS.has(buf)) {
       onlyRedirects = true;
-      afterTime = buf === 'time';
-    } else if (wasAfterTime && quoted === 'none' && (buf === '-p' || buf === '--')) {
-      afterTime = buf === '-p';
+      afterTime = buf === 'time' ? 1 : 0;
+    } else if (wasAfterTime === 1 && quoted === 'none' && buf === '-p') {
+      afterTime = 2;
+    } else if (wasAfterTime !== 0 && quoted === 'none' && buf === '--') {
+      // `time -p --` and `time --` still take a command
     } else if (FURTHER_ASSIGNMENT_RE.test(buf)) {
       onlyRedirects = false;
+      reservedOk = false;
     } else {
       atCommandStart = false;
     }
@@ -838,7 +851,8 @@ function tokenize(str) {
     seg++;
     atCommandStart = true;
     onlyRedirects = true;
-    afterTime = false;
+    reservedOk = true;
+    afterTime = 0;
     redirectTarget = false;
   };
   const op = (text, read, dup) => {
@@ -1042,6 +1056,13 @@ function tokenize(str) {
     if (ch === '(' || ch === ')') {
       sep(ch);
       i++;
+      // `((` opens arithmetic, where bash reads no assignment. The tokens are
+      // the same two seps either way.
+      if (ch === '(' && furtherReading && str[i] === '(') {
+        sep('(');
+        i++;
+        atCommandStart = false;
+      }
       continue;
     }
     if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
@@ -1050,15 +1071,21 @@ function tokenize(str) {
       continue;
     }
 
+    // bash's token_is_ident reads the RAW word: a name spelled through a quote,
+    // a backslash or a substitution (`\a[`, `$(x)a[`) takes no subscript.
     if (ch === '[' && furtherReading && atCommandStart && !redirectTarget && subscriptsOpen
-        && quoted === 'none' && SHELL_NAME_RE.test(buf)) {
-      const close = subscriptClose(str, i);
-      if (close === -1) {
-        subscriptsOpen = false;
+        && quoted === 'none' && SHELL_NAME_RE.test(buf) && isRawWordBefore(str, i, buf)) {
+      if (!subscriptJoins) {
+        joinCandidate = true;
       } else {
-        buf += str.slice(i, close + 1);
-        i = close + 1;
-        continue;
+        const close = subscriptClose(str, i);
+        if (close === -1) {
+          subscriptsOpen = false;
+        } else {
+          buf += str.slice(i, close + 1);
+          i = close + 1;
+          continue;
+        }
       }
     }
 
@@ -1073,16 +1100,38 @@ function tokenize(str) {
 const SHELL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const NAMED_FD_RE = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 
+// Whether `name` is the whole raw word in front of `i`: the same characters,
+// starting the word (at the start, or after a blank, `;`, `&`, `|`, `(`, `<`
+// or `>`).
+function isRawWordBefore(str, i, name) {
+  const start = i - name.length;
+  if (start < 0 || str.slice(start, i) !== name) return false;
+  return start === 0 || /[\s;&|(<>]/.test(str[start - 1]);
+}
+
+// Index of the `'` closing an ANSI-C quote `$'…'` whose body starts at `k`, or
+// -1: a backslash escapes the next character, `\'` included.
+function ansiCQuoteClose(str, k) {
+  for (; k < str.length; k++) {
+    if (str[k] === '\\') k++;
+    else if (str[k] === "'") return k;
+  }
+  return -1;
+}
+
 // Index of the `]` that closes the subscript bash reads from the `[` at `i`
 // (`a[x y]=1 cmd` is one word to bash), or -1 when none does, which bash
-// reports as an unexpected end of input. Quotes, a backslash, `$(…)`, `${…}`
-// and backquotes hide a `]`; a nested `[` takes its own.
+// reports as an unexpected end of input. Quotes (`$'…'` included), a
+// backslash, `$(…)`, `${…}` and backquotes hide a `]`; a nested `[` takes its own.
 function subscriptClose(str, i) {
   let depth = 0;
   for (let k = i; k < str.length; k++) {
     const c = str[k];
     if (c === '\\') {
       k++;
+    } else if (c === '$' && str[k + 1] === "'") {
+      k = ansiCQuoteClose(str, k + 2);
+      if (k === -1) return -1;
     } else if (c === "'" || c === '`') {
       k = str.indexOf(c, k + 1);
       if (k === -1) return -1;
@@ -1112,6 +1161,9 @@ function braceClose(str, k) {
     const c = str[k];
     if (c === '\\') {
       k++;
+    } else if (c === '$' && str[k + 1] === "'") {
+      k = ansiCQuoteClose(str, k + 2);
+      if (k === -1) return -1;
     } else if (c === "'" || c === '`') {
       k = str.indexOf(c, k + 1);
       if (k === -1) return -1;
@@ -1132,13 +1184,22 @@ function braceClose(str, k) {
 }
 
 // Index of the `"` closing a double-quoted span that starts at `k`, or -1.
+// `$(…)` and backquotes hide a `"`.
 function doubleQuoteClose(str, k) {
   while (k < str.length) {
     const c = str[k];
     if (c === '"') return k;
-    if (c === '\\') k += 2;
-    else if (c === '$' && str[k + 1] === '(') k = findParenClose(str, k + 2) + 1;
-    else k++;
+    if (c === '\\') {
+      k += 2;
+    } else if (c === '$' && str[k + 1] === '(') {
+      k = findParenClose(str, k + 2) + 1;
+    } else if (c === '`') {
+      const j = str.indexOf('`', k + 1);
+      if (j === -1) return -1;
+      k = j + 1;
+    } else {
+      k++;
+    }
   }
   return -1;
 }
@@ -2596,13 +2657,19 @@ process.stdin.on('end', () => {
     // decision, so the verdict above stands; Pi fails this guard closed on a
     // timeout and refuses the command.
     furtherReading = true;
+    joinCandidate = false;
     try {
-      const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-      if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
-      const furtherSpawn = findDebuggerCliSpawn(command, 0);
-      if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
+      for (const joins of [false, true]) {
+        if (joins && !joinCandidate) break;
+        subscriptJoins = joins;
+        const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+        if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
+        const furtherSpawn = findDebuggerCliSpawn(command, 0);
+        if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
+      }
     } finally {
       furtherReading = false;
+      subscriptJoins = false;
     }
     allow(undefined);
   } catch {
