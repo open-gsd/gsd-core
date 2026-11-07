@@ -56,7 +56,7 @@ import frontmatterMod = require('./frontmatter.cjs');
 const { extractFrontmatter, stripFrontmatter } = frontmatterMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
-const { findOrphanSummaries } = coreUtilsMod;
+const { findOrphanSummaries, isStateJsonPublishPath, STATE_JSON_PATHSPECS } = coreUtilsMod;
 import { stateFieldValue, stateCurrentPositionSlice } from './state-document.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInputMod = require('./unusable-input.cjs');
@@ -174,6 +174,12 @@ interface PlanningSnapshot {
   // one path under it is still tracked by git — see `buildPlanningTrackedField`'s
   // own doc comment for the full rationale.
   planningTracked: { value: { tracked: boolean; ignored: boolean }; scope: Scope; reason: string };
+  // #5505: tracked copies of the derived state.json at the paths publishStateContract
+  // writes (`.planning[/<project>][/workstreams/<ws>]/state.json`); backs W031.
+  // Asked of git directly (bounded output), so a large tracked tree cannot hide it. Carries
+  // scope + reason like `planningTracked`, so a listing git could not answer is not read as
+  // "nothing tracked".
+  stateJsonTracked: { value: string[]; scope: Scope; reason: string };
   // ─── Phase 11 (#3309) "Rule table organization" additions ─────────────────
   // The design doc's own "Rule table organization" table and prose disagree
   // on the count: the table lists EIGHT rows (through `planningRootFiles`,
@@ -594,6 +600,17 @@ function buildWorktreeHealthField(cwd: string): { value: ReturnType<typeof inspe
 const PLANNING_TRACKED_GIT_TIMEOUT_MS = 10_000;
 
 /**
+ * Why a failed `ls-files` failed: a `rev-parse` asks git whether `cwd` is a work tree at all.
+ * #5505: W029's listing and W031's (`buildStateJsonTracked`, also the publisher's migration) share
+ * it, so a listing git could not answer means the same in both; W029's behaviour is unchanged.
+ */
+function classifyLsFilesFailure(cwd: string, timeout: number = PLANNING_TRACKED_GIT_TIMEOUT_MS): string {
+  const probe = execGit(['rev-parse', '--is-inside-work-tree'], { cwd, timeout });
+  if (probe.timedOut) return 'git_timed_out';
+  return probe.exitCode === 0 ? 'git_list_failed' : 'not_a_git_repo';
+}
+
+/**
  * Resolve `planningTracked` — whether `.planning/` matches a gitignore rule
  * AND whether at least one path under it is still tracked by git (#3586,
  * Phase 2 of epic #2292). `.gitignore` has no effect on files git already
@@ -668,18 +685,25 @@ function buildPlanningTrackedField(cwd: string): { value: { tracked: boolean; ig
       return { value: { tracked: true, ignored }, scope: SCOPE.COMPLETE, reason: 'ok_truncated' };
     }
     if (result.exitCode !== 0) {
-      const probe = execGit(['rev-parse', '--is-inside-work-tree'], { cwd, timeout: PLANNING_TRACKED_GIT_TIMEOUT_MS });
-      if (probe.timedOut) {
-        return { value: { tracked: false, ignored: false }, scope: SCOPE.UNREADABLE, reason: 'git_timed_out' };
-      }
-      const reason = probe.exitCode === 0 ? 'git_list_failed' : 'not_a_git_repo';
-      return { value: { tracked: false, ignored: false }, scope: SCOPE.UNREADABLE, reason };
+      return { value: { tracked: false, ignored: false }, scope: SCOPE.UNREADABLE, reason: classifyLsFilesFailure(cwd) };
     }
     const tracked = result.stdout.trim().length > 0;
     const ignored = isGitIgnored(cwd, '.planning/');
     return { value: { tracked, ignored }, scope: SCOPE.COMPLETE, reason: 'ok' };
   } catch {
     return { value: { tracked: false, ignored: false }, scope: SCOPE.UNREADABLE, reason: 'exception' };
+  }
+}
+
+/** Tracked copies of the derived state.json (#5505); a listing git cannot answer is UNREADABLE, not empty. */
+function buildStateJsonTracked(cwd: string, timeout: number = PLANNING_TRACKED_GIT_TIMEOUT_MS): { value: string[]; scope: Scope; reason: string } {
+  try {
+    const r = execGit(['ls-files', '-z', '--', ...STATE_JSON_PATHSPECS], { cwd, timeout });
+    if (r.timedOut) return { value: [], scope: SCOPE.UNREADABLE, reason: 'git_timed_out' };
+    if (r.exitCode !== 0) return { value: [], scope: SCOPE.UNREADABLE, reason: classifyLsFilesFailure(cwd, timeout) };
+    return { value: r.stdout.split('\0').filter((f) => f && isStateJsonPublishPath(cwd, f)), scope: SCOPE.COMPLETE, reason: 'ok' };
+  } catch {
+    return { value: [], scope: SCOPE.UNREADABLE, reason: 'exception' };
   }
 }
 
@@ -1346,6 +1370,7 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
     agentInstall: buildAgentInstallField(cwd),
     worktreeHealth: buildWorktreeHealthField(cwd),
     planningTracked: buildPlanningTrackedField(cwd),
+    stateJsonTracked: buildStateJsonTracked(cwd),
     projectSections: buildProjectSectionsField(cwd),
     statePhaseTokens: stateFields.statePhaseTokens,
     stateStatus: stateFields.stateStatus,
@@ -1370,5 +1395,6 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
 
 export = {
   buildPlanningSnapshot,
+  buildStateJsonTracked,
   worstScope,
 };

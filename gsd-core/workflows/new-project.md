@@ -639,8 +639,10 @@ gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[s
 **Commit config.json:**
 
 ```bash
-gsd_run query commit "chore: add project config" --files .planning/config.json
+gsd_run query commit "chore: add project config" --files .planning/config.json .planning/.gitignore
 ```
+
+`.planning/.gitignore` holds the rule that keeps the derived `state.json` out of every clone; `config-new-project` wrote it.
 
 ## 5.1. Sub-Repo Detection
 

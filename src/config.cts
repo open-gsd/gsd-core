@@ -19,6 +19,7 @@ const { ExitError } = cliExitMod;
 import configLoader = require('./config-loader.cjs');
 const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { ignoreInTree } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
@@ -735,6 +736,14 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     platformWriteSync(configPath, JSON.stringify(config, null, 2));
   } catch (err) {
     error('Failed to write config.json: ' + (err as Error).message);
+  }
+  // #5505: state.json is a derived cache that never belongs in a commit. A project that keeps
+  // planning in git ships the ignore rule from its first commit (new-project.md commits the file
+  // with config.json); with commit_docs false the whole directory is ignored already.
+  if (configLoader.resolveCommitDocsTiers(undefined, config['commit_docs'], () => configLoader.isGitIgnored(cwd, '.planning')).resolved) {
+    ignoreInTree(planningBase, 'state.json');
+    // the workstream copies' sub-path comes from the layout owner, like the publish globs (STATE_JSON_SCOPES)
+    ignoreInTree(planningBase, 'state.json', `${path.relative(planningDir(cwd, null), planningDir(cwd, '*')).split(path.sep).join('/')}/`);
   }
   // The user defaults rewrite follows the config it was planned for: a
   // creation that fails before here leaves the defaults file as it was.

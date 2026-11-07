@@ -250,6 +250,7 @@ Report final status.
 | W028 | warning | A GSD-owned install scope shadows another on this machine | No |
 | W029 | warning | .planning/ matches a gitignore rule but is still tracked by git (gitignore has no effect on already-tracked files) | No |
 | W030 | warning | Phase verification report status is outside the closed set | Yes (known legacy statuses only) |
+| W031 | warning | Derived .planning/state.json is tracked by git, so each boundary command leaves it modified | No |
 | I001 | info | Plan without SUMMARY (may be in progress) | No |
 | I010 | info | Resolved CWD reported alongside the E010 home-directory guard | No |
 

@@ -744,6 +744,9 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
     const sub = path.join(tmpDir, 'we[ir]d#dir');
     fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+    // The enclosing repo owns the project only when it tracks a file under it outside `.planning/` (#5505, one gate for both callers).
+    fs.writeFileSync(path.join(sub, 'app.txt'), 'x');
+    git(tmpDir, 'add', '--', 'we[ir]d#dir/app.txt');
     assert.ok(begin(sub).success);
     assert.doesNotMatch(status(tmpDir), /milestone\.lock/);
     assert.ok(

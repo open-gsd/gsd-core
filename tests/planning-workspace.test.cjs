@@ -986,3 +986,37 @@ describe('planning-workspace: the phase SPEC predicate (#5629)', () => {
     assert.equal(findPhaseSpecIn([]), null);
   });
 });
+
+// #5505: commitDocsOptedOut is the ONE flat-then-nested `commit_docs` lookup for a named scope. It must read a value
+// as off exactly when the commit policy's own resolver (resolveCommitDocsTiers) does, for every value shape and scope.
+describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () => {
+  const { commitDocsOptedOut } = planningWorkspaceDirect;
+  const { resolveCommitDocsTiers } = require('../gsd-core/bin/lib/config-loader.cjs');
+  const VALUES = [false, 0, null, '', true, 1, 'no', 'false'];
+  const SCOPES = [
+    { ws: null, project: null, dir: [] },
+    { ws: 'alpha', project: null, dir: ['workstreams', 'alpha'] },
+    { ws: null, project: 'second-product', dir: ['second-product'] },
+    { ws: 'alpha', project: 'second-product', dir: ['second-product', 'workstreams', 'alpha'] },
+  ];
+  for (const scope of SCOPES) {
+    for (const nested of [false, true]) {
+      test(`${nested ? 'planning.commit_docs' : 'commit_docs'} in ${scope.dir.join('/') || 'the root'}`, (t) => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-optout-'));
+        t.after(() => cleanup(tmp));
+        const dir = path.join(tmp, '.planning', ...scope.dir);
+        fs.mkdirSync(dir, { recursive: true });
+        for (const value of VALUES) {
+          fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(nested ? { planning: { commit_docs: value } } : { commit_docs: value }));
+          assert.equal(
+            commitDocsOptedOut(tmp, scope.ws, scope.project),
+            !resolveCommitDocsTiers(undefined, value, () => false).resolved,
+            `commit_docs ${JSON.stringify(value)}`,
+          );
+        }
+        fs.writeFileSync(path.join(dir, 'config.json'), '{}');
+        assert.equal(commitDocsOptedOut(tmp, scope.ws, scope.project), false, 'an absent key never opts out');
+      });
+    }
+  }
+});

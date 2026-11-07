@@ -23,10 +23,11 @@ const { output, ERROR_REASON } = ioMod;
 const error: typeof ioMod.error = ioMod.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
-const { loadConfig, isGitIgnored } = configLoaderMod;
+const { loadConfig, isGitIgnored, resolveCommitDocsTiers } = configLoaderMod;
+import { GIT_PROBE_TIMEOUT_MS, ignoreRuleLine } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
@@ -1588,11 +1589,9 @@ function detectPhaseNumberFromFiles(files: string[] | undefined): string | null 
   return null;
 }
 
-type CommitDocsSource = 'phase' | 'config' | 'gitignore' | 'default';
-interface CommitDocsResolution {
-  resolved: boolean;
-  source: CommitDocsSource;
-}
+// The tier resolver (config-loader) owns the shape; the source union is read off it, never restated.
+type CommitDocsResolution = ReturnType<typeof resolveCommitDocsTiers>;
+type CommitDocsSource = CommitDocsResolution['source'];
 
 /**
  * #3587: resolve the `phase_commit_docs.<phase-id>` override for `phaseNum`
@@ -1619,7 +1618,8 @@ function resolvePhaseCommitDocsOverride(config: Record<string, unknown>, phaseNu
 }
 
 /**
- * #3587: the four-tier `commit_docs` precedence chain for a single commit —
+ * #3587: the four-tier `commit_docs` precedence chain for a single commit — the tiers live in
+ * `resolveCommitDocsTiers` (src/config-loader.cts); this is `cmdCommit`'s caller of it —
  * `phase_commit_docs.<phase-id>` (tier 1, resolved HERE because this call site
  * is the one place that knows the phase — see 40-design.md "Rejected" §1: NOT
  * inside `loadConfig`, which has no phase context and is called by nearly every
@@ -1642,11 +1642,7 @@ function resolveCommitDocsPolicy(
   phaseNum: string | null,
   isPlanningGitIgnored: () => boolean,
 ): CommitDocsResolution {
-  const phaseOverride = resolvePhaseCommitDocsOverride(config, phaseNum);
-  if (phaseOverride !== undefined) return { resolved: phaseOverride, source: 'phase' };
-  if (!config['commit_docs']) return { resolved: false, source: 'config' };
-  if (isPlanningGitIgnored()) return { resolved: false, source: 'gitignore' };
-  return { resolved: true, source: 'default' };
+  return resolveCommitDocsTiers(resolvePhaseCommitDocsOverride(config, phaseNum), config['commit_docs'], isPlanningGitIgnored);
 }
 
 // Reason string per commit_docs-resolution source, for the tier-1/tier-2 skip
@@ -2280,6 +2276,16 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // cmdCommitToSubrepo's exitCode-gated push.
       if (addResult.exitCode === 0) {
         stagedPaths.push(file);
+      } else if (
+        explicitFiles &&
+        // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
+        isStateJsonPublishPath(cwd, path.relative(cwd, fullPath)) &&
+        execGit(['check-ignore', '-q', '--', file], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).exitCode === 0
+      ) {
+        // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing
+        // file it is skipped and recorded, not a failure. Any other ignored path still fails
+        // (naming it is a user error), and check-ignore exits 0 only for UNTRACKED paths.
+        skippedFiles.push(file);
       } else {
         stagingFailures.push({
           file,
@@ -2292,6 +2298,35 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       }
     }
   }
+
+  // #5505: the state.json migration (publishStateContract) stages a removal and a `.gitignore` rule (new, or an edit of a tracked one).
+  // A scoped commit (`git commit -- <paths>`) would leave them staged and the tree dirty, and a path
+  // list cannot carry the removal: git re-adds a listed path from the work tree, where the file stays.
+  // So when nothing but those paths was staged before this call, the commit takes the index as it is.
+  // The git call runs only when something was pre-staged. Names come from git's own output and may
+  // hold glob characters, so they are literal pathspecs downstream.
+  const migrationStaged = explicitFiles && preStaged.size > 0
+    ? execGit(
+        ['diff', '--cached', '--name-status', '-z', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
+        { cwd, timeout: GIT_PROBE_TIMEOUT_MS },
+      ).stdout.split('\0').filter(Boolean)
+        // status, path pairs: the migration only removes a state.json, so a staged edit of one (a copy a `!` rule keeps tracked) is the user's
+        .flatMap((x, i, all) => (i % 2 === 1 && (all[i - 1] === 'D') === !x.endsWith('.gitignore') ? [x] : []))
+        // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
+        .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
+        // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
+        // any other staged line in it is the user's own edit and stays out of this commit. The diff, unlike `git show`
+        // output, survives execGit's trimming of a trailing blank line and an empty file.
+        .filter((p) => {
+          if (!p.endsWith('.gitignore')) return true;
+          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '-U0', '--ignore-space-at-eol', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+          const body = diff.stdout.split('\n');
+          const changed = body.slice(body.findIndex((l) => l.startsWith('@@'))).filter((l) => /^[+-]/.test(l));
+          return diff.exitCode === 0 && changed.length === 1 && changed[0] === `+${ignoreRuleLine('state.json')}`;
+        })
+    : [];
+  const carried = [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
+  stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));
 
   // #4208: caller-declared removals -- see stageDeclaredRemovals.
   const declaredRemovals = stageDeclaredRemovals(cwd, removedDeclared);
@@ -2306,7 +2341,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // later. Driven. Only the removal-derived entries are literalised: `--files`
   // entries keep whatever pathspec behaviour they have today, which is not this
   // change's to alter.
-  const removalPathspecs = new Set(declaredRemovals.removedPathspec);
+  const removalPathspecs = new Set([...declaredRemovals.removedPathspec, ...carried]);
   const asPathspec = (p: string): string => (removalPathspecs.has(p) ? `:(literal)${p}` : p);
 
   // Put every entry this call removed back, exactly — mode and blob. Called
@@ -2690,7 +2725,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     return;
   }
   const canScope = explicitFiles && stagedPaths.length > 0 && !amend
-    && !isMergeInProgress;
+    && !isMergeInProgress && carried.length === 0;
   const commitArgs = amend
     ? ['commit', '--amend', '--no-edit']
     : ['commit', '-m', sanitizedMessage as string];
@@ -4126,8 +4161,8 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
  *
  * The phase is derived from the STAGED `.planning/` paths via the single-
  * owner `detectPhaseNumberFromFiles` (the same helper `cmdCommit` uses), and
- * the policy itself is resolved via the single-owner `resolveCommitDocsPolicy`
- * (also shared with `cmdCommit`) — this function never re-derives phase
+ * the policy itself is resolved via `resolveCommitDocsPolicy`, `cmdCommit`'s caller of the
+ * single-owner `resolveCommitDocsTiers` (src/config-loader.cts) — this function never re-derives phase
  * detection or precedence, so it cannot diverge from `cmdCommit`'s decision
  * for the same staged tree (#3588 Part 1: this guard was previously
  * phase-blind, reading only project-level `commit_docs` and directly
