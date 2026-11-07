@@ -55,6 +55,20 @@ jobs:
           script: |
             const branch = context.payload.pull_request.head.ref;
 
+            // #5894: a main -> next back-merge must land as a merge commit, and
+            // the next merge queue squashes. A failing required check keeps the
+            // queue from ever taking it; a repo admin lands it with
+            // `node scripts/merge-commit-pr.cjs <PR>` (REST merge, which the
+            // next-queue ruleset's admin bypass allows).
+            const base = context.payload.pull_request.base.ref;
+            if (base === 'next' && branch.startsWith('chore/backmerge-main-to-next-')) {
+              core.setFailed(
+                `Back-merge PR: do not add it to the merge queue (it squashes, and main stops being an ancestor of next — #5894). ` +
+                `A repo admin merges it with: node scripts/merge-commit-pr.cjs ${context.payload.pull_request.number}`
+              );
+              return;
+            }
+
             const validPrefixes = [
               'feat/', 'fix/', 'hotfix/', 'docs/', 'chore/',
               'refactor/', 'test/', 'release/', 'ci/', 'perf/', 'revert/',

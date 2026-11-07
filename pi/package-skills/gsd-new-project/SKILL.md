@@ -32,7 +32,7 @@ Initialize a new project through unified flow: questioning → research (optiona
 - `.planning/ROADMAP.md` — phase structure
 - `.planning/STATE.md` — project memory
 
-**After this command:** Run `/skill:gsd-plan-phase 1` to start execution.
+**After this command:** Run `/skill:gsd-discuss-phase 1` to clarify the approach (or `/skill:gsd-plan-phase 1` to plan directly); then `/skill:gsd-execute-phase 1` to execute.
 </objective>
 
 <execution_context>
