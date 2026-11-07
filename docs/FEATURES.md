@@ -1566,7 +1566,7 @@ Strict mode exists because the two ways to keep planning private are not equival
 
 Both modes filter by forcing the excluded paths back to whatever the target branch already tracks, in the index *and* the working tree. Un-staging alone would record a deletion of any planning file the target branch carries, and would leave the picked file untracked on disk, where it makes a later cherry-pick of the same path abort.
 
-**Repeat publishes.** Each run picks only the commits added since the last merged `-pr` branch, replaces a merged leftover `-pr` branch, and refuses an unmerged one by name; see [How repeat publishes work](../how-to/publish-prs-without-planning-artifacts.md#how-repeat-publishes-work).
+**Repeat publishes.** Each run publishes only the commits added since the last merged `-pr` branch; see [How repeat publishes work](how-to/publish-prs-without-planning-artifacts.md#how-repeat-publishes-work).
 
 ---
 
