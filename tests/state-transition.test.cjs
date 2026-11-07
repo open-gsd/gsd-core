@@ -25,6 +25,7 @@ const {
   stateReplaceProgressPercent,
   isStatePastPhase,
   readPlanPosition,
+  readRecordedPlanTotal,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
@@ -5440,6 +5441,46 @@ describe('#5786: readPlanPosition reads the recorded plan total', () => {
       (n, m, t) => {
         assert.equal(total(`Plan: ${n} of ${m}`), m);
         assert.equal(total(`Current Plan: ${n}`, `Total Plans in Phase: ${t}`, `Plan: ${n} of ${m}`), t);
+      },
+    ));
+  });
+});
+
+describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase', () => {
+  const recorded = (...lines) => readRecordedPlanTotal(lines.join('\n'));
+
+  test('#5786 explicit Total (2) beats `Plan: 1 of 5` with no Current Plan line', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 2'), 2);
+  });
+
+  test('#5786 explicit Total (5) beats `Plan: 1 of 2` with no Current Plan line', () => {
+    assert.equal(recorded('Plan: 1 of 2', 'Total Plans in Phase: 5'), 5);
+  });
+
+  test('#5786 explicit Total beats `Current Plan: N of M`', () => {
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 2'), 2);
+  });
+
+  test('#5786 an unreadable Total falls back to the `of M` total', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: TBD'), 5);
+    assert.equal(recorded('Plan: 1 of 5'), 5);
+  });
+
+  test('#5786 a lone Total and no fields keep their reads', () => {
+    assert.equal(recorded('Total Plans in Phase: 5'), 5);
+    assert.equal(recorded('nothing here'), null);
+  });
+
+  test('#5786 property: an explicit Total T wins over `Plan: N of M`, with or without a Current Plan line', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      fc.boolean(),
+      (n, m, t, withCurrentPlan) => {
+        const lines = [`Plan: ${n} of ${m}`, `Total Plans in Phase: ${t}`];
+        if (withCurrentPlan) lines.unshift(`Current Plan: ${n}`);
+        assert.equal(recorded(...lines), t);
       },
     ));
   });

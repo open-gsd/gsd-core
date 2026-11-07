@@ -6250,6 +6250,8 @@ describe('init --validate plan-count check (#5786)', () => {
     ['#5786 row 5: `Current Plan: 1` + `Total Plans in Phase: 5` warns', ['Current Plan: 1', 'Total Plans in Phase: 5'], [MISMATCH(5)]],
     ['#5786 row 6: explicit Total (2) beats `Plan: 1 of 5`', ['Current Plan: 1', 'Total Plans in Phase: 2', 'Plan: 1 of 5'], []],
     ['#5786 row 7: explicit Total (5) beats `Plan: 1 of 2`', ['Current Plan: 1', 'Total Plans in Phase: 5', 'Plan: 1 of 2'], [MISMATCH(5)]],
+    ['#5786 row 7a: explicit Total (2) beats `Plan: 1 of 5` with no Current Plan, no warning', ['Plan: 1 of 5', 'Total Plans in Phase: 2'], []],
+    ['#5786 row 7b: explicit Total (5) beats `Plan: 1 of 2` with no Current Plan, warns', ['Plan: 1 of 2', 'Total Plans in Phase: 5'], [MISMATCH(5)]],
     ['#5786 row 8: no recorded count, no warning', [], []],
     ['#5786 row 9: `Plan: 1 of ?` has no readable count, no warning', ['Plan: 1 of ?'], []],
     ['#5786 row 10: trailing prose after `of 5` still reads 5', ['Plan: 1 of 5 in current phase'], [MISMATCH(5)]],
