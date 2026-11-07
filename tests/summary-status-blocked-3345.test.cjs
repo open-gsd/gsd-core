@@ -439,7 +439,10 @@ describe('#5789 FIFO SUMMARY — CLI commands exit promptly', { skip: IS_WIN_578
       const r = runChild5789([TOOLS_PATH, 'find-phase', '1'], project);
       assert.equal(r.timedOut, false, '#5789: find-phase hung on a FIFO SUMMARY');
       assert.equal(r.status, 0, r.stderr || r.stdout);
-      assert.doesNotThrow(() => JSON.parse(r.stdout), `#5789: find-phase stdout must be JSON, got: ${r.stdout}`);
+      let found;
+      assert.doesNotThrow(() => { found = JSON.parse(r.stdout); }, `#5789: find-phase stdout must be JSON, got: ${r.stdout}`);
+      assert.equal(found.found, true, `#5789: find-phase must locate the fixture phase, got: ${r.stdout}`);
+      assert.match(found.directory, /(^|\/)01-test$/, `#5789: find-phase must resolve to 01-test, got: ${found.directory}`);
     } finally {
       cleanup(project);
     }
@@ -560,15 +563,15 @@ describe('#5789 parity — both predicates treat every input class the same way'
     // (halted true / blocked false and the reverse); the unreadable classes
     // expect false/false for both, so a predicate that read an input the
     // other treats as unreadable would diverge from the table.
-    { id: 'regular-halted', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, summaryWithStatus('halted')); return f; }, read: true, halted: true, blocked: false },
-    { id: 'regular-blocked', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, summaryWithStatus('blocked')); return f; }, read: true, halted: false, blocked: true },
-    { id: 'empty', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, ''); return f; }, read: true, halted: false, blocked: false },
-    { id: 'directory', make: (dir) => { const f = join(dir, 's.md'); fs.mkdirSync(f); return f; }, read: false, halted: false, blocked: false },
-    { id: 'missing', make: (dir) => join(dir, 'nope.md'), read: false, halted: false, blocked: false },
-    { id: 'dev-zero-symlink', make: (dir) => { const f = join(dir, 's.md'); fs.symlinkSync('/dev/zero', f); return f; }, read: false, halted: false, blocked: false, posix: true },
+    { id: 'regular-halted', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, summaryWithStatus('halted')); return f; }, halted: true, blocked: false },
+    { id: 'regular-blocked', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, summaryWithStatus('blocked')); return f; }, halted: false, blocked: true },
+    { id: 'empty', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, ''); return f; }, halted: false, blocked: false },
+    { id: 'directory', make: (dir) => { const f = join(dir, 's.md'); fs.mkdirSync(f); return f; }, halted: false, blocked: false },
+    { id: 'missing', make: (dir) => join(dir, 'nope.md'), halted: false, blocked: false },
+    { id: 'dev-zero-symlink', make: (dir) => { const f = join(dir, 's.md'); fs.symlinkSync('/dev/zero', f); return f; }, halted: false, blocked: false, posix: true },
     // Each predicate runs in a child with a hard timeout + SIGKILL
     // (probePredicate5789), so a FIFO that blocks the open cannot hang the suite.
-    { id: 'fifo', make: (dir) => { const f = join(dir, 's.md'); makeFifo5789(f); return f; }, read: false, halted: false, blocked: false, posix: true },
+    { id: 'fifo', make: (dir) => { const f = join(dir, 's.md'); makeFifo5789(f); return f; }, halted: false, blocked: false, posix: true },
   ];
   for (const cls of INPUT_CLASSES) {
     test(`#5789 parity: ${cls.id} — halted and blocked agree on whether the file is read`, { skip: cls.posix && IS_WIN_5789 }, () => {
@@ -579,10 +582,6 @@ describe('#5789 parity — both predicates treat every input class the same way'
         const blocked = probePredicate5789('isSummaryFileBlocked', f);
         assert.equal(halted, cls.halted, `#5789 parity: ${cls.id} isSummaryFileHalted`);
         assert.equal(blocked, cls.blocked, `#5789 parity: ${cls.id} isSummaryFileBlocked`);
-        if (!cls.read) {
-          // Unreadable input: both predicates agree it is neither halted nor blocked.
-          assert.equal(halted, blocked);
-        }
       } finally {
         cleanup(dir);
       }
