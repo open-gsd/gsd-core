@@ -26,6 +26,61 @@ function scopeFor(files) {
 }
 
 describe('ci-test-scope.cjs', () => {
+  test('template docs select every template-link observer (#5427)', () => {
+    const { RULES, TEMPLATE_LINK_OBSERVERS: OBSERVERS } = require('../scripts/ci-test-scope.cjs');
+    const rule = RULES.find((r) => r.name === 'PR template links (#5427)');
+    assert.strictEqual(rule.tests, OBSERVERS);
+    // commit-files-pathspec reads CONTRIBUTING.md
+    assert.ok(OBSERVERS.includes('tests/commit-files-pathspec.test.cjs'));
+    for (const f of [
+      '.github/pull_request_template.md', '.github/PULL_REQUEST_TEMPLATE/feature.md',
+      'CONTRIBUTING.md', 'docs/registries/README.md', 'pull_request_template.md',
+      'docs/pull_request_template.md', '.github/Pull_Request_Template.md',
+      'docs/PULL_REQUEST_TEMPLATE/fix.md', 'PULL_REQUEST_TEMPLATE/fix.md',
+    ]) {
+      const r = scopeFor([f]);
+      for (const t of OBSERVERS) assert.ok(r.targeted_tests.includes(t), `${f}: ${t}`);
+      const flags = [r.code_changed, r.product_changed, r.full_matrix];
+      assert.deepStrictEqual(flags, [true, false, false], f);
+    }
+  });
+
+  test('template doc + product path escalates via a tier-member observer (#5427)', () => {
+    const r = scopeFor(['agents/x.md', 'CONTRIBUTING.md']);
+    assert.deepStrictEqual([r.product_changed, r.full_matrix], [true, true]);
+    assert.ok(r.targeted_tests.includes('tests/pr-template-links.test.cjs'));
+  });
+
+  test('template doc + product file keeps product_changed and full_matrix (#5427)', () => {
+    const r = scopeFor(['CONTRIBUTING.md', 'hooks/x.js']);
+    assert.deepStrictEqual([r.code_changed, r.product_changed, r.full_matrix], [true, true, true]);
+    assert.ok(r.targeted_tests.includes('tests/pr-template-links.test.cjs'));
+  });
+
+  test('an inert workflow and a template doc are both lightweight code changes (#5427)', () => {
+    const { INERT_WORKFLOWS } = require('../scripts/ci-test-scope.cjs');
+    const [wf] = INERT_WORKFLOWS;
+    for (const f of [`.github/workflows/${wf}`, 'CONTRIBUTING.md']) {
+      const r = scopeFor([f]);
+      assert.deepStrictEqual([r.code_changed, r.product_changed], [true, false], f);
+    }
+  });
+
+  test('non-template docs and issue templates do not select the link guard (#5427)', () => {
+    for (const f of [
+      'docs/usage.md', '.github/ISSUE_TEMPLATE/bug_report.yml',
+      // near-miss names: prefix/exact-match boundary of isTemplateLinkDoc
+      '.github/PULL_REQUEST_TEMPLATES/x.md', '.github/pull_request_template.md.bak',
+      'CONTRIBUTING.mdx', 'docs/registries/README.mdx', 'docs/registries/other.md',
+      'docs/PULL_REQUEST_TEMPLATES/x.md', 'PULL_REQUEST_TEMPLATE.md.bak',
+      '.github/pull_request_template.mdx', 'docs/sub/pull_request_template.md',
+    ]) {
+      const r = scopeFor([f]);
+      assert.ok(!r.targeted_tests.includes('tests/pr-template-links.test.cjs'), f);
+      assert.strictEqual(r.code_changed, false, f);
+    }
+  });
+
   test('docs-only changes: code_changed is false, product_changed false (skip matrix entirely)', () => {
     const result = scopeFor(['docs/usage.md']);
     assert.strictEqual(result.code_changed, false,

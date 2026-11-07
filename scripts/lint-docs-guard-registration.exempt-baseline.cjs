@@ -131,9 +131,17 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   // explanatory comment describing why the retired `windows` scope must not
   // be restored; the file never reads that (or any) docs/ file.
   'ci-test-scope.test.cjs': [
+    // #5427: classify() input strings; never read.
+    'docs/PULL_REQUEST_TEMPLATE/fix.md', 'docs/PULL_REQUEST_TEMPLATES/x.md',
     'docs/a.md', 'docs/adr', 'docs/adr/22-plan-drift-guard.md',
     'docs/adr/4641-windows-selector-consolidation.md', 'docs/how-to/configure-model-profiles.md',
-    'docs/installer-migrations.md', 'docs/ja-JP', 'docs/ja-JP/USAGE.md', 'docs/usage.md', 'docs/x.md',
+    'docs/installer-migrations.md', 'docs/ja-JP', 'docs/ja-JP/USAGE.md',
+    // #5427: classify() input strings; never read.
+    'docs/pull_request_template.md',
+    'docs/registries/README.md', 'docs/registries/README.mdx', 'docs/registries/other.md',
+    // #5427: classify() input string; never read.
+    'docs/sub/pull_request_template.md',
+    'docs/usage.md', 'docs/x.md',
   ],
   'cline-install.test.cjs': ['docs/guide.md'],
   'code-review-depth.test.cjs': ['docs/src/auth/x.ts'],

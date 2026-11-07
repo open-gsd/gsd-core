@@ -480,6 +480,65 @@ function maskInlineCodeSpans(line) {
   return out;
 }
 
+const ANGLE = /\s*<([^>\n]*)>/y;
+const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
+// True when the character at `j` is preceded by an odd run of backslashes.
+const isEscaped = (s, j) => {
+  let n = 0;
+  while (s[j - 1 - n] === '\\') n += 1;
+  return n % 2 === 1;
+};
+/**
+ * True when the `]` at `at` closes a bracket pair opened earlier in its paragraph
+ * (balanced, backslash escapes honoured): a stray `](x)` is text, not a link.
+ */
+function hasLabelOpener(text, at) {
+  if (isEscaped(text, at)) return false;
+  const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
+  let depth = 1;
+  for (let j = para.length - 1; j >= 0; j -= 1) {
+    if (isEscaped(para, j)) continue;
+    if (para[j] === ']') depth += 1;
+    else if (para[j] === '[' && !--depth) return true;
+  }
+  return false;
+}
+
+/**
+ * Every inline-link destination in `text` (mask code first, see `maskCode`): an
+ * angle-enclosed or bare destination (bare: balanced parentheses to any depth, `\`
+ * escapes), then an optional title. Returns `{ at, dest, raw }` per link: `at` is the
+ * index of the `]`, `dest` the destination (may be empty), `raw` the text between the parentheses.
+ * The one scanner behind `extractLinks` and the PR-template link guard.
+ */
+function scanInlineLinks(text) {
+  const out = [];
+  for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
+    if (!hasLabelOpener(text, i)) continue;
+    ANGLE.lastIndex = i + 2;
+    const angle = ANGLE.exec(text);
+    let end = angle ? ANGLE.lastIndex : i + 2;
+    let dest = angle?.[1];
+    if (!angle) {
+      let depth = 0;
+      while (/\s/.test(text[end] ?? '')) end += 1;
+      const start = end;
+      for (; end < text.length && !/\s/.test(text[end]); end += 1) {
+        if (text[end] === '\\' && /\S/.test(text[end + 1] ?? '')) end += 1;
+        else if (text[end] === '(') depth += 1;
+        else if (text[end] === ')' && !depth--) break;
+      }
+      if (depth > 0) continue;
+      dest = text.slice(start, end);
+    }
+    TAIL.lastIndex = end;
+    if (TAIL.test(text)) {
+      out.push({ at: i, dest, raw: text.slice(i + 2, TAIL.lastIndex - 1) });
+    }
+  }
+  return out;
+}
+
 /**
  * Every inline `[text](dest)` / `![alt](dest)` link or image in `text`, with
  * code masked out first so a code-shaped bracket/paren sequence is never
@@ -497,14 +556,12 @@ function maskInlineCodeSpans(line) {
  */
 function extractLinks(text) {
   const masked = maskCode(String(text));
-  const lines = masked.split(/\r?\n/);
   const out = [];
-  const re = /!?\[[^\][\n]*\]\(([^()\n]*)\)/g;
-  for (let i = 0; i < lines.length; i += 1) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(lines[i])) !== null) {
-      out.push({ line: i + 1, target: m[1] });
+  for (const { at, dest, raw } of scanInlineLinks(masked)) {
+    const open = masked.lastIndexOf('[', at - 1);
+    const textOk = open >= 0 && !/[\][\n]/.test(masked.slice(open + 1, at));
+    if (dest && textOk && !/[()\n]/.test(raw)) {
+      out.push({ line: masked.slice(0, at).split(/\r?\n/).length, target: raw });
     }
   }
   return out;
@@ -1221,4 +1278,4 @@ function main() {
 // effect of loading it.
 if (require.main === module) runMain(main);
 
-module.exports = { STATUSES, REASON, extractLinks, maskCode };
+module.exports = { STATUSES, REASON, extractLinks, maskCode, scanInlineLinks };
