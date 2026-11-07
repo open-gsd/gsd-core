@@ -178,6 +178,13 @@ describe('#5106: test-file conventions are one definition', () => {
     const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
     assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
       'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
+    // The reference doc names every entry of the owner list (a directory entry as `name/`).
+    const ref = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
+    for (const spec of TEST_FILE_PATHSPECS) {
+      const bare = spec.replace(':(glob,icase)**/', '');
+      const documented = bare.endsWith('/**') ? `${bare.slice(0, -2)}` : bare;
+      assert.ok(ref.includes(documented), `references/tdd.md must name ${documented} (from ${spec})`);
+    }
     // And the router recognizes a literal root and nested sample of every convention.
     const { SAMPLES_BY_SPEC: samples, SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
     assert.deepEqual(Object.keys(samples).sort(), [...TEST_FILE_PATHSPECS].sort(),
