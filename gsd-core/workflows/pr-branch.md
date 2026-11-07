@@ -125,32 +125,41 @@ if [ -n "$MARKER_TIP" ]; then
   if _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
     BASE="$MARKER_TIP"
   else
-    # History rewritten (rebase, reword): compare commits by patch-id over the paths the -pr keeps (strict
-    # drops all of .planning/, so a mixed commit rewritten by the rebase still matches its -pr copy, and a
-    # planning-only commit has nothing to publish). The base is the commit that ends the leading run of
-    # published-equivalent commits here (an equal patch, or nothing to publish); $TARGET when none of them
-    # is here. Warn instead when a published commit has no match (folded, conflict-resolved), or when a
-    # matched commit sits above an unpublished one (reordered, that commit would be skipped for good).
+    # History rewritten (rebase, reword): compare commits by patch-id. Strict mode ignores .planning/, which
+    # the -pr drops entirely, so a mixed commit rewritten by the rebase still matches its -pr copy and a
+    # planning-only commit has nothing to publish; default mode compares whole patches. The base is the
+    # commit that ends the leading run of published-equivalent commits here (an equal patch, or nothing to
+    # publish); $TARGET when none of them is here. Warn instead when a published commit has no match
+    # (folded, conflict-resolved), when a matched commit sits above an unpublished one (reordered, that
+    # commit would be skipped for good), or when any git lookup fails or times out (a missing patch would
+    # read as "nothing to publish").
     PICK_EXCL=; [ "$PR_MODE" = strict ] && PICK_EXCL=':(exclude,top).planning'
-    REWRITE=$( { printf 'L\n%s\nR\n%s\nP\n' \
-        "$(_to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null)" \
-        "$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null)"
-      _to git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" -- ':/' ${PICK_EXCL:+"$PICK_EXCL"} 2>/dev/null | git patch-id --stable; } |
-      awk '/^L$/{s=1;next} /^R$/{s=2;next} /^P$/{s=3;next}
-        s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{pid[$2]=$1}
-        END{ if(!nl){print "WARN";exit}
-          for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
-          for(c in L) if((c in pid)&&!(pid[c] in here)){print "WARN";exit}
-          for(i=n;i>=1;i--){ c=R[i]
-            if(!stop && (!(c in pid) || (pid[c] in lp))){tip=c;continue}
-            stop=1; if((c in pid)&&(pid[c] in lp)){print "WARN";exit} }
-          print "OK", (tip==""?"-":tip) }')
+    RW_TMP=$(mktemp)
+    REWRITE=WARN
+    if RW_L=$(_to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
+      RW_R=$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null) &&
+      _to git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" -- ':/' ${PICK_EXCL:+"$PICK_EXCL"} >"$RW_TMP" 2>/dev/null &&
+      RW_P=$(git patch-id --stable <"$RW_TMP"); then
+      REWRITE=$(printf 'L\n%s\nR\n%s\nP\n%s\n' "$RW_L" "$RW_R" "$RW_P" |
+        awk '/^L$/{s=1;next} /^R$/{s=2;next} /^P$/{s=3;next}
+          s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{pid[$2]=$1}
+          END{ if(!nl){print "WARN";exit}
+            for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
+            for(c in L) if((c in pid)&&!(pid[c] in here)){print "WARN";exit}
+            for(i=n;i>=1;i--){ c=R[i]
+              if(!stop && (!(c in pid) || (pid[c] in lp))){tip=c;continue}
+              stop=1; if((c in pid)&&(pid[c] in lp)){print "WARN";exit} }
+            print "OK", (tip==""?"-":tip) }')
+    fi
+    rm -f "$RW_TMP"
     case $REWRITE in
       "OK -") ;;
       OK\ *) BASE=${REWRITE#OK } ;;
       *) echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2 ;;
     esac
   fi
+elif [ -n "$PR_BRANCH_MERGED" ]; then
+  echo "WARNING: $PR_BRANCH is merged into $TARGET but nothing is recorded as published for $CURRENT_BRANCH in $PR_MODE mode, so every commit is picked again. If an earlier publish is merged, re-anchor: git update-ref $(shq "$MARKER_REF") <last published commit on $CURRENT_BRANCH>" >&2
 fi
 # The filter below removes files from the index AND the working tree before each
 # commit lands, and this command switches branches underneath the user's own

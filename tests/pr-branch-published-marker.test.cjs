@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * #5469 — /gsd:pr-branch repeat publishes: the published-marker ref
+ * #5469 — /gsd-pr-branch repeat publishes: the published-marker ref
  * (`refs/gsd/pr-published/<mode>/<target>/<branch>`, promoted from the pending build refs once the
  * `-pr` branch merges) bounds the commit range, and a leftover `<branch>-pr` is replaced when
  * merged / refused when not.
@@ -956,6 +956,30 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  test('a failed or timed-out patch lookup warns instead of skipping unpublished commits', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    // run-with-timeout reports 124 for the patch walk only; every other call runs as usual
+    const slow = `${prelude}\ngsd_run() { case "$*" in *"git log -p"*) return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }`;
+    const r = publish(dir, 'main', { prelude: slow });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+    assert.ok(changed(dir).includes('two.txt'), 'round 2 is still replayed');
+  });
+
+  test('a merged leftover -pr with nothing recorded as published warns that every commit is picked again', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    for (const ref of [MARKER, PENDING, BUILT]) git(dir, 'update-ref', '-d', ref).toString();
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
+    assert.match(r.stderr, /feature-pr is merged into main but nothing is recorded as published for feature in strict mode/);
+    assert.match(r.stderr, /git update-ref refs\/gsd\/pr-published\/strict\/main\/feature <last published commit/);
   });
 
   test('rebased working branch with an unpublished commit reordered below a published code commit: warns and uses the target', () => {
