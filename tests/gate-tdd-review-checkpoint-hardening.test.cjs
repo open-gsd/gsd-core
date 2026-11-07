@@ -645,7 +645,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   // Execute ship.md's seal step against a stubbed `gsd_run`, so the branches (not their text) are what is tested.
-  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false }) {
+  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, gitTimeout = false }) {
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf8').replace(/\r\n/g, '\n');
     const from = ship.indexOf('```bash\n', ship.indexOf('<step name="seal_tdd_review">')) + 8;
     const script = ship.slice(from, ship.indexOf('\n```', from));
@@ -658,12 +658,12 @@ describe('#5354 tdd review checkpoint seal', () => {
     // `query commit` stands in for cmdCommit: it commits the seal itself unless COMMIT_OUT is set (then it prints that and commits nothing).
     const stub = real
       ? 'gsd_run() { echo "$*" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
-      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
+      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_TIMEOUT+x}" ]; then return 124; fi; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
     const r = runHook('-c', [stub + script], {
       interpreter: 'bash', cwd: dir, timeoutMs: GIT_TIMEOUT_MS,
-      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
+      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitTimeout ? { GIT_TIMEOUT: '1' } : {}), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
     });
-    return { r, dir, before, subject: sealGit(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter(Boolean) };
+    return { r, dir, before, subject: sealGit(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter((c) => c && !c.startsWith('run-with-timeout ')) };
   }
 
   // Each seal-step branch, with the text of ship.md's own message for it (defined once, taken from the step).
@@ -671,6 +671,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     recordFailed: { marker: 'could not record the seal', exitCode: 0 },
     noSeal: { marker: 'TDD review failed or was not evaluable', exitCode: 0 },
     gitignored: { marker: 'the squash will not carry it', exitCode: 0 },
+    gitTimedOut: { marker: 'git timed out while checking', exitCode: 0 },
     commitFailed: { marker: 'TDD seal commit failed', exitCode: 1 },
     commitSkipped: { marker: 'commit_docs resolves false', exitCode: 0 },
   };
@@ -692,6 +693,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
+  });
+
+  test('ship.md seal step warns and commits nothing when a bounded git call times out', posix, () => {
+    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitTimeout: true }), 'gitTimedOut');
   });
 
   test('ship.md seal step never commits the on-disk seal when --record failed', posix, () => {

@@ -214,14 +214,21 @@ if [ "$REC" != 0 ]; then
   echo "WARNING: TDD review could not record the seal; nothing was committed." >&2
 elif [ ! -f "$SEAL" ]; then
   case "$OUT" in 0) ;; *) echo "WARNING: no $SEAL (TDD review failed or was not evaluable); the squash will lose RED/GREEN credit." >&2 ;; esac
-elif git check-ignore -q "$SEAL"; then
-  echo "WARNING: $SEAL is gitignored; the squash will not carry it." >&2
-elif [ -n "$(git status --porcelain -- "$SEAL")" ]; then
-  CR=$(gsd_run query commit "docs(${padded_phase}): seal TDD review evidence" --files "$SEAL" ${GSD_WS:+--ws=${GSD_WS##* }} --raw) || CR=failed
-  case "$CR" in
-    skipped) echo "WARNING: commit_docs resolves false for phase ${PHASE_NUMBER} (or .planning/ is gitignored), so the TDD review seal was not committed; the squash will lose RED/GREEN credit." >&2 ;;
-    failed) echo "ERROR: TDD seal commit failed" >&2; exit 1 ;;
-  esac
+else
+  # Both git calls are bounded (exit 124 = timed out): a hung git must not stall an unattended ship.
+  gsd_run run-with-timeout 10 -- git check-ignore -q "$SEAL" && GI=0 || GI=$?
+  DIRTY=$(gsd_run run-with-timeout 10 -- git status --porcelain -- "$SEAL") && GS=0 || GS=$?
+  if [ "$GI" = 124 ] || [ "$GS" = 124 ]; then
+    echo "WARNING: git timed out while checking $SEAL; the seal was not committed and the squash will lose RED/GREEN credit." >&2
+  elif [ "$GI" = 0 ]; then
+    echo "WARNING: $SEAL is gitignored; the squash will not carry it." >&2
+  elif [ -n "$DIRTY" ]; then
+    CR=$(gsd_run query commit "docs(${padded_phase}): seal TDD review evidence" --files "$SEAL" ${GSD_WS:+--ws=${GSD_WS##* }} --raw) || CR=failed
+    case "$CR" in
+      skipped) echo "WARNING: commit_docs resolves false for phase ${PHASE_NUMBER} (or .planning/ is gitignored), so the TDD review seal was not committed; the squash will lose RED/GREEN credit." >&2 ;;
+      failed) echo "ERROR: TDD seal commit failed" >&2; exit 1 ;;
+    esac
+  fi
 fi
 ```
 
