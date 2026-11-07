@@ -174,17 +174,41 @@ function toLegacyResult(result) {
 
 /**
  * True when `name` can be a directory name on this platform: Windows rejects
- * `< > : " | ? *` and control characters, POSIX filesystems accept them.
+ * `< > : " | ? * \` and control characters and strips a trailing space or dot;
+ * POSIX filesystems accept them.
  * @param {string} name
  * @returns {boolean}
  */
 function isFsLegalName(name) {
   return process.platform !== 'win32'
-    || (!/[<>:"|?*]/.test(name) && [...name].every((c) => c.charCodeAt(0) > 0x1f));
+    || (!/[<>:"|?*\\]|[ .]$/.test(name) && [...name].every((c) => c.charCodeAt(0) > 0x1f));
+}
+
+/**
+ * Watch (and optionally fake) every `git` child the code under test spawns, through the
+ * `child_process` module object, restored by the test context. `intercept(args, opts, fn)`
+ * returns a fake `spawnSync` result to replace the call, or `undefined` to run it for real.
+ * Kept here so a test file that only needs this does not carry a raw `child_process` signal.
+ * @param {{mock: {method: Function}}} t - the node:test context
+ * @param {(args: string[], opts: object|undefined, fn: string) => (object|undefined)} intercept
+ */
+function interceptGit(t, intercept) {
+  const childProcess = require('node:child_process');
+  for (const fn of ['spawnSync', 'execFileSync']) {
+    const real = childProcess[fn];
+    t.mock.method(childProcess, fn, function (cmd, args, opts, ...rest) {
+      if (require('node:path').basename(String(cmd)).replace(/\.exe$/, '') === 'git') {
+        const fake = intercept(args, opts, fn);
+        if (fake !== undefined) return fake;
+      }
+      return real.call(this, cmd, args, opts, ...rest);
+    });
+  }
 }
 
 module.exports = {
   gitOrThrow,
+  interceptGit,
   isFsLegalName,
   throwIfFailed,
   toLegacyResult,

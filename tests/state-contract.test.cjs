@@ -49,7 +49,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { stubEnv } = require('./helpers/env-guard.cjs');
 
@@ -589,7 +589,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     cleanup(path.join(tmpDir, '.planning', 'config.json'));
-    const r = runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const r = runGsdTools(['config-new-project', '{}'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(r.success, r.error || r.output);
     git(tmpDir, 'check-ignore', '-q', '.planning/state.json');
     git(tmpDir, 'check-ignore', '-q', '.planning/workstreams/ws1/state.json');
@@ -603,7 +603,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     t.after(() => cleanup(tmpDir));
     cleanup(path.join(tmpDir, '.planning', 'config.json'));
     fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '.planning\n');
-    const r = runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const r = runGsdTools(['config-new-project', '{}'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(r.success, r.error || r.output);
     assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', '.gitignore')));
   });
@@ -612,7 +612,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     cleanup(path.join(tmpDir, '.planning', 'config.json'));
-    assert.ok(runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir }).success);
+    assert.ok(runGsdTools(['config-new-project', '{}'], tmpDir, homeSandboxEnv(tmpDir)).success);
     const c = runGsdTools(['commit', 'chore: add project config', '--files', '.planning/config.json', '.planning/.gitignore'], tmpDir);
     assert.ok(c.success && JSON.parse(c.output).committed, `config commit: ${c.error || c.output}`);
     const cloneRoot = createTempDir('gsd-clone-');

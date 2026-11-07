@@ -14,7 +14,7 @@ const fc = require('fast-check');
 
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 const { stubEnv } = require('./helpers/env-guard.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, interceptGit } = require('./helpers/git-fixture.cjs');
 const { isGitIgnored, resolveCommitDocsTiers } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 const git = (cwd, ...args) => gitOrThrow(args, { cwd });
@@ -79,18 +79,14 @@ describe('isGitIgnored (#5505)', () => {
   }
 
   test('aTimedOutCheckIgnoreIsNotCached', (t) => {
-    const childProcess = require('node:child_process');
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.appendFileSync(excludeOf(tmpDir), '.planning\n');
-    const real = childProcess.spawnSync;
     let timeouts = 0;
-    t.mock.method(childProcess, 'spawnSync', function (cmd, args, ...rest) {
-      if (timeouts === 0 && path.basename(String(cmd)).replace(/\.exe$/, '') === 'git' && args.includes('check-ignore')) {
-        timeouts += 1;
-        return { status: null, signal: 'SIGTERM', stdout: '', stderr: '', output: null, pid: 0, error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
-      }
-      return real.call(this, cmd, args, ...rest);
+    interceptGit(t, (args, _opts, fn) => {
+      if (timeouts > 0 || fn !== 'spawnSync' || !args.includes('check-ignore')) return undefined;
+      timeouts += 1;
+      return { status: null, signal: 'SIGTERM', stdout: '', stderr: '', output: null, pid: 0, error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }) };
     });
     assert.strictEqual(isGitIgnored(tmpDir, '.planning'), false); // fail open
     assert.strictEqual(timeouts, 1);

@@ -1229,7 +1229,7 @@ describe('state contract — write mechanics', () => {
 
 describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
   const { createTempGitProject, withTempGitProject } = require('./helpers.cjs');
-  const { gitOrThrow, isFsLegalName } = require('./helpers/git-fixture.cjs');
+  const { gitOrThrow, interceptGit, isFsLegalName } = require('./helpers/git-fixture.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const git = (cwd, ...args) => gitOrThrow(args, { cwd });
   const excludeOf = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
@@ -1262,9 +1262,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     // The entry is always `/<prefix>state.json` and the prefix starts with `d`, so `#`, `!` and space
-    // sit mid-pattern. Windows forbids backslash, `*` and `?` in file names.
-    const meta = fc.constantFrom(...(process.platform === 'win32' ? [] : ['\\', '*', '?', ' ']), '[', ']', '#', '!', 'a', 'b');
-    const names = fc.array(meta, { minLength: 1, maxLength: 6 }).map((cs) => `d${cs.join('')}`);
+    // sit mid-pattern. Windows forbids backslash, `*` and `?` in file names (isFsLegalName).
+    const meta = fc.constantFrom('\\', '*', '?', ' ', '[', ']', '#', '!', 'a', 'b');
+    const names = fc.array(meta, { minLength: 1, maxLength: 6 }).map((cs) => `d${cs.join('')}`).filter(isFsLegalName);
     fc.assert(fc.property(names, (name) => {
       const sub = path.join(tmpDir, name);
       fs.mkdirSync(planningDirOf(sub), { recursive: true });
@@ -1286,7 +1286,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     git(tmpDir, 'check-ignore', '-q', ' notes/.planning/state.json');
   });
 
-  test('aNewlineInThePlanningPathIsRejected', { skip: process.platform === 'win32' }, (t) => {
+  test('aNewlineInThePlanningPathIsRejected', { skip: !isFsLegalName('a\nb') }, (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     const exclude = excludeOf(tmpDir);
@@ -1362,14 +1362,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     trackStateJson(tmpDir);
-    const childProcess = require('node:child_process');
-    const real = childProcess.spawnSync;
-    t.mock.method(childProcess, 'spawnSync', function (cmd, args, ...rest) {
-      if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git' && args.includes('add')) {
-        return { status: 1, signal: null, stdout: '', stderr: 'fatal: index busy', output: [null, '', 'fatal: index busy'], pid: 0 };
-      }
-      return real.call(this, cmd, args, ...rest);
-    });
+    interceptGit(t, (args, _opts, fn) => (fn === 'spawnSync' && args.includes('add')
+      ? { status: 1, signal: null, stdout: '', stderr: 'fatal: index busy', output: [null, '', 'fatal: index busy'], pid: 0 }
+      : undefined));
     assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
     t.mock.restoreAll();
     assert.strictEqual(git(tmpDir, 'diff', '--cached', '--name-status').trim(), 'D\t.planning/state.json', 'the removal stays staged; the rule file was never added');
@@ -1426,9 +1421,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   // user's negation. The entry is written iff no spelling names the file, and git agrees with the outcome.
   test('prefixEscapeAndNegationProperty', () => {
     const esc = (x) => x.replace(/[\\*?[]/g, '\\$&');
-    const chars = fc.constantFrom(...(process.platform === 'win32' ? [] : ['\\', '*', '?']), '[', ']', '#', '!', ' ', 'a', 'b');
-    // Windows strips a trailing space from a directory name and rejects the glob characters; POSIX keeps every case.
-    const legal = (name) => isFsLegalName(name) && !(process.platform === 'win32' && /[ .]$/.test(name));
+    const chars = fc.constantFrom('\\', '*', '?', '[', ']', '#', '!', ' ', 'a', 'b');
+    // Windows strips a trailing space from a directory name and rejects the glob characters; POSIX keeps every case (isFsLegalName).
+    const legal = isFsLegalName;
     // 0, 1, 6 and 7 characters: the project at the repo root, and the bounds of the name length
     const names = fc.oneof(
       fc.constant(''),
@@ -1568,19 +1563,12 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), '{}');
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'planning');
-    const childProcess = require('node:child_process');
     let gitCalls = 0;
     const calls = [];
-    for (const fn of ['spawnSync', 'execFileSync']) {
-      const real = childProcess[fn];
-      t.mock.method(childProcess, fn, function (cmd, ...rest) {
-        if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git') {
-          gitCalls += 1;
-          calls.push({ args: rest[0], timeout: rest[1] && rest[1].timeout });
-        }
-        return real.call(this, cmd, ...rest);
-      });
-    }
+    interceptGit(t, (args, opts) => {
+      gitCalls += 1;
+      calls.push({ args, timeout: opts && opts.timeout });
+    });
     assert.strictEqual(publishStateContract(tmpDir).published, true);
     // the documented ceiling (docs/features/machine-readable-state-contract-planningstatejson.md): a fixture with no
     // upstream and no STATE.md head spawns fewer, so the budget is an upper bound
@@ -1625,13 +1613,8 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const sub = path.join(tmpDir, 'sub');
     fs.mkdirSync(planningDirOf(sub), { recursive: true });
     trackUnder(tmpDir, sub);
-    const childProcess = require('node:child_process');
-    const real = childProcess.spawnSync;
     const probes = [];
-    t.mock.method(childProcess, 'spawnSync', function (cmd, args, opts, ...rest) {
-      if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git' && args.includes('ls-files')) probes.push(opts.timeout);
-      return real.call(this, cmd, args, opts, ...rest);
-    });
+    interceptGit(t, (args, opts, fn) => { if (fn === 'spawnSync' && args.includes('ls-files')) probes.push(opts.timeout); });
     publishStateContract(sub, fixedDeps());
     // the ownership probe, then the tracked-copy listing of the migration: both on the 5 s class
     assert.deepStrictEqual(probes, [GIT_PROBE_TIMEOUT_MS, GIT_PROBE_TIMEOUT_MS]);
