@@ -11,6 +11,11 @@ name: Require Issue Link
 # data via env vars, never interpolated into a shell. No head code executes. The
 # #1389 fork-forgery carve-out still holds — it is keyed on
 # head.repo.full_name == github.repository, not on the branch name alone.
+# #5890 extends that carve-out to all of the release pipeline's own PRs
+# (release/X.Y.0 and hotfix/X.Y.Z -> main, chore/sync-next-version-<v> and
+# chore/backmerge-main-to-next-<sha> -> next), keyed on the same identity plus
+# the exact base branch (BASE_REF); scripts/release-pipeline-pr.cjs, shared
+# with pr-title-validator.yml.
 #
 # #3211: the gate used to model exactly one PR→issue relationship ("this PR
 # closes that issue"), so a test-only or docs-only FOLLOW-UP PR — which
@@ -130,6 +135,7 @@ jobs:
           # never interpolated into the shell or into a JS template literal.
           PR_BODY: ${{ github.event.pull_request.body }}
           HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           CHANGED_FILES: ${{ steps.changed_files.outputs.files }}
