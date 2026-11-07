@@ -4,7 +4,7 @@ GSD's SDK commits (`gsd-tools commit`, `commit-to-subrepo`, `pr-subrepo`) run `g
 pre-commit hooks. If a hook (a full lint, a type-check, `lint-staged` on a large change) takes longer than the
 timeout, GSD kills the commit. `gsd-tools commit` and `commit-to-subrepo` report `commit_timeout` with the
 `.git/index.lock` it may have left behind, and `pr-subrepo` reports the timeout as an error message that names
-the repo (it carries no reason code). The default is 30 seconds. This page raises it.
+the repo (it carries the generic `unknown` reason). The default is 30 seconds. This page raises it.
 
 ## 1. Confirm it is a timeout, not a hook failure
 
@@ -20,8 +20,12 @@ gsd-tools config-set git.commit_timeout_ms 120000
 ```
 
 The value is milliseconds, an integer from `1` to `3600000` (one hour). `config-set` refuses anything else.
-A hand-edited `.planning/config.json` that holds an invalid value (zero, negative, fractional, non-numeric (including a quoted number such as `"60000"`), or
-above one hour) is ignored and the 30 second default applies, so a bad edit never removes the bound.
+A hand-edited `.planning/config.json` can hold an invalid value. GSD ignores it and applies the 30 second default,
+so a bad edit never removes the bound. These values are invalid:
+
+- zero, a negative number, or a fraction
+- a non-number, including a quoted number such as `"60000"`
+- a number above one hour
 
 ## 3. Clean up after a past timeout
 
