@@ -1394,10 +1394,10 @@ function sameMilestoneVersion(a: string, b: string): boolean {
  * escapes included — and that text was re-serialized as the value, adding one
  * escape layer per `state.*` write. Falls back to a `^milestone:` line read
  * only when there is no parseable frontmatter, or its `milestone` is not text;
- * that no-frontmatter line is decoded through the same FAILSAFE loader as
- * frontmatter (#5726). One
- * that parses without a `milestone` key names none: a `milestone:` line further
- * down (a fenced example) is not one (#4998 review, Minor 5).
+ * that fallback line is decoded through the same FAILSAFE loader as
+ * frontmatter (#5726). Frontmatter that parses without a `milestone` key names
+ * none: a `milestone:` line further down (a fenced example) is not one (#4998
+ * review, Minor 5).
  */
 function readStateMilestoneScalar(stateRaw: string): string | null {
   const fm = rawFrontmatterMapping(stateRaw);
