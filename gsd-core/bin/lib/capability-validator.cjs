@@ -1874,6 +1874,11 @@ const KNOWN_REVIEWER_FIELDS = new Set([
   // effort", which emits no effort argument at all.
   'effortConfigKey',
   'defaultEffort',
+  // `contextWindowTokens` / `contextWindowConfigKey` added by #4559, same optional/backward-compatible
+  // shape as `promptBudgetKey`: a manifest authored before they existed keeps validating, and an
+  // absent or non-positive window resolves to "no derived prompt cap" at the invocation boundary.
+  'contextWindowTokens',
+  'contextWindowConfigKey',
   'handler',
 ]);
 
@@ -2502,6 +2507,16 @@ function validateReviewerBodyFields(cap) {
     errors.push(
       ctx + ' reviewer.promptBudgetKey must be a dotted config key or null ' +
       '(got: ' + describeValue(r.promptBudgetKey) + ')',
+    );
+  }
+
+  // #4559: optional. Absent or null is "no declared window"; a present key must be a dotted
+  // config key string. The window's VALUE is narrowed (never rejected) by `resolveLaneCap`.
+  if (r.contextWindowConfigKey !== undefined && r.contextWindowConfigKey !== null
+      && (typeof r.contextWindowConfigKey !== 'string' || r.contextWindowConfigKey.length === 0)) {
+    errors.push(
+      ctx + ' reviewer.contextWindowConfigKey must be a dotted config key or null ' +
+      '(got: ' + describeValue(r.contextWindowConfigKey) + ')',
     );
   }
 

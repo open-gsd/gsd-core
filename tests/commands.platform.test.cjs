@@ -34,6 +34,7 @@
  * - "AC5: --amend remains exempt from the empty-diff guard" — runs a real executable pre-commit hook installed with a POSIX mode bit (chmod-mode-bit)
  * - "a cherry-pick in progress keeps its pre-existing outcome" — runs a real executable pre-commit hook installed with a POSIX mode bit (chmod-mode-bit)
  * - "a revert in progress still reports nothing_to_commit, not the hook rejection" — runs a real executable pre-commit hook installed with a POSIX mode bit (chmod-mode-bit)
+ * - "#5682: symlinked keyed dir refused" — creates a real directory symlink at the keyed dispatch-isolation path; creation needs privilege on Windows (symlink-keyword)
  */
 
 const { test, describe, after, beforeEach, afterEach } = require('node:test');
@@ -926,5 +927,38 @@ describe('#3776: query commit --files reports an empty diff as nothing_to_commit
     assert.strictEqual(output.committed, false);
     assert.strictEqual(output.reason, 'nothing_to_commit',
       'a revert permits partial commits, so the empty-diff guard must still apply');
+  });
+});
+
+describe('record-dispatch-isolation keyed per-dispatch records (#5682)', () => {
+  let project;
+  let outside;
+  beforeEach(() => {
+    project = createTempProject();
+    outside = createTempDir('gsd-5682-outside-');
+  });
+  afterEach(() => {
+    cleanup(project);
+    cleanup(outside);
+  });
+
+  const KEYED_DIR = path.join('.gsd', 'dispatch-isolation');
+
+  function record(phase, plan) {
+    const result = runGsdTools(['record-dispatch-isolation', '--isolation', 'none', '--phase', phase, '--plan', plan], project);
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('#5682: symlinked keyed dir refused', () => {
+    fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
+    fs.symlinkSync(outside, path.join(project, KEYED_DIR), 'junction');
+
+    const out = record('21', '21-13');
+    assert.equal(out.recorded, true, 'the legacy result is unchanged');
+    assert.deepEqual(fs.readdirSync(outside), [], 'nothing was written through the symlink');
+    const legacy = JSON.parse(fs.readFileSync(path.join(project, '.gsd', 'dispatch-isolation-sentinel.json'), 'utf-8'));
+    assert.equal(legacy.phase, '21');
+    assert.equal(legacy.plan, '21-13');
   });
 });
