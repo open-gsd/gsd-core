@@ -19,7 +19,7 @@ gsd capability install https://github.com/some-org/gsd-cap-example.git#v1.0.0
 **Git repository pinned to a commit SHA (fully reproducible):**
 
 ```bash
-gsd capability install https://github.com/some-org/gsd-cap-example.git#sha:abc123def456...
+gsd capability install https://github.com/some-org/gsd-cap-example.git#sha:0123456789abcdef0123456789abcdef01234567
 ```
 
 **npm package:**
