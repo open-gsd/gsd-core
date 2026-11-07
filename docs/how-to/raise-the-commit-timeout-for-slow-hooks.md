@@ -29,8 +29,17 @@ so a bad edit never removes the bound. These values are invalid:
 
 ## 3. Clean up after a past timeout
 
-A killed commit can leave the hook running and the lock in place. If no git process is running, remove the
-`index.lock` path named in the message before retrying.
+A killed commit can leave the hook running and the lock in place. The lock may belong to a hook that still runs,
+for example a `lint-staged` job that has no git process active.
+
+1. Wait for the hook to end, or stop its processes (for example `lint-staged` or your linter).
+2. Check that no hook or git process still uses the repo.
+3. Remove the `index.lock` path named in the message.
+4. Retry the commit.
+
+After a `pr-subrepo` timeout, GSD tries to return to your previous branch and delete the new branch. The locked
+index can block both steps. If the new branch still exists, run `git -C <repo> checkout <previous-branch>` and then
+`git -C <repo> branch -D <branch>`. The changed files stay staged until you commit or unstage them.
 
 ## Notes
 
