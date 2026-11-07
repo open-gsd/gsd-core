@@ -75,8 +75,8 @@ pr_merged() {
     _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET" --; then
     return 0
   fi
-  # Unprovable offline stays "not merged" (fail-safe): gh missing, a shell function or alias (it cannot be
-  # bounded), unauthenticated, offline, or slower than 10s (gsd_run run-with-timeout needs no timeout binary).
+  # Last proof: gh, run only as an executable (a shell function or alias cannot be bounded) and capped at 10s.
+  # No answer from gh counts as "not merged", so a merge the run cannot confirm is never published by guess.
   # Base-filtered: markers are keyed per target ($PR_BASE).
   _g=$(command -v gh) || return 1
   case $_g in /*) ;; *) return 1 ;; esac
@@ -125,21 +125,31 @@ if [ -n "$MARKER_TIP" ]; then
   if _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
     BASE="$MARKER_TIP"
   else
-    # History rewritten: the newest commit here with the same patch as a published one is the base, but only
-    # when every published commit kept a matching patch (a conflict-resolved one would be replayed) and no
-    # unpublished commit sits below that base (reordered, it would be skipped for good). A published commit
-    # whose patch $TARGET already holds (a rebase merge, then `git rebase`) matches that copy, so nothing is
-    # left to replay and $TARGET is the base without a warning.
-    REBASED_TIP=
-    ALL_IN_TARGET=
-    PUBLISHED=$(_to git log --no-merges --cherry-mark --left-only --format=%m "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null)
-    if [ -n "$PUBLISHED" ] && [ "$(printf '%s\n' "$PUBLISHED" | grep -c '^<')" = 0 ]; then
-      HERE=$(_to git log --topo-order --no-merges --cherry-mark --right-only --format='%m %H' "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null)
-      REBASED_TIP=$(printf '%s\n' "$HERE" | awk '$1=="="&&!e{e=$2} $1==">"&&e{b=1} END{if(e&&!b)print e}')
-      printf '%s\n' "$HERE" | grep -q '^=' || ALL_IN_TARGET=1
-    fi
-    if [ -n "$REBASED_TIP" ]; then BASE="$REBASED_TIP"
-    elif [ -z "$ALL_IN_TARGET" ]; then echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2; fi
+    # History rewritten (rebase, reword): compare commits by patch-id over the paths the -pr keeps (strict
+    # drops all of .planning/, so a mixed commit rewritten by the rebase still matches its -pr copy, and a
+    # planning-only commit has nothing to publish). The base is the commit that ends the leading run of
+    # published-equivalent commits here (an equal patch, or nothing to publish); $TARGET when none of them
+    # is here. Warn instead when a published commit has no match (folded, conflict-resolved), or when a
+    # matched commit sits above an unpublished one (reordered, that commit would be skipped for good).
+    PICK_EXCL=; [ "$PR_MODE" = strict ] && PICK_EXCL=':(exclude,top).planning'
+    REWRITE=$( { printf 'L\n%s\nR\n%s\nP\n' \
+        "$(_to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null)" \
+        "$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null)"
+      _to git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" -- ':/' ${PICK_EXCL:+"$PICK_EXCL"} 2>/dev/null | git patch-id --stable; } |
+      awk '/^L$/{s=1;next} /^R$/{s=2;next} /^P$/{s=3;next}
+        s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{pid[$2]=$1}
+        END{ if(!nl){print "WARN";exit}
+          for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
+          for(c in L) if((c in pid)&&!(pid[c] in here)){print "WARN";exit}
+          for(i=n;i>=1;i--){ c=R[i]
+            if(!stop && (!(c in pid) || (pid[c] in lp))){tip=c;continue}
+            stop=1; if((c in pid)&&(pid[c] in lp)){print "WARN";exit} }
+          print "OK", (tip==""?"-":tip) }')
+    case $REWRITE in
+      "OK -") ;;
+      OK\ *) BASE=${REWRITE#OK } ;;
+      *) echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2 ;;
+    esac
   fi
 fi
 # The filter below removes files from the index AND the working tree before each
