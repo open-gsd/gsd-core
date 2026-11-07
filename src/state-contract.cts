@@ -135,6 +135,7 @@ export interface StateContractV1 {
 
 interface Owners {
   planningPaths: typeof import('./planning-workspace.cjs')['planningPaths'];
+  ownConfigValue: typeof import('./planning-workspace.cjs')['ownConfigValue'];
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
   excludeFromGit: typeof import('./git-info-exclude.cjs')['excludeFromGit'];
@@ -184,6 +185,7 @@ function owners(): Owners {
   /* eslint-enable @typescript-eslint/no-require-imports */
   _owners = {
     planningPaths: planningWorkspaceMod.planningPaths,
+    ownConfigValue: planningWorkspaceMod.ownConfigValue,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
     excludeFromGit: gitInfoExcludeMod.excludeFromGit,
@@ -428,7 +430,7 @@ function untrackTrackedStateJson(cwd: string): void {
   // `.gitignore` carries a `!` line for the file (`ignoreInTree` refuses to write over it), keeps its copy tracked.
   const untrack = tracked.filter((f) => {
     const dir = path.dirname(path.resolve(cwd, f));
-    return !scopeOptsOutOfCommitDocs(cwd, dir) && owners().ignoreInTree(dir, 'state.json');
+    return !scopeOptsOutOfCommitDocs(dir) && owners().ignoreInTree(dir, 'state.json');
   });
   if (untrack.length === 0) return;
   const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...untrack], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
@@ -437,19 +439,21 @@ function untrackTrackedStateJson(cwd: string): void {
   owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
 }
 
-/** True when the nearest `config.json` at or above `dir` (up to `.planning/`) sets `commit_docs` to false: a workstream inherits the root, as `config-get` does. */
-function scopeOptsOutOfCommitDocs(cwd: string, dir: string): boolean {
-  const root = path.resolve(cwd, '.planning');
-  for (let d = dir; ; d = path.dirname(d)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(d, 'config.json'), 'utf8')) as Record<string, unknown>;
-      const value = parsed['commit_docs'] ?? (parsed['planning'] as Record<string, unknown> | undefined)?.['commit_docs'];
-      if (value !== undefined) return value === false;
-    } catch {
-      // no readable config at this level: ask the next one up
-    }
-    if (d === root || d === path.dirname(d)) return false;
-  }
+/**
+ * True when the commit policy turns `commit_docs` off for the scope whose copy sits in `dir`: that scope's own
+ * `config.json` (flat or `planning.` key), and only a workstream falls back to the config of the directory that
+ * holds its `workstreams/` (the project, or the root), the ladder `readScopedConfigValue` documents (a project alone does not inherit). The value goes through
+ * `resolveCommitDocsTiers`, so `0` and `null` read as off exactly as `cmdCommit` reads them.
+ */
+function scopeOptsOutOfCommitDocs(dir: string): boolean {
+  const own = (d: string): { present: boolean; value: unknown } => {
+    const flat = owners().ownConfigValue(path.join(d, 'config.json'), ['commit_docs']);
+    return flat.present ? flat : owners().ownConfigValue(path.join(d, 'config.json'), ['planning', 'commit_docs']);
+  };
+  const isWorkstream = path.basename(path.dirname(dir)) === 'workstreams';
+  const scoped = own(dir);
+  const found = scoped.present || !isWorkstream ? scoped : own(path.dirname(path.dirname(dir)));
+  return found.present && !owners().resolveCommitDocsTiers(undefined, found.value, () => false).resolved;
 }
 
 /** Hide the derived file when the commit policy keeps planning in git: append the per-clone exclude entry (the owner applies the repo-ownership gate), then migrate a tracked copy (the publisher passes no phase override: it has no phase context, D13). */

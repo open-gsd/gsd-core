@@ -726,6 +726,7 @@ function findPhaseSpecIn(files: readonly string[]): string | null {
 export = {
   worktreesOptedOut,
   readScopedConfigValue,
+  ownConfigValue,
   createPlanningWorkspace,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
