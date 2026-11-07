@@ -1355,6 +1355,18 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     });
   }
 
+  // The #5518 brief's must-allow rows: a parameter expansion stays text, and
+  // `${ x }` runs only `x`. The four after them are twins whose word holds
+  // `;cat .env; `, which every bash reads as text (5.3.20, 5.2.37 and 3.2.57
+  // run no read), so a scan that read a parameter expansion as a function
+  // substitution would deny them.
+  for (const command of ['echo ${HOME}', 'echo ${x:-a b}', 'echo "${#x}"', 'echo ${ x }',
+    'echo ${HOME%;cat .env; }', 'echo ${x:-a b;cat .env; }', 'echo "${x:+;cat .env; }" "${#x}"', 'echo "${x:-;cat .env; }"']) {
+    test(`allows: ${command}`, () => {
+      assertAllowed(runHook(bash(command)), command);
+    });
+  }
+
   // The scan's reach, pinned as #5478's git config rows pin it: a deny at
   // the limit and an allow one past it, where bash still runs the read, so
   // closing a gap flips its allow row. MAX_NESTING_DEPTH (3) bounds every
