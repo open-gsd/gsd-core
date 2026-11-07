@@ -1560,7 +1560,8 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     });
   }
 
-  test('aBoundaryCommandSpawnsExactlyTheDocumentedGitCalls', (t) => {
+  test('aBoundaryCommandSpawnsAtMostTheDocumentedGitCalls', (t) => {
+    const { GIT_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(path.join(planningDirOf(tmpDir), 'STATE.md'), '# State\n');
@@ -1589,7 +1590,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     // listing) are bounded by an explicit timeout
     const added = calls.filter(({ args }) => args.includes('check-ignore') || args.includes('info/exclude') || args.includes('ls-files'));
     assert.ok(added.length >= 2);
-    assert.ok(added.every(({ timeout }) => timeout > 0 && timeout <= 10_000), JSON.stringify(added));
+    assert.ok(added.every(({ timeout }) => timeout > 0 && timeout <= GIT_PROBE_TIMEOUT_MS), JSON.stringify(added));
   });
 
   test('publishLeavesALegacyConfigUnrewritten', (t) => {

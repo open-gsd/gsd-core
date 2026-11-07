@@ -543,6 +543,16 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.match(fs.readFileSync(path.join(tmpDir, '.planning', '.gitignore'), 'utf8'), /^\/state\.json$/m);
   });
 
+  test('new-project ignore rule: none is written when .planning/ is already ignored (the commit_docs owner decides)', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    cleanup(path.join(tmpDir, '.planning', 'config.json'));
+    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '.planning\n');
+    const r = runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    assert.ok(r.success, r.error || r.output);
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', '.gitignore')));
+  });
+
   test('new-project ignore rule: a fresh clone keeps the tree clean before any boundary command', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));

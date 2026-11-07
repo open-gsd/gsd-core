@@ -237,10 +237,11 @@ interface ParsedConfig {
 
 const _gitIgnoredCache = new Map<string, boolean>();
 
-// #5505: the state-contract publisher reaches isGitIgnored at every boundary command (its commit_docs
-// tier), so a hung git must fail fast there instead of waiting out execGit's 10 s default and a timeout
-// must not be cached as "not ignored". The bound is GIT_PROBE_TIMEOUT_MS (git-info-exclude.cts).
-
+/**
+ * #5505: the state-contract publisher reaches this at every boundary command (its commit_docs tier),
+ * so a hung git must fail fast there instead of waiting out execGit's 10 s default, and a timeout
+ * must not be cached as "not ignored". The bound is GIT_PROBE_TIMEOUT_MS (git-info-exclude.cts).
+ */
 function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, string>): boolean {
   // #2206: strip trailing slashes — `git check-ignore` has a quirk where a
   // CRLF .gitignore with blank lines falsely reports a trailing-slash path

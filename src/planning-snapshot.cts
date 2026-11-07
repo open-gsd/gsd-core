@@ -604,8 +604,8 @@ const PLANNING_TRACKED_GIT_TIMEOUT_MS = 10_000;
  * #5505: W029's listing and W031's (`buildStateJsonTracked`, also the publisher's migration) share
  * it, so a listing git could not answer means the same in both; W029's behaviour is unchanged.
  */
-function classifyLsFilesFailure(cwd: string): string {
-  const probe = execGit(['rev-parse', '--is-inside-work-tree'], { cwd, timeout: PLANNING_TRACKED_GIT_TIMEOUT_MS });
+function classifyLsFilesFailure(cwd: string, timeout: number = PLANNING_TRACKED_GIT_TIMEOUT_MS): string {
+  const probe = execGit(['rev-parse', '--is-inside-work-tree'], { cwd, timeout });
   if (probe.timedOut) return 'git_timed_out';
   return probe.exitCode === 0 ? 'git_list_failed' : 'not_a_git_repo';
 }
@@ -700,7 +700,7 @@ function buildStateJsonTracked(cwd: string, timeout: number = PLANNING_TRACKED_G
   try {
     const r = execGit(['ls-files', '-z', '--', ...STATE_JSON_PATHSPECS], { cwd, timeout });
     if (r.timedOut) return { value: [], scope: SCOPE.UNREADABLE, reason: 'git_timed_out' };
-    if (r.exitCode !== 0) return { value: [], scope: SCOPE.UNREADABLE, reason: classifyLsFilesFailure(cwd) };
+    if (r.exitCode !== 0) return { value: [], scope: SCOPE.UNREADABLE, reason: classifyLsFilesFailure(cwd, timeout) };
     return { value: r.stdout.split('\0').filter((f) => f && isStateJsonPublishPath(cwd, f)), scope: SCOPE.COMPLETE, reason: 'ok' };
   } catch {
     return { value: [], scope: SCOPE.UNREADABLE, reason: 'exception' };
