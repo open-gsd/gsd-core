@@ -1347,15 +1347,15 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     git(repo, 'commit', '-q', '-m', 'track');
   };
 
-  test('aMigrationRuleFileThatCannotBeWrittenStillUntracksAndPublishes', (t) => {
+  test('aMigrationRuleFileThatCannotBeWrittenKeepsTheCopyTrackedAndPublishes', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     trackStateJson(tmpDir);
     fs.mkdirSync(path.join(planningDirOf(tmpDir), '.gitignore'));
     assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
-    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/state.json'), '', 'the copy was untracked');
-    assert.strictEqual(git(tmpDir, 'diff', '--cached', '--name-status').trim(), 'D\t.planning/state.json', 'only the removal is staged');
-    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), true, 'the file stays on disk');
+    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/state.json').trim(), '.planning/state.json', 'no rule, no untrack');
+    assert.strictEqual(git(tmpDir, 'diff', '--cached', '--name-status').trim(), '', 'nothing is staged');
+    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), true);
   });
 
   test('aFailingRuleFileStageLeavesTheRemovalStagedAndPublishes', (t) => {

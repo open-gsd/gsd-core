@@ -466,7 +466,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const rel = path.relative(tmpDir, dir).split(path.sep).join('/');
     fs.writeFileSync(path.join(dir, 'STATE.md'), STATE_MD);
     if (preTracked) fs.writeFileSync(path.join(dir, 'state.json'), '{}\n');
-    if (priorIgnore) fs.writeFileSync(path.join(dir, '.gitignore'), 'scratch/\n');
+    if (priorIgnore) fs.writeFileSync(path.join(dir, '.gitignore'), priorIgnore === true ? 'scratch/\n' : priorIgnore);
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'seed');
     const r = runGsdTools(wsName ? [...BEGIN, '--ws', wsName] : BEGIN, tmpDir);
@@ -511,11 +511,51 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.match(git(tmpDir, 'show', `HEAD:${rel}/.gitignore`), /^\/state\.json$/m);
   });
 
+  test('the migration is carried when the tracked rule file had no final newline', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/' });
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
   test('tracked modified state.json migrates for a workstream copy too', (t) => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
     const c = runGsdTools(['commit', 'docs: ws', '--files', `${rel}/STATE.md`], tmpDir);
     assert.ok(c.success, `final commit must succeed: ${c.error}`);
     assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
+  // The migration is per scope: a sibling workstream copy is untracked only when its own scope allows it.
+  test('the migration leaves a sibling workstream copy tracked when its scope opts out or negates the rule', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const ws = (name) => path.join(tmpDir, '.planning', 'workstreams', name);
+    for (const name of ['ws1', 'ws2', 'ws3']) {
+      fs.mkdirSync(ws(name), { recursive: true });
+      fs.writeFileSync(path.join(ws(name), 'STATE.md'), STATE_MD);
+      fs.writeFileSync(path.join(ws(name), 'state.json'), '{}\n');
+    }
+    fs.writeFileSync(path.join(ws('ws2'), 'config.json'), '{"commit_docs": false}\n');
+    fs.writeFileSync(path.join(ws('ws3'), '.gitignore'), '!/state.json\n');
+    git(tmpDir, 'add', '-A');
+    git(tmpDir, 'commit', '-q', '-m', 'seed');
+    assert.ok(runGsdTools([...BEGIN, '--ws', 'ws1'], tmpDir).success);
+    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/workstreams/ws1/state.json'), '', 'the active scope migrates');
+    for (const name of ['ws2', 'ws3']) {
+      assert.strictEqual(git(tmpDir, 'ls-files', '--', `.planning/workstreams/${name}/state.json`).trim(), `.planning/workstreams/${name}/state.json`, `${name} keeps its copy tracked`);
+    }
+  });
+
+  test('a staged edit of the user\'s own .planning/.gitignore is not carried into a scoped commit', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: true });
+    fs.appendFileSync(path.join(tmpDir, rel, '.gitignore'), 'mine/\n');
+    git(tmpDir, 'add', `${rel}/.gitignore`);
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), [`${rel}/STATE.md`]);
+    assert.match(git(tmpDir, 'diff', '--cached', '--', `${rel}/.gitignore`), /\+mine\//, 'the user\'s staged edit is still staged');
   });
 
   test('a user negation keeps a tracked state.json tracked', (t) => {

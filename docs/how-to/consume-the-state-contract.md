@@ -216,7 +216,11 @@ path (`.planning/state.json`, `.planning/workstreams/<name>/state.json`,
 writes the same `/state.json` rule into the `.gitignore` beside each, and stages
 both. The file stays on disk, rerunning the migration is a no-op, and the next
 `commit` carries the staged removal and rule, so `git status` is clean after the
-workflow's final commit. A `!` rule you wrote for the file keeps your copy tracked.
+workflow's final commit. `commit` carries them only when everything staged before it is that
+removal or that one added `/state.json` line; a staged edit of your own to the same `.gitignore`
+stays staged for you to commit. Each scope decides for itself: a copy whose own (or inherited)
+`commit_docs` is `false`, or whose `.gitignore` holds a `!` rule for the file, stays tracked,
+even when a sibling workstream or project beside it is migrated.
 A teammate whose tracked copy is modified (the usual case) cannot pull that commit
 (`Your local changes ... would be overwritten by merge`): they run
 `git checkout -- <path>` (or stash) first, and the next boundary regenerates the

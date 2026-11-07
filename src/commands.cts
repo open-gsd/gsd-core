@@ -2291,6 +2291,18 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       ).stdout.split('\0').filter(Boolean)
         // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
         .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
+        // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
+        // any other staged line in it is the user's own edit and stays out of this commit
+        .filter((p) => {
+          if (!p.endsWith('.gitignore')) return true;
+          const lines = (spec: string): string[] => {
+            const r = execGit(['show', spec], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+            return r.exitCode === 0 ? r.stdout.replace(/\n$/, '').split('\n') : [];
+          };
+          const staged = lines(`:./${p}`);
+          const before = lines(`HEAD:./${p}`);
+          return staged.length === before.length + 1 && staged.every((l, i) => l === (i < before.length ? before[i] : '/state.json'));
+        })
     : [];
   const carried = [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
   stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));

@@ -424,13 +424,32 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
  */
 function untrackTrackedStateJson(cwd: string): void {
   const tracked = owners().buildStateJsonTracked(cwd, owners().GIT_PROBE_TIMEOUT_MS).value;
-  if (tracked.length === 0) return;
-  const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...tracked], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
+  // Each tracked copy answers for its own scope: a sibling workstream/project whose `commit_docs` is false, or whose
+  // `.gitignore` carries a `!` line for the file (`ignoreInTree` refuses to write over it), keeps its copy tracked.
+  const untrack = tracked.filter((f) => {
+    const dir = path.dirname(path.resolve(cwd, f));
+    return !scopeOptsOutOfCommitDocs(cwd, dir) && owners().ignoreInTree(dir, 'state.json');
+  });
+  if (untrack.length === 0) return;
+  const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...untrack], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
   if (rm.exitCode !== 0) return;
-  const rules = [...new Set(tracked.map((f) => path.dirname(path.resolve(cwd, f))))]
-    .filter((dir) => owners().ignoreInTree(dir, 'state.json'))
-    .map((dir) => path.join(dir, '.gitignore'));
-  if (rules.length > 0) owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
+  const rules = [...new Set(untrack.map((f) => path.join(path.dirname(path.resolve(cwd, f)), '.gitignore')))];
+  owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
+}
+
+/** True when the nearest `config.json` at or above `dir` (up to `.planning/`) sets `commit_docs` to false: a workstream inherits the root, as `config-get` does. */
+function scopeOptsOutOfCommitDocs(cwd: string, dir: string): boolean {
+  const root = path.resolve(cwd, '.planning');
+  for (let d = dir; ; d = path.dirname(d)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(d, 'config.json'), 'utf8')) as Record<string, unknown>;
+      const value = parsed['commit_docs'] ?? (parsed['planning'] as Record<string, unknown> | undefined)?.['commit_docs'];
+      if (value !== undefined) return value === false;
+    } catch {
+      // no readable config at this level: ask the next one up
+    }
+    if (d === root || d === path.dirname(d)) return false;
+  }
 }
 
 /** Hide the derived file when the commit policy keeps planning in git: append the per-clone exclude entry (the owner applies the repo-ownership gate), then migrate a tracked copy (the publisher passes no phase override: it has no phase context, D13). */
