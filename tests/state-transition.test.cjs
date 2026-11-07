@@ -5494,6 +5494,11 @@ describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase'
     assert.equal(recorded('Current Plan: 1 of 5', 'Plan: 1 of 7', 'Total Plans in Phase: TBD'), 5);
   });
 
+  test('#5786 an unconvertible `Current Plan` M falls through to `Plan`\'s M per field', () => {
+    assert.equal(recorded('Current Plan: 1 of 9007199254740993', 'Plan: 2 of 7'), 7);
+    assert.equal(recorded('Current Plan: 1 of 9007199254740993'), null);
+  });
+
   test('#5786 a lone Total and no fields keep their reads', () => {
     assert.equal(recorded('Total Plans in Phase: 5'), 5);
     assert.equal(recorded('nothing here'), null);

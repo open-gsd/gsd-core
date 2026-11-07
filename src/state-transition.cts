@@ -1833,11 +1833,13 @@ export function readPlanPosition(content: string): { current: number; total: num
 /**
  * The plan total a STATE.md document records, for the `init --validate`
  * plan-count check: a readable `Total Plans in Phase` first, else the
- * of-M total read straight from the plan fields: a convertible `Current Plan:
- * N of M` first, else a convertible `Plan: N of M` (the precedence
- * `parsePlanFields` applies). The fallback does not go through the legacy
- * pair, so an unconvertible `Total Plans in Phase` beside `Current Plan: N of
- * M` still yields M. `null` when neither yields a convertible M. #5786.
+ * of-M total read straight from the plan fields: `Current Plan`'s of-M is
+ * tried first, then `Plan`'s, and convertibility is checked per field (an
+ * unconvertible `Current Plan` M falls through to `Plan`'s M), unlike
+ * `parsePlanFields`, which commits to the first matching field. The fallback
+ * does not go through the legacy pair, so an unconvertible `Total Plans in
+ * Phase` beside `Current Plan: N of M` still yields M. `null` when neither
+ * yields a convertible M. #5786.
  */
 export function readRecordedPlanTotal(content: string): number | null {
   // An explicit `Total Plans in Phase` wins over an `of M` in either plan field.
