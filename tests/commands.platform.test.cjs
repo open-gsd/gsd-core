@@ -59,6 +59,7 @@ const {
 } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { runWithTimedOutCommit } = require('./helpers/commit-timeout-probe.cjs');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -931,9 +932,9 @@ describe('#3776: query commit --files reports an empty diff as nothing_to_commit
   });
 });
 
-// #5231: `git.commit_timeout_ms` (workspace-root config) must reach the sub-repo
-// commit sites too. The config lives ONLY in the workspace root; the sub-repo
-// has none (config is read from the root cwd, not repoCwd).
+// #5231: `git.commit_timeout_ms` must reach the sub-repo commit sites too. Both read it
+// through `loadConfig(cwd)`, so an active workstream config wins over the root (pinned
+// for cmdCommit in commit-files-pathspec.test.cjs).
 describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo', () => {
   const { createTempGitProject } = require('./helpers.cjs');
   let rootDir;
@@ -959,7 +960,9 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     setup({ commit_timeout_ms: 60000 });
     const r = runWithTimedOutCommit(`cmds.cmdCommitToSubrepo(${JSON.stringify(rootDir)}, 'chore: probe', ['backend/seed.js'], false);`);
     assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
-    assert.ok(JSON.parse(r.stdout).repos.backend.error.includes('60s'));
+    const backend = JSON.parse(r.stdout).repos.backend;
+    assert.strictEqual(backend.reason, 'commit_timeout');
+    assert.strictEqual(backend.timed_out, true);
   });
 
   const FALLBACK_CASES = [['unset', undefined], ['0', { commit_timeout_ms: 0 }], ['"abc"', { commit_timeout_ms: 'abc' }],
@@ -974,7 +977,7 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
       setup(git);
       const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-default', 'fix: probe', false);`);
       assert.strictEqual(r.timeout, 30000);
-      assert.ok(r.stderr.includes('timed out after 30s'), `stderr: ${r.stderr}`);
+      assert.strictEqual(r.failure.reason, ERROR_REASON.UNKNOWN);
     });
   }
 
@@ -986,7 +989,7 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
   test('probe: a non-ExitError thrown by the call surfaces in stderr with a non-zero status', () => {
     const r = runWithTimedOutCommit("throw new Error('boom-5231');");
     assert.notStrictEqual(r.status, 0);
-    assert.ok(r.stderr.includes('boom-5231'), `stderr: ${r.stderr}`);
+    assert.strictEqual(r.thrown, 'boom-5231');
   });
 
   test('pr-subrepo accepts the 3600000 ceiling', () => {
@@ -995,11 +998,25 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     assert.strictEqual(r.timeout, 3600000, `stderr: ${r.stderr}`);
   });
 
-  test('pr-subrepo passes the configured timeout to git commit and names 60s', () => {
+  test('pr-subrepo passes the configured timeout to git commit and reports it as an unclassified error naming the repo and the stale lock', () => {
     setup({ commit_timeout_ms: 60000 });
     const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-timeout', 'fix: probe', false);`);
     assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
-    assert.ok(r.stderr.includes('timed out after 60s'), `stderr: ${r.stderr}`);
+    assert.strictEqual(r.failure.reason, ERROR_REASON.UNKNOWN);
+    assert.ok(r.failure.message.includes('backend'), r.failure.message);
+    assert.ok(r.failure.message.includes('index.lock'), r.failure.message);
+  });
+
+  test('pr-subrepo leaves a legacy-shaped config byte-identical (persist:false)', () => {
+    setup();
+    const cfgPath = path.join(rootDir, '.planning', 'config.json');
+    // Hand-written spacing unlike JSON.stringify: any rewrite of the file changes the bytes.
+    fs.writeFileSync(cfgPath, '{"base_branch": "develop", "planning": {"sub_repos": ["backend"]}}\n');
+    const before = fs.readFileSync(cfgPath);
+    const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-legacy', 'fix: probe', false);`);
+    // Positive control: the config was read and the commit was reached.
+    assert.strictEqual(r.timeout, 30000, `stderr: ${r.stderr}`);
+    assert.deepStrictEqual(fs.readFileSync(cfgPath), before);
   });
 });
 

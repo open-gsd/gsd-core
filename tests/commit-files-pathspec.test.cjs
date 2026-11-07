@@ -3246,7 +3246,7 @@ describe('commit timeout reporting (#3886)', () => {
     const { result, timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
     assert.equal(timeout, 60000, 'execGit(commit) must receive the configured timeout');
     assert.equal(result.reason, 'commit_timeout');
-    assert.ok((result.error || '').includes('60s'), `error must name 60s, got: ${result.error}`);
+    assert.equal(result.timed_out, true);
   });
 
   test('#5231: an active workstream config wins over the root config for the commit timeout', () => {
@@ -3261,7 +3261,7 @@ describe('commit timeout reporting (#3886)', () => {
   test('#5231: unset git.commit_timeout_ms defaults to 30000', () => {
     const { result, timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
     assert.equal(timeout, 30000);
-    assert.ok((result.error || '').includes('30s'));
+    assert.equal(result.reason, 'commit_timeout');
   });
 
   test('#5231: invalid git.commit_timeout_ms (0, -1, abc, 1500.5, null, ceiling+1, MAX_SAFE_INTEGER+1) falls back to 30000', () => {

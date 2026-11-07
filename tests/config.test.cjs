@@ -16,6 +16,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 
 // ─── ADR-612 PR-5: phase_id_convention enum validation ──────────────────────
 
@@ -2621,13 +2622,13 @@ describe('#5231: git.commit_timeout_ms config key', () => {
       ['3600001', false], ['9007199254740991', false], ['9007199254740992', false], ['-1', false], ['abc', false], ['1500.5', false]];
     let last;
     for (const [value, ok] of cases) {
-      const r = runGsdTools(['config-set', 'git.commit_timeout_ms', value], tmpDir, env);
+      const r = runGsdTools(['--json-errors', 'config-set', 'git.commit_timeout_ms', value], tmpDir, env);
       if (ok) {
         assert.ok(r.success, `'${value}' should be accepted:\n${r.error}`);
         last = Number(value);
       } else {
         assert.ok(!r.success, `'${value}' should be rejected`);
-        assert.match(r.error, /positive integer/);
+        assert.strictEqual(JSON.parse(r.error).reason, ERROR_REASON.USAGE);
       }
       assert.strictEqual(stored(), last, `after '${value}' the stored value must be the last accepted number`);
       assert.strictEqual(typeof stored(), 'number');
@@ -2642,12 +2643,12 @@ describe('#5231: git.commit_timeout_ms config key', () => {
     const own = runNode([TOOLS_PATH, 'config-get', 'git.commit_timeout_ms'], { cwd: tmpDir, env: homeSandboxEnv(tmpDir) });
     assert.strictEqual(own.exitCode, 0, own.stderr);
     assert.strictEqual(own.stdout.trim(), '0');
-    assert.doesNotMatch(own.stderr, /commit_timeout_ms/);
+    assert.strictEqual(own.stderr, '');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'ws'), { recursive: true });
     const inh = runNode([TOOLS_PATH, 'config-get', 'git.commit_timeout_ms'], { cwd: tmpDir, env: { ...homeSandboxEnv(tmpDir), GSD_WORKSTREAM: 'ws' } });
     assert.strictEqual(inh.exitCode, 0, inh.stderr);
     assert.strictEqual(inh.stdout.trim(), '0');
-    assert.doesNotMatch(inh.stderr, /commit_timeout_ms/);
+    assert.strictEqual(inh.stderr, '');
   });
 });
 
