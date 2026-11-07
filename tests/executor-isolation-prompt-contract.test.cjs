@@ -13,27 +13,33 @@
  * "SUMMARY.md created AND committed" criterion.
  *
  * These are source-text-is-the-product assertions: the workflow markdown IS
- * what the orchestrator runtime loads. The contract checked here is the
- * documented dispatch text, per the issue's acceptance list.
+ * what the orchestrator runtime loads, and the contract checked here is the
+ * documented dispatch text, per the issue's acceptance list. The #5531 compose
+ * blocks run in real bash in tests/executor-isolation-dispatch.integration.test.cjs;
+ * only the checks that no shell run can show stay here.
  */
 
-const { test } = require('node:test');
+const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
+const { readFileNormalized } = require('./helpers.cjs');
+const { DISPATCH_STEP_PATH } = require('./qa/tdd-walk.cjs');
+const { substitutePlaceholders } = require('../scripts/lint-workflow-shellcheck.cjs');
+const { scanFencedBlocks, extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
-const FRAGMENT = path.join(
-  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md',
-);
 // allow-test-rule: source-text-is-the-product the dispatch fragment is runtime-loaded workflow text (#3637)
-const content = fs.readFileSync(FRAGMENT, 'utf8');
+// Read at run time, so a missing fragment fails one hook, not the load of the file.
+let content;
+before(() => {
+  content = readFileNormalized(DISPATCH_STEP_PATH);
+});
 
-/** The EXECUTOR_PROMPT single-quoted assignment body. */
+/** The prompt template: the `text` fence the orchestrator writes to PROMPT_FILE. */
 function promptBody() {
-  const start = content.indexOf("EXECUTOR_PROMPT='<objective>");
-  const end = content.indexOf("</success_criteria>'", start);
-  assert.ok(start !== -1 && end !== -1, 'EXECUTOR_PROMPT assignment must exist');
-  return content.slice(start, end);
+  assert.equal(content.split('\n').filter((l) => l.trim() === '```text').length, 1, 'the fragment must hold exactly one text fence: the prompt template');
+  const body = extractFencedBlock(content, 'text');
+  assert.notEqual(body, null, 'the text fence must close');
+  return body + '\n';
 }
 
 test('#3637: the executor prompt carries the required-reading contract with the explicit plan path', () => {
@@ -61,47 +67,6 @@ test('#3637: the success criteria make an intentional gitignored skip a success 
   );
 });
 
-test('#3637: the compose step fails closed when the embeds are missing', () => {
-  assert.match(
-    content,
-    /grep -q '<required_reading>'[\s\S]{0,400}exit 1/,
-    'a prompt missing the required-reading contract must halt before spawn',
-  );
-  assert.match(
-    content,
-    /grep -q 'skipped_gitignored'[\s\S]{0,400}exit 1/,
-    'a prompt missing the skip semantics must halt before spawn',
-  );
-});
-
-test('#3637: embed PERFORMANCE is gated — an un-embedded template halts before spawn', () => {
-  // The two template-completeness greps above cannot detect skipped embeds
-  // (the placeholders live in the template itself). The performance gates
-  // catch the raw-template dispatch: the provenance parenthetical must be
-  // GONE and the persona marker must be substituted (#3637 review finding).
-  assert.match(
-    content,
-    /grep -q 'Inline the actual contents'[\s\S]{0,300}exit 1/,
-    'a prompt still carrying its compose-time placeholder means the embeds were skipped — halt',
-  );
-  assert.match(
-    content,
-    /grep -q '\\\$\{AGENT_SKILLS\}'[\s\S]{0,300}exit 1/,
-    'an un-substituted persona marker means the role definition was not spliced — halt',
-  );
-});
-
-test('#4266: embed PERFORMANCE is gated — an un-substituted TDD_APPLICABLE marker halts before spawn', () => {
-  // Matches the ${AGENT_SKILLS} gate immediately above: a third performance gate for
-  // the #4266/#4272 TDD-applicability predicate, halting before worktree creation
-  // when the marker survives composition.
-  assert.match(
-    content,
-    /grep -q '\\\$\{TDD_APPLICABLE'[\s\S]{0,300}exit 1/,
-    'an un-substituted TDD_APPLICABLE marker means the TDD-applicability decision was not resolved into the prompt — halt',
-  );
-});
-
 test('#3637: the gsd-executor ROLE DEFINITION is a mandatory embed with provenance', () => {
   // The agent-skills query alone is conditional (its block is a skills list
   // whenever the project configures agent_skills; only unconfigured
@@ -122,9 +87,72 @@ test('#3637: the persona rides the prompt (${AGENT_SKILLS}), same as the harness
   assert.match(promptBody(), /\$\{AGENT_SKILLS\}/, 'the gsd-executor persona variable must be spliced into the prompt');
 });
 
-test('#3637: the prompt body contains no single-quote character (single-quoted assignment)', () => {
+test('#5531: the substitution instruction names every placeholder any fenced block of the fragment uses', () => {
+  const lines = content.split('\n');
+  const sentence = lines.find((l) => l.includes('Before running each bash block below'));
+  assert.ok(sentence, 'the substitution instruction exists');
+  const blocks = scanFencedBlocks(lines);
+  assert.ok(blocks.every((b) => b.closeLineIdx !== -1), 'every fenced block of the fragment closes');
+  const bodies = blocks.map((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
+  const named = [...sentence.matchAll(/`(\{[^`}]+\})`/g)].map((m) => m[1]);
+  assert.ok(named.length > 0, 'the instruction names placeholders');
+  for (const text of bodies) {
+    const rest = named.reduce((acc, token) => acc.replaceAll(token, ''), text);
+    assert.equal(substitutePlaceholders(rest), rest, 'a placeholder of a fenced block is missing from the instruction');
+  }
+});
+
+// ─── #5531: what no bash run of the compose blocks can show ───
+
+test('#5531: the template text sits in no bash block and the instruction has the orchestrator write it with the file tool', () => {
+  // The bash run starts from a file that already exists; it cannot show how the orchestrator makes that file.
+  const lines = content.split('\n');
+  const bashBodies = scanFencedBlocks(lines).filter((b) => b.infoString === 'bash').map((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
+  assert.ok(bashBodies.length > 0, 'the fragment holds bash blocks');
+  for (const marker of ['<objective>', '<mcp_tools>', '[gsd:dispatch']) {
+    assert.ok(!bashBodies.some((body) => body.includes(marker)), `${marker} must sit in no bash block`);
+  }
+  assert.ok(content.includes('with your file-writing tool and never through the shell'), 'the template is written with the file tool');
+});
+
+test('#5531: the template carries the two markers that only the read-and-check guards look for', () => {
+  // The bash run feeds the guards its own files; it cannot show that the shipped template holds the markers.
+  // The other three markers are asserted on the template by the #3637 tests above.
   const body = promptBody();
-  const startQuote = body.indexOf("'");
-  const rest = body.slice(startQuote + 1);
-  assert.ok(!rest.includes("'"), 'the prompt body must be free of apostrophes or the shell assignment breaks');
+  for (const marker of ['Inline the actual contents', '${TDD_APPLICABLE']) {
+    assert.ok(body.includes(marker), `the template carries ${marker}, so a skipped compose step leaves it for a guard to find`);
+  }
+});
+
+test('#5531: the two compose blocks declare the same prompt file name prefix', () => {
+  // The blocks run as separate commands, so each declares the prefix; a run of one block cannot show they agree.
+  const lines = content.split('\n');
+  const prefixes = scanFencedBlocks(lines)
+    .filter((b) => b.infoString === 'bash')
+    .flatMap((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx))
+    .filter((l) => l.startsWith('_PROMPT_PREFIX='));
+  assert.equal(prefixes.length, 2, 'block 1 and the read-and-check block each declare the prefix');
+  assert.equal(new Set(prefixes).size, 1, 'both declare the same prefix');
+});
+
+test('#5531: the two compose blocks derive the wave-keyed prompt file name the same way', () => {
+  // The blocks run as separate commands, so each derives the name; a run of one block cannot show they agree.
+  const lines = content.split('\n');
+  const bash = scanFencedBlocks(lines)
+    .filter((b) => b.infoString === 'bash')
+    .flatMap((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx));
+  const stem = bash.filter((l) => l.startsWith('_PROMPT_STEM='));
+  const name = bash.filter((l) => l.startsWith('_PROMPT_NAME='));
+  assert.equal(stem.length, 1, 'block 1 derives the stem once');
+  assert.equal(name.length, 1, 'the read-and-check block derives the name once');
+  assert.equal(name[0].replace('_PROMPT_NAME=', ''), stem[0].replace('_PROMPT_STEM=', '').replace(/"$/, '-??????"'), 'the name is the stem plus the random suffix');
+  // Block 1 builds the file from the same stem: the sweep and leftover patterns and the mktemp template share it, with a 6-wide suffix.
+  assert.ok(bash.some((l) => l.includes('-name "${_PROMPT_STEM}-??????"')), 'the leftover removal matches the stem plus the 6-wide suffix');
+  assert.ok(bash.some((l) => l.includes('mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX"')), 'mktemp creates the stem plus a 6-wide suffix');
+});
+
+test('#5531: the wave name shape the prompt file carries is the one execute-phase.md gives the manifest', () => {
+  // The integration test builds wave names of this shape by hand.
+  const executePhase = readFileNormalized(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'));
+  assert.ok(executePhase.includes('mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX"'), 'the manifest is named gsd-worktree-wave-XXXXXX');
 });
