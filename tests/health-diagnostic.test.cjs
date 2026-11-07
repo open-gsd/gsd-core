@@ -618,6 +618,7 @@ describe('W031 remedy under bash (#5505)', () => {
   const { spawnSync } = require('node:child_process');
   const { gitOrThrow, isFsLegalName } = require('./helpers/git-fixture.cjs');
   const { resolveInterpreter } = require('./helpers/process-seam.cjs');
+  const configValidation = require('../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
   const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const bash = resolveInterpreter('bash');
   const hasBash = bash !== null && spawnSync(bash, ['-c', 'true'], { timeout: GIT_TIMEOUT_MS }).status === 0;
@@ -646,7 +647,8 @@ describe('W031 remedy under bash (#5505)', () => {
 
     const w031 = RULES.find((r) => r.code === 'W031');
     const [diagnostic] = w031.check(buildPlanningSnapshot(cwd));
-    const command = /`(git --literal-pathspecs rm [^`]*)`/.exec(diagnostic.remedy.args.command)[1];
+    const command = configValidation.w031UntrackCommand(diagnostic.remedy.args.paths);
+    assert.ok(diagnostic.remedy.args.command.includes(`\`${command}\``), 'the advice carries the command');
     const run = spawnSync(bash, ['-c', command], { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
     assert.equal(run.status, 0, run.stderr);
 

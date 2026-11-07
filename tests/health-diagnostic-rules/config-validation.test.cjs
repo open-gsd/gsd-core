@@ -875,10 +875,11 @@ describe('W031 — derived state.json still tracked by git', () => {
     commitAll(cwd, 'track state.json');
   }
 
-  // Runs the advised command (the code span after "run") in the project and lists what git still tracks:
-  // the remedy is judged by what it does, not by its wording.
+  // Runs the advised command in the project and lists what git still tracks: the remedy is judged by what it
+  // does, not by its wording. The command comes from the typed `remedy.args.paths`; the prose must carry it verbatim.
   function runAdvisedThenListTracked(cwd, diagnostic) {
-    const command = /run `(git [^`]*)`/.exec(diagnostic.remedy.args.command)[1];
+    const command = configValidation.w031UntrackCommand(diagnostic.remedy.args.paths);
+    assert.ok(diagnostic.remedy.args.command.includes(`\`${command}\``), 'the advice carries the command');
     const out = runHook('-s', [], { interpreter: 'bash', input: command, timeoutMs: GIT_TIMEOUT_MS, cwd });
     assert.equal(out.exitCode, 0, `the advised command runs: ${out.stderr}`);
     return gitOrThrow(['ls-files', '-z'], { cwd }).split('\0').filter(Boolean);

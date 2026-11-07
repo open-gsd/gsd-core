@@ -343,6 +343,11 @@ function w031Listing(paths: readonly string[]): { shown: string[]; more: number 
   return { shown: paths.slice(0, W031_MAX_PATHS).map(w031Label), more: Math.max(0, paths.length - W031_MAX_PATHS) };
 }
 
+/** The one command W031 advises for these tracked paths; `remedy.args.paths` carries the same paths as typed values. */
+function w031UntrackCommand(paths: readonly string[]): string {
+  return `git --literal-pathspecs rm --cached --ignore-unmatch -- ${paths.map(quoteShellArg).join(' ')}`;
+}
+
 function checkW031(snapshot: PlanningSnapshot): Diagnostic[] {
   const field = snapshot.stateJsonTracked;
   // A listing git could not answer is not "nothing tracked": it stays silent like W029's unreadable scope.
@@ -350,15 +355,15 @@ function checkW031(snapshot: PlanningSnapshot): Diagnostic[] {
   const paths = field.value;
   const { shown, more } = w031Listing(paths);
   const listed = `${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
-  const args = paths.map(quoteShellArg).join(' ');
+  const advice = adviseRemedy(
+    `From the project directory (the one holding \`.planning/\`), run \`${w031UntrackCommand(paths)}\` once and commit the removal; the file stays on disk, and with commit_docs on GSD's .git/info/exclude entry keeps it ignored from then on. GSD runs this itself at the next boundary command when commit_docs is on and the repo owns the project`,
+  );
   return [
     {
       code: 'W031',
       severity: SEVERITY.WARNING,
       message: `Tracked by git: ${listed}. state.json is a derived cache rewritten at every boundary command, so a tracked copy stays modified and /gsd-ship refuses the dirty tree`,
-      remedy: adviseRemedy(
-        `From the project directory (the one holding \`.planning/\`), run \`git --literal-pathspecs rm --cached --ignore-unmatch -- ${args}\` once and commit the removal; the file stays on disk, and with commit_docs on GSD's .git/info/exclude entry keeps it ignored from then on. GSD runs this itself at the next boundary command when commit_docs is on and the repo owns the project`,
-      ),
+      remedy: { ...advice, args: { ...advice.args, paths } },
     },
   ];
 }
@@ -435,4 +440,4 @@ const RULES: Rule[] = [
   },
 ];
 
-export = { RULES, w031Listing };
+export = { RULES, w031Listing, w031UntrackCommand };

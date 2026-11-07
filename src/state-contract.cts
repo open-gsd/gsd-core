@@ -135,7 +135,7 @@ export interface StateContractV1 {
 
 interface Owners {
   planningPaths: typeof import('./planning-workspace.cjs')['planningPaths'];
-  readScopedConfigValue: typeof import('./planning-workspace.cjs')['readScopedConfigValue'];
+  commitDocsOptedOut: typeof import('./planning-workspace.cjs')['commitDocsOptedOut'];
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
   excludeFromGit: typeof import('./git-info-exclude.cjs')['excludeFromGit'];
@@ -185,7 +185,7 @@ function owners(): Owners {
   /* eslint-enable @typescript-eslint/no-require-imports */
   _owners = {
     planningPaths: planningWorkspaceMod.planningPaths,
-    readScopedConfigValue: planningWorkspaceMod.readScopedConfigValue,
+    commitDocsOptedOut: planningWorkspaceMod.commitDocsOptedOut,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
     excludeFromGit: gitInfoExcludeMod.excludeFromGit,
@@ -440,17 +440,14 @@ function untrackTrackedStateJson(cwd: string): void {
 }
 
 /**
- * True when the commit policy turns `commit_docs` off for the scope whose copy sits in `dir`. The scope's config comes
- * from `readScopedConfigValue` (the ladder `config-get` shares: a project alone does not inherit the root) and the
- * value goes through `resolveCommitDocsTiers`, so `0` and `null` read as off exactly as `cmdCommit` reads them.
+ * True when the commit policy turns `commit_docs` off for the scope whose copy sits in `dir`: the scope (workstream,
+ * project) comes from the path, the lookup is planning-workspace's `commitDocsOptedOut`.
  */
 function scopeOptsOutOfCommitDocs(cwd: string, dir: string): boolean {
   const parts = path.relative(path.resolve(cwd, '.planning'), dir).split(path.sep).filter(Boolean);
   const ws = parts.length >= 2 && parts[parts.length - 2] === 'workstreams' ? parts[parts.length - 1] : null;
   const project = (ws === null ? parts : parts.slice(0, -2))[0] ?? null;
-  const flat = owners().readScopedConfigValue(cwd, ['commit_docs'], ws, project);
-  const found = flat.present ? flat : owners().readScopedConfigValue(cwd, ['planning', 'commit_docs'], ws, project);
-  return found.present && !owners().resolveCommitDocsTiers(undefined, found.value, () => false).resolved;
+  return owners().commitDocsOptedOut(cwd, ws, project);
 }
 
 /** Hide the derived file when the commit policy keeps planning in git: append the per-clone exclude entry (the owner applies the repo-ownership gate), then migrate a tracked copy (the publisher passes no phase override: it has no phase context, D13). */

@@ -226,6 +226,18 @@ function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string
 }
 
 /**
+ * #5505: the ONE flat-then-nested `commit_docs` lookup for a named scope: true when that scope's config sets the key
+ * (`commit_docs`, else `planning.commit_docs`) to a falsy value. Falsy is the same off test as
+ * `resolveCommitDocsTiers` (src/config-loader.cts, which this module cannot import: it imports us); a parity test
+ * pins the two. An absent key never opts out. Reads on the readScopedConfigValue ladder.
+ */
+function commitDocsOptedOut(cwd: string, workstream: string | null, project: string | null): boolean {
+  const flat = readScopedConfigValue(cwd, ['commit_docs'], workstream, project);
+  const found = flat.present ? flat : readScopedConfigValue(cwd, ['planning', 'commit_docs'], workstream, project);
+  return found.present && !found.value;
+}
+
+/**
  * #3972: the ONE owner of "is this planning scope opted out of worktrees?" —
  * the effective `workflow.use_worktrees === false` read every
  * isolation-deciding surface must share (config-get's merged view is the
@@ -726,6 +738,7 @@ function findPhaseSpecIn(files: readonly string[]): string | null {
 
 export = {
   worktreesOptedOut,
+  commitDocsOptedOut,
   readScopedConfigValue,
   createPlanningWorkspace,
   createSharedPointerAdapter,
