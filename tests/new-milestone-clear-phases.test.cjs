@@ -1,11 +1,12 @@
 /**
  * GSD Tools Tests - New Milestone Clear Phases (#1588, #1447)
  *
- * Verifies that `phases clear` removes all phase subdirectories from
- * .planning/phases/, leaving the directory itself intact.
+ * Verifies that `phases clear` archives all phase subdirectories from
+ * .planning/phases/ into `.planning/milestones/<label>-phases/`,
+ * leaving the directory itself intact.
  *
  * Also covers the #1447 uncommitted-changes guard: phases clear must refuse
- * to delete phase directories that contain uncommitted work.
+ * to archive phase directories that contain uncommitted work.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -15,6 +16,7 @@ const path = require('path');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup, readFileNormalized } = require('./helpers.cjs');
+const milestone = require('../gsd-core/bin/lib/milestone.cjs');
 const { writeState } = require('./fixtures/index.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -125,7 +127,7 @@ describe('phases clear command', () => {
     );
   });
 
-  test('archives nested phase content (moved, not deleted) (#1871)', () => {
+  test('archives nested phase content (moved into the archive) (#1871)', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     const nested = path.join(phase1, 'subdir');
@@ -137,17 +139,17 @@ describe('phases clear command', () => {
 
     // Source is cleared (moved away)...
     assert.ok(!fs.existsSync(phase1), 'phase directory should be moved out of .planning/phases/');
-    // ...but the nested content SURVIVES in the archive (not destroyed).
+    // ...but the nested content SURVIVES in the archive (kept).
     const archive = findPhasesArchive(tmpDir);
     assert.ok(archive, 'an archive dir milestones/*-phases/ should exist');
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation', 'subdir', 'deep-file.md')),
-      'nested phase content must be preserved in the archive, not deleted',
+      'nested phase content must be preserved in the archive',
     );
   });
 });
 
-// Locate the `milestones/<version>-phases/` archive directory created by phases clear.
+// Locate the `.planning/milestones/<label>-phases/` archive directory created by phases clear.
 function findPhasesArchive(tmpDir) {
   const milestonesDir = path.join(tmpDir, '.planning', 'milestones');
   try {
@@ -189,7 +191,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
       result.error.includes('uncommitted') || result.error.includes('aborted'),
       `expected error about uncommitted changes, got: ${result.error}`
     );
-    // Phase directory must still exist (was not deleted)
+    // Phase directory must still exist (left in place, not archived)
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
@@ -210,7 +212,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
-  test('--force bypasses the uncommitted-changes guard and deletes anyway', () => {
+  test('--force bypasses the uncommitted-changes guard and archives anyway (#5270)', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     fs.mkdirSync(phase1, { recursive: true });
@@ -221,7 +223,14 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `--force should bypass guard and succeed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    assert.ok(!fs.existsSync(phase1), 'phase directory must be removed when --force is passed');
+    assert.ok(!fs.existsSync(phase1), 'phase directory must be moved out of .planning/phases/ when --force is passed');
+    // #5270: --force never deletes; the uncommitted edit moves into the archive.
+    const archive = findPhasesArchive(tmpDir);
+    assert.ok(archive, 'a milestones/*-phases/ archive should be created by --force');
+    assert.ok(
+      fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
+      'the uncommitted file must survive inside the archive',
+    );
   });
 
   test('succeeds without --force when all phase files are committed', () => {
@@ -237,13 +246,13 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `should succeed when phase files are committed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    // #1871: a committed phase dir is ARCHIVED (moved to milestones/*-phases/), not destroyed.
+    // #1871: a committed phase dir is ARCHIVED (moved to milestones/*-phases/).
     assert.ok(!fs.existsSync(phase1), 'committed phase directory should be moved out of .planning/phases/');
     const archive = findPhasesArchive(tmpDir);
     assert.ok(archive, 'a milestones/*-phases/ archive should be created for committed phase dirs');
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
-      'committed phase content must be preserved in the archive, not hard-deleted',
+      'committed phase content must be preserved in the archive',
     );
   });
 
@@ -384,7 +393,7 @@ describe('phases clear: archive-version override (#2288)', () => {
     );
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation')),
-      'the phase directory must still be archived (moved, not deleted) under the dated label'
+      'the phase directory must still be moved into the archive under the dated label'
     );
   });
 
@@ -1081,5 +1090,126 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
     assert.ok(!partABody.includes('## Evolution'), 'Evolution repair must NOT be nested inside the guarded Part A');
     assert.ok(partBBody.includes('## Evolution'), 'Part B must contain the Evolution section template');
     assert.match(partBBody, /always runs/i, 'Part B must state it always runs regardless of GSD_WS');
+  });
+});
+
+// ─── #5270: refusal-message formatter seam (trek-e ruling on #5280) ─────────
+
+// Both `phases clear` refusal messages must be pinned without matching raw CLI
+// output. The seam: the source builds both messages through exported formatter
+// functions that render the archive destination from the shared
+// PHASES_ARCHIVE_* layout, and these tests assert (1) the formatters' own
+// output never claims deletion, and (2) the actual CLI error equals the
+// corresponding formatter's output for the same cwd and count.
+describe('phases clear refusal messages — formatter seam (#5270 ruling on #5280)', () => {
+  test('confirm refusal names the archive and its location, and never claims deletion', () => {
+    const cwd = createTempProject();
+    try {
+      const message = milestone.phasesClearConfirmRefusalMessage(cwd, 2);
+      assert.ok(
+        message.includes(`.planning${path.sep}milestones${path.sep}<label>-phases${path.sep}`),
+        `message must render the archive location; got: ${message}`,
+      );
+      assert.match(message, /archive/i, 'message must say the directories are archived');
+      assert.doesNotMatch(message, /permanently/i, 'message must not claim permanence');
+
+      // The #5270 regression this pins: "delete"/"permanently" must never come back.
+      assert.ok(!/\bdelete[sd]?\b|\bpermanently\b/i.test(message), `no delete/permanently wording allowed; got: ${message}`);
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('uncommitted-guard refusal names the archive and its location, and never claims deletion', () => {
+    const cwd = createTempProject();
+    try {
+      const message = milestone.phasesClearUncommittedRefusalMessage(cwd, 1);
+      assert.ok(
+        message.includes(`.planning${path.sep}milestones${path.sep}<label>-phases${path.sep}`),
+        `message must render the archive location; got: ${message}`,
+      );
+      assert.match(message, /archived under/i, 'message must say where the directories are archived');
+      assert.ok(!/\bdelete[sd]?\b|\bpermanently\b/i.test(message), `no delete/permanently wording allowed; got: ${message}`);
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('CLI --confirm refusal equals the exported confirm formatter output (the seam, not raw text)', () => {
+    const cwd = createTempProject();
+    try {
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
+      fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
+
+      const result = runGsdTools(['phases', 'clear'], cwd);
+      assert.ok(!result.success, 'phases clear without --confirm must be refused');
+
+      const expected = 'Error: ' + milestone.phasesClearConfirmRefusalMessage(cwd, 2);
+      assert.strictEqual(
+        result.error,
+        expected,
+        'CLI refusal must byte-match the formatter output (modulo the stderr Error: prefix)',
+      );
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('CLI uncommitted-guard refusal equals the exported uncommitted formatter output', () => {
+    const cwd = createTempGitProject();
+    try {
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '01-foundation', 'PLAN.md'), '# Plan (uncommitted)');
+
+      const result = runGsdTools(['phases', 'clear', '--confirm'], cwd);
+      assert.ok(!result.success, 'phases clear must refuse when the guard sees uncommitted changes');
+
+      const expected = 'Error: ' + milestone.phasesClearUncommittedRefusalMessage(cwd, 1);
+      assert.strictEqual(
+        result.error,
+        expected,
+        'CLI guard refusal must byte-match the formatter output (modulo the stderr Error: prefix)',
+      );
+      assert.ok(fs.existsSync(path.join(phasesDir, '01-foundation')), 'phase directory must survive the refusal');
+    } finally {
+      cleanup(cwd);
+    }
+  });
+
+  test('with an active workstream the refusals report the WORKSTREAM archive root (workstream path test)', () => {
+    const cwd = createTempProject();
+    try {
+      const phasesDir = path.join(cwd, '.planning', 'workstreams', 'seam-ws', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-foundation'), { recursive: true });
+
+      // The expected text is built in-process, which reads the ambient env — so
+      // the workstream must be set (and restored) around the assertion, exactly
+      // like the child run's per-call override.
+      const saved = process.env.GSD_WORKSTREAM;
+      process.env.GSD_WORKSTREAM = 'seam-ws';
+      try {
+        const result = runGsdTools(['phases', 'clear'], cwd, { GSD_WORKSTREAM: 'seam-ws' });
+        assert.ok(!result.success, 'phases clear in a workstream still refuses without --confirm');
+
+        const expected = 'Error: ' + milestone.phasesClearConfirmRefusalMessage(cwd, 1);
+        assert.strictEqual(
+          result.error,
+          expected,
+          'workstream-mode refusal must byte-match the formatter output',
+        );
+        // Minor 1 (#5280 re-review): the workstream-aware path is the one reported.
+        assert.ok(
+          expected.includes(`.planning${path.sep}workstreams${path.sep}seam-ws${path.sep}milestones${path.sep}<label>-phases${path.sep}`),
+          `refusal must report the workstream archive root; got: ${expected}`,
+        );
+      } finally {
+        if (saved === undefined) delete process.env.GSD_WORKSTREAM;
+        else process.env.GSD_WORKSTREAM = saved;
+      }
+    } finally {
+      cleanup(cwd);
+    }
   });
 });

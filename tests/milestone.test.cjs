@@ -745,7 +745,7 @@ describe('phases clear command', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  test('deletes normal phase directories when --confirm is passed', () => {
+  test('archives normal phase directories when --confirm is passed', () => {
     const p1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
     fs.mkdirSync(p1, { recursive: true });
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
@@ -754,6 +754,10 @@ describe('phases clear command', () => {
     assert.ok(result.success);
     assert.strictEqual(JSON.parse(result.output).cleared, 1);
     assert.ok(!fs.existsSync(p1));
+    const milestonesDir = path.join(tmpDir, '.planning', 'milestones');
+    const archives = fs.readdirSync(milestonesDir).filter((name) => name.endsWith('-phases'));
+    assert.strictEqual(archives.length, 1);
+    assert.ok(fs.existsSync(path.join(milestonesDir, archives[0], '01-setup', '01-01-PLAN.md')));
   });
 
   test('requires --confirm when phase directories exist', () => {
