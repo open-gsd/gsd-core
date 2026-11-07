@@ -20,6 +20,8 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
+const { RULES } = require('../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
+const { buildPlanningSnapshot } = require('../gsd-core/bin/lib/planning-snapshot.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -3527,6 +3529,16 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   test('stop-tracking recipe carries the same four fragments in all six docs', () => {
     const norm = (t) => t.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
+    // The W029 message and remedy belong to the health rule, so the docs are compared with the rule's own output.
+    const repo = createTempGitProject('gsd-5489-w029-');
+    let w029;
+    try {
+      fs.writeFileSync(path.join(repo, '.gitignore'), '.planning/\n');
+      gitOrThrow(['add', '-A'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      gitOrThrow(['commit', '-q', '-m', 'ignore planning'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      w029 = RULES.find((r) => r.code === 'W029').check(buildPlanningSnapshot(repo))[0];
+    } finally { cleanup(repo); }
+    assert.ok(w029, 'W029 fires for an ignored but tracked .planning/');
     const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
     for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
@@ -3537,8 +3549,8 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
       if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
-        assert.ok(md.includes('- [W029] .planning/ matches a gitignore rule but is still tracked by git'), `${f}: W029 message`);
-        assert.ok(md.includes('Fix: Run `git rm -r --cached .planning/` to untrack it'), `${f}: W029 remedy`);
+        assert.ok(md.includes(`- [W029] ${w029.message}`), `${f}: W029 message`);
+        assert.ok(md.includes(`Fix: ${w029.remedy.args.command}`), `${f}: W029 remedy`);
       }
     }
   });
@@ -3583,7 +3595,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   test('async-external-jobs recipe commits the manifest with a pathspec', () => {
     // allow-test-rule: source-text-is-the-product (#5211)
     // The recipe commands are what a user runs, so their pathspec is the shipped contract.
-    const md =fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
+    const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
     const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
     assert.ok(commits.length > 0);
     for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
