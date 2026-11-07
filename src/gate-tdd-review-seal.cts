@@ -102,7 +102,8 @@ export function commitIsGone(reach: CommitReachability | null, historyComplete: 
  * names task commits none of which is reachable from HEAD (a missing object counts as unreachable only
  * in a complete history). A never-existing id looks the same as a squashed commit that was garbage-collected
  * or never fetched, so it is `NotEvaluable` by rule: the gate stays advisory and the row names the
- * plan and its reason. No SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct
+ * plan and its reason. The first existing candidate name (`summaryCandidates`) decides: an unreadable one (a symlink or
+ * other non-regular file, or over `REPO_TEXT_MAX_BYTES`) is an ordinary failure and no later name is tried. No SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct
  * hashes, or any reachable hash is an ordinary failure. When every ref exists and its subject still
  * occurs on a commit reachable from HEAD but not from the refs, the plan was rewritten (rebase/amend),
  * not squashed, so it is not unreachable. Squash evidence for a plan whose task subjects survive is the
