@@ -2300,6 +2300,9 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
     ['a no-frontmatter single-quoted version (#5726)', "milestone: 'v1.0'\n# State\n"],
     ['a no-frontmatter empty quoted string reads as absent (#5726)', 'milestone: ""\n# State\n'],
     ['a no-frontmatter quoted version with a trailing comment (#5726)', 'milestone: "v1.0" # note\n# State\n'],
+    ['a no-frontmatter quoted "null" reads as explicit null like the frontmatter path (#5726)', 'milestone: "null"\n# State\n'],
+    ['a no-frontmatter tilde reads as explicit null (#5726)', 'milestone: ~\n# State\n'],
+    ['a frontmatter quoted "null" reads as explicit null (FAILSAFE decodes it to null text) (#5726)', '---\nmilestone: "null"\nstatus: active\n---\n# State\n'],
   ]) {
     test(`no WARNING is emitted for ${label}`, () => {
       fs.writeFileSync(
@@ -2319,11 +2322,12 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
     });
   }
 
-  // #5726: a `#` inside quotes is literal content, and a quoted `"null"` is the
-  // string null, not YAML explicit null. Both name a version that is not v1.0.
+  // #5726: a `#` inside quotes is literal content, and YAML escapes decode the
+  // way the frontmatter parser decodes them. Each names a version that is not v1.0.
   for (const [label, stateText, named] of [
     ['a no-frontmatter quoted version containing a hash', 'milestone: "v1.0 # x"\n# State\n', 'v1.0 # x'],
-    ['a frontmatter quoted "null" (a string, not explicit null)', '---\nmilestone: "null"\nstatus: active\n---\n# State\n', 'null'],
+    ['a no-frontmatter single-quoted version with a doubled quote', "milestone: 'it''s v1'\n# State\n", "it's v1"],
+    ['a no-frontmatter double-quoted version with an escaped quote', 'milestone: "a\\"b"\n# State\n', 'a"b'],
   ]) {
     test(`the mismatch WARNING names the decoded value for ${label} (#5726)`, () => {
       fs.writeFileSync(
@@ -2341,6 +2345,41 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
       );
     });
   }
+
+  // #5726: the raw (no-frontmatter) line and the frontmatter field decode through
+  // the same YAML loader, so any milestone string rendered as a double-quoted,
+  // single-quoted or plain scalar reads identically on both paths.
+  test('a milestone scalar reads the same from raw STATE.md and from frontmatter (#5726)', () => {
+    const fc = require('fast-check');
+    const { extractCurrentMilestoneScoped } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    const roadmap = '# Roadmap\n\n## v1.0 Shipped\n\n### Phase 1: A\n**Goal:** x\n\n## v2.0 Next\n\n### Phase 2: B\n**Goal:** y\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    const quotedChars = ['a', 'Z', '0', '1', '.', '-', 'v', ' ', '#', "'", '"', '\\', ':', '~'];
+    const plainChars = ['a', 'Z', '0', '1', '.', '-', 'v', '_'];
+    const spellings = {
+      double: (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+      single: (s) => `'${s.replace(/'/g, "''")}'`,
+      plain: (s) => s,
+    };
+    const read = (stateText) => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateText);
+      return JSON.stringify(extractCurrentMilestoneScoped(roadmap, tmpDir));
+    };
+    fc.assert(
+      fc.property(
+        fc.constantFrom('double', 'single', 'plain'),
+        fc.array(fc.constantFrom(...quotedChars), { maxLength: 12 }).map((a) => a.join('')),
+        fc.array(fc.constantFrom(...plainChars), { minLength: 1, maxLength: 8 }).map((a) => a.join('')),
+        (kind, quotedValue, plainValue) => {
+          const value = kind === 'plain' ? plainValue : quotedValue;
+          const rendered = spellings[kind](value);
+          return read(`milestone: ${rendered}\n# State\n`)
+            === read(`---\nmilestone: ${rendered}\nstatus: active\n---\n# State\n`);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
 
   test('guard is a no-op when the scoped ROADMAP has no Phase headings (fresh project)', () => {
     // STATE in sync, ROADMAP scopes for v1.0 but lists NO phase headings →
