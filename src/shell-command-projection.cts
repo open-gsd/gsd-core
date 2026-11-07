@@ -1312,6 +1312,26 @@ export function isWindowsReservedDeviceName(basename: string): boolean {
   return /^(?:nul|con|prn|aux|(?:com|lpt)[1-9¹²³])(?:[. :].*)?$/i.test(basename);
 }
 
+/**
+ * #5759: the device-namespace path (`\\.\NUL`) to open for `target`, or null when `target` is not
+ * a spelling that names a device on every Windows. Two spellings qualify: a BARE reserved name
+ * (`NUL`, `nul.txt`, `NUL:stream`, `.\NUL`, `./NUL`, with no directory component), and an explicit
+ * `\\.\` / `\\?\` device form whose remainder is exactly a reserved stem. A reserved name inside
+ * a directory path (`sub\NUL`, `D:\x\NUL`, `C:NUL`, `\\?\C:\x\NUL`) is null: on Windows 11 24H2 /
+ * Server 2025 it is an ordinary file, so it takes the checked path. The device is always opened
+ * through `\\.\<STEM>` derived from the reserved stem (extension, stream, trailing dot/space
+ * stripped), never through a resolved directory path.
+ */
+export function windowsDeviceNamespacePath(target: string): string | null {
+  const namespaced = /^\\\\[.?]\\/.test(target);
+  let rest = namespaced ? target.slice(4) : target;
+  if (!namespaced) while (/^\.[\\/]/.test(rest)) rest = rest.slice(2);
+  if (/[\\/]/.test(rest)) return null;
+  const m = /^(nul|con|prn|aux|(?:com|lpt)[1-9¹²³])(?:[. :].*)?$/i.exec(rest);
+  if (m === null || (namespaced && m[1].length !== rest.length)) return null;
+  return `\\\\.\\${m[1].toUpperCase()}`;
+}
+
 /** Test-only seam for the Windows device branch: the platform and the fs calls it makes. */
 export interface WindowsDeviceSeams {
   platform?: NodeJS.Platform;
@@ -1321,24 +1341,23 @@ export interface WindowsDeviceSeams {
 const DEVICE_OPEN_FALLTHROUGH = new Set(['ENOENT', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY', 'EINVAL']);
 
 /**
- * #5759: writes `normalized` in place when `filePath` names a Windows reserved device and the
- * opened handle is a character device. Returns false (nothing written, handle closed untouched)
- * for any other outcome so the caller takes the checked path: a non-reserved name, a symlink
- * (never opened, so a link to a named pipe cannot block), a name that is an ordinary file on
+ * #5759: writes `normalized` in place when `filePath` is a bare reserved name or a `\\.\` / `\\?\`
+ * device form (see `windowsDeviceNamespacePath`) and the handle opened on `\\.\<NAME>` is a
+ * character device. Returns false (nothing written, handle closed untouched) for any other
+ * outcome so the caller takes the checked path: a path with a directory component (never opened,
+ * so a link or an ordinary file named NUL is never touched), a name that is an ordinary file on
  * Windows 11 (open fails with ENOENT/EISDIR/EACCES/EPERM/EBUSY/EINVAL, or the handle is not a
- * character device).
+ * character device). The open is O_WRONLY only: no O_CREAT, no O_TRUNC.
  */
 function writeWindowsDeviceInPlace(filePath: string, normalized: string, encoding: BufferEncoding, seams?: WindowsDeviceSeams): boolean {
-  if ((seams?.platform ?? process.platform) !== 'win32' || !isWindowsReservedDeviceName(path.win32.basename(filePath))) return false;
+  if ((seams?.platform ?? process.platform) !== 'win32') return false;
+  const device = windowsDeviceNamespacePath(filePath);
+  if (device === null) return false;
   const fsx = seams?.fs ?? fs;
-  if (!filePath.startsWith('\\\\.\\')) {
-    try {
-      if (fsx.lstatSync(filePath).isSymbolicLink()) return false;
-    } catch { /* absent or not inspectable: the open below decides */ }
-  }
+  // The device namespace path has no directory and no link to follow, so there is nothing to lstat.
   let deviceFd: number;
   try {
-    deviceFd = fsx.openSync(filePath, fs.constants.O_WRONLY);
+    deviceFd = fsx.openSync(device, fs.constants.O_WRONLY);
   } catch (err) {
     if (DEVICE_OPEN_FALLTHROUGH.has((err as NodeJS.ErrnoException).code ?? '')) return false;
     throw err;
@@ -1867,6 +1886,16 @@ function descriptorAliasFd(resolvedTarget: string): number | null {
  * create and the rename leaves `<file>.tmp.<pid>.<hex>` behind; such files are not reaped.
  */
 export function platformWriteSync(filePath: string, content: string, opts: PlatformWriteOptions = {}): void {
+  // #5759: a Windows device target (a bare NUL/CON/... name, or a \\.\ / \\?\ device form) has no
+  // real parent directory, so it is routed BEFORE the physical path walk below (which would refuse
+  // `\\.\nul` with ENXIO). Only under allowSpecialTarget; without it the walk refuses as before.
+  // The handle is opened on `\\.\<NAME>` and fstat must prove a character device before any byte
+  // is written; any other outcome (Windows 11 24H2+ treats a reserved name in a directory path as
+  // an ordinary file) falls through to the checked path.
+  if (opts.allowSpecialTarget === true && windowsDeviceNamespacePath(filePath) !== null) {
+    const device = normalizeContent(filePath, content, { ...opts, prior: opts.prior });
+    if (writeWindowsDeviceInPlace(filePath, device.content, device.encoding, opts.deviceSeams)) return;
+  }
   // A descriptor beyond stdio names some other open file of this process (a log, a pipe, a
   // regular file): never written through its /dev/fd or /proc alias, flag or no flag.
   // A symlink to such an alias is refused too (every link hop is walked), a path reaching one
@@ -2039,14 +2068,9 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
   if (opts.allowSpecialTarget === true) {
     // A user-chosen destination such as /dev/stdout: written in place, no temp file, no restore.
-    // Windows reserved device names (NUL, CON, PRN, AUX, COM1-9, LPT1-9, with or without an
-    // extension, in any directory, or in the \\.\ form) are devices, not files: realpath cannot
-    // resolve them, so they are their own class, written in place before any physical resolution.
-    // The name only nominates the path: on Windows 11 `dir\con.txt` can be an ordinary file, symlink
-    // or junction. The handle is opened without O_TRUNC and nothing is written until fstat proves it
-    // is a character device; anything else is closed untouched and takes the checked path below.
-    // CONIN$/CONOUT$ are not nominated (they fall to the checked path, which fails safe).
-    if (writeWindowsDeviceInPlace(filePath, normalized, encoding, opts.deviceSeams)) return;
+    // Windows device targets (a bare NUL/CON/PRN/AUX/COM1-9/LPT1-9 name or a \\.\ form) were
+    // already tried at the top of this function, before the path walk. A reserved name inside a
+    // directory path is an ordinary file on Windows 11 24H2+ and takes the checked path here.
     let special: fs.Stats | null = null;
     try { special = fs.statSync(filePath); } catch { /* absent: the ordinary path below */ }
     // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
