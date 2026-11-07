@@ -290,7 +290,7 @@ text (unstable).
 | `pick_field_absent` | `--pick <field>` names a field that does not exist in the command's JSON output (missing key, out-of-range index, a partially-missing dotted path, or a non-object JSON root) — see [CLI-TOOLS.md's `--pick` contract](CLI-TOOLS.md#--pick-field-contract) |
 | `pick_output_not_json` | `--pick <field>` is combined with a command whose output is not JSON (including `--raw` output) |
 
-### Config errors (`config-get`, `config-set`, `config-ensure-section`)
+### Config errors (`config-get`, `config-set`, `config-ensure-section`, `config-save-defaults`)
 
 | Code | When emitted |
 |------|-------------|
@@ -298,6 +298,10 @@ text (unstable).
 | `config_no_file` | Config operation when `.planning/config.json` does not exist |
 | `config_parse_failed` | Config file exists but is not valid JSON |
 | `config_invalid_key` | `config-set` for a key outside the allowed whitelist |
+| `config_defaults_invalid` | `config-save-defaults` when `$GSD_HOME/.gsd/defaults.json` exists but is not valid JSON, not a JSON object, or a link whose target cannot be resolved; the store is left as it was (#5681) |
+| `config_defaults_write_failed` | `config-save-defaults` when writing the merged store fails (#5681) |
+| `config_defaults_lock_unavailable` | `config-save-defaults` when the installer lock on `$GSD_HOME/.gsd/` cannot be taken, for example while another install or save holds it; the message names the holder. Nothing is written (#5681) |
+| `config_defaults_lock_release_failed` | `config-save-defaults` saved the store but could not release the lock; the error carries `saved`, `created` and `path` (#5681) |
 
 ### Phase / workflow errors
 

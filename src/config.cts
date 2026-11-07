@@ -12,6 +12,7 @@ import os from 'node:os';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
+type ErrorReasonValue = typeof ERROR_REASON[keyof typeof ERROR_REASON];
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
@@ -22,7 +23,6 @@ import { platformWriteSync, platformEnsureDir } from './shell-command-projection
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installerMigrations = require('./installer-migrations.cjs');
-const { acquireInstallMigrationLock } = installerMigrations;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
@@ -849,48 +849,86 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   // The installer's defaults writers take this lock for their read-modify-write
   // (bin/install.js); holding it too serializes a save with them and with
   // another save, so none of them drops a key the other wrote.
-  const release = acquireInstallMigrationLock(gsdDir);
-  let created: boolean;
+  let release: () => void;
   try {
-    // A dangling link is not a missing store: writing would replace the link.
-    let isLink = false;
-    try {
-      isLink = fs.lstatSync(defaultsPath).isSymbolicLink();
-    } catch {
-      // absent
-    }
-    created = !isLink && !fs.existsSync(defaultsPath);
-    let existing: Record<string, unknown> = {};
-    // A store kept as a symlink (into a dotfiles repo) is read and written at its
-    // target: the atomic write renames over its path, which would replace the link.
-    let storePath = defaultsPath;
-    if (!created) {
-      try {
-        storePath = fs.realpathSync(defaultsPath);
-      } catch (err) {
-        error(`Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`);
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
-      } catch (err) {
-        error(`Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`);
-      }
-      if (!isPlainObject(parsed)) {
-        error(`Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`);
-      }
-      existing = parsed as Record<string, unknown>;
-    }
-
-    try {
-      platformWriteSync(storePath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
-    } catch (err) {
-      error('Failed to write defaults.json: ' + (err as Error).message);
-    }
-  } finally {
-    release();
+    // Called through the module, not a destructured copy, so a test can hold the
+    // lock with a zero timeout instead of the 30 s default.
+    release = installerMigrations.acquireInstallMigrationLock(gsdDir);
+  } catch (err) {
+    return error(`Cannot save ${defaultsPath}: ${(err as Error).message}`, ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE);
   }
-  output({ saved: true, created, path: defaultsPath }, raw, 'saved');
+  // The store is read and written under the lock, and the lock is released
+  // before anything is reported, so a release failure cannot replace the save's
+  // own result: it is added to that result's one error line.
+  let outcome: { created: boolean } | { message: string; reason: ErrorReasonValue };
+  try {
+    outcome = saveDefaultsStore(defaultsPath, patch);
+  } catch (err) {
+    try {
+      release();
+    } catch {
+      // the unexpected error is the one to surface
+    }
+    throw err;
+  }
+  let releaseFailure = '';
+  try {
+    release();
+  } catch (err) {
+    releaseFailure = (err as Error).message;
+  }
+  if ('reason' in outcome) {
+    return error(releaseFailure ? `${outcome.message} Also: ${releaseFailure}.` : outcome.message, outcome.reason);
+  }
+  const result = { saved: true, created: outcome.created, path: defaultsPath };
+  if (releaseFailure) {
+    error(`Saved ${defaultsPath}, but: ${releaseFailure}.`, ERROR_REASON.CONFIG_DEFAULTS_LOCK_RELEASE_FAILED, result);
+  }
+  output(result, raw, 'saved');
+}
+
+/** The read-modify-write of cmdConfigSaveDefaults, run while it holds the lock. */
+function saveDefaultsStore(
+  defaultsPath: string,
+  patch: Record<string, unknown>,
+): { created: boolean } | { message: string; reason: ErrorReasonValue } {
+  // A dangling link is not a missing store: writing would replace the link.
+  let isLink = false;
+  try {
+    isLink = fs.lstatSync(defaultsPath).isSymbolicLink();
+  } catch {
+    // absent
+  }
+  const created = !isLink && !fs.existsSync(defaultsPath);
+  let existing: Record<string, unknown> = {};
+  // A store kept as a symlink (into a dotfiles repo) is read and written at its
+  // target: the atomic write renames over its path, which would replace the link.
+  let storePath = defaultsPath;
+  if (!created) {
+    const invalid = ERROR_REASON.CONFIG_DEFAULTS_INVALID;
+    try {
+      storePath = fs.realpathSync(defaultsPath);
+    } catch (err) {
+      return { message: `Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`, reason: invalid };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+    } catch (err) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`, reason: invalid };
+    }
+    if (!isPlainObject(parsed)) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`, reason: invalid };
+    }
+    existing = parsed;
+  }
+
+  try {
+    platformWriteSync(storePath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
+  } catch (err) {
+    return { message: 'Failed to write defaults.json: ' + (err as Error).message, reason: ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED };
+  }
+  return { created };
 }
 
 /**

@@ -3900,6 +3900,41 @@ async function runQuietly(fn) {
   return { ok: thrown === null, out, err };
 }
 
+/**
+ * runQuietly with --json-errors on, so a refusal's typed reason can be read:
+ * `error` is the parsed stderr line, or null when the verb succeeded.
+ */
+async function runQuietlyJson(fn) {
+  const { setJsonErrorMode, getJsonErrorMode } = require('../gsd-core/bin/lib/cli-exit.cjs');
+  const previous = getJsonErrorMode();
+  setJsonErrorMode(true);
+  try {
+    const result = await runQuietly(fn);
+    return { ...result, error: result.ok ? null : JSON.parse(result.err) };
+  } finally {
+    setJsonErrorMode(previous);
+  }
+}
+
+/** A refused `--json-errors` CLI call: exit 1, no stack trace, and the typed reason. */
+function assertRefused(result, reason) {
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.exitCode, 1);
+  assert.strictEqual(/\n\s*at\s/.test(result.error), false, 'a refusal must not print a stack trace');
+  assert.strictEqual(JSON.parse(result.error).reason, reason);
+}
+
+/** The value at `keyPath` (an array of keys) in `obj`, or undefined. */
+function valueAtKeyPath(obj, keyPath) {
+  return keyPath.reduce((o, seg) => (o == null ? undefined : o[seg]), obj);
+}
+
+/** Every leaf of a JSON object as [keyPath, value]; arrays and null are leaves. */
+function keyPathLeaves(obj, prefix = []) {
+  return Object.entries(obj).flatMap(([k, v]) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? keyPathLeaves(v, [...prefix, k]) : [[[...prefix, k], v]]);
+}
+
 /** The text that config-set parses back to `value`. */
 function cliText(value) {
   if (typeof value === 'string') return value;
@@ -4061,7 +4096,7 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
       fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
       fs.writeFileSync(defaultsPath, contents);
     }
-    const save = (settings) => runGsdTools(['config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
+    const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
     const read = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
     return { defaultsPath, save, read };
   }
@@ -4105,18 +4140,14 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
   for (const [label, contents] of [['not valid JSON', '{"model_profile": "quality",'], ['not a JSON object', '["quality"]']]) {
     test(`a store that is ${label} is refused and left byte-identical`, (t) => {
       const { defaultsPath, save } = store(t, contents);
-      const result = save({ model_profile: 'balanced' });
-      assert.strictEqual(result.success, false);
-      assert.match(result.error, /Refusing to overwrite/);
+      assertRefused(save({ model_profile: 'balanced' }), 'config_defaults_invalid');
       assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), contents);
     });
   }
 
   test('settings that are not a JSON object are refused before the store is touched', (t) => {
     const { defaultsPath, save } = store(t);
-    const result = save(['model_profile']);
-    assert.strictEqual(result.success, false);
-    assert.match(result.error, /expected a JSON object/);
+    assertRefused(save(['model_profile']), 'usage');
     assert.ok(!fs.existsSync(defaultsPath));
   });
 });
@@ -4195,15 +4226,14 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
       intel: { enabled: true },
       graphify: { enabled: true, auto_update: true },
     };
-    const leaves = (obj, prefix = '') => Object.entries(obj).flatMap(([k, v]) =>
-      v !== null && typeof v === 'object' ? leaves(v, `${prefix}${k}.`) : [[`${prefix}${k}`, v]]);
+    const dotted = (obj) => keyPathLeaves(obj).map(([keyPath]) => keyPath.join('.')).sort();
     const settingsMd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md'), 'utf-8');
     const open = "DEFAULTS_JSON=$(cat <<'JSON'\n";
     const start = settingsMd.indexOf(open);
     assert.ok(start !== -1, 'settings.md must assign DEFAULTS_JSON with a quoted heredoc');
     const body = settingsMd.slice(start + open.length, settingsMd.indexOf('\nJSON\n', start));
     const workflowTemplate = JSON.parse(body.replaceAll('<current>', 'null'));
-    assert.deepStrictEqual(leaves(template).map(([k]) => k).sort(), leaves(workflowTemplate).map(([k]) => k).sort());
+    assert.deepStrictEqual(dotted(template), dotted(workflowTemplate));
 
     const gsdHome = createTempDir('gsd-5681-home-');
     const projectDir = createTempDir('gsd-5681-proj-');
@@ -4216,9 +4246,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.ok(runGsdTools(['config-save-defaults', JSON.stringify(template)], projectDir, env).success);
     assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, env).success);
     const created = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
-    for (const [keyPath, want] of leaves(template)) {
-      const got = keyPath.split('.').reduce((o, seg) => (o == null ? undefined : o[seg]), created);
-      assert.strictEqual(got, want, keyPath);
+    for (const [keyPath, want] of keyPathLeaves(template)) {
+      assert.strictEqual(valueAtKeyPath(created, keyPath), want, keyPath.join('.'));
     }
     const config = loadConfig(projectDir);
     assert.strictEqual(config.research, false);
@@ -4233,7 +4262,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
   // Table-driven over SPELLING_TWINS, the one list of [legacy, canonical] pairs,
   // so a new LEGACY_FLAT_KEYS entry is covered without a new row.
   const { SPELLING_TWINS } = configLib;
-  const at = (obj, dotted) => dotted.split('.').reduce((o, seg) => (o == null ? undefined : o[seg]), obj);
+  const at = (obj, dotted) => valueAtKeyPath(obj, dotted.split('.'));
   const nested = (dotted, value) => {
     const [head, field] = dotted.split('.');
     return field === undefined ? { [head]: value } : { [head]: { [field]: value } };
@@ -4296,19 +4325,18 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     const gsdHome = createTempDir('gsd-5681-lock-');
     const lockPath = path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME);
     const savedHome = process.env.GSD_HOME;
-    const realRename = fs.renameSync;
     t.after(() => {
-      fs.renameSync = realRename;
       if (savedHome === undefined) delete process.env.GSD_HOME;
       else process.env.GSD_HOME = savedHome;
       cleanup(gsdHome);
     });
     process.env.GSD_HOME = gsdHome;
     const heldAtWrite = [];
-    fs.renameSync = function (from, to) {
+    const realRename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
       if (path.basename(String(to)) === 'defaults.json') heldAtWrite.push(fs.existsSync(lockPath));
       return realRename.apply(this, arguments);
-    };
+    });
 
     const saved = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
     assert.ok(saved.ok, saved.err);
@@ -4331,40 +4359,40 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
     fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
     fs.writeFileSync(defaultsPath, contents);
-    const run = (args) => runGsdTools(['config-save-defaults', ...args], gsdHome, { GSD_HOME: gsdHome });
+    const run = (args) => runGsdTools(['--json-errors', 'config-save-defaults', ...args], gsdHome, { GSD_HOME: gsdHome });
     return { defaultsPath, run };
   }
   const BEFORE = JSON.stringify({ model_profile: 'quality' });
 
-  for (const [label, settings, message] of [
-    ['an unknown key', { workflow: { reserch: true } }, /Unknown config key: "workflow\.reserch"/],
-    ['a legacy flat spelling', { branching_strategy: 'phase' }, /Unknown config key: "branching_strategy"/],
-    ['an invalid value', { mode: 'bogus' }, /Invalid mode 'bogus'/],
-    ['a prototype key', JSON.parse('{"workflow":{"__proto__":{"x":1}}}'), /Unknown config key|prototype pollution/],
+  // config-set's value rules (validateConfigValue) raise no typed reason, in
+  // config-set as here, so an invalid value is reported as `unknown`.
+  for (const [label, settings, reason] of [
+    ['an unknown key', { workflow: { reserch: true } }, 'config_invalid_key'],
+    ['a legacy flat spelling', { branching_strategy: 'phase' }, 'config_invalid_key'],
+    ['an invalid value', { mode: 'bogus' }, 'unknown'],
+    ['a prototype key', JSON.parse('{"workflow":{"__proto__":{"x":1}}}'), 'config_invalid_key'],
   ]) {
     test(`${label} is refused and the store is left byte-identical`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);
-      const result = run([JSON.stringify(settings)]);
-      assert.strictEqual(result.success, false);
-      assert.match(result.error, message);
+      assertRefused(run([JSON.stringify(settings)]), reason);
       assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
     });
   }
 
-  test('an argument that is not valid JSON is refused', (t) => {
-    const { defaultsPath, run } = storeWith(t, BEFORE);
-    const result = run(['{"model_profile":']);
-    assert.strictEqual(result.success, false);
-    assert.match(result.error, /Invalid JSON for config-save-defaults/);
-    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
-  });
+  // CONTRIBUTING.md "CLI and command routing": empty, whitespace-only and
+  // flag-like values. A flag-like positional is taken as the settings JSON.
+  for (const [label, arg] of [['not valid JSON', '{"model_profile":'], ['empty', ''], ['whitespace only', '   '], ['flag-like', '--weird']]) {
+    test(`a settings argument that is ${label} is a usage error`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      assertRefused(run([arg]), 'usage');
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
 
   for (const args of [[], ['{}', '{}']]) {
     test(`${args.length} positionals is a usage error`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);
-      const result = run(args);
-      assert.strictEqual(result.success, false);
-      assert.match(result.error, /Usage: config-save-defaults <settings-json>/);
+      assertRefused(run(args), 'usage');
       assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
     });
   }
@@ -4382,10 +4410,82 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
     t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(defaultsPath), 0));
 
-    const result = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+    const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
 
     assert.strictEqual(result.ok, false);
-    assert.match(result.err, /Failed to write defaults\.json/);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+  });
+});
+
+describe('#5681: config-save-defaults reports lock failures through error()', () => {
+  // trek-e review 5814890657 (Minors 1 and 2): a lock that cannot be taken threw
+  // a plain Error (a stack trace from runMain), and a release that threw from
+  // `finally` replaced the save's own result.
+  const installerMigrations = require('../gsd-core/bin/lib/installer-migrations.cjs');
+  function inProcessHome(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-lockfail-');
+    const savedHome = process.env.GSD_HOME;
+    t.after(() => {
+      if (savedHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedHome;
+      cleanup(gsdHome);
+    });
+    process.env.GSD_HOME = gsdHome;
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    if (contents !== undefined) fs.writeFileSync(defaultsPath, contents);
+    const lockPath = path.join(gsdHome, '.gsd', installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
+    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
+    return { gsdHome, defaultsPath, lockPath, save };
+  }
+  function failLockUnlink(t, lockPath) {
+    const realUnlink = fs.unlinkSync;
+    t.mock.method(fs, 'unlinkSync', function (target) {
+      if (path.resolve(String(target)) === path.resolve(lockPath)) {
+        throw Object.assign(new Error('EPERM: operation not permitted, unlink (injected)'), { code: 'EPERM' });
+      }
+      return realUnlink.apply(this, arguments);
+    });
+  }
+
+  test('a lock that cannot be released after a save is reported, and the save is kept', async (t) => {
+    const { defaultsPath, lockPath, save } = inProcessHome(t);
+    failLockUnlink(t, lockPath);
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    const { reason, saved, created, path: savedPath } = result.error;
+    assert.deepStrictEqual({ reason, saved, created, path: savedPath },
+      { reason: 'config_defaults_lock_release_failed', saved: true, created: true, path: defaultsPath });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { mode: 'yolo' });
+  });
+
+  test('a lock that cannot be released after a refusal keeps the refusal as the one error', async (t) => {
+    const { defaultsPath, lockPath, save } = inProcessHome(t, '{"mode":');
+    failLockUnlink(t, lockPath);
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.err.trim().split('\n').length, 1, '--json-errors writes exactly one line to stderr');
+    assert.strictEqual(result.error.reason, 'config_defaults_invalid');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), '{"mode":');
+  });
+
+  test('a lock held by another live process is a typed refusal that names the holder, and nothing is written', async (t) => {
+    const before = '{"mode":"interactive"}';
+    const { defaultsPath, lockPath, save } = inProcessHome(t, before);
+    // The parent (the test runner) is alive and is not this process, so the
+    // lock is not reclaimed; a zero timeout gives up at once.
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid, acquiredAt: '2026-11-07T00:00:00.000Z' }) + '\n');
+    // Not a subprocess timeout: the lock's own wait budget, zero so a held lock
+    // is refused on the first look instead of after the 30 s default.
+    const LOCK_WAIT_NONE_MS = 0;
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
+    assert.ok(result.error.message.includes(`pid ${process.ppid}`), 'the refusal names the lock holder');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.ok(fs.existsSync(lockPath), "another process's lock is left in place");
   });
 });
 
@@ -4397,9 +4497,6 @@ describe('#5681: mergeIntoGlobalDefaults properties', () => {
   const tree = (withNull) => fc.letrec((tie) => ({
     node: fc.dictionary(key, fc.oneof({ depthSize: 'small' }, withNull ? fc.oneof(leaf, fc.constant(null)) : leaf, tie('node')), { maxKeys: 4 }),
   })).node;
-  const leaves = (obj, prefix = []) => Object.entries(obj).flatMap(([k, v]) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v) ? leaves(v, [...prefix, k]) : [[[...prefix, k], v]]);
-  const at = (obj, keyPath) => keyPath.reduce((o, seg) => (o == null ? undefined : o[seg]), obj);
 
   test('a base key the patch does not name survives unchanged', () => {
     fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
@@ -4413,9 +4510,9 @@ describe('#5681: mergeIntoGlobalDefaults properties', () => {
   test('every patch leaf is in the result, and a null leaf is absent', () => {
     fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
       const merged = mergeIntoGlobalDefaults(base, patch);
-      for (const [keyPath, value] of leaves(patch)) {
-        if (value === null) assert.strictEqual(at(merged, keyPath), undefined);
-        else assert.deepStrictEqual(at(merged, keyPath), value);
+      for (const [keyPath, value] of keyPathLeaves(patch)) {
+        if (value === null) assert.strictEqual(valueAtKeyPath(merged, keyPath), undefined);
+        else assert.deepStrictEqual(valueAtKeyPath(merged, keyPath), value);
       }
     }));
   });

@@ -573,7 +573,7 @@ describe('config-ensure-section command', () => {
   });
 });
 
-describe('#5681: a save removes the other spelling of every spelling twin', () => {
+describe('#5681: a symlinked defaults store', () => {
   test('a symlinked store is written through, and the link survives', { skip: process.platform === 'win32' }, (t) => {
     const gsdHome = createTempDir('gsd-5681-link-');
     const dotfiles = createTempDir('gsd-5681-dotfiles-');
@@ -601,9 +601,10 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
     fs.symlinkSync(missing, defaultsPath);
 
-    const result = runGsdTools(['config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
+    const result = runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify({ model_profile: 'balanced' })], gsdHome, { GSD_HOME: gsdHome });
     assert.strictEqual(result.success, false);
-    assert.match(result.error, /Refusing to overwrite/);
+    assert.strictEqual(result.exitCode, 1);
+    assert.strictEqual(JSON.parse(result.error).reason, 'config_defaults_invalid');
     assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the link must survive a refused save');
     assert.strictEqual(fs.readlinkSync(defaultsPath), missing);
     assert.ok(!fs.existsSync(missing), 'nothing is written at the missing target');

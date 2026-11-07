@@ -753,6 +753,17 @@ A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates t
 so two saves, or a save and an install, run one after the other and neither loses the other's
 keys.
 
+With `--json-errors`, each refusal carries a typed reason
+([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
+`usage` for settings that are not one JSON object (including an empty or blank argument),
+`config_invalid_key` for a key `config-set` does not accept, `config_defaults_invalid` for a
+store that is not a readable JSON object, `config_defaults_write_failed` for a failed write, and
+`config_defaults_lock_unavailable` when the lock cannot be taken, for example while another
+install or save holds it. The lock is released before the result is reported. If releasing it
+fails after a refusal, the refusal is still the error, with the release failure added to its
+message. If it fails after a save that landed, the error is
+`config_defaults_lock_release_failed`, and it carries `saved`, `created` and `path`.
+
 ---
 
 ## Capability Commands

@@ -675,6 +675,10 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   config_no_file: 'UNAVAILABLE',
   config_parse_failed: 'UNAVAILABLE',
   config_invalid_key: 'USAGE',
+  config_defaults_invalid: 'UNAVAILABLE',
+  config_defaults_write_failed: 'UNAVAILABLE',
+  config_defaults_lock_unavailable: 'UNAVAILABLE',
+  config_defaults_lock_release_failed: 'UNAVAILABLE',
   sdk_fail_fast: 'INTERNAL',
   sdk_unknown_command: 'USAGE',
   sdk_missing_arg: 'USAGE',
@@ -711,7 +715,7 @@ function expectedErrorCode3912(reasonValue, version) {
   return CODE_FOR_3912.get(outcome);
 }
 
-describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 30-member enum', () => {
+describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 34-member enum', () => {
   afterEach(() => {
     resolveContractVersion({ argv: ['node', 'x'], env: {} }); // restore v1 default
   });
