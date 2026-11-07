@@ -1361,6 +1361,7 @@ describe('workflow call sites declare --files (#2269)', () => {
   // filters on '--', not '-').
   const GSD_BINARY_RE = /^(?:.*\/)?gsd(?:_run|-tools(?:\.cjs)?)$/;
   const COMMIT_TOKENS = new Set(['commit', 'commit-to-subrepo']);
+  const FILE_SCOPE_FLAGS = new Set(['--files', '--files-removed']);
 
   // A SUBSHELL OPENER GLUES TO THE BINARY. `(` is not a tokenizer
   // metacharacter here — subshell grouping changes no argv, so it was never
@@ -1407,9 +1408,13 @@ describe('workflow call sites declare --files (#2269)', () => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
     const tokens = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir).map((t) => t.value);
-    const filesIndex = tokens.indexOf('--files');
-    if (filesIndex === -1) return false;
-    return tokens.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
+    const listIndices = tokens
+      .map((token, index) => FILE_SCOPE_FLAGS.has(token) ? index : -1)
+      .filter((index) => index !== -1);
+    return listIndices.some((filesIndex, listNumber) => {
+      const nextListIndex = listIndices[listNumber + 1] ?? tokens.length;
+      return tokens.slice(filesIndex + 1, nextListIndex).some((t) => !t.startsWith('--'));
+    });
   };
 
   // Usage-synopsis notation is documentation OF the CLI, never a call TO it:
@@ -1694,6 +1699,9 @@ describe('workflow call sites declare --files (#2269)', () => {
       // A trailing bare flag carries no value and still selects the
       // unscoped default path.
       'gsd_run query commit "docs: plan" --files',
+      // Both path-list flags with no values are still unscoped.
+      'gsd_run query commit "docs: delete" --files-removed',
+      'gsd_run query commit "docs: delete" --files-removed --files',
       // --files followed by ANOTHER FLAG is the same unscoped default, because
       // routeCommit filters `--`-prefixed tokens out of the scope list:
       // args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) === [].
@@ -1738,6 +1746,9 @@ describe('workflow call sites declare --files (#2269)', () => {
     const scoped = [
       // The ordinary scoped shape.
       'gsd_run query commit "docs: plan" --files .planning/PLAN.md',
+      // Deletions are an explicit scope too; each list runs to the next
+      // path-list flag, matching routeCommit.
+      'gsd_run query commit "docs: delete" --files-removed .planning/OLD.md',
       // A quoted --files mention BEFORE the real flag must not blind the
       // scanner to the genuine scope that follows (quote parity is even
       // again after the closing quote).
@@ -2945,7 +2956,7 @@ describe('workflow call sites declare --files (#2269)', () => {
     });
   });
 
-  test('every query commit invocation passes --files', () => {
+  test('every query commit invocation declares a non-empty file scope', () => {
     // #2269: three workflow call sites omitted --files, landing on the
     // default branch that blanket-stages .planning/ and commits the entire
     // index. The #2112 pathspec fix is gated on explicitFiles, so it cannot
