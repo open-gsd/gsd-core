@@ -11,7 +11,7 @@
  *   (a) separator invariance: `/` and `\` spell the same path
  *   (b) depth invariance: an instance of every pathspec stays a test file under any
  *       number of non-test parent directories (0, 1, 2, ... deep)
- *   (c) the `:(glob)**\/` prefix is stripped exactly: paths built only from non-test
+ *   (c) the `:(glob,icase)**\/` prefix is stripped exactly: paths built only from non-test
  *       names are never test files, and `test_*.py` is a basename match, not a directory one
  */
 
@@ -47,7 +47,7 @@ describe('#5181 tdd-test-files matcher properties', () => {
       const p = [...parents, `${name}.js`].join('/');
       assert.equal(isTestFilePath(p), false, `${p} must not be a test file`);
     }));
-    // `:(glob)**/test_*.py` is a basename match: a `test_`-prefixed directory is not a test.
+    // `:(glob,icase)**/test_*.py` is a basename match: a `test_`-prefixed directory is not a test.
     fc.assert(fc.property(fillers, filler, filler, (parents, dir, name) => {
       const p = [...parents, `test_${dir}`, `${name}.py`].join('/');
       assert.equal(isTestFilePath(p), false, `${p} must not be a test file`);

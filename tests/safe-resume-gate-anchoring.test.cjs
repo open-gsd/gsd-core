@@ -26,6 +26,8 @@ const path = require('node:path');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { resolveEvaluationScope, planSubjectPattern } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
+const { isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+const { SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
 
 const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 
@@ -119,9 +121,6 @@ describe('#4003 / #5164 — safe_resume_gate plan-commit lookups ask the resolve
   });
 });
 
-const { isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
-const { SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
-
 // ─── #4379: the RED pathspec is language-agnostic, and matches at root ──────
 //
 // The pathspec IS this gate's definition of "a test file". It was JS/TS-only, so
@@ -196,8 +195,8 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
   });
 
   test('router and shipped pathspec agree on every shared path, nested included (#5181)', (t) => {
-    // Default-mode pathspecs match the whole path from the repo root: `tests/` is a root-anchored
-    // prefix and `test_*.py` only matches paths starting `test_`, so nested files need `:(glob)**/`.
+    // Git and the router must also agree on case (`Tests/`), on `test/`, and on `*` not crossing `/`
+    // (`src/a.test.d/impl.js`): every entry is `:(glob,icase)**/`.
     const dir = seedRepo(t);
     const hits = matched(dir, shippedRedPathspec());
     for (const rel of [...SHARED_TEST_PATHS, ...SHARED_NON_TEST_PATHS]) {

@@ -13,35 +13,32 @@
  */
 
 /**
- * Git-pathspec spelling. A `/**` tail (behind `:(glob)**\/`) names a directory at any depth.
- * Any other entry is a file glob: the router reads it against the basename with `*` as a
- * non-separator run, while git matches a bare entry against the whole path with `*` crossing
- * `/`, so git is the wider reader. `:(glob)**\/test_*.py` is basename-only in both.
+ * Git-pathspec spelling. Every entry is `:(glob,icase)**\/<name>`: `**\/` matches at any depth
+ * (root included), `*` stays inside one path segment, and `icase` matches case-insensitively,
+ * so git reads each entry the way `isTestFilePath` does. A `/**` tail names a directory; any
+ * other entry is a file glob matched against the basename.
  */
 export const TEST_FILE_PATHSPECS = [
-  '*.test.*', '*.spec.*', ':(glob)**/tests/**', ':(glob)**/__tests__/**',
-  '*_test.go', ':(glob)**/test_*.py', '*_test.py', '*_test.exs', '*_spec.rb', '*_test.rb',
+  ':(glob,icase)**/*.test.*', ':(glob,icase)**/*.spec.*', ':(glob,icase)**/tests/**',
+  ':(glob,icase)**/test/**', ':(glob,icase)**/__tests__/**', ':(glob,icase)**/*_test.go',
+  ':(glob,icase)**/test_*.py', ':(glob,icase)**/*_test.py', ':(glob,icase)**/*_test.exs',
+  ':(glob,icase)**/*_spec.rb', ':(glob,icase)**/*_test.rb',
 ] as const;
 
-// The `:(glob)` double-star prefix matches at any depth, root included; the matchers below
-// read the bare form.
-const GLOB_DEPTH_PREFIX = ':(glob)**/';
+// The matchers below read the bare form of each entry.
+const GLOB_DEPTH_PREFIX = ':(glob,icase)**/';
 const DIRECTORY_TAIL = '/**';
 const stripGlobDepthPrefix = (spec: string): string =>
   (spec.startsWith(GLOB_DEPTH_PREFIX) ? spec.slice(GLOB_DEPTH_PREFIX.length) : spec);
 const isDirectorySpec = (spec: string): boolean =>
   stripGlobDepthPrefix(spec).endsWith(DIRECTORY_TAIL);
 
-/**
- * Directory names a `<files>` entry may sit under. `test/` is the singular spelling many
- * projects use.
- */
-const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
-  ...TEST_FILE_PATHSPECS.filter(isDirectorySpec).map(
+/** Directory names a `<files>` entry may sit under, from the directory entries above. */
+const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set(
+  TEST_FILE_PATHSPECS.filter(isDirectorySpec).map(
     (spec) => stripGlobDepthPrefix(spec).slice(0, -DIRECTORY_TAIL.length),
   ),
-  'test',
-]);
+);
 
 function escapeRegex(text: string): string {
   return text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
