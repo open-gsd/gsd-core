@@ -1363,8 +1363,10 @@ function bracketAwareMilestoneSection(
  * frontmatter path and the raw line read in `readStateMilestoneScalar` decode
  * through the same FAILSAFE loader), so a quoted `"null"` is indistinguishable
  * from a bare `null` after decoding and reads as explicit null. A decoded value
- * of `null`, `Null`, `NULL` or `~` is explicit null on both paths; `null # x`
- * is a literal version. A blank value is absent, not null.
+ * of `null`, `Null`, `NULL` or `~` is explicit null on both paths. A decoded
+ * `null # x` (quoted on disk) is a literal version; an unquoted
+ * `milestone: null # x` decodes to `null` and is an explicit null. A blank value
+ * is absent, not null.
  */
 function classifyMilestoneScalar(raw: string | null | undefined): { explicitNull: boolean; version: string | null } {
   if (typeof raw !== 'string') return { explicitNull: false, version: null };
@@ -1390,8 +1392,10 @@ function sameMilestoneVersion(a: string, b: string): boolean {
  * #4998: STATE.md's `milestone:` scalar as the frontmatter parser DECODES it.
  * The raw `^milestone:` line read captured the on-disk YAML text — quotes and
  * escapes included — and that text was re-serialized as the value, adding one
- * escape layer per `state.*` write. Falls back to the legacy line read only
- * when there is no parseable frontmatter, or its `milestone` is not text. One
+ * escape layer per `state.*` write. Falls back to a `^milestone:` line read
+ * only when there is no parseable frontmatter, or its `milestone` is not text;
+ * that no-frontmatter line is decoded through the same FAILSAFE loader as
+ * frontmatter (#5726). One
  * that parses without a `milestone` key names none: a `milestone:` line further
  * down (a fenced example) is not one (#4998 review, Minor 5).
  */
