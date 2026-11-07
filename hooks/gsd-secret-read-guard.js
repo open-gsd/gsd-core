@@ -333,6 +333,8 @@ FURTHER_WRAPPERS.set('gtime', WRAPPERS.get('time')); // a program, not a keyword
 // `do cmd`, `if cmd`, `! cmd`, `coproc cmd`. A word the tokenizer saw quoted is
 // a command name.
 const SHELL_COMMAND_KEYWORDS = new Set(['!', 'if', 'elif', 'else', 'then', 'while', 'until', 'do', 'coproc']);
+// Words after which bash still takes an assignment in front of the command.
+const ASSIGNMENT_PREFIX_WORDS = new Set([...SHELL_COMMAND_KEYWORDS, 'time']);
 // Loop heads a body can follow with no separator: `for i do cmd`, and zsh's
 // `for a b do cmd`. The first word is the variable, whatever it spells; an `in`
 // after it starts a word list, which only a separator ends.
@@ -777,6 +779,17 @@ function tokenize(str) {
   let seg = 0;
   let heredocs = [];
   let expectTag = null;
+  // Under the further reading only: whether the next word stands where bash
+  // takes an assignment, which is where bash reads a subscript whole
+  // (subscriptClose): a command's start, after a reserved word, `time -p` or an
+  // assignment, and after a redirection only while nothing but redirections
+  // came before it (bash's PST_REDIRLIST: `>f a[x y]=1 cmd` joins, `A=b >f
+  // a[x y]=1 cmd` runs `a[x`). An unclosed subscript ends bash's parse.
+  let atCommandStart = true;
+  let onlyRedirects = true;
+  let afterTime = false;
+  let redirectTarget = false;
+  let subscriptsOpen = true;
 
   const flush = () => {
     if (!hasWord) return;
@@ -787,10 +800,31 @@ function tokenize(str) {
       expectTag = null;
     } else {
       tokens.push({ kind: 'word', text: buf, quoted, seg });
+      if (furtherReading) noteCommandPosition();
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
+  };
+  // The word in `buf`, just pushed, moves the further reading's command position.
+  const noteCommandPosition = () => {
+    const wasAfterTime = afterTime;
+    afterTime = false;
+    if (redirectTarget) {
+      redirectTarget = false;
+      if (!onlyRedirects) atCommandStart = false;
+    } else if (!atCommandStart) {
+      // the command word is behind us
+    } else if (quoted === 'none' && ASSIGNMENT_PREFIX_WORDS.has(buf)) {
+      onlyRedirects = true;
+      afterTime = buf === 'time';
+    } else if (wasAfterTime && quoted === 'none' && (buf === '-p' || buf === '--')) {
+      afterTime = buf === '-p';
+    } else if (FURTHER_ASSIGNMENT_RE.test(buf)) {
+      onlyRedirects = false;
+    } else {
+      atCommandStart = false;
+    }
   };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
@@ -798,9 +832,14 @@ function tokenize(str) {
     flush();
     tokens.push({ kind: 'sep', text, quoted: 'none', seg });
     seg++;
+    atCommandStart = true;
+    onlyRedirects = true;
+    afterTime = false;
+    redirectTarget = false;
   };
   const op = (text, read, dup) => {
     tokens.push({ kind: 'op', text, quoted: 'none', seg, read, dup });
+    if (!dup) redirectTarget = true;
   };
 
   let i = 0;
@@ -1006,12 +1045,96 @@ function tokenize(str) {
       continue;
     }
 
+    if (ch === '[' && furtherReading && atCommandStart && !redirectTarget && subscriptsOpen
+        && quoted === 'none' && SHELL_NAME_RE.test(buf)) {
+      const close = subscriptClose(str, i);
+      if (close === -1) {
+        subscriptsOpen = false;
+      } else {
+        buf += str.slice(i, close + 1);
+        i = close + 1;
+        continue;
+      }
+    }
+
     hasWord = true;
     buf += ch;
     i++;
   }
   flush();
   return { tokens, nested };
+}
+
+const SHELL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Index of the `]` that closes the subscript bash reads from the `[` at `i`
+// (`a[x y]=1 cmd` is one word to bash), or -1 when none does, which bash
+// reports as an unexpected end of input. Quotes, a backslash, `$(…)`, `${…}`
+// and backquotes hide a `]`; a nested `[` takes its own.
+function subscriptClose(str, i) {
+  let depth = 0;
+  for (let k = i; k < str.length; k++) {
+    const c = str[k];
+    if (c === '\\') {
+      k++;
+    } else if (c === "'" || c === '`') {
+      k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '"') {
+      k = doubleQuoteClose(str, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '$' && str[k + 1] === '(') {
+      k = findParenClose(str, k + 2);
+      if (k >= str.length) return -1;
+    } else if (c === '$' && str[k + 1] === '{') {
+      k = braceClose(str, k + 2);
+      if (k === -1) return -1;
+    } else if (c === '[') {
+      depth++;
+    } else if (c === ']' && --depth === 0) {
+      return k;
+    }
+  }
+  return -1;
+}
+
+// Index of the `}` closing a `${` opened just before `k`, or -1. Quotes, a
+// backslash and `$(…)` hide a `}`; a nested `${` takes its own.
+function braceClose(str, k) {
+  let depth = 1;
+  for (; k < str.length; k++) {
+    const c = str[k];
+    if (c === '\\') {
+      k++;
+    } else if (c === "'" || c === '`') {
+      k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '"') {
+      k = doubleQuoteClose(str, k + 1);
+      if (k === -1) return -1;
+    } else if (c === '$' && str[k + 1] === '(') {
+      k = findParenClose(str, k + 2);
+      if (k >= str.length) return -1;
+    } else if (c === '$' && str[k + 1] === '{') {
+      depth++;
+      k++;
+    } else if (c === '}' && --depth === 0) {
+      return k;
+    }
+  }
+  return -1;
+}
+
+// Index of the `"` closing a double-quoted span that starts at `k`, or -1.
+function doubleQuoteClose(str, k) {
+  while (k < str.length) {
+    const c = str[k];
+    if (c === '"') return k;
+    if (c === '\\') k += 2;
+    else if (c === '$' && str[k + 1] === '(') k = findParenClose(str, k + 2) + 1;
+    else k++;
+  }
+  return -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,6 +1704,13 @@ function commandName(text) {
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// The further reading's prefix assignment: bash and zsh also take `NAME+=value`
+// and a subscripted `NAME[sub]=value` / `NAME[sub]+=value` in front of a command
+// and run the command. A subscript may hold brackets (`a[b[1]]=x`), so the
+// bracket span is greedy; one word, so the span ends inside it. bash keeps a
+// subscript's blanks in the word (`a[x y]=1`): the tokenizer joins those under
+// this reading (subscriptAssignmentEnd).
+const FURTHER_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\+?=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
 const DASH_C_RE = /^-[A-Za-z]*c$/;
@@ -1633,10 +1763,12 @@ function skipWrapperArgs(words, start, spec) {
 }
 
 // Index of the first word from `start` past `VAR=val` assignments and, under
-// the further reading, the reserved words in front of them.
+// the further reading, the reserved words in front of them and the wider
+// assignment forms (`A+=b`, `a[0]=x`).
 function skipShellPrefixes(words, start) {
   let idx = furtherReading ? skipReservedWords(words, start) : start;
-  while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
+  const assignment = furtherReading ? FURTHER_ASSIGNMENT_RE : ASSIGNMENT_RE;
+  while (idx < words.length && assignment.test(words[idx].text)) idx++;
   return idx;
 }
 
