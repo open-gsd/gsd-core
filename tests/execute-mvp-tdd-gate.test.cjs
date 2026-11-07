@@ -184,9 +184,12 @@ describe('#5106: test-file conventions are one definition', () => {
     const listStart = ref.indexOf('**5. Create first test file:**');
     const list = ref.slice(listStart, ref.indexOf('**Cost of the broad pathspec', listStart));
     assert.ok(listStart >= 0 && list.length > 0, 'references/tdd.md has no "Create first test file" list');
+    // Only the leading part of a bullet (before ` — `) names globs; a mention in a note does not count.
+    const named = new Set(list.split(/\r?\n/).filter(l => l.startsWith('- `'))
+      .flatMap(l => [...l.split(' — ')[0].matchAll(/`([^`]+)`/g)].map(m => m[1])));
     for (const glob of TEST_FILE_GLOBS) {
       const documented = glob.endsWith('/**') ? glob.slice(0, -2) : glob;
-      assert.ok(list.includes(documented), `references/tdd.md list must name ${documented}`);
+      assert.ok(named.has(documented), `references/tdd.md list bullets must name ${documented}`);
     }
     // And the router recognizes a literal root and nested sample of every convention.
     const { SAMPLES_BY_SPEC: samples, SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
