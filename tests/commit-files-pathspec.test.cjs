@@ -3543,9 +3543,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
     for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
       'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
-      // allow-test-rule: source-text-is-the-product (#5211)
       // The doc text is the recipe a user copies, so its exact fragments are the contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
+      // allow-test-rule: source-text-is-the-product (#5211)
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
       if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
@@ -3571,9 +3571,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
 
   test('git-integration.md commit examples quote every path as :(literal)', () => {
     for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
-      // allow-test-rule: source-text-is-the-product (#5211)
       // The example commands are what an agent copies, so their quoting is the shipped contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
+      // allow-test-rule: source-text-is-the-product (#5211)
       const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
       assert.equal(tails.length, 3, f);
       for (const t of tails) assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
@@ -3585,17 +3585,17 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       'pi/package-agents/gsd-debug-session-manager.md', 'pi/package-agents/gsd-executor.md', 'pi/package-agents/gsd-debugger.md', 'pi/package-skills/gsd-debug/SKILL.md',
       'gsd-core/workflows/audit-fix.md', 'gsd-core/workflows/validate-phase.md'];
     for (const f of sites) {
-      // allow-test-rule: source-text-is-the-product (#5211)
       // The prompt text is what the model pastes a path into, so its quoting is the shipped contract.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
+      // allow-test-rule: source-text-is-the-product (#5211)
       assert.ok(md.includes(":(literal)"), `${f}: has a literal pathspec`);
       assert.equal(/":\(literal\)[^"]{1,80}[}>]"/.test(md), false, `${f}: double-quoted placeholder`);
     }
   });
   test('async-external-jobs recipe commits the manifest with a pathspec', () => {
-    // allow-test-rule: source-text-is-the-product (#5211)
     // The recipe commands are what a user runs, so their pathspec is the shipped contract.
     const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
+    // allow-test-rule: source-text-is-the-product (#5211)
     const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
     assert.ok(commits.length > 0);
     for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
