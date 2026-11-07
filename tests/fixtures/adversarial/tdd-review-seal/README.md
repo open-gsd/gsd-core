@@ -24,3 +24,13 @@ a member that should be a string is a number. The checklist predates the seal.
 | `no-plans-member.json` | no `plans` member |
 | `entry-string.json` | a plan entry is a string |
 | `entry-numeric-red.json` | a plan entry has a numeric `red` |
+
+## `readable/`
+
+Seals that parse but name nothing the gate can verify (CONTRIBUTING.md parser input list: duplicate keys,
+NUL or replacement characters). The gate stays readable and credits only what it can check.
+
+| file | shape | expected row |
+| --- | --- | --- |
+| `duplicate-key.json` | `red` appears twice, neither a hash | `FAIL`, RED and GREEN missing |
+| `nul-in-red.json` | `red` is 39 hex characters and a NUL | `FAIL`, RED missing (the valid `green` is credited) |

@@ -37,7 +37,7 @@ import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
 import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFromError, evidenceNone } from './gate-evidence.cjs';
 import { resolveEvaluationScope, commitIsAncestor, commitReachability, isFullSha } from './gate-evaluation-scope.cjs';
-import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
+import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, commitIsGone, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;
@@ -179,15 +179,14 @@ function planRow(
   const planId = path.basename(planPath, '-PLAN.md');
   const commits = planCommits(projectDir, planId);
   const reds = shasOfKind(commits, 'test');
-  // #5354: the seal stands in once the plan was squashed away, and the seal tells it: with no live RED, or when its RED (else
-  // its GREEN) is no longer reachable from HEAD. A live `test(<plan>):` commit proves nothing, since a squash may carry that
-  // title or be followed by one. A seal whose RED is still reachable was not squashed, so it never tops up live-but-incomplete
-  // commits. It credits each kind no live commit credits; live hashes stay preferred for the evidence.
+  // #5354: the seal stands in once the plan was squashed away, and the seal tells it: its RED (else its GREEN) is gone,
+  // that is no longer reachable from HEAD (an absent object counts only in a complete history). A live `test(<plan>):`
+  // commit proves nothing, since a squash may carry that title or be followed by one. A seal whose RED is still reachable
+  // was not squashed, so it credits nothing. It credits each kind no live commit credits; live hashes stay preferred for
+  // the evidence.
   const entry = Object.hasOwn(seal, planId) ? seal[planId] : undefined;
   const probe = isFullSha(entry?.red) ? entry.red : entry?.green;
-  const reach = reds.length === 0 || !isFullSha(probe) ? null : commitReachability(projectDir, probe, 'HEAD');
-  // `missing` (exit 128) names a squashed-away object only in a complete history: a shallow clone lacks reachable ones too.
-  const squashed = reds.length === 0 || reach === 'unreachable' || (reach === 'missing' && historyIsComplete(projectDir));
+  const squashed = isFullSha(probe) && commitIsGone(commitReachability(projectDir, probe, 'HEAD'), () => historyIsComplete(projectDir));
   const sealed = squashed && entry !== undefined && entry.red !== entry.green ? entry : {};
   const sealedRed = isFullSha(sealed.red);
   const sealedGreen = isFullSha(sealed.green);

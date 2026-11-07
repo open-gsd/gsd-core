@@ -2452,17 +2452,14 @@ test('finding-2: unsupported-version reparse still surfaces a clear schema-versi
 
 test('readSmallRegularFile with strict refuses a symlink and reports a close failure; without it both are as before (#5354)', { skip: process.platform === 'win32' }, (t) => {
   const dir = createTempDir('ledger-strict-');
-  try {
-    fs.writeFileSync(path.join(dir, 'target.txt'), 'hello');
-    fs.symlinkSync(path.join(dir, 'target.txt'), path.join(dir, 'link.txt'));
-    assert.equal(readSmallRegularFile(path.join(dir, 'link.txt'), 100), 'hello');
-    assert.throws(() => readSmallRegularFile(path.join(dir, 'link.txt'), 100, { strict: true }), { code: 'ELOOP' });
-    assert.equal(readSmallRegularFile(path.join(dir, 'missing.txt'), 100, { strict: true }), null);
-    t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
-    assert.equal(readSmallRegularFile(path.join(dir, 'target.txt'), 100), 'hello');
-    assert.throws(() => readSmallRegularFile(path.join(dir, 'target.txt'), 100, { strict: true }), { code: 'EIO' });
-  } finally {
-    t.mock.restoreAll();
-    cleanup(dir);
-  }
+  t.after(() => cleanup(dir));
+  fs.writeFileSync(path.join(dir, 'target.txt'), 'hello');
+  fs.symlinkSync(path.join(dir, 'target.txt'), path.join(dir, 'link.txt'));
+  assert.equal(readSmallRegularFile(path.join(dir, 'link.txt'), 100), 'hello');
+  assert.throws(() => readSmallRegularFile(path.join(dir, 'link.txt'), 100, { strict: true }), { code: 'ELOOP' });
+  assert.equal(readSmallRegularFile(path.join(dir, 'missing.txt'), 100, { strict: true }), null);
+  const closeMock = t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
+  assert.equal(readSmallRegularFile(path.join(dir, 'target.txt'), 100), 'hello');
+  assert.throws(() => readSmallRegularFile(path.join(dir, 'target.txt'), 100, { strict: true }), { code: 'EIO' });
+  closeMock.mock.restore();
 });

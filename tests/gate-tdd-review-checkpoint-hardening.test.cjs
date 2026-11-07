@@ -339,6 +339,48 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(row.missing, ['GREEN']);
   });
 
+  test('a plan without a live RED whose seal names reachable commits credits nothing (#5354)', () => {
+    const { dir } = fixture(['docs(01-01): notes']);
+    w(dir, SEAL, sealOf(sealGit(dir, 'rev-parse', 'HEAD'), sealGit(dir, 'rev-parse', 'HEAD~1')));
+    const row = run(dir).payload.rows[0];
+    assert.equal(row.status, 'FAIL');
+    assert.deepEqual(row.missing, ['RED', 'GREEN']);
+  });
+
+  test('commitIsGone reads a reachability answer as squashed only when the commit is gone', () => {
+    const { commitIsGone } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+    assert.equal(commitIsGone('reachable', () => true), false);
+    assert.equal(commitIsGone('unreachable', () => false), true);
+    assert.equal(commitIsGone('missing', () => true), true);
+    assert.equal(commitIsGone('missing', () => false), false);
+    assert.equal(commitIsGone(null, () => true), false);
+  });
+
+  // Readable but unverifiable seals (fixtures/adversarial/tdd-review-seal/readable/): the gate credits only what it can check.
+  for (const [file, missing] of [['duplicate-key.json', ['RED', 'GREEN']], ['nul-in-red.json', ['RED']]]) {
+    test(`the ${file} seal is readable and credits only what it can verify`, () => {
+      const { dir } = fixture([], { summary: false });
+      w(dir, SEAL, fs.readFileSync(path.join(SEAL_FIXTURES, 'readable', file), 'utf8'));
+      const row = run(dir).payload.rows[0];
+      assert.equal(row.status, 'FAIL');
+      assert.deepEqual(row.missing, missing);
+    });
+  }
+
+  test('a collision on the temp file leaves the prior seal and no temp file', (t) => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const prior = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
+    w(dir, SEAL, prior);
+    const real = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (f, ...rest) => {
+      if (String(f).includes('.tmp')) throw Object.assign(new Error('temp file exists'), { code: 'EEXIST' });
+      return real(f, ...rest);
+    });
+    assert.equal(run(dir, '--record').outcome, 'unreadable');
+    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), prior);
+    assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
+  });
+
   test('a seal holding only a sibling plan entry does not rule out NotEvaluable (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
     squash(dir, base);
@@ -546,21 +588,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     return false;
   }
 
-  test('a FIFO seal is rejected by the lstat regular-file check', posix, (t) => {
+  test('a FIFO seal never hangs the open (O_NONBLOCK) and fstat rejects it as not a regular file', posix, (t) => {
     const { dir } = fixture([], { summary: false });
     const fifo = path.join(dir, SEAL);
     if (!mkfifo(t, fifo)) return;
-    assert.equal(run(dir).outcome, 'unreadable');
-  });
-
-  test('a FIFO swapped in after lstat never hangs the open (O_NONBLOCK) and fstat rejects it', posix, (t) => {
-    const { dir } = fixture([], { summary: false });
-    const fifo = path.join(dir, SEAL);
-    if (!mkfifo(t, fifo)) return;
-    const regular = path.join(dir, 'regular.json');
-    fs.writeFileSync(regular, sealOf(sha('a'), sha('b')));
-    // lstat lies (as if the FIFO replaced a regular file after the check), so only open()+fstat stand between us and a hang.
-    t.mock.method(fs, 'lstatSync', () => fs.statSync(regular));
     assert.equal(run(dir).outcome, 'unreadable');
   });
 
@@ -784,6 +815,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   function expectBranchWarning({ r, subject, before }, branch) {
     assert.equal(r.exitCode, SEAL_BRANCH[branch].exitCode, r.stderr);
     for (const [name, { marker }] of Object.entries(SEAL_BRANCH)) {
+      // allow-test-rule: source-text-is-the-product #5354 (the warnings are the text ship.md's seal step prints; the markers are taken from that step)
       assert.equal(r.stderr.includes(marker), name === branch, `${branch}: stderr ${name === branch ? 'has' : 'lacks'} "${marker}": ${r.stderr}`);
     }
     assert.equal(subject, before);

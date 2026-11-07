@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
-import { extractTaskCommitRefs, commitReachability } from './gate-evaluation-scope.cjs';
+import { extractTaskCommitRefs, commitReachability, type CommitReachability } from './gate-evaluation-scope.cjs';
 import { execGit } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
@@ -24,7 +24,7 @@ export type SealPlans = Record<string, Partial<SealEntry>>;
 
 // Cap for repo-controlled text the gate reads (the seal and SUMMARY.md); a real one is a few KiB at most; anything bigger is not read (repo content, so hostile).
 const REPO_TEXT_MAX_BYTES = 64 * 1024;
-/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn, plus one `git show` per id that exists, plus one `git rev-list` per plan when every id is unreachable. */
+/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn (the loop stops at the first id that is not gone), plus one `git rev-parse --is-shallow-repository` per call when an id is missing, plus, when every id exists, one `git rev-list` and one `git show` per id. */
 const SUMMARY_REFS_MAX = 64;
 
 function parseSeal(text: string): Evidence<SealPlans> {
@@ -73,6 +73,15 @@ export function historyIsComplete(projectDir: string): boolean {
 }
 
 /**
+ * Whether a commit is gone (squashed away): git knows it but it is not an ancestor of HEAD, or git does not
+ * know it in a complete history. `null` (git could not answer) and `reachable` are not gone. The one place
+ * that reads a `commitReachability` answer as "squashed", for the seal and for the SUMMARY task commits.
+ */
+export function commitIsGone(reach: CommitReachability | null, historyComplete: () => boolean): boolean {
+  return reach === 'unreachable' || (reach === 'missing' && historyComplete());
+}
+
+/**
  * #5354: a plan was squashed away when it has no live plan commit and no seal entry, and its SUMMARY
  * names task commits none of which is reachable from HEAD (a missing object counts as unreachable only
  * in a complete history). A never-existing id looks the same as a squashed commit that was garbage-collected
@@ -89,20 +98,23 @@ export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: strin
     return !s.timedOut && s.exitCode === 0 ? s.stdout.trim() : '';
   };
   const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
+  let complete: boolean | undefined;
+  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
   for (const candidate of summaryCandidates(rel)) {
     const summary = readBoundedText(path.join(phaseDir, candidate));
     if (summary.kind !== 'found') continue;
     const refs = [...new Set(extractTaskCommitRefs(summary.value))];
     // More refs than the cap is an ordinary failure: SUMMARY.md is repo content and must not buy unbounded git spawns.
     if (refs.length === 0 || refs.length > SUMMARY_REFS_MAX) return false;
-    const probes = refs.map((id) => {
+    // Stop at the first ref that is not gone (reachable, or git could not answer): the plan is then an ordinary failure.
+    const existing: string[] = [];
+    for (const id of refs) {
       const r = commitReachability(projectDir, id, 'HEAD');
-      return { id, exists: r === 'unreachable', unreachable: r === 'unreachable' || (r === 'missing' && historyIsComplete(projectDir)) };
-    });
-    if (!probes.every((p) => p.unreachable)) return false;
-    const existing = probes.filter((p) => p.exists).map((p) => p.id);
+      if (!commitIsGone(r, historyComplete)) return false;
+      if (r === 'unreachable') existing.push(id);
+    }
     // A ref that no longer exists was squashed away, so not every ref was rewritten.
-    if (existing.length < probes.length) return true;
+    if (existing.length < refs.length) return true;
     // Subjects of commits reachable from HEAD but not from the refs; a failed log leans to FAIL (rewritten).
     const log = execGit(['rev-list', '--format=%s', 'HEAD', '--not', ...existing], { cwd: projectDir });
     if (log.timedOut || log.exitCode !== 0) return false;
