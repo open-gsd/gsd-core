@@ -2632,47 +2632,6 @@ describe('#5759 windowsDeviceNamespacePath', () => {
   });
 });
 
-// Runs on every OS: the classifier decides only whether the device branch may be TRIED.
-describe('#5759 isWindowsReservedDeviceName', () => {
-  const { isWindowsReservedDeviceName } = require(SHELL_PROJECTION_PATH);
-
-  // Win32 normalization strips trailing dots and spaces and treats `:stream` as a stream suffix;
-  // COM/LPT also take the superscript digits 1-3. CONIN$ and CONOUT$ are console handles that are
-  // deliberately not nominated (the checked path fails safe); COM0/LPT0 and COM10/LPT10 are not devices.
-  for (const name of [
-    'NUL', 'nul', 'NuL', 'con', 'CON.txt', 'prn', 'aux.log', 'com1', 'COM9', 'lpt1', 'LPT9.x', 'nul .txt',
-    'nul.', 'con ', 'com1.', 'COM¹', 'LPT²', 'com³.txt', 'nul:stream',
-  ]) {
-    test(`${JSON.stringify(name)} is reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), true); });
-  }
-  for (const name of [
-    'null', 'console', 'com0', 'lpt10', 'com', 'config.json', 'nul2', 'xcon', '', 'com10', 'lpt0',
-    'CONIN$', 'CONOUT$', 'COM⁴',
-  ]) {
-    test(`${JSON.stringify(name) || '(empty)'} is not reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), false); });
-  }
-
-  const STEMS = ['nul', 'con', 'prn', 'aux', 'com1', 'com9', 'lpt1', 'lpt9'];
-  test('property: base + "." + ext is reserved iff base is a reserved stem', () => {
-    fc.assert(fc.property(
-      fc.oneof(fc.constantFrom(...STEMS), fc.constantFrom('null', 'console', 'com0', 'lpt10', 'xnul', 'config')),
-      fc.stringMatching(/^[A-Za-z0-9_-]{0,8}$/),
-      fc.boolean(),
-      (base, ext, upper) => {
-        const b = upper ? base.toUpperCase() : base;
-        return isWindowsReservedDeviceName(b + '.' + ext) === STEMS.includes(base);
-      },
-    ));
-  });
-  test('property: a reserved stem followed by word characters is not reserved', () => {
-    fc.assert(fc.property(
-      fc.constantFrom(...STEMS),
-      fc.stringMatching(/^[A-Za-z0-9_-]{1,8}$/),
-      (stem, suffix) => isWindowsReservedDeviceName(stem + suffix) === false,
-    ));
-  });
-});
-
 // Runs on every OS: a directory at the config path is unusable everywhere. POSIX reports
 // EISDIR; Windows reports whatever errno its open(2) gives, so only the reason and the path
 // are pinned there.

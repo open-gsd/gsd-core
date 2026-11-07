@@ -1300,19 +1300,6 @@ function _normalizeMd(content: string, prior?: string, preserveFencedStructure =
 }
 
 /**
- * #5759: true when `basename` is a Windows reserved device name (NUL, CON, PRN, AUX, COM1-9,
- * LPT1-9, with or without an extension). This only NOMINATES a path for the in-place device
- * write: the opened handle must still be a character device (fstat) before anything is written.
- */
-export function isWindowsReservedDeviceName(basename: string): boolean {
-  // Win32 path normalization maps NUL, NUL., "NUL ", NUL.txt and NUL:stream to the device. COM and
-  // LPT also take the superscript digits 1-3 (COM¹ COM² COM³). COM0/LPT0, COM10 and a longer stem
-  // (nullx) are ordinary names. CONIN$ and CONOUT$ are console handles, not nominated: they take
-  // the checked path, which fails safe.
-  return /^(?:nul|con|prn|aux|(?:com|lpt)[1-9¹²³])(?:[. :].*)?$/i.test(basename);
-}
-
-/**
  * #5759: the device-namespace path (`\\.\NUL`) to open for `target`, or null when `target` is not
  * a spelling that names a device on every Windows. Two spellings qualify: an EXACT bare reserved
  * stem (`NUL`, `CON`, `PRN`, `AUX`, `COM1`-`COM9`, `LPT1`-`LPT9`, `CONIN$`, `CONOUT$`, any case,
@@ -1322,6 +1309,10 @@ export function isWindowsReservedDeviceName(basename: string): boolean {
  * `COM¹`) is an ordinary file on Windows 11, and a reserved name inside a directory path
  * (`sub\NUL`, `D:\x\NUL`, `C:NUL`, `\\?\C:\x\NUL`) is an ordinary file on 24H2 / Server 2025.
  * The device is always opened through `\\.\<STEM>` (uppercase), never through a resolved path.
+ *
+ * Deliberate: on pre-Windows-11-24H2 systems a reserved name with a directory component
+ * (`<dir>\NUL`) is still the device, but it now takes the checked path (the device is never
+ * opened through a directory path), so a write there may fail rather than discard data.
  */
 export function windowsDeviceNamespacePath(target: string): string | null {
   const namespaced = /^\\\\[.?]\\/.test(target);
