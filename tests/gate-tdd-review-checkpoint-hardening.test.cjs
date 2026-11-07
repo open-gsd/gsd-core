@@ -739,6 +739,21 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(dir).payload.rows[0].status, 'FAIL');
   });
 
+  // The primary SUMMARY is unreadable, so a later candidate name must not turn the plan into NotEvaluable (execute-mvp-tdd.md: ordinary failure).
+  for (const [label, damage] of [
+    ['symlinked', (dir, summary) => { const real = path.join(dir, 'real-summary.md'); fs.renameSync(summary, real); fs.symlinkSync(real, summary); }],
+    ['oversized', (dir, summary) => fs.writeFileSync(summary, padTo(fs.readFileSync(summary, 'utf8'), REPO_TEXT_MAX_BYTES + 1))],
+  ]) {
+    test(`a ${label} primary SUMMARY fails even when a later candidate name holds task commits`, posix, () => {
+      const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
+      squash(dir, base);
+      const summary = path.join(dir, PHASE, '01-01-SUMMARY.md');
+      fs.copyFileSync(summary, path.join(dir, PHASE, '01-01-PLAN-SUMMARY.md'));
+      damage(dir, summary);
+      assert.equal(run(dir).payload.rows[0].status, 'FAIL');
+    });
+  }
+
   test('a plan with one task rewritten and one gone is NotEvaluable, not a rewrite', () => {
     const { dir, base } = fixture(['chore: red', 'chore: green'], { refs: true });
     sealGit(dir, 'checkout', '-b', 'partial', base);

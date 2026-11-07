@@ -116,7 +116,8 @@ export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: strin
   const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
   for (const candidate of summaryCandidates(rel)) {
     const summary = readBoundedText(path.join(phaseDir, candidate));
-    if (summary.kind !== 'found') continue;
+    if (summary.kind === 'none') continue;
+    if (summary.kind === 'unreadable') return false;
     const refs = [...new Set(extractTaskCommitRefs(summary.value))];
     // More refs than the cap is an ordinary failure: SUMMARY.md is repo content and must not buy unbounded git spawns.
     if (refs.length === 0 || refs.length > SUMMARY_REFS_MAX) return false;
