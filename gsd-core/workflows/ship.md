@@ -220,6 +220,8 @@ else
   DIRTY=$(gsd_run run-with-timeout 10 -- git status --porcelain -- "$SEAL") && GS=0 || GS=$?
   if [ "$GI" = 124 ] || [ "$GS" = 124 ]; then
     echo "WARNING: git timed out while checking $SEAL; the seal was not committed and the squash will lose RED/GREEN credit." >&2
+  elif [ "$GI" -gt 1 ] || [ "$GS" != 0 ]; then
+    echo "WARNING: git failed while checking $SEAL; the seal was not committed and the squash will lose RED/GREEN credit." >&2
   elif [ "$GI" = 0 ]; then
     echo "WARNING: $SEAL is gitignored; the squash will not carry it." >&2
   elif [ -n "$DIRTY" ]; then

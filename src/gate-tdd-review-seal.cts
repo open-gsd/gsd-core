@@ -7,17 +7,13 @@
  * one over `REPO_TEXT_MAX_BYTES` is `unreadable`) and the write goes through a temp file and a rename.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
-import { evidenceFound, evidenceFromError, evidenceNone, evidenceUnreadable, isPlainObject, type Evidence } from './gate-evidence.cjs';
+import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
 import { extractTaskCommitRefs, commitReachability } from './gate-evaluation-scope.cjs';
 import { execGit } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { summaryCandidates } = coreUtilsMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
-import ledgerMod = require('./capability-ledger.cjs');
-const { readSmallRegularFile } = ledgerMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- runtime-hooks-surface.cjs is an export= CommonJS module
 import hooksSurfaceMod = require('./runtime-hooks-surface.cjs');
 const { atomicWriteFileSync } = hooksSurfaceMod;
@@ -30,15 +26,6 @@ export type SealPlans = Record<string, Partial<SealEntry>>;
 const REPO_TEXT_MAX_BYTES = 64 * 1024;
 /** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn, plus one `git show` per id that exists, plus one `git rev-list` per plan when every id is unreachable. */
 const SUMMARY_REFS_MAX = 64;
-
-/** lstat, so a symlink is seen as a symlink. Never throws. */
-function sealStat(file: string): Evidence<fs.Stats> {
-  try {
-    return evidenceFound(fs.lstatSync(file));
-  } catch (err) {
-    return evidenceFromError<fs.Stats>(err, file);
-  }
-}
 
 function parseSeal(text: string): Evidence<SealPlans> {
   try {
@@ -57,15 +44,7 @@ function parseSeal(text: string): Evidence<SealPlans> {
   }
 }
 
-/** Bounded, non-blocking read of repo-controlled text through the one shared reader: a symlink, non-regular file, one over REPO_TEXT_MAX_BYTES or a close() failure is `unreadable`; absent is `none`. */
-function readBoundedText(file: string): Evidence<string> {
-  try {
-    const text = readSmallRegularFile(file, REPO_TEXT_MAX_BYTES, { strict: true });
-    return text === null ? evidenceNone<string>() : evidenceFound(text);
-  } catch (err) {
-    return evidenceFromError<string>(err, file);
-  }
-}
+const readBoundedText = (file: string): Evidence<string> => readBoundedTextEvidence(file, REPO_TEXT_MAX_BYTES);
 
 /** #5354: per-plan RED/GREEN hashes recorded pre-squash. Absent is `none`; a malformed, oversize, non-regular or unreadable seal is `unreadable`. */
 export function readSeal(phaseDir: string): Evidence<SealPlans> {
@@ -77,10 +56,20 @@ export function readSeal(phaseDir: string): Evidence<SealPlans> {
 export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>, prior: Evidence<SealPlans>): void {
   const file = path.join(phaseDir, SEAL_FILE);
   const content = `${JSON.stringify({ plans: { ...(prior.kind === 'found' ? prior.value : {}), ...evidence } }, null, 2)}\n`;
-  const st = sealStat(file);
+  const st = lstatEvidence(file);
   if (st.kind === 'unreadable') throw new Error(`${SEAL_FILE} cannot be examined: ${st.reason}`);
   if (st.kind === 'found' && !st.value.isFile()) throw new Error(`${SEAL_FILE} exists and is not a regular file`);
   atomicWriteFileSync(file, content, 'utf8');
+}
+
+/**
+ * Whether `projectDir` has a complete (non-shallow) history. Exit 128 on a commit means "object not found" only
+ * then: in a shallow clone or outside a repo it says nothing about squashing, so it must not turn an un-squashed
+ * skipper into `NotEvaluable` or a reachable seal into a squashed one.
+ */
+export function historyIsComplete(projectDir: string): boolean {
+  const shallow = execGit(['rev-parse', '--is-shallow-repository'], { cwd: projectDir });
+  return !shallow.timedOut && shallow.exitCode === 0 && shallow.stdout === 'false';
 }
 
 /**
@@ -100,13 +89,6 @@ export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: strin
     return !s.timedOut && s.exitCode === 0 ? s.stdout.trim() : '';
   };
   const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
-  // `missing` (exit 128) means "object not found" only in a complete history: in a shallow clone or outside a repo it
-  // says nothing about squashing, so it must not turn an un-squashed skipper into NotEvaluable.
-  let complete: boolean | undefined;
-  const historyComplete = (): boolean => complete ??= (() => {
-    const shallow = execGit(['rev-parse', '--is-shallow-repository'], { cwd: projectDir });
-    return !shallow.timedOut && shallow.exitCode === 0 && shallow.stdout === 'false';
-  })();
   for (const candidate of summaryCandidates(rel)) {
     const summary = readBoundedText(path.join(phaseDir, candidate));
     if (summary.kind !== 'found') continue;
@@ -115,7 +97,7 @@ export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: strin
     if (refs.length === 0 || refs.length > SUMMARY_REFS_MAX) return false;
     const probes = refs.map((id) => {
       const r = commitReachability(projectDir, id, 'HEAD');
-      return { id, exists: r === 'unreachable', unreachable: r === 'unreachable' || (r === 'missing' && historyComplete()) };
+      return { id, exists: r === 'unreachable', unreachable: r === 'unreachable' || (r === 'missing' && historyIsComplete(projectDir)) };
     });
     if (!probes.every((p) => p.unreachable)) return false;
     const existing = probes.filter((p) => p.exists).map((p) => p.id);

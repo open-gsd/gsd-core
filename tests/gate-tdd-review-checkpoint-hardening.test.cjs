@@ -9,6 +9,11 @@
  *   H2  the plan id (a plan FILE NAME) reaches `git log --grep` as a LITERAL: a metacharacter in it
  *       can no longer satisfy RED/GREEN with an unrelated commit, while an ordinary id like
  *       `03.1-02` still matches its own commits.
+ *   #5354 the seal (`TDD-REVIEW-SEAL.json`, `--record`), the `NotEvaluable` row for a squashed-away plan,
+ *       the SUMMARY task-commit heuristic, hostile seal files, write-path faults and the `ship.md` seal step.
+ *       The owners it uses are tested in their own files: `commitReachability` / `isFullSha` in
+ *       gate-evaluation-scope.test.cjs, `readSmallRegularFile` strict in capability-ledger.test.cjs and
+ *       `isPlainObject` in gate-evidence.test.cjs.
  */
 
 const { test, describe, afterEach } = require('node:test');
@@ -309,6 +314,30 @@ describe('#5354 tdd review checkpoint seal', () => {
       assert.equal(r.block, false);
     });
   }
+
+  test('--record after a test(01-01): squash writes the sealed RED back, so the next run still passes (#5354)', () => {
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    run(dir, '--record');
+    const sealed = fs.readFileSync(path.join(dir, SEAL), 'utf8');
+    sealGit(dir, 'add', '-A');
+    sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+    squash(dir, base, 'test(01-01): phase one');
+    commit(dir, 'later.txt', 'test(01-01): add case');
+    assert.equal(run(dir, '--record').payload.rows[0].status, 'Pass');
+    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), sealed);
+    assert.equal(run(dir).payload.rows[0].status, 'Pass');
+  });
+
+  test('a shallow clone does not read an absent seal RED as squashed: a live RED without GREEN still fails (#5354)', () => {
+    const { dir } = fixture(['test(01-01): red']);
+    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow`);
+    dirs.push(clone);
+    gitOrThrow(['clone', '-q', '--depth', '1', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    w(clone, SEAL, sealOf(sha('a'), sha('b')));
+    const row = run(clone).payload.rows[0];
+    assert.equal(row.status, 'FAIL');
+    assert.deepEqual(row.missing, ['GREEN']);
+  });
 
   test('a seal holding only a sibling plan entry does not rule out NotEvaluable (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
@@ -720,7 +749,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   // Execute ship.md's seal step against a stubbed `gsd_run`, so the branches (not their text) are what is tested.
-  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, gitTimeout = false }) {
+  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, gitExit }) {
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf8').replace(/\r\n/g, '\n');
     const from = ship.indexOf('```bash\n', ship.indexOf('<step name="seal_tdd_review">')) + 8;
     const script = ship.slice(from, ship.indexOf('\n```', from));
@@ -733,10 +762,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     // `query commit` stands in for cmdCommit: it commits the seal itself unless COMMIT_OUT is set (then it prints that and commits nothing).
     const stub = real
       ? 'gsd_run() { echo "$*" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
-      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_TIMEOUT+x}" ]; then return 124; fi; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
+      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_EXIT+x}" ]; then return "$GIT_EXIT"; fi; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
     const r = runHook('-c', [stub + script], {
       interpreter: 'bash', cwd: dir, timeoutMs: GIT_TIMEOUT_MS,
-      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitTimeout ? { GIT_TIMEOUT: '1' } : {}), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
+      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitExit === undefined ? {} : { GIT_EXIT: String(gitExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
     });
     return { r, dir, before, subject: sealGit(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter((c) => c && !c.startsWith('run-with-timeout ')) };
   }
@@ -747,6 +776,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     noSeal: { marker: 'TDD review failed or was not evaluable', exitCode: 0 },
     gitignored: { marker: 'the squash will not carry it', exitCode: 0 },
     gitTimedOut: { marker: 'git timed out while checking', exitCode: 0 },
+    gitFailed: { marker: 'git failed while checking', exitCode: 0 },
     commitFailed: { marker: 'TDD seal commit failed', exitCode: 1 },
     commitSkipped: { marker: 'commit_docs resolves false', exitCode: 0 },
   };
@@ -771,8 +801,14 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   test('ship.md seal step warns and commits nothing when a bounded git call times out', posix, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitTimeout: true }), 'gitTimedOut');
+    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: 124 }), 'gitTimedOut');
   });
+
+  for (const code of [2, 127, 128]) {
+    test(`ship.md seal step warns and commits nothing when a bounded git call exits ${code}`, posix, () => {
+      expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: code }), 'gitFailed');
+    });
+  }
 
   test('ship.md seal step never commits the on-disk seal when --record failed', posix, () => {
     expectBranchWarning(runSealStep({ recordRc: 3, seal: '<<<<<<< conflict' }), 'recordFailed');
@@ -938,58 +974,5 @@ describe('#5354 tdd review checkpoint seal', () => {
     fs.cpSync(path.join(dir, '.planning'), path.join(bare, '.planning'), { recursive: true });
     dirs.push(bare);
     assert.equal(run(bare).payload.rows[0].status, 'FAIL');
-  });
-});
-
-describe('#5354 shared owners used by the seal gate', () => {
-  const scope = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
-  const posix = { skip: process.platform === 'win32' };
-
-  test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
-    const dir = createTempGitProject('gate-5354-reach-');
-    try {
-      const base = git(dir, 'rev-parse', 'HEAD').trim();
-      git(dir, 'checkout', '-q', '-b', 'side');
-      git(dir, 'commit', '-q', '--allow-empty', '-m', 'side');
-      const side = git(dir, 'rev-parse', 'HEAD').trim();
-      git(dir, 'checkout', '-q', '-');
-      assert.equal(scope.commitReachability(dir, base, 'HEAD'), 'reachable');
-      assert.equal(scope.commitReachability(dir, side, 'HEAD'), 'unreachable');
-      assert.equal(scope.commitReachability(dir, 'f'.repeat(40), 'HEAD'), 'missing');
-      assert.equal(scope.commitReachability(dir, '--all', 'HEAD'), null);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('readSmallRegularFile with strict refuses a symlink and reports a close failure; without it both are as before', posix, (t) => {
-    const { readSmallRegularFile } = require('../gsd-core/bin/lib/capability-ledger.cjs');
-    const dir = createTempGitProject('gate-5354-strict-');
-    try {
-      fs.writeFileSync(path.join(dir, 'target.txt'), 'hello');
-      fs.symlinkSync(path.join(dir, 'target.txt'), path.join(dir, 'link.txt'));
-      assert.equal(readSmallRegularFile(path.join(dir, 'link.txt'), 100), 'hello');
-      assert.throws(() => readSmallRegularFile(path.join(dir, 'link.txt'), 100, { strict: true }), { code: 'ELOOP' });
-      assert.equal(readSmallRegularFile(path.join(dir, 'missing.txt'), 100, { strict: true }), null);
-      t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
-      assert.equal(readSmallRegularFile(path.join(dir, 'target.txt'), 100), 'hello');
-      assert.throws(() => readSmallRegularFile(path.join(dir, 'target.txt'), 100, { strict: true }), { code: 'EIO' });
-    } finally {
-      t.mock.restoreAll();
-      cleanup(dir);
-    }
-  });
-
-  test('isFullSha accepts exactly 40 lowercase hex characters', () => {
-    assert.equal(scope.isFullSha('a'.repeat(40)), true);
-    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
-      assert.equal(scope.isFullSha(bad), false, String(bad));
-    }
-  });
-
-  test('isPlainObject is an object that is neither null nor an array', () => {
-    const { isPlainObject } = require('../gsd-core/bin/lib/gate-evidence.cjs');
-    assert.equal(isPlainObject({}), true);
-    for (const bad of [null, [], 'x', 1, undefined]) assert.equal(isPlainObject(bad), false, String(bad));
   });
 });

@@ -37,7 +37,7 @@ import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
 import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFromError, evidenceNone } from './gate-evidence.cjs';
 import { resolveEvaluationScope, commitIsAncestor, commitReachability, isFullSha } from './gate-evaluation-scope.cjs';
-import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
+import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;
@@ -106,7 +106,6 @@ function transitiveDependents(planId: string, dependents: ReadonlyMap<string, re
 interface PlanCommit {
   sha: string;
   kind: string;
-  subject: string;
 }
 
 /**
@@ -119,7 +118,7 @@ function planCommits(projectDir: string, planId: string): PlanCommit[] {
   const commits: PlanCommit[] = [];
   for (const commit of scope.commits) {
     const kind = /^([a-z]+)\(/.exec(commit.subject)?.[1];
-    if (kind) commits.push({ sha: commit.sha, kind, subject: commit.subject });
+    if (kind) commits.push({ sha: commit.sha, kind });
   }
   return commits;
 }
@@ -187,7 +186,8 @@ function planRow(
   const entry = Object.hasOwn(seal, planId) ? seal[planId] : undefined;
   const probe = isFullSha(entry?.red) ? entry.red : entry?.green;
   const reach = reds.length === 0 || !isFullSha(probe) ? null : commitReachability(projectDir, probe, 'HEAD');
-  const squashed = reds.length === 0 || reach === 'unreachable' || reach === 'missing';
+  // `missing` (exit 128) names a squashed-away object only in a complete history: a shallow clone lacks reachable ones too.
+  const squashed = reds.length === 0 || reach === 'unreachable' || (reach === 'missing' && historyIsComplete(projectDir));
   const sealed = squashed && entry !== undefined && entry.red !== entry.green ? entry : {};
   const sealedRed = isFullSha(sealed.red);
   const sealedGreen = isFullSha(sealed.green);
@@ -224,7 +224,9 @@ function planRow(
   const reason: TddRowReason | undefined = status === 'FAIL' && missing.length === 0
     ? TDD_ROW_REASON.GREEN_BEFORE_RED
     : undefined;
-  const redSha = reds[0] ?? sealed.red;
+  // A credit the seal supplied is written back as the seal has it: a live `test(<plan>):` commit left by the squash is
+  // reachable, and sealing it would make the next run read the plan as not squashed and drop the seal's GREEN.
+  const redSha = sealedRed ? sealed.red : reds[0];
   const greenSha = (ownOk ? ownGreens[0] : dependentGreens.find((d) => inOrder(d.greens))?.greens[0]) ?? sealed.green;
   const sealEvidence = status === 'Pass' && isFullSha(redSha) && isFullSha(greenSha) ? { red: redSha, green: greenSha } : undefined;
 
@@ -244,7 +246,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   if (!phase) {
     return gateUsageFailure(
       GATE_FAILURE_CODE.SDK_MISSING_ARG,
-      'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase>',
+      'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase> [--record]',
     );
   }
 

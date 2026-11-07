@@ -119,14 +119,14 @@ function isUnsafeCapabilityId(id: unknown): boolean {
   return false;
 }
 
+/** `strict`: refuse to read through a symlink (LedgerIOError `ELOOP`) and report a close() failure instead of swallowing it. */
+interface ReadSmallOptions { strict?: boolean }
+
 /**
  * Sentinel for distinguishing IO errors (EACCES, EISDIR, EPERM, …) from
  * parse/validation failures. Thrown internally by readLedgerRaw; caught by the
  * two public readers to produce the right error type or return value.
  */
-/** `strict`: refuse to read through a symlink (LedgerIOError `ELOOP`) and report a close() failure instead of swallowing it. */
-interface ReadSmallOptions { strict?: boolean }
-
 class LedgerIOError extends Error {
   code: string | undefined;
   constructor(message: string, code?: string) {
@@ -159,6 +159,10 @@ class LedgerIOError extends Error {
  *   4. require stat.size <= maxBytes — refuse an oversized regular file WITHOUT reading it whole.
  *   5. read EXACTLY stat.size bytes from the fd — never an unbounded streaming read.
  *   6. closeSync(fd) in finally.
+ *
+ * `strict` (`ReadSmallOptions`) adds three steps for untrusted repo text: lstat refuses a symlink (the
+ * reader throws `ELOOP`), the open adds O_NOFOLLOW (the race backstop; O_NOFOLLOW is 0 on Windows, hence
+ * the lstat), and a close() failure after a good read throws LedgerIOError instead of being swallowed.
  *
  * Returns the file content as a string, or null for ENOENT (genuinely missing). Throws LedgerIOError
  * for every other condition (non-regular, oversized, IO error) so callers fail closed. Behavior for a

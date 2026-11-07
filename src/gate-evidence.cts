@@ -27,6 +27,9 @@ const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- capability-ledger.cjs is an export= CommonJS module
+import ledgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = ledgerMod;
 
 /** The evidence is there; `value` is what was read. */
 export type Found<T> = { readonly kind: 'found'; readonly value: T };
@@ -111,6 +114,28 @@ export function statEvidence(targetPath: string): Evidence<fs.Stats> {
     return evidenceFound(fs.statSync(targetPath));
   } catch (err) {
     return classifyFailure<fs.Stats>(err, targetPath);
+  }
+}
+
+/** lstat a path (a symlink is seen as a symlink) as evidence. Never throws. */
+export function lstatEvidence(targetPath: string): Evidence<fs.Stats> {
+  try {
+    return evidenceFound(fs.lstatSync(targetPath));
+  } catch (err) {
+    return classifyFailure<fs.Stats>(err, targetPath);
+  }
+}
+
+/**
+ * Read repo-controlled text through the one shared bounded reader (`readSmallRegularFile`, strict): a
+ * symlink, a non-regular file, one over `maxBytes` or a close() failure is `unreadable`; absent is `none`.
+ */
+export function readBoundedTextEvidence(filePath: string, maxBytes: number): Evidence<string> {
+  try {
+    const text = readSmallRegularFile(filePath, maxBytes, { strict: true });
+    return text === null ? evidenceNone<string>() : evidenceFound(text);
+  } catch (err) {
+    return classifyFailure<string>(err, filePath);
   }
 }
 

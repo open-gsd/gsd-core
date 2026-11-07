@@ -203,7 +203,7 @@ const CASES = [
     id: 'U5f',
     title: 'missing phase argument is a usage failure',
     args() { return []; },
-    usage: { code: 'sdk_missing_arg', message: 'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase>' },
+    usage: { code: 'sdk_missing_arg', message: 'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase> [--record]' },
   },
   {
     // #5170 (matrix row 21): a plan file that exists but cannot be read used to be read as '' and so
