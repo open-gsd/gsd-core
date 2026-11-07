@@ -187,23 +187,27 @@ cargo test    # Rust
 **5. Create first test file:**
 Follow project conventions for test location. The RED-commit gate
 (`workflows/execute-phase.md`) recognises the patterns below at any depth, repo root
-included. Note the gate's pathspec is deliberately **wider than the project types the
+included, and ignores case (`Tests/` in a SwiftPM project counts). A `*` never crosses a `/`.
+Note the gate's pathspec is deliberately **wider than the project types the
 detection step above enumerates** — it costs nothing to recognise a convention the
 onboarding flow does not yet auto-detect, and a project using one should not have its
 RED commits go unseen:
 - `*.test.*` / `*.spec.*` next to source — JS/TS and anything sharing the convention
-- `tests/` / `__tests__/` directory
+- `tests/` / `test/` / `__tests__/` directory
 - `*_test.go` — Go
-- `test_*.py` / `*_test.py` — Python (in addition to `tests/`)
+- `test_*.py` / `*_test.py` — Python (in addition to `tests/`); `test_*.py` matches the file
+  name only, so `src/test_utils/factory.py` is not a test
 - `*_test.exs` — Elixir
 - `*_spec.rb` / `*_test.rb` — Ruby
 
 **Cost of the broad pathspec (#4379).** `*.spec.*` can match a non-test file that happens to carry
 the word — `api.spec.json`, `openapi.spec.yaml` — which lets the RED gate pass on a commit touching
-only that. This is not new: the previous `**/*.spec.*` already matched those at any nested path, so
-dropping the `**/` prefix only extends the same false-positive class to the repo root. It is
-accepted rather than narrowed, because narrowing it is a behaviour change to the
-currently-supported case and not part of making other languages visible.
+only that. This is not new: the earlier `**/*.spec.*` matched those at any nested path too (#4379
+dropped the `**/` prefix, #5181 restored it as `:(glob,icase)**/`). The directory entries
+`tests/`, `test/` and `__tests__/` carry the same class: a fixture or vendored copy under
+`docs/tests/` counts as a test commit. It is accepted rather than narrowed, because narrowing
+it is a behaviour change to the currently-supported case and not part of making other languages
+visible.
 
 **Known gap — Rust inline unit tests (#4379).** Rust integration tests under `tests/` (including
 `crates/*/tests/`) match. An inline `#[test]` conventionally lives inside the implementation file, so
