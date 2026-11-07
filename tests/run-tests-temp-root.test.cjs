@@ -17,8 +17,9 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const fc = require('fast-check');
+const fc =require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -340,7 +341,15 @@ describe('#4020 — run-tests temp root', () => {
         // on win32, outside the parent's cleanup helper) is removed by the CHILD
         // after it reports the root. A child that is killed or times out before
         // that point can still leave its root behind.
+        // The child removes ONLY a fresh root it created (parent === want). An
+        // inherited root (root === want) is never removed: on win32 libuv's spawn
+        // (process.c make_program_env) re-adds TEMP, SYSTEMROOT etc. from the
+        // PARENT's environment when the env object given to spawn omits them, so
+        // a combo without TEMP still sees the parent's TEMP, which in a gsd-test
+        // run is the live outer run root. The child therefore inherits it, and
+        // deleting it would destroy the outer run's temp root.
         const ownDirs = path.dirname(a) + path.sep;
+        const parentTmp = path.resolve(os.tmpdir());
         const script = `
           const os = require('node:os');
           const path = require('node:path');
@@ -349,8 +358,9 @@ describe('#4020 — run-tests temp root', () => {
           const runner = require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'run-tests.cjs'))});
           const root = runner.setupRunTempRoot();
           process.stdout.write(JSON.stringify({ want, root }));
-          if (!root.startsWith(process.env.GSD_5688_OWN_DIRS) &&
-              path.basename(root).startsWith('gsd-test-run-')) {
+          if (path.dirname(root) === want &&
+              path.basename(root).startsWith('gsd-test-run-') &&
+              !root.startsWith(process.env.GSD_5688_OWN_DIRS)) {
             fs.rmSync(root, { recursive: true, force: true });
           }
         `;
@@ -378,12 +388,22 @@ describe('#4020 — run-tests temp root', () => {
           });
           assert.equal(r.exitCode, 0, `${JSON.stringify(combo)}: ${String(r.stderr).slice(-300)}`);
           const { want, root } = JSON.parse(r.stdout);
-          if (inherited) {
+          // The expectation follows what the child observes: a run-root basename
+          // means os.tmpdir() itself is an inherited run root (win32 libuv TEMP
+          // re-add for combos that omit TEMP).
+          const childInherits = path.basename(want).startsWith('gsd-test-run-');
+          if (process.platform !== 'win32') {
+            assert.equal(childInherits, Boolean(inherited), `unexpected inheritance for ${JSON.stringify(combo)}`);
+          }
+          if (inherited || childInherits) {
             assert.equal(root, want, `inherited root expected for ${JSON.stringify(combo)}`);
           } else {
             assert.equal(path.dirname(root), want, `parent mismatch for ${JSON.stringify(combo)}`);
           }
         }
+        // Safety: no child may have removed the parent's own temp root.
+        assert.ok(fs.existsSync(parentTmp), `parent temp root removed: ${parentTmp}`);
+        assert.ok(fs.existsSync(runRoot), `inherited run root removed: ${runRoot}`);
       });
 
       describe('linux (TMPDIR, then TMP, then TEMP)', () => {
