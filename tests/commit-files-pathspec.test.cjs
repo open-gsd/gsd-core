@@ -3268,8 +3268,8 @@ describe('commit timeout reporting (#3886)', () => {
     assert.equal(result.reason, 'commit_timeout');
   });
 
-  test('#5231: invalid git.commit_timeout_ms (0, -1, abc, 1500.5, null, ceiling+1, MAX_SAFE_INTEGER+1) falls back to 30000', () => {
-    for (const bad of [0, -1, 'abc', 1500.5, null, 3600001, Number.MAX_SAFE_INTEGER + 1]) {
+  test('#5231: invalid git.commit_timeout_ms (0, -1, abc, "60000", 1500.5, null, ceiling+1, MAX_SAFE_INTEGER+1) falls back to 30000', () => {
+    for (const bad of [0, -1, 'abc', '60000', 1500.5, null, 3600001, Number.MAX_SAFE_INTEGER + 1]) {
       writeGitConfig({ commit_timeout_ms: bad });
       const { timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
       assert.equal(timeout, 30000, JSON.stringify(bad));

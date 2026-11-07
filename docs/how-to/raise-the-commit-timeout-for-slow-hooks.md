@@ -10,7 +10,7 @@ the repo (it carries no reason code). The default is 30 seconds. This page raise
 
 A timeout reads `git commit timed out after 30s (killed mid-hook; a stale lock may remain at …)`. A hook that
 rejects the commit reads `commit_failed` with the hook's own message. Only the first is fixed by this page.
-`pr-subrepo` reports both cases as plain error messages ("<repo>: git commit timed out after Ns" versus
+`pr-subrepo` reports both cases as plain error messages ("git commit timed out after Ns in <repo> (...)" versus
 "Failed to commit in <repo>: ..."), so tell them apart by the message text.
 
 ## 2. Set the timeout
@@ -20,7 +20,7 @@ gsd-tools config-set git.commit_timeout_ms 120000
 ```
 
 The value is milliseconds, an integer from `1` to `3600000` (one hour). `config-set` refuses anything else.
-A hand-edited `.planning/config.json` that holds an invalid value (zero, negative, fractional, non-numeric, or
+A hand-edited `.planning/config.json` that holds an invalid value (zero, negative, fractional, non-numeric (including a quoted number such as `"60000"`), or
 above one hour) is ignored and the 30 second default applies, so a bad edit never removes the bound.
 
 ## 3. Clean up after a past timeout
