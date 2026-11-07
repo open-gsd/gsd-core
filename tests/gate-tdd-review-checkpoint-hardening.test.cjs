@@ -11,7 +11,7 @@
  *       `03.1-02` still matches its own commits.
  *   #5354 the seal (`TDD-REVIEW-SEAL.json`, `--record`), the `NotEvaluable` row for a squashed-away plan,
  *       the SUMMARY task-commit heuristic, hostile seal files, write-path faults and the `ship.md` seal step.
- *       The owners it uses are tested in their own files: `commitReachability` / `isFullSha` in
+ *       The owners it uses are tested in their own files: `commitReachability` / `commitIsGone` in gate-tdd-review-seal.test.cjs, `isFullSha` in
  *       gate-evaluation-scope.test.cjs, `readSmallRegularFile` strict in capability-ledger.test.cjs and
  *       `isPlainObject` in gate-evidence.test.cjs.
  */
@@ -345,15 +345,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     const row = run(dir).payload.rows[0];
     assert.equal(row.status, 'FAIL');
     assert.deepEqual(row.missing, ['RED', 'GREEN']);
-  });
-
-  test('commitIsGone reads a reachability answer as squashed only when the commit is gone', () => {
-    const { commitIsGone } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
-    assert.equal(commitIsGone('reachable', () => true), false);
-    assert.equal(commitIsGone('unreachable', () => false), true);
-    assert.equal(commitIsGone('missing', () => true), true);
-    assert.equal(commitIsGone('missing', () => false), false);
-    assert.equal(commitIsGone(null, () => true), false);
   });
 
   // Readable but unverifiable seals (fixtures/adversarial/tdd-review-seal/readable/): the gate credits only what it can check.
@@ -1006,26 +997,5 @@ describe('#5354 tdd review checkpoint seal', () => {
     fs.cpSync(path.join(dir, '.planning'), path.join(bare, '.planning'), { recursive: true });
     dirs.push(bare);
     assert.equal(run(bare).payload.rows[0].status, 'FAIL');
-  });
-});
-
-describe('#5354 seal module: commitReachability', () => {
-  const { commitReachability } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
-
-  test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
-    const dir = createTempGitProject('gate-5354-reach-');
-    try {
-      const base = git(dir, 'rev-parse', 'HEAD').trim();
-      git(dir, 'checkout', '-q', '-b', 'side');
-      git(dir, 'commit', '-q', '--allow-empty', '-m', 'side');
-      const side = git(dir, 'rev-parse', 'HEAD').trim();
-      git(dir, 'checkout', '-q', '-');
-      assert.equal(commitReachability(dir, base, 'HEAD'), 'reachable');
-      assert.equal(commitReachability(dir, side, 'HEAD'), 'unreachable');
-      assert.equal(commitReachability(dir, 'f'.repeat(40), 'HEAD'), 'missing');
-      assert.equal(commitReachability(dir, '--all', 'HEAD'), null);
-    } finally {
-      cleanup(dir);
-    }
   });
 });
