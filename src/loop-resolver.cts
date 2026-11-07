@@ -498,6 +498,8 @@ interface ResolvedActiveHooks {
   point: string;
   activeHooks: ActiveHook[];
   warnings: string[];
+  /** #5482: caps whose gate at `point` was dropped because they failed to load (fail-open, ADR-1244 D2). */
+  loadFailedCapIds: string[];
 }
 
 /**
@@ -582,9 +584,11 @@ function resolveActiveHooksForPoint(
   // stderr warning is the channel that is actually surfaced. (See #2009 review.)
   const overlayMeta = (registry as { _overlay?: { blockedGates?: Array<{ point: string; capId: string; reason: string }> } })['_overlay'];
   const loadFailWarnings: string[] = [];
+  const loadFailedCapIds: string[] = [];
   if (overlayMeta && Array.isArray(overlayMeta.blockedGates)) {
     for (const blocked of overlayMeta.blockedGates) {
       if (blocked.point !== point) continue;
+      loadFailedCapIds.push(String(blocked.capId));
       // Security (#2009 review): capId/reason come from a third-party manifest or
       // directory name. Validate capId before embedding it in the runnable
       // remediation command; withhold it (no runnable command) if it is not a
@@ -612,7 +616,7 @@ function resolveActiveHooksForPoint(
   // (in addition to the stderr emission above, which is the channel host workflows actually see).
   const combinedWarnings = [...(state.warnings || []), ...loadFailWarnings];
 
-  return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings };
+  return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings, loadFailedCapIds };
 }
 
 // ─── #5105 R2: post-fingerprint hook gating ────────────────────────────────
@@ -734,7 +738,7 @@ function cmdLoopRenderHooks(
       coreError(`--after-fingerprint phase directory not found or unreadable: ${afterFingerprintDir} (${msg})`);
       return;
     }
-    result = { point: result.point, activeHooks: partition.activeHooks, warnings: result.warnings };
+    result = { ...result, activeHooks: partition.activeHooks };
     skippedHooks = partition.skippedHooks;
   }
 

@@ -33,7 +33,7 @@ the project root as its cwd and the inherited process environment.
 node "${GSD_CAP_DIR}/checks/pre-ship.js"
 ```
 
-You may interpolate three loop-context placeholders directly into the command:
+The command can use three loop-context placeholders. Each is also an environment variable of the same name, so write them double-quoted (`"${PHASE_DIR}"`): an unquoted value splits at spaces.
 
 | Placeholder | Meaning |
 |---|---|
@@ -124,6 +124,14 @@ dispatches the evaluator automatically — no further wiring needed.
 ```bash
 gsd_run loop render-hooks ship:pre --raw
 ```
+
+A blocking `ship:pre` predicate gate (except `security` and `broken-windows`,
+which `ship.md` enforces itself) also guards the milestone close:
+`milestone complete --confirm` re-checks it once per milestone phase (with
+`${PHASE_NUMBER}`/`${PHASE_DIR}` set to that phase) and refuses while it
+blocks; `--force` does not bypass it, and `--dry-run` runs it too to list what
+would refuse. Your command therefore runs again at close, once per phase, so
+keep it read-only and idempotent.
 
 ## Gotchas
 

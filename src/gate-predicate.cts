@@ -15,8 +15,8 @@
  *   --predicate '<json>' [--phase-dir <dir>] [--phase-number <n>] [--phase-req-ids <ids>]
  *
  * The subprocess runs at the runtime project root (`projectDir`), inheriting the process env.
- * Interpolation placeholders ${PHASE_NUMBER}/${PHASE_DIR}/${PHASE_REQ_IDS} are substituted from the
- * flags.
+ * The flags become the environment values PHASE_NUMBER, PHASE_DIR and PHASE_REQ_IDS of the gate shell,
+ * so a command expands them as "${PHASE_DIR}" (double-quoted); see gate-predicate-evaluator.cts.
  */
 
 import path from 'node:path';
@@ -37,8 +37,8 @@ import { execTool, platformReadSync } from './shell-command-projection.cjs';
 /**
  * Production subprocess binding for the gate-predicate evaluator. Wraps the
  * bounded `execTool` seam (shell-command-projection) as a `runBoundedShell`
- * the pure evaluator consumes. `sh -c` runs the interpolated command; the
- * subprocess inherits the process env and is killed (SIGTERM) on timeout.
+ * the pure evaluator consumes. `sh -c` runs the command and expands `${PHASE_*}` from `env`; the
+ * subprocess inherits the process env (ADR-2008) plus those three values and is killed (SIGTERM) on timeout.
  *
  * `timedOut` is derived from the kill signal: spawnSync sets `signal: 'SIGTERM'`
  * when the `timeout` fires, distinct from a normal non-zero exit code. A command
@@ -48,14 +48,14 @@ import { execTool, platformReadSync } from './shell-command-projection.cjs';
  */
 export function buildPredicateDeps() {
   return {
-    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): {
+    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): {
       exitCode: number | null;
       stdout: string;
       stderr: string;
       signal: NodeJS.Signals | null;
       timedOut: boolean;
     } {
-      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, timeout: opts.timeoutMs });
+      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, env: opts.env, timeout: opts.timeoutMs });
       return {
         exitCode: r.exitCode,
         stdout: r.stdout,

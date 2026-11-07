@@ -26,6 +26,8 @@ const {
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
+  INTERPOLATION_VAR_NAMES,
+  GATE_COMMAND_REASON,
 } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
 
 /**
@@ -163,20 +165,68 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
 // ─── interpolation ────────────────────────────────────────────────────────────
 
 describe('evaluatePredicate — interpolation', () => {
-  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} are substituted', () => {
+  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} reach the shell as environment values; inert values are also pasted', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
       { kind: 'command-exit-zero', command: 'check ${PHASE_DIR} ${PHASE_NUMBER} ${PHASE_REQ_IDS}' },
       baseCtx,
       { runBoundedShell: shell.run },
     );
-    assert.equal(
-      shell.calls[0].command,
-      'check /proj/.planning/phases/03-x 03 R-1',
-    );
+    assert.equal(shell.calls[0].command, 'check /proj/.planning/phases/03-x 03 R-1');
+    assert.deepEqual(shell.calls[0].env, {
+      PHASE_DIR: '/proj/.planning/phases/03-x',
+      PHASE_NUMBER: '03',
+      PHASE_REQ_IDS: 'R-1',
+    });
   });
 
-  test('undefined context var => empty string (no leftover placeholder)', () => {
+  test('a value with a shell-significant character is never pasted: the shell expands it from the environment', () => {
+    const shell = fakeShell({ exitCode: 0 });
+    const phaseDir = '/proj/.planning/phases/01-$(touch pwned) x';
+    evaluatePredicate(
+      { kind: 'command-exit-zero', command: 'check "${PHASE_DIR}" ${PHASE_NUMBER}' },
+      { ...baseCtx, phaseDir },
+      { runBoundedShell: shell.run },
+    );
+    assert.equal(shell.calls[0].command, 'check "${PHASE_DIR}" 03');
+    assert.equal(shell.calls[0].env.PHASE_DIR, phaseDir);
+  });
+
+  test('every placeholder single-quoted with a non-inert value throws; inert or double-quoted does not', () => {
+    for (const name of INTERPOLATION_VAR_NAMES) {
+      const ctx = { cwd: '/proj', phaseNumber: '1 x', phaseDir: '/a b', phaseReqIds: '(' };
+      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+      assert.throws(() => run(`test -n '\${${name}}'`), { reason: GATE_COMMAND_REASON.SINGLE_QUOTED_NON_INERT });
+      assert.doesNotThrow(() => run(`test -n "\${${name}}"`));
+    }
+  });
+
+  describe('quote states: an apostrophe outside a single-quoted span pairs with nothing', () => {
+    const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a b', phaseReqIds: '' };
+    const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+    const quoted = { reason: GATE_COMMAND_REASON.SINGLE_QUOTED_NON_INERT };
+
+    test('a single-quoted placeholder after an apostrophe in double quotes still throws', () => {
+      assert.throws(() => run(`echo "it's"; test ! -f '\${PHASE_DIR}/x'`), quoted);
+    });
+    test('a double-quoted placeholder between an apostrophe and a later single-quoted word does not throw', () => {
+      assert.doesNotThrow(() => run(`echo "it's"; test -f "\${PHASE_DIR}/x"; echo 'y'`));
+    });
+    test('a backslash-escaped apostrophe opens no single-quote span', () => {
+      assert.doesNotThrow(() => run(`echo \\' "\${PHASE_DIR}" \\'`));
+    });
+    test('a single-quoted inert value is pasted and a dotted dashed path counts as inert', () => {
+      const shell = fakeShell({ exitCode: 0 });
+      evaluatePredicate({ kind: 'command-exit-zero', command: `test '\${PHASE_DIR}'` }, { ...ctx, phaseDir: '/p/.planning/phases/01-a.b' }, { runBoundedShell: shell.run });
+      assert.equal(shell.calls[0].command, "test '/p/.planning/phases/01-a.b'");
+    });
+    test('a value with a semicolon is non-inert inside single quotes', () => {
+      const semi = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { ...ctx, phaseReqIds: 'R-1;R-2' }, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+      assert.throws(() => semi("test '${PHASE_REQ_IDS}'"), quoted);
+    });
+  });
+
+  test('undefined context var => empty string, in the text and in the environment', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
       { kind: 'command-exit-zero', command: 'check ${PHASE_REQ_IDS}' },
@@ -184,6 +234,7 @@ describe('evaluatePredicate — interpolation', () => {
       { runBoundedShell: shell.run },
     );
     assert.equal(shell.calls[0].command, 'check ');
+    assert.deepEqual(shell.calls[0].env, { PHASE_DIR: '', PHASE_NUMBER: '', PHASE_REQ_IDS: '' });
   });
 
   test('foreign ${HOME} placeholder left untouched (shell interprets)', () => {
@@ -334,19 +385,40 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
     );
   });
 
-  test('every placeholder is fully replaced (no leftover ${PHASE_*})', () => {
-    fc.assert(
-      fc.property(fc.string({ maxLength: 20 }), (noise) => {
-        const cmd = `${noise} ${noise}`;
-        const shell = fakeShell({ exitCode: 0 });
-        evaluatePredicate(
-          { kind: 'command-exit-zero', command: `\${PHASE_DIR}${cmd}\${PHASE_NUMBER}` },
-          baseCtx,
-          { runBoundedShell: shell.run },
-        );
-        assert.doesNotMatch(shell.calls[0].command, /\$\{PHASE_(DIR|NUMBER|REQ_IDS)\}/);
-      }),
-      { numRuns: 100 },
-    );
-  });
+  // The ctx field behind each placeholder: one loop covers every name, so a new placeholder cannot skip the property.
+  const CTX_FIELD = { PHASE_NUMBER: 'phaseNumber', PHASE_DIR: 'phaseDir', PHASE_REQ_IDS: 'phaseReqIds' };
+
+  // Two literal character sets, not the production regex: widening the production set makes the hostile property fail.
+  const INERT = [...'abcXYZ019._/@+=:,-'];
+  const HOSTILE = [...' ;$`"\'\\&|<>(){}[]*?!#~\n\t'];
+
+  for (const name of INTERPOLATION_VAR_NAMES) {
+    const run = (value) => {
+      const shell = fakeShell({ exitCode: 0 });
+      evaluatePredicate(
+        { kind: 'command-exit-zero', command: `x "\${${name}}"` },
+        { ...baseCtx, [CTX_FIELD[name]]: value },
+        { runBoundedShell: shell.run },
+      );
+      assert.equal(shell.calls[0].env[name], value);
+      return shell.calls[0].command;
+    };
+    test(`${name}: a value of inert characters is pasted`, () => {
+      fc.assert(
+        fc.property(fc.array(fc.constantFrom(...INERT), { maxLength: 20 }), (chars) => {
+          const value = chars.join('');
+          assert.equal(run(value), `x "${value}"`);
+        }),
+        { numRuns: 100 },
+      );
+    });
+    test(`${name}: a value with any hostile character stays \${${name}} for sh; the env holds the value`, () => {
+      fc.assert(
+        fc.property(fc.array(fc.constantFrom(...INERT), { maxLength: 8 }), fc.constantFrom(...HOSTILE), fc.array(fc.constantFrom(...INERT), { maxLength: 8 }), (pre, bad, post) => {
+          assert.equal(run(pre.join('') + bad + post.join('')), `x "\${${name}}"`);
+        }),
+        { numRuns: 100 },
+      );
+    });
+  }
 });
