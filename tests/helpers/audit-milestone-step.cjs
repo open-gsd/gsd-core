@@ -9,6 +9,7 @@ const { splitLines } = require('../../gsd-core/bin/lib/text-lines.cjs');
 const AUDIT_MD = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'audit-milestone.md');
 
 function auditMilestoneMd() {
+  // allow-test-rule: source-text-is-the-product (#5482)
   return fs.readFileSync(AUDIT_MD, 'utf-8');
 }
 
@@ -26,7 +27,10 @@ function openWorkStepFields() {
 // The lines between <success_criteria> and </success_criteria> of the workflow.
 function successCriteria() {
   const lines = splitLines(auditMilestoneMd());
-  return lines.slice(lines.indexOf('<success_criteria>') + 1, lines.indexOf('</success_criteria>'));
+  const open = lines.indexOf('<success_criteria>');
+  const close = lines.indexOf('</success_criteria>');
+  if (open < 0 || close < open) throw new Error('audit-milestone.md lacks a <success_criteria> block');
+  return lines.slice(open + 1, close);
 }
 
 module.exports = { auditMilestoneMd, openWorkStep, openWorkStepFields, successCriteria };

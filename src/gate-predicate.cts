@@ -15,8 +15,8 @@
  *   --predicate '<json>' [--phase-dir <dir>] [--phase-number <n>] [--phase-req-ids <ids>]
  *
  * The subprocess runs at the runtime project root (`projectDir`), inheriting the process env.
- * Interpolation placeholders ${PHASE_NUMBER}/${PHASE_DIR}/${PHASE_REQ_IDS} are substituted from the
- * flags.
+ * The flags become the environment values PHASE_NUMBER, PHASE_DIR and PHASE_REQ_IDS of the gate shell,
+ * so a command expands them as "${PHASE_DIR}" (double-quoted); see gate-predicate-evaluator.cts.
  */
 
 import path from 'node:path';

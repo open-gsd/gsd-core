@@ -79,7 +79,7 @@ interface PredicateResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const INTERPOLATION_RE = /\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/g;
+const INTERPOLATION_RE = new RegExp(`\\$\\{(${INTERPOLATION_VAR_NAMES.join('|')})\\}`, 'g');
 // Characters that no shell treats as syntax, bare or quoted. A value made of these only is safe as command text.
 const SHELL_INERT_RE = /^[A-Za-z0-9._/@+=:,-]*$/;
 
@@ -291,4 +291,5 @@ export = {
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
   INTERPOLATION_VAR_NAMES,
+  SHELL_INERT_RE,
 };

@@ -18,6 +18,7 @@ const path = require('node:path');
 
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { auditMilestoneMd, openWorkStep, openWorkStepFields, successCriteria } = require('./helpers/audit-milestone-step.cjs');
 
 // audit-milestone.md is shipped workflow text — the bytes ARE what the
@@ -48,8 +49,8 @@ test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passe
   assert.match(step, /milestone complete \{version\} --dry-run/);
   assert.match(step, /would_refuse/);
   assert.match(step, /gaps_found/);
-  // A dry-run that fails for a reason other than a gate (unstarted phase, truncated window) leaves the audit result alone.
-  assert.match(step, /fails for any other reason .*leave the audit result as it was/);
+  // A dry-run that fails for a reason other than a gate (unstarted phase, truncated window) is a gap, never a silent skip.
+  assert.match(step, /fails for any other reason .*record a gap "open work not checked: \{error\}" and do not report `passed`/);
 });
 
 // #5482: the entries step 5.6 reports need a slot in the report: the step-6 YAML, the gaps_found
@@ -68,7 +69,7 @@ test('#5482: open-work entries have a slot in the YAML, the gaps_found output an
   const section = collectSection(md, (h) => h.text === 'Open Work');
   assert.ok(section, '#5482: the gaps_found output needs an Open Work section');
   for (const f of named) {
-    assert.match(yaml.join('\n'), new RegExp(`\\b${f}:`), `YAML open_work names ${f}`);
+    assert.match(yaml.join('\n'), new RegExp(`\\b${escapeRegex(f)}:`), `YAML open_work names ${f}`);
     assert.ok(section.body.includes(`{${f}}`), `Open Work section names {${f}}`);
   }
   // gate_message and details are untrusted command output: the report line shows them inside a code fence.
@@ -82,6 +83,7 @@ test('#5482: open-work entries have a slot in the YAML, the gaps_found output an
 // #5482: a dry-run that evaluated no gate (gate_warnings) must not read as clean, in the audit and in the close preview.
 test('#5482: audit step 5.6 and the close preview both act on a non-empty gate_warnings', () => {
   assert.match(openWorkStep(), /`gate_warnings` is non-empty/);
+  // allow-test-rule: source-text-is-the-product (#5482)
   const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
   const preview = splitLines(md).find((l) => l.startsWith('Read `would_refuse` from the JSON'));
   assert.ok(preview, 'the close preview must read would_refuse');

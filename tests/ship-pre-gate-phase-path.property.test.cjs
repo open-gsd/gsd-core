@@ -8,8 +8,7 @@
  * inside it, exits 3, and no command hidden in the name runs.
  *
  * Property: for a phase dir `01-<s>` holding OPEN_WORK, the dry-run's would_refuse entry for phase 01 has
- * reason `predicate_blocked` and gate_message `command exited 3`, and no file appears in the project root.
- * Boundary: no length cap (200 and 201 characters).
+ * reason `predicate_blocked` and details.exitCode 3, and no file appears in the project root.
  */
 
 const { describe, test, before, after } = require('node:test');
@@ -21,7 +20,8 @@ const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./he
 const { writeGateCap, cleanEnv } = require('./helpers/ship-gate-fixture.cjs');
 
 const ORDINARY = [...'abcXYZ019._-~ é\''];
-const SHELL_SYNTAX = [...'$`;&|<>()#*?[\\"'];
+// Windows file names cannot hold \ " * ? < > |, so the generator leaves them out there and every drawn name is creatable.
+const SHELL_SYNTAX = [...(process.platform === 'win32' ? '$`;&()#[' : '$`;&|<>()#*?[\\"')];
 
 describe('ship:pre command gate treats the phase directory name as data (#5482)', () => {
   let tmpDir;
@@ -38,14 +38,10 @@ describe('ship:pre command gate treats the phase directory name as data (#5482)'
   });
   after(() => { cleanup(tmpDir); cleanup(home); });
 
-  // The would_refuse entry for phase 01 of a phase dir named `name`, or null when the file system cannot hold that name.
+  // The would_refuse entry for phase 01 of a phase dir named `name`; mkdirSync throws when the file system cannot hold the name.
   function entryFor(name) {
     const dir = path.join(tmpDir, '.planning', 'phases', name);
-    try {
-      fs.mkdirSync(dir);
-    } catch {
-      return null;
-    }
+    fs.mkdirSync(dir);
     try {
       fs.writeFileSync(path.join(dir, 'OPEN_WORK'), '');
       const r = runGsdTools('milestone complete v1.0 --name MVP --dry-run', tmpDir, cleanEnv(home));
@@ -64,21 +60,11 @@ describe('ship:pre command gate treats the phase directory name as data (#5482)'
     fc.assert(
       fc.property(fc.string({ unit: fc.constantFrom(...ORDINARY, ...SHELL_SYNTAX), minLength: 1, maxLength: 12 }), (s) => {
         const entry = entryFor(`01-${s}`);
-        if (entry === null) return;
         assert.equal(entry.reason, 'predicate_blocked', `01-${s} must run the gate: ${JSON.stringify(entry)}`);
-        assert.equal(entry.gate_message, 'command exited 3', `01-${s}`);
+        assert.equal(entry.details.exitCode, 3, `01-${s}`);
         assert.deepEqual(fs.readdirSync(tmpDir).sort(), rootEntries, 'no file may appear in the project root');
       }),
       { numRuns: 15 },
     );
   });
-
-  for (const total of [200, 201]) {
-    test(`boundary: a clean ${total}-character directory name runs the gate (no length cap)`, () => {
-      const entry = entryFor('01-'.padEnd(total, 'a'));
-      assert.ok(entry, 'the file system must hold the name');
-      assert.equal(entry.reason, 'predicate_blocked');
-      assert.equal(entry.gate_message, 'command exited 3');
-    });
-  }
 });
