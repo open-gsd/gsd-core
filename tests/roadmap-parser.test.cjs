@@ -4295,16 +4295,15 @@ describe('roadmap-parser: classifyMilestoneScalar (#5038)', () => {
   const NULL_SPELLINGS = ['null', 'Null', 'NULL', '~'];
   const pad = fc.string({ unit: fc.constantFrom(' ', '\t'), maxLength: 3 });
 
-  test('every null spelling, with optional quotes and a trailing comment, is an explicit null', () => {
+  // The classifier takes an already DECODED scalar (#5726); quotes and comments
+  // are decoded upstream by readStateMilestoneScalar and covered below.
+  test('every decoded null spelling, with surrounding whitespace, is an explicit null', () => {
     fc.assert(fc.property(
       fc.constantFrom(...NULL_SPELLINGS),
-      fc.constantFrom('', "'", '"'),
-      fc.option(fc.string({ unit: fc.constantFrom('a', 'b', ' ', '#', '1'), maxLength: 8 }), { nil: undefined }),
       pad,
       pad,
-      (spelling, quote, comment, lead, trail) => {
-        const raw = `${lead}${quote}${spelling}${quote}${comment === undefined ? '' : ` #${comment}`}${trail}`;
-        assert.deepStrictEqual(classifyMilestoneScalar(raw), { explicitNull: true, version: null });
+      (spelling, lead, trail) => {
+        assert.deepStrictEqual(classifyMilestoneScalar(`${lead}${spelling}${trail}`), { explicitNull: true, version: null });
       },
     ));
   });
@@ -4323,9 +4322,10 @@ describe('roadmap-parser: classifyMilestoneScalar (#5038)', () => {
     ));
   });
 
-  test('`#` boundary: `null#x` is a version, `null #x` is null', () => {
+  test('a decoded string that merely contains `#` or a quote is a literal version', () => {
     assert.deepStrictEqual(classifyMilestoneScalar('null#x'), { explicitNull: false, version: 'null#x' });
-    assert.deepStrictEqual(classifyMilestoneScalar('null #x'), { explicitNull: true, version: null });
+    assert.deepStrictEqual(classifyMilestoneScalar('null # x'), { explicitNull: false, version: 'null # x' });
+    assert.deepStrictEqual(classifyMilestoneScalar('"null"'), { explicitNull: false, version: '"null"' });
   });
 
   test('blank or non-string input is absent, not null', () => {
@@ -4412,6 +4412,43 @@ describe('#4998 regression: readStateMilestoneScalar', () => {
   test('a trailing YAML comment is not part of the value', () => {
     assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0 # note\n---\n'), 'v1.0');
     assert.strictEqual(readStateMilestoneScalar('---\nmilestone: "v1.0" # note\n---\n'), 'v1.0');
+  });
+
+  // #5726: raw on-disk spellings decode through the FAILSAFE loader on BOTH the
+  // frontmatter path and the no-frontmatter line read, then classify.
+  test('raw null spellings (quotes, comments) decode then classify, on both paths', () => {
+    const { classifyMilestoneScalar } = roadmapParser;
+    const cases = [
+      ['null', 'null', true],
+      ['Null', 'Null', true],
+      ['NULL', 'NULL', true],
+      ['~', '~', true],
+      ['"null"', 'null', true],
+      ["'~'", '~', true],
+      ["'Null'", 'Null', true],
+      ['"NULL"', 'NULL', true],
+      ['null # c', 'null', true],
+      ['~ # c', '~', true],
+      ['"null" # c', 'null', true],
+      ['null #x', 'null', true],
+      ['null#x', 'null#x', false],
+      ['"null#x"', 'null#x', false],
+      ['"null # x"', 'null # x', false],
+    ];
+    for (const [onDisk, decoded, isNull] of cases) {
+      for (const state of [`---\nmilestone: ${onDisk}\n---\n# S\n`, `# S\nmilestone: ${onDisk}\n`]) {
+        const scalar = readStateMilestoneScalar(state);
+        assert.strictEqual(scalar, decoded, `decoded ${onDisk}`);
+        assert.deepStrictEqual(
+          classifyMilestoneScalar(scalar),
+          isNull ? { explicitNull: true, version: null } : { explicitNull: false, version: decoded },
+          `classified ${onDisk}`,
+        );
+      }
+    }
+    for (const state of ['---\nmilestone: ""\n---\n', '# S\nmilestone: ""\n']) {
+      assert.deepStrictEqual(classifyMilestoneScalar(readStateMilestoneScalar(state)), { explicitNull: false, version: null });
+    }
   });
 
   // The writer's own escaper (escapeDoubleQuotedScalar) is the encoding the
