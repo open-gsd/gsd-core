@@ -63,8 +63,8 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or (squash/rebase merge) $TARGET holds TIP's
 # content for every path TIP changed since it forked from $TARGET, or (once $TARGET has since
 # edited those paths) GitHub reports a PR for $PR_BRANCH merged into the target whose head was TIP.
-# _to CMD... — CMD capped at 10s where the host has a timeout binary, so a hung git cannot stall the run.
-_to() { if command -v timeout >/dev/null 2>&1; then timeout 10 "$@"; else "$@"; fi; }
+# _to CMD... — CMD capped at 10s by gsd_run run-with-timeout (no timeout binary needed), so a hung git cannot stall the run.
+_to() { gsd_run run-with-timeout 10 -- "$@"; }
 pr_merged() {
   local _sha _fork _top _g
   _top=$(git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
@@ -94,11 +94,12 @@ PENDING_VERDICT=
 drop_pending() { git update-ref -d "$PENDING_REF"; git update-ref -d "$PR_TIP_REF" 2>/dev/null; }
 DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"
 if [ -n "$PENDING_TIP" ]; then
-  # The recorded built tip must itself be merged. The leftover branch's verdict stands in for it only
-  # while that branch still contains the built tip (amended or extended since); a -pr reset to the target says nothing about the build.
+  # The recorded built tip must itself be merged. The leftover branch's verdict stands in for it only when that
+  # proof fails and the branch still contains the built tip (amended since); a -pr reset to the target says nothing about the build.
   PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
   BUILT_MERGED=
-  if [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; else pr_merged "$PR_TIP_REF" && BUILT_MERGED=1; fi
+  if pr_merged "$PR_TIP_REF"; then BUILT_MERGED=1
+  elif [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; fi
   # The verdict is only recorded here; settle_pending applies it once no refusal can follow.
   if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
   elif [ -z "$PR_BRANCH_TIP" ]; then PENDING_VERDICT=drop
@@ -125,21 +126,21 @@ if [ -n "$MARKER_TIP" ]; then
   else
     # History rewritten: the newest commit here with the same patch as a published one is the base, but only
     # when every published commit kept a matching patch (a conflict-resolved one would be replayed) and no
-    # unpublished commit sits below that base (reordered, it would be skipped for good).
+    # unpublished commit sits below that base (reordered, it would be skipped for good). A published commit
+    # whose patch $TARGET already holds (a rebase merge, then `git rebase`) matches that copy, so nothing is
+    # left to replay and $TARGET is the base without a warning.
     REBASED_TIP=
-    [ "$(git log --no-merges --cherry-mark --left-only --format=%m "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null | grep -c '^<')" = 0 ] &&
-      REBASED_TIP=$(git log --topo-order --no-merges --cherry-mark --right-only --format='%m %H' "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null | awk '$1=="="&&!e{e=$2} $1==">"&&e{b=1} END{if(e&&!b)print e}')
+    ALL_IN_TARGET=
+    PUBLISHED=$(git log --no-merges --cherry-mark --left-only --format=%m "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null)
+    if [ -n "$PUBLISHED" ] && [ "$(printf '%s\n' "$PUBLISHED" | grep -c '^<')" = 0 ]; then
+      HERE=$(git log --topo-order --no-merges --cherry-mark --right-only --format='%m %H' "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null)
+      REBASED_TIP=$(printf '%s\n' "$HERE" | awk '$1=="="&&!e{e=$2} $1==">"&&e{b=1} END{if(e&&!b)print e}')
+      printf '%s\n' "$HERE" | grep -q '^=' || ALL_IN_TARGET=1
+    fi
     if [ -n "$REBASED_TIP" ]; then BASE="$REBASED_TIP"
-    else echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2; fi
+    elif [ -z "$ALL_IN_TARGET" ]; then echo "WARNING: $MARKER_REF is not an ancestor of $CURRENT_BRANCH and its patches do not all match a commit here (history rewritten); using $TARGET as base. Re-anchor: git update-ref $(shq "$MARKER_REF") <rebased commit equivalent to last published tip>" >&2; fi
   fi
 fi
-AHEAD=$(git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
-if [ "$AHEAD" = "0" ]; then
-  echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
-  settle_pending
-  exit 0
-fi
-
 # The filter below removes files from the index AND the working tree before each
 # commit lands, and this command switches branches underneath the user's own
 # checkout. An uncommitted edit to a tracked file would be destroyed by that, and
@@ -158,7 +159,7 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   if [ -z "$PR_BRANCH_MERGED" ]; then echo "$PR_BRANCH exists and is not merged into $TARGET. Choose one, then re-run:" >&2
   else echo "$PR_BRANCH is merged into $TARGET but no longer holds the pending build $PENDING_TIP. Choose one, then re-run:" >&2; fi
   if [ "$PENDING_VERDICT" != promote ] && git rev-parse -q --verify "$PENDING_REF" >/dev/null; then
-    echo "  merged by squash/rebase: git update-ref $(shq "$MARKER_REF") \$(git rev-parse $(shq "$PENDING_REF")) && git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
+    echo "  published (re-anchor): git update-ref $(shq "$MARKER_REF") \$(git rev-parse $(shq "$PENDING_REF")) && git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
     echo "  discard: git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
   else
     echo "  discard: git branch -D $(shq "$PR_BRANCH")" >&2
@@ -166,6 +167,11 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   exit 1
 fi
 settle_pending
+AHEAD=$(git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
+if [ "$AHEAD" = "0" ]; then
+  echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
+  exit 0
+fi
 ```
 
 Display:
@@ -463,7 +469,7 @@ Mixed planning commits: {N} ({included — structural + transient/other, plannin
 <step name="create_pr_branch">
 ```bash
 # Create PR branch from target. A leftover branch here is merged (an unmerged one was refused in the preconditions); -B resets it.
-git checkout -q -B "$PR_BRANCH" "$TARGET" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
+git checkout -q --no-track -B "$PR_BRANCH" "$TARGET" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
 ```
 
 Cherry-pick the included commits, in order, filtering `$FILTER_PATHS` out of each one.
