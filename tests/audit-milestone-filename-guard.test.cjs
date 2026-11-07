@@ -83,7 +83,6 @@ test('#5482: open-work entries have a slot in the YAML, the gaps_found output an
 // #5482: a dry-run that evaluated no gate (gate_warnings) must not read as clean, in the audit and in the close preview.
 test('#5482: audit step 5.6 and the close preview both act on a non-empty gate_warnings', () => {
   assert.match(openWorkStep(), /`gate_warnings` is non-empty/);
-  // allow-test-rule: source-text-is-the-product (#5482)
   const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
   const preview = splitLines(md).find((l) => l.startsWith('Read `would_refuse` from the JSON'));
   assert.ok(preview, 'the close preview must read would_refuse');

@@ -1521,7 +1521,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G11b ship.md step 6 hand-enforces exactly security and broken-windows, the two caps the engine skips (G11)', () => {
-    // allow-test-rule: source-text-is-the-product (#5482)
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf-8');
     const named = [...ship.matchAll(/capId == "([a-z-]{1,40})"/g)].map((m) => m[1]).sort();
     assert.deepEqual(named, ['broken-windows', 'security']);
@@ -1740,7 +1739,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G28 the workflow previews the close and stops on would_refuse before PROJECT.md, tags or archive', () => {
-    // allow-test-rule: source-text-is-the-product (#5482)
     const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
     const lines = splitLines(md);
     const pre = lines.findIndex((l) => /milestone\.complete "v\[X\.Y\]" --dry-run(?!.*--release-map)/.test(l));
@@ -1752,7 +1750,6 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G29 the refusal the workflow matches is the one the command prints', () => {
-    // allow-test-rule: source-text-is-the-product (#5482)
     const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
     const para = splitLines(md).find((l) => l.includes('milestone complete refused'));
     assert.ok(para, 'the close step must describe the refusal');
