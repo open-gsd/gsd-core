@@ -58,7 +58,8 @@
 //   input redirect targets (`<`, `N<`) are always checked; the command word is
 //   located past wrapper prefixes AND their own options (`sudo -u U`,
 //   `env -i VAR=x`, `timeout -s KILL 5`, `nice -n 5`, `stdbuf -oL`, `exec`;
-//   see WRAPPERS, #5627); a closed set of
+//   see WRAPPERS, #5627) and inside an `env -S '…'` string, split by env's own
+//   rules (#5514); a closed set of
 //   NON-READING commands (test/[/ls/stat/rm/touch/echo/…) exempts that
 //   segment's operands — `[ -f .env ]` and `ls .env*` are existence checks
 //   GSD's own agents run — while `cp`/`mv`/`ln`/`git` are deliberately NOT
@@ -88,17 +89,36 @@
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
-//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`), shell globs
+//   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`, and a `${VAR}`
+//   inside an `env -S` string that is set, `Z=claude env -S '${Z} …'`: the
+//   string is read with each `${VAR}` kept as written and with it empty, as
+//   env expands an unset name), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
-//   the option's value). The promise is "no looser than the retired rules
+//   NON-gitignored `.env`, a wrapper (or wrapper option taking a
+//   separate value) the WRAPPERS table does not list, and a wrapper in the
+//   sub-command of `xargs`, which is not walked through that table, so an
+//   `env -S` string or a shell script behind it is not read (`xargs env -S
+//   'cat .env'`, `xargs sudo sh -c 'cat .env'`; the sub-command's own operands
+//   are still checked). A `find -exec` sub-command is not resolved as a command
+//   either, so its shell script or `env -S` string is not read (`find . -exec
+//   sh -c 'cat .env' \;`); its words are still checked as operands. `env -S`
+//   strings are
+//   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
+//   backslash before a blank is that blank) and uutils env's (a
+//   backslash-newline removed, a comment ended by a newline), and read as
+//   before #5514, skipped as the option's value; any reading's hit denies.
+//   Each reading applies one env's rules at every level, so a string that one
+//   env splits into a command running a different env (BSD env invoking a
+//   uutils env by path) is not read by the mix of the two.
+//   The promise is "no looser than the retired rules
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
-//   scanned partially or waved through. (#4639 adds one more, by design: the
+//   scanned partially or waved through, and so are `env -S` strings nested
+//   more than MAX_NESTING_DEPTH deep (`split-string-too-deep`), whose command
+//   is not read. (#4639 adds one more, by design: the
 //   value of `--env-file` under a container runtime is exempt, so the
 //   container's own command can print the interpolated environment
 //   (`alpine printenv`, `docker compose config`) — the same exposure class
@@ -142,7 +162,8 @@ const ON_CRASH = HOOK_ON_CRASH.ALLOW;
 // Commands longer than this are denied rather than scanned (see header).
 const MAX_COMMAND_LENGTH = 1024 * 1024;
 
-// Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans.
+// Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans, and
+// for `env -S` strings split inside a split string (#5514).
 const MAX_NESTING_DEPTH = 3;
 
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
@@ -158,6 +179,8 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 //   long     long options that take a SEPARATE value word (`--adjustment 5`);
 //            `--opt=value` is one word and needs no entry
 //   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   split    the option whose value is itself a command line: `env -S STRING`
+//            splits STRING into words that are read in its place (#5514)
 //   operands positional words after the options (timeout's DURATION)
 // Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
 // stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
@@ -165,7 +188,7 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 const WRAPPERS = new Map([
   ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'] }],
   ['doas', { short: 'Cu' }],
-  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
+  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true, split: { short: 'S', long: '--split-string' } }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
   ['command', {}],
@@ -443,6 +466,32 @@ function classifyGrepGlob(glob) {
 //    `(`: kept as a reading so nothing the guard denied before is allowed now.
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
+
+// #5514: the `env -S` readings.
+//  - envSplitStrings: the string is split into words read in the option's place, as
+//    env runs it. false skips the string as the option's value, the reading before
+//    #5514, kept (see underUnsplitReading) so splitting can add a denial to it
+//    but never remove one. With it false, resolveCommand reads every command exactly
+//    as before #5514.
+//  - splitDialect: how the split reads the two things env implementations, or the
+//    environment, decide differently (see splitEnvString). `vars`: 'keep' keeps
+//    `${NAME}` as written, 'drop' reads it as an unset name, which every env
+//    expands to nothing. `escapes`: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and
+//    macOS, where a backslash before a blank is that blank) or 'uutils' (uutils
+//    coreutils, Ubuntu's env since 25.10, where a backslash before a newline is
+//    removed, inside quotes too, and a comment ends at a newline rather than
+//    ending the string). The first splitting reading is PRIMARY_SPLIT.
+//  - splitSeen: a reading met a split option. The splitting readings run when the
+//    reading before #5514 met one, or when a scan threw before it could tell; the
+//    other dialects run only when one was met.
+//  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
+//    command is not read. The Bash path denies it as `split-string-too-deep` rather
+//    than allow what it could not see.
+const PRIMARY_SPLIT = Object.freeze({ vars: 'keep', escapes: 'gnu' });
+let envSplitStrings = true;
+let splitDialect = PRIMARY_SPLIT;
+let splitSeen = false;
+let splitTooDeep = false;
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
@@ -896,43 +945,177 @@ function wrapperOptionWidth(word, spec) {
   return 1;
 }
 
-// Index of the first word after a wrapper's own options, assignments and
-// positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
-function skipWrapperArgs(words, start, spec) {
-  let idx = start;
+// #5514: when `word` is the wrapper's split option (env's `-S` /
+// `--split-string`), the string it carries, or null when the string is the
+// next word; undefined for any other word.
+function splitOptionValue(word, spec) {
+  if (!spec.split) return undefined;
+  if (word.startsWith('--')) {
+    const eq = word.indexOf('=');
+    const name = eq === -1 ? word : word.slice(0, eq);
+    if (name.length <= 2 || !spec.split.long.startsWith(name)) return undefined;
+    return eq === -1 ? null : word.slice(eq + 1);
+  }
+  const valued = spec.short || '';
+  for (let i = 1; i < word.length; i++) {
+    if (!valued.includes(word[i])) continue;
+    if (word[i] !== spec.split.short) return undefined; // the value of another option
+    return i === word.length - 1 ? null : word.slice(i + 1);
+  }
+  return undefined;
+}
+
+const ENV_S_ESCAPES = { f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
+const ENV_S_BLANKS = ' \t\n\v\f\r';
+const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
+
+// The words `env -S STRING` splits STRING into, by GNU env's rules rather than
+// the shell's: blanks separate outside quotes; single quotes keep everything but
+// `\\` and `\'`; outside them `\_` separates (a space inside double quotes),
+// `\c` ends the string, `\f \n \r \t \v` are those characters and
+// `\" \# \$ \' \\` the character itself; `#` starting a word starts a comment;
+// `${VAR}` outside single quotes is env's own expansion, of a value not known
+// here: kept as written, or under `vars: 'drop'` deleted, as an unset name
+// expands (no word of its own, and a `#` after it still starts a comment).
+// Under `escapes: 'bsd'` a backslash before a blank is that blank; under
+// 'uutils' a backslash before a newline is removed, inside quotes too, and a
+// comment runs to the next newline, after which splitting goes on. Where env
+// would reject the string, the words read up to that point are returned.
+function splitEnvString(value, dialect = splitDialect) {
+  const words = [];
+  let word = '';
+  let inWord = false;
+  let quote = '';
+  const end = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (dialect.escapes === 'uutils' && ch === '\\' && value[i + 1] === '\n') {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = '';
+      else if (ch === '\\' && (value[i + 1] === '\\' || value[i + 1] === "'")) word += value[++i];
+      else word += ch;
+      continue;
+    }
+    if (ch === '"' || (ch === "'" && quote === '')) {
+      quote = quote === ch ? '' : ch;
+      inWord = true;
+      continue;
+    }
+    if (quote === '' && ' \t\n\v\f\r'.includes(ch)) {
+      end();
+      continue;
+    }
+    if (quote === '' && ch === '#' && !inWord) {
+      if (dialect.escapes !== 'uutils') break;
+      const eol = value.indexOf('\n', i);
+      if (eol === -1) break;
+      i = eol;
+      continue;
+    }
+    if (ch === '$' && value[i + 1] !== '{') break;
+    if (ch === '$' && dialect.vars === 'drop') {
+      ENV_S_VAR_RE.lastIndex = i;
+      if (ENV_S_VAR_RE.test(value)) {
+        i = ENV_S_VAR_RE.lastIndex - 1;
+        continue;
+      }
+    }
+    if (ch === '\\') {
+      const next = value[++i];
+      if (next === '_' && quote === '') {
+        end();
+        continue;
+      }
+      if (next === '_') word += ' ';
+      else if (next !== undefined && ENV_S_ESCAPES[next]) word += ENV_S_ESCAPES[next];
+      else if (next !== undefined && '"#$\'\\'.includes(next)) word += next;
+      else if (dialect.escapes === 'bsd' && next !== undefined && ENV_S_BLANKS.includes(next)) word += next;
+      else break; // `\c`, or an escape env rejects
+      inWord = true;
+      continue;
+    }
+    word += ch;
+    inWord = true;
+  }
+  end();
+  return words;
+}
+
+// Pushes the words `value` splits into onto `pending`, to be read next. A
+// string split out of a split string is one level deeper; past
+// MAX_NESTING_DEPTH it is not read, and splitTooDeep makes the command deny.
+function pushSplitWords(pending, value, source) {
+  const depth = (source.splitDepth || 0) + 1;
+  if (depth > MAX_NESTING_DEPTH) {
+    splitTooDeep = true;
+    return;
+  }
+  const words = splitEnvString(value);
+  for (let k = words.length - 1; k >= 0; k--) {
+    pending.push({ kind: 'word', text: words[k], quoted: 'none', seg: source.seg, splitDepth: depth });
+  }
+}
+
+// Pops a wrapper's own options, assignments and positional operands
+// (`-n 5`, `-i A=1`, `-s KILL 5`, `--`) off `pending`, the words still to
+// read with the next one last. The walk is the one before #5514, with one
+// addition: `env -S STRING` puts the words STRING splits into where the option
+// stood, and env goes on reading options (#5514).
+function skipWrapperArgs(pending, spec) {
+  const top = () => pending[pending.length - 1].text;
   let optionsEnded = false;
-  while (idx < words.length) {
-    const text = words[idx].text;
+  while (pending.length) {
+    const text = top();
     if (spec.assigns && ASSIGNMENT_RE.test(text)) {
-      idx++;
+      pending.pop();
     } else if (!optionsEnded && text === '--') {
       optionsEnded = true;
-      idx++;
+      pending.pop();
     } else if (!optionsEnded && text.length > 1 && text.startsWith('-')) {
-      idx += wrapperOptionWidth(text, spec);
+      const word = pending.pop();
+      const split = splitOptionValue(text, spec);
+      if (split !== undefined) splitSeen = true;
+      if (split === undefined || !envSplitStrings) {
+        if (wrapperOptionWidth(text, spec) === 2) pending.pop();
+      } else if (split === null) {
+        const value = pending.pop();
+        if (value) pushSplitWords(pending, value.text, value);
+      } else {
+        pushSplitWords(pending, split, word);
+      }
     } else {
       break;
     }
   }
-  if (!spec.operands) return idx;
-  idx = Math.min(idx + spec.operands, words.length);
+  for (let n = 0; n < (spec.operands || 0) && pending.length; n++) pending.pop();
   // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
-  return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
+  if (spec.operands && pending.length && top() === '--') pending.pop();
 }
 
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
-// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
+// `timeout -s KILL 5`, `nice -n 5`, `env -S 'cmd …'`, …), or null when nothing
+// but prefixes remain. Linear in the words read: a split string is pushed onto
+// the pending stack rather than spliced into a copy of the list.
 function resolveCommand(words) {
-  let idx = 0;
-  while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
-  while (idx < words.length) {
-    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+  const pending = words.slice().reverse();
+  while (pending.length && ASSIGNMENT_RE.test(pending[pending.length - 1].text)) pending.pop();
+  while (pending.length) {
+    const spec = WRAPPERS.get(lastSegment(pending[pending.length - 1].text).toLowerCase());
     if (!spec) break;
-    idx = skipWrapperArgs(words, idx + 1, spec);
+    pending.pop();
+    skipWrapperArgs(pending, spec);
   }
-  if (idx >= words.length) return null;
-  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+  if (!pending.length) return null;
+  const head = pending.pop();
+  return { base: lastSegment(head.text).toLowerCase(), operands: pending.reverse() };
 }
 
 /**
@@ -1106,6 +1289,42 @@ function findSecretReadUnderOtherReadings(command) {
     } finally {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
+    }
+  }
+  return null;
+}
+
+// #5514: `scan` with `env -S` strings skipped as the option's value, the reading
+// before #5514. The Bash path runs it before any splitting reading, so splitting
+// can add a denial but never remove one.
+function underUnsplitReading(scan) {
+  envSplitStrings = false;
+  try {
+    return scan();
+  } finally {
+    envSplitStrings = true;
+  }
+}
+
+// #5514: `scan` again with `env -S` strings split under each splitDialect other
+// than PRIMARY_SPLIT, and returns the first hit. Every dialect runs whenever the
+// primary reading met a split option: which strings a dialect reaches, and what
+// they hold, can differ from what the primary reading saw (an escape can build a
+// `${` or a backslash-blank inside a nested string), so no screen over the
+// strings the primary reading split can tell which dialects are needed. These
+// readings run last (see the Bash path): each re-scans the whole command.
+function underOtherSplitDialects(scan) {
+  if (!splitSeen) return null;
+  for (const vars of ['keep', 'drop']) {
+    for (const escapes of ['gnu', 'bsd', 'uutils']) {
+      if (vars === PRIMARY_SPLIT.vars && escapes === PRIMARY_SPLIT.escapes) continue;
+      splitDialect = { vars, escapes };
+      try {
+        const hit = scan();
+        if (hit !== null) return hit;
+      } finally {
+        splitDialect = PRIMARY_SPLIT;
+      }
     }
   }
   return null;
@@ -1401,6 +1620,10 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'alternatives and cannot be checked for secret-file matches. Use a narrower glob.';
   }
+  if (code === 'split-string-too-deep') {
+    return `Secret read guard: this Bash command nests env -S strings more than ${MAX_NESTING_DEPTH} deep, ` +
+      'so the command they run cannot be checked. Run that command without the nested env -S strings.';
+  }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
       'A shell-spawned debugger runs detached, returns no structured result, and the debug checkpoint never advances. ' +
@@ -1556,10 +1779,46 @@ process.stdin.on('end', () => {
     const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
     if (command === '') allow(undefined);
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+    // Each of the three scans below (the plain one, the heredoc readings together,
+    // the spawn check) runs under its own catch, once per reading (#5514). One that
+    // throws (a word that overflows the parser, say) finds nothing, the scans and
+    // readings after it still run, and the command gets the crash verdict below only
+    // when none of them denies. Before, the first throw ended the hook, so it decided
+    // the verdict for every reading after it.
+    let threw = false;
+    const attempt = (scan) => {
+      try {
+        return scan();
+      } catch {
+        threw = true;
+        return null;
+      }
+    };
+    const secretScan = () => attempt(() => findSecretRead(command, 0))
+      || attempt(() => findSecretReadUnderOtherReadings(command));
+    const spawnScan = () => attempt(() => findDebuggerCliSpawn(command, 0));
+    // The reading before #5514 first, `env -S` strings skipped as the option's value.
+    // Every denial it makes is emitted before any splitting reading runs, so nothing
+    // a splitting reading does (its time, or a throw) can lose one.
+    const hit = underUnsplitReading(secretScan);
     if (hit !== null) emitBlock('secret-read', tool, hit);
-    const spawn = findDebuggerCliSpawn(command, 0);
+    const spawn = underUnsplitReading(spawnScan);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+    // A scan that threw may have stopped before a split option; read on.
+    if (!splitSeen && !threw) allow(undefined);
+    // The splitting readings (#5514) only add denials: GNU env's split, then the
+    // other env -S dialects, which re-scan the whole command once each.
+    const splitHit = secretScan();
+    if (splitHit !== null) emitBlock('secret-read', tool, splitHit);
+    const splitSpawn = spawnScan();
+    if (splitSpawn !== null) emitBlock('debugger-cli-spawn', tool, splitSpawn);
+    if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
+    const dialectHit = underOtherSplitDialects(secretScan);
+    if (dialectHit !== null) emitBlock('secret-read', tool, dialectHit);
+    const dialectSpawn = underOtherSplitDialects(spawnScan);
+    if (dialectSpawn !== null) emitBlock('debugger-cli-spawn', tool, dialectSpawn);
+    if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
+    if (threw) crash(ON_CRASH, undefined);
     allow(undefined);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.

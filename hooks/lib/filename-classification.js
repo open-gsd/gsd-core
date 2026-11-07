@@ -54,9 +54,14 @@ function normalizeWindowsBasename(name) {
 }
 
 // Last `/`- or `\`-separated segment, ignoring trailing separators. A string
-// with no separator IS its own last segment.
+// with no separator IS its own last segment. The trailing separators are
+// stripped by a loop: the regex `/[\\/]+$/` retries from each position of a
+// run of separators that does not end the string, which is quadratic in the
+// run's length (a 1,000,000-slash word took minutes).
 function lastSegment(tok) {
-  const s = tok.replace(/[\\/]+$/, '');
+  let end = tok.length;
+  while (end > 0 && (tok[end - 1] === '/' || tok[end - 1] === '\\')) end--;
+  const s = tok.slice(0, end);
   const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
   return i === -1 ? s : s.slice(i + 1);
 }
