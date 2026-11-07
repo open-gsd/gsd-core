@@ -4410,6 +4410,7 @@ export = {
   resolveCommitDocsPolicy,
   COMMIT_DOCS_SKIP_REASON,
   cmdCommit,
+  commitTimeoutHead,
   cmdCommitToSubrepo,
   cmdPrSubrepo,
   cmdSummaryExtract,

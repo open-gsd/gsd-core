@@ -1032,6 +1032,11 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     setTimeoutConfig(30000);
     const shorter = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-msg-b', 'fix: probe', false);`);
     assert.notStrictEqual(longer.failure.message, shorter.failure.message, 'the message must follow the configured timeout');
+    // The expected text comes from the owner, so the repo slot is pinned without a prose literal.
+    const { commitTimeoutHead } = require('../gsd-core/bin/lib/commands.cjs');
+    const repoCwd = path.join(rootDir, 'backend');
+    assert.strictEqual(longer.failure.message, commitTimeoutHead(repoCwd, 60000, 'backend'));
+    assert.strictEqual(shorter.failure.message, commitTimeoutHead(repoCwd, 30000, 'backend'));
   });
 
   test('pr-subrepo leaves a legacy-shaped config byte-identical (persist:false)', () => {
