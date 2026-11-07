@@ -444,6 +444,25 @@ function classifyGrepGlob(glob) {
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
 
+// #5523: four more readings, each of one construct the plain reading takes differently
+// from a shell that runs the command. Each runs only for a command holding its construct,
+// after the plain reading and #5513's two, so like them it can add a denial and never
+// remove one. The plain reading keeps its earlier answer for every construct below.
+//  - crIsWhitespace: false is the shells' reading, where a CR is an ordinary word
+//    character (`<CR>#;cat x` is a command named CR-`#`, not a comment).
+//  - heredocLinesJoined: true is the shells' reading of an unquoted heredoc body, where a
+//    line ending in an odd number of backslashes is joined to the next one before the
+//    terminator is looked for.
+//  - zshGrouping: true is zsh's reading of a `#` straight after `(` (no comment starts) and
+//    of a brace group: at command position `{` opens one with no blank after it
+//    (`{cat x}`), and a `}` ending a word closes it.
+//  - dollarDollarIsAWord: true reads `$$` (the shell's PID) as one unit, so a `{` after it
+//    opens no `${` (`$${x; cat y` runs `cat y`).
+let crIsWhitespace = true;
+let heredocLinesJoined = false;
+let zshGrouping = false;
+let dollarDollarIsAWord = false;
+
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early.
@@ -559,8 +578,16 @@ function consumeHeredocBodies(str, i, tags) {
     while (i < str.length) {
       const nl = str.indexOf('\n', i);
       const lineEnd = nl === -1 ? str.length : nl;
-      const line = str.slice(i, lineEnd);
+      let line = str.slice(i, lineEnd);
       i = nl === -1 ? str.length : nl + 1;
+      // #5523 K: the shell removes a backslash-newline from an unquoted body before it
+      // compares a line with the tag, so `x\` + newline + `E` is the line `xE`.
+      while (heredocLinesJoined && !t.quoted && i < str.length && endsInOddBackslashes(line)) {
+        const nl2 = str.indexOf('\n', i);
+        const end2 = nl2 === -1 ? str.length : nl2;
+        line = line.slice(0, -1) + str.slice(i, end2);
+        i = nl2 === -1 ? str.length : nl2 + 1;
+      }
       const probe = t.stripTabs ? line.replace(/^\t+/, '') : line;
       if (probe === t.tag) { terminated = true; break; }
       body += line + '\n';
@@ -571,20 +598,63 @@ function consumeHeredocBodies(str, i, tags) {
   return { bodies, end: i };
 }
 
-// `$( )` and backtick spans inside an unquoted heredoc body.
-function collectSubstitutions(body, nested) {
+function endsInOddBackslashes(line) {
+  let n = 0;
+  while (n < line.length && line[line.length - 1 - n] === '\\') n++;
+  return n % 2 === 1;
+}
+
+// #5523 H: before it parses a backtick body the shell removes a backslash that comes before
+// `$`, a backtick or a backslash, so `\$${x; cat y` is parsed as `$${x; cat y`. The body as
+// written is still scanned (the earlier reading), and the body the shell parses as well when
+// the two differ.
+function pushBacktickBody(nested, raw) {
+  nested.push(raw);
+  const parsed = raw.replace(/\\([$`\\])/g, '$1');
+  if (parsed !== raw) nested.push(parsed);
+}
+
+// #5523 I: the inner text of `$((…))` is arithmetic, where `#` starts no comment. It is still
+// scanned as a command (the earlier reading), and its own `$( )` and backtick spans are also
+// scanned directly, as the shell runs them before it evaluates the arithmetic. Only one level
+// is collected here: each collected span is scanned by findSecretRead, whose recursion is
+// bounded by MAX_NESTING_DEPTH, and that scan collects the next level. Collecting every level
+// here would recurse once per nested `$((`, outside that bound.
+function pushParenSpan(nested, inner, collectArithmetic = true) {
+  nested.push(inner);
+  if (collectArithmetic && inner[0] === '(') collectSubstitutions(inner, nested, false);
+}
+
+// `$( )` and backtick spans inside an unquoted heredoc body (and inside arithmetic, above).
+// #5523 D: the shell reads `\`` in an unquoted body as a literal backtick, which opens no
+// span. The spans found with backslash pairs skipped are scanned as well as those found
+// without, so the earlier reading's spans are all still scanned.
+function collectSubstitutions(body, nested, collectArithmetic = true) {
+  const spans = [];
+  collectSubstitutionSpans(body, spans, false, collectArithmetic);
+  if (body.includes('\\')) {
+    const seen = new Set(spans);
+    const escaped = [];
+    collectSubstitutionSpans(body, escaped, true, collectArithmetic);
+    for (const s of escaped) if (!seen.has(s)) spans.push(s);
+  }
+  for (const s of spans) nested.push(s);
+}
+
+function collectSubstitutionSpans(body, nested, skipEscapes, collectArithmetic) {
   let i = 0;
   while (i < body.length) {
+    if (skipEscapes && body[i] === '\\') { i += 2; continue; }
     if (body[i] === '$' && body[i + 1] === '(') {
       const e = findParenClose(body, i + 2);
-      nested.push(body.slice(i + 2, e));
+      pushParenSpan(nested, body.slice(i + 2, e), collectArithmetic);
       i = e + 1;
       continue;
     }
     if (body[i] === '`') {
       const j = body.indexOf('`', i + 1);
       const e = j === -1 ? body.length : j;
-      nested.push(body.slice(i + 1, e));
+      pushBacktickBody(nested, body.slice(i + 1, e));
       i = e + 1;
       continue;
     }
@@ -604,6 +674,7 @@ function tokenize(str) {
   let seg = 0;
   let heredocs = [];
   let expectTag = null;
+  let zshBraceDepth = 0;
 
   const flush = () => {
     if (!hasWord) return;
@@ -657,14 +728,14 @@ function tokenize(str) {
         }
         if (c === '$' && str[i + 1] === '(') {
           const e = findParenClose(str, i + 2);
-          nested.push(str.slice(i + 2, e));
+          pushParenSpan(nested, str.slice(i + 2, e));
           i = e + 1;
           continue;
         }
         if (c === '`') {
           const j = str.indexOf('`', i + 1);
           const e = j === -1 ? str.length : j;
-          nested.push(str.slice(i + 1, e));
+          pushBacktickBody(nested, str.slice(i + 1, e));
           i = e + 1;
           continue;
         }
@@ -683,10 +754,17 @@ function tokenize(str) {
       continue;
     }
 
+    if (dollarDollarIsAWord && ch === '$' && str[i + 1] === '$') {
+      hasWord = true;
+      buf += '$$';
+      i += 2;
+      continue;
+    }
+
     if (ch === '$' && str[i + 1] === '(') {
       hasWord = true;
       const e = findParenClose(str, i + 2);
-      nested.push(str.slice(i + 2, e));
+      pushParenSpan(nested, str.slice(i + 2, e));
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
@@ -705,7 +783,7 @@ function tokenize(str) {
       hasWord = true;
       const j = str.indexOf('`', i + 1);
       const e = j === -1 ? str.length : j;
-      nested.push(str.slice(i + 1, e));
+      pushBacktickBody(nested, str.slice(i + 1, e));
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
@@ -749,13 +827,13 @@ function tokenize(str) {
       continue;
     }
 
-    if (ch === ' ' || ch === '\t' || ch === '\r') {
+    if (ch === ' ' || ch === '\t' || (ch === '\r' && crIsWhitespace)) {
       flush();
       i++;
       continue;
     }
 
-    if (ch === '#' && !hasWord) {
+    if (ch === '#' && !hasWord && !(zshGrouping && str[i - 1] === '(')) {
       const j = str.indexOf('\n', i);
       i = j === -1 ? str.length : j;
       continue;
@@ -827,6 +905,23 @@ function tokenize(str) {
       i++;
       continue;
     }
+    if (zshGrouping && !expectTag) {
+      const blankAfter = i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]);
+      const atCommand = !hasWord && (!tokens.length || tokens[tokens.length - 1].kind === 'sep');
+      if (ch === '{' && (atCommand || (!hasWord && blankAfter))) {
+        sep(ch);
+        zshBraceDepth++;
+        i++;
+        continue;
+      }
+      if (ch === '}' && blankAfter && (!hasWord || zshBraceDepth > 0)) {
+        sep(ch); // flushes the word the `}` ends
+        if (zshBraceDepth > 0) zshBraceDepth--;
+        i++;
+        continue;
+      }
+    }
+
     if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
       sep(ch);
       i++;
@@ -1096,16 +1191,43 @@ function precedingOp(s, bySeg, sepAfter) {
 // command that opens a heredoc can read differently, so the extra passes are skipped for
 // every other command.
 function findSecretReadUnderOtherReadings(command) {
-  if (!command.includes('<<')) return null;
-  for (const [bodiesSkipped, tagsAsWords] of [[false, true], [true, false]]) {
-    heredocBodiesSkippedInSpans = bodiesSkipped;
-    heredocTagsAsWords = tagsAsWords;
+  if (command.includes('<<')) {
+    for (const [bodiesSkipped, tagsAsWords] of [[false, true], [true, false]]) {
+      heredocBodiesSkippedInSpans = bodiesSkipped;
+      heredocTagsAsWords = tagsAsWords;
+      try {
+        const hit = findSecretRead(command, 0);
+        if (hit) return hit;
+      } finally {
+        heredocBodiesSkippedInSpans = true;
+        heredocTagsAsWords = true;
+      }
+    }
+  }
+  return findSecretReadUnderShellReadings(command);
+}
+
+// #5523: the four readings declared beside crIsWhitespace, each only for a command holding
+// its construct. They run after every earlier reading, and a reading that throws (a deep
+// nesting overflow) ends only itself: the readings before it have already answered.
+const SHELL_READINGS = [
+  { applies: (c) => c.includes('\r'), set: (on) => { crIsWhitespace = !on; } },
+  { applies: (c) => c.includes('<<') && c.includes('\\\n'), set: (on) => { heredocLinesJoined = on; } },
+  { applies: (c) => c.includes('(#') || /(^|[^$])[{}]/.test(c), set: (on) => { zshGrouping = on; } },
+  { applies: (c) => /\$\\*\$/.test(c), set: (on) => { dollarDollarIsAWord = on; } },
+];
+
+function findSecretReadUnderShellReadings(command) {
+  for (const reading of SHELL_READINGS) {
+    if (!reading.applies(command)) continue;
+    reading.set(true);
     try {
       const hit = findSecretRead(command, 0);
       if (hit) return hit;
+    } catch {
+      // continue with the next reading
     } finally {
-      heredocBodiesSkippedInSpans = true;
-      heredocTagsAsWords = true;
+      reading.set(false);
     }
   }
   return null;
