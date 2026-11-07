@@ -280,12 +280,37 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(none.dir).payload.rows[0].status, 'NotEvaluable');
   });
 
-  test('live commits that lack GREEN win over a stale seal entry (#5354)', () => {
+  test('a seal whose RED is still reachable credits nothing: live commits that lack GREEN fail (#5354)', () => {
     const { dir } = fixture(['test(01-01): red']);
-    w(dir, SEAL, sealOf(sha('a'), sha('b')));
+    w(dir, SEAL, sealOf(sealGit(dir, 'rev-parse', 'HEAD'), sha('b')));
     const row = run(dir).payload.rows[0];
     assert.equal(row.status, 'FAIL');
     assert.deepEqual(row.missing, ['GREEN']);
+  });
+
+  // A squash may itself be titled test(<plan>): or be followed by such a commit: the squash is told by the seal's RED no longer being reachable.
+  for (const [label, squashTitle, after] of [
+    ['a test(01-01): squash title', 'test(01-01): phase one', []],
+    ['a later test(01-01): commit', 'feat(01-01): phase one', ['test(01-01): add case']],
+  ]) {
+    test(`a sealed plan squashed with ${label} still passes (#5354)`, () => {
+      const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
+      run(dir, '--record');
+      sealGit(dir, 'add', '-A');
+      sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+      squash(dir, base, squashTitle);
+      after.forEach((s, i) => commit(dir, `after${i}.txt`, s));
+      const r = run(dir);
+      assert.equal(r.payload.rows[0].status, 'Pass');
+      assert.equal(r.block, false);
+    });
+  }
+
+  test('a seal holding only a sibling plan entry does not rule out NotEvaluable (#5354)', () => {
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
+    squash(dir, base);
+    w(dir, SEAL, JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } }));
+    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
   });
 
   // The Task Commits section comes first so an unread SUMMARY (FAIL) is told from a read one (NotEvaluable).
@@ -813,20 +838,21 @@ describe('#5354 tdd review checkpoint seal', () => {
     fc.stringMatching(/^[0-9A-F]{40}$/),
     fc.constant(GREEN_SHA),
   );
-  // The seal is consulted only when the plan has no live RED (#5354); with a live RED the live commits alone decide.
+  // The seal is consulted when the plan has no live RED or when its RED is no longer reachable (#5354): these sealed hashes name no object, so it always is. It credits each kind the live commits lack.
   for (const [name, subjects, liveRed, liveGreen] of [
     ['none', [], false, false],
     ['test only', ['test(01-01): red'], true, false],
     ['feat only', ['feat(01-01): green'], false, true],
     ['test then feat', ['test(01-01): red', 'feat(01-01): green'], true, true],
   ]) {
-    test(`property: seal credit follows the no-live-RED rule (${name})`, () => {
+    test(`property: seal credit follows the squashed-seal rule (${name})`, () => {
       const { dir } = fixture(subjects, { summary: false });
       fc.assert(fc.property(sealRedArb, (red) => {
         fs.writeFileSync(path.join(dir, SEAL), sealOf(red, GREEN_SHA));
         const status = run(dir).payload.rows[0].status;
-        const sealRed = /^[0-9a-f]{40}$/.test(red) && red !== GREEN_SHA;
-        return status === ((liveRed && liveGreen) || (!liveRed && sealRed) ? 'Pass' : 'FAIL');
+        const applies = red !== GREEN_SHA;
+        const sealRed = /^[0-9a-f]{40}$/.test(red) && applies;
+        return status === ((liveRed || sealRed) && (liveGreen || applies) ? 'Pass' : 'FAIL');
       }), { numRuns: 25 });
     });
   }

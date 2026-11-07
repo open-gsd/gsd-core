@@ -36,7 +36,7 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from
 import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
 import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFromError, evidenceNone } from './gate-evidence.cjs';
-import { resolveEvaluationScope, commitIsAncestor, isFullSha } from './gate-evaluation-scope.cjs';
+import { resolveEvaluationScope, commitIsAncestor, commitReachability, isFullSha } from './gate-evaluation-scope.cjs';
 import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
@@ -180,10 +180,15 @@ function planRow(
   const planId = path.basename(planPath, '-PLAN.md');
   const commits = planCommits(projectDir, planId);
   const reds = shasOfKind(commits, 'test');
-  // #5354: the seal stands in only when the plan has no live RED (a squash rewrote it); a live RED means the history
-  // was not squashed, so a stale entry never tops up live-but-incomplete commits. Its GREEN fills only a GREEN no live
-  // commit credits; live hashes stay preferred for the evidence.
-  const sealed = reds.length === 0 && Object.hasOwn(seal, planId) && seal[planId]?.red !== seal[planId]?.green ? seal[planId] : {};
+  // #5354: the seal stands in once the plan was squashed away, and the seal tells it: with no live RED, or when its RED (else
+  // its GREEN) is no longer reachable from HEAD. A live `test(<plan>):` commit proves nothing, since a squash may carry that
+  // title or be followed by one. A seal whose RED is still reachable was not squashed, so it never tops up live-but-incomplete
+  // commits. It credits each kind no live commit credits; live hashes stay preferred for the evidence.
+  const entry = Object.hasOwn(seal, planId) ? seal[planId] : undefined;
+  const probe = isFullSha(entry?.red) ? entry.red : entry?.green;
+  const reach = reds.length === 0 || !isFullSha(probe) ? null : commitReachability(projectDir, probe, 'HEAD');
+  const squashed = reds.length === 0 || reach === 'unreachable' || reach === 'missing';
+  const sealed = squashed && entry !== undefined && entry.red !== entry.green ? entry : {};
   const sealedRed = isFullSha(sealed.red);
   const sealedGreen = isFullSha(sealed.green);
   const red = reds.length > 0 || sealedRed;
