@@ -3017,6 +3017,7 @@ function cmdPrSubrepo(
     error(`Sub-repo not found: ${repoCwd}`);
   }
   // #5231: resolved before the branch is created and files are staged, so a config read cannot fail mid-mutation.
+  // persist:false: pr-subrepo read no config before this key, and a read must not rewrite a legacy-shaped config.
   const commitTimeout = commitTimeoutMs(loadConfig(cwd, { persist: false }).commit_timeout_ms);
 
   // 1. Collect changed files via porcelain status — explicit, never git add -A.
