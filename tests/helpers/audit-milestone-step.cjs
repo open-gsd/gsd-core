@@ -9,7 +9,6 @@ const { splitLines } = require('../../gsd-core/bin/lib/text-lines.cjs');
 const AUDIT_MD = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'audit-milestone.md');
 
 function auditMilestoneMd() {
-  // allow-test-rule: source-text-is-the-product (#5482)
   return fs.readFileSync(AUDIT_MD, 'utf-8');
 }
 
