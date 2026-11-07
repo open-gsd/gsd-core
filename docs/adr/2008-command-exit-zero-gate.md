@@ -153,3 +153,13 @@ hiding the mechanism.
 - ADR-0857 (capability system / module decomposition)
 - `src/gate-predicate-evaluator.cts`, `src/check-command-router.cts`
 - Diátaxis docs: `docs/reference/gate-predicates.md`, `docs/how-to/command-exit-zero-gate.md`
+
+## Amendment (2026-11-07): placeholders are environment values (#5482)
+
+The Interpolation row above describes the first revision, which pasted the values into the command text. A directory name that held shell syntax then ran as a command. The gate shell now receives `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` as environment values, in addition to the inherited process environment (the Environment row).
+
+A value is also pasted into the command text, only when it holds nothing but `[A-Za-z0-9._/@+=:,-]`. A gate that single-quotes `'${PHASE_NUMBER}'` still receives it. Any other value stays `${...}` for `sh` to expand, so a gate double-quotes the placeholder.
+
+`sh` cannot expand a placeholder inside single quotes. When that placeholder has a value that is not shell-inert, the evaluator throws and the gate takes its `onError` path (`unevaluable`).
+
+A fifth dispatch site joins the three generic workflow sites listed under Evaluation path: the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase.
