@@ -72,6 +72,45 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #5190 (fixes #5178), a named single-purpose carve-out kept on the maintainer's ruling:
+// `frontmatter.get` takes its field only as `--field <name>`, and quick.md's positional
+// calls are the drift #5178 repairs. Row 48 would otherwise refuse the repair, while
+// reverting it fails the frontmatter contract at planner-wave.md:142. Scope: exactly this
+// flag insertion. A line counts only beside its positional twin, so paths, fields and
+// every other divergence on a shared line stay guarded; the row-48 test below proves it.
+// isFrontmatterFieldFlagMigration judges the pair's shape by Set membership;
+// fieldFlagMigrationBudget then admits one added line per removed twin, so a
+// surplus copy of a migrated line, or a lone half of a pair, is still phase work.
+const positionalTwin = (line) => line.replace(
+  /(\b(?:gsd_run|gsd-tools)\s+query\s+frontmatter\.get\s+(?:"[^"]*"|'[^']*'|[^\s]+))\s+--field\s+([\w.-]+)(`?)$/,
+  '$1 $2$3',
+);
+
+function isFrontmatterFieldFlagMigration(sign, body, addedBodies, removedBodies) {
+  if (sign === '+') {
+    const twin = positionalTwin(body);
+    return twin !== body && removedBodies.has(twin);
+  }
+  return [...addedBodies].some((added) => positionalTwin(added) !== added && positionalTwin(added) === body);
+}
+
+/** How many copies of each `+`/`-` line the #5190 migration may exempt: one per matched pair. */
+function fieldFlagMigrationBudget(added, removed) {
+  const count = (list) => list.reduce((m, b) => m.set(b, (m.get(b) || 0) + 1), new Map());
+  const addedCounts = count(added);
+  const removedCounts = count(removed);
+  const budget = new Map();
+  for (const [body, n] of addedCounts) {
+    const twin = positionalTwin(body);
+    if (twin === body || !removedCounts.has(twin)) continue;
+    const pairs = Math.min(n, removedCounts.get(twin) - (budget.get(`-${twin}`) || 0));
+    if (pairs <= 0) continue;
+    budget.set(`+${body}`, pairs);
+    budget.set(`-${twin}`, (budget.get(`-${twin}`) || 0) + pairs);
+  }
+  return budget;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -93,17 +132,26 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
  * this row exactly as before.
  */
 function editsBeyondSharedDirective(base, file) {
-  const diff = git(['diff', '--unified=0', `${base}...HEAD`, '--', file]);
+  return diffEditsBeyondSharedDirective(git(['diff', '--unified=0', `${base}...HEAD`, '--', file]));
+}
+
+/** The pure half of editsBeyondSharedDirective: reads one path's `--unified=0` diff text. */
+function diffEditsBeyondSharedDirective(diff) {
   const diffLines = diff.split('\n');
   const bodiesOf = (sign) => diffLines
     .filter((l) => l.startsWith(sign) && !l.startsWith(sign.repeat(3)))
     .map((l) => l.slice(1).trim());
   const addedBodies = new Set(bodiesOf('+'));
   const removedBodies = new Set(bodiesOf('-'));
+  const migrationBudget = fieldFlagMigrationBudget(bodiesOf('+'), bodiesOf('-'));
   return diffLines.some((line) => {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (isFrontmatterFieldFlagMigration(line[0], body, addedBodies, removedBodies)) {
+      const key = `${line[0]}${body}`;
+      if ((migrationBudget.get(key) || 0) > 0) { migrationBudget.set(key, migrationBudget.get(key) - 1); return false; }
+    }
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
@@ -190,6 +238,77 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     // catch; same false-positive class already scoped away twice above (#3730, #2529 round 40).
     const touchedQuickSteps = unexpectedQuickStepChanges(changed, isPhaseWork);
     assert.deepEqual(touchedQuickSteps, [], `unexpected changes under gsd-core/workflows/quick/steps/: ${touchedQuickSteps.join(', ')}`);
+  });
+
+  test('the #5178 field-flag migration requires exact paired lines and preserves other quick edits', () => {
+    const before = 'gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md status';
+    const after = 'gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md --field status';
+    const added = new Set([after]);
+    const removed = new Set([before]);
+    assert.equal(isFrontmatterFieldFlagMigration('+', after, added, removed), true);
+    assert.equal(isFrontmatterFieldFlagMigration('-', before, added, removed), true);
+    assert.equal(isFrontmatterFieldFlagMigration('+', after, added, new Set()), false);
+    assert.equal(isFrontmatterFieldFlagMigration('-', before, new Set(), removed), false);
+    for (const [positional, named] of [
+      ['`gsd_run query frontmatter.get "${item_dir}/${quick_id}-PLAN.md" depends_on`',
+        '`gsd_run query frontmatter.get "${item_dir}/${quick_id}-PLAN.md" --field depends_on`'],
+      ['gsd_run query frontmatter.get "plans with spaces/PLAN.md" depends_on',
+        'gsd_run query frontmatter.get "plans with spaces/PLAN.md" --field depends_on'],
+    ]) {
+      assert.equal(isFrontmatterFieldFlagMigration('+', named, new Set([named]), new Set([positional])), true);
+      assert.equal(isFrontmatterFieldFlagMigration('-', positional, new Set([named]), new Set([positional])), true);
+      assert.equal(isFrontmatterFieldFlagMigration('+', named, new Set([named]), new Set()), false);
+      assert.equal(isFrontmatterFieldFlagMigration('-', positional, new Set(), new Set([positional])), false);
+    }
+    for (const changed of [
+      after.replace('status', 'other_field'),
+      after.replace('SUMMARY.md', 'PLAN.md'),
+      after + ' changed prose',
+      'gsd-tools query other.command file --field status',
+    ]) {
+      assert.equal(isFrontmatterFieldFlagMigration('+', changed, new Set([changed]), removed), false, changed);
+      assert.equal(isFrontmatterFieldFlagMigration('-', before, new Set([changed]), removed), false, changed);
+    }
+  });
+
+  test('the #5190 field-flag carve-out exempts nothing else: a non-field divergence on a shared line still trips row 48', () => {
+    const before = 'gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md status';
+    const after = 'gsd-tools query frontmatter.get .planning/quick/{dir}/SUMMARY.md --field status';
+    const diffOf = (removed, added) => [
+      'diff --git a/commands/gsd/quick.md b/commands/gsd/quick.md',
+      '--- a/commands/gsd/quick.md',
+      '+++ b/commands/gsd/quick.md',
+      '@@ -10 +10 @@',
+      `-${removed}`,
+      `+${added}`,
+    ].join('\n');
+    // The migration alone is the only shape the carve-out admits.
+    assert.equal(diffEditsBeyondSharedDirective(diffOf(before, after)), false);
+    // The same shared line, diverging in any way other than inserting --field, is phase work.
+    for (const diverged of [
+      after.replace('status', 'other_field'),
+      after.replace('SUMMARY.md', 'PLAN.md'),
+      `${after} changed prose`,
+      before.replace('SUMMARY.md', 'PLAN.md'),
+      'gsd-tools query other.command .planning/quick/{dir}/SUMMARY.md --field status',
+    ]) {
+      assert.equal(diffEditsBeyondSharedDirective(diffOf(before, diverged)), true, diverged);
+    }
+    // Unpaired or surplus lines are not the migration: a lone added call, a lone removal,
+    // and a second copy of the migrated line beside one removal each trip the row.
+    const lines = (...body) => ['--- a/commands/gsd/quick.md', '+++ b/commands/gsd/quick.md', '@@ -10 +10 @@', ...body].join('\n');
+    assert.equal(diffEditsBeyondSharedDirective(lines(`+${after}`)), true);
+    assert.equal(diffEditsBeyondSharedDirective(lines(`-${before}`)), true);
+    assert.equal(diffEditsBeyondSharedDirective(lines(`-${before}`, `+${after}`, `+${after}`)), true);
+    assert.equal(diffEditsBeyondSharedDirective(lines(`-${before}`, `-${before}`, `+${after}`)), true);
+    assert.equal(diffEditsBeyondSharedDirective(lines(`-${before}`, `-${before}`, `+${after}`, `+${after}`)), false);
+    // Through the row's own whole-file predicate, as the live check wires it.
+    for (const [diff, violates] of [[diffOf(before, after), false], [lines(`+${after}`), true]]) {
+      assert.equal(quickWholeFileViolation(['commands/gsd/quick.md'], () => diffEditsBeyondSharedDirective(diff), 'commands/gsd/quick.md'), violates);
+    }
+    // A migration pair beside one unrelated edit still trips the row.
+    const mixed = `${diffOf(before, after)}\n@@ -20 +20 @@\n-Ordinary quick prose.\n+Ordinary quick prose, reworded.`;
+    assert.equal(diffEditsBeyondSharedDirective(mixed), true);
   });
 
   test('positive control: the #5118 allowance exempts exactly one path; every other quick path in the same branch shape still trips row 48', () => {
