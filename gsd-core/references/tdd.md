@@ -200,12 +200,11 @@ RED commits go unseen:
 - `*_test.exs` — Elixir
 - `*_spec.rb` / `*_test.rb` — Ruby
 
-**Cost of the broad pathspec (#4379).** `*.spec.*` can match a non-test file that happens to carry
-the word — `api.spec.json`, `openapi.spec.yaml` — which lets the RED gate pass on a commit touching
-only that. This is not new: the earlier `**/*.spec.*` matched those at any nested path too. #5181
-restored the `**/` reach as `:(glob,icase)**/`, so a fixture under a nested `tests/` directory
-counts as a test commit as well. It is accepted rather than narrowed, because narrowing it is a
-behaviour change to the currently-supported case and not part of making other languages visible.
+**Cost of the broad pathspec (#4379).** `*.spec.*` also matches a non-test file that carries the
+word, such as `api.spec.json` or `openapi.spec.yaml`, so a commit touching only that file satisfies
+the RED gate. The `tests/`, `test/` and `__tests__/` entries match at any depth, so a fixture under
+`docs/tests/` also counts as a test commit. Both matches reach back to the earlier `**/*.spec.*`
+entry, which matched at any nested path.
 
 **Known gap — Rust inline unit tests (#4379).** Rust integration tests under `tests/` (including
 `crates/*/tests/`) match. An inline `#[test]` conventionally lives inside the implementation file, so
