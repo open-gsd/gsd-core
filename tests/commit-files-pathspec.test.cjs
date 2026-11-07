@@ -19,14 +19,21 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
+const { RULES } = require('../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
+const { buildPlanningSnapshot } = require('../gsd-core/bin/lib/planning-snapshot.cjs');
+const { runHook } = require('./helpers/process-seam.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { scanFencedBlocks, stripFencedCode, scanInlineCodeSpans } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   bareCommandName, tokenize, shellDashCPayloads, commentPortion,
-  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration,
+  ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_PREFIX_ORACLE, GIT_VALUE_FLAGS,
 } = require('./helpers/shipped-command-scan.cjs');
+const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
 
 describe('commit --files: pathspec honors declared scope (#2112)', () => {
   let tmpDir;
@@ -3299,5 +3306,466 @@ cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], fals
     assert.equal(result.committed, false);
     assert.equal(result.reason, 'commit_failed');
     assert.equal(result.timed_out, undefined);
+  });
+});
+
+describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
+  // A bare `git commit -m ...` commits the whole index, sweeping in files other
+  // sessions staged. Prompts must prescribe `git commit -m "..." -- <paths>`.
+  // Scope: fenced blocks and inline code spans only (prose that merely names
+  // the command is not an invocation). A command spans from `git commit` to the
+  // next operator or unquoted newline, so a multi-line -m body is one command.
+  // tokenize() stops at the first unquoted `#`, so comments are stripped per
+  // line first or a later commit in the same block would be hidden.
+  const root = path.join(__dirname, '..');
+  const promptFiles = () => listScanFiles(root, [...SCAN_ROOTS, 'pi/package-skills', 'pi/package-agents']).sort();
+  test('scanner flags unscoped commits and passes scoped ones', () => {
+    assert.equal(unscopedGitCommits('git commit -m "x"').length, 1);
+    assert.equal(unscopedGitCommits('# note\ngit commit -m "x"').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m x --').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m "x" -- a b').length, 0);
+  });
+
+  test('scanner flags whole-tree pathspecs and echo after a redirection; accepts --pathspec-from-file', () => {
+    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- *', 'git commit -m x -- **', 'git commit -m x -- /', 'git commit -m x -- ./*', "git commit -m x -- '**/*'", "git commit -m x -- ':(glob)**/*'", 'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    assert.equal(unscopedGitCommits('>&2 echo "git commit -m x"').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m x --pathspec-from-file=list.txt').length, 0);
+  });
+
+  test('scanner flags -i/--include, .. and :(icase) whole-tree specs, separate-value --attr-source/--config-env, multi-line bash -c and quoted eval commits', () => {
+    for (const c of ['git commit -i -m x -- a', 'git commit --include -m x -- a', 'git commit --inc -m x -- a', 'git commit -qi -m x -- a', 'git commit -m x -- ..', 'git commit -m x -- ../', 'git commit -m x -- ../..', "git commit -m x -- ':(icase).'", 'git --attr-source HEAD commit -m x', 'git --config-env k=V commit -m x', 'git --shallow-file f commit -m x', 'bash -c "cd a\ngit commit -m x"', 'eval "git commit -m x"']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['git commit -m x -- a', 'git commit --in -m x -- a', 'git commit -m x -- ...', 'git commit -m "- fix item" -- a', "git commit -m x -- ':(icase)src'", 'git commit -m x -- -i', 'bash -c "cd a\ngit commit -m x -- a"', 'eval "git commit -m x -- a"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+  });
+
+  test('every shell -<cluster>c spelling and an unquoted $-word pathspec are unscoped', () => {
+    for (const c of ['bash -lc "git commit -m x"', 'bash -ec "git commit -m x"', 'sh -euc "git commit -m x"', 'git commit -m x -- $FILES', 'git commit -m x -- $A $B']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['bash -lc "git commit -m x -- a"', 'git commit -m x -- "$FILES"', "git commit -m x -- '$FILES'", 'git commit -m x -- $A b', 'git commit -m x -- a$B', 'git commit -m x -- "$A" "$B"']) assert.equal(unscopedGitCommits(c).length, 0, c);
+  });
+
+  test('parity: the scanner sees every -c cluster and git value option the secret guard sees', () => {
+    const hook = (command) => runHook(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), [], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } }), env: { ...process.env }, timeoutMs: PROBE_TIMEOUT_MS,
+    }).exitCode;
+    for (const flag of ['-c', '-lc', '-ec', '-euc', '-xec']) {
+      assert.equal(hook(`bash ${flag} 'cat .env'`), 2, `hook blocks bash ${flag}`);
+      assert.equal(shellDashCPayloads(`bash ${flag} 'git commit -m x'`).length, 1, `scanner reads bash ${flag}`);
+    }
+    // A value option the hook skips (exit 0) must be a value option of the scanner too; `--super-prefix` fails closed in the hook.
+    const probed = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix'];
+    assert.deepStrictEqual([...GIT_VALUE_FLAGS].sort(), [...probed].sort(), 'every scanner value option is probed against the hook, and the reverse');
+    const skipped = probed
+      .filter((opt) => hook(`git ${opt} '-calias.x=!cat .env' status`) === 0);
+    for (const opt of skipped) assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
+    assert.ok(skipped.includes('-C') && skipped.includes('--git-dir'), `the hook skips -C and --git-dir (got ${skipped})`);
+  });
+
+  test('git -C / -c global options do not hide a commit', () => {
+    assert.equal(unscopedGitCommits('git -C sub commit -m x').length, 1);
+    assert.equal(unscopedGitCommits('git -c user.name=t -C sub commit -m x').length, 1);
+    assert.equal(unscopedGitCommits('git --no-pager commit -m x').length, 1);
+    assert.equal(unscopedGitCommits('git -C sub commit -m x -- a').length, 0);
+    assert.equal(unscopedGitCommits('git -c k=v log -1').length, 0);
+  });
+
+  test('a commit inside a quoted string (echoed advice) is scanned too', () => {
+    assert.equal(unscopedGitCommits(`echo "  1. git add -A && git commit -m 'x'   # note" >&2`).length, 1);
+    assert.equal(unscopedGitCommits(`echo "  1. git add -A && git commit -m 'x' -- a"`).length, 0);
+    assert.equal(unscopedGitCommits(`echo 'git -C d commit -m x'`).length, 1);
+    assert.equal(unscopedGitCommits(`git commit -m "fix: scope git commit calls" -- a`).length, 0);
+  });
+
+  test('a bare git commit (editor mode, no args) is unscoped', () => {
+    assert.equal(unscopedGitCommits('git commit').length, 1);
+    assert.equal(unscopedGitCommits('git commit', true).length, 0);
+    assert.equal(unscopedGitCommits('git commit\ngit commit -m "x" -- a').length, 1);
+  });
+
+  test('a # glued to a closing quote is literal, not a comment', () => {
+    assert.equal(unscopedGitCommits('echo "a\nb"#tag;git commit -m z').length, 1);
+  });
+
+  test('a # inside a multiline quoted message is not a comment', () => {
+    assert.equal(unscopedGitCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
+  });
+
+  // Commits the scanner flags on purpose, each with its reason: whole-index commits (no pathspec) and whole-tree ones (`-- .`).
+  // Key: `<file>: <first line of the command>`.
+  const UNSCOPED_COMMIT_ALLOWLIST = new Map([
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: a clean-index guard precedes it'],
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: a clean-index guard precedes it'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it'],
+    ['agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
+    ['pi/package-agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
+    ["gsd-core/workflows/execute-phase.md: git commit -m 'chore(recover): recover worktree state' -- .", 'whole worktree: run from the worktree root'],
+    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- . \':!.planning\'', '/gsd-fast commits the current directory minus .planning (commit_docs=false)'],
+    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- .', '/gsd-fast commits the current directory'],
+    ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
+    ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: the step-1 preflight refuses a tree with staged changes'],
+    ['gsd-core/workflows/ship.md: git commit --allow-empty --only -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: --only records nothing from the index'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+    ['gsd-core/workflows/undo.md: git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
+  ]);
+
+  test('every git commit with arguments carries a -- pathspec', () => {
+    const offenders = [];
+    const seen = new Set();
+    for (const f of promptFiles()) {
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      const lines = splitLines(md);
+      const segments = scanFencedBlocks(lines).map((b) =>
+        [lines.slice(b.openLineIdx + 1, b.closeLineIdx === -1 ? lines.length : b.closeLineIdx).join('\n'), false]);
+      for (const s of scanInlineCodeSpans(stripFencedCode(md).text)) segments.push([s.content, true]);
+      for (const [seg, inline] of segments) {
+        for (const cmd of unscopedGitCommits(seg, inline)) {
+          const key = `${f}: ${cmd.split('\n')[0]}`;
+          if (UNSCOPED_COMMIT_ALLOWLIST.has(key)) seen.add(key);
+          else offenders.push(key);
+        }
+      }
+    }
+    assert.deepStrictEqual([...UNSCOPED_COMMIT_ALLOWLIST.keys()].filter((k) => !seen.has(k)), [],
+      'stale UNSCOPED_COMMIT_ALLOWLIST entries: remove them');
+    assert.deepStrictEqual(offenders, [],
+      'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
+  });
+
+  const word = fc.stringMatching(/^[a-z0-9][a-z0-9._/]{0,7}$/);
+  const msg = fc.oneof(
+    word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`), word.map((w) => `"- ${w}"`),
+  );
+  test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE);
+    fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
+      const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
+      assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
+    }), { seed: 5211, numRuns: 100 });
+  });
+
+  test('property: a widening option, a whole-tree pathspec, or a bash -c / eval wrapper keeps the verdict for every git prefix', () => {
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE);
+    fc.assert(fc.property(prefix, msg, fc.constantFrom('-i', '--include', '--inc', '-qi'), fc.array(word, { minLength: 1, maxLength: 3 }), (pre, m, opt, paths) => {
+      assert.equal(unscopedGitCommits(`${pre} commit ${opt} -m ${m} -- ${paths.join(' ')}`).length, 1);
+    }), { seed: 5211, numRuns: 100 });
+    fc.assert(fc.property(prefix, msg, fc.constantFrom('.', './', '..', '../', '../..', ':/', ':(icase).', ':(top,icase)', '*', '**', '/', './*', '**/*', ':(glob)**/*'), (pre, m, t) => {
+      assert.equal(unscopedGitCommits(`${pre} commit -m ${m} -- ${t}`).length, 1);
+    }), { seed: 5211, numRuns: 100 });
+    const wrap = fc.constantFrom((c) => `bash -c 'cd x\n${c}'`, (c) => `eval '${c}'`);
+    fc.assert(fc.property(prefix, word, fc.array(word, { minLength: 0, maxLength: 3 }), wrap, (pre, w, paths, wrapper) => {
+      const cmd = `${pre} commit -m ${w}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
+      assert.equal(unscopedGitCommits(wrapper(cmd)).length, paths.length === 0 ? 1 : 0);
+    }), { seed: 5211, numRuns: 100 });
+  });
+
+  // `onCleanup` receives the teardown callback (t.after or a finally slot).
+  function initFixtureRepo(onCleanup, prefix) {
+    // The fixture owner inits the repo and makes one empty initial commit.
+    const dir = createFixture({ prefix, git: true, planning: false, projectDoc: false });
+    onCleanup(() => cleanup(dir));
+    const git = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+    return { dir, git };
+  }
+
+  // Runs a bash fence from `cwd` via the process seam; the script lives in .git so it is never staged or swept.
+  function runFence(dir, script, cwd = dir) {
+    const file = path.join(dir, '.git', 'fence.sh');
+    fs.writeFileSync(file, script);
+    return runHook(file, [], { interpreter: 'bash', cwd, timeoutMs: GIT_TIMEOUT_MS });
+  }
+
+  // Body of the first bash fence at or after `marker` in `rel`; `bounded` stops the search at the step's `</step>`.
+  const bashFenceAfter = (rel, marker, bounded = false) => {
+    const all = splitLines(fs.readFileSync(path.join(root, rel), 'utf8'));
+    const from = all.findIndex((l) => l.includes(marker));
+    assert.notEqual(from, -1, `${rel}: ${marker} exists`);
+    const rest = all.slice(from);
+    const end = rest.findIndex((l) => l.includes('</step>'));
+    assert.ok(!bounded || end !== -1, `${rel}: </step> closes the step after ${marker}`);
+    const scope = bounded ? rest.slice(0, end) : rest;
+    const blk = scanFencedBlocks(scope).find((b) => b.infoString === 'bash');
+    assert.ok(blk, `${rel}: bash fence after ${marker}`);
+    return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
+  };
+
+  test('fast.md commit fence (scratch repo): commit_docs=true commits .planning, commit_docs=false excludes it', (t) => {
+    const body = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
+    // drop the gsd_run resolver line; stub it with the config value under test
+    const fence = body.slice(body.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
+    for (const docs of ['true', 'false']) {
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489f-');
+      fs.mkdirSync(path.join(dir, '.planning'));
+      fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+      fs.writeFileSync(path.join(dir, 'code'), 'c');
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 'p');
+      const run = () => runFence(dir, `gsd_run() { echo ${docs}; }\n${fence}`);
+      const r = run();
+      assert.equal(r.exitCode, 0, r.stderr);
+      const head = git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort();
+      assert.deepStrictEqual(head, docs === 'false' ? ['code'] : ['.planning/STATE.md', 'code']);
+    }
+  });
+  test('the squash and merge-with-history commits refuse while a foreign path is staged', (t) => {
+    const guard = (marker) => bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker).find((l) => l.startsWith('git diff --cached --quiet ||'));
+    for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
+      assert.ok(g, 'a clean-index guard line exists');
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489g-');
+      fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+      assert.equal(runFence(dir, g).exitCode, 0);
+      fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+      assert.equal(runFence(dir, g).exitCode, 1);
+    }
+  });
+  test('pr-branch.md preflight refuses a staged foreign path', (t) => {
+    const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/pr-branch.md'), 'utf8'));
+    const from = all.findIndex((l) => l.startsWith('DIRTY=$(git status'));
+    assert.notEqual(from, -1, 'the preflight exists');
+    const len = all.slice(from).findIndex((l) => l === 'fi');
+    assert.notEqual(len, -1, 'the preflight closes with fi');
+    const pre = all.slice(from, from + len + 1).join('\n');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489b-');
+    fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+    assert.equal(runFence(dir, pre).exitCode, 0);
+    fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+    assert.equal(runFence(dir, pre).exitCode, 1);
+  });
+  test('ship.md CI-recovery commit records no staged foreign path', (t) => {
+    const line = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/ship.md'), 'utf8')).find((l) => l.includes('git commit --allow-empty'));
+    // allow-test-rule: source-text-is-the-product (#5211)
+    assert.ok(line && line.includes('--only'), 'the recovery commit line exists and carries --only');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489h-');
+    fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+    fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+    assert.equal(runFence(dir, line.trim()).exitCode, 0);
+    assert.equal(git('show', '--name-only', '--format=', 'HEAD').trim(), '');
+    assert.equal(git('diff', '--cached', '--name-only').trim(), 'stray');
+  });
+  test('fast.md commit fence from a repo subdir: stages and commits only the current directory', (t) => {
+    const lines = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
+    const body = lines.slice(lines.findIndex((l) => l.startsWith('COMMIT_DOCS='))).join('\n');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489s-');
+    fs.mkdirSync(path.join(dir, 'app')); fs.mkdirSync(path.join(dir, 'other'));
+    fs.writeFileSync(path.join(dir, 'app/code'), 'a'); fs.writeFileSync(path.join(dir, 'other/o'), 'o');
+    git('add', '-A'); git('commit', '-q', '-m', 'seed');
+    fs.writeFileSync(path.join(dir, 'app/code'), 'a2'); fs.writeFileSync(path.join(dir, 'other/o'), 'o2');
+    const r = runFence(dir, `gsd_run() { echo false; }\n${body}`, path.join(dir, 'app'));
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.deepStrictEqual(git('show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['app/code']);
+    assert.equal(git('diff', '--cached', '--name-only').trim(), '');
+    assert.equal(git('diff', '--name-only').trim(), 'other/o');
+  });
+  test('stop-tracking recipe carries the same four fragments in all six docs', (t) => {
+    const norm = (s) => s.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
+    const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
+    // The W029 message and remedy belong to the health rule, so the docs are compared with the rule's own output.
+    const repo = createTempGitProject('gsd-5489-w029-');
+    t.after(() => cleanup(repo));
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.planning/\n');
+    gitOrThrow(['add', '-A'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-q', '-m', 'ignore planning'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+    const w029 = RULES.find((r) => r.code === 'W029').check(buildPlanningSnapshot(repo))[0];
+    assert.ok(w029, 'W029 fires for an ignored but tracked .planning/');
+    const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
+      'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
+    for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
+      'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
+      // Each doc copies the recipe the scratch-repo test below runs and the W029 text the health rule emits, so the copies must stay in sync with those two sources.
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      // allow-test-rule: docs-parity (#5211)
+      for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
+      // allow-test-rule: docs-parity (#5211)
+      assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
+      if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
+        // allow-test-rule: docs-parity (#5211)
+        assert.ok(md.includes(`- [W029] ${w029.message}`), `${f}: W029 message`);
+        // allow-test-rule: docs-parity (#5211)
+        assert.ok(md.includes(`Fix: ${w029.remedy.args.command}`), `${f}: W029 remedy`);
+      }
+    }
+  });
+  test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {
+    const fence = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
+    for (const foreign of [true, false]) {
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489p-');
+      fs.mkdirSync(path.join(dir, '.planning'));
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 's'); fs.writeFileSync(path.join(dir, 'code'), 'c');
+      git('add', '-A'); git('commit', '-q', '-m', 'seed');
+      if (foreign) { fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray'); }
+      const r = runFence(dir, fence);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.equal(Number(git('rev-list', '--count', 'HEAD')), foreign ? 2 : 3);
+      assert.equal(git('ls-files', '.planning').trim() === '', !foreign);
+    }
+  });
+
+  test('git-integration.md commit examples quote every path as :(literal)', () => {
+    for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
+      // The example commands are what an agent copies, so their quoting is the shipped contract.
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
+      assert.equal(tails.length, 3, f);
+      for (const t of tails) {
+        // allow-test-rule: docs-parity (#5211)
+        assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
+      }
+    }
+  });
+
+  test('a pasted-path placeholder in a commit pathspec is single-quoted in every shipped prompt, never double-quoted', () => {
+    const sites = ['agents/gsd-debug-session-manager.md', 'agents/gsd-debug-session-manager.compact.md', 'agents/gsd-executor.md', 'agents/gsd-debugger.md',
+      'pi/package-agents/gsd-debug-session-manager.md', 'pi/package-agents/gsd-executor.md', 'pi/package-agents/gsd-debugger.md', 'pi/package-skills/gsd-debug/SKILL.md',
+      'gsd-core/workflows/audit-fix.md', 'gsd-core/workflows/validate-phase.md'];
+    for (const f of sites) {
+      // The prompt text is what the model pastes a path into, so its quoting is the shipped contract.
+      const md = fs.readFileSync(path.join(root, f), 'utf8');
+      // allow-test-rule: source-text-is-the-product (#5211)
+      assert.ok(md.includes(":(literal)"), `${f}: has a literal pathspec`);
+      // allow-test-rule: source-text-is-the-product (#5211)
+      assert.equal(/":\(literal\)[^"]{1,80}[}>]"/.test(md), false, `${f}: double-quoted placeholder`);
+    }
+  });
+  test('async-external-jobs recipe commits the manifest with a pathspec', () => {
+    // The recipe commands are what a user runs, so their pathspec is the shipped contract.
+    const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
+    const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
+    assert.ok(commits.length > 0);
+    for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
+  });
+  test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
+    for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
+      // The example lines are what the agent runs, so the root note beside `-- .` is the shipped contract.
+      const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
+      assert.ok(hits.length > 0, f);
+      for (const l of hits) {
+        // allow-test-rule: source-text-is-the-product (#5211)
+        assert.ok(l.includes("# from THIS worktree's root"), `${f}: ${l}`);
+        // allow-test-rule: source-text-is-the-product (#5211)
+        assert.ok(l.includes('git add -A -- .'), `${f}: ${l}`);
+      }
+    }
+  });
+
+  test('executor step-4 single-repo commit (scratch repo): foreign staged file stays staged', (t) => {
+    const fence = bashFenceAfter('agents/gsd-executor.md', '**Otherwise (standard single-repo):**').join('\n')
+      .replace("':(literal){step-2 path}' ...", "':(literal)src/a.ts' ':(literal)src/[b].ts'");
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489e-');
+    fs.mkdirSync(path.join(dir, 'src'));
+    fs.writeFileSync(path.join(dir, 'src/a.ts'), 'a'); fs.writeFileSync(path.join(dir, 'stray'), 's');
+    git('add', '-A'); git('commit', '-q', '-m', 'seed');
+    fs.writeFileSync(path.join(dir, 'src/a.ts'), 'a2'); fs.writeFileSync(path.join(dir, 'src/[b].ts'), 'b'); fs.writeFileSync(path.join(dir, 'src/b.ts'), 'b');
+    fs.writeFileSync(path.join(dir, 'stray'), 's2');
+    git('add', 'src/a.ts', 'src/[b].ts', 'src/b.ts', 'stray');
+    const r = runFence(dir, fence);
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.deepStrictEqual(git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort(), ['src/[b].ts', 'src/a.ts']);
+    assert.equal(git('diff', '--cached', '--name-only').trim(), 'src/b.ts\nstray');
+  });
+  describe('complete-milestone git_commit_milestone fence (scratch repo)', () => {
+    // Read lazily so a missing step fails one test, not the whole file at collection.
+    const fenceOf = () => bashFenceAfter('gsd-core/workflows/complete-milestone.md', '<step name="git_commit_milestone">', true).join('\n');
+
+    // Seeds `rm` + a stray, stages the deletions and the stray's edit, then runs the fence from `sub`.
+    function run(rm, sub = '.', stageMore = () => {}) {
+      let teardown;
+      try {
+        const { dir, git } = initFixtureRepo((f) => { teardown = f; }, 'gsd-5489-');
+        for (const f of [...rm, 'stray', path.join(sub, 'keep')]) { fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), 'x'); }
+        git('add', '-A'); git('commit', '-q', '-m', 'seed');
+        for (const f of rm) git('rm', '-q', f);
+        fs.writeFileSync(path.join(dir, 'stray'), 'y'); git('add', 'stray');
+        stageMore(dir, git);
+        const r = runFence(dir, fenceOf(), path.join(dir, sub));
+        const lines = (s) => s.trim().split('\n').filter(Boolean);
+        return {
+          status: r.exitCode,
+          stderr: r.stderr,
+          commits: Number(git('rev-list', '--count', 'HEAD')),
+          head: lines(git('-c', 'core.quotepath=off', 'show', '--name-only', '--format=', 'HEAD')),
+          staged: lines(git('diff', '--cached', '--name-only')),
+        };
+      } finally {
+        if (teardown) teardown();
+      }
+    }
+
+    test('root layout: commits only the REQUIREMENTS.md deletion, stray stays staged', () => {
+      const r = run(['.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('project nested in a repo subdir (cwd=app/): cwd-relative pathspec still commits', () => {
+      const r = run(['app/.planning/REQUIREMENTS.md'], 'app');
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['app/.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('non-ASCII directory in the path: git does not quote it, deletion still committed', () => {
+      const r = run(['é/.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['é/.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('deletion with identical content staged elsewhere (git reports a rename): still committed alone', () => {
+      const r = run(['.planning/REQUIREMENTS.md'], '.', (dir, git) => { fs.writeFileSync(path.join(dir, 'moved.txt'), 'x'); git('add', 'moved.txt'); });
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['.planning/REQUIREMENTS.md'], ['moved.txt', 'stray']]);
+    });
+
+    test('backslash in the directory name: -z keeps the path unquoted, deletion still committed', { skip: process.platform === 'win32' && 'a backslash is a path separator on Windows' }, () => {
+      const r = run(['a\\b/.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 3, ['stray']]);
+    });
+
+    test('two staged REQUIREMENTS.md deletions: refuses, commits nothing', () => {
+      const r = run(['.planning/REQUIREMENTS.md', '.planning/workstreams/ws1/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits], [1, 2]);
+    });
+
+    test('foreign REQUIREMENTS.md deletion outside .planning/ is never committed', () => {
+      const r = run(['.docs/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits], [1, 2]);
+    });
+
+    test('run from a subdirectory (cwd=src/): the repo-root deletion is still committed alone', () => {
+      const r = run(['.planning/REQUIREMENTS.md'], 'src');
+      assert.deepStrictEqual([r.status, r.commits, r.head, r.staged], [0, 3, ['.planning/REQUIREMENTS.md'], ['stray']]);
+    });
+
+    test('a newline in a staged deletion path cannot fake a .planning path: refuses, commits nothing', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
+      const r = run(['x\n.planning/REQUIREMENTS.md']);
+      assert.deepStrictEqual([r.status, r.commits], [1, 2]);
+    });
+
+    test('an unrelated staged deletion with a newline in its path does not block the REQUIREMENTS.md commit', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
+      const r = run(['.planning/REQUIREMENTS.md', 'a\nb.txt']);
+      assert.deepStrictEqual([r.status, r.commits, r.head], [0, 3, ['.planning/REQUIREMENTS.md']]);
+    });
+
+    test('a failing git diff refuses, it is not reported as a skip', () => {
+      let teardown;
+      try {
+        const { dir, git } = initFixtureRepo((f) => { teardown = f; }, 'gsd-5489-');
+        fs.mkdirSync(path.join(dir, '.planning'));
+        fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'x');
+        git('add', '-A'); git('commit', '-q', '-m', 'seed');
+        git('rm', '-q', '.planning/REQUIREMENTS.md');
+        const failDiff = 'git() { case " $* " in *" diff "*) return 1;; esac; command git "$@"; }\n';
+        const r = runFence(dir, failDiff + fenceOf());
+        assert.deepStrictEqual([r.exitCode, Number(git('rev-list', '--count', 'HEAD'))], [1, 2]);
+      } finally {
+        if (teardown) teardown();
+      }
+    });
+
+    test('property: any directory name (newline, backslash, glob, space, non-ASCII) still commits its .planning deletion alone', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
+      const piece = fc.constantFrom('a', ' ', '\n', '\\', '[', ']', '*', '?', 'é', '"');
+      fc.assert(fc.property(fc.array(piece, { minLength: 1, maxLength: 4 }), (parts) => {
+        const rel = `d${parts.join('')}/.planning/REQUIREMENTS.md`;
+        const r = run([rel]);
+        assert.deepStrictEqual([r.status, r.commits, r.staged], [0, 3, ['stray']]);
+      }), { seed: 5211, numRuns: 12 });
+    });
+
+    test('zero staged deletions: exits 0, commits nothing', () => {
+      const r = run([]);
+      assert.deepStrictEqual([r.status, r.commits], [0, 2]);
+    });
   });
 });

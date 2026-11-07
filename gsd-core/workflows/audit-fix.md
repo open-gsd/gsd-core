@@ -154,8 +154,9 @@ fi
 **c. If tests pass** — commit atomically:
 ```bash
 git add {changed_files}
-git commit -m "fix({scope}): resolve {ID} — {description}"
+git commit -m "fix({scope}): resolve {ID} — {description}" -- ':(literal){changed_file}' ...
 ```
+A `'` in a path becomes `'\''`.
 The commit message **must** include the finding ID (e.g., F-01) for traceability.
 
 **d. If tests fail** — revert changes, mark finding as `fix-failed`, and **stop the pipeline**:

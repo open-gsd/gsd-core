@@ -198,7 +198,12 @@ describe('#5638: the generated gsd-debug skill', () => {
   });
 
   test('commits with a message file, never a shell-quoted string built from model or user text', () => {
-    assert.ok(skill.includes('git commit -F <message file>'));
+    // allow-test-rule: source-text-is-the-product (#5211)
+    // The skill text is the command the model runs, so its quoted pathspec is the shipped contract.
+    assert.ok(skill.includes(`git commit -F "<message file>" -- ':(literal)<file fix touched>' ...`));
+    // allow-test-rule: source-text-is-the-product (#5211)
+    // The agent prompt carries the same command, so the same quoting must hold.
+    assert.ok(read('agents', 'gsd-debug-session-manager.md').includes(`-- ':(literal)<file fix touched>' ...`));
     assert.equal(skill.includes('git commit -m'), false);
     assert.ok(skill.includes('{debug_dir}/resolved/<slug>.md'));
     assert.ok(skill.includes('{debug_dir}/<slug>.md'));

@@ -139,7 +139,7 @@ GSD는 프로젝트 설정을 `.planning/config.json`에 저장합니다. `/gsd-
 
 1. `planning.commit_docs: false` 및 `planning.search_gitignored: true` 설정
 2. `.planning/`을 `.gitignore`에 추가
-3. 이미 추적 중인 경우: `git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"`
+3. 이미 추적 중인 경우: `if git diff --cached --quiet -- ':!.planning'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi`
 
 ---
 

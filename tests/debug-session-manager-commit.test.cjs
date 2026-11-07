@@ -10,9 +10,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempGitProject, cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const MANAGER = path.join(ROOT, 'agents', 'gsd-debug-session-manager.md');
+const COMPACT = path.join(ROOT, 'agents', 'gsd-debug-session-manager.compact.md');
 const DEBUGGER = path.join(ROOT, 'agents', 'gsd-debugger.md');
 
 const manager = () => fs.readFileSync(MANAGER, 'utf8');
@@ -199,17 +201,29 @@ test('#2568: the commit call is covered by the single canonical preamble', () =>
   );
 });
 
-test('#2568: the in-session fix commit is idempotent', () => {
+for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is idempotent (${path.basename(file)})`, () => {
   // gsd-debugger.md's archive_session already commits the fix on the confirmed-checkpoint
   // path, which is the standard find_and_fix flow. A bare `git commit` with nothing
   // staged exits non-zero and would abort this step before the summary is returned.
-  const body = manager();
-  assert.match(
-    body,
-    /git diff --cached --quiet \|\| git commit/,
-    'the fix-code commit must be guarded on staged content — archive_session may have ' +
+  const body = fs.readFileSync(file, 'utf8');
+  // allow-test-rule: source-text-is-the-product (#5211)
+  // The prompt line is the command the session manager runs, so the line itself is the contract.
+  const line = splitLines(body).find((l) => l.includes('git diff HEAD --quiet -- ')) ?? '';
+  const guard = line.indexOf('git diff HEAD --quiet -- ');
+  const commit = line.indexOf(' || git commit -m ', guard);
+  // allow-test-rule: source-text-is-the-product (#5211)
+  // The prompt line is the command the session manager runs, so its guard-then-commit shape is the contract.
+  assert.ok(guard !== -1 && commit !== -1 && line.indexOf(' -- ', commit + 1) !== -1,
+    'the fix-code commit must be guarded on the named paths — archive_session may have ' +
       'already committed it, and an unguarded git commit exits non-zero on an empty diff',
   );
+  // #5211: guard and commit must name the SAME paths, or the guard tests different files than the commit records.
+  const guardPaths = line.slice(guard + 'git diff HEAD --quiet -- '.length, line.indexOf(' || ', guard));
+  const commitPaths = line.slice(line.indexOf(' -- ', commit) + 4);
+  // allow-test-rule: source-text-is-the-product (#5211)
+  // Guard and commit paths come from the same prompt line the manager runs, so their equality is the contract.
+  assert.ok(guardPaths.length > 0 && guardPaths === commitPaths,
+    `guard and commit must carry the same pathspec, got ${JSON.stringify(guardPaths)} vs ${JSON.stringify(commitPaths)}`);
 });
 
 // ── The commit_docs gate the whole fix relies on — behavioral, not assumed ──

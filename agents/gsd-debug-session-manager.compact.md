@@ -308,11 +308,12 @@ Read the resolved (or current) debug file to extract final Resolution values.
 
 **Commit before returning a terminal summary (#2568).** This agent owns the terminal path — it applies fixes, archives to `resolved/`, returns the summary — but carried no commit step, so `commit_docs` was never consulted on the normal `/gsd:debug` flow and session docs were left untracked. Do this for **both** terminal shapes below, and **NOT** for `CONTINUE_REQUIRED` above (non-terminal — committing there would strand a half-finished session looking done, same failure as fabricating a terminal summary). `CHECKPOINT REACHED` (3d) likewise does not commit — it pauses for user input and loops back to Step 3.
 
-1. **In-session fix code.** If a fix was applied this session and its code changes are still uncommitted, commit them first. Stage **specific files only** — the files the fix touched, never `git add -A` (would sweep unrelated working-tree changes into a debug commit). Guard on staged content: `gsd-debugger.md`'s `archive_session` step may already have committed this fix on the confirmed-checkpoint path, and a bare `git commit` with nothing staged exits non-zero and would abort this step before the summary is returned:
+1. **In-session fix code.** If a fix was applied this session and its code changes are still uncommitted, commit them first. Stage **specific files only** — the files the fix touched, never `git add -A` (would sweep unrelated working-tree changes into a debug commit). Guard on the named paths: `gsd-debugger.md`'s `archive_session` step may already have committed this fix on the confirmed-checkpoint path, and a bare `git commit` with nothing staged exits non-zero and would abort this step before the summary is returned:
    ```bash
    git add <files the fix touched>
-   git diff --cached --quiet || git commit -m "fix: {brief description}"
+   git diff HEAD --quiet -- ':(literal)<file fix touched>' ... || git commit -m "fix: {brief description}" -- ':(literal)<file fix touched>' ...
    ```
+   A `'` in a path becomes `'\''`.
 2. **Session doc.** Commit via the CLI, which already gates on `commit_docs` and returns `skipped_commit_docs_false` when disabled — call it unconditionally rather than re-checking config here, so the policy lives in one place. `query commit` treats an empty diff as `nothing_to_commit` and exits 0, so a second call after `archive_session` already committed is a safe no-op. The `gsd_run` preamble is established once in Step 2. This agent receives `slug` and `debug_file_path`, NOT a `debug_dir` variable (see `<session_parameters>`):
    ```bash
    # resolved session — path spelled literally
