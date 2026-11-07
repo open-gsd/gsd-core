@@ -20,8 +20,8 @@ const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./he
 const { writeGateCap, cleanEnv } = require('./helpers/ship-gate-fixture.cjs');
 
 const ORDINARY = [...'abcXYZ019._-~ é\''];
-// Windows file names cannot hold \ " * ? < > |, so the generator leaves them out there and every drawn name is creatable.
-const SHELL_SYNTAX = [...(process.platform === 'win32' ? '$`;&()#[' : '$`;&|<>()#*?[\\"')];
+// Characters that are shell syntax and legal in a file name on every platform (Windows forbids \ " * ? < > |).
+const SHELL_SYNTAX = [...'$`;&()#['];
 
 describe('ship:pre command gate treats the phase directory name as data (#5482)', () => {
   let tmpDir;
