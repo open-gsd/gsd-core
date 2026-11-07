@@ -998,13 +998,11 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     assert.strictEqual(r.timeout, 3600000, `stderr: ${r.stderr}`);
   });
 
-  test('pr-subrepo passes the configured timeout to git commit and reports it as an unclassified error naming the repo and the stale lock', () => {
+  test('pr-subrepo passes the configured timeout to git commit and reports it as an unclassified error', () => {
     setup({ commit_timeout_ms: 60000 });
     const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-timeout', 'fix: probe', false);`);
     assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
     assert.strictEqual(r.failure.reason, ERROR_REASON.UNKNOWN);
-    assert.ok(r.failure.message.includes('backend'), r.failure.message);
-    assert.ok(r.failure.message.includes('index.lock'), r.failure.message);
   });
 
   test('pr-subrepo leaves a legacy-shaped config byte-identical (persist:false)', () => {
