@@ -199,6 +199,8 @@ AskUserQuestion with options: Squash merge (Recommended), Merge with history, De
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
+# The squash commits record the whole index, so a foreign staged file would ride along.
+git diff --cached --quiet || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
 if [ "$BRANCHING_STRATEGY" = "phase" ]; then
@@ -231,6 +233,8 @@ git checkout "$CURRENT_BRANCH"
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
+# The merge commits record the whole index, so a foreign staged file would ride along.
+git diff --cached --quiet || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
 if [ "$BRANCHING_STRATEGY" = "phase" ]; then

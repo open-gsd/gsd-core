@@ -3391,17 +3391,17 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   // Commits the scanner flags on purpose, each with its reason: whole-index commits (no pathspec) and whole-tree ones (`-- .`).
   // Key: `<file>: <first line of the command>`.
   const UNSCOPED_COMMIT_ALLOWLIST = new Map([
-    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: commit the merge result'],
-    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: commit the merge result'],
-    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
-    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge'],
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: a clean-index guard precedes it'],
+    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: a clean-index guard precedes it'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it'],
+    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it'],
     ['agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
     ['pi/package-agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
     ["gsd-core/workflows/execute-phase.md: git commit -m 'chore(recover): recover worktree state' -- .", 'whole worktree: run from the worktree root'],
     ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- . \':!.planning\'', '/gsd-fast commits the current directory minus .planning (commit_docs=false)'],
     ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- .', '/gsd-fast commits the current directory'],
     ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
-    ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: reuses the source commit message over the staged result'],
+    ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: the step-1 preflight refuses a tree with staged changes'],
     ['gsd-core/workflows/ship.md: git commit --allow-empty --only -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: --only records nothing from the index'],
     ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
     ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
@@ -3499,12 +3499,33 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       fs.writeFileSync(path.join(dir, 'code'), 'c');
       fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 'p');
       const run = () => runFence(dir, `gsd_run() { echo ${docs}; }\n${fence}`);
-      fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
       const r = run();
       assert.equal(r.exitCode, 0, r.stderr);
       const head = git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort();
-      assert.deepStrictEqual(head, docs === 'false' ? ['code', 'stray'] : ['.planning/STATE.md', 'code', 'stray']);
+      assert.deepStrictEqual(head, docs === 'false' ? ['code'] : ['.planning/STATE.md', 'code']);
     }
+  });
+  test('the squash and merge-with-history commits refuse while a foreign path is staged', (t) => {
+    const guard = (marker) => bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker).find((l) => l.startsWith('git diff --cached --quiet ||'));
+    for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
+      assert.ok(g, 'a clean-index guard line exists');
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489g-');
+      fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+      assert.equal(runFence(dir, g).exitCode, 0);
+      fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+      assert.equal(runFence(dir, g).exitCode, 1);
+    }
+  });
+  test('ship.md CI-recovery commit records no staged foreign path', (t) => {
+    const line = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/ship.md'), 'utf8')).find((l) => l.includes('git commit --allow-empty'));
+    // allow-test-rule: source-text-is-the-product (#5211)
+    assert.ok(line && line.includes('--only'), 'the recovery commit line exists and carries --only');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489h-');
+    fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
+    fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+    assert.equal(runFence(dir, line.trim()).exitCode, 0);
+    assert.equal(git('show', '--name-only', '--format=', 'HEAD').trim(), '');
+    assert.equal(git('diff', '--cached', '--name-only').trim(), 'stray');
   });
   test('fast.md commit fence from a repo subdir: stages and commits only the current directory', (t) => {
     const lines = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
