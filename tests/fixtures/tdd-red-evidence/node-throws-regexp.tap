@@ -1,0 +1,44 @@
+TAP version 13
+# Subtest: rejects a malformed token
+not ok 1 - rejects a malformed token
+  ---
+  duration_ms: 1.7641
+  type: 'test'
+  location: 'C:\\work\\repro\\throws-red.test.cjs:8:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /rejected token/. Input:
+    
+    'Error: boom: token accepted'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+  error: 'boom: token accepted'
+  stack: |-
+    C:\work\repro\throws-red.test.cjs:9:31
+    getActual (node:assert:611:5)
+    strict.throws (node:assert:759:24)
+    TestContext.<anonymous> (C:\work\repro\throws-red.test.cjs:9:10)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1382:25)
+    Test.start (node:internal/test_runner/test:1242:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+  operator: 'throws'
+  stack: |-
+    TestContext.<anonymous> (C:\work\repro\throws-red.test.cjs:9:10)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1382:25)
+    Test.start (node:internal/test_runner/test:1242:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 84.602

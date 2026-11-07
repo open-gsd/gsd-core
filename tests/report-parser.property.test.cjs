@@ -324,3 +324,99 @@ test('#5721 property: classname "Test suite failed to run" is always flagged, wh
     assert.equal(report.tests[0].loadFailure, true);
   }));
 });
+
+// #5819: node:test repeats error/stack keys in an assert.throws(fn, /re/)
+// diagnostic block. Tolerance for exactly that defect must not change the
+// target-failure judgment (accept), must not soften interruption refusals, and
+// must never recover a block whose repeated key is the interruption signal.
+const INTERRUPTION_ERROR = 'Test run interrupted by cancellation, hook failure, or timeout';
+
+// Bare labels may be empty (maxLength only); names and scalar values below must not be.
+const word = label.map(chars => chars.length > 0 ? chars : 'x');
+
+function dupDiagReport(target, { failureType = "  failureType: 'testCodeFailure'", messages } = {}) {
+  const [e1, e2, s1, s2] = messages;
+  return [
+    'TAP version 13',
+    `# Subtest: ${target}`,
+    `not ok 1 - ${target}`,
+    '  ---',
+    '  duration_ms: 0.5',
+    failureType,
+    `  error: '${e1}'`,
+    `  error: '${e2}'`,
+    `  stack: '${s1}'`,
+    `  stack: '${s2}'`,
+    '  ...',
+    '1..1\n',
+  ].join('\n');
+}
+
+test('#5819 property: repeated error/stack diagnostic keys keep the target-failure judgment', () => {
+  fc.assert(fc.property(word, word, word, word, word, (target, e1, e2, s1, s2) => {
+    const output = dupDiagReport(target, { messages: [e1, e2, s1, s2] });
+    const report = parseTestReport(output);
+    assert.equal(report.valid, true, report.issues.join('; '));
+    assert.deepEqual(report.tests.map(({ name, status }) => ({ name, status })), [{ name: target, status: 'failed' }]);
+    const result = classifyRedEvidence(evidence(output, target));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.matched_test, target);
+    assert.deepEqual(result.evidence.report_errors, []);
+    // Review finding: the old determinism assertion compared two parses of the same
+    // string, which cannot fail unless the parser keeps hidden state. The invariant
+    // that matters: the recovered judgment equals the SINGLE-KEY control for the same
+    // target — recovery changes nothing about which failure proves RED.
+    const controlOutput = [
+      'TAP version 13',
+      `# Subtest: ${target}`,
+      `not ok 1 - ${target}`,
+      '  ---',
+      '  duration_ms: 0.5',
+      "  failureType: 'testCodeFailure'",
+      `  error: '${e1}'`,
+      `  stack: '${s1}'`,
+      '  ...',
+      '1..1\n',
+    ].join('\n');
+    const control = classifyRedEvidence(evidence(controlOutput, target));
+    assert.equal(control.verdict, result.verdict);
+    assert.equal(control.reason, result.reason);
+    assert.equal(control.evidence.matched_test, result.evidence.matched_test);
+  }));
+});
+
+test('#5819 property: a recovered block still refuses every interruption failureType', () => {
+  fc.assert(fc.property(word, fc.constantFrom('testTimeoutFailure', 'cancelledByParent', 'hookFailed'), (target, failureType) => {
+    const output = dupDiagReport(target, {
+      failureType: `  failureType: '${failureType}'`,
+      messages: ['ran the test', 'ran the test', 'frame one', 'frame two'],
+    });
+    const result = classifyRedEvidence(evidence(output, target));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.deepEqual(result.evidence.report_errors, [INTERRUPTION_ERROR]);
+  }));
+});
+
+test('#5819 property: a repeated failureType key is never recovered, in any spelling', () => {
+  // Review finding: the property generated only the plain spelling. The second key is
+  // now drawn from every double-quoted escape form js-yaml decodes to failureType.
+  const BS = String.fromCharCode(92);
+  const spellings = [
+    'failureType',
+    `"failureType"`,
+    `'failureType'`,
+    `"${BS}x66ailureType"`,
+    `"${BS}u0066ailureType"`,
+    `"${BS}U00000066ailureType"`,
+  ];
+  fc.assert(fc.property(word, fc.constantFrom(...spellings), (target, secondKey) => {
+    const output = dupDiagReport(target, {
+      failureType: `  failureType: 'testTimeoutFailure'\n  ${secondKey}: 'testCodeFailure'`,
+      messages: ['ran the test', 'ran the test', 'frame one', 'frame two'],
+    });
+    assertBlocked(output);
+    assert.ok(parseTestReport(output).issues.includes('Malformed TAP'));
+  }));
+});
