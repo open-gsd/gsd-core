@@ -7,9 +7,10 @@
  * listing only `placement_test.go` was classified behavior-adding — the gate then asked for a RED
  * commit for the task that IS the RED commit.
  *
- * `TEST_FILE_PATHSPECS` is the list in git-pathspec spelling, which is what the workflow passes to
- * `evaluation-scope --pathspec`; `isTestFilePath` evaluates the same list for a task's `<files>`.
- * A test pins the workflow's pathspec flags to this array, so the two cannot drift apart again.
+ * `TEST_FILE_GLOBS` is the list; `TEST_FILE_PATHSPECS` is its git-pathspec spelling, which is what
+ * the workflow passes to `evaluation-scope --pathspec`. `isTestFilePath` evaluates the same list for
+ * a task's `<files>`. A test pins the workflow's pathspec flags to the derived array, so the two
+ * cannot drift apart again.
  */
 
 /**

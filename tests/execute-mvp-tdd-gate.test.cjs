@@ -182,7 +182,7 @@ describe('#5106: test-file conventions are one definition', () => {
     // (a directory glob as `name/`). Read the list alone: other paragraphs mention `tests/` too.
     const ref = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
     const listStart = ref.indexOf('**5. Create first test file:**');
-    const list = ref.slice(listStart, ref.indexOf('**Known gap', listStart));
+    const list = ref.slice(listStart, ref.indexOf('**Cost of the broad pathspec', listStart));
     assert.ok(listStart >= 0 && list.length > 0, 'references/tdd.md has no "Create first test file" list');
     for (const glob of TEST_FILE_GLOBS) {
       const documented = glob.endsWith('/**') ? glob.slice(0, -2) : glob;
