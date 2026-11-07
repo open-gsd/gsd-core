@@ -1305,7 +1305,51 @@ function _normalizeMd(content: string, prior?: string, preserveFencedStructure =
  * write: the opened handle must still be a character device (fstat) before anything is written.
  */
 export function isWindowsReservedDeviceName(basename: string): boolean {
-  return /^(?:nul|con|prn|aux|com[1-9]|lpt[1-9])(?:[. ].*)?$/i.test(basename);
+  // Win32 path normalization maps NUL, NUL., "NUL ", NUL.txt and NUL:stream to the device. COM and
+  // LPT also take the superscript digits 1-3 (COM¹ COM² COM³). COM0/LPT0, COM10 and a longer stem
+  // (nullx) are ordinary names. CONIN$ and CONOUT$ are console handles, not nominated: they take
+  // the checked path, which fails safe.
+  return /^(?:nul|con|prn|aux|(?:com|lpt)[1-9¹²³])(?:[. :].*)?$/i.test(basename);
+}
+
+/** Test-only seam for the Windows device branch: the platform and the fs calls it makes. */
+export interface WindowsDeviceSeams {
+  platform?: NodeJS.Platform;
+  fs?: Pick<typeof fs, 'lstatSync' | 'openSync' | 'fstatSync' | 'writeFileSync' | 'closeSync'>;
+}
+
+const DEVICE_OPEN_FALLTHROUGH = new Set(['ENOENT', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY', 'EINVAL']);
+
+/**
+ * #5759: writes `normalized` in place when `filePath` names a Windows reserved device and the
+ * opened handle is a character device. Returns false (nothing written, handle closed untouched)
+ * for any other outcome so the caller takes the checked path: a non-reserved name, a symlink
+ * (never opened, so a link to a named pipe cannot block), a name that is an ordinary file on
+ * Windows 11 (open fails with ENOENT/EISDIR/EACCES/EPERM/EBUSY/EINVAL, or the handle is not a
+ * character device).
+ */
+function writeWindowsDeviceInPlace(filePath: string, normalized: string, encoding: BufferEncoding, seams?: WindowsDeviceSeams): boolean {
+  if ((seams?.platform ?? process.platform) !== 'win32' || !isWindowsReservedDeviceName(path.win32.basename(filePath))) return false;
+  const fsx = seams?.fs ?? fs;
+  if (!filePath.startsWith('\\\\.\\')) {
+    try {
+      if (fsx.lstatSync(filePath).isSymbolicLink()) return false;
+    } catch { /* absent or not inspectable: the open below decides */ }
+  }
+  let deviceFd: number;
+  try {
+    deviceFd = fsx.openSync(filePath, fs.constants.O_WRONLY);
+  } catch (err) {
+    if (DEVICE_OPEN_FALLTHROUGH.has((err as NodeJS.ErrnoException).code ?? '')) return false;
+    throw err;
+  }
+  try {
+    if (!fsx.fstatSync(deviceFd).isCharacterDevice()) return false;
+    fsx.writeFileSync(deviceFd, normalized, encoding);
+    return true;
+  } finally {
+    try { fsx.closeSync(deviceFd); } catch { /* already closed */ }
+  }
 }
 
 /**
@@ -1358,6 +1402,8 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
     afterDirectLstat?: () => void;
     createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
   };
+  /** Test seam for the Windows device branch (platform and fs calls), so it runs on POSIX. Not for production callers. */
+  deviceSeams?: WindowsDeviceSeams;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -2000,17 +2046,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     // or junction. The handle is opened without O_TRUNC and nothing is written until fstat proves it
     // is a character device; anything else is closed untouched and takes the checked path below.
     // CONIN$/CONOUT$ are not nominated (they fall to the checked path, which fails safe).
-    if (process.platform === 'win32' && isWindowsReservedDeviceName(path.win32.basename(filePath))) {
-      const deviceFd = fs.openSync(filePath, fs.constants.O_WRONLY);
-      try {
-        if (fs.fstatSync(deviceFd).isCharacterDevice()) {
-          fs.writeFileSync(deviceFd, normalized, encoding);
-          return;
-        }
-      } finally {
-        try { fs.closeSync(deviceFd); } catch { /* already closed */ }
-      }
-    }
+    if (writeWindowsDeviceInPlace(filePath, normalized, encoding, opts.deviceSeams)) return;
     let special: fs.Stats | null = null;
     try { special = fs.statSync(filePath); } catch { /* absent: the ordinary path below */ }
     // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
