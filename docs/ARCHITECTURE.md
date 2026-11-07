@@ -783,7 +783,7 @@ Equivalent paths for other runtimes:
 ├── ROADMAP.md              # Phase breakdown with status tracking
 ├── STATE.md                # Living memory: position, decisions, blockers, metrics
 ├── config.json             # Workflow configuration
-├── MILESTONES.md           # Completed milestone archive
+├── MILESTONES.md           # Completed milestone archive (absent until the first /gsd-complete-milestone)
 ├── research/               # Domain research from /gsd-new-project
 │   ├── SUMMARY.md
 │   ├── STACK.md
