@@ -1376,6 +1376,8 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EXIT3 = { kind: 'command-exit-zero', exitCode: 3, signal: null };
+// Fixture data: the predicate's own `timeout` field (seconds), kept below the 30s sleep so the gate always times out.
+const GATE_TIMEOUT_FIXTURE_S = 0.3;
 
 describe('milestone complete re-checks blocking ship:pre predicate gates per milestone phase (#5482)', () => {
   let tmpDir;
@@ -1650,7 +1652,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G19b a gate that outlives its predicate timeout refuses the close with timedOut details', () => {
-    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 30', timeout: 0.3 } });
+    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 30', timeout: GATE_TIMEOUT_FIXTURE_S } });
     const blocked = refusal(complete()).blocked;
     assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.timedOut]), [['01', 'predicate_blocked', true], ['02', 'predicate_blocked', true]]);
   });
