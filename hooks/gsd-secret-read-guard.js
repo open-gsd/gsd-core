@@ -461,6 +461,7 @@ let heredocTagsAsWords = true;
 //    `$( )` and backtick spans inside `$((…))`, where `#` starts no comment; the spans of an
 //    unquoted heredoc body found with `\`` read as a literal backtick — and reads `$$` (the
 //    shell's PID) as one unit, so a `{` after it opens no `${` (`$${x; cat y` runs `cat y`).
+const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!']);
 let crIsWhitespace = true;
 let heredocLinesJoined = false;
 let zshGrouping = false;
@@ -640,17 +641,38 @@ function pushBacktickBody(nested, raw) {
 // recursion is bounded by MAX_NESTING_DEPTH, and that scan collects the next level.
 function pushParenSpan(nested, inner, collectArithmetic = true) {
   nested.push(inner);
-  if (shellSpans && collectArithmetic && inner[0] === '(') collectSubstitutions(inner, nested, false);
+  if (shellSpans && collectArithmetic && inner[0] === '(') collectShellSpans(inner, nested, false);
 }
 
-// `$( )` and backtick spans inside an unquoted heredoc body (and inside arithmetic, above).
-// #5523 D (shellSpans only): the shell reads `\`` in an unquoted body as a literal backtick,
-// which opens no span. The spans found with backslash pairs skipped are scanned as well as
-// those found without.
-function collectSubstitutions(body, nested, collectArithmetic = true) {
+// `$( )` and backtick spans inside an unquoted heredoc body. This plain-reading version is
+// next's, unchanged, so the plain reading's call chain near a stack overflow is next's too.
+function collectSubstitutions(body, nested) {
+  let i = 0;
+  while (i < body.length) {
+    if (body[i] === '$' && body[i + 1] === '(') {
+      const e = findParenClose(body, i + 2);
+      nested.push(body.slice(i + 2, e));
+      i = e + 1;
+      continue;
+    }
+    if (body[i] === '`') {
+      const j = body.indexOf('`', i + 1);
+      const e = j === -1 ? body.length : j;
+      nested.push(body.slice(i + 1, e));
+      i = e + 1;
+      continue;
+    }
+    i++;
+  }
+}
+
+// The shellSpans reading's version (and the arithmetic collection above). #5523 D: the shell
+// reads `\`` in an unquoted body as a literal backtick, which opens no span, so the spans found
+// with backslash pairs skipped are scanned as well as those found without.
+function collectShellSpans(body, nested, collectArithmetic = true) {
   const spans = [];
   collectSubstitutionSpans(body, spans, false, collectArithmetic);
-  if (shellSpans && body.includes('\\')) {
+  if (body.includes('\\')) {
     const seen = new Set(spans);
     const escaped = [];
     collectSubstitutionSpans(body, escaped, true, collectArithmetic);
@@ -829,7 +851,7 @@ function tokenize(str) {
           // Emit a heredoc token per body (quoted included) — the body is the
           // stdin script only a shell interpreter runs. Kept out of `words`.
           tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
-          if (!b.quoted) collectSubstitutions(b.body, nested); // bash expands $( ) here
+          if (!b.quoted) { if (shellSpans) collectShellSpans(b.body, nested); else collectSubstitutions(b.body, nested); } // bash expands $( ) here
         }
         heredocs = [];
         i = r.end;
@@ -923,21 +945,30 @@ function tokenize(str) {
       i++;
       continue;
     }
-    if (zshGrouping && !expectTag) {
+    if (zshGrouping && !expectTag && (ch === '{' || ch === '}')) {
+      // zsh opens a group only at command position, and closes one only at a `}` that ends a
+      // word (or stands alone) while a group is open. Any other brace is a word character.
       const blankAfter = i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]);
-      const atCommand = !hasWord && (!tokens.length || tokens[tokens.length - 1].kind === 'sep');
-      if (ch === '{' && (atCommand || (!hasWord && blankAfter))) {
+      // Command position: the start, after a separator other than a group's own `}`, or after
+      // a reserved word that starts its segment (`then {cat x}`, `! {cat x}`).
+      const prev = tokens[tokens.length - 1];
+      const prev2 = tokens[tokens.length - 2];
+      const atCommand = !hasWord && (!prev
+        || (prev.kind === 'sep' && prev.text !== '}')
+        || (prev.kind === 'word' && prev.quoted === 'none' && ZSH_GROUP_AFTER.has(prev.text)
+          && (!prev2 || prev2.kind === 'sep')));
+      if (ch === '{' && atCommand) {
         sep(ch);
-        if (atCommand) zshBraceDepth++; // zsh opens a group only at command position
-        i++;
-        continue;
-      }
-      if (ch === '}' && blankAfter && (!hasWord || zshBraceDepth > 0)) {
+        zshBraceDepth++;
+      } else if (ch === '}' && blankAfter && zshBraceDepth > 0) {
         sep(ch); // flushes the word the `}` ends
-        if (zshBraceDepth > 0) zshBraceDepth--;
-        i++;
-        continue;
+        zshBraceDepth--;
+      } else {
+        hasWord = true;
+        buf += ch;
       }
+      i++;
+      continue;
     }
 
     if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
@@ -1232,13 +1263,32 @@ function findSecretReadUnderOtherReadings(command) {
 // body) is made by removing quotes and backslashes and joining with spaces, which creates none
 // of these characters, so a command without them reads the same under the reading.
 const dollarCount = (c) => { let n = 0; for (const ch of c) if (ch === '$' && ++n === 2) break; return n; };
+const needsCr = (c) => c.includes('\r');
+const needsJoin = (c) => c.includes('<') && c.includes('\\') && c.includes('\n');
+const needsZsh = (c) => c.includes('{') || c.includes('}') || (c.includes('(') && c.includes('#'));
+const needsSpans = (c) => c.includes('`') || dollarCount(c) === 2 || (c.includes('$') && c.includes('('));
+const setCr = (on) => { crIsWhitespace = !on; };
+const setJoin = (on) => { heredocLinesJoined = on; };
+const setZsh = (on) => { zshGrouping = on; };
+const setSpans = (on) => { shellSpans = on; dollarDollarIsAWord = on; };
+const countTrue = (...xs) => xs.filter(Boolean).length;
+// Each construct is read on its own, then in two composed readings for a command mixing
+// several: bash and dash read a CR, a joined heredoc line and these spans in the same script
+// (zsh its grouping with the first two and the arithmetic spans), so `<CR>#;echo $${x; cat y`
+// needs CR and `$$` at once. A composed reading runs only when two or more of its parts apply;
+// otherwise it would read exactly as one of the single readings.
 const SHELL_READINGS = [
-  { applies: (c) => c.includes('\r'), set: (on) => { crIsWhitespace = !on; } },
-  { applies: (c) => c.includes('<') && c.includes('\\') && c.includes('\n'), set: (on) => { heredocLinesJoined = on; } },
-  { applies: (c) => c.includes('{') || c.includes('}') || (c.includes('(') && c.includes('#')), set: (on) => { zshGrouping = on; } },
+  { applies: needsCr, set: setCr },
+  { applies: needsJoin, set: setJoin },
+  { applies: needsZsh, set: setZsh },
+  { applies: needsSpans, set: setSpans },
   {
-    applies: (c) => c.includes('`') || dollarCount(c) === 2 || (c.includes('$') && c.includes('(')),
-    set: (on) => { shellSpans = on; dollarDollarIsAWord = on; },
+    applies: (c) => countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 2,
+    set: (on) => { setCr(on); setJoin(on); setSpans(on); },
+  },
+  {
+    applies: (c) => needsZsh(c) && countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 1,
+    set: (on) => { setCr(on); setJoin(on); setZsh(on); shellSpans = on; },
   },
 ];
 
