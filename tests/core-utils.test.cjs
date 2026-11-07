@@ -1615,6 +1615,18 @@ describe('state.json publish paths (#5505)', () => {
     ]);
   });
 
+  // Parity with the layout owner: whatever `planningDir` resolves for a scope is a publish path of that scope.
+  test('the directory planningDir resolves for every scope holds a publish path', (t) => {
+    const { planningDir } = require('../gsd-core/bin/lib/planning-workspace.cjs');
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/proj');
+    fs.writeFileSync(path.join(cwd, '.planning', 'proj', 'STATE.md'), '');
+    for (const [project, ws] of [[null, null], [null, 'ws1'], ['proj', null], ['proj', 'ws1']]) {
+      const rel = path.relative(cwd, path.join(planningDir(cwd, ws, project), 'state.json'));
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, rel), true, rel);
+    }
+  });
+
   test('PLANNING_PROJECT_MARKERS is the frozen marker list', () => {
     assert.deepStrictEqual([...coreUtils.PLANNING_PROJECT_MARKERS],
       ['STATE.md', 'ROADMAP.md', 'PROJECT.md', 'config.json', 'phases', 'workstreams']);

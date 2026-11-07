@@ -592,7 +592,8 @@ const PLANNING_PROJECT_MARKERS = Object.freeze(['STATE.md', 'ROADMAP.md', 'PROJE
  */
 const STATE_JSON_SCOPES = [false, true].flatMap((project) =>
   [false, true].map((workstream) => {
-    const glob = `.planning/${project ? '*/' : ''}${workstream ? 'workstreams/*/' : ''}state.json`;
+    // the directory comes from `planningDir`, the owner of the layout, with `*` standing in for each segment
+    const glob = `${toPosixPath(planningWorkspace.planningDir('.', workstream ? '*' : null, project ? '*' : null))}/state.json`;
     return {
       project,
       workstream,
