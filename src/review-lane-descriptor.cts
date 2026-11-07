@@ -213,6 +213,22 @@ interface ReviewerLaneCommon {
   /** Dotted config key for per-lane prompt trimming, or null. */
   promptBudgetKey: string | null;
   /**
+   * The context window, in tokens, this lane's default CLI model is guaranteed to have, or null
+   * when GSD declares none (#4559).
+   *
+   * A declared FLOOR, not a measurement: it seeds the default prompt cap
+   * (`floor(window * CONTEXT_WINDOW_HEADROOM)`, see `resolveLaneCap`) so a prompt larger than the
+   * lane can read is refused instead of silently dropping the plan set. Operators on a larger
+   * plan raise it via `contextWindowConfigKey`. null for lanes whose model GSD cannot know
+   * (opencode, cursor, antigravity, local HTTP lanes) and for coderabbit (no prompt).
+   */
+  contextWindowTokens: number | null;
+  /**
+   * Dotted config key holding the operator's override of `contextWindowTokens`, or null when the
+   * lane is fed no prompt (#4559). Declared rather than derived, like `promptBudgetKey`.
+   */
+  contextWindowConfigKey: string | null;
+  /**
    * Dotted config key holding this lane's model override, or null when the lane accepts none.
    *
    * Added by Phase 5b (#2799). Phase 1 left the model key IMPLICIT (`review.models.<slug>`), and
@@ -320,6 +336,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.claude',
+    contextWindowTokens: 200000,
+    contextWindowConfigKey: 'review.context_window_tokens.claude',
     modelConfigKey: 'review.models.claude',
     effortConfigKey: 'review.effort.claude',
     defaultEffort: 'high',
@@ -351,6 +369,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.codex',
+    contextWindowTokens: 272000,
+    contextWindowConfigKey: 'review.context_window_tokens.codex',
     modelConfigKey: 'review.models.codex',
     effortConfigKey: 'review.effort.codex',
     defaultEffort: 'high',
@@ -379,6 +399,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'diff-only',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.coderabbit',
+    contextWindowTokens: null,
+    contextWindowConfigKey: null,
     // Accepts no model flag at all (review.md:367) — not merely "none configured".
     modelConfigKey: null,
     effortConfigKey: null,
@@ -409,6 +431,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // stock Windows/Git-Bash (#2589) — is no longer a prerequisite for this lane.
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.opencode',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.opencode',
     modelConfigKey: 'review.models.opencode',
     effortConfigKey: 'review.effort.opencode',
     defaultEffort: 'high',
@@ -435,6 +459,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.qwen',
+    contextWindowTokens: 131072,
+    contextWindowConfigKey: 'review.context_window_tokens.qwen',
     modelConfigKey: null,
     effortConfigKey: null,
     defaultEffort: null,
@@ -463,6 +489,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.cursor',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.cursor',
     // #3653: cursor-agent exposes --model (204 selectable models); wired the same as codex.
     modelConfigKey: 'review.models.cursor',
     effortConfigKey: null,
@@ -499,6 +527,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // Phase 5b: the handler reads the transcript with JSON.parse per line, not `jq`.
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.antigravity',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.antigravity',
     // NOT `review.models.antigravity` — the shipped key is `review.models.agy` (review.md:291) and
     // Phase 4 federated it under that name. This lane is why the key is declared, not derived.
     modelConfigKey: 'review.models.agy',
@@ -533,6 +563,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // neither `jq` nor `curl` is a prerequisite any more (#2589's stated Windows hazard).
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.ollama',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.ollama',
     modelConfigKey: 'review.models.ollama',
     effortConfigKey: null,
     defaultEffort: null,
@@ -563,6 +595,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.lm_studio',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.lm_studio',
     modelConfigKey: 'review.models.lm_studio',
     effortConfigKey: null,
     defaultEffort: null,
@@ -593,6 +627,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.llama_cpp',
+    contextWindowTokens: null,
+    contextWindowConfigKey: 'review.context_window_tokens.llama_cpp',
     modelConfigKey: 'review.models.llama_cpp',
     effortConfigKey: null,
     defaultEffort: null,
@@ -641,6 +677,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.kimi-code',
+    contextWindowTokens: 262144,
+    contextWindowConfigKey: 'review.context_window_tokens.kimi-code',
     modelConfigKey: 'review.models.kimi-code',
     effortConfigKey: null,
     defaultEffort: null,

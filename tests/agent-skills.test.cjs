@@ -1804,7 +1804,9 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     // Invoke from a descendant subdirectory
     const deepDir = path.join(tmpDir, 'src', 'feature');
     fs.mkdirSync(deepDir, { recursive: true });
-    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir);
+    // HOME stays at the project root: the helper's default (HOME = the cwd)
+    // would put the project above $HOME, which the walk never reads (#5624).
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir, { HOME: tmpDir, USERPROFILE: tmpDir });
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.configured, true);
     assert.strictEqual(r.ir.reason, 'resolved');

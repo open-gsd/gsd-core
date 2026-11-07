@@ -1,6 +1,6 @@
 {
   "name": "@opengsd/gsd-core",
-  "version": "1.19.0",
+  "version": "1.20.1",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "main": ".opencode/plugins/gsd-core.js",
   "bin": {
@@ -91,7 +91,7 @@
     "gpt-tokenizer": "4.0.0",
     "js-yaml": "^4.3.2",
     "mutation-testing-metrics": "^3.7.3",
-    "re2js": "^2.8.6",
+    "re2js": "^2.8.7",
     "saxes": "6.0.0",
     "tap-parser": "18.3.4",
     "typescript": "^6.0.3",

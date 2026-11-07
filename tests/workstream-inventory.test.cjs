@@ -472,6 +472,54 @@ describe('#2562 — milestone scoping boundaries (one phase-key derivation)', ()
     ), { numRuns: 1000 });
   });
 
+  // #5675: under `milestone-prefixed` a Progress cell `M-NN. Name` and its directory `M-NN-slug`
+  // must share a key, and two phases of one milestone must not.
+  test('#5675 property: milestone-prefixed cells and directories share keys', () => {
+    const MP = 'milestone-prefixed';
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 99 }),
+      fc.integer({ min: 1, max: 98 }),
+      fc.constantFrom('', '0'),
+      fc.constantFrom('', '**', '`'),
+      fc.constantFrom('', 'Phase '),
+      fc.stringMatching(/^[a-z][a-z-]{0,20}$/),
+      (milestone, phase, milestonePad, emphasis, label, slug) => {
+        const nn = String(phase).padStart(2, '0');
+        const next = String(phase + 1).padStart(2, '0');
+        const cell = `${emphasis}${label}${milestonePad}${milestone}-${nn}. Some Name${emphasis}`;
+        const dir = `${milestone}-${nn}-${slug}`;
+        const key = phaseKeyFromProse(cell, undefined, MP);
+        assert.equal(key, phaseKeyFromDir(dir, MP),
+          `cell ${JSON.stringify(cell)} and dir ${JSON.stringify(dir)} must share a key`);
+        assert.notEqual(key, phaseKeyFromProse(`${milestone}-${next}. Other`, undefined, MP),
+          `phases ${nn} and ${next} of milestone ${milestone} must not share a key`);
+      },
+    ), { numRuns: 500 });
+  });
+
+  // #5675: the Progress rows of a milestone-prefixed workstream keyed as the bare milestone (`03`)
+  // while its directories keyed `03-01` / `03-02`, so no directory matched its own row and the
+  // rollup reported 1 phase, 0 complete, 0%.
+  test('#5675: milestone-prefixed Progress rows scope to their own directories', () => {
+    const wsDir = seedWorkstream(tmpDir, { name: 'ws-milestone-prefixed' });
+    fs.writeFileSync(path.join(wsDir, 'config.json'), JSON.stringify({ phase_id_convention: 'milestone-prefixed' }));
+    fs.writeFileSync(path.join(wsDir, 'STATE.md'), V2_STATE);
+    fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), roadmapWithRows([
+      '| 2-01. Old | v1.0 | 1/1 | Complete | - |',
+      '| 3-01. Alpha | v2.0 | 1/1 | Complete | - |',
+      '| 3-02. Beta | v2.0 | 0/1 | In Progress | - |',
+    ]));
+    writePhase(wsDir, '2-01-old', { plans: 1, summaries: 1, verification: 'passed' });
+    writePhase(wsDir, '3-01-alpha', { plans: 1, summaries: 1, verification: 'passed' });
+    writePhase(wsDir, '3-02-beta', { plans: 1, summaries: 0 });
+
+    const inv = inspectWorkstream(tmpDir, 'ws-milestone-prefixed', { active: null });
+    assert.ok(inv);
+    assert.equal(inv.roadmap_phase_count, 2, 'denominator = the two v2.0 phases, not one collapsed key');
+    assert.equal(inv.completed_phases, 1);
+    assert.equal(inv.progress_percent, 50);
+  });
+
   // A blank Milestone cell must not silently delete the phase from BOTH sides of
   // the calculation — that is how an unstarted phase vanished and the remaining
   // completed one rounded the workstream to 100%.

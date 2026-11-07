@@ -189,6 +189,15 @@ jobs:
         with:
           persist-credentials: true
           token: ${{ github.token }}
+          # #3677: lint:ci runs scripts/lint-removed-but-needed.cjs, which diffs
+          # `origin/<base>...HEAD` (<base> = GITHUB_BASE_REF, default `next`). It
+          # hard-fails under CI when that ref is unresolvable, and a depth-1
+          # checkout has neither origin/<base> nor a merge base. fetch-depth: 0
+          # (the same form the other jobs here use) fetches every branch and the
+          # full history. The live tip of origin/<base> is safe for this lint: the
+          # merge-base of that tip and the PR merge commit is the PR's base.sha
+          # even if <base> advanced mid-run, so the diff is the PR's own changes.
+          fetch-depth: 0
       - name: Set up Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
         with:

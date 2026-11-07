@@ -1974,3 +1974,42 @@ describe('planningTracked field (#3586, matrix rows A1-A12)', () => {
     });
   });
 });
+
+describe('#5676: planning snapshot roadmap readers under milestone-prefixed', () => {
+  function buildFixture(t) {
+    const cwd = createTempDir('gsd-5676-snap-');
+    t.after(() => cleanup(cwd));
+    writeFile(cwd, '.planning/config.json', JSON.stringify({ phase_id_convention: 'milestone-prefixed' }));
+    writeState(cwd, { milestone: 'v1.0' });
+    writeRoadmap(cwd, [
+      '---',
+      'phase_id_convention: milestone-prefixed',
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      '- [x] **Phase 3-01: Alpha**',
+      '- [ ] **Phase 3-02: Beta**',
+      '',
+      '### Phase 3-01: Alpha',
+      '**Goal:** A',
+      '',
+      '### Phase 3-02: Beta',
+      '**Goal:** B',
+      '',
+    ].join('\n'));
+    return cwd;
+  }
+
+  test('#5676: roadmapPhaseCheckboxes keys each M-NN checklist row', (t) => {
+    const snap = buildPlanningSnapshot(buildFixture(t));
+    assert.deepStrictEqual(snap.roadmapPhaseCheckboxes.value, { '3-01': true, '3-02': false });
+  });
+
+  test('#5676: currentMilestoneRoadmapPhaseIds lists each M-NN heading', (t) => {
+    const snap = buildPlanningSnapshot(buildFixture(t));
+    assert.deepStrictEqual(snap.currentMilestoneRoadmapPhaseIds.value, ['3-01', '3-02']);
+  });
+});

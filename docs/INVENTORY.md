@@ -356,6 +356,8 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `tdd.md` | Test-driven development integration patterns. |
 | `ui-brand.md` | Visual output formatting patterns. |
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
+| `cicd-review-patterns.md` | CI/CD pipeline rubric for `gsd-code-reviewer`: eight reliability checks, severity tiers, and negative space. Read on demand at standard/deep depth when a pipeline file is in scope. |
+| `necessity-review.md` | Necessity rubric for `gsd-code-reviewer` (category 4): taxonomy, evidence rule, and negative space. Read on demand at standard/deep depth. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `debugger-fix-acceptance.md` | Multi-signal fix-acceptance guardrail (anti-overfitting) loaded by `gsd-debugger`. |
 | `debugger-sbfl.md` | Spectrum-based fault localization (Ochiai) pre-filter loaded by `gsd-debugger`. |
@@ -490,6 +492,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 
 | Module | Responsibility |
 |--------|----------------|
+| `install-manifest-record.cjs` | Install manifest per-file hash ownership (#5683): `fileHash` (sha256 of file bytes, shared with `bin/install.js`) and `recordManifestFileHashes` (after `effort sync --apply`, updates only the entries of files that were GSD-owned before the rewrite: pre-sync hash equal to the manifest entry) |
 | `installer-migrations/000-first-time-baseline.cjs` | Installer migration: records the first-time installer migration baseline scan — walks per-runtime install surfaces so pre-existing files are classified before any later migration runs |
 | `installer-migrations/001-legacy-orphan-files.cjs` | Installer migration: removes manifest-managed legacy orphan hook files (`hooks/gsd-notify.sh`, `hooks/statusline.js`) |
 | `installer-migrations/002-codex-legacy-hooks-json.cjs` | Installer migration: removes legacy Codex `hooks.json` GSD hook registrations |
@@ -743,6 +746,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `state-document.cjs` | Pure STATE.md field extraction, replacement, status normalization, and progress calculation transforms |
 | `milestone-lock.cjs` | Milestone lock (compiled from `src/milestone-lock.cts`, gitignored) — advisory (phase, session id) claim over STATE.md's single Current Position slot: `.planning/milestone.lock` claim IO, liveness (TTL + heartbeat), conflict detection, and the shared stderr warning; consumed by `state.begin-phase` / `state.advance-plan` / `phase.complete` so parallel phases in one working tree get a visible conflict instead of silently overwriting each other (#3311) |
 | `git-info-exclude.cjs` | Git info/exclude helper (compiled from `src/git-info-exclude.cts`, gitignored) — `excludeFromGit(dir, filename)` appends an anchored, escaped, idempotent entry to the enclosing repo's `info/exclude` so a machine-local file GSD writes under `.planning/` does not dirty `git status`; best-effort, never throws, leaves a tracked copy alone; used by the milestone claim write (#5551) |
+| `gsd-tool-dir.cjs` | Tool-owned `.gsd/` directory owner (`ensureToolOwnedGsdDir`): refuses a symlinked or escaping `.gsd`, seeds and extends `.gsd/.gitignore`; shared by the fork-probe cache and the dispatch-isolation sentinel (#5757) |
 | `surface.cjs` | Runtime surface module — manages the runtime enable/disable surface state independently of the install-time profile marker (ADR-0011 Phase 2) |
 | `task-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools task`; `resolve-content` subcommand resolves a task's `tracker-id` via `task-content-resolution.cjs` (ADR-3646, #3970) |
 | `task-content-resolution.cjs` | Resolves a task's `tracker-id` to external-tracker content via a capability-declared `taskContentResolver` and a bounded subprocess call; hard-halts on ambiguous/failed/timeout/malformed/unsafe-id resolution; `loadResolverCapabilities` loads the installed resolver capabilities for callers such as the decision-coverage gates (compiled from `src/task-content-resolution.cts`, gitignored) (ADR-3646, #3970) |

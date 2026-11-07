@@ -1000,7 +1000,7 @@ GSD の保証付きでアドホックタスクを実行します。
 
 | セクション | キー |
 |---------|------|
-| 計画チューニング | `workflow.plan_bounce`、`workflow.plan_bounce_passes`、`workflow.plan_bounce_script`、`workflow.subagent_timeout`、`workflow.inline_plan_threshold` |
+| 計画チューニング | `planner.stall_detection_enabled`、`planner.stall_threshold_minutes`、`planner.stall_detect_interval_minutes`、`workflow.plan_bounce`、`workflow.plan_bounce_passes`、`workflow.plan_bounce_script`、`workflow.subagent_timeout`、`workflow.inline_plan_threshold` |
 | 実行チューニング | `workflow.node_repair`、`workflow.node_repair_budget`、`workflow.auto_prune_state` |
 | 議論チューニング | `workflow.max_discuss_passes` |
 | クロス AI 実行 | `workflow.cross_ai_execution`、`workflow.cross_ai_command`、`workflow.cross_ai_timeout` |

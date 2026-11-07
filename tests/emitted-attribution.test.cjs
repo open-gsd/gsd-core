@@ -44,6 +44,9 @@ const { BUILD_SCRIPT, buildParityManifest, buildInstallTree, PKG_VERSION } = req
 const {
   resolveChangedPaths,
   resolveBase,
+  isReleaseMergePr,
+  RELEASE_MERGE_NEXT_CANDIDATES,
+  readAckTrailers,
   resolveAttributionBase,
   resolveAttributionInputs,
   baseRefCandidates,
@@ -2863,3 +2866,180 @@ describe('#3271: emitted-runtime-bounds', () => {
 // #3875 open-PR-deferred fragment-sweep machinery, plus tests/emitted-drift-acks/ itself
 // — the commit-trailer acknowledgment leaves no tree artifact to sweep, defer, or guard.
 // Every describe block that lived here exercised that now-deleted script and is gone with it.
+
+// ── #5902: a release-merge PR measures attribution from `next`, not from `main` ──────
+//
+// `release/X.Y.0` / `hotfix/X.Y.Z` -> `main` has `main` as its PR base, so a base-derived
+// range spans the whole release cycle (PRs already checked on `next`) and the ack
+// trailers read as stale. The base for that PR shape is merge-base(next, HEAD).
+
+/**
+ * `main` @ c0 -> `next` adds c1 (the fork point) -> `release/1.2.0` adds a commit ->
+ * `next` advances one commit. HEAD is left on `release/1.2.0`.
+ */
+function makeReleaseMergeRepo() {
+  const root = createTempDir('gsd-5902-release-merge-');
+  gitFixture(root, ['init', '-q', '-b', 'main']);
+  fs.writeFileSync(path.join(root, 'shared.txt'), 'main\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'main tip']);
+  const mainSha = gitFixture(root, ['rev-parse', 'HEAD']);
+
+  gitFixture(root, ['checkout', '-q', '-b', 'next']);
+  fs.writeFileSync(path.join(root, 'shared.txt'), 'next fork\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'next fork point']);
+  const forkSha = gitFixture(root, ['rev-parse', 'HEAD']);
+
+  gitFixture(root, ['checkout', '-q', '-b', 'release/1.2.0']);
+  fs.writeFileSync(path.join(root, 'release-only.txt'), 'release\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'release-only change']);
+
+  gitFixture(root, ['checkout', '-q', 'next']);
+  fs.writeFileSync(path.join(root, 'shared.txt'), 'next advanced\n');
+  gitFixture(root, ['add', '-A']);
+  gitFixture(root, ['commit', '-q', '-m', 'next advanced']);
+  gitFixture(root, ['checkout', '-q', 'release/1.2.0']);
+  assert.notEqual(mainSha, forkSha);
+  return { root, mainSha, forkSha };
+}
+
+const SAME_REPO = 'open-gsd/gsd-core';
+function prEnv(headRef, baseRef, extra = {}) {
+  return {
+    GITHUB_HEAD_REF: headRef,
+    GITHUB_BASE_REF: baseRef,
+    GITHUB_REPOSITORY: SAME_REPO,
+    GITHUB_EVENT_PATH: '/event.json',
+    ...extra,
+  };
+}
+const payloadReader = (fullName) => () => JSON.stringify({ pull_request: { head: { repo: { full_name: fullName } } } });
+
+for (const head of ['release/1.2.0', 'hotfix/1.2.1']) {
+  test(`#5902: ${head} -> main measures from merge-base(next, HEAD), ignoring GSD_EMITTED_BASE`, () => {
+    const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+    try {
+      const messages = [];
+      const env = prEnv(head, 'main', { GSD_EMITTED_BASE: mainSha });
+      const r = resolveAttributionBase(env, {
+        cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => messages.push(m),
+      });
+      assert.equal(r.sha, forkSha, 'the release-merge base must be the fork point on next');
+      assert.equal(r.ref, 'next');
+      assert.notEqual(r.sha, mainSha);
+      assert.ok(messages.some((m) => m.includes('next') && m.includes('release-merge')),
+        'the diagnostic must name the chosen base and say why');
+    } finally {
+      cleanup(root);
+    }
+  });
+}
+
+test('#5902: the release-merge base is the same sha baseline, changed paths and trailers consume', () => {
+  const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+  try {
+    const env = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    const base = resolveAttributionBase(env, { cwd: root, readFile: payloadReader(SAME_REPO) });
+    const expectedShas = [];
+    const { changedPaths } = resolveAttributionInputs(base, {
+      cwd: root,
+      resolveBaselineFn: (o) => { expectedShas.push(o.expectedSha); return { ok: true, baseline: {} }; },
+      readJson: () => null,
+    });
+    assert.deepEqual(expectedShas, [forkSha]);
+    assert.deepEqual(changedPaths, ['release-only.txt']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+const KEEPS_PIN = [
+  ['a fork payload', prEnv('release/1.2.0', 'main'), payloadReader('someone/gsd-core')],
+  ['an ordinary head to main', prEnv('fix/1-x', 'main'), payloadReader(SAME_REPO)],
+  ['a missing payload', prEnv('release/1.2.0', 'main'), () => { throw new Error('ENOENT'); }],
+  ['an unparseable payload', prEnv('release/1.2.0', 'main'), () => 'not json'],
+  ['release/1.2.0 into next', prEnv('release/1.2.0', 'next'), payloadReader(SAME_REPO)],
+  ['release/1.2 (too short)', prEnv('release/1.2', 'main'), payloadReader(SAME_REPO)],
+  ['release/1.2.0.0 (too long)', prEnv('release/1.2.0.0', 'main'), payloadReader(SAME_REPO)],
+  ['no GITHUB_EVENT_PATH', { ...prEnv('release/1.2.0', 'main'), GITHUB_EVENT_PATH: '' }, payloadReader(SAME_REPO)],
+];
+for (const [label, baseEnv, readFile] of KEEPS_PIN) {
+  test(`#5902: ${label} keeps GSD_EMITTED_BASE`, () => {
+    const { root, mainSha } = makeReleaseMergeRepo();
+    try {
+      assert.equal(isReleaseMergePr(baseEnv, { readFile }), false);
+      const r = resolveAttributionBase({ ...baseEnv, GSD_EMITTED_BASE: mainSha }, { cwd: root, readFile });
+      assert.equal(r.ref, mainSha);
+      assert.equal(r.sha, mainSha, 'merge-base(main, HEAD) is main itself in this fixture');
+    } finally {
+      cleanup(root);
+    }
+  });
+}
+
+test('#5902: the payload repo comparison is case-insensitive', () => {
+  assert.equal(isReleaseMergePr(prEnv('release/1.2.0', 'main'), { readFile: payloadReader('Open-GSD/GSD-Core') }), true);
+});
+
+test('#5902: the "Tried:" diagnostic lists the candidates actually tried', () => {
+  const { root, mainSha } = makeReleaseMergeRepo();
+  try {
+    const triedOf = (env, readFile) => {
+      const messages = [];
+      resolveAttributionBase(env, { cwd: root, readFile, diagnostic: (m) => messages.push(m) });
+      const line = messages.find((m) => m.includes('Tried: '));
+      return line.slice(line.indexOf('Tried: ') + 'Tried: '.length);
+    };
+    const releaseEnv = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    assert.equal(triedOf(releaseEnv, payloadReader(SAME_REPO)), RELEASE_MERGE_NEXT_CANDIDATES.join(', '));
+    const releaseLine = [];
+    resolveAttributionBase(releaseEnv, {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => releaseLine.push(m),
+    });
+    assert.ok(releaseLine.some((m) => m.includes('resolved base') && !m.includes('to override')),
+      'a release-merge PR ignores GSD_EMITTED_BASE, so the override hint must be absent');
+    assert.deepEqual([...RELEASE_MERGE_NEXT_CANDIDATES], ['origin/next', 'upstream/next', 'next']);
+
+    const ordinaryEnv = prEnv('fix/1-x', 'main', { GSD_EMITTED_BASE: mainSha });
+    assert.equal(triedOf(ordinaryEnv, payloadReader(SAME_REPO)), baseRefCandidates(ordinaryEnv).join(', '));
+    const ordinaryLine = [];
+    resolveAttributionBase(ordinaryEnv, {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => ordinaryLine.push(m),
+    });
+    assert.ok(ordinaryLine.some((m) => m.includes('resolved base') && m.includes('to override')),
+      'an ordinary PR keeps the GSD_EMITTED_BASE override hint');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('#5902: CI shape — main merged into the release branch does not move the base or leak main-only trailers', () => {
+  const { root, mainSha, forkSha } = makeReleaseMergeRepo();
+  try {
+    // A squash on main (never on next) carrying an ack trailer, as the previous release left it.
+    gitFixture(root, ['checkout', '-q', 'main']);
+    fs.writeFileSync(path.join(root, 'main-only.txt'), 'squash\n');
+    gitFixture(root, ['add', '-A']);
+    gitFixture(root, ['commit', '-q', '-m',
+      'chore: merge release v1.1.0 to main\n\nEmitted-Drift-Ack-Growth: x.md \u2014 reason']);
+    const squashSha = gitFixture(root, ['rev-parse', 'HEAD']);
+    assert.equal(gitFixture(root, ['branch', '--contains', squashSha, '--list', 'next']), '',
+      'the squash must not be reachable from next');
+
+    // CI "Rebase check": merge main into the release branch.
+    gitFixture(root, ['checkout', '-q', 'release/1.2.0']);
+    gitFixture(root, ['merge', '-q', '--no-ff', '-m', 'Merge main into release/1.2.0', 'main']);
+
+    const env = prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainSha });
+    const base = resolveAttributionBase(env, { cwd: root, readFile: payloadReader(SAME_REPO) });
+    assert.equal(base.sha, forkSha, 'the base is still the fork point on next');
+
+    const ack = readAckTrailers({ baseRef: base.sha, cwd: root });
+    assert.equal(JSON.stringify(ack).includes('x.md'), false,
+      'no trailer of the main-only squash may reach the measured range');
+  } finally {
+    cleanup(root);
+  }
+});

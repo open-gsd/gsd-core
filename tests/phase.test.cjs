@@ -18524,3 +18524,409 @@ describe('phase insert placement (#5599)', () => {
     );
   });
 });
+
+describe('#5679: phase insert names another milestone', () => {
+  const STATE_V11 = ['---', 'milestone: v1.1', '---', '', '# State', ''].join('\n');
+
+  const ROADMAP_TITLE_AND_V10_HEADING = [
+    '# Roadmap',
+    '',
+    '### ✅ v1.0: First release (Shipped)',
+    '',
+  ];
+  const ROADMAP_V11 = [
+    '### 🚧 v1.1: Second release (In Progress)',
+    '',
+    '- [ ] Phase 3: Export',
+    '- [ ] Phase 4: Reports',
+    '',
+    '#### Phase 3: Export',
+    '**Goal:** export',
+    '',
+    '#### Phase 4: Reports',
+    '**Goal:** reports',
+    '',
+  ];
+  const ROADMAP = [
+    ...ROADMAP_TITLE_AND_V10_HEADING,
+    '- [x] Phase 1: Setup',
+    '- [x] Phase 2: Core',
+    '',
+    '#### Phase 1: Setup',
+    '**Goal:** setup',
+    '',
+    '#### Phase 2: Core',
+    '**Goal:** core',
+    '',
+    ...ROADMAP_V11,
+  ].join('\n');
+  // Phase 2 is a checklist bullet in v1.0 with no `#### Phase 2` detail heading.
+  const ROADMAP_NO_DETAIL = [
+    ...ROADMAP_TITLE_AND_V10_HEADING,
+    '- [x] Phase 1: Setup',
+    '- [x] Phase 2: Core',
+    '',
+    '#### Phase 1: Setup',
+    '**Goal:** setup',
+    '',
+    ...ROADMAP_V11,
+  ].join('\n');
+
+  function listPhaseDirs(dir) {
+    const phasesDir = path.join(dir, '.planning', 'phases');
+    return fs.existsSync(phasesDir) ? fs.readdirSync(phasesDir).sort() : [];
+  }
+
+  // Runs `phase insert` in a fresh project; always cleans up.
+  function runInsert(args, roadmapText, { state = STATE_V11, config = '{}' } = {}) {
+    const dir = createTempProject();
+    try {
+      const roadmapPath = path.join(dir, '.planning', 'ROADMAP.md');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), config);
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), state);
+      fs.writeFileSync(roadmapPath, roadmapText);
+      const roadmapBefore = fs.readFileSync(roadmapPath, 'utf8');
+      const dirsBefore = listPhaseDirs(dir);
+      const result = runGsdTools(['phase', 'insert', ...args], dir);
+      return {
+        result,
+        roadmapBefore,
+        roadmapAfter: fs.readFileSync(roadmapPath, 'utf8'),
+        dirsBefore,
+        dirsAfter: listPhaseDirs(dir),
+      };
+    } finally {
+      cleanup(dir);
+    }
+  }
+
+  test('phase in a closed milestone: the error names that milestone and the current one', () => {
+    const { result } = runInsert(['2', 'Hotfix for v1.0'], ROADMAP);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('milestone v1.0'), `error was: ${result.error}`);
+    assert.ok(result.error.includes('current milestone is v1.1'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('not found in ROADMAP.md'), `error was: ${result.error}`);
+  });
+
+  test('phase in a closed milestone: nothing is written', () => {
+    const { result, roadmapBefore, roadmapAfter, dirsBefore, dirsAfter } = runInsert(
+      ['2', 'Hotfix for v1.0'],
+      ROADMAP,
+    );
+    assert.equal(result.success, false);
+    assert.equal(roadmapAfter, roadmapBefore);
+    assert.deepEqual(dirsAfter, dirsBefore);
+  });
+
+  test('phase absent from the whole file keeps the not-found message', () => {
+    const { result } = runInsert(['9', 'x'], ROADMAP);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('Phase 9 not found in ROADMAP.md'), `error was: ${result.error}`);
+  });
+
+  test('phase only in another milestone checklist: gets the other-milestone message', () => {
+    const { result } = runInsert(['2', 'x'], ROADMAP_NO_DETAIL);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('milestone v1.0'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('missing a detail section'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('not found in ROADMAP.md'), `error was: ${result.error}`);
+  });
+
+  test('milestone boundary: phases 1 and 2 of v1.0 are rejected, first phase of v1.1 inserts', () => {
+    for (const phase of ['1', '2']) {
+      const closed = runInsert([phase, 'x'], ROADMAP);
+      assert.equal(closed.result.success, false, `phase ${phase} must be rejected`);
+      assert.ok(closed.result.error.includes('milestone v1.0'), `error was: ${closed.result.error}`);
+    }
+    const first = runInsert(['3', 'x'], ROADMAP);
+    assert.ok(first.result.success, `phase insert failed: ${first.result.error}`);
+    assert.equal(JSON.parse(first.result.output).phase_number, '03.1');
+  });
+
+  const V11_SECTION = [
+    '### 🚧 v1.1 Next (In Progress)',
+    '',
+    '#### Phase 3: Export',
+    '**Goal**: e',
+    '',
+  ];
+  const V10_ARCHIVE = [
+    '<details>',
+    '<summary>✅ v1.0 MVP (Phases 1-2) - SHIPPED 2026-01-01</summary>',
+    '',
+    '### Phase 1: Setup',
+    '**Goal**: s',
+    '',
+    '### Phase 2: Core',
+    '**Goal**: c',
+    '',
+    '</details>',
+    '',
+  ];
+
+  test('canonical <details> archive layout: the error names the archived milestone', () => {
+    const roadmap = ['# Roadmap', '', ...V10_ARCHIVE, ...V11_SECTION].join('\n');
+    const { result } = runInsert(['2', 'x'], roadmap);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('milestone v1.0'), `error was: ${result.error}`);
+    assert.ok(result.error.includes('current milestone is v1.1'), `error was: ${result.error}`);
+  });
+
+  test('<details> archive after the current milestone section: names v1.0, never the current milestone as owner', () => {
+    const roadmap = ['# Roadmap', '', ...V11_SECTION, '## Archive', '', ...V10_ARCHIVE].join('\n');
+    const { result } = runInsert(['2', 'x'], roadmap);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('milestone v1.0'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('milestone v1.1, but'), `error was: ${result.error}`);
+  });
+
+  test('STATE.md without a milestone: the derived current milestone is not attributed to STATE.md', () => {
+    const roadmap = ['# Roadmap', '', ...V10_ARCHIVE, '## 🚧 v1.1 Next (In Progress)', '', '### Phase 3: Export', '**Goal**: e', ''].join('\n');
+    const { result } = runInsert(['2', 'x'], roadmap, { state: '# State\n' });
+    assert.equal(result.success, false);
+    assert.ok(!result.error.includes("STATE.md's current milestone"), `error was: ${result.error}`);
+    assert.ok(result.error.includes('current milestone is v1.1'), `error was: ${result.error}`);
+  });
+
+  describe('bracket convention', () => {
+    const BRACKET_CONFIG = JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' });
+    const BRACKET_STATE = ['---', 'milestone: v2.0', '---', '', '# State', ''].join('\n');
+    const BRACKET_ROADMAP = [
+      '# Roadmap',
+      '',
+      '## [CK.02] v2.0 — Current',
+      '',
+      '### [CK.02] 01: One',
+      '**Goal:** keep',
+      '',
+      '<details>',
+      '<summary>✅ v1.9 Archive - SHIPPED</summary>',
+      '',
+      '### [CK.02] 02: Archived',
+      '**Goal:** old',
+      '',
+      '</details>',
+      '',
+    ].join('\n');
+    const bracketInsert = (phase) =>
+      runInsert([phase, 'x'], BRACKET_ROADMAP, { state: BRACKET_STATE, config: BRACKET_CONFIG });
+
+    test('phase absent from the whole file keeps the could-not-find-live text', () => {
+      const { result } = bracketInsert('9');
+      assert.equal(result.success, false);
+      assert.ok(
+        result.error.includes('Could not find live [CK.02] 09 heading in the active milestone window (primary range)'),
+        `error was: ${result.error}`,
+      );
+    });
+  });
+
+  test('phase mentioned only inside a fenced block and an HTML comment: not found, never attributed to a milestone', () => {
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '### 🚧 v1.1 Next (In Progress)',
+      '',
+      '#### Phase 3: Export',
+      '**Goal**: e',
+      '',
+      '```',
+      '- [ ] **Phase 9: Example**',
+      '### Phase 9: Example',
+      '```',
+      '',
+      '<!--',
+      '- [ ] **Phase 9: Commented**',
+      '-->',
+      '',
+    ].join('\n');
+    const { result } = runInsert(['9', 'x'], roadmap);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('Phase 9 not found in ROADMAP.md'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('milestone'), `error was: ${result.error}`);
+  });
+  test('bullet-only roadmap whose only phase bullet is fenced: not found, bytes unchanged', () => {
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '- [ ] **Phase 3: Export**',
+      '',
+      '```',
+      '- [ ] **Phase 9: Example**',
+      '```',
+      '',
+    ].join('\n');
+    const { result, roadmapBefore, roadmapAfter } = runInsert(['9', 'x'], roadmap);
+    assert.equal(result.success, false);
+    assert.ok(result.error.includes('Phase 9 not found in ROADMAP.md'), `error was: ${result.error}`);
+    assert.ok(!result.error.includes('milestone'), `error was: ${result.error}`);
+    assert.equal(roadmapAfter, roadmapBefore);
+  });
+
+  test('bullet-only roadmap with a fenced example bullet before the real one: inserts after the real bullet in its bold style', () => {
+    const fence = ['```', '- [ ] Phase 2: Example', '```'].join('\n');
+    const real = '- [ ] **Phase 2: Real**';
+    const roadmap = ['# Roadmap', '', fence, '', real, '- [ ] **Phase 3: Next**', ''].join('\n');
+    const { result, roadmapAfter } = runInsert(['2', 'x'], roadmap);
+    assert.ok(result.success, `phase insert failed: ${result.error}`);
+    assert.ok(roadmapAfter.includes(fence), 'fence content must be byte-identical');
+    assert.equal(
+      roadmapAfter,
+      roadmap.replace(real, `${real}\n- [ ] **Phase 02.1: x**`),
+    );
+  });
+});
+
+describe('#5676: phase.complete under milestone-prefixed', () => {
+  // firstTime=false: 3-01 already complete, STATE on 3-02 (re-completion).
+  // firstTime=true: 3-01 unchecked/in progress, STATE on 3-01.
+  const buildFixture = (firstTime) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5676-'));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    put('.planning/config.json', [JSON.stringify({ phase_id_convention: 'milestone-prefixed' })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      'phase_id_convention: milestone-prefixed',
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      firstTime ? '- [ ] **Phase 3-01: Alpha**' : '- [x] **Phase 3-01: Alpha**',
+      '- [ ] **Phase 3-02: Beta**',
+      '',
+      '### Phase 3-01: Alpha',
+      '**Goal:** A',
+      '**Plans**: 1 plans',
+      '',
+      '### Phase 3-02: Beta',
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      firstTime ? '| 3-01. Alpha | 0/1 | In progress | - |' : '| 3-01. Alpha | 1/1 | Complete | 2026-10-01 |',
+      '| 3-02. Beta | 0/1 | In progress | - |',
+      '',
+    ]);
+    put('.planning/phases/03-01-alpha/03-01-01-PLAN.md', ['# Plan', '']);
+    put('.planning/phases/03-01-alpha/03-01-01-SUMMARY.md', ['# Summary', '']);
+    put('.planning/phases/03-01-alpha/03-01-VERIFICATION.md', ['---', 'status: passed', '---', '', '# Verification', '']);
+    put('.planning/phases/03-02-beta/03-02-01-PLAN.md', ['# Plan', '']);
+    put('.planning/STATE.md', [
+      '---',
+      'milestone: v1.0',
+      firstTime ? 'current_phase: 3-01' : 'current_phase: 3-02',
+      'status: executing',
+      '---',
+      '',
+      '# State',
+      '',
+      '## Current Position',
+      '',
+      firstTime ? 'Phase: 3-01 of 2 (Alpha)' : 'Phase: 3-02 of 2 (Beta)',
+      'Plan: 1 of 1 in current phase',
+      'Status: In progress',
+      '',
+    ]);
+    gitOrThrow(['init', '-q'], { cwd: tmp });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: tmp });
+    gitOrThrow(['config', 'user.name', 'Test'], { cwd: tmp });
+    gitOrThrow(['add', '-A'], { cwd: tmp });
+    gitOrThrow(['commit', '-qm', 'init'], { cwd: tmp });
+    return tmp;
+  };
+
+  test('#5676: first-time completion of 3-01 advances STATE to 3-02', () => {
+    const tmp = buildFixture(true);
+    try {
+      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, { HOME: tmp });
+      assert.ok(result.success, `phase.complete should succeed: ${result.error}`);
+
+      const state = fs.readFileSync(path.join(tmp, '.planning', 'STATE.md'), 'utf8');
+      assert.match(state, /^current_phase: "?0?3-02"?$/m);
+      assert.match(state, /^current_phase_name: "?Beta"?$/m);
+      assert.match(state, /^Phase: .*3-02/m);
+      assert.doesNotMatch(state, /02: beta/i);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('#5676: re-completing 3-01 does not rewind STATE from 3-02', () => {
+    const tmp = buildFixture(false);
+    try {
+      const result = runGsdTools(['query', 'phase.complete', '3-01'], tmp, { HOME: tmp });
+      assert.ok(result.success, `phase.complete should succeed: ${result.error}`);
+
+      const state = fs.readFileSync(path.join(tmp, '.planning', 'STATE.md'), 'utf8');
+      assert.match(state, /^current_phase: "?3-02"?$/m);
+      assert.match(state, /^Phase: .*3-02/m);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});
+
+describe('#5676: find-phase directory token under milestone-prefixed', () => {
+  const buildFindFixture = (convention, dir, prefix) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5676-find-'));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    put('.planning/config.json', [JSON.stringify(convention === 'legacy' ? {} : { phase_id_convention: convention })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      `phase_id_convention: ${convention}`,
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      `### Phase ${prefix}: Beta`,
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+    ]);
+    put(`.planning/phases/${dir}/${prefix}-01-PLAN.md`, ['# Plan', '']);
+    put('.planning/STATE.md', ['---', 'milestone: v1.0', 'status: executing', '---', '', '# State', '']);
+    return tmp;
+  };
+
+  test('#5676: find-phase 3-02 reports phase 03-02 with slug beta', () => {
+    const tmp = buildFindFixture('milestone-prefixed', '03-02-beta', '03-02');
+    try {
+      const result = runGsdTools(['find-phase', '3-02'], tmp);
+      assert.ok(result.success, `find-phase should succeed: ${result.error}`);
+      const found = JSON.parse(result.output);
+      assert.strictEqual(found.directory, '.planning/phases/03-02-beta');
+      assert.strictEqual(found.phase_number, '03-02');
+      assert.strictEqual(found.phase_name, 'beta');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('#5676: find-phase keeps the legacy NN-slug split on an integer phase', () => {
+    const tmp = buildFindFixture('legacy', '02-beta', '02');
+    try {
+      const result = runGsdTools(['find-phase', '2'], tmp);
+      assert.ok(result.success, `find-phase should succeed: ${result.error}`);
+      const found = JSON.parse(result.output);
+      assert.strictEqual(found.phase_number, '02');
+      assert.strictEqual(found.phase_name, 'beta');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});

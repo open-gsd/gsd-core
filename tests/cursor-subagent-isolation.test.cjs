@@ -27,7 +27,7 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS } = require('../hooks/lib/isolation-sentinel.js');
 const { REASON_CODE } = require('../hooks/lib/isolation-deny-reason.js');
 const { runNode } = require('./helpers/process-seam.cjs');
@@ -1100,5 +1100,44 @@ describe('gsd-cursor-subagent-start.js: #3582 cold tree — RuntimeBuildError su
     // `user_message` remains free-form operator-facing text — not asserted here.
     assert.equal(typeof out.user_message, 'string');
     assert.ok(out.user_message.length > 0);
+  });
+});
+
+describe('gsd-cursor-subagent-start.js: #5682 — interleaved per-dispatch records (in-process, real record-dispatch-isolation writer)', () => {
+  const cursorHookModule = require('../hooks/gsd-cursor-subagent-start.js');
+  const FLAG = '--worktree';
+  const A = { phase: '21', plan: '21-13' };
+  const B = { phase: '23', plan: '23-15' };
+  let project;
+  let savedGsdRuntime;
+
+  before(() => {
+    savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    project = makeGitProject('gsd-cs-5682-', JSON.stringify({ runtime: 'cursor' }));
+  });
+  after(() => {
+    cleanup(project);
+    if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = savedGsdRuntime;
+  });
+
+  function record(args) {
+    const result = runGsdTools(['record-dispatch-isolation', ...args], project);
+    assert.ok(result.success, `record-dispatch-isolation failed: ${result.error}`);
+    assert.equal(JSON.parse(result.output).recorded, true);
+  }
+
+  test('#5682: two orchestrators interleaving records each get their own verdict from evaluateRootIsolation', () => {
+    record(['--isolation', 'none', '--phase', A.phase, '--plan', A.plan]);
+    record(['--isolation', 'harness-worktree', `--harness-flag=${FLAG}`, '--phase', B.phase, '--plan', B.plan]);
+    const written = JSON.parse(fs.readFileSync(path.join(project, SENTINEL_RELATIVE_PATH), 'utf-8')).written_at;
+    const clock = { now: () => written + 1 };
+
+    const forA = cursorHookModule.evaluateRootIsolation(project, 'gsd-executor', { clock, dispatchIds: A });
+    assert.equal(forA.action, 'allow', 'A\'s recorded sequential decision still governs its own dispatch');
+
+    const forB = cursorHookModule.evaluateRootIsolation(project, 'gsd-executor', { clock, dispatchIds: B });
+    assert.equal(forB.action, 'deny', 'B\'s harness-worktree decision still denies a non-isolated checkout');
   });
 });
