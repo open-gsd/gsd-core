@@ -24,6 +24,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+import { GIT_PROBE_TIMEOUT_MS } from './git-info-exclude.cjs';
 // #4717: runtime-identity fill — env rung + per-install marker rung.
 import { readInstallRuntimeMarker } from './runtime-slash.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -238,9 +239,7 @@ const _gitIgnoredCache = new Map<string, boolean>();
 
 // #5505: the state-contract publisher reaches isGitIgnored at every boundary command (its commit_docs
 // tier), so a hung git must fail fast there instead of waiting out execGit's 10 s default and a timeout
-// must not be cached as "not ignored". Exported: `cmdCommit`'s new check-ignore and staged-diff probes
-// use the same bound.
-const CHECK_IGNORE_TIMEOUT_MS = 5_000;
+// must not be cached as "not ignored". The bound is GIT_PROBE_TIMEOUT_MS (git-info-exclude.cts).
 
 function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, string>): boolean {
   // #2206: strip trailing slashes — `git check-ignore` has a quirk where a
@@ -250,7 +249,7 @@ function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, stri
   const key = cwd + '::' + normalized + (env ? '::env:' + JSON.stringify(Object.entries(env).sort()) : '');
   if (_gitIgnoredCache.has(key)) return _gitIgnoredCache.get(key)!;
   // --no-index checks .gitignore rules regardless of whether the file is tracked.
-  const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env, timeout: CHECK_IGNORE_TIMEOUT_MS });
+  const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env, timeout: GIT_PROBE_TIMEOUT_MS });
   if (result.timedOut) return false; // a bound hit says nothing about the rules: not cached
   const ignored = result.exitCode === 0;
   _gitIgnoredCache.set(key, ignored);
@@ -1246,7 +1245,6 @@ export = {
   CONFIG_REASON,
   _warnedUnusableConfig,
   isGitIgnored,
-  CHECK_IGNORE_TIMEOUT_MS,
   resolveCommitDocsTiers,
   CONFIG_DEFAULTS,
   _getConfigDefault,

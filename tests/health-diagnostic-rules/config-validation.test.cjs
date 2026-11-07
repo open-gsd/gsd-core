@@ -989,6 +989,28 @@ describe('W031 — derived state.json still tracked by git', () => {
     }
   });
 
+  // Boundaries of the two caps: 4, 5 and 6 paths (the "and N more" suffix starts at 6) and names of
+  // 119, 120 and 121 characters (the cut and its ellipsis start at 121).
+  test('W031 path-count cap: 4 and 5 paths list all, 6 adds "and 1 more"', () => {
+    for (const count of [4, 5, 6]) {
+      const value = Array.from({ length: count }, (_, i) => `.planning/w${i}/state.json`);
+      const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } });
+      const listed = value.slice(0, 5).join(', ');
+      assert.ok(diagnostic.message.startsWith(`Tracked by git: ${listed}${count === 6 ? ' and 1 more' : ''}. state.json is`), `${count}: ${diagnostic.message}`);
+      assert.ok(diagnostic.remedy.args.command.includes(value[count - 1]), 'the command keeps every path');
+    }
+  });
+
+  test('W031 name cap: 119 and 120 characters stay whole, 121 is cut with an ellipsis', () => {
+    for (const length of [119, 120, 121]) {
+      const name = `.planning/${'a'.repeat(length - '/state.json'.length - '.planning/'.length)}/state.json`;
+      assert.equal([...name].length, length);
+      const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value: [name], scope: SCOPE.COMPLETE, reason: 'ok' } });
+      const expected = length > 120 ? `${[...name].slice(0, 120).join('')}…` : name;
+      assert.ok(diagnostic.message.startsWith(`Tracked by git: ${expected}. state.json is`), `${length}: ${diagnostic.message}`);
+    }
+  });
+
   // Property: over every `.planning/<segments>/state.json` shape, git lists a path through the owner's
   // STATE_JSON_PATHSPECS exactly when the owner's matcher accepts it (every possible project directory
   // holds a marker, so only the path shape decides); the pathspecs and the matcher are one grammar.

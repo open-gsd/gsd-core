@@ -393,6 +393,17 @@ function createTempGitProject(prefix = 'gsd-test-') {
   return createFixture({ prefix, planning: true, git: true, projectDoc: true });
 }
 
+// Run `fn(dir)` on a fresh git project and remove it afterwards, also when `fn` throws.
+// For bodies that build one project per generated case (property tests), which have no `t`.
+function withTempGitProject(fn, prefix) {
+  const dir = createTempGitProject(prefix);
+  try {
+    return fn(dir);
+  } finally {
+    cleanup(dir);
+  }
+}
+
 // The OS temp root has several canonical spellings, and a path a caller
 // legitimately passes to cleanup() may arrive in any of them: macOS resolves
 // os.tmpdir() under /var/folders/... but /var is a symlink to /private/var;
@@ -1346,7 +1357,7 @@ function seedCustomPhaseDirectory(cwd, id, title, projectCode = null) {
   return directory;
 }
 
-module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, withTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

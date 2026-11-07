@@ -1228,7 +1228,7 @@ describe('state contract — write mechanics', () => {
 // ─── 14b. Git-ignore of the derived cache (#5505) ─────────────────────────────
 
 describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
-  const { createTempGitProject } = require('./helpers.cjs');
+  const { createTempGitProject, withTempGitProject } = require('./helpers.cjs');
   const { gitOrThrow, isFsLegalName } = require('./helpers/git-fixture.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const git = (cwd, ...args) => gitOrThrow(args, { cwd });
@@ -1341,6 +1341,41 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), true);
   });
 
+  const trackStateJson = (repo) => {
+    fs.writeFileSync(statePathOf(repo), '{}\n');
+    git(repo, 'add', '-f', '--', '.planning/state.json');
+    git(repo, 'commit', '-q', '-m', 'track');
+  };
+
+  test('aMigrationRuleFileThatCannotBeWrittenStillUntracksAndPublishes', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    trackStateJson(tmpDir);
+    fs.mkdirSync(path.join(planningDirOf(tmpDir), '.gitignore'));
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/state.json'), '', 'the copy was untracked');
+    assert.strictEqual(git(tmpDir, 'diff', '--cached', '--name-status').trim(), 'D\t.planning/state.json', 'only the removal is staged');
+    assert.strictEqual(fs.existsSync(statePathOf(tmpDir)), true, 'the file stays on disk');
+  });
+
+  test('aFailingRuleFileStageLeavesTheRemovalStagedAndPublishes', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    trackStateJson(tmpDir);
+    const childProcess = require('node:child_process');
+    const real = childProcess.spawnSync;
+    t.mock.method(childProcess, 'spawnSync', function (cmd, args, ...rest) {
+      if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git' && args.includes('add')) {
+        return { status: 1, signal: null, stdout: '', stderr: 'fatal: index busy', output: [null, '', 'fatal: index busy'], pid: 0 };
+      }
+      return real.call(this, cmd, args, ...rest);
+    });
+    assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
+    t.mock.restoreAll();
+    assert.strictEqual(git(tmpDir, 'diff', '--cached', '--name-status').trim(), 'D\t.planning/state.json', 'the removal stays staged; the rule file was never added');
+    assert.match(fs.readFileSync(path.join(planningDirOf(tmpDir), '.gitignore'), 'utf8'), /^\/state\.json$/m, 'the rule is on disk for the next boundary');
+  });
+
   test('aNonGitProjectPublishesWithoutCreatingDotGit', (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
@@ -1400,9 +1435,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
       ...[1, 6, 7].map((n) => fc.array(chars, { minLength: n - 1, maxLength: n - 1 }).map((cs) => `d${cs.join('')}`).filter(legal)),
     );
     const spellings = fc.constantFrom('none', 'anchoredRel', 'rel', 'filename');
-    fc.assert(fc.property(names, spellings, (name, spelling) => {
-      const repo = createTempGitProject();
-      try {
+    fc.assert(fc.property(names, spellings, (name, spelling) => withTempGitProject((repo) => {
         const sub = name ? path.join(repo, name) : repo;
         fs.mkdirSync(planningDirOf(sub), { recursive: true });
         if (name) trackUnder(repo, sub);
@@ -1417,10 +1450,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
         let ignored = true;
         try { git(repo, 'check-ignore', '-q', '--', target); } catch { ignored = false; }
         assert.strictEqual(ignored, negation === null);
-      } finally {
-        cleanup(repo);
-      }
-    }), { seed: 5505, numRuns: 40 });
+    })), { seed: 5505, numRuns: 40 });
   });
 
   test('anExplicitNegationOfTheEntryIsLeftAlone', (t) => {
@@ -1439,7 +1469,19 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const exclude = excludeOf(tmpDir);
     fs.appendFileSync(exclude, '!/.planning/x\n');
     const before = fs.readFileSync(exclude, 'utf8');
-    require('../gsd-core/bin/lib/git-info-exclude.cjs').excludeFromGit(planningDirOf(tmpDir), 'x');
+    const { excludeFromGit } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+    assert.strictEqual(excludeFromGit(tmpDir, planningDirOf(tmpDir), 'x'), false);
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+  });
+
+  test('aNegationAfterOurOwnExcludeEntryStillWins', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const exclude = excludeOf(tmpDir);
+    fs.appendFileSync(exclude, '/.planning/x\n!/.planning/x\n');
+    const before = fs.readFileSync(exclude, 'utf8');
+    const { excludeFromGit } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+    assert.strictEqual(excludeFromGit(tmpDir, planningDirOf(tmpDir), 'x'), false);
     assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
   });
 
@@ -1575,8 +1617,8 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   });
 
   test('aNestedProjectOwnershipProbeIsBounded', (t) => {
-    const { OWNERSHIP_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
-    assert.ok(OWNERSHIP_PROBE_TIMEOUT_MS > 0 && OWNERSHIP_PROBE_TIMEOUT_MS <= 5_000);
+    const { GIT_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+    assert.ok(GIT_PROBE_TIMEOUT_MS > 0 && GIT_PROBE_TIMEOUT_MS <= 5_000);
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     const sub = path.join(tmpDir, 'sub');
@@ -1591,7 +1633,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     });
     publishStateContract(sub, fixedDeps());
     // the ownership probe, then the tracked-copy listing of the migration: both on the 5 s class
-    assert.deepStrictEqual(probes, [OWNERSHIP_PROBE_TIMEOUT_MS, 5_000]);
+    assert.deepStrictEqual(probes, [GIT_PROBE_TIMEOUT_MS, GIT_PROBE_TIMEOUT_MS]);
   });
 
   test('publishStaysSilentOnStderrWithAMalformedConfig', (t) => {

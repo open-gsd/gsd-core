@@ -844,7 +844,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+const { cleanup, createTempGitProject, withTempGitProject, captureFdSync } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -1298,9 +1298,7 @@ describe('#3587 per-phase commit_docs override', () => {
       const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
       const valueArb = fc.oneof(fc.constant(undefined), fc.boolean(), fc.string({ maxLength: 4 }), fc.integer({ min: -1, max: 2 }));
       fc.assert(
-        fc.property(valueArb, valueArb, fc.boolean(), fc.boolean(), (flat, nested, hasConfig, ignored) => {
-          const cwd = createTempGitProject();
-          try {
+        fc.property(valueArb, valueArb, fc.boolean(), fc.boolean(), (flat, nested, hasConfig, ignored) => withTempGitProject((cwd) => {
             if (hasConfig) {
               const cfg = {};
               if (flat !== undefined) cfg.commit_docs = flat;
@@ -1316,10 +1314,7 @@ describe('#3587 per-phase commit_docs override', () => {
             assert.strictEqual(publishStateContract(cwd).published, true);
             const exclude = splitLines(fs.readFileSync(path.join(cwd, '.git', 'info', 'exclude'), 'utf8'));
             assert.strictEqual(exclude.includes('/.planning/state.json'), Boolean(expected));
-          } finally {
-            cleanup(cwd);
-          }
-        }),
+        })),
         { numRuns: 30, seed: 5505 },
       );
     });

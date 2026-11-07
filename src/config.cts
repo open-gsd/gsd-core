@@ -740,7 +740,10 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // #5505: state.json is a derived cache that never belongs in a commit. A project that keeps
   // planning in git ships the ignore rule from its first commit (new-project.md commits the file
   // with config.json); with commit_docs false the whole directory is ignored already.
-  if (config['commit_docs'] !== false) ignoreInTree(planningBase, 'state.json');
+  if (config['commit_docs'] !== false) {
+    ignoreInTree(planningBase, 'state.json');
+    ignoreInTree(planningBase, 'state.json', 'workstreams/*/');
+  }
   // The user defaults rewrite follows the config it was planned for: a
   // creation that fails before here leaves the defaults file as it was.
   persistDefaultsRewrite(plan);

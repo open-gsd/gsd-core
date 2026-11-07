@@ -22,7 +22,8 @@ const { output, ERROR_REASON } = ioMod;
 const error: typeof ioMod.error = ioMod.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
-const { loadConfig, isGitIgnored, resolveCommitDocsTiers, CHECK_IGNORE_TIMEOUT_MS } = configLoaderMod;
+const { loadConfig, isGitIgnored, resolveCommitDocsTiers } = configLoaderMod;
+import { GIT_PROBE_TIMEOUT_MS } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
 const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
@@ -2258,7 +2259,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         explicitFiles &&
         // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
         isStateJsonPublishPath(cwd, path.relative(cwd, fullPath)) &&
-        execGit(['check-ignore', '-q', '--', file], { cwd, timeout: CHECK_IGNORE_TIMEOUT_MS }).exitCode === 0
+        execGit(['check-ignore', '-q', '--', file], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).exitCode === 0
       ) {
         // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing
         // file it is skipped and recorded, not a failure. Any other ignored path still fails
@@ -2277,7 +2278,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     }
   }
 
-  // #5505: the state.json migration (publishStateContract) stages a removal and a `.gitignore` rule.
+  // #5505: the state.json migration (publishStateContract) stages a removal and a `.gitignore` rule (new, or an edit of a tracked one).
   // A scoped commit (`git commit -- <paths>`) would leave them staged and the tree dirty, and a path
   // list cannot carry the removal: git re-adds a listed path from the work tree, where the file stays.
   // So when nothing but those paths was staged before this call, the commit takes the index as it is.
@@ -2285,9 +2286,11 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // hold glob characters, so they are literal pathspecs downstream.
   const migrationStaged = explicitFiles && preStaged.size > 0
     ? execGit(
-        ['diff', '--cached', '--name-only', '-z', '--diff-filter=AD', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
-        { cwd, timeout: CHECK_IGNORE_TIMEOUT_MS },
+        ['diff', '--cached', '--name-only', '-z', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
+        { cwd, timeout: GIT_PROBE_TIMEOUT_MS },
       ).stdout.split('\0').filter(Boolean)
+        // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
+        .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
     : [];
   const carried = [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
   stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));

@@ -21,11 +21,9 @@ import path from 'node:path';
 import { execGit } from './shell-command-projection.cjs';
 import { splitLines } from './text-lines.cjs';
 
-// excludeFromGit runs on every boundary command's hot path: bound each of its git calls.
-const REV_PARSE_TIMEOUT_MS = 5_000;
-const CHECK_IGNORE_PROBE_TIMEOUT_MS = 5_000;
-// Bound for the ownership probe's one `git ls-files`.
-export const OWNERSHIP_PROBE_TIMEOUT_MS = 5_000;
+// The one bound for the git calls on a boundary command's hot path (exclude, ownership probe, check-ignore,
+// state.json migration): a hung git fails fast there instead of waiting out execGit's 10 s default.
+export const GIT_PROBE_TIMEOUT_MS = 5_000;
 
 /** Escape gitignore metacharacters so a directory or file name matches literally. */
 function escapeGitignore(s: string): string {
@@ -39,7 +37,7 @@ function repoOwnsProject(projectRoot: string, dir: string): boolean {
     if (fs.existsSync(path.join(d, '.git'))) return true;
     if (d === root || d === path.dirname(d)) break;
   }
-  const r = execGit(['ls-files', '-z', '--', '.', ':(exclude).planning'], { cwd: root, timeout: OWNERSHIP_PROBE_TIMEOUT_MS });
+  const r = execGit(['ls-files', '-z', '--', '.', ':(exclude).planning'], { cwd: root, timeout: GIT_PROBE_TIMEOUT_MS });
   return (r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (r.exitCode === 0 && r.stdout.length > 0);
 }
 
@@ -49,7 +47,7 @@ function repoOwnsProject(projectRoot: string, dir: string): boolean {
  * spelling or glob, git reads them all). 'open': no rule speaks.
  */
 function ignoreVerdict(dir: string, filename: string): 'ignored' | 'negated' | 'open' {
-  const r = execGit(['check-ignore', '--no-index', '-v', '--', filename], { cwd: dir, timeout: CHECK_IGNORE_PROBE_TIMEOUT_MS });
+  const r = execGit(['check-ignore', '--no-index', '-v', '--', filename], { cwd: dir, timeout: GIT_PROBE_TIMEOUT_MS });
   // `-v` prints the deciding rule as `<source>:<line>:<pattern>\t<path>` and exits 0 for a `!` rule too.
   const rule = /:\d+:([^\t]*)\t/.exec(String(r.stdout));
   if (!rule) return 'open';
@@ -69,18 +67,18 @@ export function excludeFromGit(projectRoot: string, dir: string, filename: strin
     if (!repoOwnsProject(projectRoot, dir)) return false;
     // The prefix goes last: stdout is trimmed, and a non-empty prefix ends in `/`, so only an
     // empty prefix (dir is the git root) loses its line; a leading space survives.
-    const revParse = execGit(['rev-parse', '--git-path', 'info/exclude', '--show-prefix'], { cwd: dir, timeout: REV_PARSE_TIMEOUT_MS });
+    const revParse = execGit(['rev-parse', '--git-path', 'info/exclude', '--show-prefix'], { cwd: dir, timeout: GIT_PROBE_TIMEOUT_MS });
     const [excludeRel, prefix = ''] = splitLines(String(revParse.stdout));
     if (revParse.exitCode !== 0 || !excludeRel) return false;
     // The target is whatever path git itself resolves for info/exclude (a linked worktree, core.hooksPath-style
     // layouts and GIT_DIR all move it); nothing here builds a `.git/...` path by hand.
     const exclude = path.resolve(dir, excludeRel);
     const entry = `/${escapeGitignore(prefix)}${escapeGitignore(filename)}`;
-    // linked worktrees share this file: two racing publishes may both append the entry, and git reads a duplicated line as one
-    const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
-    if (splitLines(existing).includes(entry)) return true;
+    // git decides first: our own entry reads as 'ignored', and a later `!` rule (in-tree or global) still wins over a stale entry.
     const verdict = ignoreVerdict(dir, filename);
     if (verdict !== 'open') return verdict === 'ignored';
+    // linked worktrees share this file: two racing publishes may both append the entry, and git reads a duplicated line as one
+    const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
     fs.appendFileSync(exclude, (existing && !existing.endsWith('\n') ? '\n' : '') + entry + '\n');
     return true;
@@ -92,13 +90,14 @@ export function excludeFromGit(projectRoot: string, dir: string, filename: strin
 
 /**
  * Write the committed counterpart of `excludeFromGit`: an anchored `/<filename>` line in
- * `<dir>/.gitignore`, created or extended once (idempotent). A `!` line the user wrote for the
- * file is kept as their decision. Returns true when the rule is in place.
+ * `<dir>/.gitignore`, created or extended once (idempotent). `subpath` is a raw glob prefix below
+ * `dir` (`workstreams/* /` without the space), for copies the file has in nested directories. A `!`
+ * line the user wrote for the file is kept as their decision. Returns true when the rule is in place.
  */
-export function ignoreInTree(dir: string, filename: string): boolean {
+export function ignoreInTree(dir: string, filename: string, subpath = ''): boolean {
   try {
     const file = path.join(dir, '.gitignore');
-    const line = `/${escapeGitignore(filename)}`;
+    const line = `/${subpath}${escapeGitignore(filename)}`;
     const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
     const present = splitLines(existing);
     if (present.includes(`!${line}`)) return false;

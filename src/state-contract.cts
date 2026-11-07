@@ -139,6 +139,7 @@ interface Owners {
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
   excludeFromGit: typeof import('./git-info-exclude.cjs')['excludeFromGit'];
   ignoreInTree: typeof import('./git-info-exclude.cjs')['ignoreInTree'];
+  GIT_PROBE_TIMEOUT_MS: number;
   buildStateJsonTracked: typeof import('./planning-snapshot.cjs')['buildStateJsonTracked'];
   loadConfig: typeof import('./config-loader.cjs')['loadConfig'];
   isGitIgnored: typeof import('./config-loader.cjs')['isGitIgnored'];
@@ -187,6 +188,7 @@ function owners(): Owners {
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
     excludeFromGit: gitInfoExcludeMod.excludeFromGit,
     ignoreInTree: gitInfoExcludeMod.ignoreInTree,
+    GIT_PROBE_TIMEOUT_MS: gitInfoExcludeMod.GIT_PROBE_TIMEOUT_MS,
     buildStateJsonTracked: planningSnapshotMod.buildStateJsonTracked,
     loadConfig: configLoaderMod.loadConfig,
     isGitIgnored: configLoaderMod.isGitIgnored,
@@ -414,9 +416,6 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
   };
 }
 
-// Bound for the migration's `git rm` and `git add` (same 5 s class as the other hot-path git calls).
-const MIGRATION_GIT_TIMEOUT_MS = 5_000;
-
 /**
  * #5505: untrack every tracked publish path (the set W031 lists), staged and with the file kept on
  * disk, and write the committed `.gitignore` rule beside each. `--ignore-unmatch` and the rule
@@ -424,14 +423,14 @@ const MIGRATION_GIT_TIMEOUT_MS = 5_000;
  * rules into the next scoped commit. A listing git cannot answer is empty here: nothing to do.
  */
 function untrackTrackedStateJson(cwd: string): void {
-  const tracked = owners().buildStateJsonTracked(cwd, MIGRATION_GIT_TIMEOUT_MS).value;
+  const tracked = owners().buildStateJsonTracked(cwd, owners().GIT_PROBE_TIMEOUT_MS).value;
   if (tracked.length === 0) return;
-  const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...tracked], { cwd, timeout: MIGRATION_GIT_TIMEOUT_MS });
+  const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...tracked], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
   if (rm.exitCode !== 0) return;
   const rules = [...new Set(tracked.map((f) => path.dirname(path.resolve(cwd, f))))]
     .filter((dir) => owners().ignoreInTree(dir, 'state.json'))
     .map((dir) => path.join(dir, '.gitignore'));
-  if (rules.length > 0) owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: MIGRATION_GIT_TIMEOUT_MS });
+  if (rules.length > 0) owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
 }
 
 /** Hide the derived file when the commit policy keeps planning in git: append the per-clone exclude entry (the owner applies the repo-ownership gate), then migrate a tracked copy (the publisher passes no phase override: it has no phase context, D13). */
