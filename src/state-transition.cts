@@ -1832,16 +1832,17 @@ export function readPlanPosition(content: string): { current: number; total: num
 
 /**
  * The plan total a STATE.md document records, for the `init --validate`
- * plan-count check: the plan-position total when one is readable, else a lone
- * readable `Total Plans in Phase` (a document with no `Current Plan` beside
- * it). `null` when nothing readable is recorded. #5786.
+ * plan-count check: a readable `Total Plans in Phase` first, else the
+ * plan-position total (`Plan: N of M`, `Current Plan: N of M`). `null` when
+ * nothing readable is recorded. #5786.
  */
 export function readRecordedPlanTotal(content: string): number | null {
-  const position = readPlanPosition(content);
-  if (position !== null) return position.total;
+  // An explicit `Total Plans in Phase` wins over an `of M` in either plan field.
   const raw = stateExtractField(content, 'Total Plans in Phase');
   const match = raw ? PLAN_SHAPE_N.exec(raw) : null;
-  return match ? planNumberFrom(match[1]) : null;
+  if (match) return planNumberFrom(match[1]);
+  const position = readPlanPosition(content);
+  return position !== null ? position.total : null;
 }
 
 /**
