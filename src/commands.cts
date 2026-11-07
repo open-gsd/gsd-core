@@ -2286,9 +2286,11 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // hold glob characters, so they are literal pathspecs downstream.
   const migrationStaged = explicitFiles && preStaged.size > 0
     ? execGit(
-        ['diff', '--cached', '--name-only', '-z', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
+        ['diff', '--cached', '--name-status', '-z', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
         { cwd, timeout: GIT_PROBE_TIMEOUT_MS },
       ).stdout.split('\0').filter(Boolean)
+        // status, path pairs: the migration only removes a state.json, so a staged edit of one (a copy a `!` rule keeps tracked) is the user's
+        .flatMap((x, i, all) => (i % 2 === 1 && (all[i - 1] === 'D') === !x.endsWith('.gitignore') ? [x] : []))
         // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
         .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
         // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:

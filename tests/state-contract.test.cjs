@@ -511,6 +511,21 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.match(git(tmpDir, 'show', `HEAD:${rel}/.gitignore`), /^\/state\.json$/m);
   });
 
+  test('a staged edit of a state.json that a negation keeps tracked is not carried', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true });
+    fs.mkdirSync(path.join(tmpDir, rel, 'workstreams', 'kept'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, rel, 'workstreams', 'kept', 'STATE.md'), STATE_MD);
+    fs.writeFileSync(path.join(tmpDir, rel, 'workstreams', 'kept', 'state.json'), '{}\n');
+    git(tmpDir, 'add', '-f', `${rel}/workstreams/kept`);
+    git(tmpDir, 'commit', '-q', '-m', 'track kept');
+    fs.writeFileSync(path.join(tmpDir, rel, 'workstreams', 'kept', 'state.json'), '{"a":1}\n');
+    git(tmpDir, 'add', `${rel}/workstreams/kept/state.json`);
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), [`${rel}/STATE.md`]);
+  });
+
   test('the migration is carried when the tracked rule file had no final newline', (t) => {
     const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/' });
     fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
