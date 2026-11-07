@@ -3351,7 +3351,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(shellDashCPayloads(`bash ${flag} 'git commit -m x'`).length, 1, `scanner reads bash ${flag}`);
     }
     // A value option the hook skips (exit 0) must be a value option of the scanner too; `--super-prefix` fails closed in the hook.
-    const skipped = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix']
+    const probed = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix'];
+    assert.deepStrictEqual([...GIT_VALUE_FLAGS].sort(), [...probed].sort(), 'every scanner value option is probed against the hook, and the reverse');
+    const skipped = probed
       .filter((opt) => hook(`git ${opt} '-calias.x=!cat .env' status`) === 0);
     for (const opt of skipped) assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
     assert.ok(skipped.includes('-C') && skipped.includes('--git-dir'), `the hook skips -C and --git-dir (got ${skipped})`);
@@ -3535,16 +3537,16 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
     for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
       'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
-      // The doc text is the recipe a user copies, so its exact fragments are the contract.
+      // Each doc copies the recipe the scratch-repo test below runs and the W029 text the health rule emits, so the copies must stay in sync with those two sources.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
-      // allow-test-rule: source-text-is-the-product (#5211)
+      // allow-test-rule: docs-parity (#5211)
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
-      // allow-test-rule: source-text-is-the-product (#5211)
+      // allow-test-rule: docs-parity (#5211)
       assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
       if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
-        // allow-test-rule: source-text-is-the-product (#5211)
+        // allow-test-rule: docs-parity (#5211)
         assert.ok(md.includes(`- [W029] ${w029.message}`), `${f}: W029 message`);
-        // allow-test-rule: source-text-is-the-product (#5211)
+        // allow-test-rule: docs-parity (#5211)
         assert.ok(md.includes(`Fix: ${w029.remedy.args.command}`), `${f}: W029 remedy`);
       }
     }
