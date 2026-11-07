@@ -52,8 +52,9 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 function restatesCycle(text) {
   const red = text.indexOf('commit: `test({phase}-{plan})');
   if (red === -1) return false;
-  const green = text.indexOf('commit: `feat({phase}-{plan})', red);
-  return green !== -1;
+  const feat = text.indexOf('commit: `feat({phase}-{plan})', red);
+  const fix = text.indexOf('commit: `fix({phase}-{plan})', red);
+  return feat !== -1 || fix !== -1;
 }
 
 // #4268: restatesCycle() above only catches the exact literal commit-scope
@@ -218,7 +219,8 @@ describe('#3990 — one statement of the cycle', () => {
     const tdd = read('gsd-core/references/tdd.md');
     assert.ok(/## Red-Green-Refactor Cycle/.test(tdd),
       'tdd.md carries the canonical Red-Green-Refactor Cycle section');
-    assert.ok(/Commit: `test\(\{phase\}-\{plan\}\)/.test(tdd) && /Commit: `feat\(\{phase\}-\{plan\}\)/.test(tdd),
+    assert.ok(/Commit: `test\(\{phase\}-\{plan\}\)/.test(tdd)
+      && /Commit: `feat\(\{phase\}-\{plan\}\)[^\n]{0,200}or `fix\(\{phase\}-\{plan\}\)/.test(tdd),
       'the canonical section carries the commit-scope contract');
   });
 
@@ -236,6 +238,21 @@ describe('#3990 — one statement of the cycle', () => {
       '<tdd_plan_execution> must not restate the numbered RED/GREEN commit protocol');
     assert.ok(/references\/tdd\.md/.test(plan.slice(plan.indexOf('tdd_plan_execution'))),
       'the plan-execution section points at the canonical reference');
+  });
+
+  test('restatesCycle sees a fix-only GREEN as a restatement and ignores a pointer', () => {
+    assert.ok(restatesCycle('commit: `test({phase}-{plan}): x`\ncommit: `fix({phase}-{plan}): y`'), 'fix-only GREEN');
+    assert.ok(restatesCycle('commit: `test({phase}-{plan}): x`\ncommit: `feat({phase}-{plan}): y`'), 'feat GREEN unchanged');
+    assert.ok(!restatesCycle('commit: `fix({phase}-{plan}): y`\ncommit: `test({phase}-{plan}): x`'), 'a GREEN before the RED anchor is no restatement');
+    assert.ok(!restatesCycle('see references/tdd.md'), 'a pointer is no restatement');
+  });
+
+  test('execute-mvp-tdd check 3 and its halt reason name both GREEN types (#5274)', () => {
+    const mvp = read('gsd-core/references/execute-mvp-tdd.md');
+    assert.ok(/No `feat\(\{phase\}-\{plan\}\)` or `fix\(\{phase\}-\{plan\}\)` commit may exist/.test(mvp),
+      'check 3 names both GREEN commit types');
+    assert.ok(/Reason: \{[^}\n]*\bimpl_before_test\b/.test(mvp) && !/feat_before_test/.test(mvp),
+      'the check-3 halt reason names neither GREEN type alone');
   });
 
   test('both embed lists load tdd.md only when the dispatch is TDD', () => {
