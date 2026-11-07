@@ -3402,7 +3402,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- .', '/gsd-fast commits the current directory'],
     ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
     ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: reuses the source commit message over the staged result'],
-    ['gsd-core/workflows/ship.md: git commit --allow-empty -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: no paths by design'],
+    ['gsd-core/workflows/ship.md: git commit --allow-empty --only -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: --only records nothing from the index'],
     ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
     ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
     ['gsd-core/workflows/undo.md: git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
@@ -3520,18 +3520,16 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
-  test('stop-tracking recipe carries the same four fragments in all six docs', () => {
+  test('stop-tracking recipe carries the same four fragments in all six docs', (t) => {
     const norm = (t) => t.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
     // The W029 message and remedy belong to the health rule, so the docs are compared with the rule's own output.
     const repo = createTempGitProject('gsd-5489-w029-');
-    let w029;
-    try {
-      fs.writeFileSync(path.join(repo, '.gitignore'), '.planning/\n');
-      gitOrThrow(['add', '-A'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
-      gitOrThrow(['commit', '-q', '-m', 'ignore planning'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
-      w029 = RULES.find((r) => r.code === 'W029').check(buildPlanningSnapshot(repo))[0];
-    } finally { cleanup(repo); }
+    t.after(() => cleanup(repo));
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.planning/\n');
+    gitOrThrow(['add', '-A'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-q', '-m', 'ignore planning'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+    const w029 = RULES.find((r) => r.code === 'W029').check(buildPlanningSnapshot(repo))[0];
     assert.ok(w029, 'W029 fires for an ignored but tracked .planning/');
     const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
@@ -3572,7 +3570,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
       assert.equal(tails.length, 3, f);
-      for (const t of tails) assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
+      for (const t of tails) {
+        // allow-test-rule: docs-parity (#5211)
+        assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
+      }
     }
   });
 
@@ -3585,6 +3586,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       // allow-test-rule: source-text-is-the-product (#5211)
       assert.ok(md.includes(":(literal)"), `${f}: has a literal pathspec`);
+      // allow-test-rule: source-text-is-the-product (#5211)
       assert.equal(/":\(literal\)[^"]{1,80}[}>]"/.test(md), false, `${f}: double-quoted placeholder`);
     }
   });
@@ -3603,6 +3605,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       for (const l of hits) {
         // allow-test-rule: source-text-is-the-product (#5211)
         assert.ok(l.includes("# from THIS worktree's root"), `${f}: ${l}`);
+        // allow-test-rule: source-text-is-the-product (#5211)
         assert.ok(l.includes('git add -A -- .'), `${f}: ${l}`);
       }
     }

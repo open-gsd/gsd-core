@@ -532,7 +532,7 @@ if [ "$STATUS" = "BLOCKED" ] && [ "$CHECKS" = "0" ] && git log -1 --format=%B "$
   echo "⚠ PR is BLOCKED with zero checks. The [ci skip] trailer wedged the PR due to required checks."
   echo "Pushing an empty commit to trigger the required pipelines..."
   # gsd_run query commit requires a file list; use git directly for this intentionally empty commit.
-  git commit --allow-empty -m "chore: trigger CI (recover from ship-note skip-token)"
+  git commit --allow-empty --only -m "chore: trigger CI (recover from ship-note skip-token)"
   git push origin ${CURRENT_BRANCH} 2>&1 || echo "⚠ track_shipping: recovery push failed — rerun: git push origin ${CURRENT_BRANCH}"
 elif [ "$STATUS" = "UNKNOWN" ]; then
   echo "⚠ track_shipping: PR mergeStateStatus is UNKNOWN after polling; PR may require manual check re-trigger."
