@@ -20,10 +20,10 @@ const {
 } = require(path.join(LIB, 'git-commit-timeout.cjs'));
 
 describe('#5231 git.commit_timeout_ms rule', () => {
-  const accepted = [['0 (below the lower bound)', 0, false], ['1', 1, true], ['2', 2, true],
+  const boundaries = [['0 (below the lower bound)', 0, false], ['1', 1, true], ['2', 2, true],
     ['ceiling-1', MAX - 1, true], ['ceiling', MAX, true], ['ceiling+1', MAX + 1, false],
     ['Number.MAX_SAFE_INTEGER', Number.MAX_SAFE_INTEGER, false], ['MAX_SAFE_INTEGER+1', Number.MAX_SAFE_INTEGER + 1, false]];
-  for (const [label, value, ok] of accepted) {
+  for (const [label, value, ok] of boundaries) {
     test(`boundary ${label} (${value}) -> ${ok ? 'accepted' : 'default'}`, () => {
       assert.equal(isValidCommitTimeoutMs(value), ok);
       assert.equal(commitTimeoutMs(value), ok ? value : DEFAULT);

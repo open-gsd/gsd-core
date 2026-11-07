@@ -8,7 +8,7 @@
  */
 
 const fs = require('fs');
-const os = require('os');
+const { createTempDir, cleanup } = require('../helpers.cjs');
 const path = require('path');
 const { runNode } = require('./process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./timeouts.cjs');
@@ -22,7 +22,7 @@ const LIB = path.join(__dirname, '..', '..', 'gsd-core', 'bin', 'lib');
  *   timeout/thrown/failure come from a JSON report file the child writes at exit; all are `undefined` only if the child died before exit.
  */
 function runWithTimedOutCommit(callSrc, { stderr = '', timeoutShape = 'posix' } = {}) {
-  const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-commit-probe-'));
+  const reportDir = createTempDir('gsd-commit-probe-');
   const reportFile = path.join(reportDir, 'report.json');
   const script = `
 const fs = require('fs');
@@ -55,7 +55,7 @@ try { ${callSrc} } catch (e) { /* error() throws ExitError after writing its mes
     try { report = JSON.parse(fs.readFileSync(reportFile, 'utf8')); } catch { /* child died before exit */ }
     return { status: run.exitCode, stdout: run.stdout, stderr: run.stderr, timeout: report.timeout, thrown: report.thrown, failure: report.failure };
   } finally {
-    fs.rmSync(reportDir, { recursive: true, force: true });
+    cleanup(reportDir);
   }
 }
 

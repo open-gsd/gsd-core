@@ -2619,7 +2619,7 @@ describe('#5231: git.commit_timeout_ms config key', () => {
     const stored = () => JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8')).git.commit_timeout_ms;
     // [value, accepted?] — 0/1/2 around the floor, ceiling-1/ceiling/ceiling+1 (3600000), then non-integers and non-numbers.
     const cases = [['60000', true], ['1', true], ['0', false], ['2', true], ['3599999', true], ['3600000', true],
-      ['3600001', false], ['9007199254740991', false], ['9007199254740992', false], ['-1', false], ['abc', false], ['1500.5', false]];
+      ['3600001', false], ['9007199254740991', false], ['9007199254740992', false], ['-1', false], ['abc', false], ['1500.5', false], ['', false], [' ', false]];
     let last;
     for (const [value, ok] of cases) {
       const r = runGsdTools(['--json-errors', 'config-set', 'git.commit_timeout_ms', value], tmpDir, env);
