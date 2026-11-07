@@ -196,6 +196,11 @@ const TABLE = [
   {
     file: 'gsd-secret-read-guard.js',
     stdinTimeoutMs: 3000,
+    // The default. A host can select DENY instead with
+    // GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784); runHook builds every child env
+    // from TEST_ENV_BASE alone, so this row always sees the default. The opt-in
+    // is covered by tests/gsd-secret-read-guard.test.cjs and
+    // tests/gsd-secret-read-guard.platform.test.cjs.
     declaredOnCrash: 'allow',
     allow: () => ({ payload: { tool_name: 'Bash', tool_input: { command: 'cd /proj && grep -n foo src/a.js' } } }),
     // #4221: a plain secret-file read through Bash — the exact compound shape
@@ -701,6 +706,42 @@ describe('hooks-crash-policy: hooks/dist/lib parity (#3911 review finding)', () 
     const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.outcome, OUTCOME.EXITED, `expected a clean exit; got ${r.outcome} stderr=${r.stderr}`);
     assert.equal(r.exitCode, 2, `expected HOOK_DENY's registered exit code 2; stdout=${r.stdout} stderr=${r.stderr}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// crash()'s optional stderrPayload (#5784): forwarded to deny() on the DENY
+// branch only. Driven in a child, because crash() terminates the process.
+// ---------------------------------------------------------------------------
+
+describe('hooks-crash-policy: crash() stderrPayload reaches fd 2 on DENY only (#5784)', () => {
+  const HOOK_EXIT_PATH = path.join(HOOKS_DIR, 'lib', 'hook-exit.js');
+  function runCrash(argsSource) {
+    const script = [
+      `const { crash } = require(${JSON.stringify(HOOK_EXIT_PATH)});`,
+      `crash(${argsSource});`,
+    ].join('\n');
+    return runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
+  }
+
+  test('DENY writes the payload to stdout and stderrPayload to stderr', () => {
+    const r = runCrash(`'deny', { decision: 'block', reason: 'plain reason' }, 'plain reason'`);
+    assert.equal(r.exitCode, 2, `stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.deepEqual(JSON.parse(r.stdout), { decision: 'block', reason: 'plain reason' });
+    assert.equal(r.stderr, 'plain reason');
+  });
+
+  test('DENY with no stderrPayload still writes the payload to both streams', () => {
+    const r = runCrash(`'deny', { decision: 'block', reason: 'plain reason' }`);
+    assert.equal(r.exitCode, 2, `stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.deepEqual(JSON.parse(r.stderr), JSON.parse(r.stdout));
+  });
+
+  test('ALLOW ignores stderrPayload and writes nothing to either stream', () => {
+    const r = runCrash(`'allow', undefined, 'plain reason'`);
+    assert.equal(r.exitCode, 0, `stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.equal(r.stdout, '');
+    assert.equal(r.stderr, '');
   });
 });
 
