@@ -3516,12 +3516,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(runFence(dir, g).exitCode, 1);
     }
   });
-  test('pr-branch.md preflight refuses a staged foreign path before the replay commits', (t) => {
+  test('pr-branch.md preflight refuses a staged foreign path', (t) => {
     const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/pr-branch.md'), 'utf8'));
     const from = all.findIndex((l) => l.startsWith('DIRTY=$(git status'));
     assert.notEqual(from, -1, 'the preflight exists');
-    const pre = all.slice(from, from + all.slice(from).findIndex((l) => l === 'fi') + 1).join('\n');
-    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489p-');
+    const len = all.slice(from).findIndex((l) => l === 'fi');
+    assert.notEqual(len, -1, 'the preflight closes with fi');
+    const pre = all.slice(from, from + len + 1).join('\n');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489b-');
     fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
     assert.equal(runFence(dir, pre).exitCode, 0);
     fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
