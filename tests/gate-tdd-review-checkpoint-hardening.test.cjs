@@ -867,6 +867,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
 describe('#5354 shared owners used by the seal gate', () => {
   const scope = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
+  const posix = { skip: process.platform === 'win32' };
 
   test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
     const dir = createTempGitProject('gate-5354-reach-');
@@ -881,6 +882,24 @@ describe('#5354 shared owners used by the seal gate', () => {
       assert.equal(scope.commitReachability(dir, 'f'.repeat(40), 'HEAD'), 'missing');
       assert.equal(scope.commitReachability(dir, '--all', 'HEAD'), null);
     } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('readSmallRegularFile with strict refuses a symlink and reports a close failure; without it both are as before', posix, (t) => {
+    const { readSmallRegularFile } = require('../gsd-core/bin/lib/capability-ledger.cjs');
+    const dir = createTempGitProject('gate-5354-strict-');
+    try {
+      fs.writeFileSync(path.join(dir, 'target.txt'), 'hello');
+      fs.symlinkSync(path.join(dir, 'target.txt'), path.join(dir, 'link.txt'));
+      assert.equal(readSmallRegularFile(path.join(dir, 'link.txt'), 100), 'hello');
+      assert.throws(() => readSmallRegularFile(path.join(dir, 'link.txt'), 100, { strict: true }), { code: 'ELOOP' });
+      assert.equal(readSmallRegularFile(path.join(dir, 'missing.txt'), 100, { strict: true }), null);
+      t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
+      assert.equal(readSmallRegularFile(path.join(dir, 'target.txt'), 100), 'hello');
+      assert.throws(() => readSmallRegularFile(path.join(dir, 'target.txt'), 100, { strict: true }), { code: 'EIO' });
+    } finally {
+      t.mock.restoreAll();
       cleanup(dir);
     }
   });
