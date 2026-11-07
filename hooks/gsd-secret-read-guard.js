@@ -444,8 +444,9 @@ function classifyGrepGlob(glob) {
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
 
-// #5523: four more readings, each of constructs the plain reading takes differently from a
-// shell that runs the command. They run after the plain reading and #5513's two, each under
+// #5523: the flags below, each for constructs the plain reading takes differently from a
+// shell that runs the command, set alone and together by the readings in SHELL_READINGS.
+// Those run after the plain reading and #5513's two, each under
 // its own catch, so like those it can add a denial and never remove one. The plain reading is
 // unchanged by them: every flag below is at its default there.
 //  - crIsWhitespace: false is the shells' reading, where a CR is an ordinary word
@@ -1293,7 +1294,7 @@ function findSecretReadUnderOtherReadings(command) {
   return findSecretReadUnderShellReadings(command);
 }
 
-// #5523: the four readings declared beside crIsWhitespace. They run after every earlier
+// #5523: the readings declared beside crIsWhitespace. They run after every earlier
 // reading, and a reading that throws (a deep nesting overflow) ends only itself: the readings
 // before it have already answered. Each is skipped only for a command lacking a character it
 // needs. The text the guard scans below the top level (eval's joined operands, a `bash -c`
@@ -1308,12 +1309,15 @@ const setCr = (on) => { crIsWhitespace = !on; };
 const setJoin = (on) => { heredocLinesJoined = on; };
 const setZsh = (on) => { zshGrouping = on; };
 const setSpans = (on) => { shellSpans = on; dollarDollarIsAWord = on; };
+const setBash32Spans = (on) => { heredocBodiesSkippedInSpans = !on; };
 const countTrue = (...xs) => xs.filter(Boolean).length;
-// Each construct is read on its own, then in two composed readings for a command mixing
+// Each construct is read on its own, then in three composed readings for a command mixing
 // several: bash and dash read a CR, a joined heredoc line and these spans in the same script
 // (zsh its grouping with the first two and the arithmetic spans), so `<CR>#;echo $${x; cat y`
-// needs CR and `$$` at once. A composed reading runs only when two or more of its parts apply;
-// otherwise it would read exactly as one of the single readings.
+// needs CR and `$$` at once; and bash 3.2 reads them together with #5513's heredoc span, where
+// a `)` in a heredoc body inside `$( )` closes the substitution. A composed reading runs only
+// when two or more of its parts apply; otherwise it would read exactly as one of the single
+// readings, or as #5513's.
 const SHELL_READINGS = [
   { applies: needsCr, set: setCr },
   { applies: needsJoin, set: setJoin },
@@ -1326,6 +1330,10 @@ const SHELL_READINGS = [
   {
     applies: (c) => needsZsh(c) && countTrue(needsCr(c), needsJoin(c), needsSpans(c)) >= 1,
     set: (on) => { setCr(on); setJoin(on); setZsh(on); shellSpans = on; },
+  },
+  {
+    applies: (c) => c.includes('<<') && (needsCr(c) || needsJoin(c) || needsSpans(c)),
+    set: (on) => { setBash32Spans(on); setCr(on); setJoin(on); setSpans(on); },
   },
 ];
 
