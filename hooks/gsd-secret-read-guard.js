@@ -304,6 +304,9 @@ const WRAPPERS = new Map([
 //   assigns  here a pattern, the wrapper's own rule for a word that sets a
 //            variable: env takes any word holding an `=`, sudo's parse_args one
 //            that does not start with `/` or `=`. doas has no such form
+//   dashDashEndsAssigns  after `--` the wrapper takes no more assignments: sudo
+//            reads `VAR=value` only while its `got_end_of_args` is false, so
+//            `sudo -- A=b cmd` runs a program named `A=b`. env still assigns there
 //   dash     a lone `-` is an option (env's `-i`)
 // sudo's getopt string takes a value for `-a` and `-c` on every build, whether
 // or not the build acts on them.
@@ -314,6 +317,7 @@ const FURTHER_WRAPPERS = new Map([
     short: `ac${WRAPPERS.get('sudo').short}`,
     long: ['--auth-type', '--login-class', ...WRAPPERS.get('sudo').long],
     assigns: /^[^/=][^=]*=/,
+    dashDashEndsAssigns: true,
   }],
   ['env', { ...WRAPPERS.get('env'), assigns: /=/, dash: true }],
   ['builtin', {}],
@@ -1745,7 +1749,7 @@ function skipWrapperArgs(words, start, spec) {
   let optionsEnded = false;
   while (idx < words.length) {
     const text = words[idx].text;
-    if (assigns && assigns.test(text)) {
+    if (assigns && !(optionsEnded && spec.dashDashEndsAssigns) && assigns.test(text)) {
       idx++;
     } else if (spec.dash && text === '-') {
       idx++;

