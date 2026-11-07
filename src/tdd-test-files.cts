@@ -13,30 +13,28 @@
  */
 
 /**
- * Git-pathspec spelling. Every entry is `:(glob,icase)**\/<name>`: `**\/` matches at any depth
- * (root included), `*` stays inside one path segment, and `icase` matches case-insensitively,
- * so git reads each entry the way `isTestFilePath` does. A `/**` tail names a directory; any
- * other entry is a file glob matched against the basename.
+ * The bare names of the shared list. Each is the `<name>` of a git pathspec spelled
+ * `:(glob,icase)**\/<name>`: `**\/` matches at any depth (root included), `*` stays inside one
+ * path segment, and `icase` matches case-insensitively, so git reads each entry the way
+ * `isTestFilePath` does. A `/**` tail names a directory; any other entry is a file glob matched
+ * against the basename.
  */
-export const TEST_FILE_PATHSPECS = [
-  ':(glob,icase)**/*.test.*', ':(glob,icase)**/*.spec.*', ':(glob,icase)**/tests/**',
-  ':(glob,icase)**/test/**', ':(glob,icase)**/__tests__/**', ':(glob,icase)**/*_test.go',
-  ':(glob,icase)**/test_*.py', ':(glob,icase)**/*_test.py', ':(glob,icase)**/*_test.exs',
-  ':(glob,icase)**/*_spec.rb', ':(glob,icase)**/*_test.rb',
+export const TEST_FILE_GLOBS = [
+  '*.test.*', '*.spec.*', 'tests/**', 'test/**', '__tests__/**',
+  '*_test.go', 'test_*.py', '*_test.py', '*_test.exs', '*_spec.rb', '*_test.rb',
 ] as const;
 
-// The matchers below read the bare form of each entry.
 const GLOB_DEPTH_PREFIX = ':(glob,icase)**/';
 const DIRECTORY_TAIL = '/**';
-const stripGlobDepthPrefix = (spec: string): string =>
-  (spec.startsWith(GLOB_DEPTH_PREFIX) ? spec.slice(GLOB_DEPTH_PREFIX.length) : spec);
-const isDirectorySpec = (spec: string): boolean =>
-  stripGlobDepthPrefix(spec).endsWith(DIRECTORY_TAIL);
 
-/** Directory names a `<files>` entry may sit under, from the directory entries above. */
+/** Git-pathspec spelling of {@link TEST_FILE_GLOBS}, as the workflow passes it. */
+export const TEST_FILE_PATHSPECS: readonly string[] =
+  TEST_FILE_GLOBS.map((glob) => `${GLOB_DEPTH_PREFIX}${glob}`);
+
+/** Directory names a `<files>` entry may sit under, from the directory globs above. */
 const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set(
-  TEST_FILE_PATHSPECS.filter(isDirectorySpec).map(
-    (spec) => stripGlobDepthPrefix(spec).slice(0, -DIRECTORY_TAIL.length),
+  TEST_FILE_GLOBS.filter((glob) => glob.endsWith(DIRECTORY_TAIL)).map(
+    (glob) => glob.slice(0, -DIRECTORY_TAIL.length),
   ),
 );
 
@@ -45,9 +43,9 @@ function escapeRegex(text: string): string {
 }
 
 /** A basename glob where `*` is any run of non-separator characters. */
-const FILE_GLOBS: readonly RegExp[] = TEST_FILE_PATHSPECS
-  .filter((spec) => !isDirectorySpec(spec))
-  .map((spec) => stripGlobDepthPrefix(spec).split('*').map(escapeRegex).join('[^/]*'))
+const FILE_GLOBS: readonly RegExp[] = TEST_FILE_GLOBS
+  .filter((glob) => !glob.endsWith(DIRECTORY_TAIL))
+  .map((glob) => glob.split('*').map(escapeRegex).join('[^/]*'))
   .map((source) => new RegExp(`^${source}$`, 'i'));
 
 /** True when `file` (either separator) is a test file by the shared convention list. */

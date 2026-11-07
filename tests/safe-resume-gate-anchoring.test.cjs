@@ -194,6 +194,19 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
     assert.ok(hits.has('foo_test.go'), 'a root-level _test.go must match');
   });
 
+  test('no two shared paths spell one directory with different case (case-folding disks)', () => {
+    const spellings = new Map();
+    for (const rel of [...SHARED_TEST_PATHS, ...SHARED_NON_TEST_PATHS]) {
+      const parts = rel.split('/').slice(0, -1);
+      parts.forEach((_, i) => {
+        const dir = parts.slice(0, i + 1).join('/');
+        const seen = spellings.get(dir.toLowerCase());
+        assert.ok(!seen || seen === dir, `${dir} and ${seen} differ only by case`);
+        spellings.set(dir.toLowerCase(), dir);
+      });
+    }
+  });
+
   test('router and shipped pathspec agree on every shared path, nested included (#5181)', (t) => {
     // Git and the router must also agree on case (`Tests/`), on `test/`, and on `*` not crossing `/`
     // (`src/a.test.d/impl.js`): every entry is `:(glob,icase)**/`.
