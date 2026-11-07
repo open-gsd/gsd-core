@@ -29,6 +29,7 @@ const {
   classifyRedEvidence,
   buildRedEvidenceRecord,
 } = require('../gsd-core/bin/lib/tdd-red-evidence.cjs');
+const { parseTestReport } = require('../gsd-core/bin/lib/report-parser.cjs');
 
 // ─── TAP fixtures (captured from node --test --test-reporter tap) ─────────────
 
@@ -1202,5 +1203,219 @@ describe('#5106 — go test RED evidence', () => {
     assert.equal(classifyRedEvidence({ ...INPUT, output }).reason, 'no_target_test_failure');
     const qualified = classifyRedEvidence({ ...INPUT, output, targetTest: 'example.com/a.TestPlacement' });
     assert.equal(qualified.verdict, 'RED_EVIDENCE_OK');
+  });
+});
+
+// ── #5721 — a vitest load-failure JUnit entry never satisfies a RED target ────
+// vitest's JUnit reporter emits one <testcase classname="bad.test.js" name="bad.test.js">
+// with a <failure> for a test FILE that crashed at load. That entry asserted nothing.
+
+describe('#5721 — vitest load-failure JUnit entry is never a RED target', () => {
+  const VITEST_EVIDENCE = {"command":"vitest 4.1.7 run --globals --reporter=junit (scratch hash.test.js, bad.test.js)","exitCode":1,"output":"<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n<testsuites name=\"vitest tests\" tests=\"3\" failures=\"2\" errors=\"0\" time=\"0.020839859\">\n    <testsuite name=\"bad.test.js\" timestamp=\"2026-10-24T11:57:58.844Z\" hostname=\"fixture-host\" tests=\"1\" failures=\"1\" errors=\"0\" skipped=\"0\" time=\"0\">\n        <testcase classname=\"bad.test.js\" name=\"bad.test.js\" time=\"0\">\n            <failure message=\"load crash\" type=\"Error\">\nError: load crash\n ❯ bad.test.js:1:7\n            </failure>\n        </testcase>\n    </testsuite>\n    <testsuite name=\"hash.test.js\" timestamp=\"2026-10-24T11:57:58.854Z\" hostname=\"fixture-host\" tests=\"2\" failures=\"1\" errors=\"0\" skipped=\"0\" time=\"0.020839859\">\n        <testcase classname=\"hash.test.js\" name=\"suite one &gt; issue #42 case\" time=\"0.012710944\">\n            <failure message=\"expected 1 to be 2 // Object.is equality\" type=\"AssertionError\">\nAssertionError: expected 1 to be 2 // Object.is equality\n\n- Expected\n+ Received\n\n- 2\n+ 1\n\n ❯ hash.test.js:3:15\n            </failure>\n        </testcase>\n        <testcase classname=\"hash.test.js\" name=\"suite one &gt; a passing case\" time=\"0.00074436\">\n        </testcase>\n    </testsuite>\n</testsuites>\n","targetTest":"bad.test.js"};
+
+  const classify = (targetTest, extra = {}) => classifyRedEvidence({ ...VITEST_EVIDENCE, targetTest, ...extra });
+
+  test('AC1: the crashing file as target is INVALID_RED with the load-failure reason', () => {
+    const result = classify('bad.test.js');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'fixture_or_load_failure');
+    assert.equal(result.evidence.matched_test, null);
+  });
+
+  test('AC1: the qualified load-failure identity as target is INVALID_RED too', () => {
+    const result = classify('bad.test.js#bad.test.js');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.evidence.matched_test, null);
+  });
+
+  test('AC2: the real failing test as target is still RED_EVIDENCE_OK', () => {
+    const result = classify('suite one > issue #42 case');
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.matched_test, 'hash.test.js#suite one > issue #42 case');
+  });
+
+  test('AC3 (#4701): classname-qualified target and a name containing # still match', () => {
+    for (const target of ['hash.test.js#suite one > issue #42 case', 'suite one > issue #42 case']) {
+      const result = classify(target);
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK', target);
+      assert.equal(result.evidence.matched_test, 'hash.test.js#suite one > issue #42 case', target);
+    }
+  });
+
+  test('control: a passing test as target is not the failure', () => {
+    const result = classify('suite one > a passing case');
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'no_target_test_failure');
+  });
+
+  test('parser marks only the load-failure case', () => {
+    const report = parseTestReport(VITEST_EVIDENCE.output);
+    assert.deepEqual(report.tests.map((t) => t.loadFailure === true), [true, false, false]);
+  });
+
+  test('control: a file-like name under a different classname is a real test', () => {
+    const output = '<testsuite tests="1"><testcase classname="suite" name="bad.test.js"><failure/></testcase></testsuite>';
+    const result = classifyRedEvidence({ command: 'x', exitCode: 1, output, targetTest: 'bad.test.js' });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+  });
+
+  test('control (#4724): a Surefire class-level entry with name == classname keeps matching the class target', () => {
+    const output = '<testsuite tests="1"><testcase classname="com.example.AppTest" name="com.example.AppTest"><error/></testcase></testsuite>';
+    const result = classifyRedEvidence({ command: 'mvn test', exitCode: 1, output, targetTest: 'AppTest' });
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+  });
+
+  test('control (#4724): Surefire FQNs ending in a language-like segment stay class targets', () => {
+    for (const fqn of ['com.acme.go', 'com.acme.rs', 'com.acme.py', 'com.example.Spec']) {
+      const output = `<testsuite tests="1"><testcase classname="${fqn}" name="${fqn}"><error/></testcase></testsuite>`;
+      for (const targetTest of [fqn, fqn.split('.').at(-1)]) {
+        const result = classifyRedEvidence({ command: 'mvn test', exitCode: 1, output, targetTest });
+        assert.equal(result.verdict, 'RED_EVIDENCE_OK', `${fqn} / ${targetTest}`);
+        assert.equal(parseTestReport(output).tests[0].loadFailure, undefined, fqn);
+      }
+    }
+  });
+
+  const caseXml = (attrs) => `<testsuite tests="1"><testcase ${attrs}><failure/></testcase></testsuite>`;
+  const flagged = (attrs) => parseTestReport(caseXml(attrs)).tests[0].loadFailure === true;
+
+  test('boundary: name one character off the classname is a real test, not a load failure', () => {
+    assert.equal(flagged('classname="bad.test.js" name="bad.test.js"'), true);
+    assert.equal(flagged('classname="bad.test.js" name="bad.test.jsx"'), false);
+    assert.equal(flagged('classname="bad.test.jsx" name="bad.test.js"'), false);
+    assert.equal(flagged('classname="bad.test.js" name="bad.test.j"'), false);
+  });
+
+  test('boundary: equal names with a wrong extension are not load failures, a Windows path is', () => {
+    for (const file of ['bad.test.j', 'bad.testjs', 'bad.js.snap', 'bad.test.jsxx']) {
+      assert.equal(parseTestReport(caseXml(`classname="${file}" name="${file}"`)).tests[0].loadFailure, undefined, file);
+    }
+    assert.equal(flagged('classname="src\\a\\bad.test.ts" name="src\\a\\bad.test.ts"'), true);
+  });
+
+  test('a nested path and every JS/TS extension family member are flagged', () => {
+    for (const file of ['src/a/bad.test.ts', 'bad.test.mts', 'bad.test.cts', 'bad.test.tsx', 'bad.test.mjs', 'bad.test.cjs', 'bad.test.jsx']) {
+      assert.equal(flagged(`classname="${file}" name="${file}"`), true, file);
+    }
+  });
+
+  test('attribute order does not matter: name before classname is still flagged', () => {
+    assert.equal(flagged('name="bad.test.js" classname="bad.test.js"'), true);
+    const output = caseXml('name="bad.test.js" classname="bad.test.js"');
+    assert.equal(classifyRedEvidence({ command: 'x', exitCode: 1, output, targetTest: 'bad.test.js' }).reason, 'fixture_or_load_failure');
+  });
+
+  // jest-junit (utils/buildJsonResults.js): a suite with no results gets classNameTemplate
+  // `Test suite failed to run`, titleTemplate `{filepath}`, and an <error> child.
+  describe('jest-junit suite that failed to run', () => {
+    const JEST_OUTPUT = '<testsuites name="jest tests" tests="3" failures="1" errors="1">'
+      + '<testsuite name="src/bad.test.js" errors="1" failures="0" skipped="0" tests="1">'
+      + '<testcase classname="Test suite failed to run" name="src/bad.test.js" time="0"><error>Cannot find module</error></testcase></testsuite>'
+      + '<testsuite name="real" errors="0" failures="1" skipped="0" tests="2">'
+      + '<testcase classname="real real fails" name="real real fails" time="0.1"><failure>expected 1 to be 2</failure></testcase>'
+      + '<testcase classname="real passes" name="real passes" time="0.1"></testcase></testsuite></testsuites>';
+    const jest = (targetTest) => classifyRedEvidence({ command: 'jest --ci', exitCode: 1, output: JEST_OUTPUT, targetTest });
+
+    test('the suite-load entry is flagged and the real tests are not', () => {
+      assert.deepEqual(parseTestReport(JEST_OUTPUT).tests.map((t) => t.loadFailure === true), [true, false, false]);
+    });
+
+    test('targeting the fixed class name or the file path is INVALID_RED (fixture_or_load_failure)', () => {
+      for (const target of ['Test suite failed to run', 'src/bad.test.js', 'Test suite failed to run#src/bad.test.js']) {
+        const result = jest(target);
+        assert.equal(result.verdict, 'INVALID_RED', target);
+        assert.equal(result.reason, 'fixture_or_load_failure', target);
+        assert.equal(result.evidence.matched_test, null, target);
+      }
+    });
+
+    test('the real failing test is still RED_EVIDENCE_OK', () => {
+      assert.equal(jest('real real fails').verdict, 'RED_EVIDENCE_OK');
+    });
+
+    test('the jest-junit testExecError hook-failure entry (name === classname, not a file) is not a load failure', () => {
+      const title = "Test execution failure: could be caused by test hooks like 'afterAll'.";
+      const output = `<testsuite tests="1"><testcase classname="${title}" name="${title}" time="0"><failure>hook crashed</failure></testcase></testsuite>`;
+      assert.equal(parseTestReport(output).tests[0].loadFailure, undefined);
+    });
+  });
+
+  // node:test TAP (nodejs/node#64203): a test file that exits non-zero without a failing subtest
+  // is reported as `not ok N - <file>` with `error: 'test failed'`, `code: 'ERR_TEST_FAILURE'`.
+  describe('node:test TAP file-level failure', () => {
+    const tapFor = (error, code) => ['TAP version 13', 'not ok 1 - crash.test.cjs', '  ---', "  type: 'test'",
+      "  failureType: 'testCodeFailure'", `  error: '${error}'`, `  code: '${code}'`, '  ...', '1..1', '# tests 1', '# fail 1', ''].join('\n');
+
+    test('targeting the crashing file by name alone (no targetFile) is INVALID_RED', () => {
+      const result = classifyRedEvidence({ command: 'node --test', exitCode: 1, output: tapFor('test failed', 'ERR_TEST_FAILURE'), targetTest: 'crash.test.cjs' });
+      assert.equal(result.verdict, 'INVALID_RED');
+      assert.equal(result.reason, 'fixture_or_load_failure');
+    });
+
+    test('AC2: the file-level entry beside a real failing subtest: subtest target is RED, file target is INVALID_RED', () => {
+      const output = ['TAP version 13', 'not ok 1 - real subtest', '  ---', "  error: 'expected 1 to equal 2'", "  code: 'ERR_ASSERTION'", '  ...',
+        'not ok 2 - crash.test.cjs', '  ---', "  type: 'test'", "  failureType: 'testCodeFailure'", "  error: 'test failed'", "  code: 'ERR_TEST_FAILURE'", '  ...',
+        '1..2', '# tests 2', '# fail 2', ''].join('\n');
+      const run = (targetTest) => classifyRedEvidence({ command: 'node --test', exitCode: 1, output, targetTest });
+      assert.equal(run('real subtest').verdict, 'RED_EVIDENCE_OK');
+      const file = run('crash.test.cjs');
+      assert.equal(file.verdict, 'INVALID_RED');
+      assert.equal(file.reason, 'fixture_or_load_failure');
+    });
+
+    test('control: a file-looking test name that fails a real assertion stays a valid target', () => {
+      const result = classifyRedEvidence({ command: 'node --test', exitCode: 1, output: tapFor('expected 1 to equal 2', 'ERR_ASSERTION'), targetTest: 'crash.test.cjs' });
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    });
+  });
+
+  // go test reports a package that fails to compile or set up as one package summary line
+  // ([build failed] / [setup failed]); cmd/test2json: "Events for the overall package test do not
+  // set Test". It never yields a per-test entry named after the package or file.
+  test('go test build failure yields no per-test entry that could match a target', () => {
+    const output = '# example.com/p\np_test.go:3:1: undefined: Foo\nFAIL\texample.com/p [build failed]\nFAIL\n';
+    const report = parseTestReport(output);
+    assert.equal(report.buildFailed, true);
+    assert.deepEqual(report.tests, []);
+    for (const targetTest of ['example.com/p', 'p_test.go', 'TestFoo']) {
+      const result = classifyRedEvidence({ command: 'go test ./...', exitCode: 1, output, targetTest });
+      assert.equal(result.verdict, 'INVALID_RED', targetTest);
+      assert.equal(result.reason, 'build_failure', targetTest);
+    }
+  });
+});
+
+// ── #5721 AC1 through the gate (evaluateTddRedEvidence) ───────────────────────
+
+describe('#5721 — gate-level: the crashing file as target blocks, the real failing test passes', () => {
+  const gate = require('../gsd-core/bin/lib/gate-tdd-red-evidence.cjs');
+  const { createTempProject } = require('./helpers.cjs');
+  const output = '<testsuites><testsuite tests="1"><testcase classname="bad.test.js" name="bad.test.js"><failure message="load crash"/></testcase></testsuite>'
+    + '<testsuite tests="2"><testcase classname="hash.test.js" name="suite one &gt; issue #42 case"><failure/></testcase>'
+    + '<testcase classname="hash.test.js" name="suite one &gt; a passing case"></testcase></testsuite></testsuites>';
+  const evaluate = (targetTest) => {
+    const dir = createTempProject('gate-5721-');
+    try {
+      fs.writeFileSync(path.join(dir, 'red.json'), JSON.stringify({ command: 'vitest run --reporter=junit', exitCode: 1, output, targetTest }));
+      return gate.evaluateTddRedEvidence({ projectDir: dir, args: [path.join(dir, 'red.json')] });
+    } finally {
+      cleanup(dir);
+    }
+  };
+
+  test('AC1: target = crashing file -> block, INVALID_RED / fixture_or_load_failure', () => {
+    const result = evaluate('bad.test.js');
+    assert.equal(result.outcome, 'block');
+    assert.equal(result.block, true);
+    assert.equal(result.payload.verdict, 'INVALID_RED');
+    assert.equal(result.payload.reason, 'fixture_or_load_failure');
+  });
+
+  test('AC2: target = real failing test -> pass, RED_EVIDENCE_OK', () => {
+    const result = evaluate('suite one > issue #42 case');
+    assert.equal(result.outcome, 'pass');
+    assert.equal(result.block, false);
+    assert.equal(result.payload.verdict, 'RED_EVIDENCE_OK');
   });
 });
