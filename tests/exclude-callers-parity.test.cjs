@@ -102,6 +102,18 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     assert.ok(splitLines(fs.readFileSync(excludeOf(tmpDir), 'utf8')).includes('/sub/.planning/state.json'));
   });
 
+  test('aNestedProjectWhoseEnclosingRepoTracksOnlyItsPlanningFilesGetsTheEntry', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const sub = path.join(tmpDir, 'sub');
+    fs.mkdirSync(planningDirOf(sub), { recursive: true });
+    const roadmap = path.join(planningDirOf(sub), 'ROADMAP.md');
+    fs.writeFileSync(roadmap, '# Roadmap\n');
+    git(tmpDir, 'add', '--', roadmap);
+    publishStateContract(sub, fixedDeps());
+    assert.ok(splitLines(fs.readFileSync(excludeOf(tmpDir), 'utf8')).includes('/sub/.planning/state.json'));
+  });
+
   test('aProjectRootWithItsOwnGitDirGetsTheEntry', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));

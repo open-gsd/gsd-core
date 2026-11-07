@@ -30,14 +30,14 @@ function escapeGitignore(s: string): string {
   return s.replace(/[\\*?[]/g, '\\$&');
 }
 
-/** True when the repo that git-ignores via info/exclude owns the project: a `.git` entry between `dir` and the project root, else a tracked file outside `.planning/`. */
+/** True when the repo that git-ignores via info/exclude owns the project: a `.git` entry between `dir` and the project root, else a tracked file under the project. */
 function repoOwnsProject(projectRoot: string, dir: string): boolean {
   const root = path.resolve(projectRoot);
   for (let d = path.resolve(dir); ; d = path.dirname(d)) {
     if (fs.existsSync(path.join(d, '.git'))) return true;
     if (d === root || d === path.dirname(d)) break;
   }
-  const r = execGit(['ls-files', '-z', '--', '.', ':(exclude).planning'], { cwd: root, timeout: GIT_PROBE_TIMEOUT_MS });
+  const r = execGit(['ls-files', '-z', '--', '.'], { cwd: root, timeout: GIT_PROBE_TIMEOUT_MS });
   return (r.error as NodeJS.ErrnoException | undefined)?.code === 'ENOBUFS' || (r.exitCode === 0 && r.stdout.length > 0);
 }
 

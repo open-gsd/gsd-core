@@ -43,7 +43,7 @@ const childProcess = require('node:child_process');
 
 const { createTempDir, createTempGitProject, cleanup } = require('../helpers.cjs');
 const { gitOrThrow, isFsLegalName } = require('../helpers/git-fixture.cjs');
-const { resolveInterpreter } = require('../helpers/process-seam.cjs');
+const { runHook, OUTCOME } = require('../helpers/process-seam.cjs');
 const { GIT_TIMEOUT_MS } = require('../helpers/timeouts.cjs');
 
 const configValidation = require('../../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
@@ -1062,9 +1062,8 @@ describe('W031 — derived state.json still tracked by git', () => {
   // (U+0080-U+009F as the UTF-8 bytes git tracks, C0/DEL, quotes and backslashes included).
   test('W031 property: quoted remedy round-trips through bash', (t) => {
     const fc = require('fast-check');
-    const { spawnSync } = require('node:child_process');
-    const bash = resolveInterpreter('bash');
-    if (bash === null || spawnSync(bash, ['-c', 'true'], { timeout: GIT_TIMEOUT_MS }).status !== 0) { t.skip('bash unavailable'); return; }
+    const bash = (script) => runHook('-s', [], { interpreter: 'bash', input: script, timeoutMs: GIT_TIMEOUT_MS });
+    if (bash('true').exitCode !== 0) { t.skip('bash unavailable'); return; }
     const alphabet = ['a', 'Z', '0', ' ', "'", '\\', '"', '$', '\n', '\t', '\x1b', '\x7f', '\u0080', '\u0085', '\u009f', '\x01', 'é', '-', '/', '`', String.fromCodePoint(0x202e), String.fromCodePoint(0x200d), String.fromCodePoint(0x2028)];
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...alphabet), { minLength: 1, maxLength: 8 }), (chars) => {
@@ -1072,8 +1071,8 @@ describe('W031 — derived state.json still tracked by git', () => {
         const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value: [name], scope: SCOPE.COMPLETE, reason: 'ok' } });
         const quoted = /-- (.*)` once/s.exec(diagnostic.remedy.args.command)[1];
         // The script goes in on stdin: Windows re-quotes argv for a child process, which mangles a newline next to a backslash.
-        const out = spawnSync(bash, ['-s'], { input: `printf %s ${quoted}`, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
-        return out.status === 0 && out.stdout === name;
+        const out = bash(`printf %s ${quoted}`);
+        return out.outcome === OUTCOME.EXITED && out.exitCode === 0 && out.stdout === name;
       }),
       { numRuns: 100, seed: 5505 },
     );

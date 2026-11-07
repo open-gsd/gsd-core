@@ -229,7 +229,7 @@ When `commit_docs` resolves to false (set as `commit_docs` or `planning.commit_d
 or `.planning/` is already ignored, GSD neither adds `state.json` to
 `.git/info/exclude` nor untracks it. The exclude and the untrack apply only to a
 repo that owns the project; a repo that merely encloses it, tracking no file under
-it outside `.planning/`, is left alone, and the same ownership check guards the per-machine
+it, is left alone, and the same ownership check guards the per-machine
 `milestone.lock` claim, which is excluded whatever `commit_docs` says. A negation
 you wrote (`!/.planning/state.json`, or a glob such as `!/.planning/*.json`) is
 respected: GSD asks git (`check-ignore -v`) whether the last matching rule is a
