@@ -72,9 +72,6 @@ export function historyIsComplete(projectDir: string): boolean {
   return !shallow.timedOut && shallow.exitCode === 0 && shallow.stdout === 'false';
 }
 
-/** True for a full 40-character lowercase hex object name. */
-export const isFullSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
-
 export type CommitReachability = 'reachable' | 'unreachable' | 'missing';
 
 /**

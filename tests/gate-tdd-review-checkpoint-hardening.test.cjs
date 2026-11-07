@@ -1009,8 +1009,8 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 });
 
-describe('#5354 seal module: commitReachability and isFullSha', () => {
-  const { commitReachability, isFullSha } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+describe('#5354 seal module: commitReachability', () => {
+  const { commitReachability } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
 
   test('commitReachability tells a reachable, an unreachable and a missing commit apart', () => {
     const dir = createTempGitProject('gate-5354-reach-');
@@ -1026,13 +1026,6 @@ describe('#5354 seal module: commitReachability and isFullSha', () => {
       assert.equal(commitReachability(dir, '--all', 'HEAD'), null);
     } finally {
       cleanup(dir);
-    }
-  });
-
-  test('isFullSha accepts exactly 40 lowercase hex characters', () => {
-    assert.equal(isFullSha('a'.repeat(40)), true);
-    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
-      assert.equal(isFullSha(bad), false, String(bad));
     }
   });
 });

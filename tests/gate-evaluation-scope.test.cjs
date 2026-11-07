@@ -25,6 +25,7 @@ const {
   planSubjectPattern,
   qualifiedPlanSubjectPattern,
   isSafeRefArgument,
+  isFullSha,
   SCOPE_EXCLUSION_PATHSPECS,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
@@ -949,5 +950,21 @@ describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling
     commit(repo, 'src/a.js', 'feat(wsXb-01-01): another workstream');
     const out = repo.git('log', '--extended-regexp', `--grep=${qualifiedPlanSubjectPattern('0*1-0*1', 'ws.b')}`, '--format=%s');
     assert.deepEqual(out.split('\n').filter(Boolean).sort(), ['feat(01-01): bare spelling', 'feat(ws.b-01-01): qualified spelling']);
+  });
+});
+
+describe('isFullSha (#5354)', () => {
+  test('accepts exactly 40 lowercase hex characters', () => {
+    assert.equal(isFullSha('a'.repeat(40)), true);
+    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
+      assert.equal(isFullSha(bad), false, String(bad));
+    }
+  });
+
+  test('every commit the resolver returns carries a full sha', () => {
+    const repo = makeRepo();
+    commit(repo, 'a.txt', 'feat(03-01): a');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { commitsOnly: true });
+    assert.ok(scope.commits.every((c) => isFullSha(c.sha)));
   });
 });

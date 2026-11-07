@@ -359,6 +359,9 @@ export function isSafeDateArgument(candidate: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9 .,:+-]{0,63}$/.test(candidate);
 }
 
+/** True for a full 40-character lowercase hex object name. */
+export const isFullSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+
 function isAncestor(git: Git, sha: string, of: string): boolean {
   return gitOrNo(git, ['merge-base', '--is-ancestor', sha, of]) !== null;
 }
@@ -442,7 +445,7 @@ function parseLog(out: string, withBody: boolean): ScopeCommit[] {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
     const [sha, subject, body] = trimmed.split('\x1f');
-    if (!sha || !/^[0-9a-f]{40}$/.test(sha)) continue;
+    if (!isFullSha(sha)) continue;
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
     if (withBody) commit.body = (body ?? '').trim();
     commits.push(commit);
