@@ -3241,12 +3241,16 @@ describe('commit timeout reporting (#3886)', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ git }));
   }
 
-  test('#5231: git.commit_timeout_ms=60000 sets the git commit timeout', () => {
+  test('#5231: git.commit_timeout_ms sets the git commit timeout and the reported error differs per configured value', () => {
     writeGitConfig({ commit_timeout_ms: 60000 });
     const { result, timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
     assert.equal(timeout, 60000, 'execGit(commit) must receive the configured timeout');
     assert.equal(result.reason, 'commit_timeout');
     assert.equal(result.timed_out, true);
+    writeGitConfig({ commit_timeout_ms: 30000 });
+    const other = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
+    assert.equal(other.timeout, 30000);
+    assert.notStrictEqual(result.error, other.result.error, 'the message must follow the configured timeout');
   });
 
   test('#5231: an active workstream config wins over the root config for the commit timeout', () => {
