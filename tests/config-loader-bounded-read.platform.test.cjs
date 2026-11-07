@@ -26,6 +26,7 @@
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -2302,19 +2303,6 @@ describe('#5759 allowSpecialTarget on Windows device names', {
     } finally { cleanup(cwd); }
   });
 
-  test('NUL with allowSpecialTarget creates no file named NUL in the working directory', () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-nulcwd-'));
-    try {
-      const script = 'require(process.argv[1]).platformWriteSync("NUL", "hello\\n", { allowSpecialTarget: true });';
-      const r = runNode(['-e', script, SHELL_PROJECTION_PATH], {
-        cwd, env: installSpawnEnv({}), timeoutMs: PROBE_TIMEOUT_MS,
-      });
-
-      assertExitedByItself(r);
-      assert.deepStrictEqual(fs.readdirSync(cwd).filter((n) => n.toLowerCase() === 'nul'), []);
-      assert.deepStrictEqual(fs.readdirSync(cwd), []);
-    } finally { cleanup(cwd); }
-  });
 
   // On Windows 11 a reserved-looking name can be an ordinary file. The device branch must not
   // write into it in place: a partial overwrite would leave "xRIGINAL..." behind.
@@ -2328,12 +2316,8 @@ describe('#5759 allowSpecialTarget on Windows device names', {
       cwd, env: installSpawnEnv({}), timeoutMs: PROBE_TIMEOUT_MS,
     });
   };
-  const assertNotWrittenInPlace = (file) => {
-    const after = fs.readFileSync(file, 'utf-8');
-    assert.ok(after === ORIGINAL || after === 'x', `not partially overwritten in place: ${JSON.stringify(after)}`);
-  };
 
-  test('a regular file named con.txt is not written in place by the device branch', () => {
+  test('a regular file named con.txt is replaced whole by the checked path, never written in place', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-con-'));
     try {
       const file = '\\\\?\\' + path.join(dir, 'con.txt');
@@ -2342,7 +2326,24 @@ describe('#5759 allowSpecialTarget on Windows device names', {
       const r = writeChild(dir, file);
 
       assertExitedByItself(r);
-      assertNotWrittenInPlace(file);
+      assert.strictEqual(r.stdout, 'ok');
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'x');
+      assert.deepStrictEqual(fs.readdirSync(dir), ['con.txt']);
+    } finally { cleanup(dir); }
+  });
+
+  // On Windows 11 `\\?\dir\con.txt` is an ordinary name: open(O_WRONLY) without O_CREAT fails with
+  // ENOENT, which must fall through to the checked path that creates the file.
+  test('a not-yet-existing \\\\?\\ con.txt is created by the checked path', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-concreate-'));
+    try {
+      const file = '\\\\?\\' + path.join(dir, 'con.txt');
+
+      const r = writeChild(dir, file);
+
+      assertExitedByItself(r);
+      assert.strictEqual(r.stdout, 'ok');
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'con.txt'), 'utf-8'), 'x');
     } finally { cleanup(dir); }
   });
 
@@ -2360,8 +2361,109 @@ describe('#5759 allowSpecialTarget on Windows device names', {
       const r = writeChild(dir, '\\\\?\\' + link);
 
       assertExitedByItself(r);
-      assertNotWrittenInPlace(real);
+      // The link is never opened by the device branch: the checked path publishes over the link
+      // name, so the file it pointed at keeps its content and the link name holds the new bytes.
+      assert.strictEqual(r.stdout, 'ok');
+      assert.strictEqual(fs.readFileSync(real, 'utf-8'), ORIGINAL);
+      assert.strictEqual(fs.lstatSync(link).isSymbolicLink(), false);
+      assert.strictEqual(fs.readFileSync(link, 'utf-8'), 'x');
     } finally { cleanup(dir); }
+  });
+});
+
+// Runs on every OS: the device branch is driven through the injected { platform, fs } seam.
+describe('#5759 Windows device branch via the deviceSeams seam', () => {
+  let dir;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5759-seam-')); });
+  afterEach(() => { cleanup(dir); });
+
+  const { platformWriteSync } = require(SHELL_PROJECTION_PATH);
+  const errno = (code) => Object.assign(new Error(code), { code });
+  // A scripted fs: records every call; `stat` is what fstat reports for the opened handle.
+  const scripted = ({ link = false, openError = null, charDevice = false } = {}) => {
+    const log = [];
+    return {
+      log,
+      fs: {
+        lstatSync: (p) => { log.push(['lstat', p]); if (link === null) throw errno('ENOENT'); return { isSymbolicLink: () => link }; },
+        openSync: (p) => { log.push(['open', p]); if (openError) throw errno(openError); return 99; },
+        fstatSync: (fd) => { log.push(['fstat', fd]); return { isCharacterDevice: () => charDevice }; },
+        writeFileSync: (fd, data) => { log.push(['write', fd, data]); },
+        closeSync: (fd) => { log.push(['close', fd]); },
+      },
+    };
+  };
+  const write = (file, seam, platform = 'win32') =>
+    platformWriteSync(file, 'x', { allowSpecialTarget: true, verbatim: true, deviceSeams: { platform, fs: seam.fs } });
+  const kinds = (seam) => seam.log.map((e) => e[0]);
+
+  test('a character-device handle is written in place and closed', () => {
+    const file = path.join(dir, 'con.txt');
+    const seam = scripted({ charDevice: true });
+
+    write(file, seam);
+
+    assert.deepStrictEqual(kinds(seam), ['lstat', 'open', 'fstat', 'write', 'close']);
+    assert.deepStrictEqual(seam.log[3], ['write', 99, 'x']);
+    assert.strictEqual(fs.existsSync(file), false);
+  });
+
+  test('a non-character-device handle is closed untouched and the checked path writes the file', () => {
+    const file = path.join(dir, 'con.txt');
+    fs.writeFileSync(file, 'ORIGINAL');
+    const seam = scripted({ charDevice: false });
+
+    write(file, seam);
+
+    assert.deepStrictEqual(kinds(seam), ['lstat', 'open', 'fstat', 'close']);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'x');
+  });
+
+  test('a symlink with a reserved name is never opened', () => {
+    const file = path.join(dir, 'nul');
+    const seam = scripted({ link: true, charDevice: true });
+
+    write(file, seam);
+
+    assert.deepStrictEqual(kinds(seam), ['lstat']);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'x');
+  });
+
+  test('the \\\\.\\ device form skips the lstat', () => {
+    const seam = scripted({ charDevice: true });
+
+    platformWriteSync('\\\\.\\nul', 'x', { allowSpecialTarget: true, verbatim: true, deviceSeams: { platform: 'win32', fs: seam.fs } });
+
+    assert.deepStrictEqual(kinds(seam), ['open', 'fstat', 'write', 'close']);
+  });
+
+  for (const code of ['ENOENT', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY', 'EINVAL']) {
+    test(`an open failing with ${code} falls through to the checked path`, () => {
+      const file = path.join(dir, 'con.txt');
+      const seam = scripted({ link: null, openError: code });
+
+      write(file, seam);
+
+      assert.deepStrictEqual(kinds(seam), ['lstat', 'open']);
+      assert.strictEqual(fs.readFileSync(file, 'utf-8'), 'x');
+    });
+  }
+
+  test('any other open failure is surfaced', () => {
+    const seam = scripted({ link: null, openError: 'EIO' });
+
+    assert.throws(() => write(path.join(dir, 'con.txt'), seam), { code: 'EIO' });
+  });
+
+  test('a non-reserved name or a non-win32 platform never touches the seam fs', () => {
+    const a = scripted({ charDevice: true });
+    const b = scripted({ charDevice: true });
+
+    write(path.join(dir, 'config.json'), a);
+    write(path.join(dir, 'con.txt'), b, 'linux');
+
+    assert.deepStrictEqual(a.log, []);
+    assert.deepStrictEqual(b.log, []);
   });
 });
 
@@ -2369,12 +2471,41 @@ describe('#5759 allowSpecialTarget on Windows device names', {
 describe('#5759 isWindowsReservedDeviceName', () => {
   const { isWindowsReservedDeviceName } = require(SHELL_PROJECTION_PATH);
 
-  for (const name of ['NUL', 'nul', 'con', 'CON.txt', 'prn', 'aux.log', 'com1', 'COM9', 'lpt1', 'LPT9.x', 'nul .txt']) {
-    test(`${name} is reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), true); });
+  // Win32 normalization strips trailing dots and spaces and treats `:stream` as a stream suffix;
+  // COM/LPT also take the superscript digits 1-3. CONIN$ and CONOUT$ are console handles that are
+  // deliberately not nominated (the checked path fails safe); COM0/LPT0 and COM10/LPT10 are not devices.
+  for (const name of [
+    'NUL', 'nul', 'NuL', 'con', 'CON.txt', 'prn', 'aux.log', 'com1', 'COM9', 'lpt1', 'LPT9.x', 'nul .txt',
+    'nul.', 'con ', 'com1.', 'COM¹', 'LPT²', 'com³.txt', 'nul:stream',
+  ]) {
+    test(`${JSON.stringify(name)} is reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), true); });
   }
-  for (const name of ['null', 'console', 'com0', 'lpt10', 'com', 'config.json', 'nul2', 'xcon', '']) {
-    test(`${name || '(empty)'} is not reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), false); });
+  for (const name of [
+    'null', 'console', 'com0', 'lpt10', 'com', 'config.json', 'nul2', 'xcon', '', 'com10', 'lpt0',
+    'CONIN$', 'CONOUT$', 'COM⁴',
+  ]) {
+    test(`${JSON.stringify(name) || '(empty)'} is not reserved`, () => { assert.strictEqual(isWindowsReservedDeviceName(name), false); });
   }
+
+  const STEMS = ['nul', 'con', 'prn', 'aux', 'com1', 'com9', 'lpt1', 'lpt9'];
+  test('property: base + "." + ext is reserved iff base is a reserved stem', () => {
+    fc.assert(fc.property(
+      fc.oneof(fc.constantFrom(...STEMS), fc.constantFrom('null', 'console', 'com0', 'lpt10', 'xnul', 'config')),
+      fc.stringMatching(/^[A-Za-z0-9_-]{0,8}$/),
+      fc.boolean(),
+      (base, ext, upper) => {
+        const b = upper ? base.toUpperCase() : base;
+        return isWindowsReservedDeviceName(b + '.' + ext) === STEMS.includes(base);
+      },
+    ));
+  });
+  test('property: a reserved stem followed by word characters is not reserved', () => {
+    fc.assert(fc.property(
+      fc.constantFrom(...STEMS),
+      fc.stringMatching(/^[A-Za-z0-9_-]{1,8}$/),
+      (stem, suffix) => isWindowsReservedDeviceName(stem + suffix) === false,
+    ));
+  });
 });
 
 // Runs on every OS: a directory at the config path is unusable everywhere. POSIX reports
