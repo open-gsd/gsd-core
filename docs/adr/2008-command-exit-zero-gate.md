@@ -76,7 +76,7 @@ A capability declares a `command-exit-zero` gate under the existing
 | cwd | Project root (the runtime `cwd`) | Matches the user's working context; the same root existing `check.query` gates operate from |
 | Environment | Inherit process env | The command runs as the user, on the user's machine, in the project they are working on — no sandbox boundary is crossed vs. the user's own shell. Override via the command itself (`env VAR=x ...`) |
 | Timeout | Default 30s; overridable per-gate | Bounded execution is non-negotiable; an unbounded gate could hang the loop forever |
-| Interpolation | `${PHASE_NUMBER}`, `${PHASE_DIR}`, `${PHASE_REQ_IDS}` substituted from gate context; undefined → `''`; all other `${X}` left untouched for `sh` to interpret | Parity with the context existing `check.query` gates already receive |
+| Interpolation | `${PHASE_NUMBER}`, `${PHASE_DIR}`, `${PHASE_REQ_IDS}` set as environment values of the gate shell from gate context (amended by #5482: first revision pasted the values into the command text; now a value is pasted only when it holds nothing but `[A-Za-z0-9._/@+=:,-]`, and `sh` expands it from the environment otherwise, so a gate double-quotes the placeholder); undefined → `''`; all other `${X}` left untouched for `sh` to interpret | Parity with the context existing `check.query` gates already receive |
 | Result mapping | exit 0 → `block:false`; non-zero → `block:true`; timeout (SIGTERM) → `block:true` (`timed_out`); `sh` missing (ENOENT, exit 127) → `block:true` | Fail-closed: every non-zero outcome blocks. A blocking gate with `block:true` halts per the existing two-step gate contract |
 | Output cap | stderr/stdout tail embedded in `message` trimmed to 2000 chars | Keeps the `GATE_RESULT` payload context-bounded |
 
