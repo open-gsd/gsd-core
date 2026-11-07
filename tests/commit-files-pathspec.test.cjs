@@ -3435,8 +3435,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   const msg = fc.oneof(
     word.map((w) => `"${w} # x"`), word.map((w) => `'${w}'`), word, word.map((w) => `"${w} -- x"`), word.map((w) => `"- ${w}"`),
   );
+  // Hand-written from git(1) global-option syntax, not from the scanner, so a spelling the scanner omits still reaches the properties (#2371).
+  const GIT_PREFIX_ORACLE = ['git --git-dir=g', 'git --work-tree w', 'git --namespace=n', 'git -p', 'git --bare', 'git --exec-path=e', 'git --literal-pathspecs', 'git -C a -C b'];
   test('property: prefix invariance: unscopedGitCommits counts one commit for every git prefix and zero once a pathspec follows', () => {
-    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE);
     fc.assert(fc.property(prefix, msg, fc.array(word, { minLength: 0, maxLength: 3 }), (pre, m, paths) => {
       const cmd = `${pre} commit -m ${m}${paths.length ? ` -- ${paths.join(' ')}` : ''}`;
       assert.equal(unscopedGitCommits(cmd).length, paths.length === 0 ? 1 : 0);
@@ -3444,7 +3446,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('property: a widening option, a whole-tree pathspec, or a bash -c / eval wrapper keeps the verdict for every git prefix', () => {
-    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS);
+    const prefix = fc.constantFrom(...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE);
     fc.assert(fc.property(prefix, msg, fc.constantFrom('-i', '--include', '--inc', '-qi'), fc.array(word, { minLength: 1, maxLength: 3 }), (pre, m, opt, paths) => {
       assert.equal(unscopedGitCommits(`${pre} commit ${opt} -m ${m} -- ${paths.join(' ')}`).length, 1);
     }), { seed: 5211, numRuns: 100 });
