@@ -171,7 +171,6 @@ module.exports = {
   "tests/pause-work-improvements.test.cjs",
   "tests/perf-317-context-monitor-fs.test.cjs",
   "tests/phase-completion-single-owner.test.cjs",
-  "tests/phase-entry-grammar.test.cjs",
   "tests/phase-estimation.test.cjs",
   "tests/phase-id-drift-guard.test.cjs",
   "tests/phase-id.test.cjs",
