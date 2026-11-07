@@ -5,7 +5,9 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const {
+  stripInsertedMarker,
   phaseEntryPrefixSrc,
   phaseEntryRegExp,
   phaseEntrySplitRegExp,
@@ -142,5 +144,44 @@ describe('phase-entry grammar (#5763)', () => {
     const line = `- [ ]${' '.repeat(5000)}x`;
     // Behavioral: a quadratic prefix would make this call hang the runner.
     assert.ok(!entry().test(line));
+  });
+});
+
+describe('stripInsertedMarker (#5824)', () => {
+  // The rule every pre-existing inline site applied: drop the FIRST `(INSERTED)`
+  // (case-insensitive) wherever it sits, then trim. The helper reproduces it exactly.
+  const cases = [
+    ['Hotfix rows (INSERTED)', 'Hotfix rows'],
+    ['Hotfix rows  (INSERTED) ', 'Hotfix rows'],
+    ['Hotfix rows', 'Hotfix rows'],
+    ['  Hotfix rows  ', 'Hotfix rows'],
+    ['Hotfix rows (inserted)', 'Hotfix rows'],
+    ['Name (Beta)', 'Name (Beta)'],
+    ['Name (Beta) (INSERTED)', 'Name (Beta)'],
+    ['Name (INSERTED) (Beta)', 'Name  (Beta)'],
+    ['(INSERTED)', ''],
+    ['', ''],
+  ];
+
+  for (const [input, expected] of cases) {
+    test(`${JSON.stringify(input)} -> ${JSON.stringify(expected)} (#5824)`, () => {
+      assert.equal(stripInsertedMarker(input), expected);
+    });
+  }
+
+  test('matches the legacy inline rule for every case (#5824)', () => {
+    for (const [input] of cases) {
+      assert.equal(stripInsertedMarker(input), input.replace(/\(INSERTED\)/i, '').trim());
+    }
+  });
+
+  test('property: appending the marker is stripped back to the trimmed name; a bare name is only trimmed (#5824)', () => {
+    const markerFree = fc.string().filter((s) => !/\(inserted\)/i.test(s));
+    fc.assert(
+      fc.property(markerFree, (s) => {
+        assert.equal(stripInsertedMarker(`${s} (INSERTED)`), s.trim());
+        assert.equal(stripInsertedMarker(s), s.trim());
+      }),
+    );
   });
 });
