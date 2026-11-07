@@ -357,7 +357,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   // Readable but unverifiable seals (fixtures/adversarial/tdd-review-seal/readable/): the gate credits only what it can check.
-  for (const [file, missing] of [['duplicate-key.json', ['RED', 'GREEN']], ['nul-in-red.json', ['RED']]]) {
+  for (const [file, missing] of [['duplicate-key.json', ['RED', 'GREEN']], ['nul-in-red.json', ['RED']], ['replacement-char-in-red.json', ['RED']]]) {
     test(`the ${file} seal is readable and credits only what it can verify`, () => {
       const { dir } = fixture([], { summary: false });
       w(dir, SEAL, fs.readFileSync(path.join(SEAL_FIXTURES, 'readable', file), 'utf8'));

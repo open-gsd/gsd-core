@@ -34,3 +34,4 @@ NUL or replacement characters). The gate stays readable and credits only what it
 | --- | --- | --- |
 | `duplicate-key.json` | `red` appears twice, neither a hash | `FAIL`, RED and GREEN missing |
 | `nul-in-red.json` | `red` is 39 hex characters and a NUL | `FAIL`, RED missing (the valid `green` is credited) |
+| `replacement-char-in-red.json` | `red` is 39 hex characters and U+FFFD | `FAIL`, RED missing (the valid `green` is credited) |

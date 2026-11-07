@@ -58,7 +58,7 @@ The executor MUST:
 The existing end-of-phase TDD review (in `workflows/execute-phase.md`'s `tdd_review_checkpoint` step) is normally **advisory** — it surfaces gate violations but does not block phase completion.
 
 Under TDD mode, escalate this to **blocking**:
-- If any TDD plan is missing a RED or GREEN commit, the executor MUST refuse to mark the phase complete. A `NotEvaluable` row (a plan squashed away, with no usable seal; `NotEvaluable` conditions: the `gate-tdd-review-checkpoint.cjs` row of `docs/INVENTORY.md`) is not a violation and leaves `block` false.
+- If any TDD plan is missing a RED or GREEN commit, the executor MUST refuse to mark the phase complete. A `NotEvaluable` row is not a violation and leaves `block` false; the gate reports it only under the conditions in the `gate-tdd-review-checkpoint.cjs` row of `docs/INVENTORY.md`.
 - The user is shown the same review table, but the verdict line reads:
   > "Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD. Resolve and re-run /gsd:execute-phase, or override with `/gsd:execute-phase {phase} --force-mvp-gate` to ship anyway."
 
