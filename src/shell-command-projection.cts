@@ -1314,21 +1314,24 @@ export function isWindowsReservedDeviceName(basename: string): boolean {
 
 /**
  * #5759: the device-namespace path (`\\.\NUL`) to open for `target`, or null when `target` is not
- * a spelling that names a device on every Windows. Two spellings qualify: a BARE reserved name
- * (`NUL`, `nul.txt`, `NUL:stream`, `.\NUL`, `./NUL`, with no directory component), and an explicit
- * `\\.\` / `\\?\` device form whose remainder is exactly a reserved stem. A reserved name inside
- * a directory path (`sub\NUL`, `D:\x\NUL`, `C:NUL`, `\\?\C:\x\NUL`) is null: on Windows 11 24H2 /
- * Server 2025 it is an ordinary file, so it takes the checked path. The device is always opened
- * through `\\.\<STEM>` derived from the reserved stem (extension, stream, trailing dot/space
- * stripped), never through a resolved directory path.
+ * a spelling that names a device on every Windows. Two spellings qualify: an EXACT bare reserved
+ * stem (`NUL`, `CON`, `PRN`, `AUX`, `COM1`-`COM9`, `LPT1`-`LPT9`, `CONIN$`, `CONOUT$`, any case,
+ * optionally prefixed by `.\` or `./`), and an explicit `\\.\` / `\\?\` device form whose remainder
+ * is exactly such a stem. Everything else is null and takes the checked path: a name with an
+ * extension, trailing dot or space, `:stream` or superscript digit (`nul.txt`, `NUL.`, `NUL:s`,
+ * `COM¹`) is an ordinary file on Windows 11, and a reserved name inside a directory path
+ * (`sub\NUL`, `D:\x\NUL`, `C:NUL`, `\\?\C:\x\NUL`) is an ordinary file on 24H2 / Server 2025.
+ * The device is always opened through `\\.\<STEM>` (uppercase), never through a resolved path.
  */
 export function windowsDeviceNamespacePath(target: string): string | null {
   const namespaced = /^\\\\[.?]\\/.test(target);
   let rest = namespaced ? target.slice(4) : target;
   if (!namespaced) while (/^\.[\\/]/.test(rest)) rest = rest.slice(2);
-  if (/[\\/]/.test(rest)) return null;
-  const m = /^(nul|con|prn|aux|(?:com|lpt)[1-9¹²³])(?:[. :].*)?$/i.exec(rest);
-  if (m === null || (namespaced && m[1].length !== rest.length)) return null;
+  // Only an exact stem qualifies: no extension, trailing dot/space, `:stream` or superscript
+  // COM¹/LPT² digit. On Windows 11 `nul.txt` / `con.txt` are ordinary creatable files, so routing
+  // them to the device would silently discard the data.
+  const m = /^(nul|con|prn|aux|com[1-9]|lpt[1-9]|conin\$|conout\$)$/i.exec(rest);
+  if (m === null) return null;
   return `\\\\.\\${m[1].toUpperCase()}`;
 }
 
@@ -1354,7 +1357,8 @@ function writeWindowsDeviceInPlace(filePath: string, normalized: string, encodin
   const device = windowsDeviceNamespacePath(filePath);
   if (device === null) return false;
   const fsx = seams?.fs ?? fs;
-  // The device namespace path has no directory and no link to follow, so there is nothing to lstat.
+  // No lstat: the `\\.\<STEM>` device namespace path never resolves a cwd entry, so an ordinary
+  // file or link named like the stem in the cwd is not reachable through it.
   let deviceFd: number;
   try {
     deviceFd = fsx.openSync(device, fs.constants.O_WRONLY);
