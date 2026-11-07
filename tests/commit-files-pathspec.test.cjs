@@ -3549,7 +3549,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
       if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
+        // allow-test-rule: source-text-is-the-product (#5211)
         assert.ok(md.includes(`- [W029] ${w029.message}`), `${f}: W029 message`);
+        // allow-test-rule: source-text-is-the-product (#5211)
         assert.ok(md.includes(`Fix: ${w029.remedy.args.command}`), `${f}: W029 remedy`);
       }
     }
@@ -3602,8 +3604,8 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
-      // allow-test-rule: source-text-is-the-product (#5211)
       // The example lines are what the agent runs, so the root note beside `-- .` is the shipped contract.
+      // allow-test-rule: source-text-is-the-product (#5211)
       const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
       assert.ok(hits.length > 0, f);
       for (const l of hits) {
