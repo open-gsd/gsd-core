@@ -8165,6 +8165,18 @@ describe('inserted phase name readers agree on the bare name (#5824)', () => {
     assert.strictEqual(getRoadmapPhaseInternal(tmpDir, '1.1').phase_name, 'Hotfix rows');
   });
 
+  test('a user description containing (INSERTED) keeps it; only the trailing tool marker is stripped (#5824)', () => {
+    const inserted = runGsdTools('phase insert 1 "Fix (INSERTED) parsing"', tmpDir);
+    assert.ok(inserted.success, `phase insert failed: ${inserted.error}`);
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    const heading = roadmap.match(/### Phase (\d+\.\d+): Fix \(INSERTED\) parsing \(INSERTED\)/);
+    assert.ok(heading, 'heading carries the user text plus the trailing tool marker');
+    const getPhase = JSON.parse(runGsdTools(`roadmap get-phase ${heading[1]}`, tmpDir).output);
+    assert.strictEqual(getPhase.phase_name, 'Fix (INSERTED) parsing');
+    const init = JSON.parse(runGsdTools(`init phase-op ${heading[1]}`, tmpDir).output);
+    assert.strictEqual(init.phase_name, 'Fix (INSERTED) parsing');
+  });
+
   test('a non-inserted phase keeps its parenthetical name in get-phase and init (#5824)', () => {
     const getPhase = JSON.parse(runGsdTools('roadmap get-phase 2', tmpDir).output);
     assert.strictEqual(getPhase.phase_name, 'Name (Beta)');
