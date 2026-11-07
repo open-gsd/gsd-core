@@ -376,7 +376,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 2, 'two.txt');
     const refused = publish(dir);
     assert.notEqual(refused.status, 0);
-    const cmd = printedCmd(refused.stderr, 'merged by squash/rebase');
+    const cmd = printedCmd(refused.stderr, 'published (re-anchor)');
     const recovered = runSh(cmd, dir);
     assert.equal(recovered.status, 0, `recovery command failed: ${recovered.stderr}`);
     const next = publish(dir);
@@ -552,6 +552,15 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(refOf(dir, 'refs/gsd/pr-built/strict/origin/main/feature'), '');
   });
 
+  test('the -pr branch built from a remote-tracking target has no upstream (#2498)', () => {
+    const dir = repo();
+    git(dir, 'remote', 'add', 'origin', path.join(dir, 'no-such-remote'));
+    git(dir, 'update-ref', 'refs/remotes/origin/main', 'main');
+    commitRound(dir, 1);
+    assert.equal(publish(dir, 'origin/main').status, 0);
+    assert.equal(git(dir, 'for-each-ref', '--format=%(upstream)', 'refs/heads/feature-pr'), '');
+  });
+
   test('a refused publish on a branch name with shell metacharacters leaves its refs untouched', () => {
     const branch = 'a;b$c';
     const dir = buildRepo(branch);
@@ -568,7 +577,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(git(dir, 'rev-parse', `${branch}-pr`), prTip, 'the refused publish leaves the -pr branch');
     assert.deepEqual(refs.map((ref) => refOf(dir, ref)), before);
     assert.ok(!fs.existsSync(path.join(dir, `${branch}-pr`)) && !fs.existsSync(path.join(dir, 'b$c-pr')), 'no file from the injected suffix');
-    assert.equal(runSh(printedCmd(r.stderr, 'merged by squash/rebase'), dir).status, 0, 'the printed command runs as one command');
+    assert.equal(runSh(printedCmd(r.stderr, 'published (re-anchor)'), dir).status, 0, 'the printed command runs as one command');
     assert.equal(refOf(dir, `refs/heads/${branch}-pr`), '', 'and deletes the -pr branch');
     assert.ok(!fs.existsSync(path.join(dir, 'b$c-pr')), 'no file from the injected suffix, after running it');
   });
@@ -723,6 +732,76 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
   });
 
+  test('nothing new to publish: the merged build is promoted and the run exits 0', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    const tip1 = git(dir, 'rev-parse', 'feature');
+    mergePr(dir);
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /No commits ahead/);
+    assert.equal(markerOf(dir), tip1);
+  });
+
+  test('nothing new to publish and a dirty tree: refused, every ref unchanged', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    write(dir, 'code.txt', 'dirty\n');
+    const before = [markerOf(dir), pendingOf(dir), builtOf(dir)];
+    const r = publish(dir);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /Working tree has uncommitted changes/);
+    assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
+  });
+
+  test('nothing new to publish and an unmerged leftover -pr: refused, every ref unchanged', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    const before = [markerOf(dir), pendingOf(dir), builtOf(dir)];
+    const r = publish(dir);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /feature-pr exists and is not merged into main/);
+    assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
+  });
+
+  test('-pr merged as built, then given a commit: the build still counts as published; the menu only offers discarding the branch', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    const tip1 = git(dir, 'rev-parse', 'feature');
+    mergePr(dir);
+    git(dir, 'checkout', '-q', 'feature-pr');
+    write(dir, 'extra.txt', 'x\n');
+    commitAll(dir, 'chore: extra on -pr');
+    git(dir, 'checkout', '-q', 'feature');
+    commitRound(dir, 2, 'two.txt');
+    const before = [markerOf(dir), pendingOf(dir), builtOf(dir)];
+    const r = publish(dir);
+    assert.notEqual(r.status, 0);
+    assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
+    assert.equal(r.stderr.split(/\r?\n/).filter((l) => l.startsWith('  discard: ')).length, 1, 'exactly one discard option');
+    assert.doesNotMatch(r.stderr, /update-ref/, 'the build is proven merged, so no menu line forgets it');
+    assert.equal(runSh(printedCmd(r.stderr, 'discard'), dir).status, 0);
+    onlyRound2(publish(dir), dir);
+    assert.equal(markerOf(dir), tip1);
+  });
+
+  test('on a host without `timeout`, the git merge proofs run through run-with-timeout', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    commitRound(dir, 2);
+    const noTimeout = "command() { if [ \"$1\" = -v ] && [ \"$2\" = timeout ]; then return 1; fi; builtin command \"$@\"; }";
+    const r = publish(dir, 'main', { prelude: noTimeout });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git merge-base --is-ancestor/m, 'git ran bounded');
+  });
+
   test('promote then refuse: an unmerged -pr that lacks the merged built tip leaves refs untouched', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -771,7 +850,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
       assert.notEqual(r.status, 0);
       assert.match(r.stderr, /feature-pr is merged into main but no longer holds the pending build/);
       assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir), refOf(dir, 'refs/heads/feature-pr')], before, 'a refused run changes nothing');
-      assert.equal(runSh(printedCmd(r.stderr, 'merged by squash/rebase'), dir).status, 0, 'the printed re-anchor command runs');
+      assert.equal(runSh(printedCmd(r.stderr, 'published (re-anchor)'), dir).status, 0, 'the printed re-anchor command runs');
       onlyRound2(publish(dir), dir);
       assert.equal(markerOf(dir), tip1);
     });
@@ -797,6 +876,26 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
     const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  test('published code-only commits rebase-merged onto a moved target, then `git rebase main` drops them: no warning, only round 2 is replayed', () => {
+    const dir = repo();
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code only 1');
+    write(dir, 'x2.txt', '2\n');
+    commitAll(dir, 'feat: code only 2');
+    assert.equal(publish(dir).status, 0);
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
