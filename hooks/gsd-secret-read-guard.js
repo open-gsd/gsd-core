@@ -523,9 +523,11 @@ function readHeredocTag(str, i) {
     // CRLF terminator line matches it; and a substitution inside the word belongs to it,
     // taken literally (`E$(x)F` waits for the line `E$(x)F`).
     while (i < str.length && !(heredocTagsAsWords ? /[ \t\n;&|<>()]/ : /[\s;&|<>()]/).test(str[i])) {
+      scanStep(1);
       if (!heredocTagsAsWords) { tag += str[i++]; continue; }
       if (str[i] === '$' && str[i + 1] === '(') {
         const e = findParenClose(str, i + 2);
+        scanStep(e - i);
         tag += str.slice(i, e + 1);
         i = e + 1;
         continue;
@@ -571,6 +573,7 @@ function consumeHeredocBodies(str, i, tags, eof) {
       const lineEnd = nl === -1 ? str.length : nl;
       const line = str.slice(i, lineEnd);
       const lineStart = i;
+      scanStep(lineEnd - i + 1);
       i = nl === -1 ? str.length : nl + 1;
       const probe = t.stripTabs ? line.replace(/^\t+/, '') : line;
       if (probe === t.tag) { terminated = true; break; }
@@ -653,6 +656,7 @@ let funsubSplits = [];
 function funsubBody(str, i, e) {
   const s = skipContinuations(str, funsubStart(str, i));
   let at = str[s] === '|' ? s + 1 : s;
+  scanStep(e - at + 1);
   let body = '';
   for (const split of funsubSplits) {
     body += str.slice(at, split) + '\n';
@@ -676,6 +680,7 @@ function readFunsubHeredocTag(str, i) {
   let tag = '';
   let quoted = false;
   while (i < str.length && !/[ \t\n;&|<>()]/.test(str[i])) {
+    scanStep(1);
     const ch = str[i];
     if (ch === "'") {
       const j = str.indexOf("'", i + 1);
@@ -689,6 +694,7 @@ function readFunsubHeredocTag(str, i) {
       quoted = true;
       i++;
       while (i < str.length && str[i] !== '"') {
+        scanStep(1);
         if (str[i] === '\\' && i + 1 < str.length && '"\\$`\n'.includes(str[i + 1])) {
           if (str[i + 1] !== '\n') tag += str[i + 1];
           i += 2;
@@ -709,6 +715,7 @@ function readFunsubHeredocTag(str, i) {
     }
     if (ch === '$' && str[i + 1] === '(') {
       const e = findParenClose(str, i + 2);
+      scanStep(e - i);
       tag += str.slice(i, e + 1);
       i = e + 1;
       continue;
@@ -758,9 +765,14 @@ function arithKey(i, depth) {
   return (i * (MAX_FUNSUB_DEPTH + 2) + funsubDepth) * (MAX_FUNSUB_DEPTH + 1) + depth;
 }
 
-// The work the close finders do for one hook call, in steps: a character one
-// of them reads, or a tag a recorded span pushes again. Their cost is bounded
-// by the records above and by MAX_FUNSUB_DEPTH, and a test asserts that bound
+// The work the Bash scan does for one hook call, in steps, under every
+// reading: a character the tokenizer, a close finder, a heredoc tag reader or
+// collectSubstitutions reads; a character of each heredoc line read for a
+// body; the span a `$( )` close skips (findParenClose is next's and stays
+// uncounted inside, so its stack frames match next's), and the text a function
+// substitution's body copies; a span recorded, and a tag it copies or pushes again;
+// and a token per scanned command. The cost is bounded by the records above
+// and by MAX_FUNSUB_DEPTH, and a test asserts that bound
 // as a count rather than by the clock: with GSD_TEST_MODE=1, a positive
 // integer in GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS caps the steps, and past
 // the cap the hook denies (`scan-step-budget`). Without both it is no cap.
@@ -787,7 +799,10 @@ function knownSpan(kind, i) {
 }
 // `mark` is funsubTags' length when the span's scan started.
 function recordSpan(kind, i, end, mark) {
-  if (spanCache !== null) spanCache.set(spanKey(kind, i), { end, tags: funsubTags.slice(mark) });
+  if (spanCache === null) return;
+  const tags = funsubTags.slice(mark);
+  scanStep(1 + tags.length);
+  spanCache.set(spanKey(kind, i), { end, tags });
 }
 
 // Index just past the `"` closing a double-quoted string whose text starts at
@@ -797,7 +812,7 @@ function skipDoubleQuoted(str, i) {
   while (i < str.length && str[i] !== '"') {
     scanStep(1);
     if (str[i] === '\\') { i += 2; continue; }
-    if (str[i] === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2) + 1; continue; }
+    if (str[i] === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
     if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
     if (str[i] === '`') {
       const j = str.indexOf('`', i + 1);
@@ -832,7 +847,7 @@ function findParamClose(str, i) {
       i = j === -1 ? str.length : j + 1;
       continue;
     }
-    if (ch === '$' && str[i + 1] === '(') { i = findParenClose(str, i + 2) + 1; continue; }
+    if (ch === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
     if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
     if (ch === '$' && str[i + 1] === '{') {
       const known = knownSpan(PARAM_SPAN, i + 2);
@@ -862,7 +877,7 @@ function skipWordPart(str, i) {
     return j === -1 ? str.length : j + 1;
   }
   if (ch === '"') return skipDoubleQuoted(str, i + 1);
-  if (ch === '$' && str[i + 1] === '(') return findParenClose(str, i + 2) + 1;
+  if (ch === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); return e + 1; }
   if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) return findFunsubClose(str, funsubStart(str, i)) + 1;
   if (ch === '$' && str[i + 1] === '{') return findParamClose(str, i + 2) + 1;
   return -1;
@@ -1048,7 +1063,9 @@ function scanFunsubClose(str, i) {
       }
       if ((ch === '<' || ch === '>') && str[i + 1] === '(') {
         endWord();
-        i = findParenClose(str, i + 2) + 1;
+        const e = findParenClose(str, i + 2);
+        scanStep(e - i);
+        i = e + 1;
         continue;
       }
       // `name=(` opens an array's elements, where `}` and `(` are words.
@@ -1106,7 +1123,7 @@ function scanFunsubClose(str, i) {
         i = j === -1 ? str.length : j + 1;
         continue;
       }
-      if (ch === '$' && str[i + 1] === '(') { word += '\0'; i = findParenClose(str, i + 2) + 1; continue; }
+      if (ch === '$' && str[i + 1] === '(') { word += '\0'; const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
       if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { word += '\0'; i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
       if (ch === '$' && str[i + 1] === '{') { word += '\0'; i = findParamClose(str, i + 2) + 1; continue; }
       word += ch;
@@ -1123,10 +1140,12 @@ function scanFunsubClose(str, i) {
 function collectSubstitutions(body, nested) {
   let i = 0;
   while (i < body.length) {
+    scanStep(1);
     // `\${ ` is text; `\\` is one escaped backslash, so a `${ ` after it opens one.
     if (body[i] === '\\' && (body[i + 1] === '\\' || funsubOpenerAt(body, i + 1))) { i += 2; continue; }
     if (body[i] === '$' && body[i + 1] === '(') {
       const e = findParenClose(body, i + 2);
+      scanStep(e - i);
       nested.push(body.slice(i + 2, e));
       i = e + 1;
       continue;
@@ -1198,6 +1217,7 @@ function tokenize(str) {
 
   let i = 0;
   while (i < str.length) {
+    scanStep(1);
     const ch = str[i];
 
     if (ch === "'") {
@@ -1215,6 +1235,7 @@ function tokenize(str) {
       if (quoted === 'none') quoted = 'double';
       i++;
       while (i < str.length && str[i] !== '"') {
+        scanStep(1);
         const c = str[i];
         if (c === '\\' && i + 1 < str.length && '"\\$`\n'.includes(str[i + 1])) {
           if (str[i + 1] !== '\n') buf += str[i + 1];
@@ -1223,6 +1244,7 @@ function tokenize(str) {
         }
         if (c === '$' && str[i + 1] === '(') {
           const e = findParenClose(str, i + 2);
+          scanStep(e - i);
           nested.push(str.slice(i + 2, e));
           i = e + 1;
           continue;
@@ -1256,6 +1278,7 @@ function tokenize(str) {
     if (ch === '$' && str[i + 1] === '(') {
       hasWord = true;
       const e = findParenClose(str, i + 2);
+      scanStep(e - i);
       nested.push(str.slice(i + 2, e));
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
@@ -1290,6 +1313,7 @@ function tokenize(str) {
     if ((ch === '<' || ch === '>') && str[i + 1] === '(') {
       flush();
       const e = findParenClose(str, i + 2);
+      scanStep(e - i);
       const inner = str.slice(i + 2, e);
       nested.push(inner);
       // Emit a word carrying the inner script so a shell / `source` operand
@@ -1692,6 +1716,7 @@ function findSecretReadUnderOtherReadings(command) {
 // Returns the offending token text, or null.
 function findSecretRead(command, depth) {
   const { tokens, nested } = tokenize(command);
+  scanStep(tokens.length + 1);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {

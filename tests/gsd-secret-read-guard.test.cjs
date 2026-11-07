@@ -1417,12 +1417,16 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     });
   }
 
-  // The close finders' cost, asserted as a count of steps rather than by the
-  // clock (RULESET.TESTS.no-timing-assertion): in test mode the hook denies as
+  // The scan's cost, asserted as a count of steps rather than by the clock
+  // (RULESET.TESTS.no-timing-assertion): in test mode the hook denies as
   // `scan-step-budget` once its steps pass GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS,
   // and each row below sets that to STEPS_PER_BYTE times the command's length.
-  // The most any row takes is 34 steps a byte (the million-paren row, where each
-  // `((` reads MAX_FUNSUB_DEPTH + 2 characters before the cap fails it).
+  // The count covers the whole Bash scan under every reading: the tokenizer,
+  // the close finders, the heredoc body and tag readers, collectSubstitutions,
+  // the span each `$( )` close skips, each span recorded and the tags it copies, and a
+  // token per scanned command (scanStep in the hook). The most any row takes is
+  // 37 steps a byte (the million-paren row, where each `((` reads
+  // MAX_FUNSUB_DEPTH + 2 characters before the cap fails it).
   const STEPS_PER_BYTE = 64;
   const runBudgeted = (command, env = {}) => {
     const r = runHookSeam(HOOK_PATH, [], {
@@ -1436,15 +1440,27 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // Long inputs the scan must finish and deny inside the step budget. A `((`
   // that does not end in `))` is read again as subshells, and before the scan
   // recorded what it had measured (the spans, and the states a failed attempt
-  // reached) that took 19 s at 333 bytes and 356 s at 1 MiB. Without the
-  // records the two 31-level rows and the 130000-line row pass the budget;
-  // so does the 340000-subshell row without findArithClose's depth cap, and
-  // the 170000-attempt row without the records and with an unclosed `((`
-  // failing instead of reading to the end. Each does so within about 1.5 s.
-  // The 95000-heredoc and million-paren rows pin only that a long input
-  // finishes and denies. The spawn's timeout is a hang backstop, not the
-  // assertion: it turns a runaway into a failure instead of a suite that
-  // never returns.
+  // reached) that took 19 s at 333 bytes and 356 s at 1 MiB. Each row passes
+  // the budget when a bound it guards is reverted:
+  //  - without the records: the two 31-level rows, the 130000-line row and
+  //    the three 256 MB-heap rows;
+  //  - without findArithClose's depth cap: the 340000-subshell row;
+  //  - without the records, and with an unclosed `((` failing instead of
+  //    reading to the end: also the 170000-attempt row;
+  //  - without the depth cap, and with an unclosed `((` failing: the
+  //    million-paren row, where every later `((` then reads to the end;
+  //  - with a recorded span copying every pending tag rather than its own,
+  //    the per-close copy 855b883ab removed (27 s at 1 MiB): the
+  //    95000-heredoc row;
+  //  - with a failed attempt's tags kept, the tag drop removed: the three
+  //    256 MB-heap rows.
+  // Each fails on the count, in 0.03 to 2.5 s in this file at loads up to 77
+  // on 32 cores; one run inside a loaded full suite took about 9 s. The
+  // spawn's 10 s timeout is a hang backstop, not the assertion: a reversion
+  // that ran past it would still fail, on the timeout instead of the count.
+  // The 95000-heredoc row fails on the count only while recordSpan charges
+  // each tag it copies; no row pins that per-tag part, or knownSpan's charge
+  // for a recorded hit, on its own.
   // The spawn sets NODE_V8_COVERAGE to '' so the hook runs uninstrumented in
   // the c8 unit shards, where coverage slows the scan up to ~10x (the
   // million-paren row: 0.40 s plain, 4.6 s covered). Deleting the key is not
@@ -1468,6 +1484,22 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   test('the step budget denies once the scan passes it', () => {
     const command = 'echo ${ (( ${ :; } ) ); }';
     assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: '1' }), 'budget of 1', { code: 'scan-step-budget', tool: 'Bash', path: '' });
+  });
+
+  // The count's floor on one input, so the meter cannot quietly stop counting
+  // span records: 512 KiB of unclosed `${`, then a read on the next line,
+  // takes 16 steps a byte, about a quarter of them span records, which cost a
+  // step each even with no heredoc tag pending (recordSpan). At 14 a byte the
+  // budget denies; with the records uncounted the scan takes 12 and passes. It
+  // catches the charge lost on every record, not on about half of them (only
+  // at MAX_FUNSUB_DEPTH): that count stays above the floor. A legitimate
+  // saving above about 12 % of this input's count turns it red until the
+  // floor is set again.
+  // No bash runs the read: bash 3.2.57 reports an unexpected EOF, and 5.2.37
+  // and 5.3.20 overflow their stack at the default 8 MiB (exit 139).
+  test('the step budget counts span records: 512 KiB of unclosed `${` passes 14 steps a byte', () => {
+    const command = '${ '.repeat(33) + '${'.repeat(262000) + '\ncat .env';
+    assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: String(14 * command.length) }), 'unclosed 512 KiB', { code: 'scan-step-budget', tool: 'Bash', path: '' });
   });
 
   test('the step budget is no cap outside test mode', () => {
