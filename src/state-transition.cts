@@ -1840,7 +1840,8 @@ export function readRecordedPlanTotal(content: string): number | null {
   // An explicit `Total Plans in Phase` wins over an `of M` in either plan field.
   const raw = stateExtractField(content, 'Total Plans in Phase');
   const match = raw ? PLAN_SHAPE_N.exec(raw) : null;
-  if (match) return planNumberFrom(match[1]);
+  const t = match ? planNumberFrom(match[1]) : null;
+  if (t !== null) return t;
   const position = readPlanPosition(content);
   return position !== null ? position.total : null;
 }
