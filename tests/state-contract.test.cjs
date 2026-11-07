@@ -466,7 +466,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const rel = path.relative(tmpDir, dir).split(path.sep).join('/');
     fs.writeFileSync(path.join(dir, 'STATE.md'), STATE_MD);
     if (preTracked) fs.writeFileSync(path.join(dir, 'state.json'), '{}\n');
-    if (priorIgnore) fs.writeFileSync(path.join(dir, '.gitignore'), priorIgnore === true ? 'scratch/\n' : priorIgnore);
+    if (priorIgnore !== undefined) fs.writeFileSync(path.join(dir, '.gitignore'), priorIgnore === true ? 'scratch/\n' : priorIgnore);
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'seed');
     const r = runGsdTools(wsName ? [...BEGIN, '--ws', wsName] : BEGIN, tmpDir);
@@ -534,6 +534,17 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
   });
 
+  // execGit trims stdout: a rule file ending in a blank line, or an empty one, must still read as "only the added rule"
+  for (const [shape, priorIgnore] of [['a trailing blank line', 'scratch/\n\n'], ['an empty file', '']]) {
+    test(`the migration is carried when the tracked rule file is ${shape}`, (t) => {
+      const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore });
+      fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+      const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+      assert.ok(c.success, `final commit must succeed: ${c.error}`);
+      assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+    });
+  }
+
   test('tracked modified state.json migrates for a workstream copy too', (t) => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
     const c = runGsdTools(['commit', 'docs: ws', '--files', `${rel}/STATE.md`], tmpDir);
@@ -546,18 +557,19 @@ describe('state.json never dirties the tree (#5505)', () => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     const ws = (name) => path.join(tmpDir, '.planning', 'workstreams', name);
-    for (const name of ['ws1', 'ws2', 'ws3']) {
+    for (const name of ['ws1', 'ws2', 'ws3', 'ws4']) {
       fs.mkdirSync(ws(name), { recursive: true });
       fs.writeFileSync(path.join(ws(name), 'STATE.md'), STATE_MD);
       fs.writeFileSync(path.join(ws(name), 'state.json'), '{}\n');
     }
     fs.writeFileSync(path.join(ws('ws2'), 'config.json'), '{"commit_docs": false}\n');
     fs.writeFileSync(path.join(ws('ws3'), '.gitignore'), '!/state.json\n');
+    fs.writeFileSync(path.join(ws('ws4'), 'config.json'), '{"commit_docs": 0}\n'); // the commit policy reads every falsy value as off
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'seed');
     assert.ok(runGsdTools([...BEGIN, '--ws', 'ws1'], tmpDir).success);
     assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/workstreams/ws1/state.json'), '', 'the active scope migrates');
-    for (const name of ['ws2', 'ws3']) {
+    for (const name of ['ws2', 'ws3', 'ws4']) {
       assert.strictEqual(git(tmpDir, 'ls-files', '--', `.planning/workstreams/${name}/state.json`).trim(), `.planning/workstreams/${name}/state.json`, `${name} keeps its copy tracked`);
     }
   });

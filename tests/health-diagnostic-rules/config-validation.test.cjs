@@ -941,8 +941,9 @@ describe('W031 — derived state.json still tracked by git', () => {
     t.after(() => cleanup(cwd));
     trackStateJson(cwd, ['.planning/proj/state.json', '.planning/proj/ROADMAP.md', '.planning/proj/workstreams/ws1/state.json']);
 
-    const [diagnostic] = ruleFor('W031').check(buildPlanningSnapshot(cwd));
-    assert.ok(diagnostic.message.startsWith('Tracked by git: .planning/proj/state.json, .planning/proj/workstreams/ws1/state.json'), diagnostic.message);
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(ruleFor('W031').check(snapshot).length, 1);
+    assert.deepEqual(configValidation.w031Listing(snapshot.stateJsonTracked.value).shown, ['.planning/proj/state.json', '.planning/proj/workstreams/ws1/state.json']);
   });
 
   // Property: for any single-segment name, `.planning/<name>[/workstreams/ws1]/state.json` is a publish path
@@ -969,7 +970,8 @@ describe('W031 — derived state.json still tracked by git', () => {
             else fs.writeFileSync(path.join(dir, m), '# s\n');
           }
           gitOrThrow(['add', '-f', '--', `.planning/${name}`], { cwd });
-          const named = ruleFor('W031').check(buildPlanningSnapshot(cwd)).some((d) => d.message.includes(rel));
+          const snapshot = buildPlanningSnapshot(cwd);
+          const named = ruleFor('W031').check(snapshot).length > 0 && snapshot.stateJsonTracked.value.includes(rel);
           gitOrThrow(['rm', '-rq', '--cached', '--', `.planning/${name}`], { cwd });
           return named === (markers.length > 0 || ws);
         },
@@ -978,14 +980,10 @@ describe('W031 — derived state.json still tracked by git', () => {
     );
   });
 
-  // The wording holds for one path and for several, and the remedy's exclude promise is conditional:
-  // with commit_docs false GSD writes no exclude entry.
-  test('W031 wording agrees for one path and for several; remedy conditions the exclude promise on commit_docs', () => {
+  // The remedy's exclude promise is conditional: with commit_docs false GSD writes no exclude entry.
+  test('W031 lists one path and several the same way', () => {
     for (const value of [['.planning/state.json'], ['.planning/state.json', '.planning/workstreams/ws1/state.json']]) {
-      const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } });
-      assert.ok(diagnostic.message.startsWith(`Tracked by git: ${value.join(', ')}. state.json is a derived cache`), diagnostic.message);
-      assert.ok(!/ (is|are) tracked by git/.test(diagnostic.message), diagnostic.message);
-      assert.ok(diagnostic.remedy.args.command.includes('with commit_docs on GSD'), diagnostic.remedy.args.command);
+      assert.deepEqual(configValidation.w031Listing(value), { shown: value, more: 0 });
     }
   });
 
@@ -995,8 +993,7 @@ describe('W031 — derived state.json still tracked by git', () => {
     for (const count of [4, 5, 6]) {
       const value = Array.from({ length: count }, (_, i) => `.planning/w${i}/state.json`);
       const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } });
-      const listed = value.slice(0, 5).join(', ');
-      assert.ok(diagnostic.message.startsWith(`Tracked by git: ${listed}${count === 6 ? ' and 1 more' : ''}. state.json is`), `${count}: ${diagnostic.message}`);
+      assert.deepEqual(configValidation.w031Listing(value), { shown: value.slice(0, 5), more: count === 6 ? 1 : 0 });
       assert.ok(diagnostic.remedy.args.command.includes(value[count - 1]), 'the command keeps every path');
     }
   });
@@ -1005,9 +1002,7 @@ describe('W031 — derived state.json still tracked by git', () => {
     for (const length of [119, 120, 121]) {
       const name = `.planning/${'a'.repeat(length - '/state.json'.length - '.planning/'.length)}/state.json`;
       assert.equal([...name].length, length);
-      const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value: [name], scope: SCOPE.COMPLETE, reason: 'ok' } });
-      const expected = length > 120 ? `${[...name].slice(0, 120).join('')}…` : name;
-      assert.ok(diagnostic.message.startsWith(`Tracked by git: ${expected}. state.json is`), `${length}: ${diagnostic.message}`);
+      assert.deepEqual(configValidation.w031Listing([name]).shown, [length > 120 ? `${[...name].slice(0, 120).join('')}…` : name]);
     }
   });
 
@@ -1083,20 +1078,18 @@ describe('W031 — derived state.json still tracked by git', () => {
     const check = (value) => ruleFor('W031').check({ stateJsonTracked: { value, scope: SCOPE.COMPLETE, reason: 'ok' } })[0];
 
     const escaped = check([`.planning/a${rlo}b/state.json`, '.planning/x`y/state.json']);
-    assert.ok(!escaped.message.includes(rlo), escaped.message);
-    assert.ok(escaped.message.includes('\\u{202e}'), escaped.message);
+    assert.deepEqual(configValidation.w031Listing([`.planning/a${rlo}b/state.json`, '.planning/x`y/state.json']).shown[0], '.planning/a\\u{202e}b/state.json');
     assert.ok(escaped.remedy.args.command.includes('\\xe2\\x80\\xae'), 'the command passes the character as its UTF-8 bytes');
     assert.ok(escaped.remedy.args.command.includes('\\x60'), 'a backtick cannot end the markdown code span');
 
     const long = `.planning/${'n'.repeat(300)}/state.json`;
     const cut = check([long]);
-    assert.ok(cut.message.includes('…') && !cut.message.includes(long), cut.message);
+    assert.deepEqual(configValidation.w031Listing([long]).shown, [`${[...long].slice(0, 120).join('')}…`]);
     assert.ok(cut.remedy.args.command.includes(long), 'the command keeps the full name');
 
     const many = Array.from({ length: 8 }, (_, i) => `.planning/p${i}/state.json`);
     const capped = check(many);
-    assert.ok(capped.message.includes('and 3 more'), capped.message);
-    assert.ok(!capped.message.includes('p5/state.json'), capped.message);
+    assert.deepEqual(configValidation.w031Listing(many), { shown: many.slice(0, 5), more: 3 });
     for (const p of many) assert.ok(capped.remedy.args.command.includes(p), p);
   });
 

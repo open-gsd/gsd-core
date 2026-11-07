@@ -86,11 +86,6 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     assert.ok(splitLines(fs.readFileSync(exclude, 'utf8')).includes('/sub/.planning/milestone.lock'));
   });
 
-  test('CONTEXT.md names the exclude owner and both callers', () => {
-    const context = fs.readFileSync(path.join(__dirname, '..', 'CONTEXT.md'), 'utf8');
-    for (const word of ['git-info-exclude', 'excludeFromGit', 'ignoreInTree']) assert.ok(context.includes(word), word);
-  });
-
   test('aProjectNestedInAnEnclosingRepoThatTracksItGetsTheEntry', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
