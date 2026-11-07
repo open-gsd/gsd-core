@@ -663,7 +663,7 @@ describe('git.commit_timeout_ms doc parity (#5231)', () => {
     assert.strictEqual(Number(value), COMMIT_TIMEOUT_DEFAULT_MS);
   });
 
-  test('the how-to and the docs index state the exported default and ceiling in prose', () => {
+  test('the how-to, the docs index and CONTEXT.md state the exported default and ceiling in prose', () => {
     const root = path.join(__dirname, '..', 'docs');
     const howTo = fs.readFileSync(path.join(root, 'how-to', 'raise-the-commit-timeout-for-slow-hooks.md'), 'utf8');
     const index = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
