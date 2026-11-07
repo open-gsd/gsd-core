@@ -882,7 +882,7 @@ Pick by which question you are actually asking:
 | You want | Setting | What you give up |
 |---|---|---|
 | Planning never enters git | `planning.commit_docs: false` | Parallel executor worktrees; planning git history |
-| Planning is versioned locally but never published | `planning.commit_docs: true` + `planning.pr_strict: true` | Nothing — but the working branch itself must not be pushed; publish the generated `-pr` branch. Repeat runs replay only commits after the last published tip (see below) |
+| Planning is versioned locally but never published | `planning.commit_docs: true` + `planning.pr_strict: true` | Nothing — but the working branch itself must not be pushed; publish the generated `-pr` branch |
 
 The two are independent keys and can be set together, but `pr_strict` is inert when `commit_docs` is `false`: with nothing committed, there is nothing for the PR-branch filter to remove.
 
