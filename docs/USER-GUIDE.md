@@ -157,7 +157,7 @@ For the full command reference with all flags, see [`docs/COMMANDS.md`](COMMANDS
 
 ### The implicit first milestone
 
-`/gsd-new-project` does not register a milestone. On a fresh project there is no `MILESTONES.md`, no `milestone:` value in `STATE.md`, and no version token in `ROADMAP.md` — by design (ADR-3180 §7.2 rule 5): a ROADMAP with no version token has no milestone identity, and the runtime must not invent one.
+`/gsd-new-project` does not register a milestone. On a fresh project there is no `MILESTONES.md`, no `milestone:` value in `STATE.md`, and no version token in `ROADMAP.md` — by design ([ADR-3180](adr/3180-planning-semantic-model-single-owner.md) §7.2 rule 5): a ROADMAP with no version token has no milestone identity, and the runtime must not invent one.
 
 The first milestone is therefore **implicit**: it is "everything between `/gsd-new-project` and the first `/gsd-complete-milestone <version>`". Its identity is recorded only at close time — the version from the command argument, the name from the separate `--name` value the close workflow passes alongside it (defaulting to the version when no name is given). There is no start-registration step to look for, and none is needed; `/gsd-new-milestone` (the cycle opener) is intended for the second milestone onward, where it reads the previous version from `MILESTONES.md` and records the new identity at cycle start.
 

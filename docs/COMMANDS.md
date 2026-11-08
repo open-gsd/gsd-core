@@ -51,7 +51,7 @@ Initialize a new project with deep context gathering.
 **Prerequisites:** No existing `.planning/PROJECT.md`
 **Produces:** `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `config.json`, `research/`, `CLAUDE.md`
 
-> **Note:** the first milestone is implicit. No milestone identity is recorded at project start — no `MILESTONES.md`, no `milestone:` in `STATE.md` (ADR-3180 §7.2 rule 5). The version and name are decided at the first `/gsd-complete-milestone <version>`. See [The implicit first milestone](USER-GUIDE.md#the-implicit-first-milestone).
+> **Note:** the first milestone is implicit. No milestone identity is recorded at project start — no `MILESTONES.md`, no `milestone:` in `STATE.md` ([ADR-3180](adr/3180-planning-semantic-model-single-owner.md) §7.2 rule 5). The version and name are decided at the first `/gsd-complete-milestone <version>`. See [The implicit first milestone](USER-GUIDE.md#the-implicit-first-milestone).
 
 ```bash
 /gsd-new-project                    # Interactive mode
@@ -500,7 +500,8 @@ Archive milestone, tag release.
 > **Note:** for the project's first milestone this command is also the identity *registration* — the version comes from the `<version>` argument, the name from the separate `--name` value the workflow passes alongside it, because nothing recorded them at `/gsd-new-project` time ([the first milestone is implicit](USER-GUIDE.md#the-implicit-first-milestone)). From the second milestone onward, `/gsd-new-milestone` records the identity as well, at cycle start.
 
 ```bash
-/gsd-complete-milestone
+/gsd-complete-milestone v1.0                # First milestone: name the version
+/gsd-complete-milestone                     # Later milestones: inferred from ROADMAP.md
 ```
 
 **Pre-close artifact audit.** Before archiving, the workflow runs `gsd-tools audit-open` and reports every unresolved item across nine categories:
