@@ -396,3 +396,20 @@ allowing `raw-child-process` for one file exempts every future raw spawn in it. 
 on Windows (`--test-name-pattern`): a second selector, which this ADR removed.
 
 How to split a file: [docs/how-to/split-platform-sensitive-tests.md](../how-to/split-platform-sensitive-tests.md).
+
+## #6002 amendment (2026-11-08)
+
+Narrowed two detectors in `scripts/gen-platform-conformance-tier.cjs`:
+
+- `classifyContent` and `classifyMacosContent` now strip `//` and block comments (string literals,
+  including a `//` inside a URL, are preserved) before matching, so prose in a comment is no longer a
+  platform signal.
+- `raw-child-process` no longer matches a bare `require('child_process')`. It matches only a
+  `spawnSync`/`execSync`/`execFileSync` call whose first argument is not node itself
+  (`process.execPath`, `'node'`, `"node"`). Any other first argument still matches.
+
+Why: the Windows tier sat at the 33% ceiling because of text matches, with 175 of 380 tier files
+carrying `raw-child-process`, many of which only re-spawn node, which behaves identically on every OS.
+
+Result (2026-11-08, live tree): Windows tier 295 of 1152 eligible unit-suite files (25.6%); macOS
+tier 216 of 1152 (18.8%). `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.

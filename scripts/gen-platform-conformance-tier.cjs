@@ -172,14 +172,19 @@ const CATEGORIES = [
   },
   {
     name: 'raw-child-process',
-    // Requires BOTH the child_process import/reference token AND one of the
-    // three call names in the same file — this is what keeps a same-named
-    // local identifier (e.g. a variable called `spawnResult`) from false-
-    // positiving: `spawnResult` never forms the substring `spawnSync(`.
+    // #6002: matches a call that can spawn a platform-dependent binary, not
+    // the mere presence of the module. Requires the child_process token AND a
+    // spawnSync/execSync/execFileSync call whose first argument is NOT node
+    // itself (`process.execPath` or the literal 'node' / "node"): a child that
+    // only re-runs node behaves identically on every OS and is no real-OS
+    // signal. Any other first argument (another literal, an identifier, a
+    // template literal) still matches (over-inclusion, the safe direction). A
+    // bare require('child_process') with no call site no longer matches on its
+    // own. A same-named local identifier (e.g. `spawnResult`) never forms the
+    // substring `spawnSync(`.
     test: (content) => {
-      if (/require\((['"])(?:node:)?child_process\1\)/.test(content)) return true;
       if (!content.includes('child_process')) return false;
-      return /\bspawnSync\(|\bexecSync\(|\bexecFileSync\(/.test(content);
+      return /\b(?:spawnSync|execSync|execFileSync)\(\s*(?!process\.execPath\s*[,)]|(['"])node\1\s*[,)])/.test(content);
     },
   },
   {
@@ -304,15 +309,72 @@ const MACOS_CATEGORIES = [
 ];
 
 /**
+ * #6002 — remove `//` line comments and block comments from source text so
+ * the CATEGORIES / MACOS_CATEGORIES tests match platform BEHAVIOR in code, not
+ * words in prose. A single-pass scanner tracks whether it is inside a '…', "…"
+ * or `…` string literal (honoring backslash escapes), so a `//` inside a
+ * string (e.g. a URL) does not start a comment. Regex literals are not
+ * modeled; '…' and "…" strings end at a newline so an unbalanced quote (e.g.
+ * inside a regex literal) cannot swallow the rest of the file. A line comment
+ * is dropped up to (not including) its newline; a block comment becomes one
+ * space (its newlines are kept) so adjacent tokens never fuse.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+function stripComments(content) {
+  const src = typeof content === 'string' ? content : '';
+  const n = src.length;
+  let out = '';
+  let i = 0;
+  while (i < n) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < n && src[i] !== '\n') i++;
+    } else if (ch === '/' && next === '*') {
+      i += 2;
+      let newlines = '';
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+        if (src[i] === '\n') newlines += '\n';
+        i++;
+      }
+      i += 2;
+      out += ' ' + newlines;
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      out += ch;
+      i++;
+      while (i < n) {
+        const c = src[i];
+        if (c === '\\' && i + 1 < n) {
+          out += c + src[i + 1];
+          i += 2;
+          continue;
+        }
+        if (c === '\n' && ch !== '`') break;
+        out += c;
+        i++;
+        if (c === ch) break;
+      }
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * Pure classifier: given a test file's raw string content, returns which
  * platform-conformance categories matched and whether the file needs real-OS
- * coverage (true iff at least one category matched).
+ * coverage (true iff at least one category matched). Comments are stripped
+ * first (#6002).
  *
  * @param {string} content
  * @returns {{needsRealOs: boolean, signals: string[]}}
  */
 function classifyContent(content) {
-  const text = typeof content === 'string' ? content : '';
+  const text = stripComments(content);
   const signals = [];
   for (const category of CATEGORIES) {
     if (category.test(text)) signals.push(category.name);
@@ -328,7 +390,7 @@ function classifyContent(content) {
  * @returns {{needsRealOs: boolean, signals: string[]}}
  */
 function classifyMacosContent(content) {
-  const text = typeof content === 'string' ? content : '';
+  const text = stripComments(content); // #6002
   const signals = [];
   for (const category of MACOS_CATEGORIES) {
     if (category.test(text)) signals.push(category.name);
