@@ -666,12 +666,13 @@ function hasVersionedMilestones(content: string): boolean {
  * predicate feeds `classifyMilestoneWindow`'s rows 3/4 and its behavior stays
  * as is. This one gates only the write refusal for an unresolved STATE
  * milestone, which must not fire on a roadmap that has no real milestone
- * heading at all. Built on `tokenizeHeadings` (fence-aware),
+ * heading at all. Reads `blankFencesAndComments` content (an unclosed `<!--`
+ * hides to EOF), then `tokenizeHeadings` (fence-aware),
  * `isRecognizedMilestoneHeading` (Phase exclusion, level bound) and
  * `listMilestoneHeadings` (the version-bearing grammar).
  */
 function hasRecognizedVersionedMilestoneHeading(content: string): boolean {
-  const visible = content.replace(/<!--[\s\S]*?-->/g, '');
+  const visible = blankFencesAndComments(content);
   return tokenizeHeadings(visible).some((heading) =>
     isRecognizedMilestoneHeading(heading.text, heading.level)
     && listMilestoneHeadings(`${'#'.repeat(heading.level)} ${heading.text}`).length > 0);
