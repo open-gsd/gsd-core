@@ -1136,7 +1136,7 @@ function cmdInitExecutePhase(
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
 
-    tdd_mode: options['tdd'] || (config.tdd_mode === undefined ? false : config.tdd_mode) || false,
+    tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
     commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
     sub_repos: config.sub_repos,
     parallelization: config.parallelization,
@@ -1351,7 +1351,7 @@ function cmdInitPlanPhase(
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
 
-    tdd_mode: options['tdd'] || (config.tdd_mode === undefined ? false : config.tdd_mode) || false,
+    tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
     granularity,
     research_enabled: (config.research === undefined ? false : config.research),
     plan_checker_enabled: (config.plan_checker === undefined ? false : config.plan_checker),
@@ -3870,7 +3870,7 @@ function cmdInitTransition(cwd: string, raw: boolean, options: Record<string, un
  *   location has one source instead of two kept in sync by hand.
  * - `debugger_model` — `resolveModelInternal`, which IS what `query
  *   resolve-model --pick model` returns (`cmdResolveModel`, src/commands.cts).
- * - `tdd_mode` — the `(config.tdd_mode === undefined ? false : config.tdd_mode)` idiom `cmdInitExecutePhase` and
+ * - `tdd_mode` — the `Boolean(config.tdd_mode)` idiom `cmdInitExecutePhase` and
  *   `cmdInitPlanPhase` already use. `/gsd:debug` has no `--tdd` flag, so the
  *   sibling handlers' `options['tdd'] ||` disjunct is deliberately omitted
  *   rather than carried as a phantom.
@@ -3896,7 +3896,7 @@ function cmdInitDebug(cwd: string, raw: boolean, options: Record<string, unknown
     // own cwd may differ from the orchestrator's.
     debug_dir: toPosixPath(planningPaths(cwd).debug),
     debugger_model: resolveModelInternal(cwd, 'gsd-debugger'),
-    tdd_mode: (config.tdd_mode === undefined ? false : config.tdd_mode),
+    tdd_mode: Boolean(config.tdd_mode),
     diagnose: options['diagnose'] === true,
   };
 

@@ -5078,6 +5078,13 @@ describe('init section manifest', () => {
       assert.ok(result.success, result.error);
       assert.equal(JSON.parse(result.output).subagent_timeout, 'hand-edited-value');
     });
+
+    test('#5096: the pre-existing TDD boolean projection retains its coercion', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-legacy-tdd-projection-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ workflow: { tdd_mode: 1 } }));
+      const body = parseOkJson(runSectionManifestCli(['init.plan-phase', '1'], dir), 'legacy-tdd');
+      assert.equal(body.tdd_mode, true);
+    });
   });
 
   // ── Row 62: stub <execution_context> @-refs still resolve (ADR-0002) ────
