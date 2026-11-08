@@ -135,39 +135,131 @@ export function tokenizeCriterionCommand(command: string): { argv: string[] } | 
 
 const ALLOWED_PROGRAMS = new Set(['grep', 'git']);
 const ALLOWED_GIT_SUBCOMMANDS = new Set(['grep', 'ls-files', 'rev-parse', 'rev-list']);
-const GIT_FORBIDDEN_LONG = /^--(output|open-files-in-pager|textconv|ext-diff)(=|$)/;
-const SHORT_OPTION = /^-[^-]/;
+interface OptionSpec {
+  /** Single-character boolean flags, accepted alone or clustered. */
+  short: ReadonlySet<string>;
+  /** Long options that take no value, matched exactly (an abbreviation is not on the list). */
+  long: ReadonlySet<string>;
+  /** Long options that take a value; the value must follow '=' in the same token. */
+  valued: ReadonlySet<string>;
+  /** The one exact short token whose next token is its value (a pattern or a count). */
+  valueShort: string | null;
+}
+
+const words = (s: string): ReadonlySet<string> => new Set(s.split(' ').filter((w) => w.length > 0));
+
+const GREP_SPEC: OptionSpec = {
+  short: words('c i v w x F E G n l L q s r h H o y I'),
+  long: words(
+    '--count --ignore-case --invert-match --word-regexp --line-regexp --fixed-strings --extended-regexp --basic-regexp --quiet --silent --no-messages --recursive --no-filename --with-filename --files-with-matches --files-without-match --only-matching --line-number',
+  ),
+  valued: words('--regexp --include --exclude --exclude-dir'),
+  valueShort: '-e',
+};
+
+const GIT_SPECS: Readonly<Record<string, OptionSpec>> = Object.freeze({
+  grep: {
+    short: words('c i v w n l L h H F E G P I o q'),
+    long: words(
+      '--count --ignore-case --invert-match --word-regexp --line-number --files-with-matches --name-only --files-without-match --fixed-strings --extended-regexp --basic-regexp --perl-regexp --quiet --cached --untracked --no-index --full-name --and --or --not --all-match',
+    ),
+    valued: words(''),
+    valueShort: '-e',
+  },
+  'ls-files': {
+    short: words('c o d m'),
+    long: words('--cached --others --deleted --modified --exclude-standard --full-name'),
+    valued: words(''),
+    valueShort: null,
+  },
+  'rev-parse': {
+    short: words('q'),
+    long: words('--verify --quiet --is-inside-work-tree --show-toplevel --abbrev-ref --show-prefix --short'),
+    valued: words('--short'),
+    valueShort: null,
+  },
+  'rev-list': {
+    short: words(''),
+    long: words('--count --all --no-merges --merges --first-parent'),
+    valued: words('--max-count'),
+    valueShort: '-n',
+  },
+});
 
 function isOutsideRoot(candidate: string): boolean {
   return /^[\\/]/.test(candidate) || /^[A-Za-z]:[\\/]/.test(candidate) || candidate.split(/[\\/]/).includes('..');
 }
 
-export function checkReplayQuarantine(argv: string[]): null | { status: 'disallowed'; detail: string } {
+export interface QuarantineOptions {
+  /** Injected so this module stays pure: false when the operand resolves outside the project. */
+  isInsideRoot?: (operand: string) => boolean;
+}
+
+/** Exact-match option allowlist: an option not named here (including any abbreviation of one) is refused. */
+export function checkReplayQuarantine(argv: string[], opts: QuarantineOptions = {}): null | { status: 'disallowed'; detail: string } {
   const program = argv[0];
   if (typeof program !== 'string' || !ALLOWED_PROGRAMS.has(program)) {
     return { status: 'disallowed', detail: 'program is not on the allowlist (grep, git)' };
   }
-  let args: string[];
+  let spec: OptionSpec;
+  let tokens: string[];
   if (program === 'git') {
     if (argv.length < 2 || !ALLOWED_GIT_SUBCOMMANDS.has(argv[1])) {
       return { status: 'disallowed', detail: 'git subcommand is not on the allowlist' };
     }
-    args = argv.slice(2);
-    for (const arg of args) {
-      if (GIT_FORBIDDEN_LONG.test(arg)) return { status: 'disallowed', detail: `git option ${arg} is not allowed` };
-      if (SHORT_OPTION.test(arg) && arg.slice(1).includes('O')) {
-        return { status: 'disallowed', detail: `git option ${arg} is not allowed` };
-      }
-    }
+    spec = GIT_SPECS[argv[1]];
+    tokens = argv.slice(2);
   } else {
-    args = argv.slice(1);
+    spec = GREP_SPEC;
+    tokens = argv.slice(1);
   }
-  for (const arg of args) {
-    const candidates = [arg];
-    if (arg.startsWith('--') && arg.includes('=')) candidates.push(arg.slice(arg.indexOf('=') + 1));
-    else if (SHORT_OPTION.test(arg) && arg.length > 2) candidates.push(arg.slice(2));
-    if (candidates.some(isOutsideRoot)) return { status: 'disallowed', detail: 'path_outside_root' };
+  const disallowed = (detail: string): { status: 'disallowed'; detail: string } => ({ status: 'disallowed', detail });
+  const pathProblem = (candidate: string): boolean => {
+    if (isOutsideRoot(candidate)) return true;
+    return opts.isInsideRoot !== undefined && !opts.isInsideRoot(candidate);
+  };
+  let operandsOnly = false;
+  let takesValueNext = false;
+  for (const token of tokens) {
+    if (takesValueNext) {
+      takesValueNext = false;
+      if (pathProblem(token)) return disallowed('path_outside_root');
+      continue;
+    }
+    if (operandsOnly || !token.startsWith('-') || token === '-') {
+      if (pathProblem(token)) return disallowed('path_outside_root');
+      continue;
+    }
+    if (token === '--') {
+      operandsOnly = true;
+      continue;
+    }
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      const name = eq === -1 ? token : token.slice(0, eq);
+      const value = eq === -1 ? undefined : token.slice(eq + 1);
+      if (spec.valued.has(name)) {
+        if (value === undefined) {
+          if (!spec.long.has(name)) return disallowed('option ' + name + ' needs =value');
+        } else if (pathProblem(value)) {
+          return disallowed('path_outside_root');
+        }
+      } else if (spec.long.has(name)) {
+        if (value !== undefined) return disallowed('option ' + name + ' takes no value');
+      } else {
+        return disallowed('option ' + name + ' is not allowed');
+      }
+      continue;
+    }
+    if (spec.valueShort !== null && token === spec.valueShort) {
+      takesValueNext = true;
+      continue;
+    }
+    for (const ch of token.slice(1)) {
+      if (!spec.short.has(ch)) return disallowed('option ' + token + ' is not allowed');
+    }
   }
+  if (takesValueNext) return disallowed('malformed: option is missing its value');
   return null;
 }
 
@@ -193,6 +285,7 @@ export interface ReplayDeps {
   now: () => number;
   headSha: string | null;
   scan?: (c: string) => BaselineScanResult;
+  isInsideRoot?: (p: string) => boolean;
 }
 export interface ReplayResult {
   line: number;
@@ -246,7 +339,7 @@ export function replayBaselineCriteria(content: unknown, deps: ReplayDeps): Repl
       if ('status' in extracted) { addStatus(extracted.status, record.line, record.text, extracted.detail); continue; }
       const tokens = tokenizeCriterionCommand(extracted.command);
       if ('status' in tokens) { addStatus(tokens.status, record.line, record.text, tokens.detail); continue; }
-      const refused = checkReplayQuarantine(tokens.argv);
+      const refused = checkReplayQuarantine(tokens.argv, { isInsideRoot: deps.isInsideRoot });
       if (refused !== null) { addStatus(refused.status, record.line, record.text, refused.detail); continue; }
       if (ran >= REPLAY_LIMITS.MAX_COMMANDS) { skipped += 1; continue; }
       const elapsed = deps.now() - start;

@@ -75,6 +75,7 @@ module.exports = {
   "tests/copilot-install.test.cjs",
   "tests/copilot-upgrades.test.cjs",
   "tests/core-utils.test.cjs",
+  "tests/criterion-replay.test.cjs",
   "tests/cursor-hooks.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
   "tests/custom-phase-readers.test.cjs",

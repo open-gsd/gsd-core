@@ -1443,7 +1443,17 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean, opt
     const head = execGit(['rev-parse', 'HEAD'], { cwd: projectDir, timeout: 5000 });
     const headSha = head.exitCode === 0 && /^[0-9a-f]{40}$/.test(head.stdout) ? head.stdout : null;
     const replayEnv = { ...process.env, ...readOnlyGitEnv(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_PAGER: 'cat', PAGER: 'cat' };
+    // Fail closed: an operand that exists but cannot be shown to resolve inside the project is refused.
+    const isInsideRoot = (candidate: string): boolean => {
+      try {
+        if (!fs.existsSync(path.resolve(projectDir, candidate))) return true;
+        return tryWithinRoot(candidate, projectDir) !== null;
+      } catch {
+        return false;
+      }
+    };
     replayReport = replayBaselineCriteria(content, {
+      isInsideRoot,
       run: (argv, { timeoutMs }) => execArgvQuarantined(argv[0], argv.slice(1), {
         cwd: projectDir,
         env: replayEnv,

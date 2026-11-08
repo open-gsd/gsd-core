@@ -1044,6 +1044,10 @@ export function execArgvQuarantined(
     if (invocation.windowsVerbatimArguments === true) {
       return { outcome: 'refused', exitCode: null, stdout: '', stderr: '', signal: null };
     }
+    // An unresolved bare name would let CreateProcess search the cwd (the project) before PATH.
+    if ((opts.platform ?? process.platform) === 'win32' && invocation.resolved === null) {
+      return { outcome: 'not_found', exitCode: null, stdout: '', stderr: '', signal: null };
+    }
     const result = childProcess.spawnSync(invocation.command, invocation.args, {
       cwd: opts.cwd,
       env: opts.env,

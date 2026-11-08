@@ -270,6 +270,66 @@ describe('#4310 quarantine', () => {
       assert.strictEqual(checkReplayQuarantine(['grep', '-c', 'x', arg]), null, arg);
     }
   });
+
+  test('[R50] git option abbreviations are not allowed (F1)', () => {
+    for (const argv of [
+      ['git', 'grep', '--open-files=sh', '-e', 'x'],
+      ['git', 'grep', '--open-files-in-p=true', '-e', 'x'],
+      ['git', 'grep', '--out=f', 'x'],
+      ['git', 'grep', '--text', 'x'],
+      ['git', 'grep', '--ext', 'x'],
+      ['git', 'grep', '--cou', 'x'],
+    ]) {
+      assert.strictEqual(checkReplayQuarantine(argv).status, REPLAY_STATUS.DISALLOWED, argv.join(' '));
+    }
+    assert.strictEqual(checkReplayQuarantine(['git', 'grep', '--count', '-e', 'x']), null);
+  });
+
+  test('[R51] a short-option cluster cannot smuggle a file option (F2)', () => {
+    for (const argv of [
+      ['grep', '-ncf/etc/passwd', 'x'],
+      ['grep', '-rf', 'pats', 'x'],
+      ['grep', '-f', 'pats', 'x'],
+      ['grep', '-m1', 'x', 'f'],
+      ['grep', '-A2', 'x', 'f'],
+      ['grep', '-e'],
+    ]) {
+      assert.strictEqual(checkReplayQuarantine(argv).status, REPLAY_STATUS.DISALLOWED, argv.join(' '));
+    }
+    assert.strictEqual(checkReplayQuarantine(['grep', '-nci', 'x', 'f']), null);
+    assert.strictEqual(checkReplayQuarantine(['grep', '-e', '-x', 'f']), null);
+  });
+
+  test('[R52] long options match exactly and value-taking ones need =', () => {
+    for (const argv of [
+      ['grep', '--include', 'x'],
+      ['grep', '--count=3', 'x', 'f'],
+      ['grep', '--include=/etc/x', '-c', 'x', '.'],
+    ]) {
+      assert.strictEqual(checkReplayQuarantine(argv).status, REPLAY_STATUS.DISALLOWED, argv.join(' '));
+    }
+    for (const argv of [
+      ['grep', '--include=src/a.ts', '-c', 'x', '.'],
+      ['git', 'rev-parse', '--short=7', 'HEAD'],
+      ['git', 'rev-list', '-n', '3', 'HEAD'],
+      ['git', 'rev-list', '--max-count=3', 'HEAD'],
+    ]) {
+      assert.strictEqual(checkReplayQuarantine(argv), null, argv.join(' '));
+    }
+  });
+
+  test('[R53] after -- every token is an operand', () => {
+    assert.strictEqual(checkReplayQuarantine(['grep', '-c', '--', '-x', 'f']), null);
+    assert.strictEqual(checkReplayQuarantine(['grep', '-c', '--', '/etc/x']).status, REPLAY_STATUS.DISALLOWED);
+  });
+
+  test('[R55] an operand that resolves outside the project is disallowed (F4)', () => {
+    const isInsideRoot = (p) => p !== 'link';
+    assert.strictEqual(checkReplayQuarantine(['grep', '-c', 'x', 'link'], { isInsideRoot }).status, REPLAY_STATUS.DISALLOWED);
+    assert.strictEqual(checkReplayQuarantine(['grep', '-c', 'x', 'f'], { isInsideRoot }), null);
+    assert.strictEqual(checkReplayQuarantine(['grep', '-R', 'x', '.']).status, REPLAY_STATUS.DISALLOWED);
+    assert.strictEqual(checkReplayQuarantine(['grep', '--include=link', '-c', 'x', '.'], { isInsideRoot }).status, REPLAY_STATUS.DISALLOWED);
+  });
 });
 
 describe('#4310 observed value', () => {
@@ -487,6 +547,20 @@ describe('#4310 execArgvQuarantined seam', () => {
     assert.strictEqual(r.exitCode, null);
   });
 
+  test('[R54] an unresolved bare name on Windows is not_found, never searched in the cwd (F3)', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4310-'));
+    t.after(() => cleanup(dir));
+    const r = projection.execArgvQuarantined('grep', ['-c', 'x', 'f'], {
+      cwd: dir,
+      timeout: PROBE_TIMEOUT_MS,
+      maxBuffer: 1024,
+      platform: 'win32',
+      env: { PATH: dir, Path: dir, PATHEXT: '.EXE' },
+    });
+    assert.strictEqual(r.outcome, 'not_found');
+    assert.strictEqual(r.exitCode, null);
+  });
+
   test('[R46] exited, not_found, timed_out and overflow are distinct outcomes', () => {
     const ok = projection.execArgvQuarantined(process.execPath, ['-e', 'process.stdout.write("7");process.exit(1)'], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 });
     assert.strictEqual(ok.outcome, 'exited');
@@ -569,5 +643,17 @@ describe('#4310 e2e: verify plan-structure --replay', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.deepStrictEqual(out.replay.statuses.map((s) => s.code), ['disallowed']);
     assert.strictEqual(fs.existsSync(path.join(tmpDir, 'PWNED')), false);
+  });
+
+  test('[R56] an operand symlinked outside the project is disallowed (F4)', (t) => {
+    try {
+      fs.symlinkSync(os.tmpdir(), path.join(tmpDir, 'out'));
+    } catch {
+      t.skip('symlinks unavailable');
+      return;
+    }
+    const { result, out } = run(critLine('git grep -c x -- out', '[HEAD=1 EXPECT>=2]'), [PLAN, '--replay']);
+    assert.strictEqual(result.exitCode, 0);
+    assert.deepStrictEqual(out.replay.statuses.map((s) => s.code), ['disallowed']);
   });
 });
