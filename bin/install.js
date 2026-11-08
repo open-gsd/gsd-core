@@ -4699,7 +4699,7 @@ function managedCodexMarkers(content) {
     !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER);
 }
 
-function codexHooksOwnership(record) {
+function parseCodexHooksOwnership(record) {
   if (!record || record.startsInMultilineString) return null;
   return /^# GSD codex_hooks ownership: (section|root_dotted)[ \t]*$/.exec(record.text)?.[1] || null;
 }
@@ -4741,7 +4741,7 @@ function stripGsdFromCodexConfig(content) {
   for (const managedMarker of markerRecords) {
     removalRanges.push({ start: managedMarker.start, end: managedMarker.end + managedMarker.eol.length });
     const ownershipRecord = lineRecords[lineRecords.indexOf(managedMarker) + 1];
-    if (codexHooksOwnership(ownershipRecord)) {
+    if (parseCodexHooksOwnership(ownershipRecord)) {
       removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
     }
   }
@@ -5426,7 +5426,7 @@ function getManagedCodexHooksOwnership(content, markerRecord) {
   }
 
   const afterMarker = content.slice(markerRecord.end + markerRecord.eol.length);
-  return codexHooksOwnership(getTomlLineRecords(afterMarker)[0]);
+  return parseCodexHooksOwnership(getTomlLineRecords(afterMarker)[0]);
 }
 
 function setManagedCodexHooksOwnership(content, ownership) {
@@ -5440,7 +5440,7 @@ function setManagedCodexHooksOwnership(content, ownership) {
   const markerEnd = marker.end;
   const afterMarker = content.slice(markerEnd);
   const following = getTomlLineRecords(content.slice(markerEnd + marker.eol.length))[0];
-  const normalizedAfterMarker = codexHooksOwnership(following)
+  const normalizedAfterMarker = parseCodexHooksOwnership(following)
     ? eol + afterMarker.slice(marker.eol.length + following.end + following.eol.length)
     : afterMarker;
 
@@ -6721,7 +6721,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
     // the freshly regenerated block.
     const rawAfter = existing.substring(markerIndex);
     const records = getTomlLineRecords(rawAfter);
-    const end = codexHooksOwnership(records[1])
+    const end = parseCodexHooksOwnership(records[1])
       ? records[1].end + records[1].eol.length
       : records[0].end + records[0].eol.length;
     const markerStripped = rawAfter.slice(end);
@@ -15378,7 +15378,7 @@ module.exports = {
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,
     managedCodexMarkers,
-    codexHooksOwnership,
+    parseCodexHooksOwnership,
     collapseTomlBlankLines,
     setManagedCodexHooksOwnership,
     stripStaleGsdHookBlocks,
