@@ -4457,7 +4457,9 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
     fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
     fs.writeFileSync(defaultsPath, before);
-    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(defaultsPath), 5));
+    // Matched by name: the store is written at its resolved path, which spells a
+    // temp dir differently when it sits behind a link (/var is /private/var on macOS).
+    t.after(mockPartialWriteThenThrow(fs, (target) => path.basename(String(target)).startsWith('defaults.json'), 5));
 
     const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
 
