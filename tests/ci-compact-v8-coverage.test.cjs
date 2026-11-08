@@ -5,12 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { createRequire } = require('node:module');
 const { pathToFileURL, fileURLToPath } = require('node:url');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { BUILD_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { compact, parseArgs, INCLUDE_GLOBS, EXCLUDE_GLOBS } = require('../scripts/ci-compact-v8-coverage.cjs');
 
 function scriptCoverage(cwd, rel, count) {
@@ -30,6 +29,26 @@ function withFixture(fn) {
     fn(cwd);
   } finally {
     cleanup(cwd);
+  }
+}
+
+async function withFixtureAsync(fn) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-compact-'));
+  try {
+    fs.mkdirSync(path.join(cwd, 'raw'));
+    await fn(cwd);
+  } finally {
+    cleanup(cwd);
+  }
+}
+
+async function inDir(dir, fn) {
+  const prev = process.cwd();
+  process.chdir(dir);
+  try {
+    return await fn();
+  } finally {
+    process.chdir(prev);
   }
 }
 
@@ -191,60 +210,100 @@ test("sharded compaction equals one-pass compaction (the gate's composition cont
   });
 });
 
-test('c8 report json-summary is identical over raw and compacted dumps', () => {
-  withFixture((tmp) => {
+test('c8 report json-summary is identical over raw and compacted dumps', async () => {
+  await withFixtureAsync(async (tmp) => {
     // V8 records real paths (macOS /private/var, Windows long names, not 8.3), so match them.
     const cwd = fs.realpathSync.native(tmp);
     const write = (rel, text) => {
       fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true });
       fs.writeFileSync(path.join(cwd, rel), text);
     };
-    write(
-      'gsd-core/bin/lib/a.cjs',
-      [
-        "'use strict';",
-        'function f(x) {',
-        '  if (x > 5) {',
-        "    return 'big';",
-        '  } else {',
-        "    return 'small';",
-        '  }',
-        '}',
-        'module.exports = { f };',
-        '',
-      ].join('\n'),
-    );
+    const aSrc = [
+      "'use strict';",
+      'function f(x) {',
+      '  if (x > 5) {',
+      "    return 'big';",
+      '  } else {',
+      "    return 'small';",
+      '  }',
+      '}',
+      'module.exports = { f };',
+      '',
+    ].join('\n');
+    const sSrc = "'use strict';\nmodule.exports = () => 2;\n";
+    write('gsd-core/bin/lib/a.cjs', aSrc);
     write('gsd-core/bin/lib/never.cjs', "'use strict';\nmodule.exports = () => 1;\n");
-    write('scripts/s.cjs', "'use strict';\nmodule.exports = () => 2;\n");
-    write(
-      'driver.cjs',
-      "'use strict';\nconst a = require('./gsd-core/bin/lib/a.cjs');\nconst s = require('./scripts/s.cjs');\nconsole.log(a.f(Number(process.argv[2])), s());\n",
-    );
+    write('scripts/s.cjs', sSrc);
+
+    // Offsets come from the written text, never hardcoded.
+    const fStart = aSrc.indexOf('function f');
+    const fEnd = aSrc.indexOf('\n}\n', fStart) + 2;
+    const ifOpen = aSrc.indexOf('{', aSrc.indexOf('if (x > 5) '));
+    const ifEnd = aSrc.indexOf('}', ifOpen) + 1;
+    const elseOpen = aSrc.indexOf('{', aSrc.indexOf('else '));
+    const elseEnd = aSrc.indexOf('}', elseOpen) + 1;
+    const urlOf = (rel) => pathToFileURL(path.join(cwd, rel)).href;
+    const whole = (len, count) => ({ functionName: '', isBlockCoverage: true, ranges: [{ startOffset: 0, endOffset: len, count }] });
+    const dump = (n, b, e) => ({
+      result: [
+        {
+          scriptId: '1',
+          url: urlOf('gsd-core/bin/lib/a.cjs'),
+          functions: [
+            whole(aSrc.length, 1),
+            {
+              functionName: 'f',
+              isBlockCoverage: true,
+              ranges: [
+                { startOffset: fStart, endOffset: fEnd, count: n },
+                { startOffset: ifOpen, endOffset: ifEnd, count: b },
+                { startOffset: elseOpen, endOffset: elseEnd, count: e },
+              ],
+            },
+          ],
+        },
+        { scriptId: '2', url: urlOf('scripts/s.cjs'), functions: [whole(sSrc.length, 1)] },
+        { scriptId: '3', url: urlOf('tests/t.cjs'), functions: [whole(10, 1)] },
+        { scriptId: '9', url: 'node:fs', functions: [] },
+      ],
+      'source-map-cache': {},
+    });
 
     const rawDir = path.join(cwd, 'raw');
-    for (const arg of ['1', '9']) {
-      execFileSync(process.execPath, [path.join(cwd, 'driver.cjs'), arg], {
-        cwd,
-        timeout: BUILD_TIMEOUT_MS,
-        env: { ...process.env, NODE_V8_COVERAGE: rawDir },
-        stdio: 'pipe',
-      });
-    }
+    fs.writeFileSync(path.join(rawDir, 'coverage-1.json'), JSON.stringify(dump(1, 0, 1)));
+    fs.writeFileSync(path.join(rawDir, 'coverage-2.json'), JSON.stringify(dump(2, 2, 0)));
     const compactedDir = path.join(cwd, 'compacted');
     compact({ tempDirectory: rawDir, outFile: path.join(compactedDir, 'shard.json'), cwd });
 
-    const c8Bin = require.resolve('c8/bin/c8.js');
-    const summaryFor = (tempDir, reportsDir) => {
-      execFileSync(
-        process.execPath,
-        [
-          c8Bin, 'report', '--reporter', 'json-summary', '--merge-async',
-          '--include', 'gsd-core/bin/lib/**/*.cjs', '--include', 'scripts/**/*.cjs',
-          '--exclude', 'tests/**', '--all',
-          '--temp-directory', tempDir, '--reports-dir', reportsDir,
-        ],
-        { cwd, timeout: SEAM_DEFAULT_TIMEOUT_MS, stdio: 'pipe' },
-      );
+    const c8Require = createRequire(require.resolve('c8/package.json'));
+    const Report = c8Require('./lib/report.js');
+    const defaultExtension = c8Require('@istanbuljs/schema/default-extension');
+    const summaryFor = async (tempDir, reportsDir) => {
+      await inDir(cwd, async () => {
+        // Same option set c8/lib/commands/report.js builds from argv; values are the CLI defaults plus the gate's flags.
+        const report = Report({
+          include: ['gsd-core/bin/lib/**/*.cjs', 'scripts/**/*.cjs'],
+          exclude: ['tests/**'],
+          extension: defaultExtension,
+          excludeAfterRemap: false,
+          reporter: ['json-summary'],
+          reportsDirectory: reportsDir,
+          reporterOptions: {},
+          tempDirectory: tempDir,
+          watermarks: undefined,
+          resolve: '',
+          omitRelative: true,
+          wrapperLength: undefined,
+          all: true,
+          allowExternal: false,
+          src: undefined,
+          skipFull: false,
+          excludeNodeModules: true,
+          mergeAsync: true,
+          monocartArgv: null,
+        });
+        await report.run();
+      });
       const summary = JSON.parse(fs.readFileSync(path.join(reportsDir, 'coverage-summary.json'), 'utf8'));
       const bases = [fs.realpathSync(cwd), cwd].map((b) => b.split(path.sep).join('/'));
       const relKey = (key) => {
@@ -255,9 +314,10 @@ test('c8 report json-summary is identical over raw and compacted dumps', () => {
       return Object.fromEntries(Object.entries(summary).map(([k, v]) => [relKey(k), v]));
     };
 
-    const fromRaw = summaryFor(rawDir, path.join(cwd, 'rep-raw'));
-    const fromCompacted = summaryFor(compactedDir, path.join(cwd, 'rep-compacted'));
+    const fromRaw = await summaryFor(rawDir, path.join(cwd, 'rep-raw'));
+    const fromCompacted = await summaryFor(compactedDir, path.join(cwd, 'rep-compacted'));
     assert.ok(fromRaw['gsd-core/bin/lib/never.cjs'], '--all must report the never-executed file');
+    assert.ok(fromRaw['gsd-core/bin/lib/a.cjs'].branches.total > 0, 'fixture must exercise branch coverage');
     assert.deepEqual(fromCompacted, fromRaw);
   });
 });
