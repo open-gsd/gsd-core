@@ -823,6 +823,29 @@ describe('raw config.json override paths (FIX 4)', () => {
 // ─── 8. Renderer tests ────────────────────────────────────────────────────────
 
 describe('renderLoopHooks', () => {
+  test('#5360: every registered skill step renders a shipped capability skill', () => {
+    let checked = 0;
+    for (const [point, hooks] of Object.entries(realRegistry.byLoopPoint)) {
+      for (const step of hooks.steps) {
+        if (!step.ref?.skill) continue;
+        const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'capabilities', step.capId, 'capability.json'), 'utf8'));
+        assert.ok(manifest.skills.includes(step.ref.skill), `${step.capId} declares ${step.ref.skill}`);
+        const rendered = renderLoopHooks({ point, activeHooks: [{ ...step, kind: 'step' }] });
+        const id = rendered.split('\n')[0].split('skill:')[1].split(' ')[0];
+        const stem = id.slice('gsd-'.length);
+        assert.equal(stem, step.ref.skill);
+        const candidates = [
+          path.join(__dirname, '..', 'commands', 'gsd', `${stem}.md`),
+          path.join(__dirname, '..', 'capabilities', step.capId, 'skills', stem, 'SKILL.md'),
+          path.join(__dirname, '..', 'skills', id, 'SKILL.md'),
+        ];
+        assert.ok(candidates.some((file) => fs.existsSync(file)), `${id} names a shipped source`);
+        checked += 1;
+      }
+    }
+    assert.ok(checked > 0, 'the real registry must exercise skill dispatch');
+  });
+
   test('skill step renders the invocable id while preserving the bare registry ref', () => {
     const registry = makeRegistry({
       point: 'plan:post',
