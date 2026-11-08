@@ -1074,17 +1074,17 @@ function resolveGit(
       const fetchRef = ref.kind === 'tag' ? `refs/tags/${ref.value}` : ref.value;
       const fetchResult = execGit([
         ...gitConfig, '-C', cloneDir, 'fetch', '--depth', '1', '--no-tags', '--', 'origin', fetchRef,
-      ], { timeout: 60_000 });
+      ], { timeout: 30_000 });
       let checkoutTarget = 'FETCH_HEAD';
       if (fetchResult.exitCode !== 0) {
-        if (ref.kind !== 'bare') {
+        if (ref.kind !== 'bare' || !/couldn't find remote ref/i.test(fetchResult.stderr)) {
           throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
         }
         // Preserve commit-ish spellings the former shallow-clone checkout
         // accepted when a BARE target is already present at the cloned tip.
         const localResult = execGit([
           ...gitConfig, '-C', cloneDir, 'rev-parse', '--verify', `${ref.value}^{commit}`,
-        ], { timeout: 60_000 });
+        ], { timeout: 10_000 });
         if (localResult.exitCode !== 0) {
           throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
         }
@@ -1092,7 +1092,7 @@ function resolveGit(
       }
       const checkoutResult = execGit([
         ...gitConfig, '-C', cloneDir, 'checkout', '--detach', checkoutTarget, '--',
-      ], { timeout: 60_000 });
+      ], { timeout: 10_000 });
       if (checkoutResult.exitCode !== 0) {
         throw new Error(
           `git checkout "${parsed.ref}" failed (exit ${checkoutResult.exitCode}): ${checkoutResult.stderr}`

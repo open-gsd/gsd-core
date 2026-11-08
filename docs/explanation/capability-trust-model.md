@@ -297,7 +297,9 @@ install, so a later `trust` inspection shows exactly which bytes landed.
 Prompt claims are exact per kind: a sha512 `--integrity` pin renders as
 *supplied and verified*, a git source checked out at a `#sha:<commit>` ref
 renders as *pinned to a git commit* (never as a sha512 pin — none was
-supplied), and a mutable `#sha:<branch>` ref is not a pin at all.
+supplied). A `#sha:<branch>` value is rejected: typed SHA pins require a complete
+40- or 64-hex object ID. The remote must permit fetching that object ID; a refusal
+fails the install, and typed pins never use a shallow-clone fallback.
 
 ### Fetch-host denylist
 

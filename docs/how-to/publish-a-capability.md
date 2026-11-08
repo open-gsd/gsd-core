@@ -4,6 +4,10 @@ This guide is for capability authors who want to distribute their work so other 
 
 Before publishing, make sure your capability works locally by following [Develop a Capability](./develop-a-capability.md).
 
+When publishing a Git SHA pin, use a complete 40- or 64-hex object ID and a server
+that permits fetching that object under its unadvertised-object policy. Typed pins
+fail without fallback when the server refuses the fetch.
+
 ---
 
 ## Add the required publishing fields

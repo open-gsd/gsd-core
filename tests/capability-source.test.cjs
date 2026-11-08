@@ -436,6 +436,22 @@ describe('#5297 git adapter — exact pinned target', {
 });
 
 describe('#5297 git adapter — normalized ref safety', () => {
+  test('PROPERTY (fc): unsafe typed refs reject before any Git operation', async (t) => {
+    const gsdHome = createTempDir('gsd-unsafe-typed-');
+    t.after(() => cleanup(gsdHome));
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom('tag:', 'TAG:', 'Tag:', 'sha:', 'SHA:', 'Sha:'),
+      fc.constantFrom('+bad', '-bad', 'bad:ref'),
+      fc.constantFrom('', ' ', '  '),
+      async (prefix, value, padding) => {
+        let calls = 0;
+        await assert.rejects(() => resolveCapabilitySource(`https://example.com/repo.git#${padding}${prefix}${value}${padding}`, {
+          gsdHome, hostVersion: '1.5.0', execOverrides: { git: () => { calls += 1; return spawnOk(''); } },
+        }));
+        assert.equal(calls, 0);
+      },
+    ));
+  });
   test('normalized unsafe refs and empty typed refs reject before Git runs', async () => {
     const gsdHome = createTempDir('gsd-ref-safety-');
     const calls = [];
