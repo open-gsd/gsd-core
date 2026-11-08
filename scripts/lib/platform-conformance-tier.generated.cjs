@@ -65,6 +65,7 @@ module.exports = {
   "tests/compact-content-4139.test.cjs",
   "tests/complete-milestone-release-map-routing.test.cjs",
   "tests/config-defaults-runtime-exclusion.test.cjs",
+  "tests/config-get-default.test.cjs",
   "tests/config-loader-bounded-read.platform.test.cjs",
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
