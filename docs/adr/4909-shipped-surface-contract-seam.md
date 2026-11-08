@@ -26,7 +26,7 @@ Validation exists, but it is split per surface and written by hand. Each scan ow
 | `scripts/lint-phase-arg-assignment.cjs` (#4831) | `${PHASE_ARG}` only | every other variable |
 | `tests/check-predicate-dispatch-phase-flags-4483.test.cjs` | a hand-written table of five `check predicate` call sites | every other verb's inputs |
 | `tests/runtime-command-form.test.cjs` (#5372) | colon-form strings in named `bin/lib` surfaces | any surface not named |
-| `tests/plugin-manifest.test.cjs` (#5362) | the plugin manifest's two component paths | install-path collisions (#4855) |
+| `tests/plugin-manifest.test.cjs` (#5362) | the plugin's live load: #5362 set `commands` to `[]` so workflows register once through `skills`, and a test runs the real Claude Code loader to confirm it | install-path collisions (#4855); a second surface added later is caught only when that slow live test runs |
 
 The thirteen issues absorbed by #4909 were each fixed where they were reported. Several of those fixes added another per-surface scan (the last four rows above). The defect class is unchanged: the next unassigned variable that is not `PHASE_ARG`, the next omitted flag on a verb that is not `check predicate`, and the next dangling reference in a third spelling will all pass.
 
@@ -95,7 +95,7 @@ Each cell is the set of every path an installed artifact can address, including 
 | R5 | each `@`-ref, in any spelling | D3 manifest, for **every** cell | `dangling_ref` (names the cell) |
 | R6 | each named template or reference file (`…/templates/x.md`, `references/x.md`) | D3 manifest | `dangling_file` |
 | R7 | each command name and its flags | the declared shipped-shell table | `disallowed_command`, `disallowed_flag` |
-| R8 | each `$ARGUMENTS` in a `commands/` or `skills/` body, and the shape of the labeled block itself | the one labeled `<arguments>$ARGUMENTS</arguments>` block at the top of the body, followed by the standing data note (#4780, #5145) | `unlabeled_arguments`, `malformed_arguments_block` |
+| R8 | each `$ARGUMENTS` in a `commands/` or `skills/` body, and the shape of the labeled block itself | the one labeled `<arguments>$ARGUMENTS</arguments>` block as the first content after frontmatter (CRLF normalized to LF before the split), followed by the standing data note; a template that takes no arguments carries no block (#4780, #5145) | `unlabeled_arguments`, `malformed_arguments_block` |
 | R9 | each `gsd-core/workflows/*.md` | reachability from a `commands/`, `agents/` or `skills/` loader, transitively through `gsd-core/**` (ADR-0002 rule 6, moved here) | `unreachable_workflow` |
 
 - **R2/R3 call forms.** `--flag value` and `--flag=value` are the same flag. A flag inside a conditional expansion (`${GSD_WS:+--ws "$GSD_WS"}`) is checked by name under R2. Under R3 and R3b it counts as passed, because the author has bound the flag to a variable and made it conditional on purpose. A flag name built at runtime is a known limit.
@@ -127,10 +127,10 @@ Each scan below is deleted once the extractor carries every rule it enforced, ea
 | `<execution_context>` `@`-ref resolution and workflow reachability in `scripts/lint-command-contract.cjs` (frontmatter and `allowed-tools` stay) | R5, R9 |
 | `scripts/lint-portable-grep.cjs`, `scripts/lint-portable-timeout.cjs` | R7 |
 | `tests/check-predicate-dispatch-phase-flags-4483.test.cjs` call-site table | R3 |
-| `tests/command-arguments-block.test.cjs`, whole file. R8 carries both halves: no `$ARGUMENTS` outside the block, and the block's shape (exactly one block line at the top of the body, followed by the standing data note). | R8 |
+| The static-template tests of `tests/command-arguments-block.test.cjs`: block present and correctly placed, data note, no block on argument-free templates, and their mutation controls. The rest of the file **stays**, because each part tests runtime behavior rather than template text: commands and skills carrying the same block, the block surviving every install converter, the quick-batch quoted-heredoc path, the #5143 fence-splice guard and its controls, the real-bash hostile-text round-trip, the per-statement injection-safety matrix, and the fast-check round-trip property. | R8 |
 | `tests/execute-phase-continuation-template-4783.test.cjs` | R6 |
 | `tests/runtime-command-form.test.cjs` | D5 |
-| the component-duplication assertions of `tests/plugin-manifest.test.cjs` | D3 `duplicate_registration` |
+| nothing from `tests/plugin-manifest.test.cjs`. Its live-loader registers-once test stays as end-to-end evidence; D3 `duplicate_registration` adds the generation-time conflict that catches a second surface before that test runs. | — |
 
 Keeping a scan beside the extractor is the defect this ADR closes. Two copies that agree today are the same defect as two that disagree.
 
