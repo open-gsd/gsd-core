@@ -1319,7 +1319,9 @@ describe('#5831: state prune never loses entries', () => {
       section: fc.constantFrom('Decisions', 'Recently Completed', 'Blockers'),
       lines: fc.array(entry, { minLength: 1, maxLength: 6 }),
     });
-    fc.assert(fc.property(fc.array(section, { minLength: 1, maxLength: 3 }), fc.nat(1000), fc.nat(9), (sections, cutoff, keepRecent) => {
+    fc.assert(fc.property(fc.array(section, { minLength: 1, maxLength: 3 }), fc.nat(1000), fc.nat(9), (generated, cutoff, keepRecent) => {
+      // fc.record yields null-prototype objects and deepStrictEqual compares prototypes, so rebuild plain objects.
+      const sections = generated.map(sx => ({ section: sx.section, lines: [...sx.lines] }));
       const input = sections.map(sx => ({ ...sx, count: sx.lines.length }));
       const out = stateLib.renderStateArchiveAppend(stateLib.planStateArchiveAppend(null, input, { date: '2026-11-04', cutoff, keepRecent }));
       assert.deepStrictEqual(stateLib.parseLastArchiveBlock(out), { cutoff, sections }, 'the round trip returns the same block');
@@ -1355,9 +1357,16 @@ describe('#5831: state prune never loses entries', () => {
     fs.writeFileSync(archivePath, SEED_ARCHIVE);
     const archiveBefore = fs.readFileSync(archivePath);
     const realRead = scp.platformReadBytesSync;
-    // Only the read made while the STATE.md lock is held sees the file gone.
-    mock.method(scp, 'platformReadBytesSync', (p, ...rest) =>
-      (p === statePath && fs.existsSync(statePath + '.lock') ? null : realRead.call(scp, p, ...rest)));
+    // The first in-lock read is readModifyWriteStateMd's own; only the second in-lock
+    // read (the snapshot inside publishPrunedToArchive) sees the file gone.
+    let inLockReads = 0;
+    mock.method(scp, 'platformReadBytesSync', (p, ...rest) => {
+      if (p === statePath && fs.existsSync(statePath + '.lock')) {
+        inLockReads += 1;
+        if (inLockReads === 2) return null;
+      }
+      return realRead.call(scp, p, ...rest);
+    });
     assert.throws(() => prune(3), /disappeared while its lock was held/);
     mock.restoreAll();
 
