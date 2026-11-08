@@ -974,6 +974,32 @@ export function extractTaggedBlocks(content: string, tagName: string, allowAttri
 }
 
 /**
+ * Offset spans of the bodies `extractTaggedBlocks` returns (#4309): same
+ * pattern, same blocks, but each body is reported as `{ start, end }` into
+ * `content` so a caller can test whether an arbitrary offset lies inside a
+ * block (and dedupe nested blocks) without re-harvesting the text.
+ * `content.slice(span.start, span.end)` equals the matching extracted body.
+ */
+export function extractTaggedBlockSpans(
+  content: string,
+  tagName: string,
+  allowAttributes = false,
+): { start: number; end: number }[] {
+  if (typeof content !== 'string' || content.length === 0) return [];
+  if (typeof tagName !== 'string' || tagName.length === 0) return [];
+
+  const closeLength = `</${tagName}>`.length;
+  const pattern = taggedBlockPattern(tagName, 'g', allowAttributes);
+  const spans: { start: number; end: number }[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    const end = match.index + match[0].length - closeLength;
+    spans.push({ start: end - match[1].length, end });
+  }
+  return spans;
+}
+
+/**
  * Build the single, ReDoS-safe `<tag>…</tag>` block regex shared by
  * `extractTaggedBlocks` (extract bodies) and `stripTaggedBlocks` (remove blocks).
  *
