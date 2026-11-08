@@ -278,6 +278,61 @@ Full behavioral reference: `gsd-core/references/checkpoints.md` → `checkpoint:
 
 ---
 
+## Baseline notation
+
+A quantitative criterion (a count or a match) carries its measured baseline beside it (issue #4309, [ADR-4309](../adr/4309-criterion-baseline-notation.md)):
+
+```
+[HEAD=<value> EXPECT<op><value> [@<sha>] [GUARD MUTATION: <ref>] [UNPINNED]]
+```
+
+```xml
+<acceptance_criteria>
+  - `grep -c "## Quickstart" README.md` -ge 1 [HEAD=0 EXPECT>=1 @3f9c2a1]
+</acceptance_criteria>
+<verify><automated>grep -c "## Quickstart" README.md   # [HEAD=0 EXPECT>=1]</automated></verify>
+```
+
+| Part | Values | Meaning |
+|---|---|---|
+| `HEAD=<value>` | integer (optionally signed, at most 15 digits) · `absent` · `present` · `error:<1-255>` | What the command prints at HEAD, whichever counting flag produced it. `error:N` is the command's exit code: `grep -c` over a missing path is `error:2`, not `0`. |
+| `EXPECT<op><value>` | op `==` `!=` `>=` `>` `<=` `<` | What the command must print after the change. `>` `>=` `<` `<=` need an integer `EXPECT`; a non-integer `HEAD` never satisfies them. |
+| `@<sha>` | 7–40 lowercase hex characters | The commit the baseline was measured at. |
+| `GUARD MUTATION: <ref>` | free text, not empty | Declares a regression guard: a criterion meant to hold before and after the change. `<ref>` names the mutation that turns it red. |
+| `UNPINNED` | flag | No revision was recorded. Do not combine it with `@<sha>`. |
+
+Keywords are uppercase and the grammar is closed. The `GUARD MUTATION:` reference cannot contain `]`. A trailing `UNPINNED` at the end of the reference is always the flag, never part of the reference. `@<sha>` must precede `GUARD`; one written after the reference is removed from it, reported as `unrecognized_trailing`, and the criterion is judged with the remaining reference (an empty reference is not a guard). The notation is read from `<acceptance_criteria>`, `<automated>` (in a shell comment), and `<verify>`, and is never executed.
+
+**`verify plan-structure` rules:**
+
+| Id | Severity | Fires when | Fix |
+|---|---|---|---|
+| B1 | error | `HEAD` already satisfies `EXPECT`, and the notation lacks `GUARD MUTATION: <ref>` | Anchor the gate to what the task creates, or tighten `EXPECT` to the delta (`[HEAD=6 EXPECT>=7]`). For a deliberate regression guard, add `GUARD MUTATION: <ref>`. |
+| B2 | warning | a free-form `# baseline at HEAD:` comment sits in a criteria zone | Rewrite it as the notation. |
+
+A notation the checker cannot parse or evaluate is a **status**, not a finding. It is listed under `baseline_statuses` and does not change the exit code:
+
+| `code` | Meaning |
+|---|---|
+| `malformed` | Not `HEAD=<value> EXPECT<op><value>` (unknown or missing operator, missing `EXPECT`) |
+| `bad_value` | A value outside the value grammar (`HEAD=abc`, `error:0`, `error:256`, more than 15 digits) |
+| `ordering_needs_integer` | `>`, `>=`, `<` or `<=` with a non-integer `EXPECT` |
+| `bad_rev` | `@` is not a 7–40 hex sha (the criterion is still judged) |
+| `pin_conflict` | Both `@<sha>` and `UNPINNED` (the criterion is still judged) |
+| `unrecognized_trailing` | Text after the recognized parts, such as a misspelled `GUARD` (the criterion is still judged, unguarded) |
+| `unterminated` | `[HEAD=` with no `]` on the same line within 500 characters |
+| `outside_criteria_zone` | The notation sits outside the three criteria zones and is not judged |
+| `scanner_error` | The scanner failed; plan validation continues |
+| `truncated` | More than 50 statuses; the rest are summarized in one entry (at most 51 statuses are listed). Findings are never capped. |
+
+The legitimate exit is `<!-- plan-criteria-allow: B1 - <reason> -->` (or `B2`), with a non-empty reason, as for the R1–R6 rules.
+
+`baseline_notation_count` counts every notation found, including ones outside the criteria zones. The JSON verdict carries `baseline_notation_count`, `baseline_findings` (`{ rule, severity, line, text, message }`), and `baseline_statuses` (`{ code, line, text, detail }`).
+
+**Known limits:** `EXPECT` is not cross-checked against the shell command's own comparison, and nothing checks that `HEAD` was actually measured.
+
+---
+
 ## Task types
 
 | Type | Use | Autonomy |

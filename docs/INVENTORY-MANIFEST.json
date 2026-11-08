@@ -406,6 +406,7 @@
       "context-utilization.cjs",
       "core-utils.cjs",
       "coverage.cjs",
+      "criterion-baseline.cjs",
       "decision-coverage-support.cjs",
       "decisions.cjs",
       "docs.cjs",

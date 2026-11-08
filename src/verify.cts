@@ -27,6 +27,7 @@ import { tryWithinRoot } from './security.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
+import { scanBaselineNotation, parseCriteriaAllowMarkers } from './criterion-baseline.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import type { GateExitMode } from './gate-exit.cjs';
@@ -852,10 +853,9 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
 
   // Allow markers may sit anywhere in the plan (same as the sibling scanners).
   // The reason must be non-empty: `R1 - -->` is not an auditable exit.
-  const allow = new Set<string>();
-  const allowRe = /<!--\s*plan-criteria-allow:\s*(R[1-6])\s+-\s+([^>]*\S)\s*-->/g;
-  let am: RegExpExecArray | null;
-  while ((am = allowRe.exec(content || '')) !== null) allow.add(am[1]);
+  // #4309: the marker parser is shared with the baseline-notation scanner
+  // (it also honors B1/B2; this scanner only ever asks about R ids).
+  const allow = parseCriteriaAllowMarkers(content || '');
 
   const record = (bucket: string[], rule: string, message: string, seen: Set<string>): void => {
     if (allow.has(rule) || seen.has(message)) return;
@@ -1428,6 +1428,12 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   errors.push(...quantScan.errors);
   warnings.push(...quantScan.warnings);
 
+  // #4309: criterion baseline notation (B1 non-discriminating, B2 legacy
+  // comment). Parse failures are statuses only and never change validity.
+  const baselineScan = scanBaselineNotation(content);
+  errors.push(...baselineScan.errors);
+  warnings.push(...baselineScan.warnings);
+
   emitVerbVerdict(
     validityVerdict(errors.length === 0, {
       valid: errors.length === 0,
@@ -1436,6 +1442,10 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
       task_count: tasks.length,
       tasks,
       frontmatter_fields: Object.keys(fm),
+      // #4309: appended keys (additive payload).
+      baseline_notation_count: baselineScan.notationCount,
+      baseline_findings: baselineScan.findings,
+      baseline_statuses: baselineScan.statuses,
     }),
     'status',
     raw,

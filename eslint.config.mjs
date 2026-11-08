@@ -184,6 +184,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/pr-branch-patterns.cjs',
       // #4984: tsc-generated — lint the src/undo-commit-selection.cts source.
       'gsd-core/bin/lib/undo-commit-selection.cjs',
+      'gsd-core/bin/lib/criterion-baseline.cjs', // #4309: tsc-generated — lint the src/criterion-baseline.cts source.
       // #5705: tsc-generated — lint the src/milestone-release-tags.cts source.
       'gsd-core/bin/lib/milestone-release-tags.cjs',
       // #4145: tsc-generated runtime artifact — lint the src/pristine-baseline.cts source.
