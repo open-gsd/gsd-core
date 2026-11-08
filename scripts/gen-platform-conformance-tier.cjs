@@ -333,6 +333,11 @@ const NOISY_FOR_SOURCE_REACHABILITY = new Set(['symlink-keyword']);
  *   actually running on Windows; the win32 branch is unreachable on Linux.
  *   This is a security-relevant write-confinement gate, so a silent gap
  *   here is a security regression, not a coverage nit (#4641).
+ * - tests/state-todos-render.test.cjs: exercises `renderPendingTodosMarkdown`
+ *   (src/init.cts:2646-2650), which builds repo-relative links via the AMBIENT
+ *   `path.isAbsolute`/`path.relative` with no injection seam (#4384/#4421);
+ *   its win32 branch is reachable only on Windows. Its only content signal was
+ *   a node-only `spawnSync`, which #6002 deliberately ignores.
  */
 const ALWAYS_REAL_OS = new Map([
   [
@@ -340,6 +345,13 @@ const ALWAYS_REAL_OS = new Map([
     'Exercises isPathConfined (src/external-descriptor-trust.cts:41-49), which uses the ambient ' +
       'path module (path.resolve/path.sep) with no platform injection; its win32 branch (drive ' +
       'letters, UNC paths, \\ separator) is unreachable on Linux. Security-relevant write-confinement gate.',
+  ],
+  [
+    'tests/state-todos-render.test.cjs',
+    'Exercises renderPendingTodosMarkdown (src/init.cts:2646-2650), which uses the ambient path module ' +
+      '(path.isAbsolute/path.relative) with no platform injection to build repo-relative todo links ' +
+      '(#4384/#4421); its win32 branch (drive letters, \\ separator) is unreachable on Linux. The test ' +
+      "file's only content signal was a node-only spawnSync, which #6002 deliberately ignores.",
   ],
 ]);
 

@@ -435,14 +435,29 @@ describe('classifyMacosContent — happy-path signals', () => {
   });
 
   test('flags case-sensitivity phrasing', () => {
+    // #6002: the phrasing must appear in CODE (identifier or string literal);
+    // the same words inside a comment are prose, not behavior, and are pinned
+    // as non-signals by the sibling test below.
     for (const fixture of [
-      '// verify the case-insensitive lookup',
-      '// verify the case-sensitive lookup',
-      '// verify case insensitivity',
+      'assert.ok(isCaseInsensitiveFs());',
+      "test('verify the case-sensitive lookup', () => {});",
+      'const caseInsensitivity = probeFs();',
     ]) {
       const { needsRealOs, signals } = classifyMacosContent(fixture);
       assert.equal(needsRealOs, true, fixture);
       assert.ok(signals.includes('case-sensitivity'), fixture);
+    }
+  });
+
+  test('does not flag case-sensitivity phrasing that appears only in a comment (#6002)', () => {
+    for (const fixture of [
+      '// verify the case-insensitive lookup',
+      '// verify the case-sensitive lookup',
+      '/* verify case insensitivity */',
+    ]) {
+      const { needsRealOs, signals } = classifyMacosContent(fixture);
+      assert.equal(needsRealOs, false, fixture);
+      assert.ok(!signals.includes('case-sensitivity'), fixture);
     }
   });
 
