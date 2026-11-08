@@ -860,7 +860,10 @@ function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolea
     const results = { updated, failed };
 
     output(results, raw, results.updated.length > 0 ? 'true' : 'false');
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      error(`state patch: ${err instanceof Error ? err.message : String(err)}`);
+    }
     error('STATE.md not found');
   }
 }
@@ -1042,7 +1045,10 @@ function cmdStateUpdate(cwd: string, field: string | undefined, value: string | 
     } else {
       output({ updated: false, reason: explainUpdateFailure(field as string), preserved }, false, undefined);
     }
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      error(`state update: ${err instanceof Error ? err.message : String(err)}`);
+    }
     output({ updated: false, reason: 'STATE.md not found' }, false, undefined);
   }
 }
