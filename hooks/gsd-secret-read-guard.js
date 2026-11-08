@@ -274,8 +274,11 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 // stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
 // (the option's value becomes the command word), so keep it to the man pages.
 const WRAPPERS = new Map([
-  ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'] }],
-  ['doas', { short: 'Cu' }],
+  ['sudo', { short: 'aCcDghpRrTtUu', long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'],
+    // No-value long options, so an exact one never prefix-matches a longer
+    // valued one (`--login` vs `--login-class`).
+    flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'] }],
+  ['doas', { short: 'aCu' }],
   ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
@@ -1006,7 +1009,9 @@ const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
 function wrapperOptionWidth(word, spec) {
   if (word.startsWith('--')) {
     if (word.includes('=')) return 1;
-    // getopt_long accepts any unambiguous prefix (`--adj 5`).
+    // getopt_long takes an exact match over any longer option it prefixes
+    // (`sudo --login` is not `--login-class`), else any unambiguous prefix (`--adj 5`).
+    if ((spec.flags || []).includes(word)) return 1;
     return word.length > 2 && (spec.long || []).some((l) => l.startsWith(word)) ? 2 : 1;
   }
   const valued = spec.short || '';
