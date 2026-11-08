@@ -2776,7 +2776,7 @@ const capabilities = {
         "consumes": [
           "CONTEXT.md"
         ],
-        "when": "mempalace.enabled",
+        "when": "mempalace.recall_on_plan",
         "onError": "skip"
       },
       {
@@ -4475,7 +4475,7 @@ const byLoopPoint = {
         "consumes": [
           "CONTEXT.md"
         ],
-        "when": "mempalace.enabled",
+        "when": "mempalace.recall_on_plan",
         "onError": "skip"
       },
       {
