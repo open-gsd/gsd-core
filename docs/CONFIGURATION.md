@@ -165,6 +165,11 @@ watchdog is the fail-safe exception: `"planner": null` still leaves
 `planner_stall_detection_enabled` enabled, while the raw per-key resolver reports
 `planner.stall_detection_enabled` as not configured.
 
+An explicit `workflow: null` also disables the research, plan-checker and verifier
+defaults; init payloads report those absent values as `false`. An explicit `review: null`
+removes the prompt-budget default, so reviewer lanes run without default prompt trimming.
+Use an object with explicit settings when those safeguards should remain enabled.
+
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
 

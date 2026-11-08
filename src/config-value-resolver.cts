@@ -6,10 +6,9 @@
  * A present non-object parent stops every lower layer, including declared defaults.
  */
 
-import os from 'node:os';
 import path from 'node:path';
 import { CONFIG_DEFAULTS, normalizeLegacyKeys, isConfigSection } from './configuration.cjs';
-import { getGlobalConfigDir } from './runtime-homes.cjs';
+import { getGlobalConfigDir, resolveGsdHome } from './runtime-homes.cjs';
 import { platformReadSync } from './shell-command-projection.cjs';
 import { parseJsonc } from './settings-jsonc.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -171,7 +170,7 @@ function fileLayers(cwd: string, family: ConfigFamily): Array<{ layer: ConfigLay
     const ws = resolveEnvWorkstream();
     if (ws) result.push({ layer: 'workstream', file: path.join(planningDir(cwd, ws), 'config.json') });
     result.push({ layer: 'root', file: path.join(ws ? planningRoot(cwd) : planningDir(cwd, null), 'config.json') });
-    result.push({ layer: 'global-defaults', file: path.join(process.env['GSD_HOME'] || os.homedir(), '.gsd', 'defaults.json') });
+    result.push({ layer: 'global-defaults', file: path.join(resolveGsdHome(), '.gsd', 'defaults.json') });
     return result;
   }
   const projectDir = path.join(cwd, '.claude');

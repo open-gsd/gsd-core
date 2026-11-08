@@ -1,5 +1,5 @@
 /** JSONC parser shared by runtime settings readers.
- * Known comment/trailing-comma edge defects remain tracked separately (#5937).
+ * String cleanup and unterminated-comment defects are tracked in #5989 and #5990.
  */
 
 /** Strip line/block comments without removing comment-like text inside strings. */

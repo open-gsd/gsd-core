@@ -152,7 +152,7 @@ const BLOCKED_SECTION_PROJECTIONS: Readonly<Record<string, readonly string[]>> =
   planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
   // #4570 fail-safe exception: a malformed planner section must not disable
   // the watchdog merely because consumers read an absent projection as falsy.
-  planner: ['planner'],
+  planner: ['planner', 'planner_stall_detection_enabled'],
   review: ['review', 'max_prompt_tokens'],
 });
 
@@ -162,7 +162,9 @@ function _removeBlockedSectionDefaults(
 ): void {
   for (const [section, projections] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
     if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
-    for (const projection of projections) delete assembled[projection];
+    for (const projection of projections) {
+      if (projection !== 'planner_stall_detection_enabled') delete assembled[projection];
+    }
   }
 }
 
@@ -1256,6 +1258,7 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
 }
 
 export = {
+  BLOCKED_SECTION_PROJECTIONS,
   loadConfig,
   loadConfigResolved,
   CONFIG_REASON,
