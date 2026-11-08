@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-08
 - **Issue:** [#4309](https://github.com/open-gsd/gsd-core/issues/4309) (approved-feature; scope amended by the maintainer on 2026-11-08). It is half 2 of [#4024](https://github.com/open-gsd/gsd-core/issues/4024). Half 1 is the R1–R6 static ban list from #4288.
+- **Amended by:** [ADR-4310](4310-criterion-replay.md): opt-in `--replay` executes each criterion's command under a no-shell quarantine and compares the printed value with the recorded `HEAD`. It is advisory only.
 - **Relationship to prior work:** this ADR extends the plan-discipline scanner family in `cmdVerifyPlanStructure` (`src/verify.cts`): #429's comment-echo gate, #968's file-wide negative-gate conflict, and #4024's `scanQuantitativeCriteria`. It replaces the free-form `# baseline at HEAD: N` comment that #4927 introduced in planner guidance. [#4310](https://github.com/open-gsd/gsd-core/issues/4310) (opt-in `--replay`) consumes this grammar and is expected to amend this ADR. It is not decided here.
 
 ## Context
