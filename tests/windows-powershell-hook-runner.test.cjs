@@ -23,10 +23,12 @@ const WITH_BASH = {
   existsSync: (p) => /bash\.exe$/i.test(String(p)),
   execPath: 'D:/Program Files/nodejs/node.exe',
 };
+// Hook budget in seconds recorded on the fixture entries (not a wall-clock assertion).
+const HOOK_TIMEOUT_S = 10;
 const POSIX_ONLY = /\$\(|command -v|\[ -x|printf '%s'|; do |; done/;
 
 function settingsWith(commands) {
-  return { hooks: { PreToolUse: commands.map((command) => ({ matcher: 'Read|Grep|Bash', hooks: [{ type: 'command', command, timeout: 10 }] })) } };
+  return { hooks: { PreToolUse: commands.map((command) => ({ matcher: 'Read|Grep|Bash', hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_S }] })) } };
 }
 
 describe('#5850 win32 hook runner without Git Bash', () => {

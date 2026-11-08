@@ -1971,6 +1971,7 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'opencodePathPrefix',
   'ownsClaudePaths',
   'permissionsSchema',
+  'powershellHooksWithoutGitBash',
   'pluginOnlyInstall',
   'projectInstructionFile',
   'reapplyCommand',

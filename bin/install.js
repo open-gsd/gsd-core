@@ -13948,14 +13948,19 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // skip managed-hook registration. Returning null from buildHookCommand on
   // global installs has the same effect. Better to skip than to emit a bare
   // `node` command that recreates the #2979 failure.
+  // #5850: Claude on Windows without Git Bash hosts hooks in PowerShell, where the
+  // POSIX chain does not parse — use the PowerShell runner there instead.
+  const localUsesPowerShell = hooksSurface.usesPowerShellHookShell({ platform: process.platform, runtime });
   const localCmd = (hookFile) => localNodeRunner === null
     ? null
-    : hooksSurface.recordConfiguredHookCommand(projectShellCommandText({
-      runnerToken: localNodeRunner,
-      argTokens: [`${localPrefix}/hooks/${hookFile}`],
-      runtime,
-      platform: process.platform,
-    }), targetDir, hookFile, hookOpts);
+    : hooksSurface.recordConfiguredHookCommand(localUsesPowerShell
+      ? hooksSurface.buildPowerShellLocalHookCommand({ localPrefix, hookFile })
+      : projectShellCommandText({
+        runnerToken: localNodeRunner,
+        argTokens: [`${localPrefix}/hooks/${hookFile}`],
+        runtime,
+        platform: process.platform,
+      }), targetDir, hookFile, hookOpts);
   const localShellCmd = (hookFile) => hooksSurface.recordConfiguredHookCommand(buildLocalShellHookCommand({
     localPrefix,
     hookFile,
@@ -14308,6 +14313,9 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // rejects at parse time. validateHookFields filters those out so the file
   // we write is always schema-valid.
   if (settingsPath && settings && plan.writesSharedSettings) {
+    // #5850: pin `shell: "powershell"` on PowerShell-form hooks so Claude Code
+    // does not depend on its own Git Bash detection to choose the shell.
+    hooksSurface.projectPowerShellHookShell(settings);
     writeSettings(settingsPath, validateHookFields(settings));
   }
 

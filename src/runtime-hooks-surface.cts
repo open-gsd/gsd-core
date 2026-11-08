@@ -30,6 +30,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 // #2544: the single source of truth for the CommonJS module-type marker. The
 // two helpers below are thin boolean-returning shims over these — see the
 // marker section for why this file no longer carries its own copy.
@@ -682,6 +683,95 @@ function resolveBashRunner(opts?: BashRunnerOpts): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// #5850 — PowerShell hook runner (Claude Code on Windows without Git Bash)
+// ---------------------------------------------------------------------------
+
+/**
+ * #5850: Claude Code runs shell-form hook commands in PowerShell when Git Bash
+ * is not installed, and the POSIX `$(for ... done)` runner chain does not parse
+ * there. A blocking PreToolUse guard that cannot start blocks every tool call.
+ * Claude on win32 with no discoverable Git Bash therefore gets a PowerShell
+ * command (and an explicit `shell: "powershell"`, see projectPowerShellHookShell)
+ * instead. Git Bash discovery is the same single policy resolveBashExecutable
+ * applies to `.sh` hooks, so a Git Bash install keeps the unchanged chain.
+ */
+function usesPowerShellHookShell(opts?: BashRunnerOpts & { runtime?: string }): boolean {
+  const platform = (opts && opts.platform) || process.platform;
+  const runtime = (opts && opts.runtime) || 'generic';
+  if (platform !== 'win32' || hostBehaviorsFor(runtime).powershellHooksWithoutGitBash !== true) return false;
+  return resolveBashExecutable(opts) === null;
+}
+
+/** A PowerShell single-quoted string literal (only the quote itself needs escaping). */
+function powerShellQuote(value: string): string {
+  return `'${shellCmdProjection.escapePowerShellSingleQuoted(value)}'`;
+}
+
+/**
+ * A hook script path as a PowerShell argument. A local-install path anchored on
+ * `"$CLAUDE_PROJECT_DIR"/...` becomes a double-quoted `$env:CLAUDE_PROJECT_DIR`
+ * expansion; any other path is a single-quoted literal.
+ */
+function powerShellScriptArg(scriptPath: string): string {
+  const anchored = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/[^"`$]*)$/);
+  if (anchored) return `"$env:CLAUDE_PROJECT_DIR${anchored[1]}"`;
+  return powerShellQuote(shellCmdProjection.posixNormalize(scriptPath));
+}
+
+/**
+ * The PowerShell counterpart of buildNodeRunnerChainToken: the baked install-time
+ * node first (the minimal-PATH guarantee), then node on PATH, resolved when the
+ * hook fires. `scriptToken` is an already-quoted PowerShell argument.
+ */
+function buildPowerShellHookCommand(scriptToken: string, opts?: NodeNormOpts): string | null {
+  const execPath = (opts && opts.execPath) || (typeof process.execPath === 'string' ? process.execPath : '');
+  if (!execPath) return null;
+  const baked = powerShellQuote(shellCmdProjection.posixNormalize(normalizeNodePath(execPath, opts)));
+  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}`;
+}
+
+/**
+ * Local installs anchor the script under `"$CLAUDE_PROJECT_DIR"/<dir>`; the
+ * PowerShell spelling of that variable is `$env:CLAUDE_PROJECT_DIR`.
+ */
+function buildPowerShellLocalHookCommand(
+  opts: { localPrefix?: string | null; hookFile?: string | null } & NodeNormOpts,
+): string | null {
+  if (!opts.localPrefix || !opts.hookFile) return null;
+  return buildPowerShellHookCommand(powerShellScriptArg(`${opts.localPrefix}/hooks/${opts.hookFile}`), opts);
+}
+
+// Recognizes buildPowerShellHookCommand's output once the `& ` call operator is stripped.
+const POWERSHELL_RUNNER_COMMAND = /^\(\(@\('(?:[^']|'')*'\) \+ @\(Get-Command node [\s\S]*?Select-Object -First 1\)\s+\S/;
+
+function isPowerShellRunnerCommand(command: unknown): boolean {
+  return typeof command === 'string' && /^&\s+/.test(command) && POWERSHELL_RUNNER_COMMAND.test(command.replace(/^&\s+/, '').trim());
+}
+
+/**
+ * Set the explicit `shell: "powershell"` on every hook whose command is the
+ * PowerShell runner, so Claude Code does not depend on its own Git Bash
+ * detection to pick the shell. Returns true when a hook changed. Idempotent.
+ */
+function projectPowerShellHookShell(settings: Settings): boolean {
+  if (!settings || !settings.hooks) return false;
+  let changed = false;
+  for (const entries of Object.values(settings.hooks)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (!entry || !Array.isArray(entry.hooks)) continue;
+      for (const h of entry.hooks) {
+        if (!h || !isPowerShellRunnerCommand(h.command)) continue;
+        if ((h as { shell?: string }).shell === 'powershell') continue;
+        (h as { shell?: string }).shell = 'powershell';
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+// ---------------------------------------------------------------------------
 // Shared: rewriteLegacyManagedNodeHookCommands
 // ---------------------------------------------------------------------------
 
@@ -706,6 +796,10 @@ interface Settings {
 interface RewriteOpts {
   platform?: string;
   runtime?: string;
+  // #5850: test/seam injection for Git Bash discovery and the baked node path.
+  env?: NodeJS.ProcessEnv;
+  existsSync?: (p: string) => boolean;
+  execPath?: string;
 }
 
 // #3662 — recognize the two runtime-resolving command shapes the installer
@@ -718,6 +812,7 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
   if (!settings || !settings.hooks || !runnerToken) return false;
   if (!opts) opts = {};
   const platform = opts.platform || process.platform;
+  const usePowerShell = usesPowerShellHookShell({ platform, runtime: opts.runtime, env: opts.env, existsSync: opts.existsSync });
   let changed = false;
   for (const entries of Object.values(settings.hooks)) {
     if (!Array.isArray(entries)) continue;
@@ -731,7 +826,22 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
         if (hadPowerShellCallOperator) {
           trimmed = trimmed.replace(/^&\s+/, '').trim();
         }
-        if (CHAIN_RUNNER_COMMAND.test(trimmed) || RESOLVER_RUNNER_COMMAND.test(trimmed)) continue;
+        if (usePowerShell) {
+          // #5850: already the PowerShell runner: nothing to do. A POSIX chain
+          // (or a legacy bare/foreign-node entry) is re-projected below.
+          if (POWERSHELL_RUNNER_COMMAND.test(trimmed)) continue;
+          const chain = trimmed.match(/^"\$\(for n in [\s\S]*?printf '%s' "\$n" && break; done\)"\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/);
+          if (chain) {
+            const chainScript = chain[1] || chain[2] || chain[3] || '';
+            if (!isManagedHookBasename(chainScript, { surface: 'settings-json' })) continue;
+            const converted = buildPowerShellHookCommand(powerShellScriptArg(chainScript), opts);
+            if (!converted || h.command === converted) continue;
+            h.command = converted;
+            changed = true;
+            continue;
+          }
+        }
+        if (CHAIN_RUNNER_COMMAND.test(trimmed) || RESOLVER_RUNNER_COMMAND.test(trimmed) || POWERSHELL_RUNNER_COMMAND.test(trimmed)) continue;
 
         const m = trimmed.match(/^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/) ||
                   trimmed.match(/^("([^"]+)"|'([^']+)'|(\S+))\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/);
@@ -753,6 +863,14 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
         }
 
         if (!isManagedHookBasename(scriptPath, { surface: 'settings-json' })) continue;
+
+        if (usePowerShell) {
+          const converted = buildPowerShellHookCommand(powerShellScriptArg(scriptPath), opts);
+          if (!converted || h.command === converted) continue;
+          h.command = converted;
+          changed = true;
+          continue;
+        }
 
         const projectedCommand = projectLegacySettingsHookCommand({
           runnerToken,
@@ -1635,6 +1753,15 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       platform,
       hookShell,
     }));
+  }
+
+  // #5850: no Git Bash on win32 means Claude Code hosts the hook in PowerShell,
+  // where the POSIX chain below cannot parse.
+  if (usesPowerShellHookShell({ platform, runtime, env: opts.env, existsSync: opts.existsSync })) {
+    return track(buildPowerShellHookCommand(
+      powerShellScriptArg(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName),
+      opts,
+    ));
   }
 
   const chainRunner = buildNodeRunnerChainToken(opts);
@@ -3397,6 +3524,10 @@ export = {
   normalizeNodePath,
   resolveNodeRunner,
   buildNodeRunnerChainToken,
+  usesPowerShellHookShell,
+  buildPowerShellHookCommand,
+  buildPowerShellLocalHookCommand,
+  projectPowerShellHookShell,
   resolveBashExecutable,
   resolveBashRunner,
   NODE_RUNNER_RESOLVER_HOOK,
