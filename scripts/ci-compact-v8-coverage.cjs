@@ -38,16 +38,17 @@ function loadDeps(cwd) {
   return {
     mergeProcessCovs: c8Require('@bcoe/v8-coverage').mergeProcessCovs,
     Exclude: c8Require('test-exclude'),
-    defaultExclude: c8Require('@istanbuljs/schema/default-exclude'),
   };
 }
 
 function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
-  const { mergeProcessCovs, Exclude, defaultExclude } = loadDeps(cwd);
+  const { mergeProcessCovs, Exclude } = loadDeps(cwd);
   const exclude = new Exclude({
     cwd,
     include: INCLUDE_GLOBS,
-    exclude: [...defaultExclude, ...EXCLUDE_GLOBS],
+    // Exactly c8's set: an explicit --exclude REPLACES istanbul's default exclude
+    // (c8 lib/parse-args.js `exclude` default), so defaultExclude must not apply.
+    exclude: [...EXCLUDE_GLOBS],
     relativePath: true,
     excludeNodeModules: true,
   });
