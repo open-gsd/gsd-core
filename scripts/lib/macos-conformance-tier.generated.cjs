@@ -245,6 +245,7 @@ module.exports = {
   "tests/state.platform.test.cjs",
   "tests/state.test.cjs",
   "tests/todos-workstream-scope.test.cjs",
+  "tests/traceability-row-existence-5844.test.cjs",
   "tests/tracer-bullet.test.cjs",
   "tests/uat-complete-session.test.cjs",
   "tests/uat-predicate.test.cjs",

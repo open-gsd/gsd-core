@@ -82,6 +82,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
 import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { traceabilityRowExists } from './markdown-table.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -7464,9 +7465,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // which section (deferred or not) it lives under.
           const reqIsRegisteredAnywhere = (id: string): boolean => {
             const reqEscaped = escapeRegex(id);
-            // Surface 1 — checkbox, EITHER state (`[ ]` or `[x]`), case-
-            // insensitive: existence check, not the write's space-only match.
-            if (new RegExp(`-\\s*\\[[ xX]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
+            // Surface 1 — checkbox, ANY single mark (`[ ]`, `[x]`, `[~]`, …; #5844),
+            // case-insensitive: existence check, not the write's space-only match.
+            if (new RegExp(`-\\s*\\[[^\\]\\r\\n]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
               return true;
             }
             // Surface 2 — Traceability row exists at all (any Status value),
@@ -7475,7 +7476,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // insensitive first-cell match, regardless of current Status.
             const rowProbeMatch = (row: Record<string, string>): boolean =>
               (Object.values(row)[0] ?? '').trim().toLowerCase() === id.toLowerCase();
-            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok;
+            // #5844: a table with no Status column fails the probe above with
+            // `unknown column`, so row existence is also read directly.
+            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok
+              || traceabilityRowExists(reqContent, id);
           };
           const ghostReqIds = citedReqIds.filter(
             (id) => !isPlaceholderReqId(id) && !reqIsRegisteredAnywhere(id),
@@ -7494,9 +7498,18 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const traceabilityWriteFailures = traceabilityWriteMisses.filter(
             (id) => !ghostReqIds.includes(id),
           );
-          if (traceabilityWriteFailures.length > 0) {
+          // #5844: a row that EXISTS but has no Status cell to write is not a
+          // missing row — name the real cause instead of blaming the row.
+          const noStatusCellIds = traceabilityWriteFailures.filter((id) => traceabilityRowExists(reqContent, id));
+          const noRowIds = traceabilityWriteFailures.filter((id) => !noStatusCellIds.includes(id));
+          if (noRowIds.length > 0) {
             warnings.push(
-              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${traceabilityWriteFailures.join(', ')}`,
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${noRowIds.join(', ')}`,
+            );
+          }
+          if (noStatusCellIds.length > 0) {
+            warnings.push(
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (row found but the table has no Status column to write): ${noStatusCellIds.join(', ')}`,
             );
           }
 
