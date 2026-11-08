@@ -24,6 +24,7 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 PHASE_NUMBER="${PHASE_NUMBER:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick phase_number 2>/dev/null)}"
 PHASE_DIR="${PHASE_DIR:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick phase_dir 2>/dev/null)}"
+PHASE_DIR="${PHASE_DIR:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick expected_phase_dir 2>/dev/null)}"
 PHASE_REQ_IDS="${PHASE_REQ_IDS:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick phase_req_ids 2>/dev/null)}"
 PHASE_REQ_IDS="${PHASE_REQ_IDS:-TBD}"
 AUTO_CHAIN=$(gsd_run query check auto-mode --pick auto_chain_active 2>/dev/null)
@@ -73,5 +74,21 @@ A gate carrying neither — including an `agentVerdict` check, which has no runn
 - `blocking == true` and `block == true` → output `⚠ Planning blocked by capability gate ({hook.capId}): {message}` (`check.message`, plus the result's own `message` when it has one) and **EXIT the plan-phase workflow. Do not spawn the planner.**
 - `blocking == false` → advisory: surface the message when `block` is `true`, and continue.
 - `block == false` → continue silently.
+
+## Products for the planner (#5960)
+
+A step dispatched above hands its declared `produces` files to the planner, so a capability's plan:pre output (for example MemPalace's `MEMORY-RECALL.md`) is read, and only when its step was active this run. Validate each `produces` entry IN-CONTEXT against `^[A-Za-z0-9][A-Za-z0-9._-]*$` (a bare file name: no `/`, no leading `.`); record a warning naming the `capId` and drop a name that fails. Then put the remaining names of the dispatched steps, space-separated, in place of the placeholder:
+
+```bash
+# Plan:pre products (#5960)
+PLAN_PRE_PRODUCES='<validated produces names of the steps dispatched above, space-separated>'
+PLAN_PRE_PRODUCTS=""
+# shellcheck disable=SC2086 # validated bare file names: splitting them is intended
+for _f in $(printf '%s' "$PLAN_PRE_PRODUCES"); do
+  if [ -n "${PHASE_DIR}" ] && [ -f "${PHASE_DIR}/${_f}" ]; then PLAN_PRE_PRODUCTS="${PLAN_PRE_PRODUCTS:+${PLAN_PRE_PRODUCTS}, }${PHASE_DIR}/${_f}"; fi
+done
+```
+
+`PLAN_PRE_PRODUCTS` is listed in the §8 planner `<required_reading>`; it stays empty when no dispatched step wrote its file. A dedicated-section capability's output (RESEARCH.md, PATTERNS.md, UI-SPEC.md, ...) reaches the planner through its own section, not this list.
 
 When every remaining hook has been handled, return to §5.6.
