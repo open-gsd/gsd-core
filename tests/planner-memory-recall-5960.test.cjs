@@ -77,7 +77,9 @@ function bashMissing(r) {
 
 /** Run `script` under bash through the process seam; skips the test and returns null when bash is absent. */
 function runBashOrSkip(t, script, env) {
-  const r = runHook('-c', [script], { interpreter: 'bash', env: { ...process.env, ...env } });
+  const merged = { ...process.env, ...env };
+  for (const k of Object.keys(env)) if (env[k] === undefined) delete merged[k];
+  const r = runHook('-c', [script], { interpreter: 'bash', env: merged });
   if (bashMissing(r)) {
     t.skip('bash unavailable');
     return null;
@@ -85,14 +87,25 @@ function runBashOrSkip(t, script, env) {
   return r;
 }
 
-/** Run the products snippet for `names` against `phaseDir`; returns the seam result or null. */
-function runProducts(t, names, phaseDir) {
+const PHASE_DIR_PLACEHOLDER = '<PHASE_DIR from the phase-value block above>';
+
+/**
+ * Run the products snippet for `names`; returns the seam result or null. `phaseDir` fills both the
+ * PHASE_DIR env var and the quoted heredoc unless `opts.inEnv` / `opts.heredoc` override them
+ * (`inEnv: false` leaves PHASE_DIR unset, as in a fresh tool-call shell).
+ */
+function runProducts(t, names, phaseDir, opts = {}) {
+  const inEnv = opts.inEnv !== false;
+  const heredoc = opts.heredoc === undefined ? phaseDir : opts.heredoc;
   const body = productsBlock()
     .filter((l) => !l.startsWith('echo "PLAN_PRE_PRODUCTS='))
-    .map((l) => (l.startsWith('PLAN_PRE_PRODUCES=') ? `PLAN_PRE_PRODUCES='${names}'` : l))
+    .map((l) => {
+      if (l === PHASE_DIR_PLACEHOLDER) return heredoc;
+      return l.startsWith('PLAN_PRE_PRODUCES=') ? `PLAN_PRE_PRODUCES='${names}'` : l;
+    })
     .join('\n');
   const script = `set -u\n${body}\nprintf '%s' "$PLAN_PRE_PRODUCTS"`;
-  return runBashOrSkip(t, script, { PHASE_DIR: phaseDir });
+  return runBashOrSkip(t, script, { PHASE_DIR: inEnv ? phaseDir : undefined });
 }
 
 function tempPhaseDir(t, prepare) {
@@ -156,6 +169,25 @@ describe('#5960 planner reads the plan:pre memory recall', () => {
 
     test('the block echoes PLAN_PRE_PRODUCTS so the orchestrator can read it', () => {
       assert.ok(productsBlock().some((l) => l === 'echo "PLAN_PRE_PRODUCTS=${PLAN_PRE_PRODUCTS}"'));
+    });
+
+    test('PHASE_DIR absent from the environment is read from the heredoc', (t) => {
+      const dir = tempPhaseDir(t, (d) => fs.writeFileSync(path.join(d, 'MEMORY-RECALL.md'), 'x', 'utf8'));
+      const r = runProducts(t, 'MEMORY-RECALL.md', dir, { inEnv: false });
+      if (!r) return;
+      assert.equal(r.stdout, `${dir}/MEMORY-RECALL.md`, r.summary + r.stderr);
+    });
+
+    test('PHASE_DIR absent from both environment and heredoc warns and yields an empty list', (t) => {
+      const r = runProducts(t, 'MEMORY-RECALL.md', '', { inEnv: false, heredoc: '' });
+      if (!r) return;
+      assert.equal(r.stdout, '', r.summary + r.stderr);
+      assert.ok(r.stderr.includes('PHASE_DIR is empty'), r.summary + r.stderr);
+    });
+
+    test('the phase-value block prints PHASE_DIR for the products block to be filled from', () => {
+      const lines = firstBashBlock(readFileNormalized(STEP_FILE));
+      assert.ok(lines.includes('echo "PHASE_DIR=${PHASE_DIR}"'));
     });
 
     test('an absent file yields an empty list', (t) => {

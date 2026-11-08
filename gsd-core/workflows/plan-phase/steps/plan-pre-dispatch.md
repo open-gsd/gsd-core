@@ -29,6 +29,7 @@ PHASE_REQ_IDS="${PHASE_REQ_IDS:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=$
 PHASE_REQ_IDS="${PHASE_REQ_IDS:-TBD}"
 AUTO_CHAIN=$(gsd_run query check auto-mode --pick auto_chain_active 2>/dev/null)
 AUTO_CHAIN="${AUTO_CHAIN:-false}"
+echo "PHASE_DIR=${PHASE_DIR}"
 ```
 
 ## Steps
@@ -81,7 +82,12 @@ A step dispatched above hands its declared `produces` files to the planner, so a
 
 ```bash
 # Plan:pre products (#5960)
+IFS= read -rd '' _PHASE_DIR_IN <<'GSD_PHASE_DIR_END' || true
+<PHASE_DIR from the phase-value block above>
+GSD_PHASE_DIR_END
+PHASE_DIR="${PHASE_DIR:-${_PHASE_DIR_IN%$'\n'}}"
 PLAN_PRE_PRODUCES='<validated produces names of the steps dispatched above, space-separated>'
+[ -n "${PLAN_PRE_PRODUCES}" ] && [ -z "${PHASE_DIR}" ] && echo "WARNING: plan:pre products not collected — PHASE_DIR is empty" >&2
 PLAN_PRE_PRODUCTS=""
 # shellcheck disable=SC2046 # validated bare file names: splitting the substitution is intended
 for _f in $(printf '%s' "$PLAN_PRE_PRODUCES"); do
@@ -90,6 +96,6 @@ done
 echo "PLAN_PRE_PRODUCTS=${PLAN_PRE_PRODUCTS}"
 ```
 
-`PLAN_PRE_PRODUCTS` is listed in the §8 planner `<required_reading>`; it stays empty when no dispatched step wrote its file. A dedicated-section capability's output (RESEARCH.md, PATTERNS.md, UI-SPEC.md, ...) reaches the planner through its own section, not this list. Run the block in the same shell as the phase-value block at the top of this file, so `PHASE_DIR` is set.
+`PLAN_PRE_PRODUCTS` is listed in the §8 planner `<required_reading>`; it stays empty when no dispatched step wrote its file. A dedicated-section capability's output (RESEARCH.md, PATTERNS.md, UI-SPEC.md, ...) reaches the planner through its own section, not this list. Shell variables do not survive between tool calls, so fill the `PHASE_DIR` value the phase-value block printed into the quoted heredoc as well.
 
 When every remaining hook has been handled, return to §5.6.
