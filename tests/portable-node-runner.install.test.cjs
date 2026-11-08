@@ -501,6 +501,8 @@ describe('#3662 runtime-resolving managed hook runners', () => {
         runtime: 'claude',
         platform: 'win32',
         execPath: 'C:\\Program Files\\nodejs\\node.exe',
+        env: { ProgramFiles: 'C:\\Program Files' },
+        existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
       });
       assert.ok(typeof emitted === 'string', `no command emitted: ${emitted}`);
       assert.ok(emitted.includes('"$(for n in '), `win32 chain shape missing: ${emitted}`);

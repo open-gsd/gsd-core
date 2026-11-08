@@ -695,7 +695,8 @@ function resolveBashRunner(opts?: BashRunnerOpts): string | null {
  * instead. Git Bash discovery is the same single policy resolveBashExecutable
  * applies to `.sh` hooks, so a Git Bash install keeps the unchanged chain.
  */
-function usesPowerShellHookShell(opts?: BashRunnerOpts & { runtime?: string }): boolean {
+function usesPowerShellHookShell(opts?: BashRunnerOpts & { runtime?: string; hookShell?: string }): boolean {
+  if (opts && opts.hookShell === 'bash') return false;
   const platform = (opts && opts.platform) || process.platform;
   const runtime = (opts && opts.runtime) || 'generic';
   if (platform !== 'win32' || hostBehaviorsFor(runtime).powershellHooksWithoutGitBash !== true) return false;
@@ -1787,7 +1788,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
 
   // #5850: no Git Bash on win32 means Claude Code hosts the hook in PowerShell,
   // where the POSIX chain below cannot parse.
-  if (usesPowerShellHookShell({ platform, runtime, env: opts.env, existsSync: opts.existsSync })) {
+  if (usesPowerShellHookShell({ platform, runtime, hookShell, env: opts.env, existsSync: opts.existsSync })) {
     return track(buildPowerShellHookCommand(
       powerShellScriptArg(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName),
       opts,

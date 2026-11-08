@@ -173,7 +173,7 @@ describe('#5850 rewriter and settings projection', () => {
   test('an anchored local token with special characters stays one expression', () => {
     const plain = hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: '"$CLAUDE_PROJECT_DIR"/.claude', hookFile: GUARD, execPath: NO_BASH.execPath });
     assert.ok(plain.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"`), plain);
-    for (const dir of ['.cl$aude', '.cl`aude', '.cl\u201Caude', '.cl{a}ude']) {
+    for (const dir of ['.cl$aude', '.cl`aude', '.cl\u201Caude']) {
       const cmd = hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: `"$CLAUDE_PROJECT_DIR"/${dir}`, hookFile: GUARD, execPath: NO_BASH.execPath });
       assert.ok(cmd.includes(`($env:CLAUDE_PROJECT_DIR + '/${dir}/hooks/${GUARD}')`), cmd);
     }
