@@ -73,11 +73,13 @@ So a CLI surface manifest cannot be generated from what exists. The declarations
 
 Each cell is the set of every path an installed artifact can address, including the `@`-ref target form that cell's rewrite produces.
 
+- **Machine-independent by construction.** The committed manifest never holds a real home directory, checkout path, or project root. The generator calls the rewrite with fixed symbolic inputs: `homeDir = "<HOME>"`, `projectRoot = "<PROJECT_ROOT>"`, and a config dir of `<CONFIG_DIR>`. Every path is stored with those tokens, so `--check` produces the same bytes on every machine and OS. The extractor (R5) applies the same symbolic inputs when it maps a source `@`-ref, so the lookup compares token form with token form.
+- **`computePathPrefix` becomes a public export.** It is currently exported only as `_computePathPrefix`, for tests. Phase 2 promotes it to a public export of `src/runtime-artifact-conversion.cts`, because the manifest generator and the extractor both depend on it.
 - **Source of truth: the installer's plan, not a walk.** The installer already plans runtime artifacts through `createRuntimeArtifactInstallPlan` (`src/runtime-artifact-install-plan.cts:182`), which returns `{ items: [{ kind, sourceDir, destDir }] }`. Phase 2 extends that plan to cover every file the installer writes (the `gsd-core/` payload and hooks included), and the installer's copy step consumes the plan. The manifest is generated from the plan, so the installer and the manifest cannot disagree by construction.
 - **The real install stays as an end-to-end parity check.** `buildInstallTree` (`tests/helpers/install-shared.cjs`) walks a real install, and `tests/fixtures/install-tree/*.json` stays as that test's evidence. Phase 2 adds an assertion that, for the cells the fixtures cover, the walked tree equals the planned tree. A divergence is a planner bug, not a manifest to regenerate.
 - **Conflicts are found at generation time, and generation fails on them:**
   - `path_collision`: two source artifacts install to one destination (#4855).
-  - `duplicate_registration`: one component is reachable through two plugin component surfaces (#4860).
+  - `duplicate_registration`: one component is reachable through two plugin component surfaces (#4860). The install plan does not cover the Claude Code plugin surface, so the generator reads `.claude-plugin/plugin.json` as a second input. It resolves every component surface the manifest declares (today `commands` and `skills`; any other component key is read the same way) to its component names and reports any name reachable through more than one.
 
 ### D4. One extractor over every authored surface
 
@@ -93,7 +95,7 @@ Each cell is the set of every path an installed artifact can address, including 
 | R5 | each `@`-ref, in any spelling | D3 manifest, for **every** cell | `dangling_ref` (names the cell) |
 | R6 | each named template or reference file (`…/templates/x.md`, `references/x.md`) | D3 manifest | `dangling_file` |
 | R7 | each command name and its flags | the declared shipped-shell table | `disallowed_command`, `disallowed_flag` |
-| R8 | each `$ARGUMENTS` in a `commands/` or `skills/` body | the one labeled `<arguments>$ARGUMENTS</arguments>` block (#4780, #5145) | `unlabeled_arguments` |
+| R8 | each `$ARGUMENTS` in a `commands/` or `skills/` body, and the shape of the labeled block itself | the one labeled `<arguments>$ARGUMENTS</arguments>` block at the top of the body, followed by the standing data note (#4780, #5145) | `unlabeled_arguments`, `malformed_arguments_block` |
 | R9 | each `gsd-core/workflows/*.md` | reachability from a `commands/`, `agents/` or `skills/` loader, transitively through `gsd-core/**` (ADR-0002 rule 6, moved here) | `unreachable_workflow` |
 
 - **R2/R3 call forms.** `--flag value` and `--flag=value` are the same flag. A flag inside a conditional expansion (`${GSD_WS:+--ws "$GSD_WS"}`) is checked by name under R2. Under R3 and R3b it counts as passed, because the author has bound the flag to a variable and made it conditional on purpose. A flag name built at runtime is a known limit.
@@ -125,7 +127,7 @@ Each scan below is deleted once the extractor carries every rule it enforced, ea
 | `<execution_context>` `@`-ref resolution and workflow reachability in `scripts/lint-command-contract.cjs` (frontmatter and `allowed-tools` stay) | R5, R9 |
 | `scripts/lint-portable-grep.cjs`, `scripts/lint-portable-timeout.cjs` | R7 |
 | `tests/check-predicate-dispatch-phase-flags-4483.test.cjs` call-site table | R3 |
-| the template-scan half of `tests/command-arguments-block.test.cjs` (its block-shape assertions stay if R8 does not carry them) | R8 |
+| `tests/command-arguments-block.test.cjs`, whole file. R8 carries both halves: no `$ARGUMENTS` outside the block, and the block's shape (exactly one block line at the top of the body, followed by the standing data note). | R8 |
 | `tests/execute-phase-continuation-template-4783.test.cjs` | R6 |
 | `tests/runtime-command-form.test.cjs` | D5 |
 | the component-duplication assertions of `tests/plugin-manifest.test.cjs` | D3 `duplicate_registration` |
