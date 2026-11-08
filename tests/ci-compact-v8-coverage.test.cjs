@@ -12,11 +12,11 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { compact, parseArgs, INCLUDE_GLOBS, EXCLUDE_GLOBS } = require('../scripts/ci-compact-v8-coverage.cjs');
 
-function scriptCoverage(cwd, rel, count) {
+function scriptCoverage(cwd, rel, count, isBlockCoverage = true) {
   return {
     scriptId: '1',
     url: pathToFileURL(path.join(cwd, rel)).href,
-    functions: [{ functionName: '', isBlockCoverage: true, ranges: [{ startOffset: 0, endOffset: 10, count }] }],
+    functions: [{ functionName: '', isBlockCoverage, ranges: [{ startOffset: 0, endOffset: 10, count }] }],
   };
 }
 
@@ -173,15 +173,49 @@ test('parseArgs validates flag values at their boundaries', () => {
   assert.deepEqual(parseArgs(['--temp-directory', 'd', '--out', 'o.json']), { tempDirectory: 'd', outFile: 'o.json' });
 });
 
+test('a never-called function has no block flag whatever the dump count (#5985 parity quirk)', () => {
+  withFixture((cwd) => {
+    for (const n of [1, 2, 3]) {
+      const dir = path.join(cwd, `n${n}`);
+      fs.mkdirSync(dir);
+      const url = pathToFileURL(path.join(cwd, 'gsd-core/bin/lib/a.cjs')).href;
+      for (let i = 0; i < n; i++) {
+        const never = { functionName: 'f', isBlockCoverage: true, ranges: [{ startOffset: 0, endOffset: 10, count: 0 }] };
+        const called = { functionName: 'g', isBlockCoverage: true, ranges: [{ startOffset: 20, endOffset: 30, count: 2 }] };
+        fs.writeFileSync(path.join(dir, `d${i}.json`), JSON.stringify({ result: [{ scriptId: '1', url, functions: [never, called] }] }));
+      }
+      const out = path.join(cwd, `out${n}`, 'c.json');
+      compact({ tempDirectory: dir, outFile: out, cwd });
+      const fns = JSON.parse(fs.readFileSync(out, 'utf8')).result[0].functions;
+      assert.equal(fns.find((f) => f.functionName === 'f').isBlockCoverage, false, `never-called, ${n} dumps`);
+      assert.equal(fns.find((f) => f.functionName === 'g').isBlockCoverage, true, `called, ${n} dumps`);
+    }
+  });
+});
+
 test("sharded compaction equals one-pass compaction (the gate's composition contract)", () => {
   const files = ['gsd-core/bin/lib/a.cjs', 'gsd-core/bin/lib/b.cjs', 'scripts/c.cjs', 'tests/t.cjs', 'node_modules/x/i.js'];
-  const dumpArb = fc.array(fc.record({ file: fc.constantFrom(...files), count: fc.nat({ max: 50 }) }), { maxLength: 4 });
+  // NODE_V8_COVERAGE collects detailed (block) coverage, so V8 reports isBlockCoverage:false only for a function it never compiled, which is never called: one range, count 0. Mixed inputs outside this invariant are not something V8 produces, and @bcoe/v8-coverage's block-over-function preference would drop the function-level counts.
+  const entryArb = fc.oneof(
+    fc.record({ file: fc.constantFrom(...files), count: fc.nat({ max: 50 }), isBlockCoverage: fc.constant(true) }),
+    fc.record({ file: fc.constantFrom(...files), count: fc.constant(0), isBlockCoverage: fc.constant(false) }),
+  );
+  const dumpArb = fc.array(entryArb, { maxLength: 4 });
   const arbitrary = fc.tuple(fc.array(dumpArb, { minLength: 2, maxLength: 6 }), fc.nat());
 
   const canonical = (cwd, file) => {
     const { result } = JSON.parse(fs.readFileSync(file, 'utf8'));
     return result
-      .map((s) => [relOf(cwd, s.url), JSON.stringify(s.functions)])
+      .map((s) => [
+        relOf(cwd, s.url),
+        JSON.stringify(
+          s.functions.map((f) => ({
+            functionName: f.functionName,
+            isBlockCoverage: f.isBlockCoverage,
+            ranges: f.ranges.map((r) => ({ startOffset: r.startOffset, endOffset: r.endOffset, count: r.count })),
+          })),
+        ),
+      ])
       .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
   };
 
@@ -194,7 +228,7 @@ test("sharded compaction equals one-pass compaction (the gate's composition cont
         const cut = (split % (dumps.length - 1)) + 1;
         for (const dir of ['all', 'shardA', 'shardB', 'g']) fs.mkdirSync(at(dir), { recursive: true });
         dumps.forEach((entries, i) => {
-          const body = JSON.stringify({ result: entries.map((e) => scriptCoverage(cwd, e.file, e.count)) });
+          const body = JSON.stringify({ result: entries.map((e) => scriptCoverage(cwd, e.file, e.count, e.isBlockCoverage)) });
           fs.writeFileSync(at('all', `d${i}.json`), body);
           fs.writeFileSync(at(i < cut ? 'shardA' : 'shardB', `d${i}.json`), body);
         });

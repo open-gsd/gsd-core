@@ -20,7 +20,9 @@
  * `c8 report` commands read it as if it were one more raw dump. Retained urls
  * are the UNION of every include glob the gate uses, so both
  * `test:coverage:report` and `test:coverage:scripts-floor` see all of the
- * data they would have seen before.
+ * data they would have seen before. The one deliberate deviation from raw c8
+ * is `normalizeBlockFlags`, which makes a never-called function's block flag
+ * independent of dump count (#5985).
  *
  * Guard: a shard that produced no V8 coverage dumps at all throws, restoring
  * the `if-no-files-found: error` guarantee the raw-dump upload step gave.
@@ -51,6 +53,19 @@ function retainedHref(exclude, url) {
   if (typeof url !== 'string' || !/^file:\/\//.test(url)) return null; // node: and non-file urls
   const filePath = fileURLToPath(url);
   return exclude.shouldInstrument(filePath) ? pathToFileURL(filePath).href : null;
+}
+
+// The same rule @bcoe/v8-coverage mergeFunctionCovs applies on a real merge
+// (merge.js:158). Its single-input fast path skips it, so under c8's pairwise
+// merge a never-called function adds a 0-count branch only when it appears in
+// an odd number of dumps. Applying the rule unconditionally makes the gate's
+// branch count independent of how dumps are split into shards (#5985).
+function normalizeBlockFlags(result) {
+  for (const script of result) {
+    for (const fn of script.functions) {
+      if (fn.ranges.length === 1 && fn.ranges[0].count === 0) fn.isBlockCoverage = false;
+    }
+  }
 }
 
 function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
@@ -102,6 +117,7 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
 
   const merged = mergeProcessCovs(processCovs);
   const out = { result: merged ? merged.result : [], 'source-map-cache': sourceMapCache };
+  normalizeBlockFlags(out.result);
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, JSON.stringify(out));
   return { inputFiles, scripts: out.result.length };
