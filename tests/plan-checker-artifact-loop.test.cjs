@@ -49,10 +49,10 @@ function runArtifactBlock(t, shell, files, variable = 'phase_dir') {
 }
 
 /** Run one plan-checker step's first bash fence against a real gsd-tools, on a one-plan phase. */
-function runStructureStep(t, shell, heading, content, prelude, epilogue = [], binding = 'PHASE_DIR="$1"') {
+function runStructureStep(t, shell, heading, content, prelude, epilogue = [], binding = 'PHASE_DIR="$1"', planFiles = ['01-01-PLAN.md']) {
   const dir = createTempProject('plan-checker-structure-5178-');
   t.after(() => cleanup(dir));
-  fs.writeFileSync(path.join(dir, '01-01-PLAN.md'), content);
+  for (const file of planFiles) fs.writeFileSync(path.join(dir, file), content);
   const section = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (h) => h.text === heading);
   assert.ok(section, `plan-checker ${heading} must exist`);
   const lines = section.body.split(/\r?\n/);
@@ -139,10 +139,28 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
       }
 
       if (label === 'valid') {
-        test(`${shell}: Step 8 skips its loop when both phase variables are unset (#5178)`, { skip }, (t) => {
+        test(`${shell}: Step 8 says scope was not evaluated when both phase variables are unset (#5178)`, { skip }, (t) => {
           const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
             'gsd_run() { echo "UNEXPECTED gsd_run $*"; }',
           ], [], 'unset phase_dir PHASE_DIR; set -u');
+          assert.equal(stdout.trim(), 'scope_not_evaluated: phase_dir unset', stdout);
+        });
+
+        test(`${shell}: Step 8 reads every plan in the phase (#5178)`, { skip }, (t) => {
+          const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
+            'gsd_run() { "$NODE" "$TOOLS" "$@"; }',
+          ], [], 'phase_dir="$1"', ['01-01-PLAN.md', '01-02-PLAN.md']);
+          const headers = stdout.split(/\r?\n/).filter((line) => line.startsWith('=== '));
+          assert.equal(headers.length, 2, stdout);
+          assert.match(headers[0], /01-01-PLAN\.md ===$/);
+          assert.match(headers[1], /01-02-PLAN\.md ===$/);
+          assert.equal(stdout.split(/\r?\n/).filter((line) => line === 'structure_exit=0').length, 2, stdout);
+        });
+
+        test(`${shell}: Step 8 exits zero and prints nothing for a phase with no plans (#5178)`, { skip }, (t) => {
+          const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
+            'gsd_run() { echo "UNEXPECTED gsd_run $*"; }',
+          ], [], 'phase_dir="$1"', []);
           assert.equal(stdout, '', stdout);
         });
       }

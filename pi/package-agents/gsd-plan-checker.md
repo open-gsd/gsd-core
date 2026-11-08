@@ -893,8 +893,11 @@ if [ -n "${phase_dir:-${PHASE_DIR:-}}" ]; then
     PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
     printf '%s\n' "$PLAN_STRUCTURE"
     echo "structure_exit=$STRUCTURE_EXIT"
-    gsd_run query frontmatter.get "$plan" --field files_modified
+    FILES_MODIFIED=$(gsd_run query frontmatter.get "$plan" --field files_modified)
+    printf '%s\n' "$FILES_MODIFIED"
   done
+else
+  echo "scope_not_evaluated: phase_dir unset"
 fi
 ```
 
