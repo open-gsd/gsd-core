@@ -59,6 +59,7 @@ module.exports = {
   "tests/commit-files-pathspec.test.cjs",
   "tests/commonjs-marker.test.cjs",
   "tests/completion-ratio-scope-withholding.test.cjs",
+  "tests/config-loader-bounded-read.platform.test.cjs",
   "tests/config-loader.test.cjs",
   "tests/config-schema.property.test.cjs",
   "tests/config.test.cjs",

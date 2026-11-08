@@ -8040,21 +8040,37 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   }
 
   let autoPruned = false;
+  // #5831: a failed auto-prune stays non-fatal (exit code and completion are
+  // unchanged), but is reported instead of swallowed — prune now fails loudly
+  // when it cannot write the archive, and that must reach the user.
+  let autoPruneError: string | null = null;
   try {
     const configPath = path.join(planningDir(cwd), 'config.json');
-    if (fs.existsSync(configPath)) {
-      const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
+    // best-effort catch below.
+    const rawConfigText = configLoaderMod.readConfigFileBounded(configPath);
+    if (rawConfigText !== null) {
+      const rawConfig = JSON.parse(rawConfigText) as Record<string, unknown>;
       const workflow = rawConfig['workflow'] as Record<string, unknown> | undefined;
       const autoPruneEnabled = workflow && workflow['auto_prune_state'] === true;
       if (autoPruneEnabled && fs.existsSync(statePath)) {
         // Non-hoisted: load-order matters (stateMod must be fully resolved first).
         const { cmdStatePrune } = stateMod;
-        cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
-        autoPruned = true;
+        try {
+          const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
+          // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
+          autoPruned = pruneResult.pruned === true;
+        } catch (err) {
+          // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
+          // the failed prune left them (it never loses entries).
+          autoPruneError = err instanceof Error ? err.message : String(err);
+          warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
+        }
       }
     }
   } catch {
-    /* intentionally empty — auto-prune is best-effort */
+    // Best-effort: an unreadable or invalid config.json means auto-prune is not
+    // enabled; completion proceeds silently.
   }
 
   const result = {
@@ -8069,6 +8085,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     state_updated: stateUpdated,
     requirements_updated: requirementsUpdated,
     auto_pruned: autoPruned,
+    // #5831: ADDITIVE — present only when auto-prune threw.
+    ...(autoPruneError !== null ? { auto_prune_error: autoPruneError } : {}),
     warnings,
     has_warnings: warnings.length > 0,
     // ADDITIVE, never a change to `warnings[]`'s element shape — that array is

@@ -2391,8 +2391,9 @@ describe('bug #580: local .sh hooks on Claude/Windows must NOT wrap with bash.ex
  * the CJS layer routes through. Its contract:
  *
  *   1. mkdirSync(dirname, { recursive: true }) — ensure parent exists.
- *   2. writeFileSync(<tmpPath>, content) — write to a sibling tmpfile
- *      named `<filePath>.tmp.<pid>`.
+ *   2. openSync(<tmpPath>, O_CREAT|O_EXCL) then writeFileSync(<fd>, content) —
+ *      write to a sibling tmpfile named `<filePath>.tmp.<pid>.<12 hex>`, created
+ *      exclusively so a planted link or FIFO is never followed (#5759).
  *   3. renameSync(<tmpPath>, filePath) — atomic publish.
  *   4. On any error in steps 2-3: unlinkSync(<tmpPath>) (best-effort)
  *      then writeFileSync(filePath, content) directly as a fallback.
@@ -2435,13 +2436,14 @@ const mkScratch = (name) => createTempDir(`fs-fault-${name}-`);
 
 /**
  * Enumerate orphan tmp files left behind by platformWriteSync. The
- * tmp shape is `<filename>.tmp.<pid>`; we match that pattern strictly
+ * tmp shape is `<filename>.tmp.<pid>.<12 hex>`; we match that pattern strictly
  * so a test that happens to write a real `*.tmp.123` doesn't get a
  * false positive.
  */
+const TMP_NAME_RE = /\.tmp\.\d+\.[0-9a-f]{12}$/;
 function orphanTmpFiles(dir) {
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((n) => /\.tmp\.\d+$/.test(n));
+  return fs.readdirSync(dir).filter((n) => TMP_NAME_RE.test(n));
 }
 
 // ─── Happy path baseline ────────────────────────────────────────────────────
@@ -2554,21 +2556,21 @@ test('platformWriteSync falls back when initial tmp writeFileSync fails (ENOSPC)
   t.after(() => cleanup(dir));
   const file = path.join(dir, 'config.json');
 
-  // Make the FIRST writeFileSync (to .tmp.<pid>) fail with ENOSPC. The
-  // SECOND writeFileSync (the fallback, direct to filePath) succeeds.
+  // Make the FIRST writeFileSync (through the exclusive tmp's descriptor) fail with ENOSPC.
+  // The SECOND writeFileSync (the fallback, through the target's descriptor) succeeds.
   let writeCalls = 0;
   const realWrite = fs.writeFileSync;
   const writeMock = mock.method(fs, 'writeFileSync', function (target, data, opts) {
     writeCalls++;
+    // Both writes go through an open descriptor (#5759), never a path.
+    assert.equal(typeof target, 'number', 'platformWriteSync writes through a descriptor');
     if (writeCalls === 1) {
-      // First call is to the tmp path.
-      assert.match(String(target), /\.tmp\.\d+$/, 'first write must be to the tmp path');
+      // First call is to the tmp file's descriptor.
       const err = new Error('ENOSPC: no space left on device');
       err.code = 'ENOSPC';
       throw err;
     }
-    // Second call is the fallback to the real target.
-    assert.equal(target, file, 'fallback write must target the original file path');
+    // Second call is the fallback to the real target; the file content below proves it.
     return realWrite.call(fs, target, data, opts);
   });
   t.after(() => writeMock.mock.restore());
@@ -2711,7 +2713,7 @@ test('platformWriteSync never leaks a tmp file after a successful happy-path wri
   }
   // 25 real files, 0 tmp orphans.
   const entries = fs.readdirSync(dir);
-  const tmpCount = entries.filter((n) => /\.tmp\.\d+$/.test(n)).length;
+  const tmpCount = entries.filter((n) => TMP_NAME_RE.test(n)).length;
   const realCount = entries.length - tmpCount;
   assert.equal(realCount, 25);
   assert.equal(tmpCount, 0);

@@ -4644,8 +4644,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           try {
             const { planningDir } = require('./lib/planning-workspace.cjs');
             const cfgPath = require('path').join(planningDir(cwd), 'config.json');
-            if (require('fs').existsSync(cfgPath)) {
-              const rawCfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf-8'));
+            // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
+            // catch below (defaults apply) instead of blocking; null is an absent file.
+            const rawCfgText = require('./lib/config-file-read.cjs').readConfigFileBounded(cfgPath);
+            if (rawCfgText !== null) {
+              const rawCfg = JSON.parse(rawCfgText);
               if (rawCfg && rawCfg.plan_review && rawCfg.plan_review.source_grounding_authority) {
                 configuredAuthority = String(rawCfg.plan_review.source_grounding_authority);
               }

@@ -901,8 +901,10 @@ function loadConfigJson(cwd: string): Record<string, unknown> {
   const configPath = path.join(planningDir(cwd), 'config.json');
   let config: Record<string, unknown> = {};
   try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws.
+    const raw = configLoader.readConfigFileBounded(configPath);
+    if (raw !== null) {
+      config = JSON.parse(raw) as Record<string, unknown>;
     }
   } catch (err) {
     error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
@@ -1460,8 +1462,11 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
 
   let config: Record<string, unknown> = {};
   try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws and
+    // is reported as an unreadable config below, never waited on.
+    const rawConfig = configLoader.readConfigFileBounded(configPath);
+    if (rawConfig !== null) {
+      config = JSON.parse(rawConfig) as Record<string, unknown>;
     } else {
       // #2702: when a workstream is active and has no config.json of its own, fall
       // back to the project ROOT config first — a key the user configured at root is
@@ -1566,8 +1571,10 @@ function resolveFromRootConfig(cwd: string, kp: string): { found: boolean; value
   const rootConfigPath = path.join(root, 'config.json');
   let rootConfig: Record<string, unknown>;
   try {
-    if (!fs.existsSync(rootConfigPath)) return { found: false, value: undefined };
-    rootConfig = JSON.parse(fs.readFileSync(rootConfigPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
+    const rawRoot = configLoader.readConfigFileBounded(rootConfigPath);
+    if (rawRoot === null) return { found: false, value: undefined };
+    rootConfig = JSON.parse(rawRoot) as Record<string, unknown>;
   } catch {
     // Unparseable root config → don't inherit (do not let a corrupt root file
     // change config-get's verdict). Fall through to schema default / error.

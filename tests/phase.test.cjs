@@ -44,6 +44,28 @@ function phaseTokenFromDirName(name) {
   return match ? match[1] : null;
 }
 
+/**
+ * platformWriteSync writes through open descriptors (#5759): the exclusive temp file and the
+ * direct-write fallback both reach `fs.writeFileSync(fd, ...)`, never a path. A mock that fails
+ * a write by PATH therefore resolves the descriptor back to the path it was opened for.
+ * Returns `pathOf(target)` for a writeFileSync target (a path or a descriptor).
+ */
+function installFdPathResolver(t) {
+  const fdPaths = new Map();
+  const realOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', function (p, ...rest) {
+    const fd = realOpen.call(this, p, ...rest);
+    fdPaths.set(fd, String(p));
+    return fd;
+  });
+  return (target) => (typeof target === 'number' ? (fdPaths.get(target) ?? '') : String(target));
+}
+
+/** True when `candidate` is `base` itself or one of its platformWriteSync temp siblings. */
+function isWriteTargetOrTemp(candidate, base) {
+  return candidate === base || candidate.startsWith(`${base}.tmp.`);
+}
+
 function writePassedVerificationForPhase(tmpDir, phase) {
   const phasesDir = path.join(tmpDir, '.planning', 'phases');
   const wanted = normalizePhaseToken(phase);
@@ -9094,9 +9116,10 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       writePassedVerificationForPhase(tmpDir, '5');
       const phaseModule = require('../gsd-core/bin/lib/phase.cjs');
       const originalWriteFileSync = fs.writeFileSync;
+      const pathOf = installFdPathResolver(t);
       t.mock.method(fs, 'writeFileSync', function injectedRoadmapWriteFailure(target, ...args) {
-        const targetPath = String(target);
-        if (targetPath === roadmapPath || targetPath === `${roadmapPath}.tmp.${process.pid}`) {
+        const targetPath = pathOf(target);
+        if (isWriteTargetOrTemp(targetPath, roadmapPath)) {
           const err = new Error('injected ROADMAP.md write failure');
           err.code = 'EIO';
           throw err;
@@ -9476,6 +9499,8 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
   }
 
   describe('phase complete auto-prune (#2087)', () => {
+    const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
+    const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
     let tmpDir;
 
     beforeEach(() => {
@@ -9519,12 +9544,77 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, true, 'the prune moved entries');
+      assert.strictEqual('auto_prune_error' in out, false, '#5831: no error field when auto-prune succeeds');
 
       const newState = readStateMdForAutoPrune(tmpDir);
       assert.doesNotMatch(newState, /\[Phase 1\]: Old decision/);
       assert.doesNotMatch(newState, /\[Phase 2\]: Old decision/);
       assert.match(newState, /\[Phase 5\]: Recent decision/);
       assert.match(newState, /\[Phase 6\]: Current decision/);
+    });
+
+    test('#5831: a failed auto-prune reports auto_pruned false and keeps every entry in STATE.md', () => {
+      writeConfigForAutoPrune(tmpDir, { workflow: { auto_prune_state: true } });
+      const oldDecisions = ['- [Phase 1]: Old decision from phase 1', '- [Phase 2]: Old decision from phase 2'];
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', ...oldDecisions, '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md')); // the archive is unusable
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `phase complete must not fail on a best-effort auto-prune: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual(typeof out.auto_prune_error, 'string', 'the failure is reported, not swallowed');
+      assert.ok(out.auto_prune_error.length > 0);
+      assert.strictEqual(out.has_warnings, true);
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 1,
+        'one advisory warning names the failed auto-prune');
+
+      const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+      const prunable = transitionCore(state, { kind: 'prune', cutoff: 2 }, { clock: realClock }).data.archivedSections;
+      assert.deepStrictEqual(prunable.map(s => ({ section: s.section, lines: s.lines })),
+        [{ section: 'Decisions', lines: oldDecisions }], 'the old decisions are still in STATE.md');
+    });
+
+    test('#5831: an auto-prune that archives nothing reports auto_pruned false and no error', () => {
+      writeConfigForAutoPrune(tmpDir, { workflow: { auto_prune_state: true } });
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false, 'a no-op prune is not reported as pruned');
+      assert.strictEqual('auto_prune_error' in out, false);
+      assert.match(readStateMdForAutoPrune(tmpDir), /\[Phase 6\]: Current decision/);
+    });
+
+    test('#5831: an invalid config.json is not an auto-prune failure: no auto_prune_error and no warning', () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', '- [Phase 1]: Old decision from phase 1', '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual('auto_prune_error' in out, false, 'a config read/parse failure is not reported as an auto-prune failure');
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 0, 'no auto-prune warning');
+      assert.match(readStateMdForAutoPrune(tmpDir), /\[Phase 1\]: Old decision/, 'nothing was pruned');
     });
 
     test('does NOT prune when auto_prune_state is false (default)', () => {
@@ -11696,9 +11786,10 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalState = fs.readFileSync(statePath, 'utf8');
     const originalWriteFileSync = fs.writeFileSync;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedStateWriteFailure(target, ...args) {
-      const targetPath = String(target);
-      const isStatePublish = targetPath === statePath || targetPath === `${statePath}.tmp.${process.pid}`;
+      const targetPath = pathOf(target);
+      const isStatePublish = isWriteTargetOrTemp(targetPath, statePath);
       if (isStatePublish) {
         const err = new Error('injected STATE.md write failure');
         err.code = 'EIO';
@@ -11739,9 +11830,10 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalReq = fs.readFileSync(reqPath, 'utf8');
     const originalWriteFileSync = fs.writeFileSync;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedRequirementsWriteFailure(target, ...args) {
-      const targetPath = String(target);
-      if (targetPath === reqPath || targetPath === `${reqPath}.tmp.${process.pid}`) {
+      const targetPath = pathOf(target);
+      if (isWriteTargetOrTemp(targetPath, reqPath)) {
         const err = new Error('injected REQUIREMENTS.md write failure');
         err.code = 'EIO';
         throw err;
@@ -11771,15 +11863,16 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalWriteFileSync = fs.writeFileSync;
     let requirementsWriteFailed = false;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedRollbackFailure(target, ...args) {
-      const targetPath = String(target);
-      if (targetPath === reqPath || targetPath === `${reqPath}.tmp.${process.pid}`) {
+      const targetPath = pathOf(target);
+      if (isWriteTargetOrTemp(targetPath, reqPath)) {
         requirementsWriteFailed = true;
         const err = new Error('injected REQUIREMENTS.md write failure');
         err.code = 'EIO';
         throw err;
       }
-      if (requirementsWriteFailed && (targetPath === roadmapPath || targetPath === `${roadmapPath}.tmp.${process.pid}`)) {
+      if (requirementsWriteFailed && isWriteTargetOrTemp(targetPath, roadmapPath)) {
         const err = new Error('injected ROADMAP.md rollback failure');
         err.code = 'EIO';
         throw err;
