@@ -387,6 +387,7 @@
       "clusters.cjs",
       "code-review-depth.cjs",
       "code-review-flags.cjs",
+      "code-unit-cap.cjs",
       "codex-agent-toml.cjs",
       "command-aliases.cjs",
       "command-arg-projection.cjs",
