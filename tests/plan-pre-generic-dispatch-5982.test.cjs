@@ -81,6 +81,25 @@ describe('#5982 plan:pre dispatches every active step and gate', () => {
     assert.ok(pointer < branch2, 'the generic dispatch must come before Branch 2 skips to step 6');
   });
 
+  test('no §5 path jumps past the plan:pre dispatch to step 6', () => {
+    // §5 research outcomes and §5.6's UI branches used to say "step 6", skipping §5.5–§5.65 (and with
+    // them the generic dispatch, the security and UI gates, and the drift gate). Only Branch 1 (no active
+    // plan:pre hook at all) may still go straight to step 6.
+    const text = readFileNormalized(PLAN_PHASE);
+    const from = text.indexOf('\n## 5. ');
+    const to = text.indexOf('\n## 5.65. ');
+    assert.ok(from !== -1 && to > from, 'plan-phase.md must keep ## 5. and ## 5.65.');
+    const offenders = text.slice(from, to).split('\n')
+      .filter((l) => /\bstep 6\b/i.test(l) && !/do not proceed/i.test(l) && !l.startsWith('**Branch 1'));
+    assert.deepEqual(offenders, []);
+  });
+
+  test('the UI branches act only on the ui capability', () => {
+    const s = section56();
+    assert.ok(s.includes('`kind == "step"`, `capId == "ui"`'), 'Branch 5 must fire only the ui step (generic arm owns the rest)');
+    assert.ok(s.includes('`kind == "gate"`, `capId == "ui"`'), 'Branch 6 must halt only on the ui gate result');
+  });
+
   test('step dispatch is not gated on auto-chain', () => {
     assert.ok(
       !section56().includes('when pipeline mode allows auto-chaining'),
@@ -112,13 +131,21 @@ describe('#5982 plan:pre dispatches every active step and gate', () => {
     assert.equal(patterns.length, 2, `loop-hook-dispatch.md must name the step and gate patterns; got ${JSON.stringify(patterns)}`);
     for (const p of patterns) assert.ok(t.includes(p), `step file must validate with the contract pattern ${p}`);
     assert.ok(t.includes('single argv element'), 'predicate must be passed as a single argv element');
-    assert.ok(t.includes('agentVerdict'), 'an agentVerdict gate must be routed, never silently passed');
+    assert.ok(t.includes('--predicate "$PREDICATE_JSON"'), 'predicate must reach argv through the quoted-heredoc variable');
+    assert.ok(!t.includes("--predicate '"), 'predicate must never be re-quoted into a single-quoted shell literal');
+    assert.ok(/agentVerdict[^\n]{0,200}\*\*never\*\* as a silent pass/.test(t),
+      'an agentVerdict gate must be routed as a check failure, never silently passed');
   });
 
   test('every dedicated capId is real and its section exists', () => {
     const table = dedicatedTable();
     assert.ok(table.size > 0, 'step file must carry the dedicated-section table');
     const real = firstPartyPlanPreStepOrGate();
+    // Two-way parity: every first-party plan:pre step/gate is either owned by a dedicated section or
+    // deliberately generic. A new one must be placed in one of the two, or it is run twice / never.
+    const GENERIC = ['mempalace'];
+    assert.deepEqual([...real].sort(), [...table.keys(), ...GENERIC].sort(),
+      'first-party plan:pre step/gate capIds must equal the dedicated table plus the generic allowlist');
     const planPhase = readFileNormalized(PLAN_PHASE);
     for (const [capId, sectionNo] of table) {
       assert.ok(real.has(capId), `dedicated capId ${capId} declares no first-party plan:pre step or gate`);
@@ -132,7 +159,7 @@ describe('#5982 plan:pre dispatches every active step and gate', () => {
     assert.ok(!dedicatedTable().has('mempalace'), 'mempalace has no dedicated section; the generic arm must own it');
   });
 
-  test('a resolved non-dedicated step falls to the generic arm', (t) => {
+  test('registry parity: a resolved first-party step with no dedicated section reaches the generic arm', (t) => {
     const tmp = createTempProject('plan-pre-5982-');
     t.after(() => cleanup(tmp));
     fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), JSON.stringify({ mempalace: { enabled: true } }), 'utf8');
