@@ -1591,7 +1591,8 @@ const jsonValue = fc.oneof(
   fc.dictionary(
     fc.string({ minLength: 1, maxLength: 6 }).filter((k) => k !== '__proto__'),
     fc.oneof(fc.boolean(), fc.integer(), plainString),
-    { maxKeys: 4 },
+    // fast-check 4 emits null-prototype dictionaries by default; JSON.parse never does.
+    { maxKeys: 4, noNullPrototype: true },
   ),
 );
 
