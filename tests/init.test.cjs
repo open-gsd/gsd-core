@@ -5068,6 +5068,16 @@ describe('init section manifest', () => {
       assert.equal(map.search_gitignored, false);
       assert.equal(map.subagent_timeout, 300000);
     });
+
+    test('#5096: a present hand-edited timeout retains its existing init representation', (t) => {
+      const dir = seedSinglePhaseProject(t, 'gsd-present-timeout-');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({
+        workflow: { subagent_timeout: 'hand-edited-value' },
+      }));
+      const result = runGsdTools('init map-codebase', dir);
+      assert.ok(result.success, result.error);
+      assert.equal(JSON.parse(result.output).subagent_timeout, 'hand-edited-value');
+    });
   });
 
   // ── Row 62: stub <execution_context> @-refs still resolve (ADR-0002) ────

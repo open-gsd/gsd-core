@@ -2984,7 +2984,7 @@ function cmdInitMapCodebase(cwd: string, raw: boolean): void {
     commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
     search_gitignored: (config.search_gitignored === undefined ? false : config.search_gitignored),
     parallelization: config.parallelization,
-    subagent_timeout: typeof config.subagent_timeout === 'number' ? config.subagent_timeout : configLoader.CONFIG_DEFAULTS.subagent_timeout,
+    subagent_timeout: config.subagent_timeout === undefined ? configLoader.CONFIG_DEFAULTS.subagent_timeout : config.subagent_timeout,
 
     date: realClock.localToday(),
     timestamp: realClock.nowIso(),
