@@ -517,7 +517,7 @@ HOOKS_JSON="$PLAN_PRE_HOOKS_JSON"
 
 Read the `activeHooks` array directly from `PLAN_PRE_HOOKS_JSON` / `HOOKS_JSON` (in-context — do NOT invoke a shell pipeline).
 
-**Branch 1 — all plan:pre hooks inactive (`activeHooks` is empty or absent):** Skip to step 6.
+**Branch 1 — all plan:pre hooks inactive (`activeHooks` is empty or absent):** Skip to step 6; `PLAN_PRE_PRODUCTS` stays empty.
 
 **Generic dispatch (#5982):** dispatch every active `kind == "step"` hook (`ref.skill`, `ref.agent`, `ref.command`) and evaluate every active `kind == "gate"` hook (`check.query`, `check.predicate`) per @gsd-core/references/loop-hook-dispatch.md, in manual and auto-chain mode: read and execute `gsd-core/workflows/plan-phase/steps/plan-pre-dispatch.md` — except the capabilities its table assigns to a dedicated section (research, drift, ui, ai-integration, pattern-mapper, intel). A blocking gate that blocks exits the workflow.
 
@@ -634,6 +634,7 @@ SKETCH_FINDINGS_PATH=$(ls ./.claude/skills/sketch-findings-*/SKILL.md 2>/dev/nul
 # on non-AI phases; gating it there silently starves the planner of the SPEC (#550 review).
 # init resolves the plain phase SPEC (never the -AI-SPEC.md / -UI-SPEC.md variants) through the one shared predicate.
 PHASE_DIR_FOR_SPEC=$(_gsd_field "$INIT" phase_dir)
+PHASE_DIR_FOR_SPEC="${PHASE_DIR_FOR_SPEC:-$(_gsd_field "$INIT" expected_phase_dir)}"  # §2 may create it after INIT (#5960)
 SPEC_PATH=$(_gsd_field "$INIT" spec_path)
 SPEC_FILE="${SPEC_PATH}"
 # Resolve the phase UI-SPEC separately (the glob above excludes -UI-SPEC.md); it carries the
@@ -777,6 +778,7 @@ Planner prompt:
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
 - {API_SURFACE_PATH} (API Surface — HINT ONLY, when intel capability is active; see <intel_surface_hint> below)
+- {PLAN_PRE_PRODUCTS} (plan:pre capability outputs from this run, e.g. MemPalace's MEMORY-RECALL.md — prior decisions, patterns, surprises; if any)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
 - CONTEXT.md files from the 3 most recent completed phases (locked decisions — maintain consistency)
