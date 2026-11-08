@@ -325,6 +325,11 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           gitOrThrow(['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'fixture'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
           const linked = path.join(dir, 'linked');
           gitOrThrow(['worktree', 'add', '-qb', 'linked', linked], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+          const captured = runFresh(linked, timingFence(AGENT, 'worktree_metadata_capture'), 1000);
+          assert.deepEqual(captured, {
+            worktree_path: fs.realpathSync(linked), branch: 'linked',
+            expected_base: gitOrThrow(['rev-parse', 'HEAD'], { cwd: linked, timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim(),
+          }, 'capture prints authoritative return data independently of shell lifetime');
           runFresh(linked, start(), 4000, identities[0], false, false, 'continuation');
           assert.deepEqual(runFresh(linked, finish(), 4660, identities[0]), { duration: '1h 1m', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T01:17:40Z' });
           assert.deepEqual(runFresh(dir, finish(), 4660, identities[0]), { duration: '1h 1m', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T01:17:40Z' });

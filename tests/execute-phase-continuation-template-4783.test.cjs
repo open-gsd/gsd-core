@@ -41,6 +41,7 @@ describe('#4783 execute-phase continuation spawn does not point at a missing tem
       assert.ok(step[0].includes(placeholder), `step 6 must state ${placeholder}`);
     }
     assert.ok(step[0].includes('<completed_tasks>'), 'step 6 must name the <completed_tasks> tag the executor keys on');
+    assert.ok(step[0].includes('<completed_tasks></completed_tasks>'), 'an empty first-task checkpoint must still select continuation');
     assert.ok(step[0].includes('original executor worktree'), 'step 6 must preserve the worktree that owns continuation metadata');
     assert.ok(step[0].includes('main checkout'), 'step 6 must define an empty worktree path as the main checkout');
     assert.ok(step[0].includes('non-empty') && step[0].includes('fail closed'),
