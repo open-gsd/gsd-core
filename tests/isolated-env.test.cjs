@@ -471,7 +471,7 @@ describe('createHermeticRoot: ancestor config discovery', () => {
     fs.mkdirSync(path.join(realLookingHome, '.gsd'));
     fs.writeFileSync(
       path.join(realLookingHome, '.gsd', 'defaults.json'),
-      JSON.stringify({ agent_tools: { '*': ['mcp__home__*'] } }),
+      JSON.stringify({ agent_tools: { 'gsd-planner': ['mcp__home__*'] } }), // '*' would be shadowed by the project '*' ({...global,...project}, install-model-override-resolver.cts:175)
     );
     const emptyHome = tmp(t, 'gsd-6033-empty-home-');
 
