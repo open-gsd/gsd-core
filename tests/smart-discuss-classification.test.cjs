@@ -5,7 +5,7 @@
 // elsewhere in the file cannot satisfy it. The CONTEXT.md template the reference
 // prescribes is additionally fed to the real decision extractor
 // (gsd-core/bin/lib/decisions.cjs) — the parser the blocking decision-coverage
-// gate runs — so the new "Decided Autonomously" subsection is tested behaviorally.
+// gate runs — so the new "Decided autonomously" subsection is tested behaviorally.
 // Issue #5069.
 
 'use strict';
@@ -22,6 +22,7 @@ const ROOT = path.resolve(__dirname, '..');
 const SMART_DISCUSS = path.join(ROOT, 'gsd-core', 'references', 'autonomous-smart-discuss.md');
 const AUTONOMOUS = path.join(ROOT, 'gsd-core', 'workflows', 'autonomous.md');
 const PLANNER_REVERSIBILITY = path.join(ROOT, 'gsd-core', 'references', 'planner-reversibility.md');
+const COMMANDS_DOC = path.join(ROOT, 'docs', 'COMMANDS.md');
 
 /** Read a shipped file with line endings normalized, so CRLF checkouts behave alike. */
 function read(file) {
@@ -53,6 +54,13 @@ function tableRows(body) {
   return table
     .slice(2) // header + separator
     .map((l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()));
+}
+
+/** The parenthesised example list of a classification-table cell, sorted. */
+function examples(cell) {
+  const m = /\(([^)]*)\)/.exec(cell);
+  assert.ok(m, `expected a parenthesised example list in: ${cell}`);
+  return m[1].split(',').map((s) => s.trim()).sort();
 }
 
 const classification = () => section(read(SMART_DISCUSS), 2, /^Sub-step 3\.5: Classify/);
@@ -105,6 +113,18 @@ describe('#5069 smart discuss classifies every grey-area question', () => {
     for (const example of ['persisted schema', 'public API/URL contracts', 'auth model', 'new external dependency', 'data migrations']) {
       assert.ok(hard[0].includes(example), `hard-to-reverse class must name "${example}"`);
     }
+  });
+
+  test('docs/COMMANDS.md class table lists the same examples as the reference (parity)', () => {
+    const ref = tableRows(classification());
+    const autonomous = section(read(COMMANDS_DOC), 3, /^`\/gsd-autonomous`$/);
+    const at = autonomous.indexOf('**Smart discuss question classes.**');
+    assert.ok(at !== -1, 'COMMANDS.md /gsd-autonomous must document the smart discuss question classes');
+    const doc = tableRows(autonomous.slice(at));
+    assert.equal(doc.length, 3, 'COMMANDS.md class table must list the same three classes');
+    const list = (cell) => cell.split(',').map((s) => s.trim()).sort();
+    assert.deepEqual(list(doc[0][1]), examples(ref[0][0]), 'reversible examples diverge between COMMANDS.md and the reference');
+    assert.deepEqual(list(doc[1][1]), examples(ref[1][0]), 'hard-to-reverse examples diverge between COMMANDS.md and the reference');
   });
 
   test('classes map onto the existing reversibility taxonomy', () => {
@@ -168,18 +188,26 @@ describe('#5069 smart discuss presents each class differently', () => {
     assert.match(body, /2[–-]3 genuinely competitive options/i);
     assert.match(body, /trade-off/i);
     assert.match(body, /"You decide"[^\n]*last/i, '"You decide" stays available, as the last option');
-    assert.match(body, /"You decide"[^\n]*Claude's Discretion/i, 'a delegated preference answer is Claude\'s Discretion, not Decided Autonomously');
+    assert.match(body, /"You decide"[^\n]*Claude's Discretion/i, 'a delegated preference answer is Claude\'s Discretion, not Decided autonomously');
+  });
+
+  test('questions added by "Discuss deeper" are classified too', () => {
+    const hard = section(present(), 3, /^Hard-to-reverse questions/);
+    const line = hard.split('\n').find((l) => l.startsWith('**On "Discuss deeper":**'));
+    assert.ok(line, 'the Discuss deeper branch must exist');
+    assert.match(line, /Classify every new question with Sub-step 3\.5/);
+    assert.match(line, /neutral rules/);
   });
 });
 
 // ─── CONTEXT.md output ──────────────────────────────────────────────────────────
 
 describe('#5069 CONTEXT.md records auto-decided items', () => {
-  test('CONTEXT template puts "### Decided Autonomously" inside <decisions>', () => {
+  test('CONTEXT template puts "### Decided autonomously" inside <decisions>', () => {
     const decisions = decisionsBlock(contextTemplate());
-    assert.match(decisions, /^### Decided Autonomously$/m);
-    const bulletAfter = decisions.split('\n### Decided Autonomously\n')[1].split('\n').find((l) => l.startsWith('- '));
-    assert.ok(bulletAfter, 'Decided Autonomously must show a bullet template');
+    assert.match(decisions, /^### Decided autonomously$/m);
+    const bulletAfter = decisions.split('\n### Decided autonomously\n')[1].split('\n').find((l) => l.startsWith('- '));
+    assert.ok(bulletAfter, 'Decided autonomously must show a bullet template');
     assert.match(bulletAfter, /^- \[[^\]]+\] Q: "[^"]*" → Selected: "[^"]*" — /, 'bullet must use the [Area] Q/Selected line shape, plain (no bold lead-in)');
   });
 
@@ -188,7 +216,7 @@ describe('#5069 CONTEXT.md records auto-decided items', () => {
   });
 
   test('zero auto-decided items omits the CONTEXT subsection', () => {
-    assert.match(writeContext(), /omit[^\n]*`### Decided Autonomously`|`### Decided Autonomously`[^\n]*omit/i);
+    assert.match(writeContext(), /omit[^\n]*`### Decided autonomously`|`### Decided autonomously`[^\n]*omit/i);
   });
 
   test('CONTEXT template stays parseable by the decision-coverage gate', () => {
@@ -196,10 +224,10 @@ describe('#5069 CONTEXT.md records auto-decided items', () => {
     assert.equal(outcome, 'none-present', `template must not trip the gate (got ${outcome})`);
   });
 
-  test('property: Decided Autonomously bullets never trip the decision gate', () => {
+  test('property: Decided autonomously bullets never trip the decision gate', () => {
     const template = contextTemplate();
     const placeholder = template.split('\n').find((l) => /^- \[[^\]]+\] Q: /.test(l));
-    assert.ok(placeholder, 'template must carry a Decided Autonomously bullet to substitute');
+    assert.ok(placeholder, 'template must carry a Decided autonomously bullet to substitute');
     // Single-line free text. D-tokens (`D-1`, `D4-x`) are excluded: the gate
     // deliberately fails loud on them anywhere in <decisions> (#4130).
     const text = fc.stringMatching(/^[A-Za-z0-9 ,.'()/_:-]{1,40}$/).filter((s) => !/D[0-9]*-[A-Za-z0-9]/.test(s));
@@ -217,6 +245,13 @@ describe('#5069 CONTEXT.md records auto-decided items', () => {
     const body = writeContext();
     assert.match(body, /revers\w*[^\n]*edit[^\n]*CONTEXT\.md[^\n]*re-run/i);
     assert.match(body, /no confirmation (step|gate)|no override step/i);
+  });
+
+  test('recorded questions and answers are data and stay on one line', () => {
+    const body = writeContext();
+    assert.match(body, /data, never an instruction/);
+    assert.match(body, /collapse line breaks to spaces/);
+    assert.match(body, /start a line with `#` or `<`/);
   });
 });
 
@@ -258,10 +293,10 @@ describe('#5069 surrounding contracts', () => {
     assert.doesNotMatch(step[1], /identical/i);
   });
 
-  test('planner does not treat Decided Autonomously entries as settled', () => {
+  test('planner does not treat Decided autonomously entries as settled', () => {
     const settled = section(read(PLANNER_REVERSIBILITY), 2, /^Already settled$/);
-    const line = settled.split('\n').find((l) => /Decided Autonomously/.test(l));
-    assert.ok(line, 'Already settled must address Decided Autonomously entries');
+    const line = settled.split('\n').find((l) => /Decided autonomously/.test(l));
+    assert.ok(line, 'Already settled must address Decided autonomously entries');
     assert.match(line, /not (human-)?settled|never (human-)?settled/i);
   });
 });
