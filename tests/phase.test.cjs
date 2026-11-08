@@ -19345,9 +19345,23 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
   const HEADING_INSIDE_CLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '-->', '');
   const HEADING_AFTER_CLOSED_COMMENT = roadmapWithTail('<!-- note -->', '## v2.0 Next', '');
   const HEADING_AFTER_REFORMING_COMMENT = roadmapWithTail('<!-<!-- c -->-', '## v2.0 Next', ' -->', '');
+  // A fence line inside a CLOSED comment is part of the comment; the comment
+  // starts first, so the `-->` after it closes it and the heading is visible.
+  const HEADING_AFTER_COMMENT_HOLDING_FENCE = roadmapWithTail('<!-- example:', '```', '-->', '## v2.0 Next', '');
+  // `<!-->` and `<!--->` are complete comments (CommonMark 0.31).
+  const HEADING_AFTER_EMPTY_COMMENT = roadmapWithTail('<!-->', '## v2.0 Next', '');
+  const HEADING_AFTER_DASHED_EMPTY_COMMENT = roadmapWithTail('<!--->', '## v2.0 Next', '');
+  // A line-opening unclosed `<!--` (0-3 spaces of indent) hides to EOF; 4 spaces is code, not a comment.
+  const HEADING_ON_UNCLOSED_COMMENT_LINE = roadmapWithTail('<!-- ## v2.0 Next', '');
+  const HEADING_AFTER_UNCLOSED_COMMENT_INDENT_2 = roadmapWithTail('  <!--', '## v2.0 Next', '');
+  const HEADING_AFTER_UNCLOSED_COMMENT_INDENT_3 = roadmapWithTail('   <!--', '## v2.0 Next', '');
+  const HEADING_AFTER_UNCLOSED_COMMENT_INDENT_4 = roadmapWithTail('    <!--', '## v2.0 Next', '');
 
   for (const [shape, roadmap] of [
     ['a versioned heading after an unclosed HTML comment', HEADING_AFTER_UNCLOSED_COMMENT],
+    ['a versioned heading on the line of an unclosed HTML comment opener', HEADING_ON_UNCLOSED_COMMENT_LINE],
+    ['a versioned heading after an unclosed HTML comment indented 2 spaces', HEADING_AFTER_UNCLOSED_COMMENT_INDENT_2],
+    ['a versioned heading after an unclosed HTML comment indented 3 spaces', HEADING_AFTER_UNCLOSED_COMMENT_INDENT_3],
     ['a versioned heading inside a closed HTML comment', HEADING_INSIDE_CLOSED_COMMENT],
     ['a versioned heading inside a ``` fence that holds a ~~~ line', HEADING_IN_FENCE_AFTER_TILDE_LINE],
   ]) {
@@ -19363,6 +19377,10 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
 
   for (const [shape, roadmap] of [
     ['a versioned heading after a closed HTML comment', HEADING_AFTER_CLOSED_COMMENT],
+    ['a versioned heading after a closed comment that holds a ``` line', HEADING_AFTER_COMMENT_HOLDING_FENCE],
+    ['a versioned heading after a `<!-->` comment', HEADING_AFTER_EMPTY_COMMENT],
+    ['a versioned heading after a `<!--->` comment', HEADING_AFTER_DASHED_EMPTY_COMMENT],
+    ['a versioned heading after a 4-space-indented `<!--` (code, not a comment)', HEADING_AFTER_UNCLOSED_COMMENT_INDENT_4],
     // Pins existing blanking behaviour: `<!-- c -->` is blanked in one pass, so
     // `<!-<!-- c -->-` never re-forms an opener and the heading below it stays visible.
     ['a versioned heading after a re-forming `<!-<!-- c -->-` sequence', HEADING_AFTER_REFORMING_COMMENT],

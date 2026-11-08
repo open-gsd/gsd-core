@@ -4679,19 +4679,95 @@ describe('milestoneVersionAtOffset (#5679)', () => {
 
 describe('#5726: blankFencesAndComments properties', () => {
   const { blankFencesAndComments } = roadmapParser;
-  const PIECES = ['<!--', '-->', '```', '~~~', '`', '~', '\n', '\r\n', ' ', '  ', '## v2.0 X', 'a', '<', '!', '-'];
+  const PIECES = ['<!--', '-->', '<!-->', '<!--->', '```', '~~~', '`', '~', '\n', '\r\n', ' ', '  ', '## v2.0 X', 'a', '<', '!', '-'];
   const docs = fc.array(fc.constantFrom(...PIECES), { maxLength: 40 }).map((c) => c.join(''));
+
+  function assertShapeInvariants(input, out) {
+    assert.strictEqual(out.length, input.length);
+    for (let i = 0; i < input.length; i++) {
+      if (input[i] === '\n') assert.strictEqual(out[i], '\n', `newline moved at ${i}`);
+      else assert.notStrictEqual(out[i], '\n', `newline invented at ${i}`);
+      if (out.startsWith('<!--', i)) assert.ok(input.startsWith('<!--', i), `opener invented at ${i}`);
+    }
+  }
 
   test('output is same-length, keeps every newline in place, and never invents a comment opener', () => {
     fc.assert(fc.property(docs, (input) => {
-      const out = blankFencesAndComments(input);
-      assert.strictEqual(out.length, input.length);
-      for (let i = 0; i < input.length; i++) {
-        if (input[i] === '\n') assert.strictEqual(out[i], '\n', `newline moved at ${i}`);
-        else assert.notStrictEqual(out[i], '\n', `newline invented at ${i}`);
-        if (out.startsWith('<!--', i)) assert.ok(input.startsWith('<!--', i), `opener invented at ${i}`);
-      }
+      assertShapeInvariants(input, blankFencesAndComments(input));
     }), { numRuns: 500, seed: 5726 });
+  });
+
+  // Model-based oracle: documents are built from segments whose visibility is
+  // known by construction, so the expected set of visible versioned heading
+  // lines is computed from the model, not from the implementation.
+  //   inner tokens: P plain, H heading, F fence line, O a bare `<!--`
+  const INNER = fc.constantFrom('P', 'H', 'F', 'O');
+  const FENCE_BODY = fc.constantFrom('P', 'H', 'O', 'C'); // C: a bare `-->`
+  const FENCE_CHAR = fc.constantFrom('```', '~~~', '````');
+  const segment = fc.oneof(
+    fc.record({ kind: fc.constant('plain') }),
+    fc.record({ kind: fc.constant('heading') }),
+    fc.record({ kind: fc.constant('fence'), fence: FENCE_CHAR, body: fc.array(FENCE_BODY, { maxLength: 4 }) }),
+    fc.record({ kind: fc.constant('comment'), body: fc.array(INNER, { maxLength: 4 }), fence: FENCE_CHAR }),
+  );
+  const tail = fc.option(
+    fc.record({ indent: fc.integer({ min: 0, max: 3 }), body: fc.array(INNER, { maxLength: 4 }), fence: FENCE_CHAR }),
+    { nil: undefined },
+  );
+
+  function render(segments, unclosed, eol) {
+    const lines = [];
+    const visible = [];
+    const emit = (text, isVisibleHeading) => {
+      if (isVisibleHeading) visible.push(text);
+      lines.push(text);
+    };
+    const heading = (n) => `## v${(n % 9) + 1}.${n % 7} H${lines.length}`;
+    const inner = (tok, fence) => {
+      if (tok === 'H') return heading(lines.length);
+      if (tok === 'F') return fence;
+      if (tok === 'O') return '<!--';
+      if (tok === 'C') return '-->';
+      return 'some text';
+    };
+    for (const seg of segments) {
+      if (seg.kind === 'plain') emit('some text', false);
+      else if (seg.kind === 'heading') { const h = heading(lines.length); emit(h, true); }
+      else if (seg.kind === 'fence') {
+        emit(seg.fence, false);
+        for (const tok of seg.body) emit(inner(tok, seg.fence[0] === '`' ? '~~~' : '```'), false);
+        emit(seg.fence, false);
+      } else {
+        emit('<!-- note', false);
+        for (const tok of seg.body) emit(inner(tok, seg.fence), false);
+        emit('-->', false);
+      }
+    }
+    if (unclosed) {
+      emit(`${' '.repeat(unclosed.indent)}<!--`, false);
+      for (const tok of unclosed.body) emit(inner(tok, unclosed.fence), false);
+    }
+    return { input: lines.join(eol) + eol, visible };
+  }
+
+  test('the visible versioned heading lines equal the segment model, and the shape invariants hold', () => {
+    fc.assert(fc.property(
+      fc.array(segment, { maxLength: 8 }),
+      tail,
+      fc.constantFrom('\n', '\r\n'),
+      (segments, unclosed, eol) => {
+        const { input, visible } = render(segments, unclosed, eol);
+        const out = blankFencesAndComments(input);
+        assertShapeInvariants(input, out);
+        const surviving = out.split('\n').map((l) => l.trim()).filter((l) => /^## v\d+\.\d+ H\d+$/.test(l));
+        assert.deepStrictEqual(surviving, visible, JSON.stringify(input));
+      },
+    ), { numRuns: 300, seed: 5726 });
+  });
+
+  test('a 200 KB run of mid-line unclosed `<!--` openers hides nothing', () => {
+    const input = 'x' + '<!--'.repeat(50000);
+    assert.strictEqual(blankFencesAndComments(input), input);
   });
 });
 
