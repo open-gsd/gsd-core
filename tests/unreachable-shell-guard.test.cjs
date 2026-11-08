@@ -357,7 +357,8 @@ test('#3409 G4: the milestone summary read does not hang with no summaries', (t)
     snippet,
   ].join('\n');
 
-  const result = runBashScript(t, script, { cwd: root, timeoutMs: G4_TIMEOUT_MS });
+  // The fence resolves the scoped planning dir through gsd_run: RUNTIME_DIR points its launcher at this checkout.
+  const result = runBashScript(t, script, { cwd: root, timeoutMs: G4_TIMEOUT_MS, env: { ...process.env, RUNTIME_DIR: REPO_ROOT } });
 
   // RED on the current tree: the bare `cat <glob>` reads from the blocked
   // stdin and never returns within G4_TIMEOUT_MS, so `outcome` is

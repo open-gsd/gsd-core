@@ -133,7 +133,9 @@ function runBlock(setup) {
     const probe = `${contextDetectionBlock}\n` +
       'printf \'phase=%s\\nspike=%s\\nsketch=%s\\ndeliberation=%s\\n\' ' +
       '"$phase" "$spike" "$sketch" "$deliberation"\n';
-    const result = runHook('-c', [probe], { interpreter: 'bash', cwd: tmpDir });
+    // The block opens with the runtime launcher (it resolves the scoped planning dir through gsd_run):
+    // RUNTIME_DIR points it at this checkout's gsd-tools, as an installed runtime would.
+    const result = runHook('-c', [probe], { interpreter: 'bash', cwd: tmpDir, env: { ...process.env, RUNTIME_DIR: REPO_ROOT } });
     assert.equal(result.outcome, OUTCOME.EXITED, `bash exited abnormally: ${result.stderr}`);
     assert.equal(result.exitCode, 0, `bash exited ${result.exitCode}: ${result.stderr}`);
     const out = {};
