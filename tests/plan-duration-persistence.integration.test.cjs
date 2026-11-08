@@ -393,6 +393,8 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
               duration: '0 min', started: new Date(epoch * 1000).toISOString().replace('.000Z', 'Z'),
               completed: new Date(epoch * 1000).toISOString().replace('.000Z', 'Z'),
             });
+            assert.throws(() => runFresh(dir, finish(), 10000000000), (error) => error.exitCode === 1,
+              'an 11-digit completion epoch must fail independently of the valid start epoch');
           }
         });
       }
