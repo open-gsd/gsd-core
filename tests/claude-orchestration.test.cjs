@@ -1545,7 +1545,7 @@ describe('F. Workflow backend never forces worktree isolation on a submodule / u
     // #2686: the options object legitimately gained an optional `model` key, so assert
     // the invariant this test exists to protect — agentType present, isolation absent —
     // rather than a frozen literal that any future additive key would break.
-    assert.match(result.script, /agent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
+    assert.match(result.script, /gsdRunAgent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
     assert.ok(
       !/gsdRunAgent\("submodule plan"[^)]*isolation/.test(result.script),
       'the submodule-touching plan must NEVER be emitted with forced worktree isolation',
@@ -1575,7 +1575,7 @@ describe('F. Workflow backend never forces worktree isolation on a submodule / u
     const parsed = JSON.parse(res.output);
     assert.strictEqual(parsed.backend, 'workflow');
     // #2686: additive `model` key — see the note on the pure-seam test above.
-    assert.match(parsed.script, /agent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
+    assert.match(parsed.script, /gsdRunAgent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
     assert.ok(!/gsdRunAgent\("submodule plan"[^)]*isolation/.test(parsed.script));
   });
 
@@ -1901,7 +1901,7 @@ describe('#2590: emitted Workflow scripts satisfy the Workflow tool contract', (
     });
     assert.ok(/parallel\(\[/.test(script), 'parallel() expects an array of functions');
     assert.ok(
-      !/parallel\(\s*agent\(/.test(script),
+      !/parallel\(\s*(?:gsdRunAgent|agent)\(/.test(script),
       'passing agent() results directly both throws and starts every agent eagerly',
     );
     // Each agent must be wrapped in a thunk so parallel() can bound concurrency.

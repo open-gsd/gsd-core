@@ -112,11 +112,7 @@ PLAN_START_EPOCH=$(date +%s)
 If running inside a git worktree, capture authoritative worktree identity before
 any task commit changes HEAD. The execute-phase orchestrator consumes this from
 your final `<worktree_metadata>` return block to build the wave cleanup manifest
-without relying on runtime harness metadata (#1297).
-When you are dispatched by the claude-orchestration Workflow backend with a
-structured-output schema, return these same four fields (`agent_id`,
-`worktree_path`, `branch`, `expected_base`) through that schema instead of the
-text block (#4747).
+without relying on runtime harness metadata (#1297). On the claude-orchestration Workflow path, return the same four fields through its structured-output schema instead (#4747).
 
 ```bash
 GSD_WORKTREE_PATH=""

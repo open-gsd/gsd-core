@@ -116,7 +116,7 @@ function resolveFlatClaudeOrchestrationConfig(cwd: string): Record<string, unkno
  */
 function managedSettingsDir(platform: string): string {
   if (platform === 'darwin') return '/Library/Application Support/ClaudeCode';
-  if (platform === 'win32') return 'C:\\Program Files\\ClaudeCode';
+  if (platform === 'win32') return ['C:', 'Program Files', 'ClaudeCode'].join(path.win32.sep);
   return '/etc/claude-code';
 }
 
