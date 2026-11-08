@@ -52,11 +52,17 @@ function makeTempWorkflowsDir(files) {
 
 // ─── Minimal valid workflow content templates ─────────────────────────────────
 
-function makeWorkflow(step, points, roles, produces, consumes, extraContent) {
+// `wiredPoints` defaults to every declared point: a real host both declares a
+// point in its header AND renders it in its body (#5848). A test that needs a
+// declared-but-undispatched point passes a shorter list.
+function makeWorkflow(step, points, roles, produces, consumes, extraContent, wiredPoints) {
   const pointsList = points.join(', ');
   const rolesList = roles.join(', ');
   const producesList = produces.join(', ');
   const consumesList = consumes.join(', ');
+  const sites = (wiredPoints || points)
+    .map((p) => 'HOOKS_JSON=$(gsd_run loop render-hooks ' + p + ' --raw)\n')
+    .join('');
   return (
     '<!-- gsd:loop-host\n' +
     'step: ' + step + '\n' +
@@ -65,6 +71,7 @@ function makeWorkflow(step, points, roles, produces, consumes, extraContent) {
     'produces: ' + producesList + '\n' +
     'consumes: ' + consumesList + '\n' +
     '-->\n' +
+    sites +
     (extraContent || '')
   );
 }
@@ -951,6 +958,98 @@ describe('--check full-content comparison (FIX 4)', () => {
 // ─── 12. Regression: FIX 5 — temp-dir cleanup in existing cross-check tests ──
 //  (cleanup is handled via try/finally in each test above that creates temp dirs;
 //   this suite documents and verifies the makeTempWorkflowsDir helper itself)
+
+// ─── #5848 — a declared point must be dispatched ─────────────────────────────
+
+const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
+const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
+const { scanWiredPoints, scanWiredKinds } = require('../scripts/gen-loop-host-contract.cjs');
+
+describe('declared loop points are dispatched (#5848)', () => {
+  test('every point a host declares has a render-hooks call site in the host or its auxiliary hosts', () => {
+    const undispatched = [];
+    for (const { file, auxiliaryHosts = [] } of STEP_WORKFLOWS) {
+      const hostText = fs.readFileSync(path.join(WORKFLOWS_ROOT, file), 'utf8');
+      const declared = parseLoopHostBlock(hostText, file).points;
+      const wired = new Set(scanWiredPoints(hostText));
+      for (const aux of auxiliaryHosts) {
+        for (const p of scanWiredPoints(fs.readFileSync(path.join(WORKFLOWS_ROOT, aux.file), 'utf8'))) wired.add(p);
+      }
+      for (const p of declared) if (!wired.has(p)) undispatched.push(file + ' declares ' + p);
+    }
+    assert.deepEqual(undispatched, [], 'declared but never rendered: ' + undispatched.join('; '));
+  });
+
+  test('execute:pre is rendered before the first wave and dispatches contribution, step and gate', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
+    const preIdx = text.indexOf('loop render-hooks execute:pre');
+    const wavePreIdx = text.indexOf('loop render-hooks execute:wave:pre');
+    assert.ok(preIdx !== -1, 'execute:pre call site must exist');
+    assert.ok(preIdx < wavePreIdx, 'execute:pre must be rendered before the first wave dispatch site');
+    const stateBeginIdx = text.indexOf('state.begin-phase');
+    assert.ok(preIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
+    const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
+    assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
+  });
+
+  test('the execute:pre gate step file exists and halts on a blocking block', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
+    const m = /execute-phase\/steps\/(pre-execute-gate-hooks\.md)/.exec(text);
+    assert.ok(m, 'execute-phase.md must hand execute:pre gate evaluation to its step file');
+    const stepPath = path.join(WORKFLOWS_ROOT, 'execute-phase', 'steps', m[1]);
+    assert.ok(fs.existsSync(stepPath), 'referenced step file must exist');
+    assert.match(fs.readFileSync(stepPath, 'utf8'), /HALT/);
+  });
+
+  test('resolveLoopHooks delivers a blocking gate and a step registered at execute:pre', () => {
+    const registry = {
+      byLoopPoint: {
+        'execute:pre': {
+          steps: [{ capId: 'approval', ref: { skill: 'approve-plan' } }],
+          contributions: [],
+          gates: [{ capId: 'approval', blocking: true, onError: 'halt', check: { query: 'ui.plan-gate' } }],
+        },
+      },
+      configSchema: {},
+    };
+    const { activeHooks } = resolveLoopHooks({ point: 'execute:pre', registry, config: {} });
+    assert.deepEqual(activeHooks.map((h) => h.kind), ['step', 'gate']);
+    assert.equal(activeHooks[1].blocking, true);
+  });
+
+  test('buildContract rejects a host that declares a point with no call site', () => {
+    const files = makeValidWorkflowFiles();
+    files['execute-phase.md'] = makeWorkflow(
+      'execute', ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
+      ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
+      ['execute:wave:pre', 'execute:wave:post', 'execute:post'],
+    );
+    const tmpDir = makeTempWorkflowsDir(files);
+    try {
+      assert.throws(
+        () => buildContract(tmpDir),
+        /execute-phase\.md: declared point "execute:pre" has no `loop render-hooks execute:pre` call site/,
+      );
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('buildContract accepts a declared point wired only in an auxiliary host', () => {
+    const files = makeValidWorkflowFiles();
+    files['execute-phase.md'] = makeWorkflow(
+      'execute', ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
+      ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
+      ['execute:pre', 'execute:wave:pre', 'execute:wave:post'],
+    );
+    const tmpDir = makeTempWorkflowsDir(files);
+    try {
+      assert.doesNotThrow(() => buildContract(tmpDir));
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
 
 describe('temp-dir lifecycle', () => {
   test('makeTempWorkflowsDir creates a directory that can be cleaned up', () => {
