@@ -155,6 +155,7 @@ module.exports = {
   "tests/installer-migration-rename-gsd-core.test.cjs",
   "tests/installer-migrations.test.cjs",
   "tests/inventory-nested-families.test.cjs",
+  "tests/isolated-env.test.cjs",
   "tests/isolation-aged-none-sentinel.test.cjs",
   "tests/isolation-sentinel-read.platform.test.cjs",
   "tests/isolation-sentinel.test.cjs",
