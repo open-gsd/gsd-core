@@ -1481,7 +1481,21 @@ const RENAME_MAX_ATTEMPTS = 3;
 const RENAME_RETRY_BACKOFF_MS = 50;
 
 /** The device and inode that identify one file or directory. */
-export type FileIdentity = { dev: number; ino: number };
+// bigint: a Windows file id is 64 bits (libuv st_ino = IndexNumber.QuadPart) and a JS number keeps
+// 53, so identities are read with { bigint: true } and compared exactly. Never serialized.
+export type FileIdentity = { dev: bigint; ino: bigint };
+
+/** The exact identity of an open descriptor. */
+function identityOfFd(fd: number): FileIdentity {
+  const s = fs.fstatSync(fd, { bigint: true });
+  return { dev: s.dev, ino: s.ino };
+}
+
+/** The exact identity of the entry at `p` (a final symlink is not followed). */
+function identityOfPath(p: string): FileIdentity {
+  const s = fs.lstatSync(p, { bigint: true });
+  return { dev: s.dev, ino: s.ino };
+}
 
 /** Synchronous best-effort backoff sleep (Atomics.wait — same idiom as io.cts). */
 let _renameSleepBuf: Int32Array | null = null;
@@ -1663,7 +1677,7 @@ function writeTargetDirect(
   // Probe an existing target READ-ONLY and non-blocking, so a device or FIFO is never opened
   // for write: it is classified by fstat, and the old bytes are captured for a restore.
   // Returns null when the target is absent.
-  const probe = (): { prior: Buffer; dev: number; ino: number } | null => {
+  const probe = (): { prior: Buffer; dev: bigint; ino: bigint } | null => {
     let fd: number;
     try {
       fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlock);
@@ -1689,7 +1703,7 @@ function writeTargetDirect(
         got += n;
       }
       if (got !== prior.length) refuse('existing content could not be read back', 'EIO');
-      return { prior, dev: st.dev, ino: st.ino };
+      return { prior, ...identityOfFd(fd) };
     } finally {
       try { fs.closeSync(fd); } catch { /* already closed */ }
     }
@@ -1725,7 +1739,8 @@ function writeTargetDirect(
       throw err;
     }
     const st = fs.fstatSync(fd);
-    if (!st.isFile() || st.dev !== existing.dev || st.ino !== existing.ino) {
+    const opened = identityOfFd(fd);
+    if (!st.isFile() || opened.dev !== existing.dev || opened.ino !== existing.ino) {
       try { fs.closeSync(fd); } catch { /* already closed */ }
       refuse('the target changed while it was being opened', 'ENXIO');
     }
@@ -1798,7 +1813,7 @@ function writeTargetDirect(
   if (failure !== undefined && created) {
     try {
       const st = fs.fstatSync(fd);
-      if (st.isFile()) createdIdentity = { dev: st.dev, ino: st.ino };
+      if (st.isFile()) createdIdentity = identityOfFd(fd);
     } catch { /* identity unknown: the file is left in place */ }
   }
   try { fs.closeSync(fd); } catch { /* already closed */ }
@@ -1806,7 +1821,8 @@ function writeTargetDirect(
     if (created && createdIdentity !== null) {
       try {
         const now = fs.lstatSync(filePath);
-        if (now.isFile() && now.dev === createdIdentity.dev && now.ino === createdIdentity.ino) {
+        const nowId = identityOfPath(filePath);
+        if (now.isFile() && nowId.dev === createdIdentity.dev && nowId.ino === createdIdentity.ino) {
           fs.unlinkSync(filePath);
         }
       } catch { /* already gone */ }
@@ -1906,9 +1922,12 @@ function makeParentGuard(
   filePath: string,
   statFailed: (err: NodeJS.ErrnoException) => never,
 ): { record(): void; changed(): boolean } {
-  const stat = (): FileIdentity | null => {
+  // bigint: a Windows file id is 64 bits (libuv st_ino = IndexNumber.QuadPart), and a JS number
+  // keeps 53, so two different directories could compare equal as numbers.
+  type DirIdentity = { dev: bigint; ino: bigint };
+  const stat = (): DirIdentity | null => {
     try {
-      const s = fs.statSync(path.dirname(filePath));
+      const s = fs.statSync(path.dirname(filePath), { bigint: true });
       return { dev: s.dev, ino: s.ino };
     } catch (err) {
       if (isMissing(err)) return null;
@@ -2079,7 +2098,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     if (st !== null) {
       // Still a link after 40 hops: an unclassifiable chain.
       if (st.isSymbolicLink()) refuseUnresolved('ELOOP', 'the symbolic link chain is circular or longer than 40 links');
-      walked = { dev: st.dev, ino: st.ino };
+      walked = identityOfPath(finalPath);
     }
   }
   // The identity of the directory that holds the target entry, taken by a separate stat of
@@ -2275,8 +2294,7 @@ function publishViaTempFile(
       if (typeof data === 'string') fs.writeFileSync(fd, data, encoding);
       else fs.writeFileSync(fd, data);
       if (hooks.onCreated !== undefined) {
-        const st = fs.fstatSync(fd);
-        identity = { dev: st.dev, ino: st.ino };
+        identity = identityOfFd(fd);
       }
     } finally {
       try { fs.closeSync(fd); } catch { /* already closed */ }
@@ -2345,14 +2363,14 @@ export function platformRestoreFileSync(
   if (bytes === null) {
     const expected = opts.unlinkOnlyIf;
     if (expected !== undefined) {
-      let st: fs.Stats;
+      let nowId: FileIdentity;
       try {
-        st = fs.lstatSync(filePath);
+        nowId = identityOfPath(filePath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
         throw err;
       }
-      if (st.dev !== expected.dev || st.ino !== expected.ino) {
+      if (nowId.dev !== expected.dev || nowId.ino !== expected.ino) {
         throw Object.assign(
           new Error(`ESTALE: ${filePath} is no longer the file this run created — left in place`),
           { code: 'ESTALE' },

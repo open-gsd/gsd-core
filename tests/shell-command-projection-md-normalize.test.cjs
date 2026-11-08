@@ -703,7 +703,7 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
       if (destination === 'present') fs.writeFileSync(target, PREVIOUS);
       const seen = [];
       scp.platformWriteSync(target, '# New\n', { atomic: true, onCreated: (id) => seen.push(id) });
-      const st = fs.statSync(target);
+      const st = fs.statSync(target, { bigint: true });
       assert.deepStrictEqual(seen, [{ dev: st.dev, ino: st.ino }]);
     });
 
@@ -771,6 +771,18 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     const createTemp = (basePath, _suffix, mode) => {
       const tmpPath = `${basePath}.swap.${process.pid}.tmp`;
       const fd = fs.openSync(tmpPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode);
+      if (process.platform === 'win32') {
+        // Windows refuses to rename a directory while a handle opened inside it is open (the rename
+        // threw here and the test never reached the check), so the swap is simulated: the
+        // directory's identity reads as a different one from now on.
+        const realStat = fs.statSync;
+        mock.method(fs, 'statSync', (p, ...rest) => {
+          const st = realStat.call(fs, p, ...rest);
+          if (p !== dir) return st;
+          return { dev: st.dev, ino: typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1 };
+        });
+        return { fd, tmpPath };
+      }
       // Replace the parent directory with a different one after the walk recorded its identity.
       fs.renameSync(dir, swappedAway);
       fs.mkdirSync(dir);
@@ -781,11 +793,12 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
         atomic: true,
         onCreated: (id) => seen.push(id),
         writeSeams: { createTemp },
-      }));
+      }), (err) => err.code === 'ENXIO');
       assert.strictEqual(seen.length, 0);
     } finally {
+      mock.restoreAll();
       cleanup(dir);
-      fs.renameSync(swappedAway, dir);
+      if (fs.existsSync(swappedAway)) fs.renameSync(swappedAway, dir);
     }
   });
 
@@ -902,7 +915,8 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     let parentStats = 0;
     mock.method(fs, 'statSync', (p, ...rest) => {
       const st = realStat.call(fs, p, ...rest);
-      if (p === dir && ++parentStats > 1) return { dev: st.dev, ino: st.ino + 1 };
+      // The directory is stat'ed as bigint; +1n is exact where a number id past 2^53 would not move.
+      if (p === dir && ++parentStats > 1) return { dev: st.dev, ino: typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1 };
       return st;
     });
     assert.throws(() => scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS)), (err) => err.code === 'ENXIO');
@@ -925,7 +939,7 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
 
   test('restoring "absent" with an identity unlinks only the file that identity names', () => {
     fs.writeFileSync(target, 'created by this run\n');
-    const { dev, ino } = fs.lstatSync(target);
+    const { dev, ino } = fs.lstatSync(target, { bigint: true });
     // A different inode takes the name: created while the first still exists.
     const incoming = path.join(dir, 'incoming.md');
     fs.writeFileSync(incoming, 'FOREIGN\n');
@@ -934,7 +948,7 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     assert.throws(() => scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev, ino } }), (err) => err.code === 'ESTALE');
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), 'FOREIGN\n', 'the foreign file stays');
 
-    const mine = fs.lstatSync(target);
+    const mine = fs.lstatSync(target, { bigint: true });
     scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
     assert.strictEqual(fs.existsSync(target), false, 'a matching identity is unlinked');
     scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
