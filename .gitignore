@@ -367,6 +367,7 @@ build/
 /gsd-core/bin/lib/tdd-test-files.cjs
 /gsd-core/bin/lib/pr-branch-patterns.cjs
 /gsd-core/bin/lib/undo-commit-selection.cjs
+/gsd-core/bin/lib/criterion-baseline.cjs
 __pycache__/
 *.pyc
 .venv/
