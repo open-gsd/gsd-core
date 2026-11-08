@@ -113,7 +113,7 @@ Set `is_re_verification = false`, proceed with Step 1.
 ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null
 ls "$PHASE_DIR"/*-SUMMARY.md 2>/dev/null
 gsd_run query roadmap.get-phase "$PHASE_NUM"
-# REQUIREMENTS_PATH: from <required_reading>
+# REQUIREMENTS_PATH: see prompt
 grep -E "^| $PHASE_NUM" "$REQUIREMENTS_PATH" 2>/dev/null
 ```
 
