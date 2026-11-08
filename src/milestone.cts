@@ -20,7 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
-import { updateTraceabilityCell, resetQuickTaskRows, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
+import { updateTraceabilityCell, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
 import { requireSafePath, PathAcceptance, type ContainedPath } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
@@ -276,7 +276,9 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // Surface traceability drift: checkbox reconciled (this run or before) but the
     // table has no row for this ID. This is what makes a partial reconcile
     // distinguishable from a full one (#2140).
-    if (hasTable && doneCheckbox && !hasRow) {
+    // #5844: a row in a table with no Status column is still a row; only the
+    // Status write is impossible there, so existence is read directly.
+    if (hasTable && doneCheckbox && !hasRow && !traceabilityRowExists(reqContent, reqId)) {
       tableUnmatched.push(reqId);
     }
   }
