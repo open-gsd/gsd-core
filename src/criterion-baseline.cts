@@ -82,10 +82,18 @@ export interface BaselineParseResult {
   statuses: { code: BaselineStatusCode; detail: string }[];
 }
 
+export interface BaselineNotationRecord {
+  line: number;
+  index: number;
+  text: string;
+  notation: BaselineNotation;
+}
+
 export interface BaselineScanResult {
   findings: BaselineFinding[];
   statuses: BaselineStatus[];
   notationCount: number;
+  notations: BaselineNotationRecord[];
   errors: string[];
   warnings: string[];
 }
@@ -150,7 +158,7 @@ export function compareBaseline(head: BaselineValue, op: BaselineOp, expect: Bas
   }
 }
 
-function decodeNotationEntities(s: string): string {
+export function decodeNotationEntities(s: string): string {
   return s.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
 }
 
@@ -249,7 +257,7 @@ export function parseCriteriaAllowMarkers(content: string): Set<string> {
 }
 
 function emptyResult(): BaselineScanResult {
-  return { findings: [], statuses: [], notationCount: 0, errors: [], warnings: [] };
+  return { findings: [], statuses: [], notationCount: 0, notations: [], errors: [], warnings: [] };
 }
 
 function cap(s: string): string {
@@ -350,6 +358,7 @@ export function scanBaselineNotation(
       for (const s of parsed.statuses) addStatus(s.code, line, text, s.detail);
       const n = parsed.notation;
       if (n === null) continue;
+      result.notations.push({ line, index: idx, text: cap(text), notation: n });
       const holds = compareBaseline(n.head, n.op, n.expect);
       if (holds === true && !(n.guard && n.mutation !== null)) {
         addFinding(BASELINE_RULE.NON_DISCRIMINATING, line, text, describeB1(n));
