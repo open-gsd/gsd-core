@@ -22,6 +22,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
+import { matchFenceDelimiter } from './markdown-sectionizer.cjs';
 import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
@@ -318,7 +319,7 @@ function isMilestoneShippedInRoadmap(content: string, version: string): boolean 
  *
  * ONE linear scan in document order; the construct that starts first wins:
  *
- * - At a line start, a fence opener (the `scanFencedBlocks` grammar: 0-3 spaces
+ * - At a line start, a fence opener (the `matchFenceDelimiter` grammar: 0-3 spaces
  *   of indent, 3+ backticks or tildes, a backtick opener's info string holds no
  *   backtick) blanks through its matching closer line (same character, at least
  *   the opener's length, nothing but whitespace after), or to EOF when none
@@ -348,9 +349,8 @@ function blankFencesAndComments(content: string): string {
   const nextOpen = finder('<!--');
   const nextClose = finder('-->');
   const nextNewline = finder('\n');
-  const fenceRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
-  const fenceOn = (from: number, to: number): RegExpExecArray | null =>
-    fenceRe.exec(content.slice(from, to).replace(/\r$/, ''));
+  const fenceOn = (from: number, to: number): ReturnType<typeof matchFenceDelimiter> =>
+    matchFenceDelimiter(content.slice(from, to));
   const lineEnd = (from: number): number => {
     const nl = nextNewline(from);
     return nl === -1 ? n : nl;
@@ -370,13 +370,12 @@ function blankFencesAndComments(content: string): string {
     const le = lineEnd(pos);
     if (atLineStart) {
       const opener = fenceOn(pos, le);
-      if (opener !== null && !(opener[2][0] === '`' && opener[3].includes('`'))) {
-        const char = opener[2][0];
+      if (opener !== null && opener.canOpen) {
         let closeEnd = n;
         for (let ls = le + 1; ls < n; ) {
           const e = lineEnd(ls);
           const m = fenceOn(ls, e);
-          if (m !== null && m[2][0] === char && m[2].length >= opener[2].length && /^\s*$/.test(m[3])) {
+          if (m !== null && m.closes(opener)) {
             closeEnd = e;
             break;
           }
