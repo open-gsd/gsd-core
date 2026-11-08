@@ -501,6 +501,8 @@ describe('#5831: state prune never loses entries', () => {
     statePath = path.join(tmpDir, '.planning', 'STATE.md');
     archivePath = path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md');
     writeStateMd(tmpDir, stateLines(8, [...OLD_ENTRIES, PHASE7]));
+    // A constant date: the production block heading and the expected one cannot straddle midnight.
+    mock.method(realClock, 'localToday', () => '2026-11-08');
   });
 
   afterEach(() => {
@@ -1099,18 +1101,40 @@ describe('#5831: state prune never loses entries', () => {
     assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'STATE.md holds only the kept entry');
   });
 
-  test('a retry at a smaller cutoff after a kill loses nothing: every entry is in STATE.md or the archive', () => {
-    pruneKilledBeforeStateWrite(3); // cutoff 5 archives phases 1, 2, 4
-    const writes = captureArchiveWrites();
-    prune(5); // cutoff 3 prunes phases 1, 2 only
+  /** How many `## Pruned` blocks the archive holds. */
+  function archiveBlockCount() {
+    return (fs.readFileSync(archivePath, 'utf-8').match(/^## Pruned /gm) || []).length;
+  }
 
-    assert.strictEqual(writes.length, 1, 'the block is not contained in this prune, so the whole prune is appended');
+  test('a retry at a smaller cutoff after a kill completes the interrupted run: each entry is archived once, in one block', () => {
+    const PHASE6 = '- [Phase 6]: Decision six, only copy';
+    writeStateMd(tmpDir, stateLines(8, [PHASE1, PHASE2, PHASE4, PHASE6, PHASE7]));
+    pruneKilledBeforeStateWrite(3); // cutoff 5 archives phases 1, 2, 4
+    assertArchivedOnce(OLD_ENTRIES);
+    const archiveAfterKill = fs.readFileSync(archivePath);
+    const writes = captureArchiveWrites();
+    prune(5); // cutoff 3 on its own would prune phases 1, 2 only
+
+    assert.strictEqual(writes.length, 0, 'the interrupted run is completed without a second archive block');
+    assert.deepStrictEqual(fs.readFileSync(archivePath), archiveAfterKill, 'the archive is unchanged by the retry');
+    assertArchivedOnce(OLD_ENTRIES);
+    assert.strictEqual(archiveBlockCount(), 1, 'one block holds these entries');
+    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE6, PHASE7] }], 'phase 4 left STATE.md with the block\'s other entries');
+  });
+
+  test('a retry at a smaller cutoff after a kill uses its own cutoff when the last block is not contained in STATE.md', () => {
+    const PHASE6 = '- [Phase 6]: Decision six, only copy';
+    writeStateMd(tmpDir, stateLines(8, [PHASE1, PHASE2, PHASE4, PHASE6, PHASE7]));
+    pruneKilledBeforeStateWrite(3); // cutoff 5 archives phases 1, 2, 4
+    writeStateMd(tmpDir, stateLines(8, [PHASE1, PHASE2, PHASE6, PHASE7])); // phase 4 is gone: the block is not contained
+    const writes = captureArchiveWrites();
+    prune(5); // cutoff 3
+
+    assert.strictEqual(writes.length, 1, 'a separate block is written');
     assertWriteIsPlan(writes[0], [{ section: 'Decisions', count: 2, lines: [PHASE1, PHASE2] }], 3, 5);
-    const stateText = fs.readFileSync(statePath, 'utf-8').split(/\r?\n/);
-    for (const entry of [...OLD_ENTRIES, PHASE7]) {
-      assert.ok(archiveCount(entry) >= 1 || stateText.includes(entry), `${entry} is in the archive or STATE.md`);
-    }
-    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE4, PHASE7] }], 'the unpruned entries stay in STATE.md');
+    assert.strictEqual(archiveBlockCount(), 2, 'the kill\'s block and this run\'s own block');
+    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE6, PHASE7] }]);
+    for (const entry of [PHASE1, PHASE2, PHASE4]) assert.ok(archiveCount(entry) >= 1, `${entry} is archived`);
   });
 
   const sec = (section, lines) => ({ section, count: lines.length, lines });

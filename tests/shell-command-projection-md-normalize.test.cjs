@@ -839,8 +839,14 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
   function forceFirstTempSuffix(hexSuffix) {
     const nodeCrypto = require('node:crypto');
     const realRandomBytes = nodeCrypto.randomBytes;
-    const state = { calls: 0 };
+    const state = { calls: 0, opened: [] };
     mock.method(nodeCrypto, 'randomBytes', (...args) => (state.calls++ === 0 ? Buffer.from(hexSuffix, 'hex') : realRandomBytes(...args)));
+    // Every path opened, so a test can prove the planted name was really attempted.
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, ...rest) => {
+      if (typeof p === 'string') state.opened.push(p);
+      return realOpen.call(fs, p, ...rest);
+    });
     return state;
   }
   const FIXED_HEX = '0a0b0c0d0e0f';
@@ -848,10 +854,12 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
   test('an atomic publish never writes through a symlink planted at the temp name its first attempt picks', posixOnly, () => {
     const victim = path.join(dir, 'victim.txt');
     fs.writeFileSync(victim, 'ORIGINAL');
-    fs.symlinkSync(victim, `${target}.tmp.${process.pid}.${FIXED_HEX}`);
+    const planted = `${target}.tmp.${process.pid}.${FIXED_HEX}`;
+    fs.symlinkSync(victim, planted);
     const rng = forceFirstTempSuffix(FIXED_HEX);
     scp.platformWriteSync(target, '# New\n', { atomic: true });
     mock.restoreAll();
+    assert.ok(rng.opened.includes(planted), 'the planted name was attempted, so the collision really happened');
     assert.ok(rng.calls >= 2, 'the first temp name collided with the planted link and a new one was drawn');
     assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), '# New\n');
@@ -861,10 +869,12 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     const victim = path.join(dir, 'victim.txt');
     fs.writeFileSync(victim, 'ORIGINAL');
     fs.writeFileSync(target, 'current\n');
-    fs.symlinkSync(victim, `${target}.restore.${process.pid}.${FIXED_HEX}`);
+    const planted = `${target}.restore.${process.pid}.${FIXED_HEX}`;
+    fs.symlinkSync(victim, planted);
     const rng = forceFirstTempSuffix(FIXED_HEX);
     scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS));
     mock.restoreAll();
+    assert.ok(rng.opened.includes(planted), 'the planted name was attempted, so the collision really happened');
     assert.ok(rng.calls >= 2, 'the first temp name collided with the planted link and a new one was drawn');
     assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);

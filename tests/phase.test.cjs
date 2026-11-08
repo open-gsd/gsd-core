@@ -9499,6 +9499,8 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
   }
 
   describe('phase complete auto-prune (#2087)', () => {
+    const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
+    const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
     let tmpDir;
 
     beforeEach(() => {
@@ -9542,7 +9544,9 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
-      assert.strictEqual('auto_prune_error' in JSON.parse(result.output), false, '#5831: no error field when auto-prune succeeds');
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, true, 'the prune moved entries');
+      assert.strictEqual('auto_prune_error' in out, false, '#5831: no error field when auto-prune succeeds');
 
       const newState = readStateMdForAutoPrune(tmpDir);
       assert.doesNotMatch(newState, /\[Phase 1\]: Old decision/);
@@ -9572,12 +9576,27 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 1,
         'one advisory warning names the failed auto-prune');
 
-      const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
-      const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
       const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
       const prunable = transitionCore(state, { kind: 'prune', cutoff: 2 }, { clock: realClock }).data.archivedSections;
       assert.deepStrictEqual(prunable.map(s => ({ section: s.section, lines: s.lines })),
         [{ section: 'Decisions', lines: oldDecisions }], 'the old decisions are still in STATE.md');
+    });
+
+    test('#5831: an auto-prune that archives nothing reports auto_pruned false and no error', () => {
+      writeConfigForAutoPrune(tmpDir, { workflow: { auto_prune_state: true } });
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false, 'a no-op prune is not reported as pruned');
+      assert.strictEqual('auto_prune_error' in out, false);
+      assert.match(readStateMdForAutoPrune(tmpDir), /\[Phase 6\]: Current decision/);
     });
 
     test('#5831: an invalid config.json is not an auto-prune failure: no auto_prune_error and no warning', () => {

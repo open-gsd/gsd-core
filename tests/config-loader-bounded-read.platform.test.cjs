@@ -2784,4 +2784,53 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
       assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
     });
   }
+
+  test('a STATE.md that is a FIFO makes a locked read-modify-write command exit non-zero without blocking', () => {
+    const { spawnSync } = require('node:child_process');
+    fs.unlinkSync(statePath);
+    assert.strictEqual(spawnSync('mkfifo', [statePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    const script = `require(${JSON.stringify(STATE_LIB_PATH)}).cmdStateUpdate(${JSON.stringify(tmpDir)}, 'Status', 'x');`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+
+    assert.strictEqual(child.error, undefined, `the command must not hang on a FIFO (${child.error && child.error.code})`);
+    assert.notStrictEqual(child.status, 0, 'the command fails');
+    assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
+  });
+
+  test('rolling back a prune of a symlinked STATE.md restores a regular file that is not given the link\'s 0777 mode', () => {
+    const { mock } = require('node:test');
+    const linkedTarget = path.join(tmpDir, 'real-state.md');
+    const stateBefore = fs.readFileSync(statePath);
+    fs.renameSync(statePath, linkedTarget);
+    fs.chmodSync(linkedTarget, 0o600);
+    fs.symlinkSync(linkedTarget, statePath);
+    const probe = path.join(tmpDir, 'mode-probe');
+    fs.writeFileSync(probe, '');
+    const defaultMode = fs.statSync(probe).mode & 0o777; // what a newly created file gets under this umask
+
+    // The STATE.md publish lands, then reports failure: the rollback must put the snapshot back.
+    const realRename = fs.renameSync;
+    let failed = false;
+    mock.method(fs, 'renameSync', (from, to, ...rest) => {
+      realRename.call(fs, from, to, ...rest);
+      if (!failed && to === statePath) {
+        failed = true;
+        throw Object.assign(new Error('EIO: simulated'), { code: 'EIO' });
+      }
+    });
+    try {
+      assert.throws(() => prune(3), (err) => err.code === 'EIO');
+    } finally {
+      mock.restoreAll();
+    }
+
+    assert.ok(failed, 'the STATE.md write was made to fail');
+    assert.ok(fs.lstatSync(statePath).isFile(), 'STATE.md is a regular file again');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'the snapshot is back');
+    if (process.platform !== 'win32') {
+      const mode = fs.lstatSync(statePath).mode & 0o777;
+      assert.notStrictEqual(mode, 0o777, 'the symlink\'s own mode is not applied');
+      assert.strictEqual(mode, defaultMode, 'the restored file has the default creation mode');
+    }
+  });
 });
