@@ -8,7 +8,6 @@
 
 import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -423,8 +422,6 @@ interface PrunedSection {
   section: string;
   count: number;
   lines: string[];
-  /** #5831: the section's body before the prune (identifies the run; see pruneRunMarker). */
-  sourceBody: string;
 }
 
 const STATE_PROGRESS_RESYNC_FIELDS = new Set([
@@ -7285,42 +7282,99 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 const STATE_ARCHIVE_HEADER = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
 
 /**
- * #5831: identity of one prune run — sha256 over the prune parameters and the
- * pre-prune bodies of the sections it prunes (CRLF folded to LF, trailing
- * whitespace and blank lines ignored). Recorded in the run's archive block as
- * an HTML comment (`<!-- gsd-prune-run: <hex> -->`, invisible when rendered).
- * Only the touched sections count, so a retry still matches after another
- * state command rewrote frontmatter, the session block or other sections in
- * between; a completed prune removes lines from those bodies, so a later
- * legitimate prune has a different marker.
+ * Pure (#5831): the entries of the archive's most recent `## Pruned ` block,
+ * per section, or null when the archive has no such heading. The block is the
+ * text after the last line starting `## Pruned ` up to the next `## ` heading;
+ * a `### <name>` line starts a section and every other non-blank line is an
+ * entry of the current section (trailing `\r` stripped). Lines before the first
+ * `###` are ignored.
  */
-function pruneRunMarker(sections: PrunedSection[], cutoff: number, keepRecent: number): string {
-  const hash = crypto.createHash('sha256').update(`gsd-prune-run v2\0cutoff=${cutoff}\0keep-recent=${keepRecent}\0`);
-  for (const s of sections) {
-    const body = s.sourceBody
-      .split('\n')
-      .map(l => l.replace(/\s+$/, ''))
-      .filter(l => l.length > 0)
-      .join('\n');
-    hash.update(`${s.section}\0${body}\0`);
+function parseLastArchiveBlock(archiveText: string): Array<{ section: string; lines: string[] }> | null {
+  const all = archiveText.split(/\r?\n/);
+  let start = -1;
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (all[i].startsWith('## Pruned ')) { start = i; break; }
   }
-  return hash.digest('hex');
+  if (start === -1) return null;
+  const out: Array<{ section: string; lines: string[] }> = [];
+  let current: { section: string; lines: string[] } | null = null;
+  for (let i = start + 1; i < all.length; i++) {
+    const line = all[i].replace(/\r$/, '');
+    if (line.startsWith('## ')) break;
+    if (line.startsWith('### ')) {
+      current = { section: line.slice(4).trimEnd(), lines: [] };
+      out.push(current);
+    } else if (current !== null && line.trim().length > 0) {
+      current.lines.push(line);
+    }
+  }
+  return out;
 }
 
-const PRUNE_RUN_MARKER_LINE = /^<!-- gsd-prune-run: ([0-9a-f]{64}) -->\r?$/gm;
+function lineCounts(lines: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const l of lines) {
+    const k = l.replace(/\r$/, '');
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return counts;
+}
 
-/** Pure: the run marker of the archive's most recent marked block, or null (no marked block, e.g. an archive written before #5831). */
-function lastPruneRunMarker(archiveText: string): string | null {
-  let last: string | null = null;
-  for (const m of archiveText.matchAll(PRUNE_RUN_MARKER_LINE)) last = m[1];
-  return last;
+/**
+ * Pure (#5831): does the archive's last block (`block`, from
+ * `parseLastArchiveBlock`) already hold part of this prune? It does when the
+ * block has at least one entry and, for every section it names, its lines are a
+ * sub-multiset of the same-named pruned section's lines (trailing `\r`
+ * ignored). `remainder` is then the pruned sections minus the block's lines
+ * (one occurrence removed per block occurrence, original strings and order
+ * kept, empty sections dropped, `count` recomputed); otherwise it is `sections`.
+ */
+function subtractPendingBlock(
+  block: Array<{ section: string; lines: string[] }> | null,
+  sections: PrunedSection[],
+): { pending: boolean; remainder: PrunedSection[] } {
+  if (block === null || !block.some(b => b.lines.length > 0)) return { pending: false, remainder: sections };
+  const remaining = new Map<string, Map<string, number>>();
+  for (const s of sections) {
+    const into = remaining.get(s.section) ?? new Map<string, number>();
+    for (const [k, n] of lineCounts(s.lines)) into.set(k, (into.get(k) ?? 0) + n);
+    remaining.set(s.section, into);
+  }
+  const taken = new Map<string, Map<string, number>>();
+  for (const b of block) {
+    const have = remaining.get(b.section);
+    if (have === undefined) {
+      if (b.lines.length === 0) continue;
+      return { pending: false, remainder: sections };
+    }
+    const want = lineCounts(b.lines);
+    const t = taken.get(b.section) ?? new Map<string, number>();
+    for (const [k, n] of want) {
+      if ((have.get(k) ?? 0) - (t.get(k) ?? 0) < n) return { pending: false, remainder: sections };
+    }
+    for (const [k, n] of want) t.set(k, (t.get(k) ?? 0) + n);
+    taken.set(b.section, t);
+  }
+  const remainder: PrunedSection[] = [];
+  for (const s of sections) {
+    const t = taken.get(s.section);
+    const kept: string[] = [];
+    for (const l of s.lines) {
+      const k = l.replace(/\r$/, '');
+      const left = t?.get(k) ?? 0;
+      if (left > 0) t!.set(k, left - 1);
+      else kept.push(l);
+    }
+    if (kept.length > 0) remainder.push({ section: s.section, count: kept.length, lines: kept });
+  }
+  return { pending: true, remainder };
 }
 
 /**
  * Structured form of one prune's STATE-ARCHIVE.md append (#5831): what the
  * archive is built on (`base`: the existing archive text, or the header when
  * the archive is absent), the separator inserted before the new block, and the
- * block itself — its heading fields, its run marker, and every pruned entry
+ * block itself — its heading fields and every pruned entry
  * per section, in order and with every occurrence kept.
  * `renderStateArchiveAppend` turns it into the text `publishPrunedToArchive`
  * writes.
@@ -7333,8 +7387,6 @@ interface StateArchiveAppendPlan {
     date: string;
     cutoff: number;
     keepRecent: number;
-    /** `pruneRunMarker` of the run that produced this block. */
-    run: string;
     sections: Array<{ section: string; lines: string[] }>;
   };
 }
@@ -7343,7 +7395,7 @@ interface StateArchiveAppendPlan {
 function planStateArchiveAppend(
   existing: string | null,
   sections: PrunedSection[],
-  meta: { date: string; cutoff: number; keepRecent: number; run: string },
+  meta: { date: string; cutoff: number; keepRecent: number },
 ): StateArchiveAppendPlan {
   const base = existing ?? STATE_ARCHIVE_HEADER;
   return {
@@ -7353,22 +7405,19 @@ function planStateArchiveAppend(
       date: meta.date,
       cutoff: meta.cutoff,
       keepRecent: meta.keepRecent,
-      run: meta.run,
       sections: sections.map(s => ({ section: s.section, lines: [...s.lines] })),
     },
   };
 }
 
 /**
- * Pure: render a plan to the archive text. The visible `## Pruned ...` block
- * format is unchanged; the run marker is one HTML-comment line under the
- * heading.
+ * Pure: render a plan to the archive text, in the `## Pruned ...` block format
+ * the archive has always had.
  */
 function renderStateArchiveAppend(plan: StateArchiveAppendPlan): string {
   const { block } = plan;
   let out = plan.base + plan.boundary +
-    `## Pruned ${block.date} (phases 1-${block.cutoff}, kept recent ${block.keepRecent})\n\n` +
-    `<!-- gsd-prune-run: ${block.run} -->\n\n`;
+    `## Pruned ${block.date} (phases 1-${block.cutoff}, kept recent ${block.keepRecent})\n\n`;
   for (const section of block.sections) {
     out += `### ${section.section}\n\n${section.lines.join('\n')}\n\n`;
   }
@@ -7397,17 +7446,16 @@ function errMessage(e: unknown): string {
  * the archive still differ from its snapshot after a failed write, it is
  * restored before the error propagates.
  *
- * Returns null, writing nothing, when the archive's most recent block carries
- * this run's marker: an earlier run with the same parameters and the same
- * pruned-section bodies published its block but never rewrote STATE.md
- * (killed between the two writes, or a failed STATE.md write whose archive
- * restore also failed). Its block already holds exactly these entries, so the
- * retry only rewrites STATE.md. A completed prune removes lines from those
- * sections, so a later legitimate prune — even of an identical entry that was
- * added again — normally has a different marker and is archived again. (If
- * those section bodies are put back exactly as they were before the prune,
- * e.g. by reverting STATE.md in git, the same occurrences are already archived
- * and are not archived twice.)
+ * Retry detection is by content, not by a hidden marker: when the archive's
+ * most recent block is contained, per section and with multiplicity, in what
+ * this run prunes (`subtractPendingBlock`), an earlier run published that block
+ * but never rewrote STATE.md (killed between the two writes, or a failed
+ * STATE.md write whose archive restore also failed). Only the entries not
+ * already in that block are appended, and nothing is written (the function
+ * returns null) when none are left, so the retry just rewrites STATE.md. A
+ * last block that is not contained in this prune is a different run, and the
+ * whole prune is appended. Identical text already in the last block is treated
+ * as archived: nothing is lost, and it is not archived a second time.
  */
 function publishPrunedToArchive(
   statePath: string,
@@ -7418,6 +7466,8 @@ function publishPrunedToArchive(
 ): ArchiveRollback | null {
   const stateBytes = platformReadBytesSync(statePath);
   if (stateBytes === null) throw new Error(`state prune: ${statePath} disappeared while its lock was held`);
+  // STATE.md's permission bits, so a restore from the snapshot puts them back too.
+  const stateMode = fs.lstatSync(statePath).mode & 0o777;
   // A symlinked or special archive is refused before it is read or snapshotted: reading through a
   // link would snapshot another file's bytes, and the rollback would then replace the link itself.
   try {
@@ -7431,13 +7481,17 @@ function publishPrunedToArchive(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
-  const archiveBytes = platformReadBytesSync(archivePath);
+  // O_NOFOLLOW closes the window between the lstat above and this open: a link planted in between fails with ELOOP.
+  const archiveBytes = platformReadBytesSync(archivePath, { noFollow: true });
   const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
-  const run = pruneRunMarker(sections, cutoff, keepRecent);
-  if (existing !== null && lastPruneRunMarker(existing) === run) return null;
+  const { pending, remainder } = subtractPendingBlock(
+    existing === null ? null : parseLastArchiveBlock(existing),
+    sections,
+  );
+  if (pending && remainder.length === 0) return null;
 
-  const plan = planStateArchiveAppend(existing, sections, { date: realClock.localToday(), cutoff, keepRecent, run });
-  // The file this run created, by the identity the write reports just before it publishes: a
+  const plan = planStateArchiveAppend(existing, remainder, { date: realClock.localToday(), cutoff, keepRecent });
+  // The file this run created, by the identity the write reports once it is published: a
   // rollback to "absent" removes only that file, never one another process put at the path.
   let created: { dev: number; ino: number } | undefined;
   try {
@@ -7446,7 +7500,7 @@ function publishPrunedToArchive(
       onCreated: (id) => { created = id; },
     });
   } catch (writeErr) {
-    restoreArchiveAfterFailedWrite(archivePath, archiveBytes, writeErr, created);
+    restoreArchiveAfterFailedWrite(archivePath, archiveBytes, writeErr);
     throw writeErr;
   }
 
@@ -7469,7 +7523,7 @@ function publishPrunedToArchive(
       }
       if (stateNow === null || !stateNow.equals(stateBytes)) {
         try {
-          platformRestoreFileSync(statePath, stateBytes);
+          platformRestoreFileSync(statePath, stateBytes, { mode: stateMode });
         } catch (stateRestoreErr) {
           throw new AggregateError(
             [stateErr, stateRestoreErr],
@@ -7487,7 +7541,7 @@ function publishPrunedToArchive(
           [stateErr, restoreErr],
           `state prune: writing STATE.md failed (${errMessage(stateErr)}) and restoring STATE-ARCHIVE.md also failed ` +
           `(${errMessage(restoreErr)}). The pruned entries are in both files for now; pruning again with the same ` +
-          'options only removes them from STATE.md (the archived block is recognised by its run marker).',
+          'options only removes them from STATE.md (the archived block is recognised by its content).',
         );
       }
     },
@@ -7505,20 +7559,15 @@ function restoreArchiveAfterFailedWrite(
   archivePath: string,
   archiveBytes: Buffer | null,
   writeErr: unknown,
-  created?: { dev: number; ino: number },
 ): void {
   try {
     const now = platformReadBytesSync(archivePath);
     if (archiveBytes === null && now !== null) {
-      // No archive existed: remove the file only if it is the one this run created.
-      if (created === undefined) {
-        throw Object.assign(
-          new Error(`ESTALE: ${archivePath} appeared during the failed write and was not created by this run — left in place`),
-          { code: 'ESTALE' },
-        );
-      }
-      platformRestoreFileSync(archivePath, null, { unlinkOnlyIf: created });
-      return;
+      // No archive existed and one does now, though the write failed: it is not this run's, so it is never deleted.
+      throw Object.assign(
+        new Error(`ESTALE: ${archivePath} appeared during the failed write and was not created by this run — left in place`),
+        { code: 'ESTALE' },
+      );
     }
     const unchanged = now === null ? archiveBytes === null : archiveBytes !== null && now.equals(archiveBytes);
     if (!unchanged) platformRestoreFileSync(archivePath, archiveBytes);
@@ -7545,7 +7594,6 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   const silent = !!options.silent;
   const emit = silent ? () => {} : (result: Record<string, unknown>, r: boolean, v?: string) => output(result, r, v);
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { emit({ error: 'STATE.md not found' }, raw); return; }
 
   const keepRecent = parseInt(String(options.keepRecent), 10) || 3;
   const dryRun = !!options.dryRun;
@@ -7555,7 +7603,11 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   // engages on a template-conformant STATE.md instead of bailing "Only 0
   // phases" (#1760). #3231/#3481 routed the phase-labeled write commands
   // through the same helper rather than leaving a second copy of the ladder here.
-  const rawState = fs.readFileSync(statePath, 'utf-8');
+  // Read through the non-blocking seam: a FIFO or device at STATE.md fails with ENXIO and a
+  // directory with EISDIR instead of blocking this process.
+  const stateBytesBefore = platformReadBytesSync(statePath);
+  if (stateBytesBefore === null) { emit({ error: 'STATE.md not found' }, raw); return; }
+  const rawState = stateBytesBefore.toString('utf-8');
   const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
   const body = stripFrontmatter(rawState);
   // Prune needs an integer cutoff, so it parses the resolved id itself; a
@@ -7585,8 +7637,9 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   if (dryRun) {
     // Dry-run: compute what would be pruned without writing anything
-    const content = fs.readFileSync(statePath, 'utf-8');
-    const result = runPruneCore(content);
+    const dryBytes = platformReadBytesSync(statePath);
+    if (dryBytes === null) { emit({ error: 'STATE.md not found' }, raw); return; }
+    const result = runPruneCore(dryBytes.toString('utf-8'));
     const totalPruned = result.archivedSections.reduce((sum, s) => sum + s.count, 0);
     emit({
       pruned: false,
@@ -7605,8 +7658,9 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   // serializes archive writers (this is the only one):
   //   1. compute the prune and snapshot the archive's exact bytes (or absence);
   //   2. publish the archive atomically (old content + one `## Pruned ...`
-  //      block carrying this run's marker), or skip it when the archive's
-  //      latest block already carries that marker (see publishPrunedToArchive);
+  //      block), appending only the entries the archive's latest block does
+  //      not already hold, or skipping it when that block holds them all
+  //      (content match, see publishPrunedToArchive);
   //   3. write STATE.md. If that throws, `onWriteFailure` restores the archive
   //      to its snapshot (or deletes it if it was absent) and the error is
   //      rethrown, so both files are as they were before the prune.
@@ -7619,11 +7673,13 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   // damaged STATE.md and whose restore also failed can cost unpruned content,
   // and that error says so). A process killed between steps 2
   // and 3 (or a failed archive restore) leaves the entries in both files;
-  // re-running the same prune then only rewrites STATE.md, because the run
-  // marker covers just the pruned sections' bodies and the options — other
-  // state commands in between do not change it. Not covered: a re-run with
-  // different options, or after one of those sections was edited in between —
-  // a different run, which archives its entries again (duplicated, never lost).
+  // re-running the prune then finds the archive's latest block contained in
+  // what it prunes and appends only what that block lacks (nothing, for the
+  // same options), so each entry is archived once even when the cutoff grew or
+  // other state commands rewrote STATE.md in between. Not covered: a re-run
+  // that prunes less than the block holds (a smaller cutoff, or one of those
+  // entries edited in between) — the block is not contained in it, so the whole
+  // prune is appended (duplicated, never lost).
   let rollback: ArchiveRollback | null = null;
   readModifyWriteStateMd(statePath, (content) => {
     const result = runPruneCore(content);
@@ -8157,9 +8213,10 @@ export = {
   // prune's archive write is built from, exposed so tests assert on it.
   planStateArchiveAppend,
   renderStateArchiveAppend,
-  // #5831: a prune run's marker and the archive's latest one (retry detection).
-  pruneRunMarker,
-  lastPruneRunMarker,
+  // #5831: retry detection by content — the archive's last block and its
+  // subtraction from a prune's sections.
+  parseLastArchiveBlock,
+  subtractPendingBlock,
   cmdStateRebuild,
   cmdStateMilestoneSwitch,
   cmdSignalWaiting,

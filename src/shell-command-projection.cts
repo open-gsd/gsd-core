@@ -2224,14 +2224,21 @@ function publishViaTempFile(
     checkParent?: () => void;
     createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
     onCreated?: (id: { dev: number; ino: number }) => void;
+    /** Permission bits to publish with, instead of those of the existing target (or the default when absent). */
+    mode?: number;
   } = {},
 ): void {
   let mode = 0o666;
   let hasTargetMode = false;
-  try {
-    const st = fs.lstatSync(filePath);
-    if (st.isFile()) { mode = st.mode & 0o777; hasTargetMode = true; }
-  } catch { /* absent: default mode */ }
+  if (hooks.mode !== undefined) {
+    mode = hooks.mode & 0o777;
+    hasTargetMode = true;
+  } else {
+    try {
+      const st = fs.lstatSync(filePath);
+      if (st.isFile()) { mode = st.mode & 0o777; hasTargetMode = true; }
+    } catch { /* absent: default mode */ }
+  }
   hooks.checkParent?.();
   const { fd, tmpPath } = hooks.createTemp !== undefined
     ? hooks.createTemp(filePath, undefined, mode)
@@ -2291,12 +2298,26 @@ function removeFileWithRetry(filePath: string): void {
  * `unlinkOnlyIf` (with `bytes` null): the file is removed only while `lstat`
  * still reports that device and inode — the file this run created. Any other
  * entry at the path (a file another process put there since) is left in place
- * and the call throws ESTALE. Absent is fine either way.
+ * and the call throws ESTALE. Absent is fine either way. Remaining race: the
+ * `lstat` identity check and the `rmSync` are separate syscalls, so another
+ * process replacing the entry between them is not observed and its file is
+ * removed. Documented residual: it needs write access to the parent directory
+ * and lands inside a window of two syscalls; no further race machinery guards it.
+ *
+ * `mode` (with `bytes`): the permission bits the restored file gets, in place of
+ * those of whatever sits at the path now (the default when the path is absent).
+ *
+ * With `bytes`, the directory holding the file is re-checked against the identity
+ * it had at entry before the temp file is created and again before the rename,
+ * and a changed directory is refused with ENXIO. Remaining race: the stat and the
+ * following syscall are separate, so a swap landing between them is not observed;
+ * a temp file created before such a swap may be orphaned in the original directory
+ * (accepted residual, same class as the parent swap in `platformWriteSync`).
  */
 export function platformRestoreFileSync(
   filePath: string,
   bytes: Buffer | null,
-  opts: { unlinkOnlyIf?: { dev: number; ino: number } } = {},
+  opts: { unlinkOnlyIf?: { dev: number; ino: number }; mode?: number } = {},
 ): void {
   if (bytes === null) {
     const expected = opts.unlinkOnlyIf;
@@ -2319,7 +2340,21 @@ export function platformRestoreFileSync(
     return;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  publishViaTempFile(filePath, bytes, undefined, 'restore');
+  const statParent = (): { dev: number; ino: number } => {
+    const s = fs.statSync(path.dirname(filePath));
+    return { dev: s.dev, ino: s.ino };
+  };
+  const entryParent = statParent();
+  const checkParent = (): void => {
+    const now = statParent();
+    if (now.dev !== entryParent.dev || now.ino !== entryParent.ino) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot restore ${filePath}: its directory is not the one it had at entry — refusing`),
+        { code: 'ENXIO' },
+      );
+    }
+  };
+  publishViaTempFile(filePath, bytes, undefined, 'restore', { checkParent, mode: opts.mode });
 }
 
 /**
@@ -2327,12 +2362,18 @@ export function platformRestoreFileSync(
  * non-blocking and checked with fstat, so a FIFO or device at the path fails
  * with ENXIO instead of blocking the caller (who may hold a lock); a directory
  * fails with EISDIR. There is no size cap: the caller needs every byte. Other
- * read errors throw.
+ * read errors throw. With `noFollow` the final component is opened O_NOFOLLOW, so
+ * a symlink there fails with ELOOP instead of being read through (no effect where
+ * the platform has no O_NOFOLLOW).
  */
-export function platformReadBytesSync(filePath: string): Buffer | null {
+export function platformReadBytesSync(filePath: string, opts: { noFollow?: boolean } = {}): Buffer | null {
   let fd: number;
   try {
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0) |
+        (opts.noFollow === true ? (fs.constants.O_NOFOLLOW ?? 0) : 0),
+    );
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;

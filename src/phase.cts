@@ -8056,15 +8056,20 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (autoPruneEnabled && fs.existsSync(statePath)) {
         // Non-hoisted: load-order matters (stateMod must be fully resolved first).
         const { cmdStatePrune } = stateMod;
-        cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
-        autoPruned = true;
+        try {
+          cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
+          autoPruned = true;
+        } catch (err) {
+          // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
+          // the failed prune left them (it never loses entries).
+          autoPruneError = err instanceof Error ? err.message : String(err);
+          warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
+        }
       }
     }
-  } catch (err) {
-    // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
-    // the failed prune left them (it never loses entries).
-    autoPruneError = err instanceof Error ? err.message : String(err);
-    warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
+  } catch {
+    // Best-effort: an unreadable or invalid config.json means auto-prune is not
+    // enabled; completion proceeds silently.
   }
 
   const result = {
