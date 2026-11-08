@@ -35,7 +35,14 @@ export const BASELINE_STATUS = Object.freeze({
   UNTERMINATED: 'unterminated',
   OUTSIDE_CRITERIA_ZONE: 'outside_criteria_zone',
   SCANNER_ERROR: 'scanner_error',
+  TRUNCATED: 'truncated',
 } as const);
+
+/** Most statuses a scan records; the rest collapse into one `truncated` entry. */
+export const MAX_BASELINE_STATUSES = 50;
+
+export type BaselineRuleId = (typeof BASELINE_RULE)[keyof typeof BASELINE_RULE];
+export type BaselineStatusCode = (typeof BASELINE_STATUS)[keyof typeof BASELINE_STATUS];
 
 export type BaselineValue =
   | { kind: 'integer'; value: number }
@@ -56,7 +63,7 @@ export interface BaselineNotation {
 }
 
 export interface BaselineFinding {
-  rule: 'B1' | 'B2';
+  rule: BaselineRuleId;
   severity: 'error' | 'warning';
   line: number;
   text: string;
@@ -64,7 +71,7 @@ export interface BaselineFinding {
 }
 
 export interface BaselineStatus {
-  code: string;
+  code: BaselineStatusCode;
   line: number;
   text: string;
   detail: string;
@@ -72,7 +79,7 @@ export interface BaselineStatus {
 
 export interface BaselineParseResult {
   notation: BaselineNotation | null;
-  statuses: { code: string; detail: string }[];
+  statuses: { code: BaselineStatusCode; detail: string }[];
 }
 
 export interface BaselineScanResult {
@@ -93,7 +100,7 @@ const REV_RE = /^[0-9a-f]{7,40}$/;
 const HEAD_EXPECT_RE = /^\s*HEAD\s*=\s*(\S+)\s+EXPECT\s*(==|!=|>=|<=|>|<)\s*(\S+?)(?=\s|$)/;
 const OPENER_RE = /\[[ \t]*HEAD[ \t]*=/g;
 const LEGACY_RE = /#[ \t]*baseline[ \t]+at[ \t]+HEAD[ \t]*:/gi;
-const ALLOW_RE = /<!--\s*plan-criteria-allow:\s*(R[1-6]|B[12])\s+-\s+([^>]*\S)\s*-->/g;
+const ALLOW_RE = /<!--\s*plan-criteria-allow:\s*(R[1-6]|B[12])\s+-\s+([^>\n]{0,500}?\S)\s*-->/g;
 
 /** Parse one value token; null when it is outside the value grammar. */
 export function parseBaselineValue(token: string): BaselineValue | null {
@@ -149,8 +156,8 @@ function decodeNotationEntities(s: string): string {
 
 /** Parse the text between `[` and `]`. Fatal problems yield a null notation. */
 export function parseBaselineNotation(inner: string): BaselineParseResult {
-  const statuses: { code: string; detail: string }[] = [];
-  const fatal = (code: string, detail: string): BaselineParseResult => ({
+  const statuses: { code: BaselineStatusCode; detail: string }[] = [];
+  const fatal = (code: BaselineStatusCode, detail: string): BaselineParseResult => ({
     notation: null,
     statuses: [{ code, detail }],
   });
@@ -200,6 +207,14 @@ export function parseBaselineNotation(inner: string): BaselineParseResult {
       if (trailingUnpinned) {
         unpinned = true;
         ref = ref.slice(0, ref.length - trailingUnpinned[0].length).trim();
+      }
+      const misplacedPin = /(?:^|\s)(@\S+)$/.exec(ref);
+      if (misplacedPin) {
+        statuses.push({
+          code: BASELINE_STATUS.UNRECOGNIZED_TRAILING,
+          detail: `\`${misplacedPin[1].slice(0, 60)}\` must precede GUARD (\`@<rev> GUARD MUTATION: <ref>\`)`,
+        });
+        ref = ref.slice(0, ref.length - misplacedPin[0].length).trim();
       }
       mutation = ref.length > 0 ? ref : null;
       tail = '';
@@ -273,16 +288,29 @@ export function scanBaselineNotation(
         cursorLine = 1;
       }
       for (let i = cursorIdx; i < idx; i += 1) {
-        if (content.charCodeAt(i) === 10) cursorLine += 1;
+        const c = content.charCodeAt(i);
+        // A bare CR ends a line; the CR of a CRLF pair is counted by its LF.
+        if (c === 10 || (c === 13 && content.charCodeAt(i + 1) !== 10)) cursorLine += 1;
       }
       cursorIdx = idx;
       return cursorLine;
     };
 
-    const addStatus = (code: string, line: number, text: string, detail: string): void => {
+    let droppedStatuses = 0;
+    let firstDroppedLine = 0;
+    let firstDroppedText = '';
+    const addStatus = (code: BaselineStatusCode, line: number, text: string, detail: string): void => {
+      if (result.statuses.length >= MAX_BASELINE_STATUSES) {
+        if (droppedStatuses === 0) {
+          firstDroppedLine = line;
+          firstDroppedText = text;
+        }
+        droppedStatuses += 1;
+        return;
+      }
       result.statuses.push({ code, line, text: cap(text), detail });
     };
-    const addFinding = (rule: 'B1' | 'B2', line: number, text: string, message: string): void => {
+    const addFinding = (rule: BaselineRuleId, line: number, text: string, message: string): void => {
       if (allow.has(rule)) return;
       const severity = rule === 'B1' ? 'error' : 'warning';
       result.findings.push({ rule, severity, line, text: cap(text), message });
@@ -338,6 +366,14 @@ export function scanBaselineNotation(
         lm[0],
         'free-form `# baseline at HEAD:` comment is not checked; write `[HEAD=<value> EXPECT<op><value>]` instead',
       );
+    }
+    if (droppedStatuses > 0) {
+      result.statuses.push({
+        code: BASELINE_STATUS.TRUNCATED,
+        line: firstDroppedLine,
+        text: cap(firstDroppedText),
+        detail: `${droppedStatuses} further status${droppedStatuses === 1 ? '' : 'es'} omitted after the first ${MAX_BASELINE_STATUSES}`,
+      });
     }
     return result;
   } catch (e) {

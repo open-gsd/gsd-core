@@ -31,6 +31,7 @@ const {
   renderBaselineValue,
   compareBaseline,
   parseCriteriaAllowMarkers,
+  MAX_BASELINE_STATUSES,
 } = baseline;
 
 const PLAN_HEAD = [
@@ -377,7 +378,11 @@ describe('#4309 malformed notation becomes statuses, never findings', () => {
     assert.deepStrictEqual(nextLine.findings, []);
   });
 
-  test('[M20] 500-char boundary: closing bracket at the last allowed position found, one char beyond is unterminated', () => {
+  test('[M20] 500-char boundary: limit-1 and limit found, one char beyond is unterminated', () => {
+    const limitMinusOne = `[${'HEAD=1 EXPECT>=3'.padEnd(498, ' ')}]`;
+    const minusResult = scanBaselineNotation(makePlan({ criteria: `  - ${limitMinusOne}` }));
+    assert.deepStrictEqual(codes(minusResult), []);
+    assert.strictEqual(minusResult.notationCount, 1);
     const inside = `[${'HEAD=1 EXPECT>=3'.padEnd(499, ' ')}]`;
     const beyond = `[${'HEAD=1 EXPECT>=3'.padEnd(500, ' ')}]`;
     const okResult = scanBaselineNotation(makePlan({ criteria: `  - ${inside}` }));
@@ -597,8 +602,68 @@ describe('#4309 fault and hostile input', () => {
     const plan = makePlan({ criteria: `  - ${'[HEAD='.repeat(5000)}` });
     const result = scanBaselineNotation(plan);
     assert.deepStrictEqual(result.findings, []);
-    assert.ok(Array.isArray(result.statuses));
-    assert.ok(result.statuses.every((s) => s.code === 'unterminated'));
+    assert.strictEqual(result.statuses.length, MAX_BASELINE_STATUSES + 1);
+    assert.ok(result.statuses.slice(0, MAX_BASELINE_STATUSES).every((s) => s.code === 'unterminated'));
+    assert.strictEqual(result.statuses[MAX_BASELINE_STATUSES].code, 'truncated');
+  });
+
+  test('[M42] status cap boundary: 49 and 50 unterminated openers are uncapped, 51 yields 50 plus one truncated', () => {
+    const run = (n) => scanBaselineNotation(makePlan({
+      criteria: Array.from({ length: n }, (_, i) => `  - item ${i} [HEAD=`).join('\n'),
+    }));
+    for (const n of [MAX_BASELINE_STATUSES - 1, MAX_BASELINE_STATUSES]) {
+      const r = run(n);
+      assert.strictEqual(r.statuses.length, n);
+      assert.ok(r.statuses.every((s) => s.code === 'unterminated'), String(n));
+    }
+    const over = run(MAX_BASELINE_STATUSES + 1);
+    assert.strictEqual(over.statuses.length, MAX_BASELINE_STATUSES + 1);
+    assert.ok(over.statuses.slice(0, MAX_BASELINE_STATUSES).every((s) => s.code === 'unterminated'));
+    const last = over.statuses[MAX_BASELINE_STATUSES];
+    assert.strictEqual(last.code, 'truncated');
+    assert.match(last.detail, /1 further status /);
+    assert.strictEqual(last.line, over.statuses[MAX_BASELINE_STATUSES - 1].line + 1);
+  });
+
+  test('[M42] findings are not capped by the status cap', () => {
+    const criteria = Array.from({ length: 60 }, (_, i) => `  - n${i} [HEAD=3 EXPECT>=3]`).join('\n');
+    assert.strictEqual(scanBaselineNotation(makePlan({ criteria })).findings.length, 60);
+  });
+});
+
+describe('#4309 line numbers with bare CR line endings', () => {
+  test('a CR-only plan reports the same line as its LF equivalent', () => {
+    const lf = '<acceptance_criteria>\n- a\n- b [HEAD=3 EXPECT>=1]\n</acceptance_criteria>';
+    const cr = lf.replace(/\n/g, '\r');
+    const crlf = lf.replace(/\n/g, '\r\n');
+    const expected = scanBaselineNotation(lf).findings[0].line;
+    assert.strictEqual(expected, 3);
+    assert.deepStrictEqual(scanBaselineNotation(cr).findings.map((f) => f.line), [expected]);
+    assert.deepStrictEqual(scanBaselineNotation(crlf).findings.map((f) => f.line), [expected]);
+  });
+});
+
+describe('#4309 misplaced pin inside the MUTATION reference', () => {
+  test('a trailing @<rev> after the MUTATION ref is stripped, flagged, and B1 is judged with the remaining ref', () => {
+    const r = scanBaselineNotation(crit('[HEAD=3 EXPECT>=3 GUARD MUTATION: x @abc1234]'));
+    assert.deepStrictEqual(rules(r), []);
+    assert.deepStrictEqual(codes(r), ['unrecognized_trailing']);
+    assert.match(r.statuses[0].detail, /must precede GUARD/);
+    const parsed = parseBaselineNotation('HEAD=3 EXPECT>=3 GUARD MUTATION: x @abc1234');
+    assert.strictEqual(parsed.notation.mutation, 'x');
+  });
+
+  test('a MUTATION ref that is only a pin is empty, so B1 is not honored away', () => {
+    const r = scanBaselineNotation(crit('[HEAD=3 EXPECT>=3 GUARD MUTATION: @abc1234]'));
+    assert.deepStrictEqual(rules(r), ['B1']);
+    assert.deepStrictEqual(codes(r), ['unrecognized_trailing']);
+  });
+});
+
+describe('#4309 allow-marker scan is linear', () => {
+  test('16000 unclosed markers complete and match nothing', () => {
+    const content = '<!-- plan-criteria-allow: R1 - x '.repeat(16000);
+    assert.strictEqual(parseCriteriaAllowMarkers(content).size, 0);
   });
 });
 

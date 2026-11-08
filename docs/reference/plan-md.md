@@ -301,7 +301,7 @@ A quantitative criterion (a count or a match) carries its measured baseline besi
 | `GUARD MUTATION: <ref>` | free text, not empty | Declares a regression guard: a criterion meant to hold before and after the change. `<ref>` names the mutation that turns it red. |
 | `UNPINNED` | flag | No revision was recorded. Do not combine it with `@<sha>`. |
 
-Keywords are uppercase and the grammar is closed. The notation is read from `<acceptance_criteria>`, `<automated>` (in a shell comment), and `<verify>`, and is never executed.
+Keywords are uppercase and the grammar is closed. The `GUARD MUTATION:` reference cannot contain `]`. A trailing `UNPINNED` at the end of the reference is always the flag, never part of the reference. `@<sha>` must precede `GUARD`; one written after the reference is removed from it, reported as `unrecognized_trailing`, and the criterion is judged with the remaining reference (an empty reference is not a guard). The notation is read from `<acceptance_criteria>`, `<automated>` (in a shell comment), and `<verify>`, and is never executed.
 
 **`verify plan-structure` rules:**
 
@@ -323,10 +323,11 @@ A notation the checker cannot parse or evaluate is a **status**, not a finding. 
 | `unterminated` | `[HEAD=` with no `]` on the same line within 500 characters |
 | `outside_criteria_zone` | The notation sits outside the three criteria zones and is not judged |
 | `scanner_error` | The scanner failed; plan validation continues |
+| `truncated` | More than 50 statuses; the rest are summarized in one entry (at most 51 statuses are listed). Findings are never capped. |
 
 The legitimate exit is `<!-- plan-criteria-allow: B1 - <reason> -->` (or `B2`), with a non-empty reason, as for the R1–R6 rules.
 
-The JSON verdict carries `baseline_notation_count`, `baseline_findings` (`{ rule, severity, line, text, message }`), and `baseline_statuses` (`{ code, line, text, detail }`).
+`baseline_notation_count` counts every notation found, including ones outside the criteria zones. The JSON verdict carries `baseline_notation_count`, `baseline_findings` (`{ rule, severity, line, text, message }`), and `baseline_statuses` (`{ code, line, text, detail }`).
 
 **Known limits:** `EXPECT` is not cross-checked against the shell command's own comparison, and nothing checks that `HEAD` was actually measured.
 
