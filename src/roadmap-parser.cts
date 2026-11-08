@@ -311,45 +311,108 @@ function isMilestoneShippedInRoadmap(content: string, version: string): boolean 
 
 /**
  * #5726: `content` with every fenced code block and HTML comment blanked to
- * spaces (newlines kept), so offsets and line structure are unchanged but no
- * heading inside a fence or comment can be located. Fences are blanked FIRST
- * with `scanFencedBlocks` (CommonMark: the closer matches the opener's
- * character and length; an unclosed fence runs to EOF), so a `<!--` inside a
- * fence opens nothing. Then, on that fence-blanked text, every closed
- * `<!-- ... -->` is blanked wherever it sits. An UNCLOSED `<!--` hides to EOF
- * only when it opens a line (0-3 spaces of indent, CommonMark HTML block type
- * 2); a mid-line unclosed `<!--` is not a comment and hides nothing.
+ * spaces, so offsets and line structure are unchanged but no heading inside a
+ * fence or comment can be located. `\n` stays at its index; every other
+ * character (`\r` included) becomes a space; no `<!--` appears that the input
+ * did not have at that index.
+ *
+ * ONE linear scan in document order; the construct that starts first wins:
+ *
+ * - At a line start, a fence opener (the `scanFencedBlocks` grammar: 0-3 spaces
+ *   of indent, 3+ backticks or tildes, a backtick opener's info string holds no
+ *   backtick) blanks through its matching closer line (same character, at least
+ *   the opener's length, nothing but whitespace after), or to EOF when none
+ *   exists. A `<!--` inside a fence opens nothing.
+ * - Otherwise the next `<!--` at `p` opens a comment, and its `-->` is searched
+ *   from `p + 2`, so `<!-->` and `<!--->` are complete comments (CommonMark
+ *   0.31). With a closer, `p .. closer + 3` is blanked and may span lines; a
+ *   fence line inside it is part of the comment.
+ * - With no closer anywhere after it: if the `<!--` opens its line (0-3 spaces
+ *   before it, CommonMark HTML block type 2) everything to EOF is blanked; if
+ *   it is mid-line nothing is hidden and the scan resumes after `p + 4`.
+ *
+ * Each of the next `<!--`, `-->` and `\n` is searched through a cached finder
+ * (the scan position only moves forward, so a hit at or past the position is
+ * still the next hit, and a miss stays a miss), keeping the whole pass linear.
  */
 function blankFencesAndComments(content: string): string {
-  const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
-  const lines = content.split('\n');
-  for (const fence of scanFencedBlocks(lines)) {
-    const last = fence.closeLineIdx === -1 ? lines.length - 1 : fence.closeLineIdx;
-    for (let i = fence.openLineIdx; i <= last; i++) lines[i] = blank(lines[i]);
-  }
-  const noFences = lines.join('\n');
-  let out = '';
+  const n = content.length;
+  const finder = (needle: string): ((from: number) => number) => {
+    let hit = -2;
+    return (from) => {
+      if (hit === -1) return -1;
+      if (hit < from) hit = content.indexOf(needle, from);
+      return hit;
+    };
+  };
+  const nextOpen = finder('<!--');
+  const nextClose = finder('-->');
+  const nextNewline = finder('\n');
+  const fenceRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+  const fenceOn = (from: number, to: number): RegExpExecArray | null =>
+    fenceRe.exec(content.slice(from, to).replace(/\r$/, ''));
+  const lineEnd = (from: number): number => {
+    const nl = nextNewline(from);
+    return nl === -1 ? n : nl;
+  };
+
+  const pieces: string[] = [];
   let at = 0;
-  let from = 0;
-  for (;;) {
-    const open = noFences.indexOf('<!--', from);
-    if (open === -1) break;
-    const close = noFences.indexOf('-->', open + 4);
-    let end: number;
-    if (close !== -1) end = close + 3;
-    else {
-      const lineStart = noFences.lastIndexOf('\n', open - 1) + 1;
-      if (!/^ {0,3}$/.test(noFences.slice(lineStart, open))) {
-        from = open + 4;
+  const hide = (from: number, to: number): void => {
+    pieces.push(content.slice(at, from), content.slice(from, to).replace(/[^\n]/g, ' '));
+    at = to;
+  };
+
+  let pos = 0;
+  let lineStart = 0;
+  let atLineStart = true;
+  while (pos < n) {
+    const le = lineEnd(pos);
+    if (atLineStart) {
+      const opener = fenceOn(pos, le);
+      if (opener !== null && !(opener[2][0] === '`' && opener[3].includes('`'))) {
+        const char = opener[2][0];
+        let closeEnd = n;
+        for (let ls = le + 1; ls < n; ) {
+          const e = lineEnd(ls);
+          const m = fenceOn(ls, e);
+          if (m !== null && m[2][0] === char && m[2].length >= opener[2].length && /^\s*$/.test(m[3])) {
+            closeEnd = e;
+            break;
+          }
+          ls = e + 1;
+        }
+        hide(pos, closeEnd);
+        pos = closeEnd + 1;
+        lineStart = pos;
         continue;
       }
-      end = noFences.length;
     }
-    out += noFences.slice(at, open) + blank(noFences.slice(open, end));
-    at = end;
-    from = end;
+    const p = nextOpen(pos);
+    if (p === -1 || p >= le) {
+      pos = le + 1;
+      lineStart = pos;
+      atLineStart = true;
+      continue;
+    }
+    const close = nextClose(p + 2);
+    if (close !== -1) {
+      const end = close + 3;
+      hide(p, end);
+      if (le < end) lineStart = content.lastIndexOf('\n', end - 1) + 1;
+      pos = end;
+      atLineStart = false;
+      continue;
+    }
+    if (p - lineStart <= 3 && /^ *$/.test(content.slice(lineStart, p))) {
+      hide(p, n);
+      return pieces.join('');
+    }
+    pos = p + 4;
+    atLineStart = false;
   }
-  return out + noFences.slice(at);
+  pieces.push(content.slice(at));
+  return pieces.join('');
 }
 
 /**
