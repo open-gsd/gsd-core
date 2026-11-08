@@ -198,22 +198,50 @@ function resolveSchemaDefault(cwd: string, kp: string): { found: boolean; value:
 }
 
 /**
- * Emit a schema-resolved default (#2256), applying the same secret-masking
- * invariant the found-key path applies. getCapabilityConfigSchema is a
- * federated, third-party-extensible surface (ADR-1244) — a future key-name
- * collision with a secret key must not leak a declared default in plaintext.
- * Centralizing emission here means masking can't be missed at a call site.
+ * #6029 (ADR-1411 Decision 3): the single argv value parser at the config CLI
+ * boundary, shared by `config-set` and `config-get --default`. Type-directed
+ * only: per-key setter policy (project_code verbatim, validators) and the
+ * setter's `null` = unset action (#2046) stay in cmdConfigSet.
  */
-function emitResolvedDefault(kp: string, value: unknown, raw: boolean): void {
-  const resolvedValue = kp === 'planner.stall_detection_enabled'
+function parseConfigArgValue(val: string): unknown {
+  if (val === 'true') return true;
+  if (val === 'false') return false;
+  if (val === 'null') return null;
+  // #1581: Number.isFinite (not !isNaN) so 'Infinity'/'-Infinity' are NOT
+  // coerced to non-finite numbers that JSON.stringify later renders as `null`.
+  // They fall through and stay strings.
+  if (Number.isFinite(Number(val)) && val !== '') return Number(val);
+  if (val.startsWith('[') || val.startsWith('{')) {
+    try { return JSON.parse(val); } catch { /* keep as string */ }
+  }
+  return val;
+}
+
+/**
+ * #6029 (ADR-1411 Decisions 3-4): the single emission projection for every
+ * `cmdConfigGet` arm. Order: the #4570 planner-watchdog resolver, then secret
+ * masking (the encoder never sees plaintext; getCapabilityConfigSchema is a
+ * federated, third-party-extensible surface (ADR-1244), so centralizing the
+ * masking here means it cannot be missed at a call site), then encoding.
+ * `json` is what JSON mode emits; `text` is what `--raw` emits. Raw is frozen:
+ * it is `sourceText` (the verbatim argv of `--default`) when the value reached
+ * here untransformed, else `String(value)`.
+ */
+function projectConfigGetOutput(kp: string, value: unknown, sourceText?: string): { json: unknown; text: string } {
+  const resolved = kp === 'planner.stall_detection_enabled'
     ? resolvePlannerStallDetectionEnabled(value)
     : value;
   if (isSecretKey(kp)) {
-    const masked = maskSecret(resolvedValue as Parameters<typeof maskSecret>[0]);
-    output(masked, raw, masked);
-    return;
+    const masked = maskSecret(resolved as Parameters<typeof maskSecret>[0]);
+    return { json: masked, text: masked };
   }
-  output(resolvedValue, raw, String(resolvedValue));
+  const text = sourceText !== undefined && resolved === value ? sourceText : String(resolved);
+  return { json: resolved, text };
+}
+
+function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: string): void {
+  const { json, text } = projectConfigGetOutput(kp, value, sourceText);
+  output(json, raw, text);
 }
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
@@ -1070,20 +1098,8 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   assertKnownConfigKey(cwd, kp);
 
-  // Parse value (handle booleans, numbers, and JSON arrays/objects)
-  let parsedValue: unknown = val;
-  if (val === 'true') parsedValue = true;
-  else if (val === 'false') parsedValue = false;
-  else if (val === 'null') parsedValue = null;
-  // #1581: Number.isFinite (not !isNaN) so 'Infinity'/'-Infinity' are NOT
-  // coerced to non-finite numbers that JSON.stringify later renders as `null`
-  // (disk=null while the CLI echoed 'Infinity'). They fall through to the
-  // JSON branch (which rejects them) and stay strings, then per-key validators
-  // reject them with a non-zero exit.
-  else if (Number.isFinite(Number(val)) && val !== '') parsedValue = Number(val);
-  else if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
-    try { parsedValue = JSON.parse(val); } catch { /* keep as string */ }
-  }
+  // Parse value (handle booleans, numbers, and JSON arrays/objects) — #6029: shared with config-get --default.
+  let parsedValue: unknown = parseConfigArgValue(val);
 
   // #2046: a bare `null` unsets (deletes) the key — the documented "Clear" action.
   // Short-circuits before every typed per-key validator so clearing a typed key
@@ -1480,7 +1496,7 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
   return parsedValue;
 }
 
-function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: unknown): void {
+function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: string | undefined): void {
   const configPath = path.join(planningDir(cwd), 'config.json');
   const hasDefault = defaultValue !== undefined;
 
@@ -1490,6 +1506,8 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
 
   // After the error() guard, keyPath is narrowed to string.
   const kp = keyPath!;
+  // #6029: the --default argv is parsed by the same parser config-set uses; its raw text is kept verbatim for --raw.
+  const emitDefault = (): void => emitConfigValue(kp, parseConfigArgValue(defaultValue!), raw, defaultValue);
 
   let config: Record<string, unknown> = {};
   try {
@@ -1505,10 +1523,10 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
       // --default). Only when root also misses do --default / schema default apply.
       // (When no workstream is active, resolveFromRootConfig is a no-op: same file.)
       const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
-      if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
+      if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
+      if (hasDefault) { emitDefault(); return; }
       const sd = resolveSchemaDefault(cwd, kp);
-      if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
+      if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
       error('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
     }
   } catch (err) {
@@ -1532,10 +1550,10 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     if (current === undefined || current === null || typeof current !== 'object') {
       // #2702: root-config inheritance before --default / schema default (see above).
       const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
-      if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
+      if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
+      if (hasDefault) { emitDefault(); return; }
       const sd = resolveSchemaDefault(cwd, kp);
-      if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
+      if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
       error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
     }
     // Own-property gate: bracket access on a plain object walks the
@@ -1555,26 +1573,16 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   if (current === undefined) {
     // #2702: root-config inheritance before --default / schema default (see above).
     const rootVal = resolveFromRootConfig(cwd, kp);
-    if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
-    if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
+    if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
+    if (hasDefault) { emitDefault(); return; }
     const sd = resolveSchemaDefault(cwd, kp);
-    if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
+    if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
     error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
   }
 
-  if (kp === 'planner.stall_detection_enabled') {
-    current = resolvePlannerStallDetectionEnabled(current);
-  }
-
-  // Never echo plaintext for sensitive keys via config-get. Plaintext lives
-  // in config.json on disk; the CLI surface always shows the masked form.
-  if (isSecretKey(kp)) {
-    const masked = maskSecret(current as Parameters<typeof maskSecret>[0]);
-    output(masked, raw, masked);
-    return;
-  }
-
-  output(current, raw, String(current));
+  // #6029: the present-key arm uses the same projection as every other arm
+  // (planner resolver and secret masking included).
+  emitConfigValue(kp, current, raw);
 }
 
 /**
@@ -1772,6 +1780,8 @@ export = {
   cmdConfigEnsureSection,
   cmdConfigSet,
   cmdConfigGet,
+  parseConfigArgValue,
+  projectConfigGetOutput,
   cmdConfigSetModelProfile,
   cmdConfigNewProject,
   cmdConfigPath,
