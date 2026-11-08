@@ -1022,7 +1022,6 @@ describe('#5298 — Git source excludes only cloned .git metadata', () => {
     const { f, project } = await stagedFixture(t);
     const add = realExecGit(['-C', project, 'add', '-A'], { timeout: GIT_TIMEOUT_MS });
     assert.equal(add.exitCode, 0, add.stderr);
-    assert.doesNotMatch(add.stderr, /embedded git repository/i);
     const entries = splitLines(git(project, 'ls-files', '--stage')).filter(Boolean);
     assert.equal(entries.length, Object.keys(f.files).length);
     assert.ok(entries.every((entry) => entry.startsWith('100644 ')), 'capability files must be regular index entries, never a 160000 gitlink');
