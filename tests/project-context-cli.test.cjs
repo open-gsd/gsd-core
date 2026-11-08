@@ -214,6 +214,77 @@ describe('project-context CLI: commit refuses to write outside the worktree', ()
     assertRefused(res, 'not_git_repo');
     assert.equal(fs.existsSync(path.join(dir, '.git')), false, 'no repository was created');
   });
+
+  test('commit: refused outside_worktree from a linked worktree inside a planning.sub_repos workspace (ADR-4908 §3)', (t) => {
+    const tmp = mkTmp(t);
+    const main = fs.realpathSync(mkRepo(path.join(tmp, 'main-repo')));
+    const ws = path.join(tmp, 'workspace');
+    write(path.join(ws, 'README.md'), '# workspace\n');
+    git(['init', '-q', '-b', 'main'], ws);
+    git(['add', 'README.md'], ws);
+    git(['commit', '-q', '-m', 'workspace init'], ws);
+    write(
+      path.join(ws, '.planning', 'config.json'),
+      JSON.stringify({ commit_docs: true, planning: { sub_repos: ['wt-a'] } }),
+    );
+    write(path.join(ws, '.planning', 'STATE.md'), '# workspace state\n');
+    const wt = addWorktree(main, path.join(ws, 'wt-a'), 'feat-ws-commit');
+    const sub = path.join(wt, 'src');
+    fs.mkdirSync(sub, { recursive: true });
+    const wsBefore = head(ws);
+    const mainBefore = head(main);
+    const wtBefore = head(wt);
+
+    const res = run(['commit', 'docs: workspace planning', '--files', '.planning/STATE.md'], sub, tmp);
+    assertRefused(res, 'outside_worktree');
+    assert.equal(head(ws), wsBefore, 'workspace repo HEAD unchanged');
+    assert.equal(head(main), mainBefore, 'main checkout HEAD unchanged');
+    assert.equal(head(wt), wtBefore, 'worktree HEAD unchanged');
+  });
+
+  describe('commit: a symlinked path to the worktree is not outside it', () => {
+    const skip = process.platform === 'win32' ? 'symlink creation needs privileges on win32' : false;
+
+    function mkLinked(t) {
+      const tmp = mkTmp(t);
+      const repo = fs.realpathSync(mkRepo(path.join(tmp, 'real', 'repo'), { planning: true }));
+      const link = path.join(tmp, 'link');
+      fs.symlinkSync(path.join(tmp, 'real'), link, 'dir');
+      write(path.join(repo, '.planning', 'STATE.md'), '# state\n');
+      return { tmp, repo, viaLink: path.join(link, 'repo') };
+    }
+
+    test('cwd reached through a symlinked directory is not refused', { skip }, (t) => {
+      const { tmp, repo, viaLink } = mkLinked(t);
+      const before = head(repo);
+      const res = run(['commit', 'docs: via symlinked cwd', '--files', '.planning/STATE.md'], viaLink, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(outcome(res).committed, true);
+      assert.notEqual(head(repo), before);
+    });
+
+    test('absolute in-tree path through the symlinked prefix is not refused', { skip }, (t) => {
+      const { tmp, repo, viaLink } = mkLinked(t);
+      const before = head(repo);
+      const abs = path.join(viaLink, '.planning', 'STATE.md');
+      const res = run(['commit', 'docs: via symlinked absolute path', '--files', abs], repo, tmp);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(outcome(res).committed, true);
+      assert.notEqual(head(repo), before);
+    });
+
+    test('non-canonical os.tmpdir() absolute path is not refused (macOS /var vs /private/var)', (t) => {
+      const raw = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6043-raw-'));
+      t.after(() => cleanup(raw));
+      const repo = mkRepo(path.join(raw, 'repo'), { planning: true });
+      write(path.join(repo, '.planning', 'STATE.md'), '# state\n');
+      const before = head(repo);
+      const res = run(['commit', 'docs: raw tmpdir', '--files', path.join(repo, '.planning', 'STATE.md')], repo, raw);
+      assert.equal(res.exitCode, 0, JSON.stringify(res));
+      assert.equal(outcome(res).committed, true);
+      assert.notEqual(head(repo), before);
+    });
+  });
 });
 
 describe('project-context CLI: workspace and verb', () => {

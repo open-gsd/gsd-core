@@ -2008,8 +2008,11 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
 /**
  * #6043 (ADR-4908 §3): a committing verb commits in the checkout the process
  * runs in. Returns the typed refusal when it cannot: not a git repository, or
- * `cwd` / a path to commit resolves lexically outside `ctx.worktreeRoot`.
- * Lexical on purpose: a `.planning` symlink inside the worktree stays inside.
+ * `cwd` / a path to commit resolves outside `ctx.worktreeRoot`.
+ * `cwd` and the worktree root are compared by realpath; a relative path is
+ * resolved lexically against the canonical `cwd`, so a `.planning` symlink
+ * inside the worktree stays inside; an absolute path is canonicalized through
+ * its nearest existing ancestor directory.
  * A degraded context (git timed out or could not run) makes no claim about the
  * worktree, so it never refuses.
  */
@@ -2023,12 +2026,44 @@ function commitRefusal(
     return { reason: 'not_git_repo', message: `commit refused: ${cwd} is not inside a git repository` };
   }
   if (ctx.provenance.degraded) return null;
-  const worktreeRoot = path.resolve(ctx.worktreeRoot);
+  const realOrSelf = (p: string): string => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  // Nearest existing ancestor directory of an absolute path, realpath'd, with
+  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var).
+  const canonicalAbsolute = (abs: string): string => {
+    const rest: string[] = [path.basename(abs)];
+    let ancestor = path.dirname(abs);
+    for (;;) {
+      try {
+        return path.join(fs.realpathSync(ancestor), ...rest);
+      } catch {
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) return abs;
+        rest.unshift(path.basename(ancestor));
+        ancestor = parent;
+      }
+    }
+  };
+  const norm = (p: string): string => {
+    const slashed = p.replace(/\\/g, '/');
+    return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
+  };
+  const inside = (target: string, root: string): boolean => isContainedIn(norm(target), norm(root), { sep: '/' });
+  const worktreeRoot = realOrSelf(path.resolve(ctx.worktreeRoot));
+  const realCwd = realOrSelf(path.resolve(cwd));
   const declared = [...(files ?? []), ...(filesRemoved ?? [])];
   const targets = declared.length > 0 ? declared : ['.planning/'];
-  const escaping = !isContainedIn(path.resolve(cwd), worktreeRoot)
-    ? path.resolve(cwd)
-    : targets.map((t) => path.resolve(cwd, t)).find((abs) => !isContainedIn(abs, worktreeRoot));
+  // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
+  const resolveTarget = (t: string): string =>
+    path.isAbsolute(t) ? canonicalAbsolute(path.resolve(t)) : path.resolve(realCwd, t);
+  const escaping = !inside(realCwd, worktreeRoot)
+    ? realCwd
+    : targets.map(resolveTarget).find((abs) => !inside(abs, worktreeRoot));
   if (escaping === undefined) return null;
   return {
     reason: 'outside_worktree',

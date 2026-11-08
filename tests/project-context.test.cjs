@@ -287,11 +287,86 @@ describe('project-context: git degradation', () => {
       },
     });
     assert.equal(ctx.worktreeRoot, root);
-    assert.deepEqual(calls[0].args, ['rev-parse', '--show-toplevel']);
+    assert.deepEqual(calls[0].args, ['rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir']);
     for (const c of calls) {
       assert.equal(c.opts.cwd, start);
       assert.equal(c.opts.timeout, 10000);
     }
+  });
+
+  test('project-context: a main checkout spawns exactly one git process', (t) => {
+    const root = real(mkRepo(path.join(mkTmp(t), 'main'), { planning: true }));
+    const calls = [];
+    const ctx = resolveProjectContext(subdir(root, 1), {
+      deps: {
+        execGit: (args, opts) => {
+          calls.push(args);
+          return shellProjection.execGit(args, { ...opts, env: { ...GIT_ENV, ...(opts && opts.env) } });
+        },
+      },
+    });
+    assert.equal(ctx.worktreeRoot, root);
+    assert.equal(ctx.repoRoot, root);
+    assert.equal(calls.length, 1, `a main checkout needs no worktree list: ${JSON.stringify(calls)}`);
+  });
+
+  test('project-context: a linked worktree adds exactly one worktree list', (t) => {
+    const tmp = mkTmp(t);
+    const main = real(mkRepo(path.join(tmp, 'main')));
+    const wt = addWorktree(main, path.join(tmp, 'wt'), 'feat-one-list');
+    const calls = [];
+    resolveProjectContext(wt, {
+      deps: {
+        execGit: (args, opts) => {
+          calls.push(args);
+          return shellProjection.execGit(args, { ...opts, env: { ...GIT_ENV, ...(opts && opts.env) } });
+        },
+      },
+    });
+    assert.deepEqual(calls.map((a) => a[0]), ['rev-parse', 'worktree']);
+  });
+
+  test('project-context: git worktree list failure degrades to worktree_list_failed', (t) => {
+    const start = mkTmp(t);
+    const ctx = resolveProjectContext(start, {
+      deps: {
+        execGit: (args) => {
+          const out = (exitCode, stdout, stderr = '') => ({ exitCode, stdout, stderr, signal: null, error: null, timedOut: false });
+          if (args[0] === 'rev-parse') return out(0, `${start}\n${start}/.git/worktrees/w\n${start}/.git\n`);
+          return out(128, '', 'fatal: unable to read worktrees');
+        },
+      },
+    });
+    assert.equal(ctx.provenance.reason, 'worktree_list_failed');
+    assert.equal(ctx.provenance.degraded, true);
+    assert.equal(ctx.repoRoot, ctx.worktreeRoot);
+    assert.equal(ctx.isLinkedWorktree, false);
+    assert.equal(ctx.provenance.warnings.length, 1);
+  });
+
+  test('project-context: rev-parse "not a git repository" is not_git_repo and not degraded', (t) => {
+    const start = mkTmp(t);
+    const ctx = resolveProjectContext(start, {
+      deps: {
+        execGit: () => ({ exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', signal: null, error: null, timedOut: false }),
+      },
+    });
+    assert.equal(ctx.provenance.reason, 'not_git_repo');
+    assert.equal(ctx.provenance.degraded, false);
+  });
+
+  test('project-context: any other rev-parse failure is git_error and degraded', (t) => {
+    const start = mkTmp(t);
+    const ctx = resolveProjectContext(start, {
+      deps: {
+        execGit: () => ({ exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership in repository at /x\n', signal: null, error: null, timedOut: false }),
+      },
+    });
+    assert.equal(ctx.provenance.reason, 'git_error');
+    assert.equal(ctx.provenance.degraded, true);
+    assert.equal(ctx.worktreeRoot, start);
+    assert.equal(ctx.repoRoot, start);
+    assert.equal(ctx.provenance.warnings.length, 1);
   });
 });
 
@@ -324,8 +399,7 @@ describe('project-context: repository shapes', () => {
       deps: {
         execGit: (args) => {
           const out = (stdout) => ({ exitCode: 0, stdout, stderr: '', signal: null, error: null, timedOut: false });
-          if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return out(`${start}\n`);
-          if (args[0] === 'rev-parse' && args[1] === '--git-common-dir') return out('.git\n');
+          if (args[0] === 'rev-parse') return out(`${start}\n${start}/.git/worktrees/w\n${start}/.git\n`);
           if (args[0] === 'worktree') return out(bareOnly);
           return TIMED_OUT;
         },

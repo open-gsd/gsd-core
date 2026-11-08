@@ -35,7 +35,7 @@ export interface ProjectContextProvenance {
   readonly source: 'explicit' | 'ancestor' | 'workspace' | 'main-checkout' | 'none';
   readonly reason: string;
   readonly degraded: boolean;
-  readonly warnings: string[];
+  readonly warnings: readonly string[];
 }
 
 export interface ProjectContext {
@@ -340,6 +340,11 @@ const GIT_TIMED_OUT_WARNING =
 const GIT_UNAVAILABLE_WARNING =
   'git could not be run while resolving the project context; roots fall back to what git had answered or the start directory';
 
+const GIT_ERROR_WARNING =
+  'git failed while resolving the project context; roots fall back to the start directory';
+const GIT_WORKTREE_LIST_WARNING =
+  'git worktree list failed while resolving the project context; the main checkout is taken to be the current checkout';
+
 function lexicalFacts(start: string, reason: string, degraded: boolean, warnings: string[]): GitFacts {
   return { worktreeRoot: start, repoRoot: start, gitCommonDir: null, reason, degraded, warnings };
 }
@@ -354,49 +359,39 @@ function readGitFacts(start: string, execGit: ExecGitFn): GitFacts {
     }
   };
 
-  const top = run(['rev-parse', '--show-toplevel']);
-  if (top.timedOut) return lexicalFacts(start, 'git_timed_out', true, [GIT_TIMED_OUT_WARNING]);
-  if (top.error) return lexicalFacts(start, 'git_unavailable', true, [GIT_UNAVAILABLE_WARNING]);
-  const topText = String(top.stdout || '').trim();
-  if (top.exitCode !== 0 || topText === '') return lexicalFacts(start, 'not_git_repo', false, []);
+  const rev = run(['rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir']);
+  if (rev.timedOut) return lexicalFacts(start, 'git_timed_out', true, [GIT_TIMED_OUT_WARNING]);
+  if (rev.error) return lexicalFacts(start, 'git_unavailable', true, [GIT_UNAVAILABLE_WARNING]);
+  if (rev.exitCode !== 0) {
+    // Only git's own "not a git repository" is a claim about the directory; any other
+    // failure (dubious ownership, corrupt repo) says nothing, so it degrades.
+    if (/not a git repository/i.test(String(rev.stderr || ''))) return lexicalFacts(start, 'not_git_repo', false, []);
+    return lexicalFacts(start, 'git_error', true, [GIT_ERROR_WARNING]);
+  }
+  const [topText = '', gitDirText = '', commonText = ''] = String(rev.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+  if (topText === '') return lexicalFacts(start, 'not_git_repo', false, []);
   const worktreeRoot = path.resolve(start, topText);
+  const gitCommonDir = commonText !== '' ? path.resolve(start, commonText) : null;
+  const linked = gitDirText !== '' && gitCommonDir !== null && path.resolve(start, gitDirText) !== gitCommonDir;
 
-  let degradedReason = null as string | null;
-  const warnings: string[] = [];
-  const noteDegraded = (r: SpawnResultOutput): boolean => {
-    if (r.timedOut) {
-      degradedReason = 'git_timed_out';
-      warnings.push(GIT_TIMED_OUT_WARNING);
-      return true;
-    }
-    if (r.error) {
-      degradedReason = 'git_unavailable';
-      warnings.push(GIT_UNAVAILABLE_WARNING);
-      return true;
-    }
-    return false;
-  };
-
-  let gitCommonDir: string | null = null;
-  const common = run(['rev-parse', '--git-common-dir']);
-  if (!noteDegraded(common)) {
-    const commonText = String(common.stdout || '').trim();
-    if (common.exitCode === 0 && commonText !== '') gitCommonDir = path.resolve(start, commonText);
+  // A main checkout is its own repo root: no second git process.
+  if (!linked) {
+    return { worktreeRoot, repoRoot: worktreeRoot, gitCommonDir, reason: 'ok', degraded: false, warnings: [] };
   }
 
-  let repoRoot = worktreeRoot;
-  let bareMain = false;
   const listed = run(['worktree', 'list', '--porcelain']);
-  if (!noteDegraded(listed)) {
-    const firstNonBare = listed.exitCode === 0
-      ? parseWorktreeEntries(listed.stdout).find((entry) => !entry.bare)
-      : undefined;
-    if (firstNonBare) repoRoot = path.resolve(start, firstNonBare.path);
-    else bareMain = true;
+  if (listed.timedOut) return { worktreeRoot, repoRoot: worktreeRoot, gitCommonDir, reason: 'git_timed_out', degraded: true, warnings: [GIT_TIMED_OUT_WARNING] };
+  if (listed.error) return { worktreeRoot, repoRoot: worktreeRoot, gitCommonDir, reason: 'git_unavailable', degraded: true, warnings: [GIT_UNAVAILABLE_WARNING] };
+  if (listed.exitCode !== 0) {
+    return { worktreeRoot, repoRoot: worktreeRoot, gitCommonDir, reason: 'worktree_list_failed', degraded: true, warnings: [GIT_WORKTREE_LIST_WARNING] };
   }
-
-  const reason = degradedReason ?? (bareMain ? 'bare_main_worktree' : 'ok');
-  return { worktreeRoot, repoRoot, gitCommonDir, reason, degraded: degradedReason !== null, warnings };
+  const firstNonBare = parseWorktreeEntries(listed.stdout).find((entry) => !entry.bare);
+  if (firstNonBare) {
+    return { worktreeRoot, repoRoot: path.resolve(start, firstNonBare.path), gitCommonDir, reason: 'ok', degraded: false, warnings: [] };
+  }
+  return { worktreeRoot, repoRoot: worktreeRoot, gitCommonDir, reason: 'bare_main_worktree', degraded: false, warnings: [] };
 }
 
 // ─── Resolver ─────────────────────────────────────────────────────────────────
@@ -450,7 +445,7 @@ export function resolveProjectContext(startDir: string, opts: ResolveProjectCont
     source,
     reason: facts.reason,
     degraded: facts.degraded,
-    warnings: Object.freeze([...facts.warnings]) as string[],
+    warnings: Object.freeze([...facts.warnings]),
   });
   return Object.freeze({
     projectRoot,
@@ -466,7 +461,10 @@ export function resolveProjectContext(startDir: string, opts: ResolveProjectCont
 /**
  * Transitional cwd for SKIP_ROOT_RESOLUTION commands and the workstream
  * resolution input (Phase 2 deletes this as it migrates skip commands to named
- * fields). Reproduces the retired `resolveMainWorktreeCwd` remap: the start
+ * fields). Equivalent to the retired `resolveMainWorktreeCwd` remap for
+ * non-bare, non-submodule layouts; for bare-main and submodule layouts it uses
+ * the first non-bare `git worktree list` entry (the old `dirname(git-common-dir)`
+ * pointed at a non-checkout there). The remap: the start
  * directory when it owns `.planning/`; otherwise, inside a linked worktree,
  * that worktree's top level when it owns `.planning/`, else the main checkout;
  * outside a linked worktree the start directory unchanged.
