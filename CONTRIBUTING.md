@@ -649,6 +649,7 @@ const r = runNode([SCRIPT], { env: isolatedEnv({ home }) });
 |---|---|---|
 | `isolatedEnv({ home, path?, claudeConfigDir?, override?, base? })` | a plain env object | `HOME` and `USERPROFILE` both set to `home` (required, absolute). Every config-location and session-identity variable is blanked, using the same registry-derived list as `testEnvBase()` in `tests/helpers.cjs`. Every ambient `GSD_*`, `RUN_TESTS_*`, `NODE_TEST_CONTEXT`, `BASH_ENV` and `CLAUDE_ENV_FILE` is removed. Each key the helper sets appears exactly once, whatever its casing (Windows reports PATH as `Path`). |
 | `isolatedPath({ without, basePath? })` | `{ path, nodeBinDir }` | No directory holding a tool named in `without` stays on PATH, and neither do relative or empty entries. `node` stays resolvable from a dedicated directory placed first. Clean up `nodeBinDir`. |
+| `linkExecutable(dir, name)` | `dir` | Puts an executable named `name` in `dir` that runs this Node interpreter. It uses a symlink on POSIX, and a hard link on Windows (falling back to a copy across volumes). Use it to plant a tool on a fixture PATH. |
 | `createHermeticRoot(prefix, { parent? })` | an absolute temp directory | Contains a neutral `.planning/config.json`. GSD's upward project-config search stops there, so it cannot reach an ancestor's real config. This matters when you run from a worktree nested inside another checkout. |
 
 To keep a variable the helper strips, pass it in `override`. For example,
