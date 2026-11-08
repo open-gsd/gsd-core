@@ -23,7 +23,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runNode } = require('./helpers/process-seam.cjs');
 
-const { installRuntimeFixture,installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
+const { installRuntimeFixture, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
