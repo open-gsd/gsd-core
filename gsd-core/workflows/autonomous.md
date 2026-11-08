@@ -573,7 +573,7 @@ Display the review result summary and score from UI-REVIEW.md if produced. Conti
 
 > Full instructions are in `gsd-core/references/autonomous-smart-discuss.md`. Read that file now and follow it exactly.
 
-Smart discuss is an autonomous-optimized variant of `gsd-discuss-phase`. It proposes grey area answers in batch tables — the user accepts or overrides per area — and writes an identical CONTEXT.md to what discuss-phase produces.
+Smart discuss is an autonomous-optimized variant of `gsd-discuss-phase`. It decides reversible technical questions autonomously (logged, no prompt), proposes hard-to-reverse answers in batch tables the user accepts or overrides per area, asks preference questions neutrally, and writes CONTEXT.md and DISCUSSION-LOG.md.
 
 **Inputs:** `PHASE_NUM` from execute_phase.
 
@@ -802,7 +802,7 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 
 <success_criteria>
 - [ ] All incomplete phases executed in order (smart discuss → ui-phase → plan → execute → ui-review each)
-- [ ] Smart discuss proposes grey area answers in tables, user accepts or overrides per area
+- [ ] Smart discuss decides reversible technical questions autonomously, proposes hard-to-reverse answers in tables the user accepts or overrides per area, and asks preference questions neutrally
 - [ ] Progress banners displayed between phases
 - [ ] Execute-phase invoked with --no-transition (autonomous manages transitions)
 - [ ] Post-execution verification reads VERIFICATION.md and routes on status
