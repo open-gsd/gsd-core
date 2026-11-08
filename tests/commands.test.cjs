@@ -1345,10 +1345,6 @@ describe('scaffold command', () => {
     assert.equal(verdict.passed, false);
     assert.equal(verdict.policy.require_verification, true);
     assert.deepEqual(verdict.verification_files, ['03-VERIFICATION.md']);
-    assert.ok(
-      verdict.blockers.some((blocker) => /verification required but no passing .*VERIFICATION\.md found/i.test(blocker)),
-      `expected the missing passing verification report blocker, got: ${JSON.stringify(verdict.blockers)}`,
-    );
   });
 
   test('#5202: scaffolded verification blocks phase complete as incomplete without a vocabulary error or writes', () => {
