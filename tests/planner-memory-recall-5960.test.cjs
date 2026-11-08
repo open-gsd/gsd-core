@@ -88,6 +88,7 @@ function runBashOrSkip(t, script, env) {
 /** Run the products snippet for `names` against `phaseDir`; returns the seam result or null. */
 function runProducts(t, names, phaseDir) {
   const body = productsBlock()
+    .filter((l) => !l.startsWith('echo "PLAN_PRE_PRODUCTS='))
     .map((l) => (l.startsWith('PLAN_PRE_PRODUCES=') ? `PLAN_PRE_PRODUCES='${names}'` : l))
     .join('\n');
   const script = `set -u\n${body}\nprintf '%s' "$PLAN_PRE_PRODUCTS"`;
@@ -140,6 +141,21 @@ describe('#5960 planner reads the plan:pre memory recall', () => {
       const r = runProducts(t, 'MEMORY-RECALL.md', dir);
       if (!r) return;
       assert.equal(r.stdout, `${dir}/MEMORY-RECALL.md`, r.summary + r.stderr);
+    });
+
+    test('a phase dir path containing a space is handed over intact', (t) => {
+      const dir = tempPhaseDir(t, (d) => {
+        fs.mkdirSync(path.join(d, 'phase dir'));
+        fs.writeFileSync(path.join(d, 'phase dir', 'MEMORY-RECALL.md'), 'x', 'utf8');
+      });
+      const spaced = `${dir}/phase dir`;
+      const r = runProducts(t, 'MEMORY-RECALL.md', spaced);
+      if (!r) return;
+      assert.equal(r.stdout, `${spaced}/MEMORY-RECALL.md`, r.summary + r.stderr);
+    });
+
+    test('the block echoes PLAN_PRE_PRODUCTS so the orchestrator can read it', () => {
+      assert.ok(productsBlock().some((l) => l === 'echo "PLAN_PRE_PRODUCTS=${PLAN_PRE_PRODUCTS}"'));
     });
 
     test('an absent file yields an empty list', (t) => {
@@ -212,6 +228,11 @@ describe('#5960 planner reads the plan:pre memory recall', () => {
       assert.deepEqual(steps, []);
     });
 
+    test('default config (mempalace off): no mempalace step', (t) => {
+      const steps = mempalaceSteps(activeHooksFor(t, {}));
+      assert.deepEqual(steps, []);
+    });
+
     test('mempalace disabled: no mempalace step', (t) => {
       const steps = mempalaceSteps(activeHooksFor(t, { mempalace: { enabled: false } }));
       assert.deepEqual(steps, []);
@@ -230,6 +251,15 @@ describe('#5960 planner reads the plan:pre memory recall', () => {
     const s8 = text.indexOf('\n## 8. Spawn gsd-planner Agent');
     assert.ok(s56 !== -1 && s8 !== -1 && s56 < s8, 'plan-phase.md must order §5.6 before §8');
     assert.ok(section(text, '5.6. ').includes('plan-phase/steps/plan-pre-dispatch.md'));
+  });
+
+  test('inactive-hook paths state that PLAN_PRE_PRODUCTS stays empty', () => {
+    const stepLine = readFileNormalized(STEP_FILE).split('\n').find((l) => l.startsWith('If no active `step` or `gate` remains'));
+    assert.ok(stepLine, 'step file must carry the "If no active `step` or `gate` remains" sentence');
+    assert.ok(stepLine.includes('`PLAN_PRE_PRODUCTS` stays empty'), stepLine);
+    const branch1 = readFileNormalized(PLAN_PHASE).split('\n').find((l) => l.startsWith('**Branch 1 — all plan:pre hooks inactive'));
+    assert.ok(branch1, 'plan-phase.md must carry Branch 1');
+    assert.ok(branch1.includes('`PLAN_PRE_PRODUCTS` stays empty'), branch1);
   });
 
   test('skill-step dispatch is never gated on auto-chain', () => {

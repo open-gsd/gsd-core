@@ -2695,6 +2695,7 @@ const capabilities = {
       "gsd-mempalace-curator"
     ],
     "hooks": [],
+    "activationKey": "mempalace.enabled",
     "config": {
       "mempalace.enabled": {
         "type": "boolean",
