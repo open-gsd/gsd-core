@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 319,
+  "count": 321,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 46,
+    "SEAM": 48,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1265,6 +1265,16 @@
       "id": "SEAM.criterion-baseline.owns",
       "klass": "SEAM",
       "value": "the [HEAD=… EXPECT…] notation grammar, its comparison kernel, and the plan-criteria-allow marker parser (#4309, ADR-4309)"
+    },
+    {
+      "id": "SEAM.criterion-replay.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/criterion-replay.test.cjs"
+    },
+    {
+      "id": "SEAM.criterion-replay.owns",
+      "klass": "SEAM",
+      "value": "opt-in replay of criterion baseline commands under the no-shell argv quarantine, and its observed-value derivation (#4310, ADR-4310)"
     },
     {
       "id": "SEAM.evaluation-scope.enforced-by",
