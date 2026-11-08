@@ -4703,15 +4703,58 @@ describe('#5726: blankFencesAndComments properties', () => {
   //   inner tokens: P plain, H heading, F fence line, O a bare `<!--`
   const INNER = fc.constantFrom('P', 'H', 'F', 'O');
   const FENCE_BODY = fc.constantFrom('P', 'H', 'O', 'C'); // C: a bare `-->`
+  const VISIBLE_BODY = fc.constantFrom('P', 'H'); // lines no unclosed opener hides
   const FENCE_CHAR = fc.constantFrom('```', '~~~', '````');
+  const LONG_FENCE = fc.constantFrom('````', '`````', '~~~~', '~~~~~');
+  const INFO = fc.constantFrom('', ' js', ' `x`');
+  // A backtick fence whose info string holds a backtick is not a fence (CommonMark §4.5).
+  const infoOf = (fence, info) => (fence[0] === '`' && info.includes('`') ? ' js' : info);
   const segment = fc.oneof(
     fc.record({ kind: fc.constant('plain') }),
     fc.record({ kind: fc.constant('heading') }),
-    fc.record({ kind: fc.constant('fence'), fence: FENCE_CHAR, body: fc.array(FENCE_BODY, { maxLength: 4 }) }),
+    // A closer of the opener's length or LONGER (extra 1-2) closes the fence.
+    fc.record({
+      kind: fc.constant('fence'),
+      fence: FENCE_CHAR,
+      body: fc.array(FENCE_BODY, { maxLength: 4 }),
+      extra: fc.integer({ min: 0, max: 2 }),
+      info: INFO,
+    }),
+    // A same-char closer that is too SHORT, or carries trailing text, does not
+    // close: the lines after it (headings included) stay inside the fence.
+    fc.record({
+      kind: fc.constant('fenceBadCloser'),
+      fence: LONG_FENCE,
+      body: fc.array(FENCE_BODY, { maxLength: 3 }),
+      bad: fc.constantFrom('short', 'trailing'),
+      body2: fc.array(FENCE_BODY, { maxLength: 3 }),
+      extra: fc.integer({ min: 0, max: 1 }),
+    }),
+    // A backtick fence line with a backtick in its info string is plain content.
+    fc.record({ kind: fc.constant('badInfo') }),
     fc.record({ kind: fc.constant('comment'), body: fc.array(INNER, { maxLength: 4 }), fence: FENCE_CHAR }),
   );
   const tail = fc.option(
-    fc.record({ indent: fc.integer({ min: 0, max: 3 }), body: fc.array(INNER, { maxLength: 4 }), fence: FENCE_CHAR }),
+    fc.oneof(
+      // a line-opening unclosed comment hides to EOF
+      fc.record({
+        kind: fc.constant('comment'),
+        indent: fc.integer({ min: 0, max: 3 }),
+        body: fc.array(INNER, { maxLength: 4 }),
+        fence: FENCE_CHAR,
+      }),
+      // an unclosed fence blanks to EOF
+      fc.record({
+        kind: fc.constant('fence'),
+        fence: FENCE_CHAR,
+        info: INFO,
+        body: fc.array(FENCE_BODY, { maxLength: 4 }),
+      }),
+      // a mid-line unclosed `<!--` hides nothing
+      fc.record({ kind: fc.constant('midline'), body: fc.array(VISIBLE_BODY, { maxLength: 4 }) }),
+      // a 4-space-indented unclosed `<!--` is not a comment opener: hides nothing
+      fc.record({ kind: fc.constant('indented'), body: fc.array(VISIBLE_BODY, { maxLength: 4 }) }),
+    ),
     { nil: undefined },
   );
 
@@ -4734,9 +4777,17 @@ describe('#5726: blankFencesAndComments properties', () => {
       if (seg.kind === 'plain') emit('some text', false);
       else if (seg.kind === 'heading') { const h = heading(lines.length); emit(h, true); }
       else if (seg.kind === 'fence') {
-        emit(seg.fence, false);
+        emit(seg.fence + infoOf(seg.fence, seg.info), false);
         for (const tok of seg.body) emit(inner(tok, seg.fence[0] === '`' ? '~~~' : '```'), false);
+        emit(seg.fence + seg.fence[0].repeat(seg.extra), false);
+      } else if (seg.kind === 'fenceBadCloser') {
         emit(seg.fence, false);
+        for (const tok of seg.body) emit(inner(tok, ''), false);
+        emit(seg.bad === 'short' ? seg.fence[0].repeat(3) : `${seg.fence} x`, false);
+        for (const tok of seg.body2) emit(inner(tok, ''), false);
+        emit(seg.fence + seg.fence[0].repeat(seg.extra), false);
+      } else if (seg.kind === 'badInfo') {
+        emit('```js `x`', false);
       } else {
         emit('<!-- note', false);
         for (const tok of seg.body) emit(inner(tok, seg.fence), false);
@@ -4744,8 +4795,25 @@ describe('#5726: blankFencesAndComments properties', () => {
       }
     }
     if (unclosed) {
-      emit(`${' '.repeat(unclosed.indent)}<!--`, false);
-      for (const tok of unclosed.body) emit(inner(tok, unclosed.fence), false);
+      const visibleBody = (body) => {
+        for (const tok of body) {
+          if (tok === 'H') emit(heading(lines.length), true);
+          else emit('some text', false);
+        }
+      };
+      if (unclosed.kind === 'comment') {
+        emit(`${' '.repeat(unclosed.indent)}<!--`, false);
+        for (const tok of unclosed.body) emit(inner(tok, unclosed.fence), false);
+      } else if (unclosed.kind === 'fence') {
+        emit(unclosed.fence + infoOf(unclosed.fence, unclosed.info), false);
+        for (const tok of unclosed.body) emit(inner(tok, ''), false);
+      } else if (unclosed.kind === 'midline') {
+        emit('text <!--', false);
+        visibleBody(unclosed.body);
+      } else {
+        emit('    <!--', false);
+        visibleBody(unclosed.body);
+      }
     }
     return { input: lines.join(eol) + eol, visible };
   }
@@ -4768,6 +4836,92 @@ describe('#5726: blankFencesAndComments properties', () => {
   test('a 200 KB run of mid-line unclosed `<!--` openers hides nothing', () => {
     const input = 'x' + '<!--'.repeat(50000);
     assert.strictEqual(blankFencesAndComments(input), input);
+  });
+});
+
+// ─── one fence-delimiter matcher (#5726) ─────────────────────────────────────
+
+describe('#5726: matchFenceDelimiter parity', () => {
+  const {
+    matchFenceDelimiter, scanFencedBlocks, stripFencedCode, tokenizeHeadings,
+  } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const { blankFencesAndComments } = roadmapParser;
+
+  const fenceLine = fc.record({
+    kind: fc.constant('fence'),
+    indent: fc.integer({ min: 0, max: 4 }),
+    char: fc.constantFrom('`', '~'),
+    run: fc.integer({ min: 2, max: 6 }),
+    info: fc.constantFrom('', ' ', ' js', ' `x`', 'x', ' a b', ' x `y` z'),
+    cr: fc.boolean(),
+  });
+  const otherLine = fc.record({
+    kind: fc.constantFrom('text', 'heading'),
+    cr: fc.boolean(),
+  });
+  const lineSpec = fc.oneof(fenceLine, fenceLine, otherLine);
+
+  function textOf(spec, i) {
+    const body = spec.kind === 'fence'
+      ? ' '.repeat(spec.indent) + spec.char.repeat(spec.run) + spec.info
+      : spec.kind === 'heading' ? `# h${i}` : 'some text';
+    return body + (spec.cr ? '\r' : '');
+  }
+
+  // Independent grammar, spelled from the generator's components.
+  const isDelimiter = (s) => s.kind === 'fence' && s.indent <= 3 && s.run >= 3;
+  const canOpen = (s) => !(s.char === '`' && s.info.includes('`'));
+  const closesOpener = (s, o) => s.char === o.char && s.run >= o.run && s.info.trim() === '';
+
+  test('the matcher agrees with the grammar spelled from the line components', () => {
+    fc.assert(fc.property(fenceLine, fc.constantFrom('`', '~'), fc.integer({ min: 3, max: 6 }), (s, oc, ol) => {
+      const m = matchFenceDelimiter(textOf(s, 0));
+      if (!isDelimiter(s)) { assert.strictEqual(m, null, JSON.stringify(s)); return; }
+      assert.ok(m, JSON.stringify(s));
+      assert.strictEqual(m.char, s.char);
+      assert.strictEqual(m.len, s.run);
+      assert.strictEqual(m.trailing, s.info);
+      assert.strictEqual(m.canOpen, canOpen(s));
+      assert.strictEqual(m.closes({ char: oc, len: ol }), closesOpener(s, { char: oc, run: ol }), JSON.stringify([s, oc, ol]));
+    }), { numRuns: 500, seed: 5726 });
+  });
+
+  // Fenced line spans [open, close] (close = last line when unterminated),
+  // from a state machine over the generator's own components.
+  function spansOf(specs) {
+    const spans = [];
+    let open = null;
+    specs.forEach((s, i) => {
+      if (!isDelimiter(s)) return;
+      if (open === null) {
+        if (canOpen(s)) open = { idx: i, char: s.char, run: s.run };
+      } else if (closesOpener(s, open)) {
+        spans.push([open.idx, i]);
+        open = null;
+      }
+    });
+    if (open !== null) spans.push([open.idx, specs.length - 1]);
+    return spans;
+  }
+
+  test('scanFencedBlocks, stripFencedCode, tokenizeHeadings and blankFencesAndComments all partition a document as the matcher does', () => {
+    fc.assert(fc.property(fc.array(lineSpec, { maxLength: 24 }), (specs) => {
+      const lines = specs.map(textOf);
+      const doc = lines.join('\n');
+      const spans = spansOf(specs);
+      const inSpan = (i) => spans.some(([a, b]) => i >= a && i <= b);
+
+      const scanned = scanFencedBlocks(lines).map((b) => [b.openLineIdx, b.closeLineIdx === -1 ? lines.length - 1 : b.closeLineIdx]);
+      assert.deepStrictEqual(scanned, spans, JSON.stringify(doc));
+
+      assert.strictEqual(stripFencedCode(doc).text, lines.filter((_, i) => !inSpan(i)).join('\n'), JSON.stringify(doc));
+
+      const headingLines = specs.map((s, i) => (s.kind === 'heading' && !inSpan(i) ? i + 1 : 0)).filter(Boolean);
+      assert.deepStrictEqual(tokenizeHeadings(doc).map((t) => t.line), headingLines, JSON.stringify(doc));
+
+      const blanked = lines.map((l, i) => (inSpan(i) ? l.replace(/[^\n]/g, ' ') : l)).join('\n');
+      assert.strictEqual(blankFencesAndComments(doc), blanked, JSON.stringify(doc));
+    }), { numRuns: 500, seed: 5726 });
   });
 });
 
