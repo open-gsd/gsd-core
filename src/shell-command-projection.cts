@@ -1018,6 +1018,91 @@ export function execTool(program: string, args: string[], opts: { cwd?: string; 
   return _spawnResult(result, program);
 }
 
+export type QuarantinedOutcome = 'exited' | 'not_found' | 'refused' | 'timed_out' | 'overflow' | 'killed' | 'error';
+
+export interface QuarantinedSpawnResult {
+  outcome: QuarantinedOutcome;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  signal: NodeJS.Signals | null;
+}
+
+/**
+ * Seam primitive for running untrusted argv with no shell (#4310, ADR-4310).
+ * Refuses cmd.exe mediation: a `.cmd`/`.bat` target would run through a shell,
+ * so it is reported as `refused` and never spawned. Output is returned
+ * untrimmed; this function never throws.
+ */
+export function execArgvQuarantined(
+  program: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; platform?: string },
+): QuarantinedSpawnResult {
+  try {
+    const platform = opts.platform ?? process.platform;
+    const notFound: QuarantinedSpawnResult = { outcome: 'not_found', exitCode: null, stdout: '', stderr: '', signal: null };
+    const isWin = platform === 'win32';
+    const pathApi = isWin ? path.win32 : path.posix;
+    const env = opts.env ?? process.env;
+    let resolved: string | null = null;
+    if (pathApi.isAbsolute(program)) {
+      // An absolute program is addressed directly: no PATH lookup is involved.
+      resolved = _isFile(program, true, platform) ? program : null;
+    } else if (program.includes('/') || program.includes('\\')) {
+      // The quarantine passes bare names only; a relative path would resolve against the project cwd.
+      return notFound;
+    } else {
+      // Only ABSOLUTE PATH entries are searched: an empty or relative entry would
+      // resolve against the project (the spawn cwd), so a committed ./git could run.
+      const segments = String(envGet(env, 'PATH') ?? '')
+        .split(isWin ? ';' : ':')
+        .filter((seg) => seg.length > 0 && pathApi.isAbsolute(seg));
+      if (isWin) {
+        const joined = segments.join(';');
+        resolved = resolveExecutableBinary(program, { platform, env: { ...env, PATH: joined, Path: joined } });
+      } else {
+        for (const seg of segments) {
+          const candidate = path.posix.join(seg, program);
+          if (_isFile(candidate, true, platform)) {
+            resolved = candidate;
+            break;
+          }
+        }
+      }
+    }
+    if (resolved === null || !pathApi.isAbsolute(resolved)) return notFound;
+    if (isWin && CMD_MEDIATED_EXT.test(path.win32.basename(resolved))) {
+      return { outcome: 'refused', exitCode: null, stdout: '', stderr: '', signal: null };
+    }
+    const result = childProcess.spawnSync(resolved, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: opts.timeout,
+      maxBuffer: opts.maxBuffer,
+      windowsHide: true,
+      shell: false,
+    });
+    const stdout = (result.stdout ?? '').toString();
+    const stderr = (result.stderr ?? '').toString();
+    const signal = result.signal ?? null;
+    const spawnError: NodeJS.ErrnoException | undefined = result.error;
+    const code = spawnError?.code;
+    let outcome: QuarantinedOutcome;
+    if (code === 'ENOENT') outcome = 'not_found';
+    else if (isSpawnTimeout({ error: result.error })) outcome = 'timed_out';
+    else if (code === 'ENOBUFS') outcome = 'overflow';
+    else if (result.error) outcome = 'error';
+    else if (result.status === null && signal) outcome = 'killed';
+    else outcome = 'exited';
+    return { outcome, exitCode: outcome === 'exited' ? result.status : null, stdout, stderr, signal };
+  } catch {
+    return { outcome: 'error', exitCode: null, stdout: '', stderr: '', signal: null };
+  }
+}
+
 /**
  * Result shape for {@link dispatchGsdCommand}. Modeled on the existing
  * `{exitCode,stdout,stderr,signal,error}` seam above, but flattened to the

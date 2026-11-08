@@ -182,6 +182,7 @@
   - [Capability Management Command](#147-capability-management-command)
   - [Smart Entry Launcher](#148-smart-entry-launcher)
   - [Criterion Baseline Notation](#4309-criterion-baseline-notation)
+  - [Criterion Baseline Replay](#4310-criterion-baseline-replay)
 - [v1.7.0 Features](#v170-features)
   - [Embeddable Orchestration System (Host-Integration Interface)](#149-embeddable-orchestration-system-host-integration-interface)
   - [Discoverability Registries](#150-discoverability-registries)
@@ -3798,6 +3799,26 @@ value ∈ <integer> | absent | present | error:<exit-code>      op ∈ == != >= 
 A notation the checker cannot parse or evaluate is a status in `baseline_statuses` and never changes the exit code. Nothing is executed. The JSON verdict adds `baseline_notation_count`, `baseline_findings` and `baseline_statuses`. The exit is `<!-- plan-criteria-allow: B1 - <reason> -->`.
 
 **Reference:** [PLAN.md → Baseline notation](reference/plan-md.md#baseline-notation) · [Resolve baseline-notation findings](how-to/resolve-baseline-notation-findings.md) · [ADR-4309](adr/4309-criterion-baseline-notation.md)
+
+---
+
+### 4310. Criterion Baseline Replay
+
+**Command:** `gsd-tools verify plan-structure <PLAN.md> --replay` (opt-in, run by hand)
+
+**Purpose:** Check that a recorded baseline was measured, not guessed. `[HEAD=2 EXPECT>=3]` claims the command printed 2 before the work. Replay runs the command and reports a mismatch when it prints something else. Without it, a wrong baseline surfaces only when the executor runs the phase.
+
+**How it works:**
+- The command is the backtick span before the notation, or the text before the trailing `#` of an `<automated>` command.
+- It runs as direct argv with no shell, from the project root.
+- Only `grep`, and `git` with `grep`, `ls-files`, `rev-parse` or `rev-list`, may run. Anything else is a `disallowed` status and does not run.
+- Each command gets 10 s and 64 KiB of output. A run replays at most 50 commands within 60 s.
+
+**Output:** a `replay` key, `{ head_sha, results, mismatch_count, statuses }`. Results carry the recorded and observed values, never the raw output.
+
+**Advisory only:** a mismatch is a warning and a status changes nothing. The exit code and `valid` come from the static rules alone.
+
+**Docs:** [How to check recorded baselines by replaying them](how-to/replay-recorded-baselines.md) · [ADR-4310](adr/4310-criterion-replay.md)
 
 
 ---

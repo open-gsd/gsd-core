@@ -1319,6 +1319,41 @@ Extract reusable patterns, anti-patterns, and architectural decisions from compl
 
 ---
 
+### `gsd-tools verify plan-structure <PLAN.md> --replay`
+
+Opt-in replay of recorded criterion baselines (#4310, [ADR-4310](adr/4310-criterion-replay.md)).
+Without `--replay`, `verify plan-structure` reads text only and runs nothing. With it, the command
+of each `[HEAD=<value> EXPECT…]` notation is run at the project root, and the printed value is
+compared with the recorded `HEAD`. Nothing invokes the flag automatically; you run it by hand.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<PLAN.md>` | Yes | The plan to check. `--replay` may come before or after it |
+
+| Flag | Description |
+|------|-------------|
+| `--replay` | Run each criterion's command under the replay quarantine and compare its output with the recorded baseline |
+| `--raw` | Emit the JSON payload with no surrounding prose |
+
+**Produces:** the usual `verify plan-structure` JSON, plus a final `replay` key:
+`{ head_sha, results, mismatch_count, statuses }`. Each result is
+`{ line, text, argv, recorded, observed, outcome, rev_drift }`, where `outcome` is `match` or
+`mismatch`. Each status is `{ code, line, text, detail }`. Raw command output is never included.
+**Exit status:** unchanged by replay. A mismatch adds a warning and a status changes nothing. Only
+the static rules (B1 and the rest) decide validity.
+
+**Quarantine.** Replay never starts a shell:
+- Only `grep`, and `git` with `grep`, `ls-files`, `rev-parse` or `rev-list`, may run.
+- Pipes, redirects, globs, `$` expansion and command substitution are `disallowed`.
+- Absolute paths and `..` segments are `disallowed`.
+- Options come from an exact-match allowlist per program, so abbreviations like `--open-files=sh` are `disallowed`.
+- A path that resolves outside the project through a symlink is `disallowed`.
+- Each command gets 10 s and 64 KiB of output. A run replays at most 50 commands within 60 s.
+
+Status codes: `no_command`, `ambiguous_command`, `malformed_command`, `disallowed`,
+`cannot_run`, `timeout`, `output_cap`, `budget_exhausted`, `truncated`, `replay_error`. See
+[Replay recorded baselines](how-to/replay-recorded-baselines.md).
+
 ### `gsd-tools check verify-command-paths`
 
 Deterministic resolvability probe over a phase's `<automated>` verify commands (#2401). Run

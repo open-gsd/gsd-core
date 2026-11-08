@@ -301,7 +301,7 @@ A quantitative criterion (a count or a match) carries its measured baseline besi
 | `GUARD MUTATION: <ref>` | free text, not empty | Declares a regression guard: a criterion meant to hold before and after the change. `<ref>` names the mutation that turns it red. |
 | `UNPINNED` | flag | No revision was recorded. Do not combine it with `@<sha>`. |
 
-Keywords are uppercase and the grammar is closed. The `GUARD MUTATION:` reference cannot contain `]`. A trailing `UNPINNED` at the end of the reference is always the flag, never part of the reference. `@<sha>` must precede `GUARD`; one written after the reference is removed from it, reported as `unrecognized_trailing`, and the criterion is judged with the remaining reference (an empty reference is not a guard). The notation is read from `<acceptance_criteria>`, `<automated>` (in a shell comment), and `<verify>`, and is never executed.
+Keywords are uppercase and the grammar is closed. The `GUARD MUTATION:` reference cannot contain `]`. A trailing `UNPINNED` at the end of the reference is always the flag, never part of the reference. `@<sha>` must precede `GUARD`; one written after the reference is removed from it, reported as `unrecognized_trailing`, and the criterion is judged with the remaining reference (an empty reference is not a guard). The notation is read from `<acceptance_criteria>`, `<automated>` (in a shell comment), and `<verify>`. Its command is never executed unless you pass `--replay` (see **Replay** below).
 
 **`verify plan-structure` rules:**
 
@@ -329,7 +329,23 @@ The legitimate exit is `<!-- plan-criteria-allow: B1 - <reason> -->` (or `B2`), 
 
 `baseline_notation_count` counts every notation found, including ones outside the criteria zones. The JSON verdict carries `baseline_notation_count`, `baseline_findings` (`{ rule, severity, line, text, message }`), and `baseline_statuses` (`{ code, line, text, detail }`).
 
-**Known limits:** `EXPECT` is not cross-checked against the shell command's own comparison, and nothing checks that `HEAD` was actually measured.
+**Replay (opt-in, #4310).** `verify plan-structure <PLAN.md> --replay` runs the command beside each judged notation and compares what it prints with `HEAD` ([ADR-4310](../adr/4310-criterion-replay.md)). The command is read from the same line:
+
+- **Acceptance criterion:** the single backtick span before the notation.
+- **Automated command:** the text before the trailing `#`.
+
+The output becomes a value as follows:
+
+| Exit / output | Observed value |
+|---|---|
+| exit 0 or 1, prints one integer | that integer (`grep -c` with no match exits 1 and prints `0`) |
+| exit 0, anything else | `present` |
+| exit 1, anything else | `absent` |
+| exit 2–255 | `error:<code>` |
+
+A different value is a `mismatch`: it adds a warning and never changes validity. `rev_drift: true` marks a mismatch on a notation pinned (`@<sha>`) to a commit other than the current `HEAD`. Only `grep` and the read-only `git` subcommands `grep`, `ls-files`, `rev-parse` and `rev-list` run, as direct argv with no shell. A pipeline, a glob or any other program is a `disallowed` status and does not run. See [`gsd-tools verify plan-structure --replay`](../COMMANDS.md#gsd-tools-verify-plan-structure-planmd---replay).
+
+**Known limits:** `EXPECT` is not cross-checked against the shell command's own comparison. Without `--replay`, nothing checks that `HEAD` was actually measured. Replay measures the working tree, not a clean checkout of `HEAD`.
 
 ---
 
