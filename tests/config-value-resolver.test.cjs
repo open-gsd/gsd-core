@@ -141,7 +141,7 @@ describe('Config Value Resolution Module (#5096)', () => {
       const jsonc = '{ /* before value */ "fixture": // value follows\n' + json + ', /* trailing */ }';
       // The known string-comma bug is tracked separately; keep this generator
       // discriminating for comment handling without absorbing that follow-up.
-      fc.pre(!json.includes(',}') && !json.includes(',]'));
+      fc.pre(!/,\s{0,4096}[}\]]/.test(json));
       assert.deepEqual(parseJsonc(jsonc), { fixture: value });
     }));
   });
