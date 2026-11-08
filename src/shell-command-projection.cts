@@ -1434,7 +1434,7 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
    * renamed into place, immediately before the rename. The renamed file keeps that
    * identity, so a caller can later remove exactly the file this write created.
    */
-  onCreated?: (id: { dev: number; ino: number }) => void;
+  onCreated?: (id: FileIdentity) => void;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -1479,6 +1479,9 @@ export function contentChangedAfterNormalize(
 const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const RENAME_MAX_ATTEMPTS = 3;
 const RENAME_RETRY_BACKOFF_MS = 50;
+
+/** The device and inode that identify one file or directory. */
+export type FileIdentity = { dev: number; ino: number };
 
 /** Synchronous best-effort backoff sleep (Atomics.wait — same idiom as io.cts). */
 let _renameSleepBuf: Int32Array | null = null;
@@ -1618,7 +1621,7 @@ export function openExclusiveTempSync(
 }
 
 /** What the path walk in platformWriteSync saw at the final physical target: its identity, or 'absent'. */
-type WalkedTarget = { dev: number; ino: number } | 'absent';
+type WalkedTarget = FileIdentity | 'absent';
 
 /**
  * Restore limit: an existing target is captured for restore only up to MAX_PRIOR_BYTES (2 MiB);
@@ -1791,7 +1794,7 @@ function writeTargetDirect(
   // The identity of the descriptor this write created, taken before it is closed: the cleanup
   // unlinks the PATH only if it still names that same file, so a parent swapped after the create
   // can never make it delete a same-named file elsewhere.
-  let createdIdentity: { dev: number; ino: number } | null = null;
+  let createdIdentity: FileIdentity | null = null;
   if (failure !== undefined && created) {
     try {
       const st = fs.fstatSync(fd);
@@ -1886,6 +1889,42 @@ function descriptorAliasFd(resolvedTarget: string): number | null {
   return m !== null && Number(m[1]) <= 2 ? Number(m[1]) : null;
 }
 
+/** A path component that is absent (ENOENT) or is not a directory (ENOTDIR). */
+function isMissing(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * A guard on the directory that holds `filePath`: its identity is taken when the
+ * guard is made (null when the directory is absent; `record()` takes it again
+ * once the directory exists) and `changed()` re-stats and reports whether the
+ * directory is no longer that one (or is absent). A stat error other than a
+ * missing directory goes to `statFailed`, which must throw.
+ */
+function makeParentGuard(
+  filePath: string,
+  statFailed: (err: NodeJS.ErrnoException) => never,
+): { record(): void; changed(): boolean } {
+  const stat = (): FileIdentity | null => {
+    try {
+      const s = fs.statSync(path.dirname(filePath));
+      return { dev: s.dev, ino: s.ino };
+    } catch (err) {
+      if (isMissing(err)) return null;
+      return statFailed(err as NodeJS.ErrnoException);
+    }
+  };
+  let walked = stat();
+  return {
+    record(): void { walked ??= stat(); },
+    changed(): boolean {
+      const now = stat();
+      return now === null || walked === null || now.dev !== walked.dev || now.ino !== walked.ino;
+    },
+  };
+}
+
 /**
  * Write `content` to `filePath` atomically: a sibling temp file (`<file>.tmp.<pid>.<12 hex>`,
  * created exclusively, never following a link, never blocking on a planted FIFO) is renamed
@@ -1946,10 +1985,6 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       new Error(`ENXIO: cannot write ${filePath}: ${what} (${code ?? 'unknown error'}) — refusing`),
       { code: 'ENXIO' },
     );
-  };
-  const isMissing = (err: unknown): boolean => {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code === 'ENOENT' || code === 'ENOTDIR';
   };
   // The parent directory of a raw (un-normalised) path, resolved physically by the OS, or null
   // when a component is absent (ENOENT/ENOTDIR); any other failure refuses with ENXIO.
@@ -2051,20 +2086,8 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // dirname(filePath) right after the walk (null when absent: it is then recorded right after
   // mkdir below). The atomic publish creates its temp file in, and renames within, this
   // directory, so it is re-checked against this identity before each step.
-  const statParent = (): { dev: number; ino: number } | null => {
-    try {
-      const s = fs.statSync(path.dirname(filePath));
-      return { dev: s.dev, ino: s.ino };
-    } catch (err) {
-      if (isMissing(err)) return null;
-      return refuseUnresolved((err as NodeJS.ErrnoException).code, 'its directory cannot be inspected');
-    }
-  };
-  let walkedParent = statParent();
-  const parentChanged = (): boolean => {
-    const now = statParent();
-    return now === null || walkedParent === null || now.dev !== walkedParent.dev || now.ino !== walkedParent.ino;
-  };
+  const parentGuard = makeParentGuard(filePath, (err) => refuseUnresolved(err.code, 'its directory cannot be inspected'));
+  const parentChanged = (): boolean => parentGuard.changed();
   const refuseParentSwap = (): never => {
     throw Object.assign(
       new Error(`ENXIO: cannot write ${filePath}: its directory is not the one the path check approved — refusing`),
@@ -2124,7 +2147,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     }
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  walkedParent ??= statParent();
+  parentGuard.record();
   if (opts.atomic === true) {
     publishViaTempFile(filePath, normalized, encoding, 'tmp', {
       checkParent: () => { if (parentChanged()) refuseParentSwap(); },
@@ -2223,15 +2246,15 @@ function publishViaTempFile(
   hooks: {
     checkParent?: () => void;
     createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
-    onCreated?: (id: { dev: number; ino: number }) => void;
+    onCreated?: (id: FileIdentity) => void;
     /** Permission bits to publish with, instead of those of the existing target (or the default when absent). */
-    mode?: number;
+    targetMode?: number;
   } = {},
 ): void {
   let mode = 0o666;
   let hasTargetMode = false;
-  if (hooks.mode !== undefined) {
-    mode = hooks.mode & 0o777;
+  if (hooks.targetMode !== undefined) {
+    mode = hooks.targetMode & 0o777;
     hasTargetMode = true;
   } else {
     try {
@@ -2247,7 +2270,7 @@ function publishViaTempFile(
     try { fs.fchmodSync(fd, mode); } catch { /* no permission bits on this platform */ }
   }
   try {
-    let identity: { dev: number; ino: number } | undefined;
+    let identity: FileIdentity | undefined;
     try {
       if (typeof data === 'string') fs.writeFileSync(fd, data, encoding);
       else fs.writeFileSync(fd, data);
@@ -2317,7 +2340,7 @@ function removeFileWithRetry(filePath: string): void {
 export function platformRestoreFileSync(
   filePath: string,
   bytes: Buffer | null,
-  opts: { unlinkOnlyIf?: { dev: number; ino: number }; mode?: number } = {},
+  opts: { unlinkOnlyIf?: FileIdentity; mode?: number } = {},
 ): void {
   if (bytes === null) {
     const expected = opts.unlinkOnlyIf;
@@ -2340,21 +2363,16 @@ export function platformRestoreFileSync(
     return;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const statParent = (): { dev: number; ino: number } => {
-    const s = fs.statSync(path.dirname(filePath));
-    return { dev: s.dev, ino: s.ino };
-  };
-  const entryParent = statParent();
+  const parentGuard = makeParentGuard(filePath, (err) => { throw err; });
   const checkParent = (): void => {
-    const now = statParent();
-    if (now.dev !== entryParent.dev || now.ino !== entryParent.ino) {
+    if (parentGuard.changed()) {
       throw Object.assign(
         new Error(`ENXIO: cannot restore ${filePath}: its directory is not the one it had at entry — refusing`),
         { code: 'ENXIO' },
       );
     }
   };
-  publishViaTempFile(filePath, bytes, undefined, 'restore', { checkParent, mode: opts.mode });
+  publishViaTempFile(filePath, bytes, undefined, 'restore', { checkParent, targetMode: opts.mode });
 }
 
 /**

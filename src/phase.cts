@@ -8057,8 +8057,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // Non-hoisted: load-order matters (stateMod must be fully resolved first).
         const { cmdStatePrune } = stateMod;
         try {
-          cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
-          autoPruned = true;
+          const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
+          // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
+          autoPruned = pruneResult?.['pruned'] === true;
         } catch (err) {
           // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
           // the failed prune left them (it never loses entries).
