@@ -282,6 +282,38 @@ describe('#4747 B: resolveWorkflowAvailability applies the documented kill switc
       assert.ok(DETECT_REASONS.includes(r.reason), r.reason);
     }
   });
+
+  test('property: matches the documented precedence model for any combination of sources', () => {
+    const scopes = ['managed', 'projectLocal', 'project', 'user'];
+    const sourceArb = fc.oneof(
+      fc.constant({ status: 'absent' }),
+      fc.constant({ status: 'unreadable' }),
+      fc.record({
+        status: fc.constant('ok'),
+        settings: fc.record({ disableWorkflows: fc.boolean(), enableWorkflows: fc.boolean() }, { requiredKeys: [] }),
+      }),
+    );
+    const reasonFor = (scope) => (scope === 'managed' ? 'workflows_disabled_by_managed_settings' : 'workflows_disabled_by_settings');
+    const has = (s, key) => Object.prototype.hasOwnProperty.call(s.settings, key);
+    const oracle = (srcs) => {
+      if (srcs.some((s) => s.status === 'unreadable')) return { disabled: true, reason: 'workflow_settings_unreadable' };
+      const okSrcs = srcs.filter((s) => s.status === 'ok');
+      const dis = okSrcs.find((s) => has(s, 'disableWorkflows'));
+      if (dis && dis.settings.disableWorkflows === true) return { disabled: true, reason: reasonFor(dis.scope) };
+      if (!dis) {
+        const en = okSrcs.find((s) => has(s, 'enableWorkflows'));
+        if (en && en.settings.enableWorkflows === false) return { disabled: true, reason: reasonFor(en.scope) };
+      }
+      return { disabled: false, reason: 'workflows_available' };
+    };
+    fc.assert(
+      fc.property(fc.tuple(sourceArb, sourceArb, sourceArb, sourceArb), (tuple) => {
+        const srcs = tuple.map((s, i) => ({ scope: scopes[i], ...s }));
+        assert.deepEqual(resolveWorkflowAvailability({ env: {}, sources: srcs }), oracle(srcs));
+      }),
+      { seed: 47471, numRuns: 500 },
+    );
+  });
 });
 
 // ─── B. readWorkflowSettingsSources (router IO seam) ──────────────────────────
@@ -338,6 +370,41 @@ describe('#4747 B: readWorkflowSettingsSources reads the documented settings fil
       write(path.join(d.home, '.claude', 'settings.json'));
       assert.equal(byScope(read(d)).user.status, 'unreadable', label);
     }
+  });
+
+  test('S11 non-regular and oversized settings files are unreadable', (t) => {
+    const LIMIT = 1024 * 1024;
+    const settingsPath = (d) => path.join(d.home, '.claude', 'settings.json');
+
+    // (i) symlink to a directory is never read
+    const d1 = layout(t);
+    fs.mkdirSync(path.join(d1.home, '.claude'));
+    const target = path.join(d1.home, 'a-dir');
+    fs.mkdirSync(target);
+    let linked = true;
+    try {
+      fs.symlinkSync(target, settingsPath(d1), 'dir');
+    } catch (e) {
+      if (e && e.code === 'EPERM') linked = false; else throw e;
+    }
+    if (linked) assert.equal(byScope(read(d1)).user.status, 'unreadable', 'symlink to directory');
+    else t.skip('symlink unsupported');
+
+    // (ii) one byte over the limit
+    const d2 = layout(t);
+    fs.mkdirSync(path.join(d2.home, '.claude'));
+    fs.writeFileSync(settingsPath(d2), ' '.repeat(LIMIT + 1));
+    assert.equal(byScope(read(d2)).user.status, 'unreadable', 'limit+1');
+
+    // (iii) exactly the limit, valid JSON object padded with spaces
+    const d3 = layout(t);
+    fs.mkdirSync(path.join(d3.home, '.claude'));
+    const body = '{"disableWorkflows":false}';
+    fs.writeFileSync(settingsPath(d3), body + ' '.repeat(LIMIT - body.length));
+    assert.equal(fs.statSync(settingsPath(d3)).size, LIMIT);
+    const u = byScope(read(d3)).user;
+    assert.equal(u.status, 'ok', 'limit');
+    assert.deepEqual(u.settings, { disableWorkflows: false });
   });
 
   test('S4 managed drop-ins merge alphabetically after the base file', (t) => {
@@ -411,14 +478,15 @@ describe('#4747 B: the CLI applies the kill switches end to end', () => {
   function project(t, extraConfig) {
     const dir = createTempProject('gsd-4747-cli-');
     const home = createTempDir('gsd-4747-home-');
-    t.after(() => { cleanup(dir); cleanup(home); });
+    const managed = createTempDir('gsd-4747-managed-');
+    t.after(() => { cleanup(dir); cleanup(home); cleanup(managed); });
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(Object.assign({
       claude_orchestration: { enabled: true },
     }, extraConfig || {})));
     // Isolate the user scope from the machine running the test.
-    const env = { CLAUDE_CONFIG_DIR: path.join(home, '.claude'), HOME: home, USERPROFILE: home, CLAUDE_CODE_DISABLE_WORKFLOWS: '' };
+    const env = { CLAUDE_CONFIG_DIR: path.join(home, '.claude'), HOME: home, USERPROFILE: home, CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managed, GSD_TEST_MODE: '1' };
     fs.mkdirSync(env.CLAUDE_CONFIG_DIR);
-    return { dir, env };
+    return { dir, env, managed };
   }
   function detectCli(p, envExtra, args) {
     const res = runGsdTools(['claude-orchestration', 'detect-backend', '--raw', ...(args || [])], p.dir, Object.assign({}, p.env, envExtra || {}));
@@ -442,6 +510,12 @@ describe('#4747 B: the CLI applies the kill switches end to end', () => {
     fs.mkdirSync(path.join(p.dir, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(p.dir, '.claude', 'settings.local.json'), JSON.stringify({ enableWorkflows: false }));
     assert.equal(detectCli(p).reason, 'workflows_disabled_by_settings');
+  });
+
+  test('the CLI ignores the host managed settings directory under the test seam and reads the injected one', (t) => {
+    const p = project(t);
+    fs.writeFileSync(path.join(p.managed, 'managed-settings.json'), JSON.stringify({ disableWorkflows: true }));
+    assert.equal(detectCli(p).reason, 'workflows_disabled_by_managed_settings');
   });
 
   test('the deprecated --agent-sdk-version flag is ignored', (t) => {

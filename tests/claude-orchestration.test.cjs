@@ -1151,8 +1151,9 @@ const INCAPABLE_HOST = { dispatch: { nested: false, background: true } };
  */
 function isolatedSettingsEnv(t) {
   const cfgDir = createTempDir('gsd-4747-cfg-');
-  t.after(() => cleanup(cfgDir));
-  return { CLAUDE_CONFIG_DIR: cfgDir, CLAUDE_CODE_DISABLE_WORKFLOWS: '' };
+  const managedDir = createTempDir('gsd-4747-managed-');
+  t.after(() => { cleanup(cfgDir); cleanup(managedDir); });
+  return { CLAUDE_CONFIG_DIR: cfgDir, CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managedDir, GSD_TEST_MODE: '1' };
 }
 
 function enabledConfig(overrides = {}) {

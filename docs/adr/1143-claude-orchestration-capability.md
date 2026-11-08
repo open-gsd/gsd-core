@@ -54,6 +54,8 @@ Net effect on Claude Code: **wave parallelism, the plan-checker, and the verifie
 
 ### 2. Registration at ADR-857 loop extension points
 
+> **Superseded.** Loop registration is replaced by the 2026-09-14 amendment (the `execute:wave:*` contribution is removed), and activation gating by the 2026-11-08 amendment (kill switches, not an Agent SDK version). Both are at the end of this ADR.
+
 The capability registers hooks at `execute:wave:pre`, `execute:wave:post`, and `execute:post`, resolved through `gsd_run loop render-hooks <point>`. Activation is gated by:
 
 - **Runtime/tool detection** — the active runtime must actually expose the Workflow tool (Claude Code / Agent SDK ≥ the pinned minimum). Detection miss → no-op.

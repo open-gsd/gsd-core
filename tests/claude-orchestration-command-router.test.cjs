@@ -133,6 +133,7 @@ describe('claude-orchestration detect-backend (CLI)', () => {
     // #4747: availability is read from the real settings scopes; isolate the
     // user scope and clear the env kill switch so the result is deterministic.
     const cfgDir = createTempDir('claw-detect-cfg-');
+    const managedDir = createTempDir('claw-detect-managed-');
     try {
       fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
       fs.writeFileSync(
@@ -143,11 +144,12 @@ describe('claude-orchestration detect-backend (CLI)', () => {
       const parsed = runAndParse([
         'claude-orchestration', 'detect-backend',
         '--runtime', 'claude',
-      ], tmp, { CLAUDE_CONFIG_DIR: cfgDir, CLAUDE_CODE_DISABLE_WORKFLOWS: '' });
+      ], tmp, { CLAUDE_CONFIG_DIR: cfgDir, CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managedDir, GSD_TEST_MODE: '1' });
       assert.strictEqual(parsed.backend, 'workflow');
       assert.strictEqual(parsed.available, true);
     } finally {
       cleanup(cfgDir);
+      cleanup(managedDir);
       cleanup(tmp);
     }
   });

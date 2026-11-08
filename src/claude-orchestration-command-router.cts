@@ -54,6 +54,8 @@ import configLoader = require('./config-loader.cjs');
 import runtimeSlash = require('./runtime-slash.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolver = require('./model-resolver.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import shellProjection = require('./shell-command-projection.cjs');
 
 const { output } = io;
 const { detectWorkflowBackend, emitWorkflowScript, resolveWaveDispatch } = core;
@@ -124,6 +126,9 @@ type SettingsSource = {
   settings?: Record<string, unknown>;
 };
 
+// #4747: a repo-controlled .claude/settings*.json must not hang or exhaust the CLI.
+const MAX_SETTINGS_FILE_BYTES = 1024 * 1024;
+
 type JsonFileRead =
   | { status: 'absent' }
   | { status: 'unreadable' }
@@ -136,6 +141,8 @@ type JsonFileRead =
 function readJsonObjectFile(p: string): JsonFileRead {
   let text: string;
   try {
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size > MAX_SETTINGS_FILE_BYTES) return { status: 'unreadable' };
     text = fs.readFileSync(p, 'utf8');
   } catch (e) {
     const code = (e as { code?: unknown } | null)?.code;
@@ -203,7 +210,7 @@ function readWorkflowSettingsSources(opts: {
     }
   };
   const managedDir = opts.managedDir ?? managedSettingsDir(opts.platform ?? process.platform);
-  const configDir = opts.env?.['CLAUDE_CONFIG_DIR'];
+  const configDir = opts.env ? shellProjection.envGet(opts.env, 'CLAUDE_CONFIG_DIR') : undefined;
   let user: SettingsSource;
   if (typeof configDir === 'string' && configDir.length > 0) {
     user = fileSource('user', path.join(configDir, 'settings.json'));
@@ -235,9 +242,14 @@ function resolveDetectionArgs(args: string[], cwd?: string): { runtimeId: string
   const runtimeId = argValue(args, '--runtime') || runtimeSlash.resolveRuntime(cwd || null);
   let home: string | undefined;
   try { home = os.homedir(); } catch { home = undefined; }
+  // Test-only seam so CLI tests do not read the host's real managed settings; ignored outside GSD_TEST_MODE.
+  const injectedManagedDir = process.env['GSD_TEST_MODE'] === '1'
+    ? shellProjection.envGet(process.env, 'GSD_TEST_MANAGED_SETTINGS_DIR')
+    : undefined;
+  const testManagedDir = typeof injectedManagedDir === 'string' && injectedManagedDir.length > 0 ? injectedManagedDir : undefined;
   const workflowAvailability = core.resolveWorkflowAvailability({
-    env: process.env,
-    sources: readWorkflowSettingsSources({ cwd: cwd || process.cwd(), env: process.env, platform: process.platform, homedir: home }),
+    env: { CLAUDE_CODE_DISABLE_WORKFLOWS: shellProjection.envGet(process.env, 'CLAUDE_CODE_DISABLE_WORKFLOWS') },
+    sources: readWorkflowSettingsSources({ cwd: cwd || process.cwd(), env: process.env, platform: process.platform, homedir: home, ...(testManagedDir ? { managedDir: testManagedDir } : {}) }),
   });
   const noNested = args.includes('--no-nested-dispatch');
   const hostIntegration = noNested ? { dispatch: { nested: false, background: true } } : CAPABLE_HOST;
