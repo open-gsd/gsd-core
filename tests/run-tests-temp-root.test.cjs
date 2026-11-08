@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const fc =require('fast-check');
+const fc = require('fast-check');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -388,13 +388,16 @@ describe('#4020 — run-tests temp root', () => {
           });
           assert.equal(r.exitCode, 0, `${JSON.stringify(combo)}: ${String(r.stderr).slice(-300)}`);
           const { want, root } = JSON.parse(r.stdout);
-          // The expectation follows what the child observes: a run-root basename
-          // means os.tmpdir() itself is an inherited run root (win32 libuv TEMP
-          // re-add for combos that omit TEMP).
+          // Expected inheritance is derived from the platform contract, not from what
+          // the child reports. POSIX: only a run root in the set variable is
+          // inherited. win32: additionally, a combo without TEMP gets the PARENT's
+          // TEMP re-added by libuv, so it inherits iff the parent's os.tmpdir() is
+          // itself a run root (true under gsd-test).
+          const parentIsRunRoot = path.basename(parentTmp).startsWith('gsd-test-run-');
+          const libuvReaddsTemp = process.platform === 'win32' && !('TEMP' in combo);
+          const expectInherit = Boolean(inherited) || (libuvReaddsTemp && parentIsRunRoot);
           const childInherits = path.basename(want).startsWith('gsd-test-run-');
-          if (process.platform !== 'win32') {
-            assert.equal(childInherits, Boolean(inherited), `unexpected inheritance for ${JSON.stringify(combo)}`);
-          }
+          assert.equal(childInherits, expectInherit, `unexpected inheritance for ${JSON.stringify(combo)}`);
           if (inherited || childInherits) {
             assert.equal(root, want, `inherited root expected for ${JSON.stringify(combo)}`);
           } else {
