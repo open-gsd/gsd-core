@@ -7747,17 +7747,17 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): S
     const dryContent = dryBytes.toString('utf-8');
     let result = runPruneCore(dryContent);
     let dryCutoff = cutoff;
-    let wouldArchive = result.archivedSections;
     if (result.archivedSections.length > 0) {
       // The same decision the real run makes, with the archive read-only: an interrupted run's
-      // block is completed at its cutoff, and its entries are not counted as archived again.
+      // block is completed at its cutoff. Like the real run, the preview lists every entry the
+      // effective prune removes from STATE.md, those already in that block included.
       const archiveBytes = readArchiveSnapshot(archivePath);
       const block = archiveBytes === null ? null : parseLastArchiveBlock(archiveBytes.toString('utf-8'));
       const chosen = chooseCutoffRun(block, result, cutoff, currentPhase, (atCutoff) => runPruneCore(dryContent, atCutoff));
       result = chosen.run;
       dryCutoff = chosen.cutoff;
-      wouldArchive = subtractPendingBlock(block === null ? null : block.sections, result.archivedSections).remainder;
     }
+    const wouldArchive = result.archivedSections;
     const totalPruned = wouldArchive.reduce((sum, s) => sum + s.count, 0);
     return finish({
       pruned: false,
@@ -7795,11 +7795,11 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): S
   // same options), so each entry is archived once even when the cutoff grew or
   // other state commands rewrote STATE.md in between. A re-run at a SMALLER
   // cutoff completes the interrupted run: when the block's heading names a
-  // larger cutoff and the prune at that cutoff contains the block, this
-  // invocation prunes at that cutoff (reported as `cutoff_phase`). Not covered:
-  // a block the prune does not contain (one of its entries edited or removed in
-  // between) — the whole prune is appended at this run's own cutoff (duplicated,
-  // never lost).
+  // larger cutoff N, N is no greater than the current phase, and the prune at N
+  // equals the archived block exactly, this invocation prunes at N (reported as
+  // `cutoff_phase`). Otherwise (entries added, edited or removed since the
+  // interruption, or an N past the current phase) this run's own cutoff stays in
+  // force and the whole prune is appended (duplicated, never lost).
   let rollback: ArchiveRollback | null = null;
   let effectiveCutoff = cutoff;
   readModifyWriteStateMd(statePath, (content) => {
