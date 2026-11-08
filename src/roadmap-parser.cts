@@ -312,23 +312,44 @@ function isMilestoneShippedInRoadmap(content: string, version: string): boolean 
 /**
  * #5726: `content` with every fenced code block and HTML comment blanked to
  * spaces (newlines kept), so offsets and line structure are unchanged but no
- * heading inside a fence or comment can be located. Same fence grammar as
- * `tokenizeHeadings`: a line opening with three or more backticks or tildes
- * toggles the fence.
+ * heading inside a fence or comment can be located. Fences are blanked FIRST
+ * with `scanFencedBlocks` (CommonMark: the closer matches the opener's
+ * character and length; an unclosed fence runs to EOF), so a `<!--` inside a
+ * fence opens nothing. Then, on that fence-blanked text, every closed
+ * `<!-- ... -->` is blanked wherever it sits. An UNCLOSED `<!--` hides to EOF
+ * only when it opens a line (0-3 spaces of indent, CommonMark HTML block type
+ * 2); a mid-line unclosed `<!--` is not a comment and hides nothing.
  */
 function blankFencesAndComments(content: string): string {
   const blank = (s: string): string => s.replace(/[^\n]/g, ' ');
-  const noComments = content.replace(/<!--[\s\S]*?(?:-->|$)/g, blank);
-  let inFence = false;
-  return noComments
-    .split('\n')
-    .map((line) => {
-      const opens = /^ {0,3}(?:`{3,}|~{3,})/.test(line);
-      const wasInFence = inFence;
-      if (opens) inFence = !inFence;
-      return opens || wasInFence ? blank(line) : line;
-    })
-    .join('\n');
+  const lines = content.split('\n');
+  for (const fence of scanFencedBlocks(lines)) {
+    const last = fence.closeLineIdx === -1 ? lines.length - 1 : fence.closeLineIdx;
+    for (let i = fence.openLineIdx; i <= last; i++) lines[i] = blank(lines[i]);
+  }
+  const noFences = lines.join('\n');
+  let out = '';
+  let at = 0;
+  let from = 0;
+  for (;;) {
+    const open = noFences.indexOf('<!--', from);
+    if (open === -1) break;
+    const close = noFences.indexOf('-->', open + 4);
+    let end: number;
+    if (close !== -1) end = close + 3;
+    else {
+      const lineStart = noFences.lastIndexOf('\n', open - 1) + 1;
+      if (!/^ {0,3}$/.test(noFences.slice(lineStart, open))) {
+        from = open + 4;
+        continue;
+      }
+      end = noFences.length;
+    }
+    out += noFences.slice(at, open) + blank(noFences.slice(open, end));
+    at = end;
+    from = end;
+  }
+  return out + noFences.slice(at);
 }
 
 /**
@@ -666,10 +687,10 @@ function hasVersionedMilestones(content: string): boolean {
  * predicate feeds `classifyMilestoneWindow`'s rows 3/4 and its behavior stays
  * as is. This one gates only the write refusal for an unresolved STATE
  * milestone, which must not fire on a roadmap that has no real milestone
- * heading at all. Reads `blankFencesAndComments` content (an unclosed `<!--`
- * hides to EOF), then `tokenizeHeadings` (fence-aware),
+ * heading at all. Fences and comments are blanked by `blankFencesAndComments`,
+ * and `tokenizeHeadings` then reads the headings;
  * `isRecognizedMilestoneHeading` (Phase exclusion, level bound) and
- * `listMilestoneHeadings` (the version-bearing grammar).
+ * `listMilestoneHeadings` (the version-bearing grammar) judge them.
  */
 function hasRecognizedVersionedMilestoneHeading(content: string): boolean {
   const visible = blankFencesAndComments(content);
@@ -3266,6 +3287,8 @@ export = {
   milestoneVersionAtOffset,
   // #5679: same-length copy with fenced blocks, code spans and HTML comments blanked.
   blankCodeAndComments,
+  // #5726: fences and HTML comments blanked (same length, newlines kept).
+  blankFencesAndComments,
   // #4144 round 5 Blocker 1: the readers' own phase-heading grammar, so the
   // bracket roadmap migrator's "phase-like but unparsed" refusal
   // (src/roadmap-upgrade.cts) can gate on it instead of a private, looser
