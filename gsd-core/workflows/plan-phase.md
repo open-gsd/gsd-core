@@ -517,7 +517,7 @@ HOOKS_JSON="$PLAN_PRE_HOOKS_JSON"
 
 Read the `activeHooks` array directly from `PLAN_PRE_HOOKS_JSON` / `HOOKS_JSON` (in-context — do NOT invoke a shell pipeline).
 
-**Branch 1 — all plan:pre hooks inactive (`activeHooks` is empty or absent):** `PLAN_PRE_PRODUCTS` stays empty. Skip to step 6.
+**Branch 1 — all plan:pre hooks inactive (`activeHooks` is empty or absent):** Skip to step 6; `PLAN_PRE_PRODUCTS` stays empty.
 
 **Generic dispatch (#5982):** dispatch every active `kind == "step"` hook (`ref.skill`, `ref.agent`, `ref.command`) and evaluate every active `kind == "gate"` hook (`check.query`, `check.predicate`) per @gsd-core/references/loop-hook-dispatch.md, in manual and auto-chain mode: read and execute `gsd-core/workflows/plan-phase/steps/plan-pre-dispatch.md` — except the capabilities its table assigns to a dedicated section (research, drift, ui, ai-integration, pattern-mapper, intel). A blocking gate that blocks exits the workflow.
 
