@@ -2,7 +2,7 @@
 Replace `{timing_attempt}` with exactly `fresh` when this invocation has no continuation payload, or `continuation` when it carries completed-task/checkpoint state. Replace `{timing_phase}` and `{timing_plan}` with JSON string literals, never raw shell text. The shell guard is authoritative: a fresh attempt replaces an abandoned marker, while a continuation preserves it. A continuation must resume in the original worktree; if its marker is missing, stop and resume there or deliberately restart as `fresh`.
 ```bash
 # Substitute {timing_phase} and {timing_plan} with JSON string literals for the raw
-# phase and plan IDs. PHASE_ID/PLAN_ID below are canonical IDs; PHASE_VALUE/PLAN_VALUE
+# phase and plan IDs. CANONICAL_PHASE_ID/CANONICAL_PLAN_ID below are canonical IDs; PHASE_VALUE/PLAN_VALUE
 # (where used) retain the raw display values. Never substitute the plan JSON object.
 GSD_TIMING_ATTEMPT='{timing_attempt}'
 # plan-timing-key:start
@@ -32,11 +32,11 @@ PLAN_JSON=$(cat <<'PLAN!NUMBER!5212'
 PLAN!NUMBER!5212
 )
 case "$PHASE_JSON:$PLAN_JSON" in *'{'*|*'}'*) echo "ERROR: timing identity contains an unsubstituted placeholder." >&2; exit 1 ;; esac
-PHASE_ID=$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v!=="string")process.exit(2);process.stdout.write(v)' "$PHASE_JSON") || exit 1
-PLAN_ID=$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v!=="string")process.exit(2);process.stdout.write(v)' "$PLAN_JSON") || exit 1
-PHASE_ID=$(canonicalize_timing_id "$PHASE_ID")
-PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
-TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
+CANONICAL_PHASE_ID=$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v!=="string")process.exit(2);process.stdout.write(v)' "$PHASE_JSON") || exit 1
+CANONICAL_PLAN_ID=$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v!=="string")process.exit(2);process.stdout.write(v)' "$PLAN_JSON") || exit 1
+CANONICAL_PHASE_ID=$(canonicalize_timing_id "$CANONICAL_PHASE_ID")
+CANONICAL_PLAN_ID=$(canonicalize_timing_id "$CANONICAL_PLAN_ID")
+TIMING_KEY=$(printf '%s\0%s' "$CANONICAL_PHASE_ID" "$CANONICAL_PLAN_ID" | git hash-object --stdin) || exit 1
 TIMING_FILE="$(git rev-parse --path-format=absolute --git-common-dir)/gsd-plan-timing-$TIMING_KEY" || exit 1
 # plan-timing-key:end
 case "$GSD_TIMING_ATTEMPT" in
