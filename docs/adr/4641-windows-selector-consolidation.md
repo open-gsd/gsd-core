@@ -399,17 +399,32 @@ How to split a file: [docs/how-to/split-platform-sensitive-tests.md](../how-to/s
 
 ## #6002 amendment (2026-11-08)
 
-Narrowed two detectors in `scripts/gen-platform-conformance-tier.cjs`:
+Narrowed the detectors in `scripts/gen-platform-conformance-tier.cjs`:
 
-- `classifyContent` and `classifyMacosContent` now strip `//` and block comments (string literals,
-  including a `//` inside a URL, are preserved) before matching, so prose in a comment is no longer a
-  platform signal.
-- `raw-child-process` no longer matches a bare `require('child_process')`. It matches only a
-  `spawnSync`/`execSync`/`execFileSync` call whose first argument is not node itself
-  (`process.execPath`, `'node'`, `"node"`). Any other first argument still matches.
+- `classifyContent` and `classifyMacosContent` strip `//` and block comments before matching, so
+  prose in a comment is no longer a platform signal. String literals (including a `//` inside a URL)
+  and regex literals (including ones containing `//` or a quote) are preserved.
+- `raw-child-process` no longer matches a bare `require('child_process')`. It matches a
+  `spawnSync`/`execSync`/`execFileSync`/`spawn`/`execFile`/`exec` call whose first argument is not
+  node itself (`process.execPath`, `'node'`, `"node"`), any `shell: true` in a file that uses
+  `child_process`, and a file that requires `child_process` whose call sites cannot be identified
+  (aliased usage). `fork(` always runs node and is node-only, so it is not a signal on its own.
+- New category `fs-lock-or-install-child`: a node-only child still counts when the same file matches
+  `lock|lockfile|rename(Sync)?|unlink(Sync)?|EBUSY|EPERM|install.js|--config-dir`, because the child is
+  then driving Windows-sensitive filesystem behavior. This is a decision, not a heuristic accident.
+- `src/` reachability in `scripts/ci-test-scope.cjs` is unchanged: it uses `classifyRawContent`,
+  the pre-#6002 classification (no comment stripping, legacy `raw-child-process`, no
+  `fs-lock-or-install-child`), so no `src/` file left full-matrix reachability.
 
 Why: the Windows tier sat at the 33% ceiling because of text matches, with 175 of 380 tier files
 carrying `raw-child-process`, many of which only re-spawn node, which behaves identically on every OS.
 
-Result (2026-11-08, live tree): Windows tier 295 of 1152 eligible unit-suite files (25.6%); macOS
-tier 216 of 1152 (18.8%). `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.
+Before and after (2026-11-08, live tree, 1152 eligible unit-suite files):
+
+| Tier | Before | After | Share of eligible |
+| :--- | ---: | ---: | ---: |
+| Windows | 380 | 319 | 27.7% |
+| macOS | 270 | 214 | 18.6% |
+
+The macOS shrink is intended: it comes from the same comment stripping applied to
+`MACOS_CATEGORIES`, not from the child-process change. `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.

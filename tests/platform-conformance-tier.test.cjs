@@ -30,6 +30,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const {
   classifyContent,
+  classifyRawContent,
   classifyTree,
   NOISY_FOR_SOURCE_REACHABILITY,
   classifyMacosContent,
@@ -1176,7 +1177,7 @@ describe('#6002: detectors match platform behavior, not text', () => {
   });
 
   test('a line comment naming a shell spawn is not a signal (#6002)', () => {
-    assert.equal(classifyContent("// spawnSync('bash')").needsRealOs, false);
+    assert.equal(classifyContent("// require('child_process'); spawnSync('bash')").needsRealOs, false);
   });
 
   test('a block comment naming process.platform is not a signal (#6002)', () => {
@@ -1184,7 +1185,7 @@ describe('#6002: detectors match platform behavior, not text', () => {
   });
 
   // Rows 5-7: real signals stay flagged.
-  test('a real shell spawn stays flagged as shell-interpreter-spawn', () => {
+  test('a real shell spawn stays flagged as raw-child-process', () => {
     const { needsRealOs, signals } = classifyContent(
       "const { spawnSync, execFileSync } = require('child_process');\nspawnSync('bash',['-c',s])",
     );
@@ -1213,13 +1214,63 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
   });
 
+  // Regex literals must not corrupt string/comment tracking.
+  test('a regex literal containing // does not hide a later platform check', () => {
+    const src = "const r=/https?:\\/\\//; if (process.platform==='win32'){}";
+    assert.ok(classifyContent(src).signals.includes('process-platform'));
+  });
+
+  test('a regex literal containing a quote does not hide a later spawn', () => {
+    const src =
+      "const cp=require('child_process');\n/'/.test(x); const y='a // b'; execFileSync('git',[])";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  // Async spawn forms, fork, shell:true, aliased usage.
+  test("async spawn('git') is flagged", () => {
+    assert.ok(classifyContent("require('child_process');spawn('git',[])").signals.includes('raw-child-process'));
+  });
+
+  test("exec('cmd /c x') is flagged", () => {
+    assert.ok(classifyContent("require('child_process');exec('cmd /c x')").signals.includes('raw-child-process'));
+  });
+
+  test("fork('./w.js') runs node and is node-only: not flagged", () => {
+    assert.equal(classifyContent("require('child_process');fork('./w.js')").needsRealOs, false);
+  });
+
+  test('shell:true on a node child is flagged', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x'],{shell:true})";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('aliased child_process usage with unidentifiable call sites is flagged', () => {
+    assert.ok(classifyContent("const cp=require('child_process');cp.run(x)").signals.includes('raw-child-process'));
+  });
+
+  test('a node-only child in a file exercising lock/rename/EBUSY is flagged fs-lock-or-install-child', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x']);fs.renameSync(a,b)";
+    const { signals } = classifyContent(src);
+    assert.ok(signals.includes('fs-lock-or-install-child'), signals.join(','));
+    assert.ok(!signals.includes('raw-child-process'));
+  });
+
+  test('classifyRawContent keeps pre-#6002 behavior (comments and bare require count)', () => {
+    assert.ok(classifyRawContent("// process.platform").signals.includes('process-platform'));
+    assert.ok(classifyRawContent("require('child_process')").signals.includes('raw-child-process'));
+  });
+
   // Row 10: property.
   test('property: comment-only content has no signals', () => {
     fc.assert(
-      fc.property(fc.string(), (s) => {
-        const line = '// ' + s.replace(/[\r\n]/g, ' ');
-        assert.deepEqual(classifyContent(line).signals, []);
-      }),
+      fc.property(
+        fc.constantFrom('process.platform', 'win32', 'chmod(', 'symlink', "spawnSync('bash'"),
+        fc.string(),
+        (token, s) => {
+          const line = '// ' + token + s.replace(/[\r\n]/g, '');
+          assert.deepEqual(classifyContent(line).signals, []);
+        },
+      ),
     );
   });
 

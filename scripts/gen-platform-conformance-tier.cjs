@@ -139,6 +139,24 @@ const MACOS_GENERATED_HEADER =
   '// Windows-oriented tier in platform-conformance-tier.generated.cjs — see\n' +
   '// docs/adr/4593-macos-conformance-tier-architecture.md for the full rationale.\n';
 
+// #6002 child_process call-site shapes. First arguments that are node itself:
+// `process.execPath` or the literal 'node' / "node".
+const NODE_FIRST_ARG = "(?:process\\.execPath\\s*[,)]|(['\"])node\\1\\s*[,)])";
+const CHILD_NON_NODE_CALL = new RegExp(
+  '(?:\\b(?:spawnSync|execSync|execFileSync)|(?<![.\\w$])(?:spawn|execFile|exec))\\(\\s*(?!' + NODE_FIRST_ARG + ')',
+);
+const CHILD_NODE_ONLY_CALL = new RegExp(
+  '(?:\\b(?:spawnSync|execSync|execFileSync)|(?<![.\\w$])(?:spawn|execFile|exec))\\(\\s*' + NODE_FIRST_ARG + '|(?<![.\\w$])fork\\(',
+);
+const CHILD_SHELL_TRUE = /\bshell:\s*true\b/;
+// Pre-#6002 raw-child-process test, kept for source-file reachability
+// (scripts/ci-test-scope.cjs), whose behavior must not change.
+function legacyRawChildProcess(content) {
+  if (/require\((['"])(?:node:)?child_process\1\)/.test(content)) return true;
+  if (!content.includes('child_process')) return false;
+  return /\bspawnSync\(|\bexecSync\(|\bexecFileSync\(/.test(content);
+}
+
 /**
  * Detection categories (#4591 design doc). Each entry's `test` receives the
  * raw file content string and returns true when that category's signal is
@@ -174,18 +192,36 @@ const CATEGORIES = [
     name: 'raw-child-process',
     // #6002: matches a call that can spawn a platform-dependent binary, not
     // the mere presence of the module. Requires the child_process token AND a
-    // spawnSync/execSync/execFileSync call whose first argument is NOT node
-    // itself (`process.execPath` or the literal 'node' / "node"): a child that
-    // only re-runs node behaves identically on every OS and is no real-OS
-    // signal. Any other first argument (another literal, an identifier, a
-    // template literal) still matches (over-inclusion, the safe direction). A
-    // bare require('child_process') with no call site no longer matches on its
-    // own. A same-named local identifier (e.g. `spawnResult`) never forms the
-    // substring `spawnSync(`.
+    // sync or async spawn call (spawnSync/execSync/execFileSync/spawn/execFile/
+    // exec) whose first argument is NOT node itself (`process.execPath` or the
+    // literal 'node' / "node"): a child that only re-runs node behaves
+    // identically on every OS and is no real-OS signal. `fork(` always runs
+    // node, so it is node-only by construction and never a signal on its own.
+    // Any other first argument (another literal, an identifier, a template
+    // literal) matches (over-inclusion, the safe direction), as does
+    // `shell: true` anywhere in a child_process-using file. A file that
+    // requires child_process but whose call sites cannot be identified at all
+    // (aliased or destructured-and-renamed usage) also counts. A same-named
+    // local identifier (e.g. `spawnResult`) never forms the substring
+    // `spawnSync(`; bare `.exec(` member calls (e.g. `re.exec(`) are not
+    // spawn call sites.
     test: (content) => {
       if (!content.includes('child_process')) return false;
-      return /\b(?:spawnSync|execSync|execFileSync)\(\s*(?!process\.execPath\s*[,)]|(['"])node\1\s*[,)])/.test(content);
+      if (CHILD_SHELL_TRUE.test(content)) return true;
+      if (CHILD_NON_NODE_CALL.test(content)) return true;
+      return !CHILD_NODE_ONLY_CALL.test(content);
     },
+  },
+  {
+    name: 'fs-lock-or-install-child',
+    // #6002 decision: a node-only child still counts when the file also
+    // exercises Windows-sensitive filesystem behavior (locking, rename/unlink
+    // semantics, EBUSY/EPERM, the installer, --config-dir), because the child
+    // is then driving that behavior in a real process.
+    test: (content) =>
+      content.includes('child_process') &&
+      CHILD_NODE_ONLY_CALL.test(content) &&
+      /\b(lock|lockfile|rename(Sync)?|unlink(Sync)?|EBUSY|EPERM|install\.js|--config-dir)\b/.test(content),
   },
   {
     name: 'shell-interpreter-spawn',
@@ -308,16 +344,40 @@ const MACOS_CATEGORIES = [
   { name: 'symlink-keyword', test: (content) => /\bsymlink/i.test(content) },
 ];
 
+/** Keywords after which a `/` begins a regex literal rather than a division. */
+const REGEX_AFTER_KEYWORD = new Set([
+  'return', 'typeof', 'case', 'in', 'of', 'delete', 'void', 'throw', 'new', 'else', 'do', 'instanceof', 'yield', 'await',
+]);
+const REGEX_AFTER_CHAR = '(,=:[!&|?{};+-*%<>~^';
+
+function regexAllowedAfter(out) {
+  let j = out.length - 1;
+  while (j >= 0 && /\s/.test(out[j])) j--;
+  if (j < 0) return true;
+  if (REGEX_AFTER_CHAR.includes(out[j])) return true;
+  if (/[A-Za-z0-9_$]/.test(out[j])) {
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(out[k])) k--;
+    return REGEX_AFTER_KEYWORD.has(out.slice(k + 1, j + 1));
+  }
+  return false;
+}
+
 /**
  * #6002 — remove `//` line comments and block comments from source text so
  * the CATEGORIES / MACOS_CATEGORIES tests match platform BEHAVIOR in code, not
  * words in prose. A single-pass scanner tracks whether it is inside a '…', "…"
  * or `…` string literal (honoring backslash escapes), so a `//` inside a
- * string (e.g. a URL) does not start a comment. Regex literals are not
- * modeled; '…' and "…" strings end at a newline so an unbalanced quote (e.g.
- * inside a regex literal) cannot swallow the rest of the file. A line comment
- * is dropped up to (not including) its newline; a block comment becomes one
- * space (its newlines are kept) so adjacent tokens never fuse.
+ * string (e.g. a URL) does not start a comment. A `/` is read as the start of
+ * a regex literal (scanned to its closing unescaped `/`, honoring `[...]`
+ * classes and escapes) when the previous significant character is one of
+ * `( , = : [ ! & | ? { } ; + - * % < > ~ ^`, the start of input, or a keyword
+ * such as return/typeof; the regex body is kept verbatim so quotes or `//`
+ * inside it cannot corrupt string or comment tracking. An unterminated regex
+ * (newline first) falls back to a plain `/`. '…' and "…" strings end at a
+ * newline so an unbalanced quote cannot swallow the rest of the file. A line
+ * comment is dropped up to (not including) its newline; a block comment
+ * becomes one space (its newlines are kept) so adjacent tokens never fuse.
  *
  * @param {string} content
  * @returns {string}
@@ -341,6 +401,31 @@ function stripComments(content) {
       }
       i += 2;
       out += ' ' + newlines;
+    } else if (ch === '/' && regexAllowedAfter(out)) {
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < n && src[j] !== '\n') {
+        const c = src[j];
+        if (c === '\\') {
+          j += 2;
+          continue;
+        }
+        if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        else if (c === '/' && !inClass) {
+          closed = true;
+          break;
+        }
+        j++;
+      }
+      if (closed) {
+        out += src.slice(i, j + 1);
+        i = j + 1;
+      } else {
+        out += ch;
+        i++;
+      }
     } else if (ch === "'" || ch === '"' || ch === '`') {
       out += ch;
       i++;
@@ -378,6 +463,27 @@ function classifyContent(content) {
   const signals = [];
   for (const category of CATEGORIES) {
     if (category.test(text)) signals.push(category.name);
+  }
+  return { needsRealOs: signals.length > 0, signals };
+}
+
+/**
+ * Pre-#6002 classification: no comment stripping and the legacy
+ * raw-child-process test (any child_process require counts); the
+ * fs-lock-or-install-child category does not exist here. Used by
+ * scripts/ci-test-scope.cjs for src/ reachability, whose behavior #6002 must
+ * not change.
+ *
+ * @param {string} content
+ * @returns {{needsRealOs: boolean, signals: string[]}}
+ */
+function classifyRawContent(content) {
+  const text = typeof content === 'string' ? content : '';
+  const signals = [];
+  for (const category of CATEGORIES) {
+    if (category.name === 'fs-lock-or-install-child') continue;
+    const matched = category.name === 'raw-child-process' ? legacyRawChildProcess(text) : category.test(text);
+    if (matched) signals.push(category.name);
   }
   return { needsRealOs: signals.length > 0, signals };
 }
@@ -790,6 +896,8 @@ if (require.main === module) {
 
 module.exports = {
   classifyContent,
+  classifyRawContent,
+  stripComments,
   CATEGORIES,
   NOISY_FOR_SOURCE_REACHABILITY,
   ALWAYS_REAL_OS,
