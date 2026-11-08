@@ -501,7 +501,6 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
         try {
           // Exact 64-bit (dev, ino): an NTFS file id does not fit a JS number (never serialized).
           const decisionId = fs.statSync(lockPath, { bigint: true });
-          const decisionStat = fs.statSync(lockPath);
           // Snapshot the decision-time body too: (dev, ino) alone is defeated by inode
           // REUSE (a racer's unlink+recreate can land on the same inode), so the body
           // content binds the identity as well — mirrors capability-lock.cts's (dev,
@@ -513,7 +512,7 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
             // Verified-live, but recover anyway once the lock crosses the absolute
             // deadman ceiling — defeats a pid-reuse false-alive that would otherwise
             // block forever (R4-FIX; mtime age is from lock creation, not this call).
-            const age = clock.now() - decisionStat.mtimeMs;
+            const age = clock.now() - Number(decisionId.mtimeMs);
             stealable = age > deadmanCeilingMs;
           }
           if (stealable) {
