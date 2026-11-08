@@ -106,7 +106,7 @@ interface QuickBatchItem {
    * coordinator crash/restart; this field is the durable fallback a
    * RESUMED coordinator process reads when its own fresh ephemeral
    * manifest has no entry for an item that finished executing in a PRIOR
-   * process (see `.gsd/phase/feat-3677-quick-batch-hardening-acceptance/40-design.md` §1).
+   * process (see the #3677 design, PR #4240, §1).
    *
    * Deliberately a SEPARATE field from the pre-existing `worktree` above,
    * not a reuse of it: `worktree`'s own `loadBatch` validation requires the

@@ -753,12 +753,16 @@ order. Default `false` keeps the original serial behavior byte-for-byte.
 
 ### Project-Root Resolution in Multi-Repo Workspaces
 
-When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels, never above `$HOME`):
+When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels):
 
 1. If the starting directory already has its own `.planning/`, it is the project root (no walk-up).
 2. Parent has `.planning/config.json` listing the starting directory's top-level segment in `sub_repos` (or the legacy `planning.sub_repos` shape).
 3. Parent has `.planning/config.json` with legacy `multiRepo: true` and the starting directory is inside a git repo.
 4. Parent has `.planning/` and an ancestor up to the candidate parent contains `.git` (heuristic fallback).
+
+The walk never reads above `$HOME`. When `$HOME` is a symlink, it stops there whether the path is spelled through the link or through its target. A starting directory at `$HOME` itself, with no `.planning/` of its own, resolves to itself.
+
+The isolation hooks resolve their project root through the same walk, so they keep the same `$HOME` boundary as `gsd-tools`.
 
 If none match, the starting directory is returned unchanged. Explicit `--project-dir /path/to/workspace` is idempotent under this resolution.
 
