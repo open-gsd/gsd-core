@@ -867,7 +867,7 @@ Read and execute `~/.claude/gsd-core/workflows/execute-plan/steps/clear-plan-tim
 **SUMMARY:** {path to SUMMARY.md}
 
 <worktree_metadata>
-{"agent_id":"{phase}-{plan}","worktree_path":"${GSD_WORKTREE_PATH:-}","branch":"${GSD_WORKTREE_BRANCH:-}","expected_base":"${GSD_WORKTREE_EXPECTED_BASE:-}"}
+{"agent_id":"{phase}-{plan}","worktree_path":"{captured_worktree_path}","branch":"{captured_branch}","expected_base":"{captured_expected_base}"}
 </worktree_metadata>
 
 **Commits:**
