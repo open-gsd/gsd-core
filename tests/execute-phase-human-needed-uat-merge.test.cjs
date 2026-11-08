@@ -1,7 +1,5 @@
 'use strict';
 
-// allow-test-rule: source-text-is-the-product
-
 /**
  * #5845: verify_phase_goal's human_needed Step A must merge-or-skip, never
  * overwrite an existing {phase_num}-UAT.md that holds a human's recorded
