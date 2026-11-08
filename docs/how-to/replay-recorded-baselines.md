@@ -45,7 +45,7 @@ Each status names why a notation was not replayed:
 | `no_command` | No backtick command before the notation, and no trailing `#` comment | Put the command in backticks on the notation's line, or put the notation in a trailing `#` comment after an `<automated>` command |
 | `ambiguous_command` | Two or more backtick spans before the notation | Keep one command per notation line |
 | `malformed_command` | An unclosed quote or a trailing backslash | Fix the quoting |
-| `disallowed` | A pipe, redirect, glob, `$`, an absolute or `..` path, a program other than `grep`/`git`, a `git` subcommand other than `grep`, `ls-files`, `rev-parse` or `rev-list`, or a `git` option that starts a program or writes a file | Rewrite the gate as one `grep` or `git` command if you can. Otherwise this gate cannot be replayed; its baseline stays a declared value |
+| `disallowed` | A pipe, redirect, glob, `$`, an absolute or `..` path, a program other than `grep`/`git`, a `git` subcommand other than `grep`, `ls-files`, `rev-parse` or `rev-list`, an option outside the allowlist (including abbreviations and `-f`/`-m` style options), or a path that resolves outside the project through a symlink | Rewrite the gate as one `grep` or `git` command if you can. Otherwise this gate cannot be replayed; its baseline stays a declared value |
 | `cannot_run` | The program was not found, or it was killed | Install `grep` or `git`, or check the command |
 | `timeout` | The command ran longer than 10 s | Narrow the search path |
 | `output_cap` | The command printed more than 64 KiB | Use a counting flag (`-c`, `--count`) |

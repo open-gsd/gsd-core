@@ -1346,7 +1346,8 @@ the static rules (B1 and the rest) decide validity.
 - Only `grep`, and `git` with `grep`, `ls-files`, `rev-parse` or `rev-list`, may run.
 - Pipes, redirects, globs, `$` expansion and command substitution are `disallowed`.
 - Absolute paths and `..` segments are `disallowed`.
-- git options that start a program or write a file are `disallowed` (`--output`, `-O`, `--textconv`, `--ext-diff`).
+- Options come from an exact-match allowlist per program, so abbreviations like `--open-files=sh` are `disallowed`.
+- A path that resolves outside the project through a symlink is `disallowed`.
 - Each command gets 10 s and 64 KiB of output. A run replays at most 50 commands within 60 s.
 
 Status codes: `no_command`, `ambiguous_command`, `malformed_command`, `disallowed`,
