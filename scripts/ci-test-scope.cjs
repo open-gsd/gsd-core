@@ -6,7 +6,7 @@ const { execFileSync } = require('child_process');
 const { existsSync, readdirSync, appendFileSync, readFileSync } = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
-const { classifyRawContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./gen-platform-conformance-tier.cjs');
+const { classifyUnstrippedContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./gen-platform-conformance-tier.cjs');
 
 // Workflow files that are purely administrative / policy bots. Changes to these
 // files do NOT require the cross-platform test matrix — only a lightweight
@@ -530,7 +530,7 @@ function reachesConformanceTierOrSeam(file, deps = {}) {
 
     if (file.startsWith('src/')) {
       const content = readFileSync(file, 'utf8');
-      const { signals } = classifyRawContent(content);
+      const { signals } = classifyUnstrippedContent(content);
       const narrowSignals = signals.filter(signal => !NOISY_FOR_SOURCE_REACHABILITY.has(signal));
       return narrowSignals.length > 0;
     }

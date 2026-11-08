@@ -30,7 +30,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const {
   classifyContent,
-  classifyRawContent,
+  classifyUnstrippedContent,
   classifyTree,
   NOISY_FOR_SOURCE_REACHABILITY,
   classifyMacosContent,
@@ -1179,7 +1179,7 @@ describe('#5074 platform split — .platform sibling rule', () => {
 describe('#6002: detectors match platform behavior, not text', () => {
   const fc = require('fast-check');
 
-  // Rows 1-4: no real-OS signal.
+  // Comments and node-only children carry no real-OS signal.
   test('node-only child via process.execPath is not a real-OS signal (#6002)', () => {
     const src =
       "const {execFileSync}=require('child_process');execFileSync(process.execPath,['x'])";
@@ -1199,8 +1199,8 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.equal(classifyContent('/* process.platform */').needsRealOs, false);
   });
 
-  // Rows 5-7: real signals stay flagged.
-  test('a real shell spawn stays flagged as raw-child-process', () => {
+  // Real shell spawns, non-node children and string-literal platform checks stay flagged.
+  test('a real shell spawn stays flagged as raw-child-process (#6002)', () => {
     const { needsRealOs, signals } = classifyContent(
       "const { spawnSync, execFileSync } = require('child_process');\nspawnSync('bash',['-c',s])",
     );
@@ -1208,7 +1208,7 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
   });
 
-  test('a non-node child process stays flagged as raw-child-process', () => {
+  test('a non-node child process stays flagged as raw-child-process (#6002)', () => {
     const { needsRealOs, signals } = classifyContent(
       "const { spawnSync, execFileSync } = require('child_process');\nexecFileSync('git',['status'])",
     );
@@ -1216,12 +1216,12 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
   });
 
-  test('a string-literal platform check stays flagged', () => {
+  test('a string-literal platform check stays flagged (#6002)', () => {
     assert.equal(classifyContent("if (process.platform === 'win32') {}").needsRealOs, true);
   });
 
-  // Row 8: `//` inside a string is not a comment start.
-  test('a URL inside a string does not start a comment that swallows the spawn', () => {
+  // `//` inside a string is not a comment start.
+  test('a URL inside a string does not start a comment that swallows the spawn (#6002)', () => {
     const { needsRealOs, signals } = classifyContent(
       "const { spawnSync, execFileSync } = require('child_process');\nconst u = 'http://example.test'; spawnSync('bash', [])",
     );
@@ -1230,49 +1230,54 @@ describe('#6002: detectors match platform behavior, not text', () => {
   });
 
   // Regex literals must not corrupt string/comment tracking.
-  test('a regex literal containing // does not hide a later platform check', () => {
+  test('a regex literal containing // does not hide a later platform check (#6002)', () => {
     const src = "const r=/https?:\\/\\//; if (process.platform==='win32'){}";
     assert.ok(classifyContent(src).signals.includes('process-platform'));
   });
 
-  test('a regex literal containing a quote does not hide a later spawn', () => {
+  test('a regex literal containing a quote does not hide a later spawn (#6002)', () => {
     const src =
       "const cp=require('child_process');\n/'/.test(x); const y='a // b'; execFileSync('git',[])";
     assert.ok(classifyContent(src).signals.includes('raw-child-process'));
   });
 
   // Async spawn forms, fork, shell:true, aliased usage.
-  test("async spawn('git') is flagged", () => {
+  test("async spawn('git') is flagged (#6002)", () => {
     assert.ok(classifyContent("require('child_process');spawn('git',[])").signals.includes('raw-child-process'));
   });
 
-  test("exec('cmd /c x') is flagged", () => {
+  test("exec('cmd /c x') is flagged (#6002)", () => {
     assert.ok(classifyContent("require('child_process');exec('cmd /c x')").signals.includes('raw-child-process'));
   });
 
-  test("fork('./w.js') runs node and is node-only: not flagged", () => {
+  test("fork('./w.js') runs node and is node-only: not flagged (#6002)", () => {
     assert.equal(classifyContent("require('child_process');fork('./w.js')").needsRealOs, false);
   });
 
-  test('shell:true on a node child is flagged', () => {
+  test('shell:true on a node child is flagged (#6002)', () => {
     const src = "require('child_process');spawnSync(process.execPath,['x'],{shell:true})";
     assert.ok(classifyContent(src).signals.includes('raw-child-process'));
   });
 
-  test('aliased child_process usage with unidentifiable call sites is flagged', () => {
+  test('aliased child_process usage with unidentifiable call sites is flagged (#6002)', () => {
     assert.ok(classifyContent("const cp=require('child_process');cp.run(x)").signals.includes('raw-child-process'));
   });
 
-  test('a node-only child in a file exercising lock/rename/EBUSY is flagged fs-lock-or-install-child', () => {
+  test('a node-only child in a file exercising lock/rename/EBUSY is flagged fs-lock-or-install-child (#6002)', () => {
     const src = "require('child_process');spawnSync(process.execPath,['x']);fs.renameSync(a,b)";
     const { signals } = classifyContent(src);
     assert.ok(signals.includes('fs-lock-or-install-child'), signals.join(','));
     assert.ok(!signals.includes('raw-child-process'));
   });
 
-  test('classifyRawContent keeps pre-#6002 behavior (comments and bare require count)', () => {
-    assert.ok(classifyRawContent("// process.platform").signals.includes('process-platform'));
-    assert.ok(classifyRawContent("require('child_process')").signals.includes('raw-child-process'));
+  test('a node-only child with the word lock only in prose is not fs-lock-or-install-child (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x']); const msg = 'unlock the lock screen';";
+    assert.ok(!classifyContent(src).signals.includes('fs-lock-or-install-child'));
+  });
+
+  test('classifyUnstrippedContent keeps pre-#6002 behavior (comments and bare require count) (#6002)', () => {
+    assert.ok(classifyUnstrippedContent("// process.platform").signals.includes('process-platform'));
+    assert.ok(classifyUnstrippedContent("require('child_process')").signals.includes('raw-child-process'));
   });
 
   test('member cp.spawn(non-node) is flagged even after a node-only spawnSync (#6002)', () => {
@@ -1311,8 +1316,8 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.equal(classifyMacosContent('// realpathSync on the tmpdir').needsRealOs, false);
   });
 
-  // Row 10: property.
-  test('property: comment-only content has no signals', () => {
+  // Property: comments never add or remove signals.
+  test('property: comment-only content has no signals (#6002)', () => {
     fc.assert(
       fc.property(
         fc.constantFrom('process.platform', 'win32', 'chmod(', 'symlink', "spawnSync('bash'"),
@@ -1325,7 +1330,7 @@ describe('#6002: detectors match platform behavior, not text', () => {
     );
   });
 
-  test('property: appending a comment never removes a real signal', () => {
+  test('property: appending a comment never removes a real signal (#6002)', () => {
     const prefix = "const { spawnSync, execFileSync } = require('child_process');\n";
     const snippets = [
       prefix + "spawnSync('bash',['-c',s])",

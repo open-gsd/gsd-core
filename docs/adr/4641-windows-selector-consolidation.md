@@ -415,7 +415,7 @@ Narrowed the detectors in `scripts/gen-platform-conformance-tier.cjs`:
 - New category `fs-lock-or-install-child`: a node-only child still counts when the same file matches
   `lock|lockfile|rename(Sync)?|unlink(Sync)?|EBUSY|EPERM|install.js|--config-dir`, because the child is
   then driving Windows-sensitive filesystem behavior. This is a decision, not a heuristic accident.
-- `src/` reachability in `scripts/ci-test-scope.cjs` is unchanged: it uses `classifyRawContent`,
+- `src/` reachability in `scripts/ci-test-scope.cjs` is unchanged: it uses `classifyUnstrippedContent`,
   the pre-#6002 classification (no comment stripping, legacy `raw-child-process`, no
   `fs-lock-or-install-child`), so no `src/` file left full-matrix reachability.
 
@@ -426,7 +426,7 @@ Before and after (2026-11-08, live tree, 1174 eligible unit-suite files):
 
 | Tier | Before | After | Share of eligible |
 | :--- | ---: | ---: | ---: |
-| Windows | 380 | 320 | 27.3% |
+| Windows | 380 | 319 | 27.2% |
 | macOS | 270 | 263 | 22.4% |
 
 The macOS shrink comes from the same comment stripping applied to `MACOS_CATEGORIES`, not from the
@@ -441,4 +441,4 @@ from the macOS tier (their code does not exercise the behavior), and a test pins
 - `tests/ci-docs-guard-registry.test.cjs:387`: released. The code calls `fs.mkdirSync` for a directory named `*.test.cjs`; no symlink is created.
 - `tests/ensure-runtime-build.test.cjs:320-321`: released. The code passes the real tsc path explicitly to avoid creating a directory symlink.
 
-No `MACOS_ALWAYS_REAL_OS` map was added and no kept entries result. macOS tier size is unchanged at 263.
+No `MACOS_ALWAYS_REAL_OS` map was added and no kept entries result. macOS tier size went from 270 to 263 (the shrink above), with no map entries added.

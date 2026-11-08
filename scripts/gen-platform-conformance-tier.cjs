@@ -142,15 +142,20 @@ const MACOS_GENERATED_HEADER =
 // #6002 child_process call-site shapes. First arguments that are node itself:
 // `process.execPath` or the literal 'node' / "node".
 const NODE_FIRST_ARG = "(?:process\\.execPath\\s*[,)]|(['\"])node\\1\\s*[,)])";
+const NOT_NODE_FIRST_ARG = '(?!' + NODE_FIRST_ARG + ')';
+// One source of truth for the call names every shape below matches.
+const CHILD_SYNC_NAMES = 'spawnSync|execSync|execFileSync';
+const CHILD_ASYNC_NAMES = 'spawn|execFile|exec';
+const CHILD_CALL_NAMES = CHILD_SYNC_NAMES + '|' + CHILD_ASYNC_NAMES;
 const CHILD_NON_NODE_CALL = new RegExp(
-  '(?:\\b(?:spawnSync|execSync|execFileSync)|(?<![.\\w$])(?:spawn|execFile|exec))\\(\\s*(?!' + NODE_FIRST_ARG + ')',
+  '(?:\\b(?:' + CHILD_SYNC_NAMES + ')|(?<![.\\w$])(?:' + CHILD_ASYNC_NAMES + '))\\(\\s*' + NOT_NODE_FIRST_ARG,
 );
 // Member form `<ident>.spawn(...)` (e.g. `cp.spawn('bash')`, `child_process.execFile('git')`).
 // Heuristic: any `<ident>.(spawn|spawnSync|execFile|execFileSync|exec|execSync)(` whose first
 // argument is not node counts as a non-node call, EXCEPT a regex `.exec(` — the receiver is a
 // regex literal (preceded by `/`) or an identifier ending in re/Re/RE/regex/Regex/REGEX.
 const CHILD_MEMBER_CALL = new RegExp(
-  '([\\w$]+)\\.(?:spawnSync|execSync|execFileSync|spawn|execFile|exec)\\(\\s*(?!' + NODE_FIRST_ARG + ')',
+  '([\\w$]+)\\.(?:' + CHILD_CALL_NAMES + ')\\(\\s*' + NOT_NODE_FIRST_ARG,
   'g',
 );
 const REGEX_RECEIVER_NAME = /(?:re|Re|RE|regex|Regex|REGEX)$/;
@@ -168,12 +173,16 @@ function hasMemberNonNodeCall(content) {
 // counted site.
 const CHILD_PROMISIFIED = /\bpromisify\(\s*(?:[\w$]+\.)?(?:execFile|exec|spawn)\b/;
 const CHILD_NODE_ONLY_CALL = new RegExp(
-  '\\b(?:spawnSync|execSync|execFileSync|spawn|execFile|exec)\\(\\s*' + NODE_FIRST_ARG + '|(?<![.\\w$])fork\\(',
+  '\\b(?:' + CHILD_CALL_NAMES + ')\\(\\s*' + NODE_FIRST_ARG + '|(?<![.\\w$])fork\\(',
 );
+// Code constructs only: a bare `lock` word matches prose, so lock-ness is a lockfile/lock-helper
+// identifier, a `.lock` path suffix, a rename/unlink call, EBUSY/EPERM, the installer or --config-dir.
+const FS_LOCK_OR_INSTALL =
+  /\b(?:lockfile|acquireLock|releaseLock|withLock|lockSync|proper-lockfile)\b|\.lock\b|\b(?:rename|unlink)(?:Sync)?\(|\bE(?:BUSY|PERM)\b|install\.js|--config-dir/;
 const CHILD_SHELL_TRUE = /\bshell\s*:\s*true\b/;
 // Pre-#6002 raw-child-process test, kept for source-file reachability
 // (scripts/ci-test-scope.cjs), whose behavior must not change.
-function legacyRawChildProcess(content) {
+function preIssue6002RawChildProcess(content) {
   if (/require\((['"])(?:node:)?child_process\1\)/.test(content)) return true;
   if (!content.includes('child_process')) return false;
   return /\bspawnSync\(|\bexecSync\(|\bexecFileSync\(/.test(content);
@@ -183,7 +192,9 @@ function legacyRawChildProcess(content) {
  * Detection categories (#4591 design doc). Each entry's `test` receives the
  * raw file content string and returns true when that category's signal is
  * present. Order matches the design doc's enumeration; `signals` in
- * `classifyContent`'s return value preserves this order.
+ * `classifyContent`'s return value preserves this order. Optional fields
+ * (the pre-#6002 view used by `classifyUnstrippedContent`): `raw: <fn>`
+ * replaces `test` there; `rawSkip: true` omits the category there.
  */
 const CATEGORIES = [
   {
@@ -212,6 +223,7 @@ const CATEGORIES = [
   },
   {
     name: 'raw-child-process',
+    raw: preIssue6002RawChildProcess, // pre-#6002 test used by classifyUnstrippedContent
     // #6002: matches a call that can spawn a platform-dependent binary, not
     // the mere presence of the module. Requires the child_process token AND a
     // sync or async spawn call (spawnSync/execSync/execFileSync/spawn/execFile/
@@ -238,6 +250,7 @@ const CATEGORIES = [
   },
   {
     name: 'fs-lock-or-install-child',
+    rawSkip: true, // did not exist pre-#6002; classifyUnstrippedContent omits it
     // #6002 decision: a node-only child still counts when the file also
     // exercises Windows-sensitive filesystem behavior (locking, rename/unlink
     // semantics, EBUSY/EPERM, the installer, --config-dir), because the child
@@ -245,7 +258,7 @@ const CATEGORIES = [
     test: (content) =>
       content.includes('child_process') &&
       CHILD_NODE_ONLY_CALL.test(content) &&
-      /\b(lock|lockfile|rename(Sync)?|unlink(Sync)?|EBUSY|EPERM|install\.js|--config-dir)\b/.test(content),
+      FS_LOCK_OR_INSTALL.test(content),
   },
   {
     name: 'shell-interpreter-spawn',
@@ -324,20 +337,8 @@ const NOISY_FOR_SOURCE_REACHABILITY = new Set(['symlink-keyword']);
  * expressible as content; reach for this map only when it structurally is
  * not.
  *
- * Current entries:
- * - tests/external-descriptor-confinement.test.cjs: exercises `isPathConfined`
- *   (src/external-descriptor-trust.cts:41-49), which calls the AMBIENT
- *   `path` module directly — `path.resolve(root, target)` and `path.sep` —
- *   with no platform/path injection seam. Its win32 semantics (drive
- *   letters, UNC paths, `\` separator) are therefore only reachable by
- *   actually running on Windows; the win32 branch is unreachable on Linux.
- *   This is a security-relevant write-confinement gate, so a silent gap
- *   here is a security regression, not a coverage nit (#4641).
- * - tests/state-todos-render.test.cjs: exercises `renderPendingTodosMarkdown`
- *   (src/init.cts:2646-2650), which builds repo-relative links via the AMBIENT
- *   `path.isAbsolute`/`path.relative` with no injection seam (#4384/#4421);
- *   its win32 branch is reachable only on Windows. Its only content signal was
- *   a node-only `spawnSync`, which #6002 deliberately ignores.
+ * Entries and their reasons live in the Map below (the single source); each
+ * reason is a required value, so none can be added without one.
  */
 const ALWAYS_REAL_OS = new Map([
   [
@@ -546,13 +547,12 @@ function classifyContent(content) {
  * @param {string} content
  * @returns {{needsRealOs: boolean, signals: string[]}}
  */
-function classifyRawContent(content) {
+function classifyUnstrippedContent(content) {
   const text = typeof content === 'string' ? content : '';
   const signals = [];
   for (const category of CATEGORIES) {
-    if (category.name === 'fs-lock-or-install-child') continue;
-    const matched = category.name === 'raw-child-process' ? legacyRawChildProcess(text) : category.test(text);
-    if (matched) signals.push(category.name);
+    if (category.rawSkip) continue;
+    if ((category.raw || category.test)(text)) signals.push(category.name);
   }
   return { needsRealOs: signals.length > 0, signals };
 }
@@ -965,7 +965,7 @@ if (require.main === module) {
 
 module.exports = {
   classifyContent,
-  classifyRawContent,
+  classifyUnstrippedContent,
   stripComments,
   CATEGORIES,
   NOISY_FOR_SOURCE_REACHABILITY,
