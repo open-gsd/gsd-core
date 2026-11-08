@@ -14,10 +14,9 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { readFileNormalized, installSpawnEnv, cleanup } = require('./helpers.cjs');
+const { readFileNormalized, installSpawnEnv, cleanup, createTempProject } = require('./helpers.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -104,7 +103,14 @@ describe('#5982 plan:pre dispatches every active step and gate', () => {
 
   test('the step file validates third-party ref.command and check before shell use', () => {
     const t = stepText();
-    assert.ok(t.includes('^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$'), 'ref.command validation pattern missing');
+    // Parity with the contract: every validation pattern loop-hook-dispatch.md names (the ref.command
+    // one and the dot-normalized check.query one) must be the one the step file applies.
+    const patterns = [];
+    for (const line of readFileNormalized(DISPATCH_REF).split('\n')) {
+      for (const m of line.matchAll(/`(\^\[a-z\][^`]{1,120}\$)`/g)) patterns.push(m[1]);
+    }
+    assert.equal(patterns.length, 2, `loop-hook-dispatch.md must name the step and gate patterns; got ${JSON.stringify(patterns)}`);
+    for (const p of patterns) assert.ok(t.includes(p), `step file must validate with the contract pattern ${p}`);
     assert.ok(t.includes('single argv element'), 'predicate must be passed as a single argv element');
     assert.ok(t.includes('agentVerdict'), 'an agentVerdict gate must be routed, never silently passed');
   });
@@ -126,22 +132,19 @@ describe('#5982 plan:pre dispatches every active step and gate', () => {
     assert.ok(!dedicatedTable().has('mempalace'), 'mempalace has no dedicated section; the generic arm must own it');
   });
 
-  test('a resolved non-dedicated step falls to the generic arm', () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-pre-5982-'));
-    try {
-      fs.mkdirSync(path.join(tmp, '.planning', 'phases'), { recursive: true });
-      fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), JSON.stringify({ mempalace: { enabled: true } }), 'utf8');
-      const r = spawnSync(process.execPath, [GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', tmp, '--raw'], {
-        cwd: tmp, encoding: 'utf8', timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS, env: installSpawnEnv(),
-      });
-      assert.strictEqual(r.status, 0, `render-hooks failed: ${r.stderr}`);
-      const hooks = JSON.parse(r.stdout.trim()).activeHooks;
-      const table = dedicatedTable();
-      const generic = hooks.filter((h) => (h.kind === 'step' || h.kind === 'gate') && !table.has(h.capId));
-      assert.ok(generic.some((h) => h.capId === 'mempalace' && h.kind === 'step'),
-        `mempalace step must resolve and fall to the generic arm; got ${JSON.stringify(hooks.map((h) => h.capId))}`);
-    } finally {
-      cleanup(tmp);
-    }
+  test('a resolved non-dedicated step falls to the generic arm', (t) => {
+    const tmp = createTempProject('plan-pre-5982-');
+    t.after(() => cleanup(tmp));
+    fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), JSON.stringify({ mempalace: { enabled: true } }), 'utf8');
+    const r = runNode([GSD_TOOLS, 'loop', 'render-hooks', 'plan:pre', '--cwd', tmp, '--raw'], {
+      cwd: tmp, env: installSpawnEnv(), timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+    });
+    assert.equal(r.outcome, OUTCOME.EXITED, `render-hooks did not exit: ${r.outcome}`);
+    assert.equal(r.exitCode, 0, `render-hooks failed: ${r.stderr}`);
+    const hooks = JSON.parse(r.stdout.trim()).activeHooks;
+    const table = dedicatedTable();
+    const generic = hooks.filter((h) => (h.kind === 'step' || h.kind === 'gate') && !table.has(h.capId));
+    assert.ok(generic.some((h) => h.capId === 'mempalace' && h.kind === 'step'),
+      `mempalace step must resolve and fall to the generic arm; got ${JSON.stringify(hooks.map((h) => h.capId))}`);
   });
 });
