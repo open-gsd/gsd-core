@@ -2768,4 +2768,20 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
     assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
   });
+
+  for (const dryRun of [false, true]) {
+    test(`a FIFO at STATE.md makes state prune${dryRun ? ' --dry-run' : ''} exit non-zero without blocking`, () => {
+      const { spawnSync } = require('node:child_process');
+      fs.unlinkSync(statePath);
+      assert.strictEqual(spawnSync('mkfifo', [statePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+      // Uncaught: the child must exit non-zero on its own rather than block on the pipe.
+      const script = `require(${JSON.stringify(STATE_LIB_PATH)})` +
+        `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: ${dryRun}, silent: true }, true);`;
+      const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+
+      assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
+      assert.notStrictEqual(child.status, 0, 'the prune fails');
+      assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
+    });
+  }
 });

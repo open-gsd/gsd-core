@@ -834,23 +834,71 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
 
   const posixOnly = { skip: process.platform === 'win32' ? 'POSIX symlinks and FIFOs' : false };
 
-  test('an atomic publish never writes through a symlink planted at the pid-only temp name', posixOnly, () => {
+  // The real temp name is `<target>.<label>.<pid>.<12 hex>`; a fixed first `randomBytes` result makes
+  // the first attempt land on a name the test has already planted, so the collision really happens.
+  function forceFirstTempSuffix(hexSuffix) {
+    const nodeCrypto = require('node:crypto');
+    const realRandomBytes = nodeCrypto.randomBytes;
+    const state = { calls: 0 };
+    mock.method(nodeCrypto, 'randomBytes', (...args) => (state.calls++ === 0 ? Buffer.from(hexSuffix, 'hex') : realRandomBytes(...args)));
+    return state;
+  }
+  const FIXED_HEX = '0a0b0c0d0e0f';
+
+  test('an atomic publish never writes through a symlink planted at the temp name its first attempt picks', posixOnly, () => {
     const victim = path.join(dir, 'victim.txt');
     fs.writeFileSync(victim, 'ORIGINAL');
-    fs.symlinkSync(victim, `${target}.tmp.${process.pid}`);
+    fs.symlinkSync(victim, `${target}.tmp.${process.pid}.${FIXED_HEX}`);
+    const rng = forceFirstTempSuffix(FIXED_HEX);
     scp.platformWriteSync(target, '# New\n', { atomic: true });
+    mock.restoreAll();
+    assert.ok(rng.calls >= 2, 'the first temp name collided with the planted link and a new one was drawn');
     assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), '# New\n');
   });
 
-  test('a restore never writes through a symlink planted at the pid-only temp name', posixOnly, () => {
+  test('a restore never writes through a symlink planted at the temp name its first attempt picks', posixOnly, () => {
     const victim = path.join(dir, 'victim.txt');
     fs.writeFileSync(victim, 'ORIGINAL');
     fs.writeFileSync(target, 'current\n');
-    fs.symlinkSync(victim, `${target}.restore.${process.pid}`);
+    fs.symlinkSync(victim, `${target}.restore.${process.pid}.${FIXED_HEX}`);
+    const rng = forceFirstTempSuffix(FIXED_HEX);
     scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS));
+    mock.restoreAll();
+    assert.ok(rng.calls >= 2, 'the first temp name collided with the planted link and a new one was drawn');
     assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
     assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+  });
+
+  test('a byte read with noFollow refuses a symlink (ELOOP); without it the link is read through', posixOnly, () => {
+    const real = path.join(dir, 'real.md');
+    fs.writeFileSync(real, 'LINKED BYTES');
+    const link = path.join(dir, 'link.md');
+    fs.symlinkSync(real, link);
+    assert.throws(() => scp.platformReadBytesSync(link, { noFollow: true }), (err) => err.code === 'ELOOP');
+    assert.deepStrictEqual(scp.platformReadBytesSync(link), Buffer.from('LINKED BYTES'));
+    assert.deepStrictEqual(scp.platformReadBytesSync(real, { noFollow: true }), Buffer.from('LINKED BYTES'), 'a regular file reads normally');
+  });
+
+  test('restoring an absent file with a mode creates it with that mode', () => {
+    scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS), { mode: 0o600 });
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, 0o600, 'the given mode is applied');
+  });
+
+  test('a restore refuses, with ENXIO, a directory that is not the one it had at entry', () => {
+    fs.writeFileSync(target, 'current\n');
+    const realStat = fs.statSync;
+    let parentStats = 0;
+    mock.method(fs, 'statSync', (p, ...rest) => {
+      const st = realStat.call(fs, p, ...rest);
+      if (p === dir && ++parentStats > 1) return { dev: st.dev, ino: st.ino + 1 };
+      return st;
+    });
+    assert.throws(() => scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS)), (err) => err.code === 'ENXIO');
+    mock.restoreAll();
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), 'current\n', 'the destination is untouched');
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md'], 'no temp file is left');
   });
 
   test('a byte read of a FIFO fails with ENXIO instead of blocking', posixOnly, () => {

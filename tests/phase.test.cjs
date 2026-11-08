@@ -9580,6 +9580,24 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
         [{ section: 'Decisions', lines: oldDecisions }], 'the old decisions are still in STATE.md');
     });
 
+    test('#5831: an invalid config.json is not an auto-prune failure: no auto_prune_error and no warning', () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', '- [Phase 1]: Old decision from phase 1', '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual('auto_prune_error' in out, false, 'a config read/parse failure is not reported as an auto-prune failure');
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 0, 'no auto-prune warning');
+      assert.match(readStateMdForAutoPrune(tmpDir), /\[Phase 1\]: Old decision/, 'nothing was pruned');
+    });
+
     test('does NOT prune when auto_prune_state is false (default)', () => {
       writeConfigForAutoPrune(tmpDir, {
         workflow: { auto_prune_state: false },
