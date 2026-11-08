@@ -263,6 +263,7 @@ module.exports = {
   "tests/plan-phase-stall-detection.test.cjs",
   "tests/plan-pre-hook-e2e.test.cjs",
   "tests/plan-review-convergence.test.cjs",
+  "tests/planner-memory-recall-5960.test.cjs",
   "tests/planning-inspect.test.cjs",
   "tests/planning-inspect.unit.test.cjs",
   "tests/planning-lock-mkdir-failure-1884.test.cjs",

@@ -1,10 +1,10 @@
-// allow-test-rule: source-text-is-the-product
-// The workflow Markdown is the deployed contract the orchestrating LLM follows, so the contract is
-// asserted on that prose (and on the shell snippet it carries, executed through the process seam).
-
 /**
  * #5960 — mempalace's plan:pre recall step produces MEMORY-RECALL.md but the plan-phase §8 planner
  * prompt never named it, so the planner never read the recall output.
+ *
+ * The workflow Markdown is the installed contract the orchestrating LLM follows (Markdown, not a
+ * source path, so local/no-source-grep does not apply). The §7 shell snippet it carries is executed
+ * under bash through the process seam, so the path resolution is tested by behavior.
  */
 
 'use strict';

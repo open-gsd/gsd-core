@@ -640,6 +640,9 @@ SPEC_FILE="${SPEC_PATH}"
 # ## UI Considerations section the planner lifts by the same rule as ## Edge Coverage (#1867).
 UI_SPEC_FILE=$(ls "${PHASE_DIR_FOR_SPEC}"/*-UI-SPEC.md 2>/dev/null | head -1)
 UI_SPEC_PATH="${UI_SPEC_FILE}"
+# MemPalace recall (#5960): the plan:pre recall step's product; empty when absent.
+MEMORY_RECALL_PATH=""
+if [ -n "${PHASE_DIR_FOR_SPEC}" ] && [ -f "${PHASE_DIR_FOR_SPEC}/MEMORY-RECALL.md" ]; then MEMORY_RECALL_PATH="${PHASE_DIR_FOR_SPEC}/MEMORY-RECALL.md"; fi
 ```
 
 **If plans exist AND the `--reviews` flag is set:** Before replanning from `--reviews`, scan
@@ -777,6 +780,7 @@ Planner prompt:
 - {SPIKE_FINDINGS_PATH} (Spike Findings — validated patterns, constraints, landmines from experiments, if exists)
 - {SKETCH_FINDINGS_PATH} (Sketch Findings — validated design decisions, CSS patterns, visual direction, if exists)
 - {API_SURFACE_PATH} (API Surface — HINT ONLY, when intel capability is active; see <intel_surface_hint> below)
+- {MEMORY_RECALL_PATH} (MEMORY-RECALL.md — prior decisions, patterns, surprises from MemPalace, if exists)
 ${CONTEXT_WINDOW >= 500000 ? `
 **Cross-phase context (1M model enrichment):**
 - CONTEXT.md files from the 3 most recent completed phases (locked decisions — maintain consistency)
