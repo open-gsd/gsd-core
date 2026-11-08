@@ -499,7 +499,8 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
         // written atomically (writeFileSync …{flag:'wx'}) so there is no empty-body
         // create window here — only the double-steal needs hardening.
         try {
-          const decisionStat = fs.statSync(lockPath);
+          // Exact 64-bit (dev, ino): an NTFS file id does not fit a JS number (never serialized).
+          const decisionId = fs.statSync(lockPath, { bigint: true });
           // Snapshot the decision-time body too: (dev, ino) alone is defeated by inode
           // REUSE (a racer's unlink+recreate can land on the same inode), so the body
           // content binds the identity as well — mirrors capability-lock.cts's (dev,
@@ -511,7 +512,7 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
             // Verified-live, but recover anyway once the lock crosses the absolute
             // deadman ceiling — defeats a pid-reuse false-alive that would otherwise
             // block forever (R4-FIX; mtime age is from lock creation, not this call).
-            const age = clock.now() - decisionStat.mtimeMs;
+            const age = clock.now() - Number(decisionId.mtimeMs);
             stealable = age > deadmanCeilingMs;
           }
           if (stealable) {
@@ -519,17 +520,17 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
             // Identity re-confirm immediately before the steal: a racer that stole +
             // recreated a fresh lock in the decision→steal gap changes (dev, ino) → do
             // NOT delete the replacement; back off and re-evaluate.
-            let confirmStat: fs.Stats;
+            let confirmStat: fs.BigIntStats;
             try {
-              confirmStat = fs.statSync(lockPath);
+              confirmStat = fs.statSync(lockPath, { bigint: true });
             } catch {
               continue; // vanished between decision and steal — retry the create.
             }
             let confirmBody: string | null;
             try { confirmBody = fs.readFileSync(lockPath, 'utf-8'); } catch { confirmBody = null; }
             const sameInstance =
-              typeof decisionStat.dev === 'number' && typeof decisionStat.ino === 'number' &&
-              confirmStat.dev === decisionStat.dev && confirmStat.ino === decisionStat.ino &&
+              typeof decisionId.dev === 'bigint' && typeof decisionId.ino === 'bigint' &&
+              confirmStat.dev === decisionId.dev && confirmStat.ino === decisionId.ino &&
               decisionBody !== null && confirmBody === decisionBody;
             if (!sameInstance) {
               clock.sleep(100); // a racer won the steal + recreated — re-evaluate, don't delete it.

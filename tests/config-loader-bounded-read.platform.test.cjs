@@ -2089,6 +2089,62 @@ describe('#5759 review round: direct-path O_NOFOLLOW, multiply-linked targets, p
     assert.deepStrictEqual(fs.readdirSync(`${dir}.moved`), ['f'], 'no temp file left in the original directory');
   });
 
+  test('atomic: a parent directory swapped for a symlink after the walk is refused; the attacker directory is untouched', () => {
+    const dir = at('d');
+    const victim = at('victim');
+    fs.mkdirSync(dir);
+    fs.mkdirSync(victim);
+    fs.writeFileSync(path.join(dir, 'f'), 'old');
+    fs.writeFileSync(path.join(victim, 'f'), 'VICTIM');
+
+    const err = attempt(() => platformWriteSync(path.join(dir, 'f'), 'PWNED', {
+      verbatim: true,
+      atomic: true,
+      writeSeams: { afterPathWalk: () => { fs.renameSync(dir, `${dir}.moved`); fs.symlinkSync(victim, dir); } },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.strictEqual(fs.readFileSync(path.join(victim, 'f'), 'utf8'), 'VICTIM');
+    assert.deepStrictEqual(fs.readdirSync(victim), ['f'], 'no temp file in the attacker directory');
+    assert.strictEqual(fs.readFileSync(path.join(`${dir}.moved`, 'f'), 'utf8'), 'old', 'nothing was published');
+  });
+
+  test('atomic: a parent swapped between the temp create and the rename is refused with ENXIO; nothing lands in the attacker directory and the temp may be orphaned in the original directory', () => {
+    const dir = at('d');
+    const victim = at('victim');
+    fs.mkdirSync(dir);
+    fs.mkdirSync(victim);
+    fs.writeFileSync(path.join(dir, 'f'), 'old');
+    fs.writeFileSync(path.join(victim, 'f'), 'VICTIM');
+    const { openExclusiveTempSync } = require(SHELL_PROJECTION_PATH);
+
+    const err = attempt(() => platformWriteSync(path.join(dir, 'f'), 'PWNED', {
+      verbatim: true,
+      atomic: true,
+      writeSeams: {
+        createTemp: (base, suffix, mode) => {
+          const made = openExclusiveTempSync(base, suffix, mode);
+          fs.renameSync(dir, `${dir}.moved`);
+          fs.symlinkSync(victim, dir);
+          return made;
+        },
+      },
+    }));
+
+    assert.ok(err, 'the write is refused');
+    assert.strictEqual(err.code, 'ENXIO');
+    assert.deepStrictEqual(fs.readdirSync(victim), ['f'], 'nothing lands in the attacker directory');
+    assert.strictEqual(fs.readFileSync(path.join(victim, 'f'), 'utf8'), 'VICTIM');
+    // Documented residual: the cleanup unlink resolves through the swapped parent, so this
+    // write's temp may stay in the original (moved) directory. It is never another file.
+    const leftovers = fs.readdirSync(`${dir}.moved`).filter((n) => n !== 'f');
+    for (const n of leftovers) {
+      assert.match(n, /^f\..+\.\d+\..+$/, 'only this write\'s temp may remain in the original directory');
+    }
+    assert.strictEqual(fs.readFileSync(path.join(`${dir}.moved`, 'f'), 'utf8'), 'old', 'the target was not published');
+  });
+
   test('a symbolic link that cannot be read is refused with ENXIO', () => {
     const entry = at('link.txt');
     fs.writeFileSync(at('real.txt'), 'old');
@@ -2651,5 +2707,147 @@ describe('#5759 a directory at the config path is unusable', () => {
     assert.strictEqual(JSON.parse(r.stdout).reason, 'config_unreadable');
     assert.ok(r.stderr.includes(rootConfig));
     if (process.platform !== 'win32') assert.ok(r.stderr.includes('EISDIR'));
+  });
+});
+
+// #5831: hostile STATE-ARCHIVE.md rows, moved from tests/state-prune.test.cjs so that file
+// stays free of real-OS signals (symlinks, FIFOs, platform skips).
+describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { skip: SKIP_WIN32 }, () => {
+  const { createTempProject } = require('./helpers.cjs');
+  const STATE_LIB_PATH = path.join(LIB_DIR, 'state.cjs');
+  const SEED_ARCHIVE = '# STATE Archive\n\nSeeded by the test.\n';
+  let tmpDir;
+  let statePath;
+  let archivePath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    archivePath = path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md');
+    fs.writeFileSync(statePath, [
+      '# Session State', '', '**Current Phase:** 8', '', '## Decisions', '',
+      '- [Phase 1]: Decision one, only copy',
+      '- [Phase 2]: Decision two, only copy',
+      '- [Phase 4]: Decision four, only copy',
+      '- [Phase 7]: Recent decision', '',
+    ].join('\n'));
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function prune(keepRecent) {
+    require(STATE_LIB_PATH).cmdStatePrune(tmpDir, { keepRecent: String(keepRecent), dryRun: false, silent: true }, true);
+  }
+  function lockReleased() {
+    return !fs.existsSync(statePath + '.lock');
+  }
+
+  test('a symlinked STATE-ARCHIVE.md is refused: STATE.md, the link and its target are unchanged', () => {
+    const linked = path.join(tmpDir, 'elsewhere-archive.md');
+    fs.writeFileSync(linked, SEED_ARCHIVE);
+    fs.symlinkSync(linked, archivePath);
+    const stateBefore = fs.readFileSync(statePath);
+
+    assert.throws(() => prune(3), /symlink|regular file/i);
+
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+    assert.ok(fs.lstatSync(archivePath).isSymbolicLink(), 'the link is still a link');
+    assert.strictEqual(fs.readFileSync(linked, 'utf-8'), SEED_ARCHIVE, 'the link target is untouched');
+    assert.ok(lockReleased(), 'the STATE.md lock is released');
+  });
+
+  test('--dry-run with a symlinked STATE-ARCHIVE.md refuses like the real run and writes nothing', () => {
+    const linked = path.join(tmpDir, 'elsewhere-archive.md');
+    fs.writeFileSync(linked, SEED_ARCHIVE);
+    fs.symlinkSync(linked, archivePath);
+    const stateBefore = fs.readFileSync(statePath);
+
+    assert.throws(
+      () => require(STATE_LIB_PATH).cmdStatePrune(tmpDir, { keepRecent: '3', dryRun: true, silent: true }, true),
+      /symlink|regular file/i,
+    );
+
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+    assert.ok(fs.lstatSync(archivePath).isSymbolicLink(), 'the link is still a link');
+    assert.strictEqual(fs.readFileSync(linked, 'utf-8'), SEED_ARCHIVE, 'the link target is untouched');
+    assert.ok(lockReleased(), 'no lock is left behind');
+  });
+
+  test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', () => {
+    const { spawnSync } = require('node:child_process');
+    assert.strictEqual(spawnSync('mkfifo', [archivePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    const stateBefore = fs.readFileSync(statePath);
+    const script = `try { require(${JSON.stringify(STATE_LIB_PATH)})` +
+      `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: false, silent: true }, true); console.log('RAN'); }` +
+      ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+
+    assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
+    assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+  });
+
+  for (const dryRun of [false, true]) {
+    test(`a FIFO at STATE.md makes state prune${dryRun ? ' --dry-run' : ''} exit non-zero without blocking`, () => {
+      const { spawnSync } = require('node:child_process');
+      fs.unlinkSync(statePath);
+      assert.strictEqual(spawnSync('mkfifo', [statePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+      // Uncaught: the child must exit non-zero on its own rather than block on the pipe.
+      const script = `require(${JSON.stringify(STATE_LIB_PATH)})` +
+        `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: ${dryRun}, silent: true }, true);`;
+      const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+
+      assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
+      assert.notStrictEqual(child.status, 0, 'the prune fails');
+      assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
+    });
+  }
+
+  test('a STATE.md that is a FIFO makes a locked read-modify-write command exit non-zero without blocking', () => {
+    const { spawnSync } = require('node:child_process');
+    fs.unlinkSync(statePath);
+    assert.strictEqual(spawnSync('mkfifo', [statePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    const script = `require(${JSON.stringify(STATE_LIB_PATH)}).cmdStateUpdate(${JSON.stringify(tmpDir)}, 'Status', 'x');`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+
+    assert.strictEqual(child.error, undefined, `the command must not hang on a FIFO (${child.error && child.error.code})`);
+    assert.notStrictEqual(child.status, 0, 'the command fails');
+    assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
+  });
+
+  test('rolling back a prune of a symlinked STATE.md restores a regular file that is not given the link\'s 0777 mode', () => {
+    const { mock } = require('node:test');
+    const linkedTarget = path.join(tmpDir, 'real-state.md');
+    const stateBefore = fs.readFileSync(statePath);
+    fs.renameSync(statePath, linkedTarget);
+    fs.chmodSync(linkedTarget, 0o600);
+    fs.symlinkSync(linkedTarget, statePath);
+    const probe = path.join(tmpDir, 'mode-probe');
+    fs.writeFileSync(probe, '');
+    const defaultMode = fs.statSync(probe).mode & 0o777; // what a newly created file gets under this umask
+
+    // The STATE.md publish lands, then reports failure: the rollback must put the snapshot back.
+    const realRename = fs.renameSync;
+    let failed = false;
+    mock.method(fs, 'renameSync', (from, to, ...rest) => {
+      realRename.call(fs, from, to, ...rest);
+      if (!failed && to === statePath) {
+        failed = true;
+        throw Object.assign(new Error('EIO: simulated'), { code: 'EIO' });
+      }
+    });
+    try {
+      assert.throws(() => prune(3), (err) => err.code === 'EIO');
+    } finally {
+      mock.restoreAll();
+    }
+
+    assert.ok(failed, 'the STATE.md write was made to fail');
+    assert.ok(fs.lstatSync(statePath).isFile(), 'STATE.md is a regular file again');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'the snapshot is back');
+    if (process.platform !== 'win32') {
+      const mode = fs.lstatSync(statePath).mode & 0o777;
+      assert.notStrictEqual(mode, 0o777, 'the symlink\'s own mode is not applied');
+      assert.strictEqual(mode, defaultMode, 'the restored file has the default creation mode');
+    }
   });
 });

@@ -1418,6 +1418,23 @@ export interface PlatformWriteOptions extends ContentNormalizationOptions {
   };
   /** Test seam for the Windows device branch (platform and fs calls), so it runs on POSIX. Not for production callers. */
   deviceSeams?: WindowsDeviceSeams;
+  /**
+   * #5831: publish only by temp file + rename, never by a direct write. On ANY
+   * failure (the temp-file write, including one that created the file and then
+   * failed partway, or the rename) the temp file is removed and the error is
+   * thrown, so the destination keeps its previous bytes (or stays absent).
+   * Without it, `platformWriteSync` falls back to a direct write when the temp
+   * file cannot be written or atomically renamed, and that direct write
+   * truncates the destination before it can fail. Use it when the destination
+   * holds data that exists nowhere else.
+   */
+  atomic?: boolean;
+  /**
+   * #5831: with `atomic`, called with the device and inode of the file about to be
+   * renamed into place, immediately before the rename. The renamed file keeps that
+   * identity, so a caller can later remove exactly the file this write created.
+   */
+  onCreated?: (id: FileIdentity) => void;
 }
 
 export function normalizeContent(filePath: string, content: string, opts: PlatformWriteOptions = {}): { content: string; encoding: BufferEncoding } {
@@ -1462,6 +1479,23 @@ export function contentChangedAfterNormalize(
 const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const RENAME_MAX_ATTEMPTS = 3;
 const RENAME_RETRY_BACKOFF_MS = 50;
+
+/** The device and inode that identify one file or directory. */
+// bigint: a Windows file id is 64 bits (libuv st_ino = IndexNumber.QuadPart) and a JS number keeps
+// 53, so identities are read with { bigint: true } and compared exactly. Never serialized.
+export type FileIdentity = { dev: bigint; ino: bigint };
+
+/** The exact identity of an open descriptor. */
+function identityOfFd(fd: number): FileIdentity {
+  const s = fs.fstatSync(fd, { bigint: true });
+  return { dev: s.dev, ino: s.ino };
+}
+
+/** The exact identity of the entry at `p` (a final symlink is not followed). */
+function identityOfPath(p: string): FileIdentity {
+  const s = fs.lstatSync(p, { bigint: true });
+  return { dev: s.dev, ino: s.ino };
+}
 
 /** Synchronous best-effort backoff sleep (Atomics.wait — same idiom as io.cts). */
 let _renameSleepBuf: Int32Array | null = null;
@@ -1566,6 +1600,7 @@ function defaultTempSuffix(): string {
  * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
  * `mode` is the creation mode (default 0o666, narrowed by the umask): a caller replacing a
  * private file passes that file's mode so the temp is never briefly more readable than it.
+ * `label` names the temp (`<basePath>.<label>.<suffix>`; default `tmp`).
  *
  * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
  * process killed between the create and the rename leaves one beside its target, and a later
@@ -1575,13 +1610,14 @@ export function openExclusiveTempSync(
   basePath: string,
   nextSuffix: () => string = defaultTempSuffix,
   mode = 0o666,
+  label = 'tmp',
 ): { fd: number; tmpPath: string } {
   const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0);
   let collision: unknown;
   let shrink = 0; // 0 = nextSuffix, 1 = 4 random bytes, 2 = 2 random bytes
   for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
     const suffix = shrink === 0 ? nextSuffix() : randomBytes(shrink === 1 ? 4 : 2).toString('hex');
-    const tmpPath = `${basePath}.tmp.${suffix}`;
+    const tmpPath = `${basePath}.${label}.${suffix}`;
     try {
       return { fd: fs.openSync(tmpPath, flags, mode), tmpPath };
     } catch (err) {
@@ -1599,7 +1635,7 @@ export function openExclusiveTempSync(
 }
 
 /** What the path walk in platformWriteSync saw at the final physical target: its identity, or 'absent'. */
-type WalkedTarget = { dev: number; ino: number } | 'absent';
+type WalkedTarget = FileIdentity | 'absent';
 
 /**
  * Restore limit: an existing target is captured for restore only up to MAX_PRIOR_BYTES (2 MiB);
@@ -1641,7 +1677,7 @@ function writeTargetDirect(
   // Probe an existing target READ-ONLY and non-blocking, so a device or FIFO is never opened
   // for write: it is classified by fstat, and the old bytes are captured for a restore.
   // Returns null when the target is absent.
-  const probe = (): { prior: Buffer; dev: number; ino: number } | null => {
+  const probe = (): { prior: Buffer; dev: bigint; ino: bigint } | null => {
     let fd: number;
     try {
       fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow | nonBlock);
@@ -1667,7 +1703,7 @@ function writeTargetDirect(
         got += n;
       }
       if (got !== prior.length) refuse('existing content could not be read back', 'EIO');
-      return { prior, dev: st.dev, ino: st.ino };
+      return { prior, ...identityOfFd(fd) };
     } finally {
       try { fs.closeSync(fd); } catch { /* already closed */ }
     }
@@ -1703,7 +1739,8 @@ function writeTargetDirect(
       throw err;
     }
     const st = fs.fstatSync(fd);
-    if (!st.isFile() || st.dev !== existing.dev || st.ino !== existing.ino) {
+    const opened = identityOfFd(fd);
+    if (!st.isFile() || opened.dev !== existing.dev || opened.ino !== existing.ino) {
       try { fs.closeSync(fd); } catch { /* already closed */ }
       refuse('the target changed while it was being opened', 'ENXIO');
     }
@@ -1772,11 +1809,11 @@ function writeTargetDirect(
   // The identity of the descriptor this write created, taken before it is closed: the cleanup
   // unlinks the PATH only if it still names that same file, so a parent swapped after the create
   // can never make it delete a same-named file elsewhere.
-  let createdIdentity: { dev: number; ino: number } | null = null;
+  let createdIdentity: FileIdentity | null = null;
   if (failure !== undefined && created) {
     try {
       const st = fs.fstatSync(fd);
-      if (st.isFile()) createdIdentity = { dev: st.dev, ino: st.ino };
+      if (st.isFile()) createdIdentity = identityOfFd(fd);
     } catch { /* identity unknown: the file is left in place */ }
   }
   try { fs.closeSync(fd); } catch { /* already closed */ }
@@ -1784,7 +1821,8 @@ function writeTargetDirect(
     if (created && createdIdentity !== null) {
       try {
         const now = fs.lstatSync(filePath);
-        if (now.isFile() && now.dev === createdIdentity.dev && now.ino === createdIdentity.ino) {
+        const nowId = identityOfPath(filePath);
+        if (now.isFile() && nowId.dev === createdIdentity.dev && nowId.ino === createdIdentity.ino) {
           fs.unlinkSync(filePath);
         }
       } catch { /* already gone */ }
@@ -1867,6 +1905,45 @@ function descriptorAliasFd(resolvedTarget: string): number | null {
   return m !== null && Number(m[1]) <= 2 ? Number(m[1]) : null;
 }
 
+/** A path component that is absent (ENOENT) or is not a directory (ENOTDIR). */
+function isMissing(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * A guard on the directory that holds `filePath`: its identity is taken when the
+ * guard is made (null when the directory is absent; `record()` takes it again
+ * once the directory exists) and `changed()` re-stats and reports whether the
+ * directory is no longer that one (or is absent). A stat error other than a
+ * missing directory goes to `statFailed`, which must throw.
+ */
+function makeParentGuard(
+  filePath: string,
+  statFailed: (err: NodeJS.ErrnoException) => never,
+): { record(): void; changed(): boolean } {
+  // bigint: a Windows file id is 64 bits (libuv st_ino = IndexNumber.QuadPart), and a JS number
+  // keeps 53, so two different directories could compare equal as numbers.
+  type DirIdentity = { dev: bigint; ino: bigint };
+  const stat = (): DirIdentity | null => {
+    try {
+      const s = fs.statSync(path.dirname(filePath), { bigint: true });
+      return { dev: s.dev, ino: s.ino };
+    } catch (err) {
+      if (isMissing(err)) return null;
+      return statFailed(err as NodeJS.ErrnoException);
+    }
+  };
+  let walked = stat();
+  return {
+    record(): void { walked ??= stat(); },
+    changed(): boolean {
+      const now = stat();
+      return now === null || walked === null || now.dev !== walked.dev || now.ino !== walked.ino;
+    },
+  };
+}
+
 /**
  * Write `content` to `filePath` atomically: a sibling temp file (`<file>.tmp.<pid>.<12 hex>`,
  * created exclusively, never following a link, never blocking on a planted FIFO) is renamed
@@ -1927,10 +2004,6 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
       new Error(`ENXIO: cannot write ${filePath}: ${what} (${code ?? 'unknown error'}) — refusing`),
       { code: 'ENXIO' },
     );
-  };
-  const isMissing = (err: unknown): boolean => {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code === 'ENOENT' || code === 'ENOTDIR';
   };
   // The parent directory of a raw (un-normalised) path, resolved physically by the OS, or null
   // when a component is absent (ENOENT/ENOTDIR); any other failure refuses with ENXIO.
@@ -2025,27 +2098,15 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     if (st !== null) {
       // Still a link after 40 hops: an unclassifiable chain.
       if (st.isSymbolicLink()) refuseUnresolved('ELOOP', 'the symbolic link chain is circular or longer than 40 links');
-      walked = { dev: st.dev, ino: st.ino };
+      walked = identityOfPath(finalPath);
     }
   }
   // The identity of the directory that holds the target entry, taken by a separate stat of
   // dirname(filePath) right after the walk (null when absent: it is then recorded right after
   // mkdir below). The atomic publish creates its temp file in, and renames within, this
   // directory, so it is re-checked against this identity before each step.
-  const statParent = (): { dev: number; ino: number } | null => {
-    try {
-      const s = fs.statSync(path.dirname(filePath));
-      return { dev: s.dev, ino: s.ino };
-    } catch (err) {
-      if (isMissing(err)) return null;
-      return refuseUnresolved((err as NodeJS.ErrnoException).code, 'its directory cannot be inspected');
-    }
-  };
-  let walkedParent = statParent();
-  const parentChanged = (): boolean => {
-    const now = statParent();
-    return now === null || walkedParent === null || now.dev !== walkedParent.dev || now.ino !== walkedParent.ino;
-  };
+  const parentGuard = makeParentGuard(filePath, (err) => refuseUnresolved(err.code, 'its directory cannot be inspected'));
+  const parentChanged = (): boolean => parentGuard.changed();
   const refuseParentSwap = (): never => {
     throw Object.assign(
       new Error(`ENXIO: cannot write ${filePath}: its directory is not the one the path check approved — refusing`),
@@ -2105,7 +2166,15 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
     }
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  walkedParent ??= statParent();
+  parentGuard.record();
+  if (opts.atomic === true) {
+    publishViaTempFile(filePath, normalized, encoding, 'tmp', {
+      checkParent: () => { if (parentChanged()) refuseParentSwap(); },
+      createTemp: opts.writeSeams?.createTemp,
+      onCreated: opts.onCreated,
+    });
+    return;
+  }
 
   // Step 1: write the sibling tmp file, created exclusively under an unpredictable name so a
   // planted symlink or FIFO is never followed or blocked on (#5759). If THIS fails, nothing
@@ -2175,6 +2244,184 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
   // fall back to a direct write to preserve write availability.
   writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
+}
+
+/**
+ * #5831: write `data` to `tmpPath` and rename it over `filePath`, with no
+ * direct-write fallback. The temp file is removed on any failure — also a
+ * write that created it and failed partway — and the error is thrown; the
+ * destination is then exactly as it was.
+ *
+ * The temp file is `<filePath>.<label>.<pid>.<random>`, created exclusively
+ * (O_EXCL, O_NOFOLLOW) and written through that descriptor, so an entry planted
+ * at any name is never opened or followed (#5759). It takes an existing regular
+ * target's permission bits, so a private file is never briefly more readable.
+ */
+function publishViaTempFile(
+  filePath: string,
+  data: string | Buffer,
+  encoding: BufferEncoding | undefined,
+  label: string,
+  hooks: {
+    checkParent?: () => void;
+    createTemp?: (basePath: string, nextSuffix: undefined, mode: number) => { fd: number; tmpPath: string };
+    onCreated?: (id: FileIdentity) => void;
+    /** Permission bits to publish with, instead of those of the existing target (or the default when absent). */
+    targetMode?: number;
+  } = {},
+): void {
+  let mode = 0o666;
+  let hasTargetMode = false;
+  if (hooks.targetMode !== undefined) {
+    mode = hooks.targetMode & 0o777;
+    hasTargetMode = true;
+  } else {
+    try {
+      const st = fs.lstatSync(filePath);
+      if (st.isFile()) { mode = st.mode & 0o777; hasTargetMode = true; }
+    } catch { /* absent: default mode */ }
+  }
+  hooks.checkParent?.();
+  const { fd, tmpPath } = hooks.createTemp !== undefined
+    ? hooks.createTemp(filePath, undefined, mode)
+    : openExclusiveTempSync(filePath, undefined, mode, label);
+  if (hasTargetMode) {
+    try { fs.fchmodSync(fd, mode); } catch { /* no permission bits on this platform */ }
+  }
+  try {
+    let identity: FileIdentity | undefined;
+    try {
+      if (typeof data === 'string') fs.writeFileSync(fd, data, encoding);
+      else fs.writeFileSync(fd, data);
+      if (hooks.onCreated !== undefined) {
+        identity = identityOfFd(fd);
+      }
+    } finally {
+      try { fs.closeSync(fd); } catch { /* already closed */ }
+    }
+    hooks.checkParent?.();
+    const renameErr = atomicRenameWithRetry(tmpPath, filePath);
+    if (renameErr !== null) throw renameErr;
+    // Identity is captured from the open fd before the rename, but reported only once the rename
+    // succeeded: a failed rename unlinks the temp, freeing that inode, so nothing was published.
+    if (identity !== undefined) hooks.onCreated?.(identity);
+  } catch (err) {
+    // After a parent swap this path resolves through the swapped parent, so the real temp may be
+    // orphaned in the original directory (accepted residual); nothing is ever published or left in the attacker's.
+    try { fs.unlinkSync(tmpPath); } catch { /* never created, or already gone */ }
+    throw err;
+  }
+}
+
+/**
+ * #5831: remove a file (absent is fine), retrying the transient Windows lock
+ * errnos (EPERM/EBUSY/EACCES — DEFECT.WINDOWS-FS-OPS) like the rename does.
+ */
+function removeFileWithRetry(filePath: string): void {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      fs.rmSync(filePath, { force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (attempt >= RENAME_MAX_ATTEMPTS || !RENAME_RETRY_ERRNOS.has(code)) throw err;
+      renameBackoff();
+    }
+  }
+}
+
+/**
+ * #5831: put `filePath` back to an exact earlier state — `bytes` written
+ * verbatim (no normalization) through a temp file and rename, or the file
+ * removed when `bytes` is null (it did not exist). Throws on failure, leaving
+ * no temp file behind; the destination is then as it was before the call.
+ *
+ * `unlinkOnlyIf` (with `bytes` null): the file is removed only while `lstat`
+ * still reports that device and inode — the file this run created. Any other
+ * entry at the path (a file another process put there since) is left in place
+ * and the call throws ESTALE. Absent is fine either way. Remaining race: the
+ * `lstat` identity check and the `rmSync` are separate syscalls, so another
+ * process replacing the entry between them is not observed and its file is
+ * removed. Documented residual: it needs write access to the parent directory
+ * and lands inside a window of two syscalls; no further race machinery guards it.
+ *
+ * `mode` (with `bytes`): the permission bits the restored file gets, in place of
+ * those of whatever sits at the path now (the default when the path is absent).
+ *
+ * With `bytes`, the directory holding the file is re-checked against the identity
+ * it had at entry before the temp file is created and again before the rename,
+ * and a changed directory is refused with ENXIO. Remaining race: the stat and the
+ * following syscall are separate, so a swap landing between them is not observed;
+ * a temp file created before such a swap may be orphaned in the original directory
+ * (accepted residual, same class as the parent swap in `platformWriteSync`).
+ */
+export function platformRestoreFileSync(
+  filePath: string,
+  bytes: Buffer | null,
+  opts: { unlinkOnlyIf?: FileIdentity; mode?: number } = {},
+): void {
+  if (bytes === null) {
+    const expected = opts.unlinkOnlyIf;
+    if (expected !== undefined) {
+      let nowId: FileIdentity;
+      try {
+        nowId = identityOfPath(filePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      if (nowId.dev !== expected.dev || nowId.ino !== expected.ino) {
+        throw Object.assign(
+          new Error(`ESTALE: ${filePath} is no longer the file this run created — left in place`),
+          { code: 'ESTALE' },
+        );
+      }
+    }
+    removeFileWithRetry(filePath);
+    return;
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const parentGuard = makeParentGuard(filePath, (err) => { throw err; });
+  const checkParent = (): void => {
+    if (parentGuard.changed()) {
+      throw Object.assign(
+        new Error(`ENXIO: cannot restore ${filePath}: its directory is not the one it had at entry — refusing`),
+        { code: 'ENXIO' },
+      );
+    }
+  };
+  publishViaTempFile(filePath, bytes, undefined, 'restore', { checkParent, targetMode: opts.mode });
+}
+
+/**
+ * #5831: a file's exact bytes, or null when it does not exist. Opened
+ * non-blocking and checked with fstat, so a FIFO or device at the path fails
+ * with ENXIO instead of blocking the caller (who may hold a lock); a directory
+ * fails with EISDIR. There is no size cap: the caller needs every byte. Other
+ * read errors throw. With `noFollow` the final component is opened O_NOFOLLOW, so
+ * a symlink there fails with ELOOP instead of being read through (no effect where
+ * the platform has no O_NOFOLLOW).
+ */
+export function platformReadBytesSync(filePath: string, opts: { noFollow?: boolean } = {}): Buffer | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(
+      filePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0) |
+        (opts.noFollow === true ? (fs.constants.O_NOFOLLOW ?? 0) : 0),
+    );
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (st.isDirectory()) throw Object.assign(new Error(`EISDIR: ${filePath} is a directory`), { code: 'EISDIR' });
+    if (!st.isFile()) throw Object.assign(new Error(`ENXIO: ${filePath} is not a regular file — refusing to read it`), { code: 'ENXIO' });
+    return fs.readFileSync(fd);
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+  }
 }
 
 export function platformReadSync(filePath: string, opts: { encoding?: BufferEncoding; required?: boolean } = {}): string | null {
