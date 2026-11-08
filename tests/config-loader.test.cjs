@@ -1463,11 +1463,14 @@ describe('#3532 shadowed global-defaults warning', () => {
   });
 
   // #5681: Branch D reads every key with a nested twin under either spelling,
-  // so each nested-only spelling is equally shadowed inside a project.
+  // so each nested-only spelling is equally shadowed inside a project. The
+  // last row is not new behavior: it keeps #3894's research_before_questions
+  // alias reported now that the alias list is derived from LEGACY_FLAT_KEYS.
   for (const [key, dotted] of [
     ['research', 'workflow.research'], ['plan_checker', 'workflow.plan_check'], ['verifier', 'workflow.verifier'],
     ['nyquist_validation', 'workflow.nyquist_validation'], ['text_mode', 'workflow.text_mode'],
-    ['subagent_timeout', 'workflow.subagent_timeout'], ['research_before_questions', 'workflow.research_before_questions'],
+    ['subagent_timeout', 'workflow.subagent_timeout'],
+    ['research_before_questions', 'workflow.research_before_questions'],
   ]) {
     test(`canary: nested ${dotted} (the twin of ${key}) warns under a project config`, () => {
       writeConfig(tmpDir, { model_profile: 'balanced' });

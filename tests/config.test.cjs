@@ -3924,11 +3924,6 @@ function assertRefused(result, reason) {
   assert.strictEqual(JSON.parse(result.error).reason, reason);
 }
 
-/** The value at `keyPath` (an array of keys) in `obj`, or undefined. */
-function valueAtKeyPath(obj, keyPath) {
-  return keyPath.reduce((o, seg) => (o == null ? undefined : o[seg]), obj);
-}
-
 /** Every leaf of a JSON object as [keyPath, value]; arrays and null are leaves. */
 function keyPathLeaves(obj, prefix = []) {
   return Object.entries(obj).flatMap(([k, v]) =>
@@ -4287,7 +4282,7 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, env).success);
     const created = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
     for (const [keyPath, want] of keyPathLeaves(template)) {
-      assert.strictEqual(valueAtKeyPath(created, keyPath), want, keyPath.join('.'));
+      assert.strictEqual(valueAt(created, keyPath.join('.')), want, keyPath.join('.'));
     }
     const config = loadConfig(projectDir);
     assert.strictEqual(config.research, false);
@@ -4302,7 +4297,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
   // Table-driven over SPELLING_TWINS, the one list of [legacy, canonical] pairs,
   // so a new LEGACY_FLAT_KEYS entry is covered without a new row.
   const { SPELLING_TWINS } = configLib;
-  const at = (obj, dotted) => valueAtKeyPath(obj, dotted.split('.'));
+  const at = valueAt;
   const nested = (dotted, value) => {
     const [head, field] = dotted.split('.');
     return field === undefined ? { [head]: value } : { [head]: { [field]: value } };
@@ -4602,8 +4597,8 @@ describe('#5681: mergeIntoGlobalDefaults properties', () => {
     fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
       const merged = mergeIntoGlobalDefaults(base, patch);
       for (const [keyPath, value] of keyPathLeaves(patch)) {
-        if (value === null) assert.strictEqual(valueAtKeyPath(merged, keyPath), undefined);
-        else assert.deepStrictEqual(valueAtKeyPath(merged, keyPath), value);
+        if (value === null) assert.strictEqual(valueAt(merged, keyPath.join('.')), undefined);
+        else assert.deepStrictEqual(valueAt(merged, keyPath.join('.')), value);
       }
     }));
   });
