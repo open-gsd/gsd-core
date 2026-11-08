@@ -19023,3 +19023,107 @@ describe('#5676: find-phase directory token under milestone-prefixed', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #5844: the ghost REQ-ID check must read registration the way the project
+// wrote it: any checkbox mark (`[~]`, `[-]`, …) and a Traceability table that
+// has no Status column both count as "registered".
+// ─────────────────────────────────────────────────────────────────────────────
+describe('issue #5844: ghost REQ-ID check accepts any checkbox mark and Status-less Traceability tables', () => {
+  const STATUS_TABLE = ['| Requirement | Phase | Status |', '|-------------|-------|--------|', '| KNOWN-01 | Phase 01 | Pending |'];
+  const NO_STATUS_TABLE = ['| Requirement | Phase |', '|-------------|-------|', '| KNOWN-01 | Phase 01 |'];
+
+  function build5844Fixture({ reqBody, tableLines, roadmapRequirementsLine = '[KNOWN-01]', eol = '\n' }) {
+    const tmpDir = build2334GhostSurfaceFixture({ reqBody: [], roadmapRequirementsLine });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      ['# Requirements', '', ...reqBody, '', '## Traceability', '', ...tableLines, ''].join(eol),
+    );
+    return tmpDir;
+  }
+  function completePhase1(tmpDir) {
+    const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+    return JSON.parse(output).warnings || [];
+  }
+  const ghostWarningFor = (warnings, id) => warnings.some((w) => /not registered anywhere/i.test(w) && w.includes(id));
+
+  test('#5844-1: a [~] body line with a Status-less Traceability table gives no ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [~] **KNOWN-01**: partially done'], tableLines: NO_STATUS_TABLE });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!ghostWarningFor(warnings, 'KNOWN-01'), `KNOWN-01 is registered (line + row), got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-1b: a [~] body line with a Status table gives no ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [~] **KNOWN-01**: partially done'], tableLines: ['| Requirement | Phase | Status |', '|---|---|---|'] });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!ghostWarningFor(warnings, 'KNOWN-01'), `[~] body line registers the ID, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-2: an ID with neither a body line nor a row still warns', () => {
+    const tmpDir = build5844Fixture({
+      reqBody: ['## Active', '', '- [~] **OTHER-01**: something else'],
+      tableLines: NO_STATUS_TABLE.map((l) => l.replace('KNOWN-01', 'OTHER-01')),
+    });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(ghostWarningFor(warnings, 'KNOWN-01'), `KNOWN-01 is registered nowhere, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-3: the TBD placeholder is exempt from the ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [ ] **KNOWN-01**: a thing'], tableLines: NO_STATUS_TABLE, roadmapRequirementsLine: 'TBD' });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!warnings.some((w) => /\bTBD\b/.test(w)), `TBD must not be warned about, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-4: a row found in a table with no Status column is reported as a missing Status column, not a missing row', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [ ] **KNOWN-01**: a thing'], tableLines: NO_STATUS_TABLE });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(
+        warnings.some((w) => /Traceability row write skipped/.test(w) && /row found but the table has no Status column to write/.test(w) && w.includes('KNOWN-01')),
+        `expected the no-Status-column message, got: ${JSON.stringify(warnings)}`,
+      );
+      assert.ok(!warnings.some((w) => /no matching row found/.test(w)), `the row exists; got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-5: a Status table is unchanged: the row flips to Complete and nothing warns', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [ ] **KNOWN-01**: a thing'], tableLines: STATUS_TABLE });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!warnings.some((w) => w.includes('KNOWN-01')), `no KNOWN-01 warning expected, got: ${JSON.stringify(warnings)}`);
+      const after = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+      assert.match(after, /\| KNOWN-01 \| Phase 01 \| Complete \|/);
+      assert.match(after, /- \[x\] \*\*KNOWN-01\*\*/);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-6: CRLF REQUIREMENTS.md with a [~] line and a Status-less table gives no ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [~] **KNOWN-01**: partially done'], tableLines: NO_STATUS_TABLE, eol: '\r\n' });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!ghostWarningFor(warnings, 'KNOWN-01'), `CRLF must not change the answer, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
