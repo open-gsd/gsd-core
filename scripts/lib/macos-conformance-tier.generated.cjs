@@ -233,6 +233,7 @@ module.exports = {
   "tests/runtime-identity.test.cjs",
   "tests/runtime-launcher-parity.test.cjs",
   "tests/runtime-name-policy.test.cjs",
+  "tests/secret-read-exemptions.test.cjs",
   "tests/security.test.cjs",
   "tests/self-test-report-policy.test.cjs",
   "tests/settings-jsonc.test.cjs",

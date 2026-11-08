@@ -78,6 +78,19 @@
 //   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
+// Project exemptions (#4432): `hooks.secret_read_exempt` in the root project's
+// .planning/config.json lists repo-relative files that stay readable. An entry
+// takes effect only for a file that is a regular file on disk AND a regular
+// blob (100644/100755) in the commit HEAD names — read from `.git` directly,
+// no subprocess, no timer (hooks/lib/git-head-tree.js). Read and Grep honor an
+// absolute or cwd-relative path; Bash honors the absolute path only, and only
+// when EVERY command on the line is one of cat/head/tail/grep/egrep/fgrep/rg/
+// wc/diff/cmp/sort/uniq/cut/nl/od (after wrapper resolution) with no `$( )`/
+// backtick/`<( )` body, heredoc or file-writing redirect or option; any other
+// command (mv, ln, cp, git, sh, awk, sed, …) withdraws it for the whole line. A Grep
+// `glob` is never widened, and a colon-joined word (`HEAD:.env.production`)
+// never matches. An unreadable config or repository means no exemption.
+//
 // Grep globs are judged per brace alternative (never on the whole glob, so
 // `{.env.local,zzz.ts}` cannot hide behind a benign sibling): a pure-wildcard
 // alternative (`*`, `**`) is allowed — Grep already skips gitignored files,
@@ -107,7 +120,16 @@
 //   destination exemption can move a link prepared under a non-secret name
 //   onto a secret name (`ln -s .env.example l && mv l .env`), so a later
 //   edit of `.env` lands in the link target — a write redirection, the
-//   out-of-scope write class, not a read.)
+//   out-of-scope write class, not a read. #4432 adds three stated limits to
+//   the project exemptions: (1) an agent with Bash can rewrite local git state
+//   (force-add + commit, `update-ref`) to make a file committed; the
+//   committed-file rule stops the one-step "edit the config, then read" path
+//   and is the same class as the interpreter one-liner gap above — a
+//   guardrail, not a sandbox. (2) The guard vouches for the path, not for
+//   working-tree bytes that differ from HEAD; a content-hash check would block
+//   re-reading the template after each edit, the flow the issue asks for.
+//   (3) A file inside a git submodule cannot be exempted: the submodule's
+//   `.git` is a file the reader does not follow.)
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -147,6 +169,95 @@ const MAX_NESTING_DEPTH = 3;
 
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
 const MAX_GLOB_ALTERNATIVES = 64;
+
+// #4432: project exemptions (`hooks.secret_read_exempt` in the ROOT project's
+// .planning/config.json). `root`/`allowRelative` are set once per invocation by
+// the stdin handler; `checker` is built lazily on the first secret-classified
+// token. Any failure while building or calling it means NOT exempt — never an
+// allow, and never a throw into the fail-open crash path.
+const exemption = { root: null, allowRelative: false, checker: null, configured: false, bashLine: null, bashReadOnly: null };
+
+// F3: a Bash exemption holds only when every command on the line is one of
+// these read-only readers; any other command anywhere on the line withdraws it
+// for every token (`mv a b && cat <exempt>` re-anchors or launders the name).
+const READ_ONLY_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'diff', 'cmp', 'sort', 'uniq', 'cut', 'nl', 'od',
+]);
+
+// Per-command options that write a file or run a program, so the command is
+// not read-only: `sort -o f`, `sort --compress-program`, `rg --pre`.
+function readOnlyOptionsOnly(base, operands) {
+  let positional = 0;
+  for (const w of operands) {
+    const t = w.text;
+    if (base === 'sort' && (/^-[A-Za-z]*o/.test(t) || /^--(output|compress-program|files0-from)/.test(t))) return false;
+    if (base === 'rg' && /^--(pre|pre-glob|hostname-bin)(=|$)/.test(t)) return false;
+    if (base === 'uniq' && !t.startsWith('-')) positional++;
+  }
+  return base !== 'uniq' || positional <= 1; // `uniq in out` writes `out`
+}
+
+// Fail closed: a substitution body, heredoc, process substitution, file
+// redirect out, unresolved or unlisted command word, or any exception is false.
+function lineIsReadOnly(command) {
+  try {
+    const { tokens, nested } = tokenize(command);
+    if (nested.length > 0) return false;
+    const bySeg = new Map();
+    for (const t of tokens) {
+      if (t.kind === 'heredoc') return false;
+      if (t.kind === 'sep') continue;
+      if (t.kind === 'word' && t.procsub !== undefined) return false;
+      if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+      bySeg.get(t.seg).push(t);
+    }
+    for (const segTokens of bySeg.values()) {
+      const words = [];
+      for (let k = 0; k < segTokens.length; k++) {
+        const t = segTokens[k];
+        if (t.kind === 'op') {
+          if (t.dup) continue;
+          const target = segTokens[k + 1];
+          if (!target || target.kind !== 'word') return false;
+          k++;
+          if (!t.read && target.text !== '/dev/null') return false; // output to a file
+          if (t.text.endsWith('<<<')) return false;
+          continue;
+        }
+        words.push(t);
+      }
+      if (words.length === 0) return false;
+      const cmd = resolveCommand(words);
+      if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
+      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isExemptSecret(tok) {
+  if (exemption.root === null) return false;
+  if (exemption.bashLine !== null) {
+    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
+    if (exemption.bashReadOnly !== true) return false;
+  }
+  try {
+    if (exemption.checker === null) {
+      const lib = require('./lib/secret-read-exemptions.js');
+      const entries = lib.readExemptEntries(exemption.root);
+      exemption.configured = entries.length > 0;
+      exemption.checker = entries.length === 0
+        ? () => false
+        : lib.createExemptionChecker({ root: exemption.root, entries, allowRelative: exemption.allowRelative });
+    }
+    return exemption.checker(tok) === true;
+  } catch {
+    exemption.checker = () => false;
+    return false;
+  }
+}
 
 // `.env.<suffix>` names that are templates, not secrets (case-insensitive).
 const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist']);
@@ -309,12 +420,21 @@ function isSecretBasename(name) {
 // lower case once at the top so `.ENV` / `.Secrets` match on the
 // case-insensitive filesystems (macOS, Windows) where they ARE the secret file
 // — the same stance as the write guard's `/i` patterns.
-function namesSecret(tok) {
+function namesSecretByName(tok) {
   if (typeof tok !== 'string' || tok === '') return false;
   const lower = tok.toLowerCase();
   if (isSecretBasename(lastSegment(lower))) return true;
   const colon = lower.lastIndexOf(':');
   return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
+}
+
+// A secret-by-name token is still allowed when the project listed that exact
+// committed file under `hooks.secret_read_exempt` (#4432). The exemption is
+// consulted only on the secret-classified branch, so an ordinary token costs
+// no I/O.
+function namesSecret(tok) {
+  if (!namesSecretByName(tok)) return false;
+  return !isExemptSecret(tok);
 }
 
 // ---------------------------------------------------------------------------
@@ -1410,7 +1530,10 @@ function reasonFor(code, tool, target) {
   return `Secret read guard: ${tool} would read '${target}', which matches a protected secret-file ` +
     `pattern (${PATTERN_TEXT}). Secret values must not be read into the conversation. ` +
     'If you need a specific value, ask the user for it; if you need the variable NAMES, ' +
-    'read the non-secret template (.env.example) instead.';
+    'read the non-secret template (.env.example) instead.' +
+    (tool === 'Bash' && exemption.configured
+      ? ' Files the project lists under hooks.secret_read_exempt are readable from Bash only by their absolute path.'
+      : '');
 }
 
 // stdout gets the typed JSON block; stderr gets the plain reason string
@@ -1532,6 +1655,12 @@ process.stdin.on('end', () => {
       allow(undefined);
     }
 
+    // #4432: exemptions resolve against the payload cwd (as the context
+    // monitor does), else the process cwd. Bash honors absolute paths only: a
+    // relative word there is re-anchored by cd/find/xargs/git -C.
+    exemption.root = typeof data.cwd === 'string' && data.cwd !== '' ? data.cwd : process.cwd();
+    exemption.allowRelative = tool === 'Read' || tool === 'Grep';
+
     // Every payload field is read TYPED in a single statement (#2547 class):
     // `[]`/`{}` are truthy and a non-string degrades to '' here.
     if (tool === 'Read') {
@@ -1556,6 +1685,7 @@ process.stdin.on('end', () => {
     const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
     if (command === '') allow(undefined);
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
+    exemption.bashLine = command;
     const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);

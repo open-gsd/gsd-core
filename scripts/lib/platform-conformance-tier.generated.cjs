@@ -331,6 +331,7 @@ module.exports = {
   "tests/runtime-identity.test.cjs",
   "tests/runtime-launcher-parity.test.cjs",
   "tests/schema-drift.test.cjs",
+  "tests/secret-read-exemptions.test.cjs",
   "tests/section-manifest-init-facts.test.cjs",
   "tests/security.test.cjs",
   "tests/self-test-report-policy.test.cjs",
