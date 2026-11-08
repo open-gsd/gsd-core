@@ -4740,7 +4740,7 @@ function stripGsdFromCodexConfig(content) {
   const removalRanges = [];
   for (const managedMarker of markerRecords) {
     removalRanges.push({ start: managedMarker.start, end: managedMarker.end + managedMarker.eol.length });
-    const ownershipRecord = lineRecords[lineRecords.indexOf(managedMarker) + 1];
+    const ownershipRecord = lineRecords[lineRecords.findIndex((record) => record.start === managedMarker.start) + 1];
     if (parseCodexHooksOwnership(ownershipRecord)) {
       removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
     }
