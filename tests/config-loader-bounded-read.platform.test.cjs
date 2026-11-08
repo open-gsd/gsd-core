@@ -2755,6 +2755,23 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
     assert.ok(lockReleased(), 'the STATE.md lock is released');
   });
 
+  test('--dry-run with a symlinked STATE-ARCHIVE.md refuses like the real run and writes nothing', () => {
+    const linked = path.join(tmpDir, 'elsewhere-archive.md');
+    fs.writeFileSync(linked, SEED_ARCHIVE);
+    fs.symlinkSync(linked, archivePath);
+    const stateBefore = fs.readFileSync(statePath);
+
+    assert.throws(
+      () => require(STATE_LIB_PATH).cmdStatePrune(tmpDir, { keepRecent: '3', dryRun: true, silent: true }, true),
+      /symlink|regular file/i,
+    );
+
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
+    assert.ok(fs.lstatSync(archivePath).isSymbolicLink(), 'the link is still a link');
+    assert.strictEqual(fs.readFileSync(linked, 'utf-8'), SEED_ARCHIVE, 'the link target is untouched');
+    assert.ok(lockReleased(), 'no lock is left behind');
+  });
+
   test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', () => {
     const { spawnSync } = require('node:child_process');
     assert.strictEqual(spawnSync('mkfifo', [archivePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');

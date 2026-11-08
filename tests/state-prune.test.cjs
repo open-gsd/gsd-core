@@ -1163,20 +1163,79 @@ describe('#5831: state prune never loses entries', () => {
     assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'the recent entry is not pruned');
   });
 
-  test('--dry-run after a kill reports the cutoff the real run would adopt and no entries to archive, and writes nothing', () => {
+  test('--dry-run after a kill reports the adopted cutoff and the entries the real run then removes, and writes nothing', () => {
     pruneKilledBeforeStateWrite(3); // cutoff 5 archives phases 1, 2, 4
     const stateBefore = fs.readFileSync(statePath);
     const archiveBefore = fs.readFileSync(archivePath);
     const writes = captureArchiveWrites();
-    const out = stateLib.cmdStatePrune(tmpDir, { keepRecent: '5', dryRun: true, silent: true }, true); // cutoff 3
+    const preview = stateLib.cmdStatePrune(tmpDir, { keepRecent: '5', dryRun: true, silent: true }, true); // cutoff 3
 
-    assert.strictEqual(out.dry_run, true);
-    assert.strictEqual(out.cutoff_phase, 5, 'the interrupted run\'s cutoff is reported');
-    assert.strictEqual(out.total_would_archive, 0, 'its entries are already archived');
-    assert.deepStrictEqual(out.sections, []);
+    assert.strictEqual(preview.dry_run, true);
+    assert.strictEqual(preview.cutoff_phase, 5, 'the interrupted run\'s cutoff is reported');
+    assert.strictEqual(preview.total_would_archive, OLD_ENTRIES.length, 'every entry the run removes from STATE.md is listed');
+    assert.deepStrictEqual(preview.sections, [{ section: 'Decisions', entries_would_archive: OLD_ENTRIES.length }]);
     assert.strictEqual(writes.length, 0);
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md is untouched');
     assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the archive is untouched');
+
+    const real = stateLib.cmdStatePrune(tmpDir, { keepRecent: '5', dryRun: false, silent: true }, true);
+    assert.strictEqual(real.total_archived, preview.total_would_archive, 'the real run reports the number the preview gave');
+    assert.strictEqual(real.cutoff_phase, preview.cutoff_phase);
+    assert.strictEqual(writes.length, 0, 'the real run writes no second block');
+  });
+
+  test('--dry-run without adoption (an entry was added after the kill) reports this run\'s own cutoff', () => {
+    const PHASE5 = '- [Phase 5]: Decision five, only copy';
+    pruneKilledBeforeStateWrite(3); // cutoff 5
+    writeStateMd(tmpDir, stateLines(8, [...OLD_ENTRIES, PHASE5, PHASE7]));
+    const stateBefore = fs.readFileSync(statePath);
+    const archiveBefore = fs.readFileSync(archivePath);
+    const preview = stateLib.cmdStatePrune(tmpDir, { keepRecent: '5', dryRun: true, silent: true }, true); // cutoff 3
+
+    assert.strictEqual(preview.cutoff_phase, 3, 'the block is not adopted');
+    assert.strictEqual(preview.total_would_archive, 2, 'phases 1 and 2');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore);
+    assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore);
+    const real = stateLib.cmdStatePrune(tmpDir, { keepRecent: '5', dryRun: false, silent: true }, true);
+    assert.strictEqual(real.total_archived, preview.total_would_archive);
+    assert.strictEqual(real.cutoff_phase, 3);
+  });
+
+  describe('adoption boundaries (current phase 8, this run at cutoff 3 or 5)', () => {
+    const blockArchive = (n, lines) =>
+      `# STATE Archive\n\n## Pruned 2026-01-01 (phases 1-${n}, kept recent 3)\n\n### Decisions\n\n${lines.join('\n')}\n\n`;
+
+    test('N equal to this run\'s cutoff is not adopted, and the block it matches is not written again', () => {
+      fs.writeFileSync(archivePath, blockArchive(3, [PHASE1, PHASE2]));
+      const archiveBefore = fs.readFileSync(archivePath);
+      const writes = captureArchiveWrites();
+      prune(5); // cutoff 3 prunes phases 1, 2 = the block
+
+      assert.strictEqual(writes.length, 0, 'no duplicate block');
+      assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore);
+      assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE4, PHASE7] }], 'cutoff 3, not wider');
+    });
+
+    test('N equal to the current phase is adopted when the prune at N equals the block', () => {
+      fs.writeFileSync(archivePath, blockArchive(8, [...OLD_ENTRIES, PHASE7]));
+      const writes = captureArchiveWrites();
+      const out = stateLib.cmdStatePrune(tmpDir, { keepRecent: '3', dryRun: false, silent: true }, true); // cutoff 5
+
+      assert.strictEqual(writes.length, 0, 'the block already holds everything');
+      assert.strictEqual(out.cutoff_phase, 8, 'N is adopted');
+      assert.deepStrictEqual(prunable(), [], 'the whole prune at N left STATE.md');
+    });
+
+    test('N one past the current phase is not adopted', () => {
+      fs.writeFileSync(archivePath, blockArchive(9, [...OLD_ENTRIES, PHASE7]));
+      const writes = captureArchiveWrites();
+      const out = stateLib.cmdStatePrune(tmpDir, { keepRecent: '3', dryRun: false, silent: true }, true); // cutoff 5
+
+      assert.strictEqual(out.cutoff_phase, 5, 'this run\'s own cutoff');
+      assert.strictEqual(writes.length, 1);
+      assertWriteIsPlan(writes[0], [{ section: 'Decisions', count: 3, lines: OLD_ENTRIES }], 5, 3);
+      assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'the recent entry stays');
+    });
   });
 
   const sec = (section, lines) => ({ section, count: lines.length, lines });
