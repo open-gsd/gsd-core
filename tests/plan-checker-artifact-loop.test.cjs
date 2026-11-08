@@ -49,7 +49,7 @@ function runArtifactBlock(t, shell, files, variable = 'phase_dir') {
 }
 
 /** Run one plan-checker step's first bash fence against a real gsd-tools, on a one-plan phase. */
-function runStructureStep(t, shell, heading, content, prelude, epilogue = []) {
+function runStructureStep(t, shell, heading, content, prelude, epilogue = [], binding = 'PHASE_DIR="$1"') {
   const dir = createTempProject('plan-checker-structure-5178-');
   t.after(() => cleanup(dir));
   fs.writeFileSync(path.join(dir, '01-01-PLAN.md'), content);
@@ -59,7 +59,7 @@ function runStructureStep(t, shell, heading, content, prelude, epilogue = []) {
   const block = scanFencedBlocks(lines).find((fence) => fence.infoString === 'bash');
   assert.ok(block, `${heading} must contain a bash block`);
   const script = [
-    'PHASE_DIR="$1"; PHASE=01; NODE="$2"; TOOLS="$3"',
+    `${binding}; NODE="$2"; TOOLS="$3"`,
     ...prelude,
     lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'),
     ...epilogue,
@@ -120,17 +120,32 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
       ['invalid', '# Plan without frontmatter\n', 1],
       ['escaped JSON', '---\nphase: 1\nplan: 1\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: {}\n---\n<tasks><task type="auto"><name>Line one\nLine two</name><files>x.js</files><action>Act</action><verify>node --test</verify><done>Done</done></task></tasks>\n', 0, 'Line one\nLine two'],
     ]) {
-      test(`${shell}: Step 8 prints the ${label} structure verdict and its exit status (#5178)`, { skip }, (t) => {
-        const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
-          'gsd_run() { if [ "$2" = frontmatter.get ]; then printf "\\nFRONTMATTER\\n"; fi; "$NODE" "$TOOLS" "$@"; }',
-        ]);
-        const lines = stdout.split('\nFRONTMATTER\n')[0].split(/\r?\n/);
-        const statusIdx = lines.findIndex((line) => line.startsWith('structure_exit='));
-        assert.equal(lines[statusIdx], `structure_exit=${exitCode}`, stdout);
-        const structure = JSON.parse(lines.slice(0, statusIdx).join('\n'));
-        assert.equal(structure.valid, exitCode === 0);
-        if (taskName) assert.equal(structure.tasks[0].name, taskName);
-      });
+      // Step 1 sets phase_dir and phase_number; nothing in the agent sets $PHASE, so the
+      // runner binds only what the agent itself provides (#5190 review 2026-11-08).
+      for (const binding of ['phase_dir="$1"', 'PHASE_DIR="$1"']) {
+        test(`${shell}: Step 8 reads the ${label} plan through ${binding.split('=')[0]} (#5178)`, { skip }, (t) => {
+          const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
+            'gsd_run() { if [ "$2" = frontmatter.get ]; then printf "\\nFRONTMATTER\\n"; fi; "$NODE" "$TOOLS" "$@"; }',
+          ], [], binding);
+          const lines = stdout.split('\nFRONTMATTER\n')[0].split(/\r?\n/);
+          assert.match(lines[0], /^=== .*01-01-PLAN\.md ===$/, stdout);
+          const statusIdx = lines.findIndex((line) => line.startsWith('structure_exit='));
+          assert.equal(lines[statusIdx], `structure_exit=${exitCode}`, stdout);
+          const structure = JSON.parse(lines.slice(1, statusIdx).join('\n'));
+          assert.equal(structure.valid, exitCode === 0);
+          assert.equal(structure.task_count, taskName ? 1 : 0, stdout);
+          if (taskName) assert.equal(structure.tasks[0].name, taskName);
+        });
+      }
+
+      if (label === 'valid') {
+        test(`${shell}: Step 8 skips its loop when both phase variables are unset (#5178)`, { skip }, (t) => {
+          const stdout = runStructureStep(t, shell, 'Step 8: Assess Scope', content, [
+            'gsd_run() { echo "UNEXPECTED gsd_run $*"; }',
+          ], [], 'unset phase_dir PHASE_DIR; set -u');
+          assert.equal(stdout, '', stdout);
+        });
+      }
 
       test(`${shell}: Step 2 prints the ${label} structure verdict intact (#5178)`, { skip }, (t) => {
         const stdout = runStructureStep(t, shell, 'Step 2: Load All Plans', content, [

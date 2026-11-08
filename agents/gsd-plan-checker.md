@@ -885,15 +885,21 @@ Missing: No mention of fetch/API call → Issue: Key link not planned
 ## Step 8: Assess Scope
 
 ```bash
-PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PHASE_DIR/$PHASE-01-PLAN.md") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
-printf '%s\n' "$PLAN_STRUCTURE"
-echo "structure_exit=$STRUCTURE_EXIT"
-gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" --field files_modified
+shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
+if [ -n "${phase_dir:-${PHASE_DIR:-}}" ]; then
+  for plan in "${phase_dir:-$PHASE_DIR}"/*-PLAN.md; do
+    echo "=== $plan ==="
+    PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$plan") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
+    printf '%s\n' "$PLAN_STRUCTURE"
+    echo "structure_exit=$STRUCTURE_EXIT"
+    gsd_run query frontmatter.get "$plan" --field files_modified
+  done
+fi
 ```
 
 Exit `0` / `1` are the verdict (`valid` true / false, read the JSON); any other status means the structure was not evaluated (Step 2).
 
-Use `task_count` from the structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
+Use each plan's `task_count` from its structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
 
 ## Step 9: Verify must_haves Derivation
 
