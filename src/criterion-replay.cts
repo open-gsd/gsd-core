@@ -147,9 +147,10 @@ interface OptionSpec {
 }
 
 const words = (s: string): ReadonlySet<string> => new Set(s.split(' ').filter((w) => w.length > 0));
+const chars = (s: string): ReadonlySet<string> => new Set(s);
 
 const GREP_SPEC: OptionSpec = {
-  short: words('c i v w x F E G n l L q s r h H o y I'),
+  short: chars('civwxFEGnlLqsrhHoyI'),
   long: words(
     '--count --ignore-case --invert-match --word-regexp --line-regexp --fixed-strings --extended-regexp --basic-regexp --quiet --silent --no-messages --recursive --no-filename --with-filename --files-with-matches --files-without-match --only-matching --line-number',
   ),
@@ -159,7 +160,7 @@ const GREP_SPEC: OptionSpec = {
 
 const GIT_SPECS: Readonly<Record<string, OptionSpec>> = Object.freeze({
   grep: {
-    short: words('c i v w n l L h H F E G P I o q'),
+    short: chars('civwnlLhHFEGPIoq'),
     long: words(
       '--count --ignore-case --invert-match --word-regexp --line-number --files-with-matches --name-only --files-without-match --fixed-strings --extended-regexp --basic-regexp --perl-regexp --quiet --cached --untracked --no-index --full-name --and --or --not --all-match',
     ),
