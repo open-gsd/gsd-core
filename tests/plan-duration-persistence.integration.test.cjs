@@ -387,7 +387,11 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           t.after(() => cleanup(dir));
           runFresh(dir, start(), epoch);
           if (String(epoch).length > 10) {
-            assert.throws(() => runFresh(dir, finish(), epoch), (error) => error.exitCode === 1);
+            const clockMarker = path.join(dir, 'end-clock-called');
+            const instrumented = 'date() { : > end-clock-called; printf "1000\\n"; }\n' + finish();
+            assert.throws(() => runFresh(dir, instrumented, epoch), (error) => error.exitCode === 1);
+            assert.equal(fs.existsSync(clockMarker), false,
+              'an invalid start epoch must fail before reading the completion clock');
           } else {
             assert.deepEqual(runFresh(dir, finish(), epoch), {
               duration: '0 min', started: new Date(epoch * 1000).toISOString().replace('.000Z', 'Z'),
