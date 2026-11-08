@@ -125,6 +125,9 @@ function runtimeRegisteredNames() {
     }
   }
   for (const subcommand of PRE_HUB_PHASE_SUBCOMMANDS) registered.add(`phase.${subcommand}`);
+  // Closed routers export no authoritative subcommand list yet, so each set is read from
+  // the router's own rejection line. The 8 lists command-aliases.cjs does export are not
+  // used because 3 disagree with dispatch (state, phase, phases). Tracked in #5998.
   for (const [root, { bogus, bare }] of probeHostRouters()) {
     const message = bogus.error || '';
     const available = /\bUnknown\b/.test(message) && message.match(/\bAvailable:\s*([^\r\n]+)/i);
