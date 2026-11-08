@@ -52,6 +52,9 @@ const {
   extractCurrentMilestone,
   getMilestoneInfo,
   sliceMilestoneWindow,
+  classifyMilestoneScalar,
+  readStateMilestoneScalar,
+  sameMilestoneVersion,
 } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
@@ -700,13 +703,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       try {
         const stateRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
         if (stateRaw) {
-          const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
-          if (milestoneMatch) stateVersion = milestoneMatch[1].trim();
+          // One owner for the STATE `milestone:` scalar (#5726): quoted, null and
+          // empty values and a body `milestone:` line are not drift.
+          stateVersion = classifyMilestoneScalar(readStateMilestoneScalar(stateRaw)).version;
         }
       } catch {
         /* skip — stateVersion stays null, scan still runs */
       }
-      if (stateVersion !== null && stateVersion !== version) {
+      if (stateVersion !== null && !sameMilestoneVersion(stateVersion, version)) {
         // #2946: emit a WARNING so the suspicious STATE mismatch is visible
         // rather than silently disarming the guard. Plain-text diagnostic on
         // stderr, matching the existing [gsd-tools] WARNING convention
