@@ -561,6 +561,40 @@ describe('#4310 execArgvQuarantined seam', () => {
     assert.strictEqual(r.exitCode, null);
   });
 
+  test('[R57] a relative or empty PATH entry never resolves into the cwd (POSIX)', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4310-'));
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(path.join(dir, 'grep'), '#!/bin/sh\ntouch PLANTED\n', { mode: 0o755 });
+    const r = projection.execArgvQuarantined('grep', ['-c', 'x', 'f'], {
+      cwd: dir,
+      env: { PATH: '.' + ':' + '' + ':' + 'bin' },
+      timeout: PROBE_TIMEOUT_MS,
+      maxBuffer: 1024,
+      platform: 'linux',
+    });
+    assert.strictEqual(r.outcome, 'not_found');
+    assert.strictEqual(fs.existsSync(path.join(dir, 'PLANTED')), false);
+  });
+
+  test('[R58] a relative PATH entry never resolves into the cwd (win32)', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4310-'));
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(path.join(dir, 'grep.exe'), 'MZ');
+    const r = projection.execArgvQuarantined('grep', ['-c', 'x', 'f'], {
+      cwd: dir,
+      env: { PATH: '.;bin', Path: '.;bin', PATHEXT: '.EXE' },
+      timeout: PROBE_TIMEOUT_MS,
+      maxBuffer: 1024,
+      platform: 'win32',
+    });
+    assert.strictEqual(r.outcome, 'not_found');
+  });
+
+  test('[R59] a relative program containing a separator is not_found', () => {
+    const r = projection.execArgvQuarantined('./grep', [], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 });
+    assert.strictEqual(r.outcome, 'not_found');
+  });
+
   test('[R46] exited, not_found, timed_out and overflow are distinct outcomes', () => {
     const ok = projection.execArgvQuarantined(process.execPath, ['-e', 'process.stdout.write("7");process.exit(1)'], { timeout: PROBE_TIMEOUT_MS, maxBuffer: 1024 });
     assert.strictEqual(ok.outcome, 'exited');

@@ -1040,15 +1040,42 @@ export function execArgvQuarantined(
   opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; platform?: string },
 ): QuarantinedSpawnResult {
   try {
-    const invocation = projectSpawnInvocation(program, args, { platform: opts.platform, env: opts.env ?? process.env });
-    if (invocation.windowsVerbatimArguments === true) {
+    const platform = opts.platform ?? process.platform;
+    const notFound: QuarantinedSpawnResult = { outcome: 'not_found', exitCode: null, stdout: '', stderr: '', signal: null };
+    const isWin = platform === 'win32';
+    const pathApi = isWin ? path.win32 : path.posix;
+    const env = opts.env ?? process.env;
+    let resolved: string | null = null;
+    if (pathApi.isAbsolute(program)) {
+      // An absolute program is addressed directly: no PATH lookup is involved.
+      resolved = _isFile(program, true, platform) ? program : null;
+    } else if (program.includes('/') || program.includes('\\')) {
+      // The quarantine passes bare names only; a relative path would resolve against the project cwd.
+      return notFound;
+    } else {
+      // Only ABSOLUTE PATH entries are searched: an empty or relative entry would
+      // resolve against the project (the spawn cwd), so a committed ./git could run.
+      const segments = String(envGet(env, 'PATH') ?? '')
+        .split(isWin ? ';' : ':')
+        .filter((seg) => seg.length > 0 && pathApi.isAbsolute(seg));
+      if (isWin) {
+        const joined = segments.join(';');
+        resolved = resolveExecutableBinary(program, { platform, env: { ...env, PATH: joined, Path: joined } });
+      } else {
+        for (const seg of segments) {
+          const candidate = path.posix.join(seg, program);
+          if (_isFile(candidate, true, platform)) {
+            resolved = candidate;
+            break;
+          }
+        }
+      }
+    }
+    if (resolved === null || !pathApi.isAbsolute(resolved)) return notFound;
+    if (isWin && CMD_MEDIATED_EXT.test(path.win32.basename(resolved))) {
       return { outcome: 'refused', exitCode: null, stdout: '', stderr: '', signal: null };
     }
-    // An unresolved bare name would let CreateProcess search the cwd (the project) before PATH.
-    if ((opts.platform ?? process.platform) === 'win32' && invocation.resolved === null) {
-      return { outcome: 'not_found', exitCode: null, stdout: '', stderr: '', signal: null };
-    }
-    const result = childProcess.spawnSync(invocation.command, invocation.args, {
+    const result = childProcess.spawnSync(resolved, args, {
       cwd: opts.cwd,
       env: opts.env,
       encoding: 'utf-8',
