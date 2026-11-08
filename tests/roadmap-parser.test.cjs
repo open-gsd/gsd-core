@@ -4852,7 +4852,7 @@ describe('#5726: matchFenceDelimiter parity', () => {
     indent: fc.integer({ min: 0, max: 4 }),
     char: fc.constantFrom('`', '~'),
     run: fc.integer({ min: 2, max: 6 }),
-    info: fc.constantFrom('', ' ', ' js', ' `x`', 'x', ' a b', ' x `y` z'),
+    info: fc.constantFrom('', ' ', '\t', ' \t', ' js', ' `x`', 'x', ' a b', ' x `y` z'),
     cr: fc.boolean(),
   });
   const otherLine = fc.record({
@@ -4914,10 +4914,37 @@ describe('#5726: matchFenceDelimiter parity', () => {
       const scanned = scanFencedBlocks(lines).map((b) => [b.openLineIdx, b.closeLineIdx === -1 ? lines.length - 1 : b.closeLineIdx]);
       assert.deepStrictEqual(scanned, spans, JSON.stringify(doc));
 
-      assert.strictEqual(stripFencedCode(doc).text, lines.filter((_, i) => !inSpan(i)).join('\n'), JSON.stringify(doc));
+      const stripped = stripFencedCode(doc);
+      assert.strictEqual(stripped.text, lines.filter((_, i) => !inSpan(i)).join('\n'), JSON.stringify(doc));
+      // A span ends at the last line only when it is unterminated; spansOf marks that
+      // by a close index equal to the last line with no closing delimiter, so rebuild it
+      // from the state machine's own final state.
+      const endsUnterminated = (() => {
+        let open = null;
+        specs.forEach((s) => {
+          if (!isDelimiter(s)) return;
+          if (open === null) { if (canOpen(s)) open = { char: s.char, run: s.run }; }
+          else if (closesOpener(s, open)) open = null;
+        });
+        return open !== null;
+      })();
+      assert.strictEqual(stripped.unterminatedFence, endsUnterminated, JSON.stringify(doc));
 
-      const headingLines = specs.map((s, i) => (s.kind === 'heading' && !inSpan(i) ? i + 1 : 0)).filter(Boolean);
-      assert.deepStrictEqual(tokenizeHeadings(doc).map((t) => t.line), headingLines, JSON.stringify(doc));
+      const expectedHeadings = specs
+        .map((s, i) => (s.kind === 'heading' && !inSpan(i)
+          ? {
+            level: 1,
+            text: `h${i}`,
+            line: i + 1,
+            offset: lines.slice(0, i).join('\n').length + (i > 0 ? 1 : 0),
+          }
+          : null))
+        .filter(Boolean);
+      assert.deepStrictEqual(
+        tokenizeHeadings(doc).map((t) => ({ level: t.level, text: t.text, line: t.line, offset: t.offset })),
+        expectedHeadings,
+        JSON.stringify(doc),
+      );
 
       const blanked = lines.map((l, i) => (inSpan(i) ? l.replace(/[^\n]/g, ' ') : l)).join('\n');
       assert.strictEqual(blankFencesAndComments(doc), blanked, JSON.stringify(doc));
