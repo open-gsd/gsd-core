@@ -623,6 +623,8 @@ const {
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
+// #5759: bounded config.json reader shared with the runtime (non-blocking open, regular file, 1 MiB cap).
+const { readConfigFileBounded } = require(path.join(_gsdLibDir, 'config-file-read.cjs'));
 let _capabilityRegistry;
 try {
   _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
@@ -2376,10 +2378,11 @@ function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array.
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertCopilotToolName(t));
   const uniqueTools = [...new Set(mappedTools)];
   const toolsArray = uniqueTools.length > 0
@@ -4059,7 +4062,9 @@ function convertClaudeAgentToCodexAgent(content) {
 
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const tools = extractFrontmatterField(frontmatter, 'tools') || '';
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const tools = parseFrontmatterTools(frontmatter).join(', ');
 
   const roleHeader = `<codex_agent_role>
 role: ${name}
@@ -13989,7 +13994,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         const candidate = path.join(probeDir, '.planning', 'config.json');
         if (fs.existsSync(candidate)) {
           try {
-            const parsed = JSON.parse(stripJsonComments(fs.readFileSync(candidate, 'utf-8')));
+            // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
+            // catch below (treated as enabled) instead of blocking the installer.
+            const parsed = JSON.parse(stripJsonComments(readConfigFileBounded(candidate) ?? ''));
             if (parsed && typeof parsed === 'object' &&
                 parsed.workflow && parsed.workflow.use_worktrees === false) {
               worktreesEnabled = false;

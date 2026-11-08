@@ -402,25 +402,33 @@ const RESERVED_TEMP_PREFIXES = ['gsd-test-home-', 'gsd-run-tests-events-'];
 /** True when THIS process created the active run temp root (see setupRunTempRoot). */
 let createdRunTempRoot = false;
 
-function setupRunTempRoot() {
+function setupRunTempRoot({ env = process.env, tmpdirFn = tmpdir, platform = process.platform } = {}) {
   // Ownership (a nested run-tests spawn REUSES an inherited root and must never
   // remove it on ITS exit — that would delete the outer run's root mid-suite,
-  // mass-ENOENTing every later fixture). PRECEDENCE: the FIRST SET var in
-  // TMPDIR > TEMP > TMP order decides — a set-but-not-a-run-root TMPDIR is an
-  // operator redirect (or a test sandboxing a child) and must WIN over leftover
-  // inherited TEMP/TMP, never be overridden by them (a CI-observed failure: the
-  // child redirected TMPDIR but inherited TEMP=<outer root>, and the any-of-three
-  // reuse check silently preferred the inherited root).
+  // mass-ENOENTing every later fixture). RULE (#5688): follow os.tmpdir(). The
+  // variables consulted are exactly the ones os.tmpdir() reads on this platform —
+  // POSIX: TMPDIR, then TMP, then TEMP; win32: TEMP, then TMP — as ONE ordered list. The FIRST
+  // non-empty variable in that list decides BOTH whether a run root is inherited
+  // (its basename carries the run-root prefix) AND the parent of a fresh root
+  // (resolve()d). A set-but-not-a-run-root value is an operator redirect (or a
+  // test sandboxing a child) and wins over any later variable. tmpdirFn() is the
+  // parent only when none of the listed variables is set. The resulting absolute
+  // root is exported to all three variables so every child agrees.
   let inherited = '';
-  for (const key of ['TMPDIR', 'TEMP', 'TMP']) {
-    const v = process.env[key] || '';
+  let parent = '';
+  const readKeys = platform === 'win32' ? ['TEMP', 'TMP'] : ['TMPDIR', 'TMP', 'TEMP'];
+  for (const key of readKeys) {
+    const v = env[key] || '';
     if (!v) continue;
-    inherited = basename(v).startsWith(RUN_TEMP_ROOT_PREFIX) ? v : '';
+    // Resolve against THIS process's cwd now; a relative value would be
+    // re-resolved against each child's cwd. No realpath: absolute stays byte-identical.
+    parent = resolve(v);
+    inherited = basename(v).startsWith(RUN_TEMP_ROOT_PREFIX) ? parent : '';
     break;
   }
   createdRunTempRoot = !inherited;
-  const root = inherited || mkdtempSync(join(tmpdir(), RUN_TEMP_ROOT_PREFIX));
-  for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = root;
+  const root = inherited || mkdtempSync(join(parent || resolve(tmpdirFn()), RUN_TEMP_ROOT_PREFIX));
+  for (const key of ['TMPDIR', 'TEMP', 'TMP']) env[key] = root;
   return root;
 }
 

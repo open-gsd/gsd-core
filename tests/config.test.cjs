@@ -1190,8 +1190,11 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
       else process.env.GSD_HOME = savedGsdHome;
     });
     // In-process, so the fault lands on the config write itself and on nothing before it.
+    // platformWriteSync publishes through an exclusively created temp file and writes its
+    // DESCRIPTOR (#5759), so the injected fault matches descriptor writes as well as path writes;
+    // a path-only matcher never fires and the creation succeeds.
     const configPath = path.join(dir, '.planning', 'config.json');
-    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(configPath), 0));
+    t.after(mockPartialWriteThenThrow(fs, (target) => typeof target === 'number' || String(target).startsWith(configPath), 0));
 
     const result = await runQuietly(() => configLib.cmdConfigNewProject(dir, JSON.stringify({ mode: 'yolo' }), false));
 

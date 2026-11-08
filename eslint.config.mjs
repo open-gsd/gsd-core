@@ -127,6 +127,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
       'gsd-core/bin/lib/capability-ledger.cjs',
+      // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
+      'gsd-core/bin/lib/config-file-read.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
