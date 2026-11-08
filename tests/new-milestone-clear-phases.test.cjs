@@ -1089,9 +1089,8 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
 // under a named project (GSD_PROJECT) or a workstream the fence must archive
 // the SCOPED phases dir (init `phases_dir`) and must never touch the root
 // project's .planning/phases. The fence is EXECUTED with the real
-// init.new-milestone output, as the workflow does. Where the archive lands is
-// whatever init reports as `phase_archive_path` (its scoping is tracked
-// separately), so this test isolates the fence's source directory.
+// init.new-milestone output, as the workflow does. The archive destination is
+// read from init's `phase_archive_path`, which #5858 (same PR) scopes.
 // ────────────────────────────────────────────────────────────────────────
 describe('new-milestone reset-phase-safety: archives the scoped phases dir, never root .planning/phases (#5860)', () => {
   const stepPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone', 'steps', 'reset-phase-safety.md');
@@ -1144,4 +1143,28 @@ describe('new-milestone reset-phase-safety: archives the scoped phases dir, neve
         `the scoped phase dir must land in phase_archive_path (${init.phase_archive_path})`);
     });
   }
+
+  test('flat project (no scope): archives root .planning/phases into the root milestone archive, as before', () => {
+    const rootPlanning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(rootPlanning, 'MILESTONES.md'), '# Milestones\n\n## v1.0 Root Ship (Shipped: 2026-01-01)\n');
+    fs.mkdirSync(path.join(rootPlanning, 'phases', '01-root-old'), { recursive: true });
+
+    const result = runGsdTools(['init', 'new-milestone', '--reset-phase-numbers'], tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    assert.ok(result.success, `init new-milestone failed: ${result.error}`);
+    const init = JSON.parse(result.output);
+    assert.strictEqual(init.phase_dir_count, 1);
+    assert.strictEqual(fs.realpathSync(init.phases_dir), path.join(rootPlanning, 'phases'));
+    assert.strictEqual(init.phase_archive_path, path.join(rootPlanning, 'milestones', 'v1.0-phases').split(path.sep).join('/'));
+
+    const run = runHookSeam('-c', [resetFence], {
+      interpreter: 'bash',
+      cwd: tmpDir,
+      env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path },
+    });
+    throwIfFailed(run, 'bash <reset-phase-safety fence>');
+
+    assert.ok(!fs.existsSync(path.join(rootPlanning, 'phases', '01-root-old')), 'the root phase dir must leave .planning/phases');
+    assert.ok(fs.existsSync(path.join(rootPlanning, 'milestones', 'v1.0-phases', '01-root-old')),
+      'the root phase dir must land in .planning/milestones/v1.0-phases');
+  });
 });

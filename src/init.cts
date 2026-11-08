@@ -1680,6 +1680,7 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     // workstream-aware planningDir(cwd), matching the established,
     // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
+    // null drops the workstream: research is project-level, shared by a project's workstreams like PROJECT.md.
     research_dir: toPosixPath(path.join(planningDir(cwd, null), 'research')),
   };
 
@@ -1755,6 +1756,7 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
     // workstream-aware planningDir(cwd), matching the established,
     // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
+    // null drops the workstream: research is project-level, shared by a project's workstreams like PROJECT.md.
     research_dir: toPosixPath(path.join(planningDir(cwd, null), 'research')),
     milestones_path: toPosixPath(path.join(planningDir(cwd), 'MILESTONES.md')),
     // #4456: new-milestone.md's Step 6 stages the phase-archive move

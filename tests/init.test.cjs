@@ -5744,6 +5744,26 @@ describe('init.new-project / init.new-milestone — scoped research, milestones 
     assert.equal(out.research_dir, absPlanningPath(tmpDir, 'research'));
   });
 
+  test('under GSD_PROJECT with phases but no MILESTONES.md, no milestone or archive is inherited from the root', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'fresh', 'phases', '01-a'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'fresh', 'PROJECT.md'), '# Fresh\n');
+    const r = runGsdTools(['query', 'init.new-milestone'], tmpDir, env({ GSD_PROJECT: 'fresh' }));
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.equal(out.latest_completed_milestone, null, 'must not read the root v9.9');
+    assert.equal(out.phase_archive_path, null, 'reset-phase-safety must stop rather than archive into the root');
+  });
+
+  test('under --ws, new-project keeps the project-level research dir', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    const r = runGsdTools(['query', 'init.new-project', '--ws', 'ws1'], tmpDir, env());
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).research_dir, absPlanningPath(tmpDir, 'research'));
+  });
+
   test('the root project is unchanged', (t) => {
     const tmpDir = seed();
     t.after(() => cleanup(tmpDir));
