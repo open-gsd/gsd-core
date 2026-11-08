@@ -625,6 +625,39 @@ marker above for a bound over the 600000 ms ceiling. Never reach for `eslint-dis
 — with the allowlist gone, that is the only remaining way to silence it, and a test asserts that no
 such comment exists anywhere under `tests/`.
 
+### Isolating a child's environment: `tests/helpers/isolated-env.cjs`
+
+A test that spawns a child must not let the developer's machine into it. That means
+controlling the child's home directory, its PATH, the config-location and `GSD_*` variables GSD
+reads, the test runner's own control variables, and the project config GSD discovers by walking
+up from a directory. Build the child's env with the isolation helper instead of hand-writing
+`{ ...process.env, HOME: x }` or filtering `process.env.PATH` yourself. Hand-written copies are
+how a suite ends up hermetic on its author's machine and red, or vacuously green, on everyone
+else's (#4635).
+
+```javascript
+const { isolatedEnv, isolatedPath, createHermeticRoot } = require('./helpers/isolated-env.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+
+const home = createTempDir('my-home-');
+t.after(() => cleanup(home));
+
+const r = runNode([SCRIPT], { env: isolatedEnv({ home }) });
+```
+
+| Export | Returns | Guarantees |
+|---|---|---|
+| `isolatedEnv({ home, path?, claudeConfigDir?, override?, base? })` | a plain env object | `HOME` and `USERPROFILE` both set to `home` (required, absolute). Every config-location and session-identity variable is blanked, using the same registry-derived list as `testEnvBase()` in `tests/helpers.cjs`. Every ambient `GSD_*`, `RUN_TESTS_*`, `NODE_TEST_CONTEXT`, `BASH_ENV` and `CLAUDE_ENV_FILE` is removed. Each key the helper sets appears exactly once, whatever its casing (Windows reports PATH as `Path`). |
+| `isolatedPath({ without, basePath? })` | `{ path, nodeBinDir }` | No directory holding a tool named in `without` stays on PATH, and neither do relative or empty entries. `node` stays resolvable from a dedicated directory placed first. Clean up `nodeBinDir`. |
+| `createHermeticRoot(prefix, { parent? })` | an absolute temp directory | Contains a neutral `.planning/config.json`. GSD's upward project-config search stops there, so it cannot reach an ancestor's real config. This matters when you run from a worktree nested inside another checkout. |
+
+To keep a variable the helper strips, pass it in `override`. For example,
+`override: { RUN_TESTS_SHARD_RESERVE: '2' }` for a test about that switch. `override` is applied
+last and is the only way to opt back in.
+
+This covers child processes. A test that calls the installer in-process still clears the parent's
+config-location variables with `scrubConfigLocationEnv()` from `tests/helpers.cjs`.
+
 ### Test Structure
 
 ```javascript
