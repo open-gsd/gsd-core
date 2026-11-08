@@ -22,7 +22,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
-import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
 const {
@@ -2013,7 +2013,7 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSour
   const headerMatch = heading.text.match(headingPattern);
   if (!headerMatch) return null;
 
-  const phaseName = headerMatch[1].trim();
+  const phaseName = stripInsertedMarker(headerMatch[1]);
   const nextHeading = headings.slice(headingIndex + 1).find((candidate) => candidate.level <= heading.level);
   const sectionEnd = nextHeading ? nextHeading.offset : content.length;
   const section = content.slice(heading.offset, sectionEnd).trim();

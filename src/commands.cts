@@ -11,6 +11,7 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, GIT_LOCATION_ENV_VARS, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
@@ -3931,7 +3932,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       phasesByNumber.set(key, {
         number: key,
         ...(displayId ? { display_id: displayId } : {}),
-        name: phaseName.replace(/\(INSERTED\)/i, '').trim(),
+        name: stripInsertedMarker(phaseName),
         plans: 0,
         summaries: 0,
         phaseStatus: PHASE_STATUS.NOT_STARTED,
