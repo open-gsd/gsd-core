@@ -2,7 +2,7 @@
 
 <purpose>
 
-Drive milestone phases autonomously — all remaining phases, a range via `--from N`/`--to N`, or a single phase via `--only N`. For each incomplete phase: discuss → plan → execute using Skill() flat invocations. When `--converge` or `--cross-ai` is set, route the planning step through plan-review convergence before execution. Pauses only for explicit user decisions (grey area acceptance, blockers, validation requests). Re-reads ROADMAP.md after each phase to catch dynamically inserted phases.
+Drive milestone phases autonomously — all remaining phases, a range via `--from N`/`--to N`, or a single phase via `--only N`. For each incomplete phase: discuss → plan → execute using Skill() flat invocations. When `--converge` or `--cross-ai` is set, route the planning step through plan-review convergence before execution. Pauses only for explicit user decisions (hard-to-reverse and preference grey areas, blockers, validation requests). Re-reads ROADMAP.md after each phase to catch dynamically inserted phases.
 
 </purpose>
 
@@ -311,7 +311,7 @@ The discuss step in `--auto` mode MUST NOT loop. If CONTEXT.md already exists af
 Skill(skill="gsd-discuss-phase", args="${PHASE_NUM}")
 ```
 
-**If `INTERACTIVE` is NOT set:** Execute the smart_discuss step for this phase (batch table proposals, auto-optimized).
+**If `INTERACTIVE` is NOT set:** Execute the smart_discuss step for this phase (classified questions: reversible technical choices decided autonomously, the rest asked).
 
 After discuss completes (either mode), verify context was written:
 

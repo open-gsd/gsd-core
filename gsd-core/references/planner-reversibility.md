@@ -111,7 +111,7 @@ these records the human choosing this exact option:
 - an ADR ingested with `--ingest`;
 - a `checkpoint:decision` earlier in this phase's plans that was already answered.
 
-Entries under `### Decided Autonomously` in CONTEXT.md are not human-settled: smart discuss chose them without asking (`gsd-core/references/autonomous-smart-discuss.md`). If one of them turns out to be `one-way`, it is newly surfaced and earns a checkpoint.
+Entries under `### Decided autonomously` in CONTEXT.md are not human-settled: smart discuss chose them without asking (`gsd-core/references/autonomous-smart-discuss.md`). If one of them turns out to be `one-way`, it is newly surfaced and earns a checkpoint. Otherwise the planner follows them like any other CONTEXT.md decision; only this checkpoint exemption does not apply.
 
 Only a **newly surfaced** `one-way` decision — one nothing above records — earns a
 fresh checkpoint before the implementing task. If you cannot point at the record,
