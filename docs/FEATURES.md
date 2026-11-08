@@ -181,6 +181,7 @@
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
   - [Capability Management Command](#147-capability-management-command)
   - [Smart Entry Launcher](#148-smart-entry-launcher)
+  - [Criterion Baseline Notation](#4309-criterion-baseline-notation)
 - [v1.7.0 Features](#v170-features)
   - [Embeddable Orchestration System (Host-Integration Interface)](#149-embeddable-orchestration-system-host-integration-interface)
   - [Discoverability Registries](#150-discoverability-registries)
@@ -3769,6 +3770,34 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 **Situations:** no project, paused, blocked, verify failed, needs first phase, planning, executing, verify pending, idle stranded, complete, unknown.
 
 **Reference:** [Smart Entry Design](superpowers/specs/2026-06-27-gsd-smart-entry-design.md)
+
+---
+
+### 4309. Criterion Baseline Notation
+
+**Command:** `gsd-tools verify plan-structure <PLAN.md>` (run by `/gsd-plan-phase`'s plan checker)
+
+**Purpose:** Catch a quantitative acceptance criterion that is already true before any work happens. Such a criterion passes whether or not the task runs, so it verifies nothing. The planner records each count/match gate's measured baseline beside it, and `verify plan-structure` checks that the gate can fail.
+
+**Notation:**
+
+```
+[HEAD=<value> EXPECT<op><value> [@<sha>] [GUARD MUTATION: <ref>] [UNPINNED]]
+value ∈ <integer> | absent | present | error:<exit-code>      op ∈ == != >= > <= <
+```
+
+`HEAD` is what the command prints now, and `EXPECT` is what it must print after the change. A `grep -c` over a missing file is `error:2`, not `0`.
+
+**Behavior:**
+
+| Rule | Severity | Fires when |
+|---|---|---|
+| B1 | error | `HEAD` already satisfies `EXPECT` and the notation lacks `GUARD MUTATION: <ref>`; the plan is invalid |
+| B2 | warning | a legacy free-form `# baseline at HEAD:` comment sits in a criteria zone |
+
+A notation the checker cannot parse or evaluate is a status in `baseline_statuses` and never changes the exit code. Nothing is executed. The JSON verdict adds `baseline_notation_count`, `baseline_findings` and `baseline_statuses`. The exit is `<!-- plan-criteria-allow: B1 - <reason> -->`.
+
+**Reference:** [PLAN.md → Baseline notation](reference/plan-md.md#baseline-notation) · [Resolve baseline-notation findings](how-to/resolve-baseline-notation-findings.md) · [ADR-4309](adr/4309-criterion-baseline-notation.md)
 
 
 ---
