@@ -13,12 +13,17 @@
  *
  * Exactness: this applies the SAME steps c8's Report applies before it
  * converts to istanbul — `_normalizeProcessCov` (node: urls, file:// urls,
- * include/exclude filter) then `@bcoe/v8-coverage` `mergeProcessCovs`, which
- * is associative. The merged output is a valid c8 temp-directory dump, so the
- * gate's unchanged `c8 report` commands read it as if it were one more raw
- * dump. Retained urls are the UNION of every include glob the gate uses, so
- * both `test:coverage:report` and `test:coverage:scripts-floor` see all of
- * the data they would have seen before.
+ * include/exclude filter), `_normalizeSourceMapCache` (file-url keys; a
+ * non-file key throws, as it does in c8) and then `@bcoe/v8-coverage`
+ * `mergeProcessCovs` over all dumps in one call, which is associative. The
+ * merged output is a valid c8 temp-directory dump, so the gate's unchanged
+ * `c8 report` commands read it as if it were one more raw dump. Retained urls
+ * are the UNION of every include glob the gate uses, so both
+ * `test:coverage:report` and `test:coverage:scripts-floor` see all of the
+ * data they would have seen before.
+ *
+ * Guard: a shard that produced no V8 coverage dumps at all throws, restoring
+ * the `if-no-files-found: error` guarantee the raw-dump upload step gave.
  */
 
 const fs = require('fs');
@@ -41,6 +46,13 @@ function loadDeps(cwd) {
   };
 }
 
+// Normalized href for a retained script url, or null when c8 would discard it.
+function retainedHref(exclude, url) {
+  if (typeof url !== 'string' || !/^file:\/\//.test(url)) return null; // node: and non-file urls
+  const filePath = fileURLToPath(url);
+  return exclude.shouldInstrument(filePath) ? pathToFileURL(filePath).href : null;
+}
+
 function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
   const { mergeProcessCovs, Exclude } = loadDeps(cwd);
   const exclude = new Exclude({
@@ -53,7 +65,7 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
     excludeNodeModules: true,
   });
 
-  let merged = null;
+  const processCovs = [];
   const sourceMapCache = {};
   let inputFiles = 0;
   for (const name of fs.readdirSync(tempDirectory).sort()) {
@@ -67,53 +79,61 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
     inputFiles++;
     const result = [];
     for (const script of dump.result) {
-      const url = script.url;
-      if (/^node:/.test(url)) continue; // builtins never match an include glob
-      if (!/^file:\/\//.test(url)) continue;
-      let filePath;
-      try {
-        filePath = fileURLToPath(url);
-      } catch {
-        continue;
-      }
-      if (!exclude.shouldInstrument(filePath)) continue;
-      script.url = pathToFileURL(filePath).href;
+      const href = retainedHref(exclude, script.url);
+      if (href === null) continue;
+      script.url = href;
       result.push(script);
     }
     const cache = dump['source-map-cache'];
     if (cache) {
       for (const key of Object.keys(cache)) {
-        try {
-          const keyPath = fileURLToPath(key);
-          if (exclude.shouldInstrument(keyPath)) sourceMapCache[pathToFileURL(keyPath).href] = cache[key];
-        } catch { /* non-file url: c8 would throw/skip as well */ }
+        // c8's _normalizeSourceMapCache calls fileURLToPath(key) unguarded: a
+        // non-file key throws there, so it throws here too.
+        const keyPath = fileURLToPath(key);
+        if (exclude.shouldInstrument(keyPath)) sourceMapCache[pathToFileURL(keyPath).href] = cache[key];
       }
     }
-    merged = mergeProcessCovs(merged ? [merged, { result }] : [{ result }]);
+    processCovs.push({ result });
   }
 
+  if (inputFiles === 0) {
+    throw new Error(`ci-compact-v8-coverage: no V8 coverage dumps in ${tempDirectory}`);
+  }
+
+  const merged = mergeProcessCovs(processCovs);
   const out = { result: merged ? merged.result : [], 'source-map-cache': sourceMapCache };
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, JSON.stringify(out));
   return { inputFiles, scripts: out.result.length };
 }
 
-function main(argv) {
-  const get = (flag) => {
+const USAGE = 'usage: ci-compact-v8-coverage.cjs --out <file> [--temp-directory <dir>]';
+
+function parseArgs(argv) {
+  // undefined: flag absent; null: flag present without a usable value.
+  const value = (flag) => {
     const i = argv.indexOf(flag);
-    return i === -1 ? undefined : argv[i + 1];
+    if (i === -1) return undefined;
+    const v = argv[i + 1];
+    return v === undefined || v.startsWith('--') ? null : v;
   };
-  const tempDirectory = get('--temp-directory') || path.join('coverage', 'tmp');
-  const outFile = get('--out');
-  if (!outFile) {
-    console.error('usage: ci-compact-v8-coverage.cjs --out <file> [--temp-directory <dir>]');
+  const outFile = value('--out');
+  const tempDirectory = value('--temp-directory');
+  if (!outFile || tempDirectory === null) return { error: USAGE };
+  return { tempDirectory: tempDirectory === undefined ? path.join('coverage', 'tmp') : tempDirectory, outFile };
+}
+
+function main(argv) {
+  const parsed = parseArgs(argv);
+  if (parsed.error) {
+    console.error(parsed.error);
     process.exitCode = 2;
     return;
   }
-  const stats = compact({ tempDirectory, outFile });
-  console.log(`compacted ${stats.inputFiles} dumps -> ${stats.scripts} scripts in ${outFile}`);
+  const stats = compact({ tempDirectory: parsed.tempDirectory, outFile: parsed.outFile });
+  console.log(`compacted ${stats.inputFiles} dumps -> ${stats.scripts} scripts in ${parsed.outFile}`);
 }
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { compact, INCLUDE_GLOBS, EXCLUDE_GLOBS };
+module.exports = { compact, parseArgs, main, INCLUDE_GLOBS, EXCLUDE_GLOBS };
