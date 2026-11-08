@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+const { VALID_PROFILES } = require('../gsd-core/bin/lib/model-profiles.cjs');
 const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
@@ -1700,7 +1701,15 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
           homeSandboxEnv(f.dir),
         );
         assert.ok(result.success, result.error);
-        assert.ok(fs.existsSync(f.configPath));
+        const config = readConfig(f.dir);
+        if (command === 'config-ensure-section') assert.equal(config.model_profile, 'balanced');
+        else if (command === 'config-set-model-profile') assert.equal(config.model_profile, 'quality');
+        else {
+          assert.equal(Object.hasOwn(config, 'depth'), false);
+          assert.equal(config.granularity, 'fine');
+          assert.equal(config.commit_docs, false);
+          assert.notDeepEqual(fs.readFileSync(f.configPath), f.before);
+        }
       });
 
       test(`${invocation} refuses an extra positional before writing`, (t) => {
@@ -1715,7 +1724,11 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         assertUnchanged(f);
         assert.equal(result.success, false);
         assert.equal(result.exitCode, 1);
-        assert.match(JSON.parse(result.error).message, /Unexpected argument/);
+        assert.deepEqual(JSON.parse(result.error), {
+          ok: false, reason: ERROR_REASON.USAGE,
+          message: `Unexpected argument for ${command}: ${extra}`,
+        });
+        assert.equal(result.output, '');
       });
     }
   }
@@ -1732,10 +1745,18 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
       assertUnchanged(f);
       assert.equal(result.success, false);
       assert.equal(result.exitCode, 1);
+      assert.equal(result.output, '');
+      assert.deepEqual(JSON.parse(result.error), {
+        ok: false, reason: ERROR_REASON.UNKNOWN,
+        message: profile ? `Invalid profile '${profile}'. Valid profiles: ${VALID_PROFILES.join(', ')}`
+          : `Usage: config-set-model-profile <${VALID_PROFILES.join('|')}>`,
+      });
     });
   }
 
-  test('unknown flag spelling and placement cannot bypass refusal on any of the three routes', async () => {
+  test('unknown flag spelling and placement cannot bypass refusal on any of the three routes', async (t) => {
+    const fixtures = [];
+    t.after(() => fixtures.forEach((dir) => cleanup(dir)));
     await fc.assert(fc.property(
       fc.record({
         suffix: fc.array(fc.constantFrom('a', 'b', 'c', '0', '1', '='), { minLength: 1, maxLength: 12 }),
@@ -1749,7 +1770,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         const flag = `${short ? '-' : '--'}unknown-${suffix.join('')}`;
         for (const { command, positionals } of verbs) {
           const f = fixture(existing);
-          try {
+          fixtures.push(f.dir);
             const result = runGsdTools([
               ...(query ? ['query'] : []), command,
               ...(leading ? [flag] : []), ...positionals,
@@ -1757,9 +1778,6 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
             ], f.dir, homeSandboxEnv(f.dir));
             assertUnchanged(f);
             assertUsage(result, command, flag);
-          } finally {
-            cleanup(f.dir);
-          }
         }
       },
     ), { seed: 5286, numRuns: 12 });
