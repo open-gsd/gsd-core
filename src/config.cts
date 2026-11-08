@@ -29,7 +29,7 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
-import { RUNTIME_PROFILE_MAP } from './model-catalog.cjs';
+import { hasRuntimeModelTierMap } from './model-catalog.cjs';
 import { resolveActiveRuntime } from './runtime-slash.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
@@ -488,8 +488,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   delete safeDefaults['runtime'];
   const activeRuntime = resolveActiveRuntime(choices, Object.hasOwn(choices, 'runtime')
     ? { ...process.env, GSD_RUNTIME: undefined } : process.env);
-  const activeRuntimeHasTierMap = Object.hasOwn(RUNTIME_PROFILE_MAP, activeRuntime)
-    && Object.keys(RUNTIME_PROFILE_MAP[activeRuntime]).length > 0;
+  const activeRuntimeHasTierMap = hasRuntimeModelTierMap(activeRuntime);
   if (safeDefaults['resolve_model_ids'] === 'omit'
       && (activeRuntime === 'claude' || activeRuntimeHasTierMap)) {
     delete safeDefaults['resolve_model_ids'];
