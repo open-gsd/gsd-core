@@ -4428,8 +4428,9 @@ function acquireStateLock(statePath: string, clock?: StateLockClock): string {
       // in the decision→steal gap never has its replacement deleted (window b). Mirrors
       // capability-lock.cts:455-499.
       try {
-        const stat = fs.statSync(lockPath);
-        const ageMs = clock.now() - stat.mtimeMs;
+        // Exact 64-bit (dev, ino): an NTFS file id does not fit a JS number (never serialized).
+        const stat = fs.statSync(lockPath, { bigint: true });
+        const ageMs = clock.now() - Number(stat.mtimeMs);
         const bodyStatus = _stateLockBodyStatus(lockPath);
         const bodyPid = bodyStatus.kind === 'pid' ? bodyStatus.pid : null;
         const holderLive = bodyPid !== null && _stateLockIsPidAlive(bodyPid);
@@ -4448,14 +4449,14 @@ function acquireStateLock(statePath: string, clock?: StateLockClock): string {
           // Identity re-confirm immediately before the steal: a racer that stole +
           // recreated a fresh lock in the decision→steal gap changes (dev, ino) and/or
           // the body pid → do NOT delete the replacement; re-evaluate from scratch.
-          let confirmStat: fs.Stats;
+          let confirmStat: fs.BigIntStats;
           try {
-            confirmStat = fs.statSync(lockPath);
+            confirmStat = fs.statSync(lockPath, { bigint: true });
           } catch {
             continue; // lock vanished between decision and steal — retry the create.
           }
           const sameInstance =
-            typeof stat.dev === 'number' && typeof stat.ino === 'number' &&
+            typeof stat.dev === 'bigint' && typeof stat.ino === 'bigint' &&
             confirmStat.dev === stat.dev && confirmStat.ino === stat.ino &&
             _stateLockBodyPid(lockPath) === bodyPid;
           if (!sameInstance) {
