@@ -2,4 +2,4 @@
 type: Fixed
 pr: 0
 ---
-**A re-run of execute-phase no longer overwrites a UAT file that already holds recorded human results** — when the verifier returned human_needed, Step A recreated NN-UAT.md from the template and committed it; it now merges new items as pending and keeps existing results. (#5845)
+**Human-recorded UAT results are no longer lost when execute-phase re-runs** — a phase that already had a filled UAT file had it reset to all-pending and committed when verification again needed human checks; new items are now appended and existing results kept. (#5845)

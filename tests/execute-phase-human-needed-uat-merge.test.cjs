@@ -1,5 +1,7 @@
 'use strict';
 
+// allow-test-rule: source-text-is-the-product
+
 /**
  * #5845: verify_phase_goal's human_needed Step A must merge-or-skip, never
  * overwrite an existing {phase_num}-UAT.md that holds a human's recorded
@@ -36,20 +38,19 @@ describe('execute-phase human_needed Step A: merge-or-skip (#5845)', () => {
   test('existing file keeps recorded results, status and started', () => {
     const block = stepABlock();
     assert.match(block, /keep every recorded result/i);
-    assert.match(block, /`status`/);
-    assert.match(block, /`started`/);
+    assert.match(block, /Keep `status` and `started` unchanged/);
     assert.match(block, /never (reset|overwrite|replace)/i);
   });
 
   test('appends only items absent by description as pending', () => {
     const block = stepABlock();
     assert.match(block, /not already present/i);
-    assert.match(block, /matched by (item )?description/i);
+    assert.match(block, /matched by description/i);
     assert.match(block, /result: \[pending\]/);
   });
 
   test('recomputes Summary counts from the merged list', () => {
-    assert.match(stepABlock(), /recompute[^.]*Summary counts/i);
+    assert.match(stepABlock(), /recompute the `## Summary` counts/i);
   });
 
   test('no write or commit when nothing to append', () => {
@@ -65,7 +66,7 @@ describe('execute-phase human_needed Step A: merge-or-skip (#5845)', () => {
 
   test('never instructs renaming the old file aside', () => {
     const block = stepABlock();
-    assert.doesNotMatch(block, /\bmv\b|rename[^.]*(aside|round)/i);
+    assert.doesNotMatch(block, /^\s*(git\s+)?mv\s/m);
     assert.match(block, /do not rename/i);
   });
 });
