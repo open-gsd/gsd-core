@@ -381,6 +381,29 @@ describe('#5297 git adapter — exact pinned target', {
     assertScratchClonesRemoved('sha pin fetch failure');
   });
 
+  test('a server refusal of an unadvertised SHA reports the fetch failure', async () => {
+    const refused = (args, opts) => args.includes('fetch')
+      ? { exitCode: 128, stdout: '', stderr: 'server refuses unadvertised object', signal: null, error: null }
+      : localGit(args, opts);
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#sha:${commits.tip}`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
+    }), { message: `git fetch "sha:${commits.tip}" failed (exit 128): server refuses unadvertised object` });
+    assertScratchClonesRemoved('server SHA refusal');
+  });
+
+  test('a bare-ref fallback after a transport failure emits a typed warning', async (t) => {
+    const warnings = [];
+    t.mock.method(process, 'emitWarning', (_message, options) => warnings.push(options.code));
+    const refused = (args, opts) => args.includes('fetch')
+      ? { exitCode: 1, stdout: '', stderr: 'network unavailable', signal: null, error: null }
+      : localGit(args, opts);
+    const result = await resolveCapabilitySource(`${sourceUrl}#main`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
+    });
+    assert.equal(result.id, 'pinned-cap');
+    assert.deepEqual(warnings, ['GSD_GIT_REF_LOCAL_FALLBACK']);
+  });
+
   test('checkout failure cleans the scratch clone', async () => {
     const checkoutFailGit = (args, opts) => {
       if (args.includes('checkout')) {
