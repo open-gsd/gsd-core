@@ -432,3 +432,13 @@ Before and after (2026-11-08, live tree, 1174 eligible unit-suite files):
 The macOS shrink comes from the same comment stripping applied to `MACOS_CATEGORIES`, not from the
 child-process change. A new macOS category `realpath` (`/\brealpath(Sync)?\b/`, matched in code only)
 keeps files that normalize the macOS `/var` to `/private/var` tmpdir symlink. `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.
+
+Maintainer review of four files that mention a macOS behavior only in a comment. All four are released
+from the macOS tier (their code does not exercise the behavior), and a test pins that:
+
+- `tests/profile-output.test.cjs:164`: released. It asserts with `endsWith` (lines 42-45 of the cited span) specifically to avoid depending on `/var` normalization.
+- `tests/fallow-runner.test.cjs:31`: released. The case-folding concern is the win32 PATHEXT fixture (`process.platform === 'win32'`, line 35), already in the Windows tier.
+- `tests/ci-docs-guard-registry.test.cjs:387`: released. The code calls `fs.mkdirSync` for a directory named `*.test.cjs`; no symlink is created.
+- `tests/ensure-runtime-build.test.cjs:320-321`: released. The code passes the real tsc path explicitly to avoid creating a directory symlink.
+
+No `MACOS_ALWAYS_REAL_OS` map was added and no kept entries result. macOS tier size is unchanged at 263.
