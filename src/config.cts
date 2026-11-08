@@ -486,8 +486,9 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // Projects detect the runtime from the install path / .gsd-runtime marker.
   const safeDefaults = { ...userDefaults };
   delete safeDefaults['runtime'];
-  const activeRuntime = resolveActiveRuntime(undefined);
-  const activeRuntimeHasTierMap = Object.keys(RUNTIME_PROFILE_MAP[activeRuntime] ?? {}).length > 0;
+  const activeRuntime = resolveActiveRuntime(choices);
+  const activeRuntimeHasTierMap = Object.hasOwn(RUNTIME_PROFILE_MAP, activeRuntime)
+    && Object.keys(RUNTIME_PROFILE_MAP[activeRuntime]).length > 0;
   if (safeDefaults['resolve_model_ids'] === 'omit'
       && (activeRuntime === 'claude' || activeRuntimeHasTierMap)) {
     delete safeDefaults['resolve_model_ids'];

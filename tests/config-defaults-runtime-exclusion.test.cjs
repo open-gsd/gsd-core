@@ -163,7 +163,8 @@ describe('#5329 — shared omit must not become explicit project model intent', 
 
   for (const runtime of tierMapRuntimes) {
     test(`${runtime} still resolves its runtime tier map after project seeding`, () => {
-      seed({ resolve_model_ids: 'omit', runtime }, 'config-new-project', {}, project, runtime);
+      const config = seed({ resolve_model_ids: 'omit', runtime }, 'config-new-project', {}, project, runtime);
+      assert.equal(Object.hasOwn(config, 'resolve_model_ids'), false);
       assert.equal(resolve('gsd-executor', runtime).model, RUNTIME_PROFILE_MAP[runtime].sonnet.model);
     });
   }
@@ -179,29 +180,52 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     }
   }
 
-  test('the install runtime marker excludes shared omit when GSD_RUNTIME is unset', () => {
-    const originalRuntime = process.env.GSD_RUNTIME;
+  test('the install runtime marker determines shared omit with hermetic in-process defaults', (t) => {
+    const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE'];
+    const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    t.after(() => {
+      _setInstallRuntimeMarkerForTests(null);
+      _resetInstallRuntimeMarkerCacheForTests();
+      for (const key of keys) {
+        if (original[key] === undefined) delete process.env[key];
+        else process.env[key] = original[key];
+      }
+    });
     delete process.env.GSD_RUNTIME;
-    _setInstallRuntimeMarkerForTests('codex');
+    process.env.GSD_HOME = store;
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
     fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({
       resolve_model_ids: 'omit', model_profile: 'balanced',
     }));
-    try {
+    for (const runtime of ['cline', 'codex']) {
+      _setInstallRuntimeMarkerForTests(runtime);
       for (const command of ['config-new-project', 'config-ensure-section', 'config-set-model-profile']) {
-        const cwd = path.join(root, `marker-${command}`);
+        const cwd = path.join(root, `marker-${runtime}-${command}`);
         fs.mkdirSync(cwd);
         if (command === 'config-new-project') configCommands.cmdConfigNewProject(cwd, '{}', false);
         else if (command === 'config-ensure-section') configCommands.cmdConfigEnsureSection(cwd, false);
         else configCommands.cmdConfigSetModelProfile(cwd, 'balanced', false);
         const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
-        assert.equal(Object.hasOwn(config, 'resolve_model_ids'), false, command);
+        assert.equal(Object.hasOwn(config, 'resolve_model_ids'), runtime === 'cline', command);
       }
-    } finally {
-      _setInstallRuntimeMarkerForTests(null);
-      _resetInstallRuntimeMarkerCacheForTests();
-      if (originalRuntime === undefined) delete process.env.GSD_RUNTIME;
-      else process.env.GSD_RUNTIME = originalRuntime;
     }
+  });
+
+  for (const runtime of KNOWN_RUNTIMES) {
+    test(`shared omit seeding and resolution agree for ${runtime}`, () => {
+      fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
+      const sharedModel = resolve('gsd-executor', runtime).model;
+      const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', {}, project, runtime);
+      assert.equal(config.resolve_model_ids === 'omit', sharedModel === '');
+      assert.equal(resolve('gsd-executor', runtime).model, sharedModel);
+    });
+  }
+
+  test('an explicit no-tier runtime choice keeps shared omit despite a Claude environment', () => {
+    const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', { runtime: 'cline' });
+    assert.equal(config.runtime, 'cline');
+    assert.equal(config.resolve_model_ids, 'omit');
   });
 
   test('existing project CLI resolution warns without either creation command rewriting its config', () => {
