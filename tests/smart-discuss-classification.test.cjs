@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product [#5069]
+// Source text is the product (#5069):
 // gsd-core/references/autonomous-smart-discuss.md and planner-reversibility.md are
 // runtime-loaded prose: their text IS the contract the autonomous orchestrator
 // follows. Every assertion is scoped to a named section or fenced block so prose
@@ -25,7 +25,6 @@ const PLANNER_REVERSIBILITY = path.join(ROOT, 'gsd-core', 'references', 'planner
 
 /** Read a shipped file with line endings normalized, so CRLF checkouts behave alike. */
 function read(file) {
-  // allow-test-rule: source-text-is-the-product [#5069]
   return fs.readFileSync(file, 'utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
