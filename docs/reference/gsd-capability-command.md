@@ -357,8 +357,9 @@ Git `#sha:` pins require a complete 40- or 64-hex object ID; short IDs and branc
 after `sha:` are rejected. Fetching an object ID requires the remote server to permit
 that object to be requested under its unadvertised-object policy. A refusal reports
 `git fetch "<ref>" failed`; typed pins never fall back. A bare ref may use a commit already
-in the shallow clone only when Git reports that it could not find the remote ref.
-Network, authentication, and timeout failures fail the install.
+in the shallow clone after any fetch failure, including network, authentication or timeout
+errors. That compatibility fallback emits `GSD_GIT_REF_LOCAL_FALLBACK`; the fetched
+remote target has not been verified, and the installed commit is the locally resolved ref.
 
 | Form | Example | Adapter | `--integrity` |
 |---|---|---|---|

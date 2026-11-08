@@ -1077,7 +1077,7 @@ function resolveGit(
       ], { timeout: 30_000 });
       let checkoutTarget = 'FETCH_HEAD';
       if (fetchResult.exitCode !== 0) {
-        if (ref.kind !== 'bare' || !/couldn't find remote ref/i.test(fetchResult.stderr)) {
+        if (ref.kind !== 'bare') {
           throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
         }
         // Preserve commit-ish spellings the former shallow-clone checkout
@@ -1089,6 +1089,9 @@ function resolveGit(
           throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
         }
         checkoutTarget = ref.value;
+        process.emitWarning('Git fetch failed; installing the bare ref already present in the shallow clone.', {
+          code: 'GSD_GIT_REF_LOCAL_FALLBACK',
+        });
       }
       const checkoutResult = execGit([
         ...gitConfig, '-C', cloneDir, 'checkout', '--detach', checkoutTarget, '--',
