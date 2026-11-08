@@ -44,6 +44,28 @@ function phaseTokenFromDirName(name) {
   return match ? match[1] : null;
 }
 
+/**
+ * platformWriteSync writes through open descriptors (#5759): the exclusive temp file and the
+ * direct-write fallback both reach `fs.writeFileSync(fd, ...)`, never a path. A mock that fails
+ * a write by PATH therefore resolves the descriptor back to the path it was opened for.
+ * Returns `pathOf(target)` for a writeFileSync target (a path or a descriptor).
+ */
+function installFdPathResolver(t) {
+  const fdPaths = new Map();
+  const realOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', function (p, ...rest) {
+    const fd = realOpen.call(this, p, ...rest);
+    fdPaths.set(fd, String(p));
+    return fd;
+  });
+  return (target) => (typeof target === 'number' ? (fdPaths.get(target) ?? '') : String(target));
+}
+
+/** True when `candidate` is `base` itself or one of its platformWriteSync temp siblings. */
+function isWriteTargetOrTemp(candidate, base) {
+  return candidate === base || candidate.startsWith(`${base}.tmp.`);
+}
+
 function writePassedVerificationForPhase(tmpDir, phase) {
   const phasesDir = path.join(tmpDir, '.planning', 'phases');
   const wanted = normalizePhaseToken(phase);
@@ -9094,9 +9116,10 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       writePassedVerificationForPhase(tmpDir, '5');
       const phaseModule = require('../gsd-core/bin/lib/phase.cjs');
       const originalWriteFileSync = fs.writeFileSync;
+      const pathOf = installFdPathResolver(t);
       t.mock.method(fs, 'writeFileSync', function injectedRoadmapWriteFailure(target, ...args) {
-        const targetPath = String(target);
-        if (targetPath === roadmapPath || targetPath === `${roadmapPath}.tmp.${process.pid}`) {
+        const targetPath = pathOf(target);
+        if (isWriteTargetOrTemp(targetPath, roadmapPath)) {
           const err = new Error('injected ROADMAP.md write failure');
           err.code = 'EIO';
           throw err;
@@ -11696,9 +11719,10 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalState = fs.readFileSync(statePath, 'utf8');
     const originalWriteFileSync = fs.writeFileSync;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedStateWriteFailure(target, ...args) {
-      const targetPath = String(target);
-      const isStatePublish = targetPath === statePath || targetPath === `${statePath}.tmp.${process.pid}`;
+      const targetPath = pathOf(target);
+      const isStatePublish = isWriteTargetOrTemp(targetPath, statePath);
       if (isStatePublish) {
         const err = new Error('injected STATE.md write failure');
         err.code = 'EIO';
@@ -11739,9 +11763,10 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalReq = fs.readFileSync(reqPath, 'utf8');
     const originalWriteFileSync = fs.writeFileSync;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedRequirementsWriteFailure(target, ...args) {
-      const targetPath = String(target);
-      if (targetPath === reqPath || targetPath === `${reqPath}.tmp.${process.pid}`) {
+      const targetPath = pathOf(target);
+      if (isWriteTargetOrTemp(targetPath, reqPath)) {
         const err = new Error('injected REQUIREMENTS.md write failure');
         err.code = 'EIO';
         throw err;
@@ -11771,15 +11796,16 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalWriteFileSync = fs.writeFileSync;
     let requirementsWriteFailed = false;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedRollbackFailure(target, ...args) {
-      const targetPath = String(target);
-      if (targetPath === reqPath || targetPath === `${reqPath}.tmp.${process.pid}`) {
+      const targetPath = pathOf(target);
+      if (isWriteTargetOrTemp(targetPath, reqPath)) {
         requirementsWriteFailed = true;
         const err = new Error('injected REQUIREMENTS.md write failure');
         err.code = 'EIO';
         throw err;
       }
-      if (requirementsWriteFailed && (targetPath === roadmapPath || targetPath === `${roadmapPath}.tmp.${process.pid}`)) {
+      if (requirementsWriteFailed && isWriteTargetOrTemp(targetPath, roadmapPath)) {
         const err = new Error('injected ROADMAP.md rollback failure');
         err.code = 'EIO';
         throw err;

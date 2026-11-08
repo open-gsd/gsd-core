@@ -65,6 +65,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { allow } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // Workspace resolution is shared across the Cursor hooks (#2587) — see
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
@@ -421,7 +422,7 @@ function resolveFallbackIsolation(root, configPath) {
   const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
   let runtimeId = resolveRuntimeNameFromCandidates(process.env.GSD_RUNTIME);
-  const rawConfig = fs.readFileSync(configPath, 'utf-8');
+  const rawConfig = readConfigFileBounded(configPath, { required: true });
   const parsedConfig = JSON.parse(rawConfig);
   if (!runtimeId && parsedConfig && typeof parsedConfig === 'object' && 'runtime' in parsedConfig) {
     runtimeId = resolveRuntimeNameFromCandidates(parsedConfig.runtime) || null;

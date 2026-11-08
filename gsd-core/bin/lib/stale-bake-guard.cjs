@@ -25,6 +25,7 @@ const capabilityRegistry = require('./capability-registry.cjs');
 const { hostBehaviorsFor } = require('./runtime-name-policy.cjs');
 const { resolveConfigHomeFromDescriptor } = require('./runtime-homes.cjs');
 const { resolveActiveRuntime } = require('./runtime-slash.cjs');
+const { readConfigFileBounded } = require('./config-file-read.cjs');
 
 /**
  * Runtimes whose agent config is static frontmatter/TOML baked at install time,
@@ -226,7 +227,9 @@ function _readRuntimeConfig(cwd, { fsStatSync = fs.statSync } = {}) {
     const candidate = path.join(probe, '.planning', 'config.json');
     try {
       fsStatSync(candidate);
-      const raw = fs.readFileSync(candidate, 'utf8');
+      // Bounded read (#5759): a FIFO/device/oversized config throws and is walked past like a
+      // missing one; null (raced away after the stat) makes JSON.parse('') throw into the same catch.
+      const raw = readConfigFileBounded(candidate) ?? '';
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') return parsed;
       return {};

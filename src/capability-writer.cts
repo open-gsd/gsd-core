@@ -51,10 +51,11 @@ const { setConfigValues } = configMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 const { planningDir } = planningWorkspaceMod;
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import nodefs = require('fs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import nodepath = require('path');
 import { runtimeCommand } from './runtime-slash.cjs';
@@ -250,8 +251,10 @@ function setCapabilityState(
   if (pendingGateWrites.length > 0) {
     try {
       const configJsonPath = nodepath.join(planningDir(cwd), 'config.json');
-      if (nodefs.existsSync(configJsonPath)) {
-        const raw = nodefs.readFileSync(configJsonPath, 'utf-8');
+      // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
+      // outer catch below ("cannot read the file path — not an error").
+      const raw = readConfigFileBounded(configJsonPath);
+      if (raw !== null) {
         try {
           JSON.parse(raw);
         } catch (parseErr: unknown) {

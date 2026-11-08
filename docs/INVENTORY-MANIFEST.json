@@ -395,6 +395,7 @@
       "commands.cjs",
       "commonjs-marker.cjs",
       "complexity-trigger.cjs",
+      "config-file-read.cjs",
       "config-loader.cjs",
       "config-schema.cjs",
       "config-types.cjs",

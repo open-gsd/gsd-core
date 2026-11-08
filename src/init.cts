@@ -675,7 +675,9 @@ function detectHasPriorPhases(cwd: string, phaseInfo: Record<string, unknown> | 
  */
 function readConfigJsonBoolean(cwd: string, keyPath: readonly string[]): boolean {
   try {
-    const raw = fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8');
+    // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to false below.
+    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    if (raw === null) return false;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
       if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return false;
@@ -710,7 +712,9 @@ function readNonEmptyFileOrNull(filePath: string): string | null {
  */
 function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
   try {
-    const raw = fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8');
+    // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
+    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
       if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined;
