@@ -1131,5 +1131,30 @@ export function updateTraceabilityCell(
   return result.ok ? { ok: true, value: edited } : result;
 }
 
+/**
+ * Row-existence READ for REQUIREMENTS.md's Traceability section (#5844): true
+ * when any table row in the section has `id` (case-insensitive) as its first
+ * cell, whatever the table's columns. `updateTraceabilityCell(..., 'Status', …)`
+ * answers "is there a row" only for tables that HAVE a Status column; this
+ * answers it for every table.
+ */
+export function traceabilityRowExists(text: string, id: string): boolean {
+  const headings = tokenizeHeadings(text);
+  const index = headings.findIndex((h) => h.level === 2 && /^Traceability(?:[ \t]+Status)?\b/i.test(h.text));
+  let scoped = text;
+  if (index !== -1) {
+    editHeadingSlice(text, headingSliceRange(text, headings, index, 2), (slice) => {
+      scoped = slice;
+      return slice;
+    });
+  }
+  const wanted = id.trim().toLowerCase();
+  return scoped.split(/\r?\n/).some((line) => {
+    if (!line.trim().startsWith('|')) return false;
+    const cells = splitTableRow(line);
+    return cells.length > 0 && cells[0].trim().toLowerCase() === wanted;
+  });
+}
+
 // Consumers: require('../gsd-core/bin/lib/markdown-table.cjs')
 // Named CJS exports are the canonical surface (ADR-457 .cts → .cjs build-at-publish).
