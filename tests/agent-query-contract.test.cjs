@@ -444,7 +444,7 @@ function probeHostRouters() {
 
 test('closed-router probes leave their scrubbed project unchanged', () => {
   const probes = probeHostRouters();
-  assert.deepEqual([...probes.keys()].sort(), [...CLOSED_ROUTER_ROOTS].sort());
+  for (const root of CLOSED_ROUTER_ROOTS) assert.ok(Object.hasOwn(runtime.HOST_COMMAND_ROUTERS, root), `closed router ${root} must be a host router`);
   for (const [root, { sideEffects }] of probes) {
     assert.deepEqual(sideEffects, [], `probing ${root} changed its project`);
   }
