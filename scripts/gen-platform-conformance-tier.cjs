@@ -145,10 +145,32 @@ const NODE_FIRST_ARG = "(?:process\\.execPath\\s*[,)]|(['\"])node\\1\\s*[,)])";
 const CHILD_NON_NODE_CALL = new RegExp(
   '(?:\\b(?:spawnSync|execSync|execFileSync)|(?<![.\\w$])(?:spawn|execFile|exec))\\(\\s*(?!' + NODE_FIRST_ARG + ')',
 );
-const CHILD_NODE_ONLY_CALL = new RegExp(
-  '(?:\\b(?:spawnSync|execSync|execFileSync)|(?<![.\\w$])(?:spawn|execFile|exec))\\(\\s*' + NODE_FIRST_ARG + '|(?<![.\\w$])fork\\(',
+// Member form `<ident>.spawn(...)` (e.g. `cp.spawn('bash')`, `child_process.execFile('git')`).
+// Heuristic: any `<ident>.(spawn|spawnSync|execFile|execFileSync|exec|execSync)(` whose first
+// argument is not node counts as a non-node call, EXCEPT a regex `.exec(` — the receiver is a
+// regex literal (preceded by `/`) or an identifier ending in re/Re/RE/regex/Regex/REGEX.
+const CHILD_MEMBER_CALL = new RegExp(
+  '([\\w$]+)\\.(?:spawnSync|execSync|execFileSync|spawn|execFile|exec)\\(\\s*(?!' + NODE_FIRST_ARG + ')',
+  'g',
 );
-const CHILD_SHELL_TRUE = /\bshell:\s*true\b/;
+const REGEX_RECEIVER_NAME = /(?:re|Re|RE|regex|Regex|REGEX)$/;
+function hasMemberNonNodeCall(content) {
+  CHILD_MEMBER_CALL.lastIndex = 0;
+  let m;
+  while ((m = CHILD_MEMBER_CALL.exec(content)) !== null) {
+    if (content[m.index - 1] === '/') continue; // regex-literal receiver: /x/g.exec(
+    if (/\.exec\(/.test(m[0]) && REGEX_RECEIVER_NAME.test(m[1])) continue;
+    return true;
+  }
+  return false;
+}
+// `promisify(cp.execFile)` hides the call sites from the call-shape scan: an unidentifiable,
+// counted site.
+const CHILD_PROMISIFIED = /\bpromisify\(\s*(?:[\w$]+\.)?(?:execFile|exec|spawn)\b/;
+const CHILD_NODE_ONLY_CALL = new RegExp(
+  '\\b(?:spawnSync|execSync|execFileSync|spawn|execFile|exec)\\(\\s*' + NODE_FIRST_ARG + '|(?<![.\\w$])fork\\(',
+);
+const CHILD_SHELL_TRUE = /\bshell\s*:\s*true\b/;
 // Pre-#6002 raw-child-process test, kept for source-file reachability
 // (scripts/ci-test-scope.cjs), whose behavior must not change.
 function legacyRawChildProcess(content) {
@@ -209,6 +231,8 @@ const CATEGORIES = [
       if (!content.includes('child_process')) return false;
       if (CHILD_SHELL_TRUE.test(content)) return true;
       if (CHILD_NON_NODE_CALL.test(content)) return true;
+      if (hasMemberNonNodeCall(content)) return true;
+      if (CHILD_PROMISIFIED.test(content)) return true;
       return !CHILD_NODE_ONLY_CALL.test(content);
     },
   },
@@ -342,6 +366,8 @@ const MACOS_CATEGORIES = [
   { name: 'case-sensitivity', test: (content) => /case.?insensitiv|case.?sensitiv/i.test(content) },
   { name: 'chmod-mode-bit', test: (content) => /chmodSync|chmod\(/.test(content) || /0o[0-7]{3,4}\b/.test(content) },
   { name: 'symlink-keyword', test: (content) => /\bsymlink/i.test(content) },
+  // #6002: realpath calls normalize the macOS /var -> /private/var tmpdir symlink.
+  { name: 'realpath', test: (content) => /\brealpath(Sync)?\b/.test(content) },
 ];
 
 /** Keywords after which a `/` begins a regex literal rather than a division. */
@@ -387,65 +413,96 @@ function stripComments(content) {
   const n = src.length;
   let out = '';
   let i = 0;
-  while (i < n) {
-    const ch = src[i];
-    const next = src[i + 1];
-    if (ch === '/' && next === '/') {
-      while (i < n && src[i] !== '\n') i++;
-    } else if (ch === '/' && next === '*') {
-      i += 2;
-      let newlines = '';
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
-        if (src[i] === '\n') newlines += '\n';
+
+  // Scans code from `i`. When `inExpr` (inside a template `${ … }`), returns at the
+  // matching unnested `}` (not consumed); otherwise runs to end of input.
+  function scanCode(inExpr) {
+    let depth = 0;
+    while (i < n) {
+      const ch = src[i];
+      const next = src[i + 1];
+      if (inExpr && ch === '}' && depth === 0) return;
+      if (inExpr && ch === '{') depth++;
+      else if (inExpr && ch === '}') depth--;
+      if (ch === '/' && next === '/') {
+        while (i < n && src[i] !== '\n') i++;
+      } else if (ch === '/' && next === '*') {
+        i += 2;
+        let newlines = '';
+        while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+          if (src[i] === '\n') newlines += '\n';
+          i++;
+        }
+        i += 2;
+        out += ' ' + newlines;
+      } else if (ch === '/' && regexAllowedAfter(out)) {
+        let j = i + 1;
+        let inClass = false;
+        let closed = false;
+        while (j < n && src[j] !== '\n') {
+          const c = src[j];
+          if (c === '\\') {
+            j += 2;
+            continue;
+          }
+          if (c === '[') inClass = true;
+          else if (c === ']') inClass = false;
+          else if (c === '/' && !inClass) {
+            closed = true;
+            break;
+          }
+          j++;
+        }
+        if (closed) {
+          out += src.slice(i, j + 1);
+          i = j + 1;
+        } else {
+          out += ch;
+          i++;
+        }
+      } else if (ch === '`') {
+        out += ch;
         i++;
-      }
-      i += 2;
-      out += ' ' + newlines;
-    } else if (ch === '/' && regexAllowedAfter(out)) {
-      let j = i + 1;
-      let inClass = false;
-      let closed = false;
-      while (j < n && src[j] !== '\n') {
-        const c = src[j];
-        if (c === '\\') {
-          j += 2;
-          continue;
+        while (i < n) {
+          const c = src[i];
+          if (c === '\\' && i + 1 < n) {
+            out += c + src[i + 1];
+            i += 2;
+            continue;
+          }
+          if (c === '$' && src[i + 1] === '{') {
+            out += '${';
+            i += 2;
+            scanCode(true);
+            continue;
+          }
+          out += c;
+          i++;
+          if (c === '`') break;
         }
-        if (c === '[') inClass = true;
-        else if (c === ']') inClass = false;
-        else if (c === '/' && !inClass) {
-          closed = true;
-          break;
+      } else if (ch === "'" || ch === '"') {
+        out += ch;
+        i++;
+        while (i < n) {
+          const c = src[i];
+          if (c === '\\' && i + 1 < n) {
+            out += c + src[i + 1];
+            i += 2;
+            continue;
+          }
+          if (c === '\n') break;
+          out += c;
+          i++;
+          if (c === ch) break;
         }
-        j++;
-      }
-      if (closed) {
-        out += src.slice(i, j + 1);
-        i = j + 1;
       } else {
         out += ch;
         i++;
       }
-    } else if (ch === "'" || ch === '"' || ch === '`') {
-      out += ch;
-      i++;
-      while (i < n) {
-        const c = src[i];
-        if (c === '\\' && i + 1 < n) {
-          out += c + src[i + 1];
-          i += 2;
-          continue;
-        }
-        if (c === '\n' && ch !== '`') break;
-        out += c;
-        i++;
-        if (c === ch) break;
-      }
-    } else {
-      out += ch;
-      i++;
     }
   }
+
+  scanCode(false);
   return out;
 }
 

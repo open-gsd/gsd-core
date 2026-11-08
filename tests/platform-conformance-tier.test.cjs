@@ -716,7 +716,7 @@ describe('conformance tier narrowing (#4641)', () => {
   test('macOS signal set is untouched by the Windows narrowing (#4641)', () => {
     assert.deepEqual(
       MACOS_CATEGORIES.map((c) => c.name),
-      ['darwin-literal', 'zsh-dispatch', 'case-sensitivity', 'chmod-mode-bit', 'symlink-keyword'],
+      ['darwin-literal', 'zsh-dispatch', 'case-sensitivity', 'chmod-mode-bit', 'symlink-keyword', 'realpath'],
     );
   });
 
@@ -1258,6 +1258,42 @@ describe('#6002: detectors match platform behavior, not text', () => {
   test('classifyRawContent keeps pre-#6002 behavior (comments and bare require count)', () => {
     assert.ok(classifyRawContent("// process.platform").signals.includes('process-platform'));
     assert.ok(classifyRawContent("require('child_process')").signals.includes('raw-child-process'));
+  });
+
+  test('member cp.spawn(non-node) is flagged even after a node-only spawnSync (#6002)', () => {
+    const src = "const cp=require('child_process');spawnSync(process.execPath,[]);cp.spawn('bash')";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('promisify(cp.execFile) is an unidentifiable counted call site (#6002)', () => {
+    const src =
+      "const cp=require('child_process');const ex = promisify(cp.execFile); ex('git'); spawnSync('node',[])";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('regex .exec( receivers are not spawn call sites (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,[]);const m = nameRe.exec(s); /x/g.exec(s);";
+    assert.ok(!classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('member cp.spawn(process.execPath) is node-only (#6002)', () => {
+    const src = "const cp=require('child_process');cp.spawn(process.execPath,['x'])";
+    assert.equal(classifyContent(src).needsRealOs, false);
+  });
+
+  test('shell : true with whitespace before the colon is flagged (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x'],{shell : true})";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('a nested template containing // inside ${} does not start a comment (#6002)', () => {
+    const src = 'const a = `x ${ `http://y` } z`; if (process.platform === "win32") {}';
+    assert.ok(classifyContent(src).signals.includes('process-platform'));
+  });
+
+  test('realpath in code is a macOS signal; in a comment it is not (#6002)', () => {
+    assert.ok(classifyMacosContent('fs.realpathSync(os.tmpdir())').signals.includes('realpath'));
+    assert.equal(classifyMacosContent('// realpathSync on the tmpdir').needsRealOs, false);
   });
 
   // Row 10: property.

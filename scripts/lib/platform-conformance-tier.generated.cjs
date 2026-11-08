@@ -245,6 +245,7 @@ module.exports = {
   "tests/release-notes-real-os-5922.test.cjs",
   "tests/repo-layout.test.cjs",
   "tests/require-fs-op-fallback.rule.test.cjs",
+  "tests/require-full-tmpdir-triad.rule.test.cjs",
   "tests/require-userprofile-with-home.rule.test.cjs",
   "tests/response-language-coverage.test.cjs",
   "tests/retired-artifact-cleanup.test.cjs",

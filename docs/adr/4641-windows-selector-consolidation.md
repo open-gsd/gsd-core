@@ -401,14 +401,17 @@ How to split a file: [docs/how-to/split-platform-sensitive-tests.md](../how-to/s
 
 Narrowed the detectors in `scripts/gen-platform-conformance-tier.cjs`:
 
-- `classifyContent` and `classifyMacosContent` strip `//` and block comments before matching, so
+- `classifyContent` and `classifyMacosContent` strip `//` and block comments before matching (tracking `${…}` depth inside template literals), so
   prose in a comment is no longer a platform signal. String literals (including a `//` inside a URL)
   and regex literals (including ones containing `//` or a quote) are preserved.
 - `raw-child-process` no longer matches a bare `require('child_process')`. It matches a
   `spawnSync`/`execSync`/`execFileSync`/`spawn`/`execFile`/`exec` call whose first argument is not
   node itself (`process.execPath`, `'node'`, `"node"`), any `shell: true` in a file that uses
   `child_process`, and a file that requires `child_process` whose call sites cannot be identified
-  (aliased usage). `fork(` always runs node and is node-only, so it is not a signal on its own.
+  (aliased usage). Member calls (`cp.spawn('bash')`) count when the first argument is not node,
+  except regex `.exec(` (receiver is a regex literal or an identifier ending in `re`/`Re`/`RE`/`regex`/
+  `Regex`/`REGEX`); `promisify(cp.execFile)` counts as an unidentifiable call site; `shell\s*:\s*true`
+  matches with whitespace around the colon. `fork(` always runs node and is node-only, so it is not a signal on its own.
 - New category `fs-lock-or-install-child`: a node-only child still counts when the same file matches
   `lock|lockfile|rename(Sync)?|unlink(Sync)?|EBUSY|EPERM|install.js|--config-dir`, because the child is
   then driving Windows-sensitive filesystem behavior. This is a decision, not a heuristic accident.
@@ -419,12 +422,13 @@ Narrowed the detectors in `scripts/gen-platform-conformance-tier.cjs`:
 Why: the Windows tier sat at the 33% ceiling because of text matches, with 175 of 380 tier files
 carrying `raw-child-process`, many of which only re-spawn node, which behaves identically on every OS.
 
-Before and after (2026-11-08, live tree, 1152 eligible unit-suite files):
+Before and after (2026-11-08, live tree, 1174 eligible unit-suite files):
 
 | Tier | Before | After | Share of eligible |
 | :--- | ---: | ---: | ---: |
-| Windows | 380 | 319 | 27.7% |
-| macOS | 270 | 214 | 18.6% |
+| Windows | 380 | 320 | 27.3% |
+| macOS | 270 | 263 | 22.4% |
 
-The macOS shrink is intended: it comes from the same comment stripping applied to
-`MACOS_CATEGORIES`, not from the child-process change. `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.
+The macOS shrink comes from the same comment stripping applied to `MACOS_CATEGORIES`, not from the
+child-process change. A new macOS category `realpath` (`/\brealpath(Sync)?\b/`, matched in code only)
+keeps files that normalize the macOS `/var` to `/private/var` tmpdir symlink. `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.
