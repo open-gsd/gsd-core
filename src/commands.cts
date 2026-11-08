@@ -14,7 +14,8 @@ import { escapeRegex } from './pattern.cjs';
 import { stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
-import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
+import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, ERROR_REASON } = ioMod;
@@ -2004,7 +2005,40 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
   return { removedEntries, removedPathspec, failures };
 }
 
-function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[]): void {
+/**
+ * #6043 (ADR-4908 §3): a committing verb commits in the checkout the process
+ * runs in. Returns the typed refusal when it cannot: not a git repository, or
+ * `cwd` / a path to commit resolves lexically outside `ctx.worktreeRoot`.
+ * Lexical on purpose: a `.planning` symlink inside the worktree stays inside.
+ * A degraded context (git timed out or could not run) makes no claim about the
+ * worktree, so it never refuses.
+ */
+function commitRefusal(
+  ctx: ProjectContext,
+  cwd: string,
+  files: string[] | undefined,
+  filesRemoved: string[] | undefined,
+): { reason: 'not_git_repo' | 'outside_worktree'; message: string; skipped?: false } | null {
+  if (ctx.provenance.reason === 'not_git_repo') {
+    return { reason: 'not_git_repo', message: `commit refused: ${cwd} is not inside a git repository` };
+  }
+  if (ctx.provenance.degraded) return null;
+  const worktreeRoot = path.resolve(ctx.worktreeRoot);
+  const declared = [...(files ?? []), ...(filesRemoved ?? [])];
+  const targets = declared.length > 0 ? declared : ['.planning/'];
+  const escaping = !isContainedIn(path.resolve(cwd), worktreeRoot)
+    ? path.resolve(cwd)
+    : targets.map((t) => path.resolve(cwd, t)).find((abs) => !isContainedIn(abs, worktreeRoot));
+  if (escaping === undefined) return null;
+  return {
+    reason: 'outside_worktree',
+    skipped: false,
+    message: `commit refused: ${escaping} is outside the worktree ${worktreeRoot}; ` +
+      'pass the checkout that owns the path with --project-dir to commit there',
+  };
+}
+
+function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[], ctx?: ProjectContext): void {
   if (!message && !amend) {
     error('commit message required');
   }
@@ -2040,6 +2074,17 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     };
     output(result, raw, 'skipped');
     return;
+  }
+
+  // #6043: refuse before branching or staging, and only AFTER the commit_docs
+  // skip above, so a benign skip is never turned into an error.
+  const refusal = ctx ? commitRefusal(ctx, cwd, files, filesRemoved) : null;
+  if (refusal) {
+    error(refusal.message, refusal.reason === 'not_git_repo' ? ERROR_REASON.COMMIT_NOT_GIT_REPO : ERROR_REASON.COMMIT_OUTSIDE_WORKTREE, {
+      committed: false,
+      ...(refusal.skipped === false ? { skipped: false } : {}),
+      hash: null,
+    });
   }
 
   // Ensure branching strategy branch exists before first commit (#1278).
