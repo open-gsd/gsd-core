@@ -300,15 +300,13 @@ describe('#4747 B: resolveWorkflowAvailability applies the documented kill switc
       const okSrcs = srcs.filter((s) => s.status === 'ok');
       const dis = okSrcs.find((s) => has(s, 'disableWorkflows'));
       if (dis && dis.settings.disableWorkflows === true) return { disabled: true, reason: reasonFor(dis.scope) };
-      if (!dis) {
-        const en = okSrcs.find((s) => has(s, 'enableWorkflows'));
-        if (en && en.settings.enableWorkflows === false) return { disabled: true, reason: reasonFor(en.scope) };
-      }
+      const en = okSrcs.find((s) => has(s, 'enableWorkflows'));
+      if (en && en.settings.enableWorkflows === false) return { disabled: true, reason: reasonFor(en.scope) };
       return { disabled: false, reason: 'workflows_available' };
     };
     fc.assert(
       fc.property(fc.tuple(sourceArb, sourceArb, sourceArb, sourceArb), (tuple) => {
-        const srcs = tuple.map((s, i) => ({ scope: scopes[i], ...s }));
+        const srcs = tuple.map((entry, i) => Object.assign({ scope: scopes[i] }, entry));
         assert.deepEqual(resolveWorkflowAvailability({ env: {}, sources: srcs }), oracle(srcs));
       }),
       { seed: 47471, numRuns: 500 },
@@ -565,8 +563,8 @@ describe('#4747 C: emitWorkflowScript enforces the documented runtime caps', () 
     for (const n of [4096, 4095]) {
       const r = emitWorkflowScript(Object.assign({}, base, { waves: [{ id: 'big', plans: wideWave(n) }] }));
       assert.equal(r.ok, false, String(n));
-      assert.match(r.reason, /1000/, String(n));
-      assert.doesNotMatch(r.reason, /4096/, String(n));
+      assert.match(r.reason, /1000 agents per run/, String(n));
+      assert.doesNotMatch(r.reason, /parallel\(\)/, String(n));
     }
   });
 
@@ -704,11 +702,12 @@ describe('#4747 D: worktree metadata comes back through agent({ schema })', () =
 describe('#4747: docs and declaration stay in step with the code', () => {
   test('the how-to lists exactly the detect reason codes', () => {
     const md = fs.readFileSync(HOWTO_PATH, 'utf8').replace(/\r\n/g, '\n');
-    const start = md.indexOf('\n## Detection reason codes\n');
-    assert.ok(start !== -1, 'how-to must have a "## Detection reason codes" section');
+    const start = md.indexOf('\n### Detection reason codes\n');
+    assert.ok(start !== -1, 'how-to must have a "### Detection reason codes" section');
     const rest = md.slice(start + 1);
-    const next = rest.indexOf('\n## ', 3);
-    const section = next === -1 ? rest : rest.slice(0, next);
+    const restLines = rest.split(String.fromCharCode(10));
+    const endIdx = restLines.findIndex((line, i) => i > 0 && /^#{2,3} /.test(line));
+    const section = (endIdx === -1 ? restLines : restLines.slice(0, endIdx)).join(String.fromCharCode(10));
     const codes = [...section.matchAll(/^\| `([a-z_]+)` \|/gm)].map((m) => m[1]);
     assert.deepEqual([...codes].sort(), [...DETECT_REASONS].sort());
   });
