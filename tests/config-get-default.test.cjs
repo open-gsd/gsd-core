@@ -1555,8 +1555,7 @@ describe('#2702: workstream config-get inherits from root config', () => {
  * secret `--raw --default null` masking the four-character text "null" as
  * `****`, and `planner.stall_detection_enabled --default false` resolving true.
  *
- * In-process only; the CLI-subprocess acceptance lives in
- * config-get-encoder-6029.integration.test.cjs.
+ * In-process only; the CLI-subprocess acceptance is the next block below.
  */
 
 
@@ -1603,6 +1602,7 @@ const PARSER_BOUNDARY = [
   ['5 ', '5 '],
   ['0x10', '0x10'],
   ['0b1', '0b1'],
+  ['0o7', '0o7'], ['\t5', '\t5'], ['5\r', '5\r'],
   ['1e400', '1e400'],
   ['', ''],
   ['.5', 0.5],

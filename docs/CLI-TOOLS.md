@@ -690,7 +690,8 @@ there is no `config.json`). `--default` is parsed
 exactly as `config-set` parses its value: `true`, `false` and `null` become those JSON values, a
 decimal number (`5`, `-1`, `.5`, `5.0`, `1e3`, with no surrounding spaces and no `0x` prefix)
 becomes a number, text starting with `[` or `{` is parsed as JSON (and stays a string if it is
-not valid JSON), and anything else is a string, including ` 5` and `0x10`. So `--default '[]'` prints `[]`,
+not valid JSON), and anything else is a string, including ` 5`, `0x10` and a number too large to
+represent (`1e400`). So `--default '[]'` prints `[]`,
 the same as a key set to an empty array.
 
 `--raw` prints the value as plain text for shell use. It is a display format, not JSON: an array
