@@ -217,7 +217,11 @@ describe('#5329 — shared omit must not become explicit project model intent', 
       fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
       const sharedModel = resolve('gsd-executor', runtime).model;
       const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', {}, project, runtime);
-      assert.equal(config.resolve_model_ids === 'omit', sharedModel === '');
+      // Pi's catalog tier models are intentionally empty (session inheritance),
+      // so its empty result is not evidence that shared omit applies.
+      const inheritedTier = Object.hasOwn(RUNTIME_PROFILE_MAP, runtime)
+        && RUNTIME_PROFILE_MAP[runtime].sonnet.model === '';
+      assert.equal(config.resolve_model_ids === 'omit', sharedModel === '' && !inheritedTier);
       assert.equal(resolve('gsd-executor', runtime).model, sharedModel);
     });
   }
