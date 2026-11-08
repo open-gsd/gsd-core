@@ -1157,3 +1157,86 @@ describe('#5074 platform split — .platform sibling rule', () => {
     }
   });
 });
+
+// ─── #6002: detectors match platform behavior, not text ──────────────────────
+
+describe('#6002: detectors match platform behavior, not text', () => {
+  const fc = require('fast-check');
+
+  // Rows 1-4: no real-OS signal.
+  test('node-only child via process.execPath is not a real-OS signal (#6002)', () => {
+    const src =
+      "const {execFileSync}=require('child_process');execFileSync(process.execPath,['x'])";
+    assert.equal(classifyContent(src).needsRealOs, false);
+  });
+
+  test('node-only child via literal "node" is not a real-OS signal (#6002)', () => {
+    const src = "const {spawnSync}=require('child_process');spawnSync('node',['x'])";
+    assert.equal(classifyContent(src).needsRealOs, false);
+  });
+
+  test('a line comment naming a shell spawn is not a signal (#6002)', () => {
+    assert.equal(classifyContent("// spawnSync('bash')").needsRealOs, false);
+  });
+
+  test('a block comment naming process.platform is not a signal (#6002)', () => {
+    assert.equal(classifyContent('/* process.platform */').needsRealOs, false);
+  });
+
+  // Rows 5-7: real signals stay flagged.
+  test('a real shell spawn stays flagged as shell-interpreter-spawn', () => {
+    const { needsRealOs, signals } = classifyContent(
+      "const { spawnSync, execFileSync } = require('child_process');\nspawnSync('bash',['-c',s])",
+    );
+    assert.equal(needsRealOs, true);
+    assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
+  });
+
+  test('a non-node child process stays flagged as raw-child-process', () => {
+    const { needsRealOs, signals } = classifyContent(
+      "const { spawnSync, execFileSync } = require('child_process');\nexecFileSync('git',['status'])",
+    );
+    assert.equal(needsRealOs, true);
+    assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
+  });
+
+  test('a string-literal platform check stays flagged', () => {
+    assert.equal(classifyContent("if (process.platform === 'win32') {}").needsRealOs, true);
+  });
+
+  // Row 8: `//` inside a string is not a comment start.
+  test('a URL inside a string does not start a comment that swallows the spawn', () => {
+    const { needsRealOs, signals } = classifyContent(
+      "const { spawnSync, execFileSync } = require('child_process');\nconst u = 'http://example.test'; spawnSync('bash', [])",
+    );
+    assert.equal(needsRealOs, true);
+    assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
+  });
+
+  // Row 10: property.
+  test('property: comment-only content has no signals', () => {
+    fc.assert(
+      fc.property(fc.string(), (s) => {
+        const line = '// ' + s.replace(/[\r\n]/g, ' ');
+        assert.deepEqual(classifyContent(line).signals, []);
+      }),
+    );
+  });
+
+  test('property: appending a comment never removes a real signal', () => {
+    const prefix = "const { spawnSync, execFileSync } = require('child_process');\n";
+    const snippets = [
+      prefix + "spawnSync('bash',['-c',s])",
+      prefix + "execFileSync('git',['status'])",
+      "if (process.platform === 'win32') {}",
+    ];
+    fc.assert(
+      fc.property(fc.constantFrom(...snippets), fc.string(), (c, s) => {
+        const comment = s.replace(/[\r\n]/g, ' ');
+        const before = classifyContent(c).signals;
+        const after = classifyContent(c + '\n// ' + comment).signals;
+        for (const sig of before) assert.ok(after.includes(sig), `lost ${sig}`);
+      }),
+    );
+  });
+});
