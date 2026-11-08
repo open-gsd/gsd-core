@@ -7467,7 +7467,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const reqEscaped = escapeRegex(id);
             // Surface 1 — checkbox, ANY single mark (`[ ]`, `[x]`, `[~]`, …; #5844),
             // case-insensitive: existence check, not the write's space-only match.
-            if (new RegExp(`-\\s*\\[[^\\]]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
+            if (new RegExp(`-\\s*\\[[^\\]\\r\\n]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
               return true;
             }
             // Surface 2 — Traceability row exists at all (any Status value),

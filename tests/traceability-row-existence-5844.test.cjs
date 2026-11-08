@@ -47,6 +47,40 @@ describe('#5844 traceabilityRowExists', () => {
     assert.strictEqual(exists(doc(['| Requirement | Phase |', '|---|---|', '| OTHER-01 | Phase 1 |']), 'KNOWN-01'), false);
   });
 
+  test('a matching first cell in a table OUTSIDE the Traceability section is not a row', () => {
+    const text = [
+      '# Requirements', '', '## Phase map', '', '| Requirement | Phase |', '|---|---|', '| KNOWN-01 | Phase 1 |', '',
+      '## Traceability', '', '| Requirement | Phase |', '|---|---|', '| OTHER-01 | Phase 1 |', '',
+    ].join('\n');
+    assert.strictEqual(exists(text, 'KNOWN-01'), false);
+    assert.strictEqual(exists(text, 'OTHER-01'), true);
+  });
+
+  test('with no Traceability heading only the FIRST table counts (parity with updateTraceabilityCell)', () => {
+    const text = [
+      '# Requirements', '', '| Requirement | Phase |', '|---|---|', '| FIRST-01 | Phase 1 |', '', 'prose', '',
+      '| Requirement | Phase |', '|---|---|', '| SECOND-01 | Phase 2 |', '',
+    ].join('\n');
+    assert.strictEqual(exists(text, 'FIRST-01'), true);
+    assert.strictEqual(exists(text, 'SECOND-01'), false);
+  });
+
+  test('parity: agrees with the Status-column write probe on every Status table', () => {
+    const idArb = fc.stringMatching(/^[A-Z]{2,6}-[0-9]{2}$/);
+    fc.assert(
+      fc.property(idArb, idArb, fc.boolean(), (id, other, withHeading) => {
+        const rows = ['| Requirement | Phase | Status |', '|---|---|---|', `| ${id} | Phase 1 | Pending |`];
+        const text = withHeading ? doc(rows) : rows.join('\n') + '\n';
+        for (const probe of [id, other]) {
+          const writeProbe = markdownTable.updateTraceabilityCell(
+            text, (row) => (Object.values(row)[0] ?? '').trim().toLowerCase() === probe.toLowerCase(), 'Status', (c) => c,
+          ).ok;
+          assert.strictEqual(markdownTable.traceabilityRowExists(text, probe), writeProbe);
+        }
+      }),
+    );
+  });
+
   test('a document with no table is not found', () => {
     assert.strictEqual(exists('# Requirements\n\n- [ ] **KNOWN-01**: x\n', 'KNOWN-01'), false);
   });
