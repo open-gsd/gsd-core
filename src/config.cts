@@ -198,19 +198,30 @@ function resolveSchemaDefault(cwd: string, kp: string): { found: boolean; value:
 }
 
 /**
+ * A decimal number literal as a person types it: optional sign, digits with an optional
+ * fraction (`5`, `5.`, `.5`, `5.0`, `007`), optional exponent. No surrounding whitespace and
+ * no `0x`/`0b`/`0o` prefix, so `' '`, `' 5'` and `'0x10'` stay strings (#6029, owner ruling
+ * 2026-11-08). `Number()` alone accepted all three.
+ */
+const DECIMAL_LITERAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
  * #6029 (ADR-1411 Decision 3): the single argv value parser at the config CLI
  * boundary, shared by `config-set` and `config-get --default`. Type-directed
  * only: per-key setter policy (project_code verbatim, validators) and the
- * setter's `null` = unset action (#2046) stay in cmdConfigSet.
+ * setter's `null` = unset action (#2046) stay in cmdConfigSet. The numeric
+ * branch is the DECIMAL_LITERAL rule above (the one deliberate change from the
+ * pre-#6029 setter parser).
  */
 function parseConfigArgValue(val: string): unknown {
   if (val === 'true') return true;
   if (val === 'false') return false;
   if (val === 'null') return null;
-  // #1581: Number.isFinite (not !isNaN) so 'Infinity'/'-Infinity' are NOT
-  // coerced to non-finite numbers that JSON.stringify later renders as `null`.
-  // They fall through and stay strings.
-  if (Number.isFinite(Number(val)) && val !== '') return Number(val);
+  // #1581: Number.isFinite (not !isNaN) so 'Infinity' and an overflowing literal such as
+  // '1e400' are NOT coerced to non-finite numbers that JSON.stringify later renders as
+  // `null` (disk=null while the CLI echoed 'Infinity'). They stay strings, and in
+  // config-set the per-key validators then reject them with a non-zero exit.
+  if (DECIMAL_LITERAL.test(val) && Number.isFinite(Number(val))) return Number(val);
   if (val.startsWith('[') || val.startsWith('{')) {
     try { return JSON.parse(val); } catch { /* keep as string */ }
   }
@@ -227,7 +238,7 @@ function parseConfigArgValue(val: string): unknown {
  * it is `sourceText` (the verbatim argv of `--default`) when the value reached
  * here untransformed, else `String(value)`.
  */
-function projectConfigGetOutput(kp: string, value: unknown, sourceText?: string): { json: unknown; text: string } {
+function encodeConfigValue(kp: string, value: unknown, sourceText?: string): { json: unknown; text: string } {
   const resolved = kp === 'planner.stall_detection_enabled'
     ? resolvePlannerStallDetectionEnabled(value)
     : value;
@@ -235,12 +246,13 @@ function projectConfigGetOutput(kp: string, value: unknown, sourceText?: string)
     const masked = maskSecret(resolved as Parameters<typeof maskSecret>[0]);
     return { json: masked, text: masked };
   }
-  const text = sourceText !== undefined && resolved === value ? sourceText : String(resolved);
+  const transformed = resolved !== value;
+  const text = sourceText !== undefined && !transformed ? sourceText : String(resolved);
   return { json: resolved, text };
 }
 
 function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: string): void {
-  const { json, text } = projectConfigGetOutput(kp, value, sourceText);
+  const { json, text } = encodeConfigValue(kp, value, sourceText);
   output(json, raw, text);
 }
 
@@ -1498,7 +1510,6 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
 
 function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: string | undefined): void {
   const configPath = path.join(planningDir(cwd), 'config.json');
-  const hasDefault = defaultValue !== undefined;
 
   if (!keyPath) {
     error('Usage: config-get <key.path> [--default <value>]');
@@ -1506,8 +1517,19 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
 
   // After the error() guard, keyPath is narrowed to string.
   const kp = keyPath!;
-  // #6029: the --default argv is parsed by the same parser config-set uses; its raw text is kept verbatim for --raw.
-  const emitDefault = (): void => emitConfigValue(kp, parseConfigArgValue(defaultValue!), raw, defaultValue);
+  /**
+   * #2702 / #1893 / #2256: an absent key resolves root config first (a present root key wins
+   * over --default), then --default (parsed by the config-set parser, raw bytes kept), then the
+   * schema default. With none of them, fail with the caller's reason.
+   */
+  const emitAbsentKey = (message: string, reason: Parameters<typeof error>[1]): void => {
+    const rootVal = resolveFromRootConfig(cwd, kp);
+    if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
+    if (defaultValue !== undefined) { emitConfigValue(kp, parseConfigArgValue(defaultValue), raw, defaultValue); return; }
+    const sd = resolveSchemaDefault(cwd, kp);
+    if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
+    error(message, reason);
+  };
 
   let config: Record<string, unknown> = {};
   try {
@@ -1517,17 +1539,8 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     if (rawConfig !== null) {
       config = JSON.parse(rawConfig) as Record<string, unknown>;
     } else {
-      // #2702: when a workstream is active and has no config.json of its own, fall
-      // back to the project ROOT config first — a key the user configured at root is
-      // a real, present value and must inherit (per #1893: a present key wins over
-      // --default). Only when root also misses do --default / schema default apply.
-      // (When no workstream is active, resolveFromRootConfig is a no-op: same file.)
-      const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
-      if (hasDefault) { emitDefault(); return; }
-      const sd = resolveSchemaDefault(cwd, kp);
-      if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
-      error('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
+      emitAbsentKey('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
+      return;
     }
   } catch (err) {
     // ADR-3889: error() now throws ExitError (carries no message) instead of
@@ -1548,13 +1561,8 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   let current: unknown = config;
   for (const key of keys) {
     if (current === undefined || current === null || typeof current !== 'object') {
-      // #2702: root-config inheritance before --default / schema default (see above).
-      const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
-      if (hasDefault) { emitDefault(); return; }
-      const sd = resolveSchemaDefault(cwd, kp);
-      if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
-      error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+      emitAbsentKey(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+      return;
     }
     // Own-property gate: bracket access on a plain object walks the
     // prototype chain, so an unqualified `current[key]` would resolve
@@ -1571,13 +1579,8 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   }
 
   if (current === undefined) {
-    // #2702: root-config inheritance before --default / schema default (see above).
-    const rootVal = resolveFromRootConfig(cwd, kp);
-    if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
-    if (hasDefault) { emitDefault(); return; }
-    const sd = resolveSchemaDefault(cwd, kp);
-    if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
-    error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+    emitAbsentKey(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+    return;
   }
 
   // #6029: the present-key arm uses the same projection as every other arm
@@ -1781,7 +1784,7 @@ export = {
   cmdConfigSet,
   cmdConfigGet,
   parseConfigArgValue,
-  projectConfigGetOutput,
+  encodeConfigValue,
   cmdConfigSetModelProfile,
   cmdConfigNewProject,
   cmdConfigPath,
