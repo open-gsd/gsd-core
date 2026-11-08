@@ -4313,7 +4313,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
     fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
     fs.writeFileSync(defaultsPath, JSON.stringify(contents));
-    const save = (settings) => runGsdTools(['config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
+    const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
     return { defaultsPath, save, read: () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')) };
   }
 
@@ -4351,6 +4351,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
         assert.strictEqual(at(read(), canonical), undefined, `${canonical} must be dropped when ${legacy} is saved`);
         assert.strictEqual(at(read(), legacy), true);
       } else {
+        assertRefused(result, 'config_invalid_key');
         assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before, `a refused ${legacy} save must leave the store as it was`);
       }
     }
@@ -4470,6 +4471,40 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
     assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
   });
+
+  // The temp file is written but cannot replace the store (EACCES on every
+  // attempt, including the rename's retries): the store keeps its bytes, the
+  // temp file is removed, and the lock is released.
+  test('a rename that fails is reported and leaves the existing store, no temp file and no lock', async (t) => {
+    const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+      cleanup(gsdHome);
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, before);
+    const realRename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      if (path.basename(String(to)) === 'defaults.json') {
+        throw Object.assign(new Error('EACCES: permission denied, rename (injected)'), { code: 'EACCES' });
+      }
+      return realRename.apply(this, arguments);
+    });
+
+    const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+    assert.ok(!fs.existsSync(path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME)), 'the lock must be released');
+  });
 });
 
 describe('#5681: config-save-defaults reports lock failures through error()', () => {
@@ -4538,7 +4573,8 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
     const result = await save();
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
-    assert.ok(result.error.message.includes(`pid ${process.ppid}`), 'the refusal names the lock holder');
+    assert.deepStrictEqual({ pid: result.error.holder_pid, since: result.error.holder_since },
+      { pid: process.ppid, since: '2026-11-07T00:00:00.000Z' }, 'the refusal names the lock holder');
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
     assert.ok(fs.existsSync(lockPath), "another process's lock is left in place");
   });

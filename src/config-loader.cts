@@ -445,18 +445,18 @@ const _warnedShadowedGlobalKeys = new Set<string>();
 function _warnShadowedGlobalDefaults(globalDefaults: Record<string, unknown>, globalPath: string): void {
   const shadowed = GLOBAL_DEFAULTS_RESOLUTION_KEYS.filter(k =>
     k !== 'effort' && Object.prototype.hasOwnProperty.call(globalDefaults, k));
-  // Branch D also honors the nested alias workflow.post_planning_gaps (the
-  // `?? globalDefaults['workflow']?.['post_planning_gaps']` fallback in
-  // _globalBaseCfg) — a global file using only the nested form is equally
-  // shadowed, so it reports under its dotted name.
-  // #3894: research_before_questions gets the same nested-alias reporting.
-  const nestedAliasKeys = ['post_planning_gaps', 'research_before_questions'];
-  const wf = globalDefaults['workflow'];
-  if (wf && typeof wf === 'object' && !Array.isArray(wf)) {
-    for (const k of nestedAliasKeys) {
-      if (!shadowed.includes(k) && Object.prototype.hasOwnProperty.call(wf, k)) {
-        shadowed.push(`workflow.${k}`);
-      }
+  // Branch D also reads these keys under their nested spelling (the
+  // LEGACY_FLAT_KEYS twins through globalGet, #5681, and the
+  // workflow.research_before_questions fallback, #3894), so a global file using
+  // only the nested form is equally shadowed and reports under its dotted name.
+  // A nested key under a section already reported (`planning`) is not repeated.
+  for (const k of GLOBAL_DEFAULTS_RESOLUTION_KEYS) {
+    if (shadowed.includes(k)) continue;
+    const nested = k === 'research_before_questions' ? { section: 'workflow', field: k } : legacyNestedSpelling(k);
+    if (!nested || shadowed.includes(nested.section)) continue;
+    const sec = globalDefaults[nested.section];
+    if (sec && typeof sec === 'object' && !Array.isArray(sec) && Object.prototype.hasOwnProperty.call(sec, nested.field)) {
+      shadowed.push(`${nested.section}.${nested.field}`);
     }
   }
   if (shadowed.length === 0) return;

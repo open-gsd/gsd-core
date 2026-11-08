@@ -300,7 +300,7 @@ text (unstable).
 | `config_invalid_key` | `config-set` for a key outside the allowed whitelist |
 | `config_defaults_invalid` | `config-save-defaults` when `$GSD_HOME/.gsd/defaults.json` exists but is not valid JSON, not a JSON object, or a link whose target cannot be resolved; the store is left as it was (#5681) |
 | `config_defaults_write_failed` | `config-save-defaults` when writing the merged store fails (#5681) |
-| `config_defaults_lock_unavailable` | `config-save-defaults` when the installer lock on `$GSD_HOME/.gsd/` cannot be taken, for example while another install or save holds it; the message names the holder. Nothing is written (#5681) |
+| `config_defaults_lock_unavailable` | `config-save-defaults` when the installer lock on `$GSD_HOME/.gsd/` cannot be taken, for example while another install or save holds it; the error carries `holder_pid` and `holder_since` when the holder is known. Nothing is written (#5681) |
 | `config_defaults_lock_release_failed` | `config-save-defaults` saved the store but could not release the lock; the error carries `saved`, `created` and `path` (#5681) |
 
 ### Phase / workflow errors

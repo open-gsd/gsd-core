@@ -867,7 +867,12 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
     // lock with a zero timeout instead of the 30 s default.
     release = installerMigrations.acquireInstallMigrationLock(gsdDir);
   } catch (err) {
-    return error(`Cannot save ${defaultsPath}: ${(err as Error).message}`, ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE);
+    const holder = (err as { lockHolder?: { pid: number; acquiredAt: string } | null }).lockHolder;
+    return error(
+      `Cannot save ${defaultsPath}: ${(err as Error).message}`,
+      ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE,
+      holder ? { holder_pid: holder.pid, holder_since: holder.acquiredAt } : undefined,
+    );
   }
   // The store is read and written under the lock, and the lock is released
   // before anything is reported, so a release failure cannot replace the save's
