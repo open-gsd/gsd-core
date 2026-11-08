@@ -2051,6 +2051,45 @@ describe('generateCodexConfigBlock', () => {
 // ─── stripGsdFromCodexConfig ────────────────────────────────────────────────────
 
 describe('stripGsdFromCodexConfig', () => {
+  test('#5199: marker-looking user text is markerless at every marker owner', () => {
+    const { managedCodexMarkers, setManagedCodexHooksOwnership } = require('../bin/install.js');
+    for (const input of [
+      `x = "${GSD_CODEX_MARKER}"\n`,
+      `k = 1 # ${GSD_CODEX_MARKER}\n`,
+      `${GSD_CODEX_MARKER} extra text\n`,
+    ]) {
+      assert.deepEqual(managedCodexMarkers(input), []);
+      assert.equal(stripGsdFromCodexConfig(input), input);
+      assert.equal(setManagedCodexHooksOwnership(input, 'section'), input);
+      assert.equal(migrateCodexHooksMapFormat(input), input);
+    }
+  });
+
+  test('#5199: ownership setter and cleanup agree on whitespace and actual marker location', () => {
+    const { managedCodexMarkers, setManagedCodexHooksOwnership } = require('../bin/install.js');
+    for (const eol of ['\n', '\r\n']) {
+      const user = `x = "${GSD_CODEX_MARKER}"${eol}`;
+      const input = user + [GSD_CODEX_MARKER, '# GSD codex_hooks ownership: section  \t', '[agents]', 'max_depth = 1', ''].join(eol);
+      const updated = setManagedCodexHooksOwnership(input, 'root_dotted');
+      assert.equal(updated, user + [GSD_CODEX_MARKER, '# GSD codex_hooks ownership: root_dotted', '[agents]', 'max_depth = 1', ''].join(eol));
+      assert.equal(managedCodexMarkers(updated).length, 1);
+      assert.equal(stripGsdFromCodexConfig(updated), user);
+    }
+  });
+
+  test('#5199: uninstall blank-line collapse has explicit boundaries and install retains its legacy behavior', () => {
+    const { collapseTomlBlankLines } = require('../bin/install.js');
+    for (const count of [1, 2, 3]) {
+      const input = 'a = 1\n' + '\n'.repeat(count) + '[user]\nb = 2\n';
+      assert.equal(collapseTomlBlankLines(input, true), 'a = 1\n\n[user]\nb = 2\n');
+    }
+    const spaced = 'a = 1\n \n\t\n[user]\nb = 2\n';
+    assert.equal(collapseTomlBlankLines(spaced), spaced);
+    assert.equal(collapseTomlBlankLines(spaced, true), 'a = 1\n \n[user]\nb = 2\n');
+    const multiline = 'x = """a\n\n\nb"""\n';
+    assert.equal(collapseTomlBlankLines(multiline, true), multiline);
+    assert.equal(collapseTomlBlankLines(multiline), 'x = """a\n\nb"""\n');
+  });
   for (const eol of ['\n', '\r\n']) {
     test(`#5199: preserves user config on both sides of the marker with ${JSON.stringify(eol)} endings`, () => {
       const before = ['model = "session-model"', '', '[mcp_servers.before]', 'command = "before-mcp"', ''].join(eol);
@@ -2180,7 +2219,7 @@ describe('stripGsdFromCodexConfig', () => {
     assert.strictEqual(stripGsdFromCodexConfig(cleaned), cleaned);
   });
 
-  for (const gap of ['', '\n']) {
+  for (const gap of ['', '\n', '\n\n']) {
     test(`#5199 F2: cleanup preserves a trailing user comment${gap ? ' across a blank separator' : ''}`, () => {
       const content = [
         GSD_CODEX_MARKER,
@@ -2188,7 +2227,7 @@ describe('stripGsdFromCodexConfig', () => {
         'max_depth = 1',
         '',
         '# my MCP notes',
-        ...(gap ? [''] : []),
+        ...Array(gap.length).fill(''),
         '[mcp_servers.user]',
         'command = "keep"',
         '',
@@ -2197,7 +2236,7 @@ describe('stripGsdFromCodexConfig', () => {
       assert.deepStrictEqual(parseTomlToObject(cleaned), {
         mcp_servers: { user: { command: 'keep' } },
       });
-      const separator = gap ? '\n\n' : '\n';
+      const separator = '\n'.repeat(gap.length + 1);
       assert.equal(cleaned, `# my MCP notes${separator}[mcp_servers.user]\ncommand = "keep"\n`,
         'the trailing comment block belongs byte-for-byte to the following user table');
     });

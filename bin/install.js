@@ -4694,12 +4694,20 @@ function stripCodexGsdAgentSections(content) {
  * Strip GSD sections from Codex config.toml content.
  * Returns cleaned content, or null if file would be empty.
  */
+function managedCodexMarkers(content) {
+  return getTomlLineRecords(content).filter((record) =>
+    !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER);
+}
+
+function codexHooksOwnership(record) {
+  if (!record || record.startsInMultilineString) return null;
+  return /^# GSD codex_hooks ownership: (section|root_dotted)[ \t]*$/.exec(record.text)?.[1] || null;
+}
+
 function stripGsdFromCodexConfig(content) {
   const eol = detectLineEnding(content);
   const lineRecords = getTomlLineRecords(content);
-  const markerRecords = lineRecords.filter((record) =>
-    !record.startsInMultilineString && record.text.trim() === GSD_CODEX_MARKER
-  );
+  const markerRecords = managedCodexMarkers(content);
   const markerRecord = markerRecords[0] || null;
   const codexHooksOwnership = markerRecords
     .map((record) => getManagedCodexHooksOwnership(content, record))
@@ -4733,8 +4741,7 @@ function stripGsdFromCodexConfig(content) {
   for (const managedMarker of markerRecords) {
     removalRanges.push({ start: managedMarker.start, end: managedMarker.end + managedMarker.eol.length });
     const ownershipRecord = lineRecords[lineRecords.indexOf(managedMarker) + 1];
-    if (ownershipRecord && !ownershipRecord.startsInMultilineString &&
-        /^# GSD codex_hooks ownership: (?:section|root_dotted)[ \t]*$/.test(ownershipRecord.text)) {
+    if (codexHooksOwnership(ownershipRecord)) {
       removalRanges.push({ start: ownershipRecord.start, end: ownershipRecord.end + ownershipRecord.eol.length });
     }
   }
@@ -4743,7 +4750,7 @@ function stripGsdFromCodexConfig(content) {
   // Older installers wrote hook tables after the managed marker. The marker
   // no longer owns marker-to-EOF, so remove those tables through their existing
   // structural owner before preserving the remaining user content (#5199 F1).
-  cleaned = stripStaleGsdHookBlocks(cleaned);
+  cleaned = stripStaleGsdHookBlocks(cleaned, true);
   // These legacy injected keys belong only to [features]. Identically named
   // user-table keys and text inside multiline values must survive cleanup.
   const injectedFeatureRecords = getTomlLineRecords(cleaned).filter((record) => {
@@ -5273,7 +5280,11 @@ function getTomlTableSections(content) {
   }));
 }
 
-function collapseTomlBlankLines(content) {
+function collapseTomlBlankLines(content, preserveUserText = false) {
+  if (!preserveUserText) {
+    const eol = detectLineEnding(content);
+    return content.replace(/(?:\r?\n){3,}/g, eol + eol);
+  }
   let blankRun = 0;
   let collapsed = '';
   for (const record of getTomlLineRecords(content)) {
@@ -5415,23 +5426,23 @@ function getManagedCodexHooksOwnership(content, markerRecord) {
   }
 
   const afterMarker = content.slice(markerRecord.end + markerRecord.eol.length);
-  const match = afterMarker.match(/^# GSD codex_hooks ownership: (section|root_dotted)[ \t]*(?:\r?\n|$)/);
-  return match ? match[1] : null;
+  return codexHooksOwnership(getTomlLineRecords(afterMarker)[0]);
 }
 
 function setManagedCodexHooksOwnership(content, ownership) {
-  const markerIndex = content.indexOf(GSD_CODEX_MARKER);
+  const marker = managedCodexMarkers(content)[0];
+  const markerIndex = marker?.start ?? -1;
   if (markerIndex === -1) {
     return content;
   }
 
   const eol = detectLineEnding(content);
-  const markerEnd = markerIndex + GSD_CODEX_MARKER.length;
+  const markerEnd = marker.end;
   const afterMarker = content.slice(markerEnd);
-  const normalizedAfterMarker = afterMarker.replace(
-    /^\r?\n# GSD codex_hooks ownership: (?:section|root_dotted)[ \t]*\r?\n/,
-    eol
-  );
+  const following = getTomlLineRecords(content.slice(markerEnd + marker.eol.length))[0];
+  const normalizedAfterMarker = codexHooksOwnership(following)
+    ? eol + afterMarker.slice(marker.eol.length + following.end + following.eol.length)
+    : afterMarker;
 
   if (!ownership) {
     return content.slice(0, markerEnd) + normalizedAfterMarker;
@@ -5541,7 +5552,7 @@ function stripLeakedGsdCodexSections(content) {
  * Pure function, exported for test coverage. Returns the input unchanged
  * if no GSD-managed hook section is present.
  */
-function stripStaleGsdHookBlocks(configContent) {
+function stripStaleGsdHookBlocks(configContent, preserveUserText = false) {
   const sections = getTomlTableSections(configContent);
   const lineRecords = getTomlLineRecords(configContent);
   const hookSections = sections.filter(
@@ -5629,10 +5640,10 @@ function stripStaleGsdHookBlocks(configContent) {
     if (prev && !prev.startsInMultilineString && prev.text.trim() === '# GSD Hooks') {
       start = prev.start;
     }
-    ranges.push({ start, end: managedTomlSectionRemovalEnd(configContent, section) });
+    ranges.push({ start, end: preserveUserText ? managedTomlSectionRemovalEnd(configContent, section) : section.end });
   }
 
-  return collapseTomlBlankLines(removeContentRanges(configContent, ranges));
+  return collapseTomlBlankLines(removeContentRanges(configContent, ranges), preserveUserText);
 }
 
 /**
@@ -5868,7 +5879,7 @@ function migrateCodexHooksMapFormat(content) {
   // If no marker exists, append at the end of the file.
   if (flatAotBlocks.length > 0) {
     const insertionText = flatAotBlocks.join('');
-    const markerIdx = result.indexOf(GSD_CODEX_MARKER);
+    const markerIdx = managedCodexMarkers(result)[0]?.start ?? -1;
     if (markerIdx !== -1) {
       const before = result.slice(0, markerIdx).trimEnd();
       const after = result.slice(markerIdx);
@@ -6683,7 +6694,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
   // it inside the managed block, so install never silently drops it.
   const mergedGsdBlock = spliceCodexAgentsScalars(gsdBlock, extractCodexUserAgentsScalars(existing));
   const normalizedGsdBlock = mergedGsdBlock.replace(/\r?\n/g, eol);
-  const markerIndex = existing.indexOf(GSD_CODEX_MARKER);
+  const markerIndex = managedCodexMarkers(existing)[0]?.start ?? -1;
 
   // Case 2: Has GSD marker — preserve user content on BOTH sides, regenerate the GSD block.
   //
@@ -6709,9 +6720,11 @@ function mergeCodexConfig(configPath, gsdBlock) {
     // is GSD-owned and is stripped from the trailing region so it is not duplicated alongside
     // the freshly regenerated block.
     const rawAfter = existing.substring(markerIndex);
-    const markerStripped = rawAfter
-      .replace(GSD_CODEX_MARKER, '')
-      .replace(/^\r?\n# GSD codex_hooks ownership: (?:section|root_dotted)[ \t]*\r?\n/, '');
+    const records = getTomlLineRecords(rawAfter);
+    const end = codexHooksOwnership(records[1])
+      ? records[1].end + records[1].eol.length
+      : records[0].end + records[0].eol.length;
+    const markerStripped = rawAfter.slice(end);
     // Keep install/update merge behavior outside #5199 unchanged. The only
     // ownership-line change here is whitespace-tolerant marker removal above;
     // uninstall owns structural hooks-feature cleanup.
@@ -15364,6 +15377,10 @@ module.exports = {
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,
+    managedCodexMarkers,
+    codexHooksOwnership,
+    collapseTomlBlankLines,
+    setManagedCodexHooksOwnership,
     stripStaleGsdHookBlocks,
     hasUserNamespacedAotHooks,
     parseTomlToObject,
