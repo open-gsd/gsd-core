@@ -49,10 +49,10 @@ function loadDeps(cwd) {
 }
 
 // Normalized href for a retained script url, or null when c8 would discard it.
-function retainedHref(exclude, url) {
+function retainedHref(shouldInstrument, url) {
   if (typeof url !== 'string' || !/^file:\/\//.test(url)) return null; // node: and non-file urls
   const filePath = fileURLToPath(url);
-  return exclude.shouldInstrument(filePath) ? pathToFileURL(filePath).href : null;
+  return shouldInstrument(filePath) ? pathToFileURL(filePath).href : null;
 }
 
 // The same rule @bcoe/v8-coverage mergeFunctionCovs applies on a real merge
@@ -80,6 +80,28 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
     excludeNodeModules: true,
   });
 
+  // Memoized per path, as c8 does (report.js shouldInstrumentCache): the same
+  // node_modules scripts repeat across every dump.
+  const instrumentCache = new Map();
+  const shouldInstrument = (filePath) => {
+    let decision = instrumentCache.get(filePath);
+    if (decision === undefined) {
+      decision = exclude.shouldInstrument(filePath);
+      instrumentCache.set(filePath, decision);
+    }
+    return decision;
+  };
+  const hrefCache = new Map();
+  const hrefFor = (url) => {
+    if (typeof url !== 'string') return null;
+    let href = hrefCache.get(url);
+    if (href === undefined) {
+      href = retainedHref(shouldInstrument, url);
+      hrefCache.set(url, href);
+    }
+    return href;
+  };
+
   const processCovs = [];
   const sourceMapCache = {};
   let inputFiles = 0;
@@ -94,7 +116,7 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
     inputFiles++;
     const result = [];
     for (const script of dump.result) {
-      const href = retainedHref(exclude, script.url);
+      const href = hrefFor(script.url);
       if (href === null) continue;
       script.url = href;
       result.push(script);
@@ -105,7 +127,7 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
         // c8's _normalizeSourceMapCache calls fileURLToPath(key) unguarded: a
         // non-file key throws there, so it throws here too.
         const keyPath = fileURLToPath(key);
-        if (exclude.shouldInstrument(keyPath)) sourceMapCache[pathToFileURL(keyPath).href] = cache[key];
+        if (shouldInstrument(keyPath)) sourceMapCache[pathToFileURL(keyPath).href] = cache[key];
       }
     }
     processCovs.push({ result });
