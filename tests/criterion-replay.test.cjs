@@ -541,7 +541,7 @@ describe('#4310 execArgvQuarantined seam', () => {
       timeout: PROBE_TIMEOUT_MS,
       maxBuffer: 1024,
       platform: 'win32',
-      env: { PATH: dir, Path: dir, PATHEXT: '.CMD' },
+      env: { PATH: dir, Path: dir, PATHEXT: '.cmd' }, // same case as the file: the bench FS is case-sensitive
     });
     assert.strictEqual(r.outcome, 'refused');
     assert.strictEqual(r.exitCode, null);
