@@ -13954,7 +13954,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const localCmd = (hookFile) => localNodeRunner === null
     ? null
     : hooksSurface.recordConfiguredHookCommand(localUsesPowerShell
-      ? hooksSurface.buildPowerShellLocalHookCommand({ localPrefix, hookFile })
+      ? hooksSurface.buildPowerShellLocalHookCommand({ ...hookOpts, localPrefix, hookFile })
       : projectShellCommandText({
         runnerToken: localNodeRunner,
         argTokens: [`${localPrefix}/hooks/${hookFile}`],

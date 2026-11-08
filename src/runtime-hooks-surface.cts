@@ -702,9 +702,13 @@ function usesPowerShellHookShell(opts?: BashRunnerOpts & { runtime?: string }): 
   return resolveBashExecutable(opts) === null;
 }
 
-/** A PowerShell single-quoted string literal (only the quote itself needs escaping). */
+/**
+ * A PowerShell single-quoted string literal. PowerShell treats U+2018..U+201B
+ * as single-quote delimiters as well as the ASCII quote, and each is escaped by
+ * doubling itself.
+ */
 function powerShellQuote(value: string): string {
-  return `'${shellCmdProjection.escapePowerShellSingleQuoted(value)}'`;
+  return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, (q) => q + q)}'`;
 }
 
 /**
@@ -713,8 +717,15 @@ function powerShellQuote(value: string): string {
  * expansion; any other path is a single-quoted literal.
  */
 function powerShellScriptArg(scriptPath: string): string {
-  const anchored = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/[^"`$]*)$/);
-  if (anchored) return `"$env:CLAUDE_PROJECT_DIR${anchored[1]}"`;
+  const anchored = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/.*)$/);
+  if (anchored) {
+    const suffix = anchored[1];
+    // Plain suffixes keep the readable double-quoted expansion; any character
+    // PowerShell treats specially inside double quotes (including the curly
+    // double quotes) moves the suffix into a single-quoted literal.
+    if (!/["`$\u201C\u201D\u201E]/.test(suffix)) return `"$env:CLAUDE_PROJECT_DIR${suffix}"`;
+    return `($env:CLAUDE_PROJECT_DIR + ${powerShellQuote(suffix)})`;
+  }
   return powerShellQuote(shellCmdProjection.posixNormalize(scriptPath));
 }
 
@@ -814,7 +825,13 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
   const platform = opts.platform || process.platform;
   const usePowerShell = usesPowerShellHookShell({ platform, runtime: opts.runtime, env: opts.env, existsSync: opts.existsSync });
   let changed = false;
-  for (const entries of Object.values(settings.hooks)) {
+  // #5850: the managed statusLine is a command like a hook; on the PowerShell
+  // path it is converted too (a POSIX chain there fails the same way).
+  const statusLine = (settings as { statusLine?: HookEntry }).statusLine;
+  const statusLineGroups: HookGroup[] = usePowerShell && statusLine && typeof statusLine.command === 'string'
+    ? [{ hooks: [statusLine] }]
+    : [];
+  for (const entries of [...Object.values(settings.hooks), statusLineGroups]) {
     if (!Array.isArray(entries)) continue;
     for (const entry of entries) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
@@ -835,6 +852,19 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
             const chainScript = chain[1] || chain[2] || chain[3] || '';
             if (!isManagedHookBasename(chainScript, { surface: 'settings-json' })) continue;
             const converted = buildPowerShellHookCommand(powerShellScriptArg(chainScript), opts);
+            if (!converted || h.command === converted) continue;
+            h.command = converted;
+            changed = true;
+            continue;
+          }
+          // The #3662 bash resolver shape needs bash too. Convert it when its
+          // script is a plain path; a `$HOME`-relative portable path has no
+          // PowerShell spelling here and is left as written.
+          const resolver = trimmed.match(/^(?:"[^"]*bash(?:\.exe)?"|bash)\s+"[^"]*gsd-node-runner\.sh"\s+"[^"]*"\s+(?:"([^"]+)"|(\S+))\s*$/);
+          if (resolver) {
+            const resolverScript = resolver[1] || resolver[2] || '';
+            if (resolverScript.includes('$') || !isManagedHookBasename(resolverScript, { surface: 'settings-json' })) continue;
+            const converted = buildPowerShellHookCommand(powerShellScriptArg(resolverScript), opts);
             if (!converted || h.command === converted) continue;
             h.command = converted;
             changed = true;

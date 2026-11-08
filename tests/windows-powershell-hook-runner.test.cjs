@@ -128,13 +128,67 @@ describe('#5850 rewriter and settings projection', () => {
     assert.doesNotMatch(cmd, POSIX_ONLY);
   });
 
+  test('a chain built by the installer under Git Bash converts when Git Bash is gone', () => {
+    const chain = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, WITH_BASH);
+    assert.ok(chain.startsWith('"$(for n in '), chain);
+    const settings = settingsWith([chain]);
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), { ...NO_BASH }), true);
+    assert.ok(settings.hooks.PreToolUse[0].hooks[0].command.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'`));
+  });
+
+  test('a local-install chain converts to the $env:CLAUDE_PROJECT_DIR form', () => {
+    const local = shellCmdProjection.projectShellCommandText({
+      runnerToken: hooksSurface.buildNodeRunnerChainToken({ execPath: NO_BASH.execPath }),
+      argTokens: [`"$CLAUDE_PROJECT_DIR"/.claude/hooks/${GUARD}`],
+      runtime: 'claude',
+      platform: 'win32',
+    });
+    const settings = settingsWith([local]);
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), { ...NO_BASH }), true);
+    const cmd = settings.hooks.PreToolUse[0].hooks[0].command;
+    assert.ok(cmd.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"`), cmd);
+  });
+
+  test('the bash resolver shape converts when its script is a plain path and is kept for $HOME paths', () => {
+    const plain = `bash "C:/Users/u/.claude/hooks/gsd-node-runner.sh" "/usr/bin/node" "C:/Users/u/.claude/hooks/${GUARD}"`;
+    const portable = `bash "$HOME/.claude/hooks/gsd-node-runner.sh" "/usr/bin/node" "$HOME/.claude/hooks/${GUARD}"`;
+    const settings = settingsWith([plain, portable]);
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), { ...NO_BASH }), true);
+    assert.ok(settings.hooks.PreToolUse[0].hooks[0].command.startsWith('& '));
+    assert.equal(settings.hooks.PreToolUse[1].hooks[0].command, portable);
+  });
+
+  test('a managed statusLine chain converts and the second run is a no-op', () => {
+    const settings = { hooks: {}, statusLine: { type: 'command', command: oldChain.replace(GUARD, 'gsd-statusline.js') } };
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), { ...NO_BASH }), true);
+    assert.ok(settings.statusLine.command.startsWith('& '));
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), { ...NO_BASH }), false);
+  });
+
+  test('curly quotes are PowerShell quote delimiters and are doubled', () => {
+    const cmd = hooksSurface.buildHookCommand('C:/Users/O\u2019Brien \u2018x\u2019/.claude', GUARD, NO_BASH);
+    assert.ok(cmd.includes('O\u2019\u2019Brien \u2018\u2018x\u2019\u2019'), cmd);
+  });
+
+  test('an anchored local token with special characters stays one expression', () => {
+    const plain = hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: '"$CLAUDE_PROJECT_DIR"/.claude', hookFile: GUARD, execPath: NO_BASH.execPath });
+    assert.ok(plain.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"`), plain);
+    for (const dir of ['.cl$aude', '.cl`aude', '.cl\u201Caude', '.cl{a}ude']) {
+      const cmd = hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: `"$CLAUDE_PROJECT_DIR"/${dir}`, hookFile: GUARD, execPath: NO_BASH.execPath });
+      assert.ok(cmd.includes(`($env:CLAUDE_PROJECT_DIR + '/${dir}/hooks/${GUARD}')`), cmd);
+    }
+  });
+
   test('property: the script token round-trips any path', () => {
-    const dirChars = fc.constantFrom(...'abcXYZ019 \'$"`&;()%._-'.split(''));
+    const dirChars = fc.constantFrom(...'abcXYZ019 \'$"`&;()%._-{}\u2018\u2019\u201A\u201B\u201C\u201D'.split(''));
     fc.assert(fc.property(fc.array(dirChars, { minLength: 1, maxLength: 20 }).map((a) => a.join('')), (dir) => {
       const cmd = hooksSurface.buildHookCommand(`C:/cfg/${dir}`, GUARD, NO_BASH);
-      const m = cmd.match(/\)\s+'((?:[^']|'')*)'$/);
+      const m = cmd.match(/\) '(.*)'$/);
       assert.ok(m, cmd);
-      assert.equal(m[1].replace(/''/g, "'"), `C:/cfg/${dir}/hooks/${GUARD}`.replace(/\\/g, '/'));
+      const body = m[1];
+      // Every quote delimiter inside the literal must appear doubled.
+      assert.doesNotMatch(body.replace(/(['\u2018\u2019\u201A\u201B])\1/g, ''), /['\u2018\u2019\u201A\u201B]/);
+      assert.equal(body.replace(/(['\u2018\u2019\u201A\u201B])\1/g, '$1'), `C:/cfg/${dir}/hooks/${GUARD}`);
     }), { numRuns: 100 });
   });
 });
