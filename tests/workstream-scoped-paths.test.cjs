@@ -979,7 +979,8 @@ describe('shell fences name scoped planning artifacts through resolved paths (#5
     test('the step-1 paths, passed as {phase_dirs}, give a non-empty export map', () => {
       const phaseDirs = run(audit.replace('$ARGUMENTS', ''), 'audit-milestone step 1').split('\n')
         .filter((l) => l && !l.startsWith('PLANNING_DIR='));
-      assert.deepStrictEqual(phaseDirs, ['01-x', '02-y'].map((d) => path.join(fs.realpathSync(repo), '.planning', 'phases', d)));
+      // The fence prints the forward-slash path config-path reports on every platform (#5861).
+      assert.deepStrictEqual(phaseDirs, ['01-x', '02-y'].map((d) => path.join(fs.realpathSync(repo), '.planning', 'phases', d).split(path.sep).join('/')));
       assertMap(run(checker.replace('{phase_dirs}', phaseDirs.join('\n')), 'integration checker Step 1'));
     });
 
