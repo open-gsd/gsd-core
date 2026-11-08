@@ -1517,7 +1517,7 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
  */
 describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
   const fs = require('node:fs');
-  const { spawnSync } = require('node:child_process');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
   const { createTempGitProject, cleanup } = require('./helpers.cjs');
   const KEY = 'hooks.secret_read_exempt';
 
@@ -1532,9 +1532,9 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
   const run = (payload) => runHook(withCwd(payload));
 
   function git(args) {
-    const r = spawnSync('git', ['-c', 'commit.gpgsign=false', ...args], {
+    gitOrThrow(['-c', 'commit.gpgsign=false', ...args], {
       cwd: repo,
-      timeout: GIT_TIMEOUT_MS,
+      timeoutMs: GIT_TIMEOUT_MS,
       env: {
         ...process.env,
         GIT_AUTHOR_NAME: 't',
@@ -1542,9 +1542,7 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
         GIT_COMMITTER_NAME: 't',
         GIT_COMMITTER_EMAIL: 't@t',
       },
-      encoding: 'utf8',
     });
-    assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
   }
 
   /** `undefined` removes the config; a string is written verbatim; else the entries list. */

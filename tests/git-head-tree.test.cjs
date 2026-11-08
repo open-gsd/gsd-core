@@ -18,10 +18,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
 const { GIT_FIXTURE_TIMEOUT_MS: GIT_TEST_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { runGit } = require('./helpers/process-seam.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { trapChildProcess } = require('./helpers/subprocess-trap.cjs');
 
 const { headTreeEntry, LIMITS } = require('../hooks/lib/git-head-tree.js');
 
@@ -34,12 +36,13 @@ const GIT_ENV = {
 };
 
 function gitRaw(cwd, args) {
-  return spawnSync('git', ['-c', 'commit.gpgsign=false', '-c', 'gc.auto=0', ...args], {
-    cwd,
-    timeout: GIT_TEST_TIMEOUT_MS,
-    env: GIT_ENV,
-    encoding: 'utf8',
-  });
+  return toLegacyResult(
+    runGit(['-c', 'commit.gpgsign=false', '-c', 'gc.auto=0', ...args], {
+      cwd,
+      timeoutMs: GIT_TEST_TIMEOUT_MS,
+      env: GIT_ENV,
+    }),
+  );
 }
 
 function git(cwd, args) {
@@ -79,13 +82,21 @@ function oracleOid(repo, rel) {
   return git(repo, ['rev-parse', `HEAD:${rel}`]).trim();
 }
 
-function symlinkOrSkip(t, target, linkPath) {
+/**
+ * Commit a mode-120000 entry named `rel` straight into the index. A committed
+ * link is a tree-entry mode, not an OS file, so no real filesystem link (and
+ * no Windows link privilege) is needed to produce one.
+ */
+function commitLinkEntry(repo, rel, target) {
+  const blobDir = mkTemp('gsd-4432-ht-blob-');
   try {
-    fs.symlinkSync(target, linkPath);
-    return true;
-  } catch (err) {
-    t.skip(`symlinks unavailable: ${err.code}`);
-    return false;
+    const blobFile = path.join(blobDir, 'target');
+    fs.writeFileSync(blobFile, target);
+    const oid = git(repo, ['hash-object', '-w', blobFile]).trim();
+    git(repo, ['update-index', '--add', '--cacheinfo', `120000,${oid},${rel}`]);
+    git(repo, ['commit', '-q', '-m', 'link', '--allow-empty']);
+  } finally {
+    cleanup(blobDir);
   }
 }
 
@@ -225,11 +236,10 @@ describe('headTreeEntry resolves packed-refs and a detached HEAD (#4432 row 47)'
 // ─── Row 48: non-blob entries ───────────────────────────────────────────────
 
 describe('headTreeEntry on entries that are not regular blobs (#4432 row 48)', () => {
-  test('a committed symlink is mode 120000', (t) => {
+  test('a committed link entry is mode 120000', (t) => {
     const repo = initRepo(t);
     writeFile(repo, 'real.txt');
-    if (!symlinkOrSkip(t, 'real.txt', path.join(repo, '.env.production'))) return;
-    commitAll(repo, 'symlink');
+    commitLinkEntry(repo, '.env.production', 'real.txt');
     const entry = headTreeEntry(repo, '.env.production');
     assert.equal(entry && entry.mode, '120000');
     assert.equal(isRegular(entry), false);
@@ -343,8 +353,9 @@ describe('headTreeEntry fails closed on corruption (#4432 row 50)', () => {
     assert.ok(idxs.length > 0, 'gc produced a pack');
     for (const idx of idxs) {
       const p = path.join(packDir, idx);
-      fs.chmodSync(p, 0o644);
-      fs.truncateSync(p, 100);
+      const head = fs.readFileSync(p).subarray(0, 100);
+      fs.unlinkSync(p);
+      fs.writeFileSync(p, head);
     }
     assert.equal(headTreeEntry(repo, '.env.production'), null);
   });
@@ -357,9 +368,9 @@ describe('headTreeEntry fails closed on corruption (#4432 row 50)', () => {
     const packDir = path.join(repo, '.git', 'objects', 'pack');
     for (const idx of fs.readdirSync(packDir).filter((n) => n.endsWith('.idx'))) {
       const p = path.join(packDir, idx);
-      fs.chmodSync(p, 0o644);
       const buf = fs.readFileSync(p);
       buf.writeUInt32BE(3, 4);
+      fs.unlinkSync(p);
       fs.writeFileSync(p, buf);
     }
     assert.equal(headTreeEntry(repo, '.env.production'), null);
@@ -548,22 +559,11 @@ describe('headTreeEntry spawns no subprocess (#4432 row 54)', () => {
     const repo = initRepo(t);
     writeFile(repo, '.env.production', 'x\n');
     commitAll(repo, 'add');
-    const childProcess = require('node:child_process');
-    const names = ['spawnSync', 'execFileSync', 'execSync', 'spawn', 'exec', 'execFile'];
-    const originals = {};
-    const attempted = [];
-    for (const name of names) {
-      originals[name] = childProcess[name];
-      childProcess[name] = () => { attempted.push(name); throw new Error(`child_process.${name} must not be called`); };
-    }
-    let entry;
-    let missing;
-    try {
-      entry = headTreeEntry(repo, '.env.production');
-      missing = headTreeEntry(repo, '.env');
-    } finally {
-      for (const name of names) childProcess[name] = originals[name];
-    }
+    const { attempted, result } = trapChildProcess(() => ({
+      entry: headTreeEntry(repo, '.env.production'),
+      missing: headTreeEntry(repo, '.env'),
+    }));
+    const { entry, missing } = result;
     assert.deepEqual(attempted, []);
     assert.deepEqual(entry, { mode: '100644', oid: oracleOid(repo, '.env.production') });
     assert.equal(missing, null);
