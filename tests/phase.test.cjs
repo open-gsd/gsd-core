@@ -19334,6 +19334,45 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
     assert.equal(JSON.parse(result.output).phase_number, 2);
   });
 
+  // A versioned heading counts only when it is visible: a closed or UNCLOSED
+  // HTML comment hides it (an unclosed `<!--` hides everything to EOF), while a
+  // heading after a closed comment is still a real milestone heading.
+  const roadmapWithTail = (...tail) => ['# Roadmap', '', '### Phase 1: One', '**Goal:** a', '', ...tail].join('\n');
+  const HEADING_AFTER_UNCLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '');
+  const HEADING_ON_UNCLOSED_COMMENT_LINE = roadmapWithTail('<!-- ## v2.0 Next', '');
+  const HEADING_INSIDE_CLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '-->', '');
+  const HEADING_AFTER_CLOSED_COMMENT = roadmapWithTail('<!-- note -->', '## v2.0 Next', '');
+  const HEADING_AFTER_REFORMING_COMMENT = roadmapWithTail('<!-<!-- c -->-', '## v2.0 Next', ' -->', '');
+
+  for (const [shape, roadmap] of [
+    ['a versioned heading after an unclosed HTML comment', HEADING_AFTER_UNCLOSED_COMMENT],
+    ['a versioned heading on the line of an unclosed HTML comment', HEADING_ON_UNCLOSED_COMMENT_LINE],
+    ['a versioned heading inside a closed HTML comment', HEADING_INSIDE_CLOSED_COMMENT],
+  ]) {
+    test(`${shape}, STATE milestone v1.0: behaves as a roadmap with no recognized milestone heading`, () => {
+      setup({ roadmap, milestone: 'v1.0' });
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      assert.equal(JSON.parse(result.output).phase_number, 2);
+    });
+  }
+
+  for (const [shape, roadmap] of [
+    ['a versioned heading after a closed HTML comment', HEADING_AFTER_CLOSED_COMMENT],
+    // `<!-<!-- c -->-` is not a comment opener once `<!-- c -->` is blanked in
+    // one pass: the heading below it stays visible, as the shared blanking sees it.
+    ['a versioned heading after a re-forming `<!-<!-- c -->-` sequence', HEADING_AFTER_REFORMING_COMMENT],
+  ]) {
+    test(`${shape}, STATE milestone v1.0: the heading is recognized, so the unresolved milestone refuses`, () => {
+      setup({ roadmap, milestone: 'v1.0' });
+      const beforeRoadmap = roadmapBytes();
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, false, result.output);
+      assert.ok(/no milestone heading/.test(result.error), result.error);
+      assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    });
+  }
+
   // STATE names a milestone the ROADMAP marks shipped: the window is the closed
   // milestone, so allocation would collide with its phases.
   const SHIPPED_IN_DETAILS = [
