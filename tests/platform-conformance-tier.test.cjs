@@ -1246,8 +1246,8 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.ok(classifyContent("require('child_process');spawn('git',[])").signals.includes('raw-child-process'));
   });
 
-  test("exec('cmd /c x') is flagged (#6002)", () => {
-    assert.ok(classifyContent("require('child_process');exec('cmd /c x')").signals.includes('raw-child-process'));
+  test("exec of a cmd /c string is flagged (#6002)", () => {
+    assert.ok(classifyContent("require('child_process');const c='cmd /c x';exec(c)").signals.includes('raw-child-process'));
   });
 
   test("fork('./w.js') runs node and is node-only: not flagged (#6002)", () => {
