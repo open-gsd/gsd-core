@@ -4198,6 +4198,46 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.deepStrictEqual(store, { granularity: 'fine' });
   });
 
+  // Codex review: outside a project the loader read these keys flat-only, so a
+  // save that stored the nested spelling and dropped the flat one turned a
+  // saved `workflow.research: false` back into the default.
+  test('turning research off outside a project survives the save that drops the flat spelling', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const outside = createTempDir('gsd-5681-outside-');
+    t.after(() => { cleanup(gsdHome); cleanup(outside); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ research: false }));
+    assert.ok(runGsdTools(['config-save-defaults', JSON.stringify({ workflow: { research: false } })], outside, { GSD_HOME: gsdHome }).success);
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.strictEqual(loaded.research, false);
+  });
+
+  test('outside a project, each twin key the loader reads is honored under its nested spelling', (t) => {
+    const { LEGACY_FLAT_KEYS, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const keys = ['commit_docs', 'research', 'plan_checker', 'verifier', 'nyquist_validation', 'text_mode', 'subagent_timeout'];
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const outside = createTempDir('gsd-5681-outside-');
+    t.after(() => { cleanup(gsdHome); cleanup(outside); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    const store = {};
+    const want = {};
+    for (const key of keys) {
+      const { section, field } = LEGACY_FLAT_KEYS[key];
+      const fallback = CONFIG_DEFAULTS[key];
+      want[key] = typeof fallback === 'number' ? fallback + 1 : !fallback;
+      store[section] = { ...store[section], [field]: want[key] };
+    }
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(store));
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.deepStrictEqual(Object.fromEntries(keys.map((key) => [key, loaded[key]])), want);
+  });
+
   test('clearing a setting with null removes it and its legacy spelling, so the default applies', (t) => {
     const { config, store } = newProjectAfterSave(
       t,
@@ -4389,6 +4429,14 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     });
   }
 
+  // Codex review: both spellings were stored, and the loader and new-project
+  // creation each read a different one first.
+  test('both spellings of one setting in one save is a usage error', (t) => {
+    const { defaultsPath, run } = storeWith(t, BEFORE);
+    assertRefused(run([JSON.stringify({ commit_docs: false, planning: { commit_docs: true } })]), 'usage');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+  });
+
   for (const args of [[], ['{}', '{}']]) {
     test(`${args.length} positionals is a usage error`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);
@@ -4398,7 +4446,9 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
   }
 
   // In-process, so the fault lands on the store write and nothing before it.
-  test('a failed write is reported', async (t) => {
+  // A partial write that fails (ENOSPC) must not reach the store: the old seam
+  // fell back to writing the store in place and truncated it.
+  test('a failed write is reported and leaves the existing store and no temp file', async (t) => {
     const gsdHome = createTempDir('gsd-5681-home-');
     t.after(() => cleanup(gsdHome));
     const savedGsdHome = process.env.GSD_HOME;
@@ -4408,12 +4458,17 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
       else process.env.GSD_HOME = savedGsdHome;
     });
     const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(defaultsPath), 0));
+    const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, before);
+    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(defaultsPath), 5));
 
     const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
   });
 });
 

@@ -2439,7 +2439,9 @@ When `/gsd-new-project` creates a new `config.json`, it reads global defaults an
 Two different rules apply, and the difference is deliberate ([#3532](https://github.com/open-gsd/gsd-core/issues/3532)):
 
 - **In a directory with no `.planning/` at all**, `$GSD_HOME/.gsd/defaults.json` is the active
-  configuration — model resolution reads it directly.
+  configuration — model resolution reads it directly. A setting with a legacy flat spelling
+  (`research` for `workflow.research`, `commit_docs` for `planning.commit_docs`) is read under
+  either spelling there, flat first, as in a project config (#5681).
 - **In a real project (`.planning/config.json` present, even if empty)**, the global file is
   **not read for model resolution** — every model-side key it sets (`model_profile`,
   `model_overrides`, `models`, `dynamic_routing`, `runtime`, and the rest of the resolution

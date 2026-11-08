@@ -1131,14 +1131,18 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       }
       if (globalRead.kind !== 'ok') throw new Error('global defaults absent or unusable');
       const globalDefaults = globalRead.data;
+      // A key with a nested twin is read flat-then-nested, as in a project
+      // config: `config-save-defaults` stores the nested spelling and drops the
+      // flat one (#5681), so a flat-only read lost a saved `workflow.research`.
+      const globalGet = (key: string): unknown => _getConfigValue(globalDefaults, key, legacyNestedSpelling(key));
       const _globalBaseCfg: Record<string, unknown> = {
         ...defaults,
         model_profile: (globalDefaults['model_profile']) ?? defaults.model_profile,
-        commit_docs: (globalDefaults['commit_docs']) ?? defaults.commit_docs,
-        research: (globalDefaults['research']) ?? defaults.research,
-        plan_checker: (globalDefaults['plan_checker']) ?? defaults.plan_checker,
-        verifier: (globalDefaults['verifier']) ?? defaults.verifier,
-        nyquist_validation: (globalDefaults['nyquist_validation']) ?? defaults.nyquist_validation,
+        commit_docs: globalGet('commit_docs') ?? defaults.commit_docs,
+        research: globalGet('research') ?? defaults.research,
+        plan_checker: globalGet('plan_checker') ?? defaults.plan_checker,
+        verifier: globalGet('verifier') ?? defaults.verifier,
+        nyquist_validation: globalGet('nyquist_validation') ?? defaults.nyquist_validation,
         post_planning_gaps: (globalDefaults['post_planning_gaps'])
           ?? (globalDefaults['workflow'] as Record<string, unknown> | undefined)?.['post_planning_gaps']
           ?? defaults.post_planning_gaps,
@@ -1149,10 +1153,10 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
           ?? (globalDefaults['workflow'] as Record<string, unknown> | undefined)?.['research_before_questions']
           ?? defaults.research_before_questions,
         parallelization: (globalDefaults['parallelization']) ?? defaults.parallelization,
-        text_mode: (globalDefaults['text_mode']) ?? defaults.text_mode,
+        text_mode: globalGet('text_mode') ?? defaults.text_mode,
         resolve_model_ids: (globalDefaults['resolve_model_ids']) ?? defaults.resolve_model_ids,
         context_window: (globalDefaults['context_window']) ?? defaults.context_window,
-        subagent_timeout: (globalDefaults['subagent_timeout']) ?? defaults.subagent_timeout,
+        subagent_timeout: globalGet('subagent_timeout') ?? defaults.subagent_timeout,
         planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
           (globalDefaults['planner'] as Record<string, unknown> | undefined)?.['stall_detection_enabled'],
         ),

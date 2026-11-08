@@ -747,7 +747,8 @@ symlink is written through to its target, so the link survives; a link whose tar
 is refused. The search flags that new
 projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
 `tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. A store that is not
-valid JSON, or not a JSON object, is refused and left as it was.
+valid JSON, or not a JSON object, is refused and left as it was, and a write that fails leaves
+the store as it was.
 
 A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
 so two saves, or a save and an install, run one after the other and neither loses the other's
@@ -755,7 +756,8 @@ keys.
 
 With `--json-errors`, each refusal carries a typed reason
 ([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
-`usage` for settings that are not one JSON object (including an empty or blank argument),
+`usage` for settings that are not one JSON object (including an empty or blank argument) or
+that give both spellings of one setting (`commit_docs` and `planning.commit_docs`),
 `config_invalid_key` for a key `config-set` does not accept, `config_defaults_invalid` for a
 store that is not a readable JSON object, `config_defaults_write_failed` for a failed write, and
 `config_defaults_lock_unavailable` when the lock cannot be taken, for example while another

@@ -19,7 +19,7 @@ const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
 const { CONFIG_DEFAULTS, LEGACY_FLAT_KEYS, resolvePlannerStallDetectionEnabled } = configLoader;
-import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installerMigrations = require('./installer-migrations.cjs');
@@ -594,7 +594,13 @@ function isConfigSection(cwd: string, keyPath: string): boolean {
  * of the result either way. A null choice is left out too, unless `keepNull`
  * keeps it as the request to clear the key (`config-save-defaults`).
  */
-function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>, prefix = '', keepNull = false): Record<string, unknown> {
+function validateNewProjectChoices(
+  cwd: string,
+  choices: Record<string, unknown>,
+  prefix = '',
+  keepNull = false,
+  verb = 'config-new-project',
+): Record<string, unknown> {
   const checked: Record<string, unknown> = {};
   for (const key of Object.keys(choices)) {
     const kp = prefix ? `${prefix}.${key}` : key;
@@ -615,7 +621,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
       const dotIsInsideAnId = prefix !== '' && DYNAMIC_KEY_PATTERNS.some((family) => family.test(head) && family.test(kp));
       if (!dotIsInsideAnId) {
         error(
-          `Invalid choice key "${key}" for config-new-project. Nest it instead of using a dotted key, e.g. {"workflow":{"research":true}}.`,
+          `Invalid choice key "${key}" for ${verb}. Nest it instead of using a dotted key, e.g. {"workflow":{"research":true}}.`,
           ERROR_REASON.CONFIG_INVALID_KEY,
         );
       }
@@ -629,7 +635,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
       if (Object.keys(value).length === 0 && !isValidConfigKey(kp, cwd) && !isConfigSection(cwd, kp)) {
         assertKnownConfigKey(cwd, kp);
       }
-      const section = validateNewProjectChoices(cwd, value, kp, keepNull);
+      const section = validateNewProjectChoices(cwd, value, kp, keepNull, verb);
       // Empty as given, or emptied by null choices: it sets nothing.
       if (Object.keys(section).length > 0) checked[key] = section;
       continue;
@@ -639,7 +645,7 @@ function validateNewProjectChoices(cwd: string, choices: Record<string, unknown>
     // the name unknown, which misdescribes a real section; say what is wrong.
     if (!isValidConfigKey(kp, cwd) && isConfigSection(cwd, kp)) {
       error(
-        `Invalid choice "${kp}" for config-new-project: it is a section, so its value must be an object of settings, e.g. {"workflow":{"research":true}}.`,
+        `Invalid choice "${kp}" for ${verb}: it is a section, so its value must be an object of settings, e.g. {"workflow":{"research":true}}.`,
         ERROR_REASON.CONFIG_INVALID_KEY,
       );
     }
@@ -842,7 +848,13 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   }
   const unchecked: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
   for (const { key } of DETECTED_SEARCH_INTEGRATIONS) delete unchecked[key];
-  const patch = validateNewProjectChoices(cwd, unchecked, '', true);
+  const patch = validateNewProjectChoices(cwd, unchecked, '', true, 'config-save-defaults');
+  // Both spellings of one setting would both be stored, and the loader and
+  // new-project creation each read a different one first.
+  const twin = SPELLING_TWINS.find(([legacy, canonical]) => readPath(patch, legacy) !== undefined && readPath(patch, canonical) !== undefined);
+  if (twin) {
+    error(`Invalid settings for config-save-defaults: "${twin[0]}" and "${twin[1]}" are one setting; give only one of them.`, ERROR_REASON.USAGE);
+  }
 
   const gsdDir = path.join(resolveGsdHome(), '.gsd');
   const defaultsPath = path.join(gsdDir, 'defaults.json');
@@ -923,9 +935,16 @@ function saveDefaultsStore(
     existing = parsed;
   }
 
+  // Written to a temp file and renamed over the store, never written in place:
+  // platformWriteSync falls back to a direct write when the temp write fails,
+  // and a failed direct write (ENOSPC) truncates the existing store. Same
+  // pattern as installer-migrations' atomicWriteInstallState.
+  const tmpPath = `${storePath}.tmp-${process.pid}`;
   try {
-    platformWriteSync(storePath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n');
+    fs.writeFileSync(tmpPath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n', 'utf8');
+    retryRenameSync(tmpPath, storePath);
   } catch (err) {
+    try { fs.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
     return { message: 'Failed to write defaults.json: ' + (err as Error).message, reason: ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED };
   }
   return { created };
