@@ -401,9 +401,10 @@ describe('check predicate --phase-dir — containment boundary (#4354)', () => {
 
 describe('check predicate — literal phase data through the CLI', { skip: NO_SH ? 'requires a POSIX host with sh on PATH' : false }, () => {
   for (const name of ['11-$(touch PWNED)-x', '11-`touch PWNED2`-x', "11-o'brien", '11-double"quote', '11-$(touch PWNED)-`touch PWNED2`-\'"']) {
-    test(`phase directory ${name} reaches argv literally without substitution side effects`, () => {
+    test(`phase directory ${name} reaches argv literally without substitution side effects`, (t) => {
       const dir = createTempProject('gate-phase-env-');
-      try {
+      t.after(() => cleanup(dir));
+      {
         const phaseDir = path.join(dir, '.planning', 'phases', name);
         fs.mkdirSync(phaseDir, { recursive: true });
         fs.writeFileSync(path.join(dir, 'check.cjs'), `
@@ -431,24 +432,26 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
         for (const marker of ['PWNED', 'PWNED2', 'NUMBER_PWNED', 'IDS_PWNED', 'IDS_PWNED2']) {
           assert.equal(fs.existsSync(path.join(dir, marker)), false, marker);
         }
-      } finally { cleanup(dir); }
+      }
     });
   }
 
-  test('absent context overwrites inherited gate values with empty data', () => {
+  test('absent context overwrites inherited gate values with empty data', (t) => {
     const dir = createTempProject('gate-phase-empty-');
-    try {
+    t.after(() => cleanup(dir));
+    {
       const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
         kind: 'command-exit-zero', command: 'test "$GSD_GATE_PHASE_DIR$GSD_GATE_PHASE_NUMBER$GSD_GATE_PHASE_REQ_IDS" = ""',
       })], dir, { GSD_GATE_PHASE_DIR: 'old-dir', GSD_GATE_PHASE_NUMBER: 'old-number', GSD_GATE_PHASE_REQ_IDS: 'old-ids' });
       assert.equal(result.exitCode, 0);
       assert.equal(JSON.parse(result.output).block, false);
-    } finally { cleanup(dir); }
+    }
   });
 
-  test('real command failures and shell spawn errors remain blocking predicate results', () => {
+  test('real command failures and shell spawn errors remain blocking predicate results', (t) => {
     const dir = createTempProject('gate-phase-outcome-');
-    try {
+    t.after(() => cleanup(dir));
+    {
       const predicate = JSON.stringify({ kind: 'command-exit-zero', command: 'exit 3' });
       const failed = runGsdTools(['check', 'predicate', '--predicate', predicate], dir);
       assert.equal(failed.exitCode, 0, 'a negative verdict is a successful check dispatch');
@@ -458,12 +461,13 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
       assert.equal(missing.exitCode, 0);
       assert.equal(JSON.parse(missing.output).block, true);
       assert.equal(JSON.parse(missing.output).details.exitCode, 127);
-    } finally { cleanup(dir); }
+    }
   });
 
-  test('actual timeout is distinguished from a command terminating itself', () => {
+  test('actual timeout is distinguished from a command terminating itself', (t) => {
     const dir = createTempProject('gate-phase-timeout-');
-    try {
+    t.after(() => cleanup(dir));
+    {
       const timedOut = evaluatePredicate(
         { kind: 'command-exit-zero', command: 'while :; do :; done' },
         { cwd: dir },
@@ -477,13 +481,14 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
       assert.equal(terminated.details.exitCode, 1, 'execTool maps a signal-only termination to exit 1');
       assert.equal(terminated.details.signal, 'SIGTERM');
       assert.equal(terminated.details.timedOut, undefined);
-    } finally { cleanup(dir); }
+    }
   });
 });
 
-test('check predicate rejects old context spellings as usage errors before shell side effects', () => {
+test('check predicate rejects old context spellings as usage errors before shell side effects', (t) => {
   const dir = createTempProject('gate-phase-legacy-');
-  try {
+  t.after(() => cleanup(dir));
+  {
     for (const variable of ['GSD_GATE_PHASE_DIR', 'GSD_GATE_PHASE_NUMBER', 'GSD_GATE_PHASE_REQ_IDS']) {
       const name = variable.slice('GSD_GATE_'.length);
       const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
@@ -495,5 +500,5 @@ test('check predicate rejects old context spellings as usage errors before shell
       assert.ok(diagnostic.message.includes('$GSD_GATE_' + name));
       assert.equal(fs.existsSync(path.join(dir, 'SHOULD_NOT_RUN')), false);
     }
-  } finally { cleanup(dir); }
+  }
 });

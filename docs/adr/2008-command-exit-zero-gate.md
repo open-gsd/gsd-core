@@ -191,6 +191,9 @@ performs its ordinary expansion. Capability authors pass them as quoted data:
 ```
 
 This is a **breaking manifest change**. The old `${PHASE_NUMBER}`,
+bare `$PHASE_*` references and all braced parameter expansions of the three
+reserved names (including `${#PHASE_DIR}` and `${!PHASE_DIR}`) are rejected,
+even when a manifest declares its own variable with that name. The
 `${PHASE_DIR}` and `${PHASE_REQ_IDS}` spellings are rejected as malformed
 command predicates before any subprocess runs. Each diagnostic names the
 matching `"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or

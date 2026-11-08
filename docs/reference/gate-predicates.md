@@ -87,6 +87,8 @@ supply stale phase context. Other environment variables remain inherited and
 available to the shell as usual.
 
 **Breaking migration.** The old GSD placeholders `${PHASE_NUMBER}`,
+bare `$PHASE_NUMBER`, `$PHASE_DIR`, `$PHASE_REQ_IDS`, and their braced parameter
+expansions (including length `${#PHASE_DIR}` and indirect `${!PHASE_DIR}` forms),
 `${PHASE_DIR}` and `${PHASE_REQ_IDS}` are rejected before execution, including
 inside quotes, with a diagnostic naming the corresponding
 `"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or
@@ -124,7 +126,7 @@ ADR-2008 "Trust model".
 
 - Missing, non-string, empty, or whitespace-only `command`.
 - `command` longer than 4096 chars.
-- Any retired `${PHASE_NUMBER}`, `${PHASE_DIR}` or `${PHASE_REQ_IDS}` spelling in `command`.
+- Any retired `PHASE_NUMBER`, `PHASE_DIR` or `PHASE_REQ_IDS` shell expansion in `command`, including bare, braced, length and indirect forms, even when a manifest declares its own variable of that name.
 - `timeout` present but not a positive finite number.
 - Unknown `kind`.
 

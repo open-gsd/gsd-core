@@ -49,6 +49,9 @@ override any inherited variables with these names. Other variables (`${HOME}`,
 `$VAR`, etc.) remain available through the inherited environment.
 
 Existing manifests using `${PHASE_NUMBER}`, `${PHASE_DIR}` or `${PHASE_REQ_IDS}`
+or bare `$PHASE_*` expansions must migrate. Parameter expansions such as
+`${PHASE_DIR:-x}`, `${PHASE_DIR%/*}`, `${#PHASE_DIR}` and `${!PHASE_DIR}` are
+also rejected, even for a manifest's own variables with those reserved names. They
 must migrate to the corresponding quoted shell expansions above. The old
 spellings are rejected before the command runs, with the replacement named in
 the diagnostic. See the [ADR-2008 amendment](../adr/2008-command-exit-zero-gate.md#amendment--2026-10-14-phase-context-is-environment-data).

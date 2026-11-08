@@ -21,6 +21,7 @@ const assert = require('node:assert/strict');
 const fc = require('fast-check');
 
 const {
+  LEGACY_CONTEXT_PLACEHOLDER_RE,
   evaluatePredicate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,
@@ -185,6 +186,11 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
 
 describe('evaluatePredicate — phase context environment', () => {
   test('phase values are environment data and command text is unchanged', () => {
+    for (const accepted of ['echo "$PHASE_DIRECTORY"', 'echo "$PHASE_DIR_OLD"', 'echo "$GSD_GATE_PHASE_DIR"']) {
+      const acceptedShell = fakeShell({ exitCode: 0 });
+      evaluatePredicate({ kind: 'command-exit-zero', command: accepted }, baseCtx, { runBoundedShell: acceptedShell.run });
+      assert.equal(acceptedShell.calls[0].command, accepted);
+    }
     const shell = fakeShell({ exitCode: 0 });
     const command = 'check "$GSD_GATE_PHASE_DIR" "$GSD_GATE_PHASE_NUMBER" "$GSD_GATE_PHASE_REQ_IDS" ${HOME} $OTHER_VAR';
     evaluatePredicate(
@@ -219,6 +225,8 @@ describe('evaluatePredicate — phase context environment', () => {
         [`$${name}`, ''],
         [`\${${name}:-fallback}`, ''],
         [`\${${name}%/*}`, ''],
+        [`\${#${name}}`, ''],
+        [`\${!${name}}`, ''],
       ].map(([value]) => value)) {
         for (const quote of ['', "'", '"']) {
           const shell = fakeShell({ exitCode: 0 });
@@ -229,7 +237,7 @@ describe('evaluatePredicate — phase context environment', () => {
               { runBoundedShell: shell.run },
             ),
             (err) => {
-              assert.ok(err.message.includes('$'));
+              assert.ok(err.message.includes('$' + name + ' (including braced'));
               assert.ok(err.message.includes('$GSD_GATE_' + name));
               return true;
             },
@@ -371,7 +379,7 @@ describe('evaluatePredicate — exported contract surface', () => {
 describe('evaluatePredicate — phase transport properties (fast-check)', () => {
   test('accepted commands are byte-for-byte identical regardless of context', () => {
     fc.assert(fc.property(
-      fc.string({ minLength: 1, maxLength: 80 }).filter((s) => s.trim().length > 0 && !/\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/.test(s)),
+      fc.string({ minLength: 1, maxLength: 80 }).filter((s) => s.trim().length > 0 && !LEGACY_CONTEXT_PLACEHOLDER_RE.test(s)),
       fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
       fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
       fc.option(fc.string({ maxLength: 80 }), { nil: undefined }),
