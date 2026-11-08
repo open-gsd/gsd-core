@@ -881,4 +881,18 @@ describe('#5831: atomic write, restore and byte read in the shell-projection sea
     assert.strictEqual(fs.existsSync(target), false, 'a matching identity is unlinked');
     scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
   });
+
+  // ── permission bits ────────────────────────────────────────────────────
+
+  for (const mode of [0o600, 0o640, 0o644]) {
+    test(`an atomic write and a restore keep the destination's permission bits (${mode.toString(8)})`, () => {
+      fs.writeFileSync(target, PREVIOUS);
+      fs.chmodSync(target, mode);
+      scp.platformWriteSync(target, '# New\n', { atomic: true });
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, mode, 'the atomic publish keeps the mode');
+      scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS));
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, mode, 'the restore keeps the mode');
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    });
+  }
 });

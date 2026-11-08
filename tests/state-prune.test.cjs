@@ -1137,6 +1137,26 @@ describe('#5831: state prune never loses entries', () => {
       'a marker inside an entry line is not a block marker');
   });
 
+  test('a run marker line is recognized only with exactly 64 lowercase hex digits', () => {
+    const line = (hex) => `## Pruned x\n\n<!-- gsd-prune-run: ${hex} -->\n`;
+    const hex = (n) => 'a'.repeat(n);
+    assert.strictEqual(stateLib.lastPruneRunMarker(line(hex(63))), null, '63 digits (limit-1)');
+    assert.strictEqual(stateLib.lastPruneRunMarker(line(hex(64))), hex(64), '64 digits (limit)');
+    assert.strictEqual(stateLib.lastPruneRunMarker(line(hex(65))), null, '65 digits (limit+1)');
+    assert.strictEqual(stateLib.lastPruneRunMarker(line('A'.repeat(64))), null, 'uppercase is not a marker');
+  });
+
+  test('a prune with nothing old enough to archive writes neither STATE.md nor the archive', () => {
+    writeStateMd(tmpDir, stateLines(8, [PHASE7]));
+    const stateBefore = fs.readFileSync(statePath);
+    const writes = captureArchiveWrites();
+    prune(3); // cutoff 5: the only entry is phase 7
+    assert.strictEqual(writes.length, 0, 'no archive write');
+    assert.strictEqual(fs.existsSync(archivePath), false, 'no archive is created');
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md is byte-identical');
+    assert.ok(lockReleased(), 'the lock is released');
+  });
+
   test('a retry after a kill still archives each entry once when another state command rewrote STATE.md in between', () => {
     pruneKilledBeforeStateWrite(3);
     const beforeOther = fs.readFileSync(statePath);
@@ -1202,6 +1222,6 @@ describe('#5831: state prune never loses entries', () => {
             'every planned line appears once per occurrence');
         }
         assert.strictEqual(stateLib.lastPruneRunMarker(out), run, 'the new block carries the latest run marker');
-      }));
+      }), { seed: 5831 });
   });
 });
