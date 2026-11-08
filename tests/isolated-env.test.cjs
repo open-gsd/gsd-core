@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -73,17 +73,8 @@ function valuesNamed(env, pattern) {
   return Object.entries(env).filter(([k]) => pattern.test(k));
 }
 
-function linkNode(dir, name) {
-  const target = path.join(dir, name);
-  if (IS_WIN) {
-    fs.copyFileSync(process.execPath, target);
-  } else {
-    fs.symlinkSync(process.execPath, target);
-  }
-  return target;
-}
-
-function plantExecutable(dir, name) {
+/** Write an executable `#!/bin/sh` stub (exit 0) named `name` in `dir`. */
+function writeShellStub(dir, name) {
   const target = path.join(dir, name);
   fs.writeFileSync(target, '#!/bin/sh\nexit 0\n');
   fs.chmodSync(target, 0o755);
@@ -270,7 +261,7 @@ describe('isolatedPath', () => {
   test('isolatedPath removes a tool', (t) => {
     const home = tmp(t, 'gsd-6033-tool-home-');
     const leakDir = tmp(t, 'gsd-6033-tool-leak-');
-    linkNode(leakDir, GSD_RUN);
+    linkExecutable(leakDir, GSD_RUN);
 
     const basePath = `${leakDir}${path.delimiter}${process.env.PATH}`;
     const base = { ...SYSTEM_VARS, PATH: basePath };
@@ -318,7 +309,7 @@ describe('isolatedPath', () => {
     const names = IS_WIN ? ['gsd_run', 'gsd_run.exe'] : ['gsd_run'];
     for (const name of names) {
       const dir = tmp(t, 'gsd-6033-name-');
-      plantExecutable(dir, name);
+      writeShellStub(dir, name);
       const result = isolatedPath({ without: ['gsd_run'], basePath: dir });
       t.after(() => cleanup(result.nodeBinDir));
       assert.ok(!result.path.split(path.delimiter).includes(dir), `${name} directory survived`);
@@ -328,8 +319,8 @@ describe('isolatedPath', () => {
   test('node survives co-location', (t) => {
     const fakeBinDir = tmp(t, 'gsd-6033-coloc-');
     const emptyDir = tmp(t, 'gsd-6033-coloc-empty-');
-    plantExecutable(fakeBinDir, GSD_RUN);
-    linkNode(fakeBinDir, NODE_BIN);
+    writeShellStub(fakeBinDir, GSD_RUN);
+    linkExecutable(fakeBinDir, NODE_BIN);
 
     const result = isolatedPath({
       without: ['gsd_run'],
@@ -343,17 +334,32 @@ describe('isolatedPath', () => {
     fs.accessSync(path.join(result.nodeBinDir, NODE_BIN), fs.constants.X_OK);
     assert.deepEqual(fs.readdirSync(result.nodeBinDir), [NODE_BIN]);
 
+    // A child that looks `node` up BY NAME on the candidate PATH (the runner's own
+    // process.execPath never consults PATH, so it cannot prove anything here).
+    const lookup = (candidatePath) => probe(
+      [
+        'const r=require("node:child_process").spawnSync("node",["-e","process.stdout.write(\\"OK\\")"],',
+        '{encoding:"utf8",env:{PATH:process.argv[1],SystemRoot:process.env.SystemRoot},timeout:Number(process.argv[2])});',
+        'process.stdout.write(JSON.stringify({out:r.stdout||"",code:r.error&&r.error.code||null}))',
+      ].join(''),
+      { ...SYSTEM_VARS, PATH: process.env.PATH },
+      [candidatePath, String(PROBE_TIMEOUT_MS)],
+    );
+
     // The prepended dir is what keeps `node` resolvable for a child.
-    const out = runNode(['-e', 'process.stdout.write("ok")'], {
-      env: { ...SYSTEM_VARS, PATH: result.path },
-      timeoutMs: PROBE_TIMEOUT_MS,
-    });
-    assert.equal(seamStdout(out), 'ok');
+    assert.equal(lookup(result.path).out, 'OK', `node lookup failed on ${result.path}`);
+
+    // Bypass: the same filtered dirs WITHOUT the prepended node dir — the directory
+    // node was co-located with gsd_run in is gone, so the lookup must fail.
+    const withoutNodeDir = dirs.filter((dir) => dir !== result.nodeBinDir).join(path.delimiter);
+    const bypass = lookup(withoutNodeDir);
+    assert.notEqual(bypass.out, 'OK', 'node resolved without the prepended node dir');
+    assert.equal(bypass.code, 'ENOENT');
   });
 
   test('a fully filtered PATH leaves only the node dir', (t) => {
     const leakDir = tmp(t, 'gsd-6033-full-');
-    plantExecutable(leakDir, GSD_RUN);
+    writeShellStub(leakDir, GSD_RUN);
     const result = isolatedPath({ without: ['gsd_run'], basePath: leakDir });
     t.after(() => cleanup(result.nodeBinDir));
     assert.deepEqual(result.path.split(path.delimiter), [result.nodeBinDir]);
@@ -370,7 +376,8 @@ describe('isolatedPath', () => {
 describe('createHermeticRoot: ancestor config discovery', () => {
   const MODEL_PROBE = [
     'const lib=require(process.argv[1]);',
-    'const out=lib.readGsdEffectiveAgentTools(process.argv[2],{homedir:()=>process.argv[3]});',
+    // No homedir option: the resolver reads the home from the child's own environment.
+    'const out=lib.readGsdEffectiveAgentTools(process.argv[2]);',
     'process.stdout.write(JSON.stringify(out))',
   ].join('');
   const EFFORT_PROBE = [
@@ -379,7 +386,12 @@ describe('createHermeticRoot: ancestor config discovery', () => {
   ].join('');
 
   function readTools(dir, home) {
-    return probe(MODEL_PROBE, isolatedEnv({ home }), [MODEL_RESOLVER, dir, home]);
+    return probe(MODEL_PROBE, isolatedEnv({ home }), [MODEL_RESOLVER, dir]);
+  }
+
+  /** Bypass: the same probe, but the child's HOME/USERPROFILE come from a raw (un-isolated) merge. */
+  function readToolsRaw(dir, home) {
+    return probe(MODEL_PROBE, { ...SYSTEM_VARS, HOME: home, USERPROFILE: home }, [MODEL_RESOLVER, dir]);
   }
 
   function ancestorWithTools(t) {
@@ -452,7 +464,7 @@ describe('createHermeticRoot: ancestor config discovery', () => {
     fs.mkdirSync(path.join(outer, '.claude'), { recursive: true });
     fs.writeFileSync(
       path.join(outer, '.claude', 'settings.local.json'),
-      JSON.stringify({ mcpServers: { proof: { command: 'proof-server' } } }),
+      JSON.stringify({ mcpServers: { ancestor_settings: { command: 'proof-server' } } }),
     );
 
     const realLookingHome = tmp(t, 'gsd-6033-real-home-');
@@ -465,14 +477,20 @@ describe('createHermeticRoot: ancestor config discovery', () => {
 
     const hermetic = createHermeticRoot('gsd-6033-wt-hermetic-', { parent: worktree });
     t.after(() => cleanup(hermetic));
-    assert.equal(readTools(hermetic, emptyHome), null);
+    const sealed = readTools(hermetic, emptyHome);
+    assert.equal(sealed, null);
+    assert.ok(!JSON.stringify(sealed).includes('mcp__ancestor_settings__'));
 
-    // Bypass: plain dir inside the worktree + a real-looking home leaks both sources.
+    // Bypass: plain dir inside the worktree + a real-looking home (raw env merge) leaks
+    // both sources.
     const plain = fs.mkdtempSync(path.join(worktree, 'plain-'));
     t.after(() => cleanup(plain));
-    const leaked = JSON.stringify(readTools(plain, realLookingHome));
+    const leaked = JSON.stringify(readToolsRaw(plain, realLookingHome));
     assert.ok(leaked.includes('mcp__proof__*'), `project config not visible: ${leaked}`);
     assert.ok(leaked.includes('mcp__home__*'), `home defaults not visible: ${leaked}`);
+    // The resolver never reads .claude/settings.local.json, so the ancestor's mcpServers
+    // entry is invisible on both sides.
+    assert.ok(!leaked.includes('mcp__ancestor_settings__'), `settings.local.json was read: ${leaked}`);
   });
 
   test('sentinel is neutral', (t) => {

@@ -239,4 +239,4 @@ function createHermeticRoot(prefix, { parent } = {}) {
   return root;
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot };
+module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable };
