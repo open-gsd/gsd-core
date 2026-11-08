@@ -1137,6 +1137,48 @@ describe('#5831: state prune never loses entries', () => {
     for (const entry of [PHASE1, PHASE2, PHASE4]) assert.ok(archiveCount(entry) >= 1, `${entry} is archived`);
   });
 
+  test('a retry at a smaller cutoff does not adopt the block\'s cutoff when STATE.md gained an entry since the kill', () => {
+    const PHASE5 = '- [Phase 5]: Decision five, only copy';
+    pruneKilledBeforeStateWrite(3); // cutoff 5 archives phases 1, 2, 4
+    writeStateMd(tmpDir, stateLines(8, [...OLD_ENTRIES, PHASE5, PHASE7])); // a new phase-5 entry lands
+    const writes = captureArchiveWrites();
+    prune(5); // cutoff 3: pruning at 5 would also take the new entry, which the block does not hold
+
+    assert.strictEqual(writes.length, 1, 'a block is written at this run\'s own cutoff');
+    assertWriteIsPlan(writes[0], [{ section: 'Decisions', count: 2, lines: [PHASE1, PHASE2] }], 3, 5);
+    assert.strictEqual(archiveCount(PHASE5), 0, 'the new entry was not archived');
+    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE4, PHASE5, PHASE7] }], 'the new entry stays in STATE.md');
+    for (const entry of OLD_ENTRIES) assert.ok(archiveCount(entry) >= 1, `${entry} is archived (nothing is lost)`);
+  });
+
+  test('a forged heading cutoff past the current phase is never adopted, even when its block equals the whole prune', () => {
+    const forged = '# STATE Archive\n\n## Pruned 2026-01-01 (phases 1-999999, kept recent 3)\n\n### Decisions\n\n' +
+      [...OLD_ENTRIES, PHASE7].join('\n') + '\n\n';
+    fs.writeFileSync(archivePath, forged);
+    const writes = captureArchiveWrites();
+    prune(3); // cutoff 5, current phase 8
+
+    assert.strictEqual(writes.length, 1, 'this run\'s own prune is appended');
+    assertWriteIsPlan(writes[0], [{ section: 'Decisions', count: 3, lines: OLD_ENTRIES }], 5, 3);
+    assert.deepStrictEqual(prunable(), [{ section: 'Decisions', lines: [PHASE7] }], 'the recent entry is not pruned');
+  });
+
+  test('--dry-run after a kill reports the cutoff the real run would adopt and no entries to archive, and writes nothing', () => {
+    pruneKilledBeforeStateWrite(3); // cutoff 5 archives phases 1, 2, 4
+    const stateBefore = fs.readFileSync(statePath);
+    const archiveBefore = fs.readFileSync(archivePath);
+    const writes = captureArchiveWrites();
+    const out = stateLib.cmdStatePrune(tmpDir, { keepRecent: '5', dryRun: true, silent: true }, true); // cutoff 3
+
+    assert.strictEqual(out.dry_run, true);
+    assert.strictEqual(out.cutoff_phase, 5, 'the interrupted run\'s cutoff is reported');
+    assert.strictEqual(out.total_would_archive, 0, 'its entries are already archived');
+    assert.deepStrictEqual(out.sections, []);
+    assert.strictEqual(writes.length, 0);
+    assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md is untouched');
+    assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the archive is untouched');
+  });
+
   const sec = (section, lines) => ({ section, count: lines.length, lines });
   const blk = (section, lines) => ({ section, lines });
 
@@ -1177,32 +1219,52 @@ describe('#5831: state prune never loses entries', () => {
       'sections with nothing left are dropped');
   });
 
-  test('parseLastArchiveBlock reads only the last block', () => {
+  const parsedBlock = (cutoff, sections) => ({ cutoff, sections });
+
+  test('parseLastArchiveBlock reads only the last block, with its heading cutoff', () => {
     const parse = stateLib.parseLastArchiveBlock;
     assert.strictEqual(parse(''), null, 'empty text');
     assert.strictEqual(parse('# STATE Archive\n\nno blocks\n'), null, 'no heading');
-    assert.deepStrictEqual(parse('## Pruned x\n'), [], 'a heading with no sections');
+    assert.deepStrictEqual(parse('## Pruned x\n'), parsedBlock(null, []), 'a heading with no sections and no cutoff');
 
     const twoBlocks = '# STATE Archive\n\n## Pruned 1 (phases 1-1, kept recent 3)\n\n### Decisions\n\n- a\n\n' +
       '## Pruned 2 (phases 1-2, kept recent 3)\n\n### Decisions\n\n- b\n\n### Blockers\n\n- c\n- d\n\n';
-    const last = [blk('Decisions', ['- b']), blk('Blockers', ['- c', '- d'])];
+    const last = parsedBlock(2, [blk('Decisions', ['- b']), blk('Blockers', ['- c', '- d'])]);
     assert.deepStrictEqual(parse(twoBlocks), last, 'only the last block');
-    assert.deepStrictEqual(parse(twoBlocks.replace(/\n/g, '\r\n')), last, 'CRLF is stripped from sections and lines');
+    assert.deepStrictEqual(parse(twoBlocks.replace(/\n/g, '\r\n')), last, 'CRLF is stripped from the heading, sections and lines');
 
-    assert.deepStrictEqual(parse('## Pruned x\n\nstray text\n\n### Decisions\n\n- a\n'), [blk('Decisions', ['- a'])],
+    assert.strictEqual(parse('## Pruned 2026-01-01 (kept recent 3)\n\n### Decisions\n\n- a\n').cutoff, null, 'a heading without (phases 1-N, has no cutoff');
+    assert.strictEqual(parse('## Pruned x (phases 1-, kept recent 3)\n').cutoff, null, 'a heading with no digits has no cutoff');
+    assert.strictEqual(parse('## Pruned x (phases 1-99999999999999999999, kept recent 3)\n').cutoff, null, 'an unsafe integer has no cutoff');
+    assert.strictEqual(parse('## Pruned x (phases 1-0, kept recent 3)\n').cutoff, 0, 'a zero cutoff parses');
+
+    assert.deepStrictEqual(parse('## Pruned x\n\nstray text\n\n### Decisions\n\n- a\n').sections, [blk('Decisions', ['- a'])],
       'text before the first ### is ignored');
-    assert.deepStrictEqual(parse('## Pruned x\n\n### Decisions\n\n\n- a\n\n   \n- b\n'), [blk('Decisions', ['- a', '- b'])],
+    assert.deepStrictEqual(parse('## Pruned x\n\n### Decisions\n\n\n- a\n\n   \n- b\n').sections, [blk('Decisions', ['- a', '- b'])],
       'blank lines are skipped');
-    assert.deepStrictEqual(parse('## Pruned x\n\n### Decisions\n\n- a\n\n## Other\n\n- z\n'), [blk('Decisions', ['- a'])],
+    assert.deepStrictEqual(parse('## Pruned x\n\n### Decisions\n\n- a\n\n## Other\n\n- z\n').sections, [blk('Decisions', ['- a'])],
       'a later ## heading ends the block');
 
     const spaces = ' '.repeat(50000);
-    assert.deepStrictEqual(parse(`## Pruned x\n\n### Decisions\n\n${spaces}x\n- a\n`),
+    assert.deepStrictEqual(parse(`## Pruned x\n\n### Decisions\n\n${spaces}x\n- a\n`).sections,
       [blk('Decisions', [`${spaces}x`, '- a'])], 'a 50,000-space entry line followed by x');
-    assert.deepStrictEqual(parse(`## Pruned x\n\n### Decisions${spaces}x\n\n- a\n`),
+    assert.deepStrictEqual(parse(`## Pruned x\n\n### Decisions${spaces}x\n\n- a\n`).sections,
       [blk(`Decisions${spaces}x`, ['- a'])], 'a 50,000-space run inside a section heading');
-    assert.deepStrictEqual(parse(`## Pruned x\n\n### Decisions${spaces}\n\n- a\n`), [blk('Decisions', ['- a'])],
+    assert.deepStrictEqual(parse(`## Pruned x\n\n### Decisions${spaces}\n\n- a\n`).sections, [blk('Decisions', ['- a'])],
       'trailing whitespace on a section heading is trimmed');
+  });
+
+  test('property: parsing a rendered block returns the cutoff and sections it was rendered from', () => {
+    const entry = fc.string({ unit: fc.constantFrom('a', 'Z', '0', ' ', '-', '#', '[', ']', ':', '<', '!', '>', 'é', '\t'), maxLength: 30 }).map(t => `- ${t}`);
+    const section = fc.record({
+      section: fc.constantFrom('Decisions', 'Recently Completed', 'Blockers'),
+      lines: fc.array(entry, { minLength: 1, maxLength: 6 }),
+    });
+    fc.assert(fc.property(fc.array(section, { minLength: 1, maxLength: 3 }), fc.nat(1000), fc.nat(9), (sections, cutoff, keepRecent) => {
+      const input = sections.map(sx => ({ ...sx, count: sx.lines.length }));
+      const out = stateLib.renderStateArchiveAppend(stateLib.planStateArchiveAppend(null, input, { date: '2026-11-04', cutoff, keepRecent }));
+      assert.deepStrictEqual(stateLib.parseLastArchiveBlock(out), { cutoff, sections }, 'the round trip returns the same block');
+    }), { seed: 5831 });
   });
 
   test('a prune with nothing old enough to archive writes neither STATE.md nor the archive', () => {
