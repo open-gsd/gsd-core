@@ -1445,12 +1445,8 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean, opt
     const replayEnv = { ...process.env, ...readOnlyGitEnv(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_PAGER: 'cat', PAGER: 'cat' };
     // Fail closed: an operand that exists but cannot be shown to resolve inside the project is refused.
     const isInsideRoot = (candidate: string): boolean => {
-      try {
-        if (!fs.existsSync(path.resolve(projectDir, candidate))) return true;
-        return tryWithinRoot(candidate, projectDir) !== null;
-      } catch {
-        return false;
-      }
+      const st = statEvidence(path.resolve(projectDir, candidate));
+      return st.kind === 'none' || (st.kind === 'found' && tryWithinRoot(candidate, projectDir) !== null);
     };
     replayReport = replayBaselineCriteria(content, {
       isInsideRoot,
