@@ -54,8 +54,8 @@ describe('#4783 execute-phase continuation spawn does not point at a missing tem
     assert.ok(start !== -1 && end > start, 'executor must define checkpoint_return_format');
     const checkpoint = text.slice(start, end);
     assert.match(checkpoint, /<worktree_metadata>/);
-    assert.match(checkpoint, /"worktree_path":"\$\{GSD_WORKTREE_PATH:-\}"/);
-    assert.match(checkpoint, /"branch":"\$\{GSD_WORKTREE_BRANCH:-\}"/);
-    assert.match(checkpoint, /"expected_base":"\$\{GSD_WORKTREE_EXPECTED_BASE:-\}"/);
+    assert.match(checkpoint, /"worktree_path":"\{captured_worktree_path\}"/);
+    assert.match(checkpoint, /"branch":"\{captured_branch\}"/);
+    assert.match(checkpoint, /"expected_base":"\{captured_expected_base\}"/);
   });
 });

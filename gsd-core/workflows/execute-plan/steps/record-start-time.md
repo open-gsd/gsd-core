@@ -1,6 +1,9 @@
 <step name="record_start_time">
-Replace `{timing_attempt}` with exactly `fresh` when this invocation has no continuation payload, or `continuation` when it carries completed-task/checkpoint state. Replace `{phase_json}` and `{plan_json}` with JSON string literals, never raw shell text. The shell guard is authoritative: a fresh attempt replaces an abandoned marker, while a continuation preserves it. A continuation must resume in the original worktree; if its marker is missing, stop and resume there or deliberately restart as `fresh`.
+Replace `{timing_attempt}` with exactly `fresh` when this invocation has no continuation payload, or `continuation` when it carries completed-task/checkpoint state. Replace `{timing_phase}` and `{timing_plan}` with JSON string literals, never raw shell text. The shell guard is authoritative: a fresh attempt replaces an abandoned marker, while a continuation preserves it. A continuation must resume in the original worktree; if its marker is missing, stop and resume there or deliberately restart as `fresh`.
 ```bash
+# Substitute {timing_phase} and {timing_plan} with JSON string literals for the raw
+# phase and plan IDs. PHASE_ID/PLAN_ID below are canonical IDs; PHASE_VALUE/PLAN_VALUE
+# (where used) retain the raw display values. Never substitute the plan JSON object.
 GSD_TIMING_ATTEMPT='{timing_attempt}'
 # plan-timing-key:start
 canonicalize_timing_id() {
@@ -21,11 +24,11 @@ canonicalize_timing_id() {
   printf '%s' "$canonical"
 }
 PHASE_JSON=$(cat <<'PLAN!PHASE!5212'
-{phase_json}
+{timing_phase}
 PLAN!PHASE!5212
 )
 PLAN_JSON=$(cat <<'PLAN!NUMBER!5212'
-{plan_json}
+{timing_plan}
 PLAN!NUMBER!5212
 )
 case "$PHASE_JSON:$PLAN_JSON" in *'{'*|*'}'*) echo "ERROR: timing identity contains an unsubstituted placeholder." >&2; exit 1 ;; esac
@@ -34,7 +37,7 @@ PLAN_ID=$(node -e 'const v=JSON.parse(process.argv[1]);if(typeof v!=="string")pr
 PHASE_ID=$(canonicalize_timing_id "$PHASE_ID")
 PLAN_ID=$(canonicalize_timing_id "$PLAN_ID")
 TIMING_KEY=$(printf '%s\0%s' "$PHASE_ID" "$PLAN_ID" | git hash-object --stdin) || exit 1
-TIMING_FILE=$(git rev-parse --git-path "gsd-plan-timing-$TIMING_KEY") || exit 1
+TIMING_FILE="$(git rev-parse --path-format=absolute --git-common-dir)/gsd-plan-timing-$TIMING_KEY" || exit 1
 # plan-timing-key:end
 case "$GSD_TIMING_ATTEMPT" in
   fresh)

@@ -1119,7 +1119,7 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
    ```
 5. User responds: "approved"/"done" | issue description | decision selection
 6. **Spawn continuation agent (NOT resume) in the original executor worktree** — reuse a non-empty returned `<worktree_metadata>.worktree_path` as its cwd so per-worktree timing and other Git metadata remain available. An empty path means the executor ran in the main checkout: keep the main checkout cwd and do not `cd`. Fail closed only when a returned non-empty path no longer exists — with a prompt built from these placeholders (there is no separate template file; this list is the contract):
-   - `{completed_tasks_table}`: From checkpoint return, wrapped in a `<completed_tasks>` tag (the executor's continuation handling keys on it)
+   - `{completed_tasks_table}`: Always emit `<completed_tasks></completed_tasks>`, even for an empty table; its presence selects continuation. Timing uses the repository's shared Git directory across harness worktrees.
    - `{resume_task_number}` + `{resume_task_name}`: Current task
    - `{user_response}`: What user provided
    - `{resume_instructions}`: Based on checkpoint type

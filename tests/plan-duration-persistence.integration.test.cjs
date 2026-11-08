@@ -118,8 +118,8 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
       realCli ? 'gsd_run() { node "$FIXTURE_TOOLS" "$@"; }' :
         'gsd_run() { if [ -n "$FIXTURE_MUTATION_LOG" ]; then node -e \'const fs=require("node:fs");fs.appendFileSync(process.argv[1],JSON.stringify(process.argv.slice(2))+"\\n")\' "$FIXTURE_MUTATION_LOG" "$@"; fi; if [ "$2" = summary-extract ]; then printf "%s\\n" "$FIXTURE_DECISIONS_JSON"; elif [ "$2" = state.record-metric ]; then node -e \'const a=process.argv.slice(1);process.stdout.write(JSON.stringify({duration:a[a.indexOf("--duration")+1]})+"\\n")\' "$@"; fi; }',
       executableCode
-        .replaceAll('{phase_json}', JSON.stringify(phase))
-        .replaceAll('{plan_json}', JSON.stringify(plan))
+        .replaceAll('{timing_phase}', JSON.stringify(phase))
+        .replaceAll('{timing_plan}', JSON.stringify(plan))
         .replaceAll('{timing_attempt}', attempt)
         .replaceAll('{task_count}', String(taskCount))
         .replaceAll('{file_count}', String(fileCount))
@@ -325,18 +325,8 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           gitOrThrow(['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'fixture'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
           const linked = path.join(dir, 'linked');
           gitOrThrow(['worktree', 'add', '-qb', 'linked', linked], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
-          assert.throws(
-            () => runFresh(linked, finish(), 10000, identities[0]),
-            (error) => error.exitCode === 1 && /original worktree/.test(error.stderr),
-            'a continuation in another worktree must stop with an actionable recovery',
-          );
-          assert.throws(
-            () => runFresh(linked, start(), 10000, identities[0], false, false, 'continuation'),
-            (error) => error.exitCode === 1 && /original worktree/.test(error.stderr),
-            'the guarded start must not silently reset a missing continuation marker',
-          );
-          runFresh(linked, start(), 10000, identities[0]);
-          assert.deepEqual(runFresh(linked, finish(), 10060, identities[0]), { duration: '1 min', started: '1970-01-01T02:46:40Z', completed: '1970-01-01T02:47:40Z' });
+          runFresh(linked, start(), 4000, identities[0], false, false, 'continuation');
+          assert.deepEqual(runFresh(linked, finish(), 4660, identities[0]), { duration: '1h 1m', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T01:17:40Z' });
           assert.deepEqual(runFresh(dir, finish(), 4660, identities[0]), { duration: '1h 1m', started: '1970-01-01T00:16:40Z', completed: '1970-01-01T01:17:40Z' });
         } finally { cleanup(dir); }
       });
@@ -385,6 +375,22 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           assert.equal(fs.existsSync(path.resolve(dir, `${timingFile}.result`)), false);
         } finally { cleanup(dir); }
       });
+
+      for (const epoch of [999999999, 1000000000, 10000000000]) {
+        test(`epoch digit boundary ${String(epoch).length} digits`, (t) => {
+          const dir = fixture();
+          t.after(() => cleanup(dir));
+          runFresh(dir, start(), epoch);
+          if (String(epoch).length > 10) {
+            assert.throws(() => runFresh(dir, finish(), epoch), (error) => error.exitCode === 1);
+          } else {
+            assert.deepEqual(runFresh(dir, finish(), epoch), {
+              duration: '0 min', started: new Date(epoch * 1000).toISOString().replace('.000Z', 'Z'),
+              completed: new Date(epoch * 1000).toISOString().replace('.000Z', 'Z'),
+            });
+          }
+        });
+      }
 
       test('empty or truncated cached results fail before any STATE mutation', () => {
         const dir = fixture();

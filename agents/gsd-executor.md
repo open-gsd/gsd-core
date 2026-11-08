@@ -120,7 +120,10 @@ if [ -f .git ]; then
   GSD_WORKTREE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
   GSD_WORKTREE_EXPECTED_BASE=$(git rev-parse HEAD)
 fi
+node -e 'process.stdout.write(JSON.stringify({worktree_path:process.argv[1],branch:process.argv[2],expected_base:process.argv[3]})+"\n")' "$GSD_WORKTREE_PATH" "$GSD_WORKTREE_BRANCH" "$GSD_WORKTREE_EXPECTED_BASE"
 ```
+Retain the printed JSON as return data. Every checkpoint/final return copies these
+printed fields; a later shell must not expand the capture variables again.
 </worktree_metadata_capture>
 
 <step name="determine_execution_pattern">
@@ -379,7 +382,7 @@ When hitting checkpoint or auth gate, return this structure:
 [What user needs to do/provide]
 
 <worktree_metadata>
-{"agent_id":"{phase}-{plan}","worktree_path":"${GSD_WORKTREE_PATH:-}","branch":"${GSD_WORKTREE_BRANCH:-}","expected_base":"${GSD_WORKTREE_EXPECTED_BASE:-}"}
+{"agent_id":"{phase}-{plan}","worktree_path":"{captured_worktree_path}","branch":"{captured_branch}","expected_base":"{captured_expected_base}"}
 </worktree_metadata>
 ```
 
