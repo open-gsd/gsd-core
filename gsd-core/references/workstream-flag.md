@@ -120,7 +120,6 @@ first. The reserved list has a single owner
 .planning/
 ├── PROJECT.md          # Shared
 ├── config.json         # Shared
-├── milestones/         # Shared
 ├── codebase/           # Shared
 ├── active-workstream   # Shared marker; inherited when a session has no pointer of its own
 └── workstreams/
@@ -128,11 +127,15 @@ first. The reserved list has a single owner
     │   ├── STATE.md
     │   ├── ROADMAP.md
     │   ├── REQUIREMENTS.md
+    │   ├── MILESTONES.md   # Per workstream: `milestone complete` writes it, init reads it
+    │   ├── milestones/     # Per workstream: archived phases (`phase_archive_path`)
     │   └── phases/
     └── feature-b/      # Workstream B
         ├── STATE.md
         ├── ROADMAP.md
         ├── REQUIREMENTS.md
+        ├── MILESTONES.md
+        ├── milestones/
         └── phases/
 ```
 
