@@ -8059,7 +8059,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         try {
           const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
           // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
-          autoPruned = pruneResult?.['pruned'] === true;
+          autoPruned = pruneResult.pruned === true;
         } catch (err) {
           // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
           // the failed prune left them (it never loses entries).

@@ -418,6 +418,21 @@ interface StateSyncOptions {
   verify?: boolean;
 }
 
+/** What `cmdStatePrune` returns (and emits, apart from `pruned` on the not-found error). */
+interface StatePruneResult {
+  pruned: boolean;
+  error?: string;
+  reason?: string;
+  dry_run?: boolean;
+  cutoff_phase?: number;
+  keep_recent?: number;
+  sections?: Array<{ section: string; entries_archived?: number; entries_would_archive?: number }>;
+  total_would_archive?: number;
+  total_archived?: number;
+  note?: string;
+  archive_file?: string | null;
+}
+
 interface PrunedSection {
   section: string;
   count: number;
@@ -7286,51 +7301,43 @@ const STATE_ARCHIVE_HEADER = '# STATE Archive\n\nPruned entries from STATE.md. R
 /** One `### <name>` section of a STATE-ARCHIVE.md block: its entry lines in order. */
 type ArchiveSection = { section: string; lines: string[] };
 
+/** The archive's most recent `## Pruned ` block: its heading cutoff (null when unparsable) and its sections. */
+interface ParsedArchiveBlock {
+  cutoff: number | null;
+  sections: ArchiveSection[];
+}
+
 /**
- * Pure (#5831): the entries of the archive's most recent `## Pruned ` block,
- * per section, or null when the archive has no such heading. The block is the
- * text after the last line starting `## Pruned ` up to the next `## ` heading;
- * a `### <name>` line starts a section and every other non-blank line is an
- * entry of the current section (trailing `\r` stripped). Lines before the first
- * `###` are ignored.
+ * Pure (#5831): the archive's most recent `## Pruned <date> (phases 1-<N>, ...)`
+ * block, or null when the archive has no `## Pruned ` heading. `cutoff` is N, or
+ * null when the heading has no parsable `(phases 1-<N>, ` part. `sections` are
+ * the block's entries: the text after the last line starting `## Pruned ` up to
+ * the next `## ` heading; a `### <name>` line starts a section and every other
+ * non-blank line is an entry of the current section (trailing `\r` stripped).
+ * Lines before the first `###` are ignored.
  */
-function parseLastArchiveBlock(archiveText: string): ArchiveSection[] | null {
+function parseLastArchiveBlock(archiveText: string): ParsedArchiveBlock | null {
   const all = archiveText.split(/\r?\n/);
   let start = -1;
   for (let i = all.length - 1; i >= 0; i--) {
     if (all[i].startsWith('## Pruned ')) { start = i; break; }
   }
   if (start === -1) return null;
-  const out: ArchiveSection[] = [];
+  const heading = /\(phases 1-(\d+), /.exec(all[start]);
+  const parsed = heading === null ? NaN : Number(heading[1]);
+  const sections: ArchiveSection[] = [];
   let current: ArchiveSection | null = null;
   for (let i = start + 1; i < all.length; i++) {
     const line = all[i].replace(/\r$/, '');
     if (line.startsWith('## ')) break;
     if (line.startsWith('### ')) {
       current = { section: line.slice(4).trimEnd(), lines: [] };
-      out.push(current);
+      sections.push(current);
     } else if (current !== null && line.trim().length > 0) {
       current.lines.push(line);
     }
   }
-  return out;
-}
-
-/**
- * Pure (#5831): the cutoff N in the heading `## Pruned <date> (phases 1-<N>, ...)`
- * of the archive's most recent block, or null when there is no such heading or
- * its cutoff cannot be parsed.
- */
-function parseLastArchiveCutoff(archiveText: string): number | null {
-  const all = archiveText.split(/\r?\n/);
-  for (let i = all.length - 1; i >= 0; i--) {
-    if (!all[i].startsWith('## Pruned ')) continue;
-    const m = /\(phases 1-(\d+), /.exec(all[i]);
-    if (m === null) return null;
-    const n = Number(m[1]);
-    return Number.isSafeInteger(n) ? n : null;
-  }
-  return null;
+  return { cutoff: Number.isSafeInteger(parsed) ? parsed : null, sections };
 }
 
 function countLines(lines: string[]): Map<string, number> {
@@ -7468,6 +7475,54 @@ interface PruneRun {
 }
 
 /**
+ * Decide which prune this invocation runs (#5831). The archive's last block
+ * names a cutoff N in its heading. When N is larger than this run's cutoff and
+ * does not exceed the current phase, and the prune at N EQUALS the block exactly
+ * (per section, with multiplicity, `\r` ignored: the prune at N minus the block
+ * is empty), the block is an interrupted run's, and this invocation completes it
+ * by pruning at N. In every other case — no block, an unparsable or smaller N, an
+ * N past the current phase, or a prune at N that holds entries the block does not
+ * (added since the interruption) — this run's own cutoff stays in force.
+ */
+function chooseCutoffRun(
+  block: ParsedArchiveBlock | null,
+  first: PruneRun,
+  cutoff: number,
+  currentPhase: number,
+  runPrune: (cutoff: number) => PruneRun,
+): { run: PruneRun; cutoff: number } {
+  if (block !== null && block.cutoff !== null && block.cutoff > cutoff && block.cutoff <= currentPhase) {
+    const wider = runPrune(block.cutoff);
+    const { pending, remainder } = subtractPendingBlock(block.sections, wider.archivedSections);
+    if (pending && remainder.length === 0) return { run: wider, cutoff: block.cutoff };
+  }
+  return { run: first, cutoff };
+}
+
+/**
+ * The archive's current bytes for a prune that may append to it (#5831). A
+ * symlinked or special archive is refused before it is read or snapshotted:
+ * reading through a link would snapshot another file's bytes, and the rollback
+ * would then replace the link itself. O_NOFOLLOW closes the window between the
+ * lstat and the open: a link planted in between fails with ELOOP. Null when the
+ * archive is absent.
+ */
+function readArchiveSnapshot(archivePath: string): Buffer | null {
+  try {
+    const archiveStat = fs.lstatSync(archivePath);
+    if (!archiveStat.isFile()) {
+      throw new Error(
+        `state prune: ${archivePath} is ${archiveStat.isSymbolicLink() ? 'a symlink' : 'not a regular file'}; ` +
+        'refusing to archive into it. STATE.md was not changed.',
+      );
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  return platformReadBytesSync(archivePath, { noFollow: true });
+}
+
+/**
  * Append one `## Pruned <date> ...` block to STATE-ARCHIVE.md and return the
  * prune it archived, the cutoff it ran at, and a handle that puts the archive
  * back exactly as it was (#5831).
@@ -7492,11 +7547,12 @@ interface PruneRun {
  * archived: nothing is lost, and it is not archived a second time.
  *
  * The interrupted run is completed, not duplicated, when this run's cutoff is
- * smaller: if the block's heading names a larger cutoff N and the prune at N
- * contains the block, this invocation prunes at N instead (the block's entries
- * leave STATE.md; nothing is archived twice). A heading without a parsable
- * cutoff, or a block the prune at N does not contain, leaves this run's own
- * cutoff in force and the whole prune is appended (duplicated, never lost).
+ * smaller: if the block's heading names a larger cutoff N (no greater than the
+ * current phase) and the prune at N equals the block exactly, this invocation
+ * prunes at N instead (see `chooseCutoffRun`; the block's entries leave
+ * STATE.md and nothing is archived twice). Otherwise this run's own cutoff stays
+ * in force and the whole prune is appended (duplicated, never lost), so entries
+ * added since the interruption are never pruned early.
  */
 function publishPrunedToArchive(
   statePath: string,
@@ -7504,6 +7560,7 @@ function publishPrunedToArchive(
   first: PruneRun,
   runPrune: (cutoff: number) => PruneRun,
   cutoff: number,
+  currentPhase: number,
   keepRecent: number,
 ): { run: PruneRun; cutoff: number; rollback: ArchiveRollback | null } {
   const stateBytes = platformReadBytesSync(statePath);
@@ -7512,35 +7569,13 @@ function publishPrunedToArchive(
   // file has bits worth keeping: a symlink's own mode (0o777) is never applied to the restored file.
   const stateStat = fs.lstatSync(statePath);
   const stateMode = stateStat.isFile() ? stateStat.mode & 0o777 : undefined;
-  // A symlinked or special archive is refused before it is read or snapshotted: reading through a
-  // link would snapshot another file's bytes, and the rollback would then replace the link itself.
-  try {
-    const archiveStat = fs.lstatSync(archivePath);
-    if (!archiveStat.isFile()) {
-      throw new Error(
-        `state prune: ${archivePath} is ${archiveStat.isSymbolicLink() ? 'a symlink' : 'not a regular file'}; ` +
-        'refusing to archive into it. STATE.md was not changed.',
-      );
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-  // O_NOFOLLOW closes the window between the lstat above and this open: a link planted in between fails with ELOOP.
-  const archiveBytes = platformReadBytesSync(archivePath, { noFollow: true });
+  const archiveBytes = readArchiveSnapshot(archivePath);
   const existing = archiveBytes === null ? null : archiveBytes.toString('utf-8');
   const lastBlock = existing === null ? null : parseLastArchiveBlock(existing);
-
-  let run = first;
-  let effectiveCutoff = cutoff;
-  const blockCutoff = existing === null ? null : parseLastArchiveCutoff(existing);
-  if (lastBlock !== null && blockCutoff !== null && blockCutoff > cutoff) {
-    const wider = runPrune(blockCutoff);
-    if (subtractPendingBlock(lastBlock, wider.archivedSections).pending) {
-      run = wider;
-      effectiveCutoff = blockCutoff;
-    }
-  }
-  const { pending, remainder } = subtractPendingBlock(lastBlock, run.archivedSections);
+  const chosen = chooseCutoffRun(lastBlock, first, cutoff, currentPhase, runPrune);
+  const run = chosen.run;
+  const effectiveCutoff = chosen.cutoff;
+  const { pending, remainder } = subtractPendingBlock(lastBlock === null ? null : lastBlock.sections, run.archivedSections);
   if (pending && remainder.length === 0) return { run, cutoff: effectiveCutoff, rollback: null };
 
   const plan = planStateArchiveAppend(existing, remainder, { date: realClock.localToday(), cutoff: effectiveCutoff, keepRecent });
@@ -7651,11 +7686,11 @@ function restoreArchiveAfterFailedWrite(
  * Returns the result object it emits (also when `silent`), so callers can tell
  * whether anything was actually pruned.
  */
-function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): Record<string, unknown> {
+function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): StatePruneResult {
   const silent = !!options.silent;
   const emit = silent ? () => {} : (result: Record<string, unknown>, r: boolean, v?: string) => output(result, r, v);
-  const finish = (result: Record<string, unknown>, v?: string): Record<string, unknown> => {
-    emit(result, raw, v);
+  const finish = (result: StatePruneResult, v?: string): StatePruneResult => {
+    emit({ ...result }, raw, v);
     return result;
   };
   const statePath = planningPaths(cwd).state;
@@ -7671,7 +7706,10 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): R
   // Read through the non-blocking seam: a FIFO or device at STATE.md fails with ENXIO and a
   // directory with EISDIR instead of blocking this process.
   const stateBytesBefore = platformReadBytesSync(statePath);
-  if (stateBytesBefore === null) return finish({ error: 'STATE.md not found' });
+  if (stateBytesBefore === null) {
+    emit({ error: 'STATE.md not found' }, raw);
+    return { pruned: false, error: 'STATE.md not found' };
+  }
   const rawState = stateBytesBefore.toString('utf-8');
   const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
   const body = stripFrontmatter(rawState);
@@ -7702,15 +7740,31 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): R
   if (dryRun) {
     // Dry-run: compute what would be pruned without writing anything
     const dryBytes = platformReadBytesSync(statePath);
-    if (dryBytes === null) return finish({ error: 'STATE.md not found' });
-    const result = runPruneCore(dryBytes.toString('utf-8'));
-    const totalPruned = result.archivedSections.reduce((sum, s) => sum + s.count, 0);
+    if (dryBytes === null) {
+      emit({ error: 'STATE.md not found' }, raw);
+      return { pruned: false, error: 'STATE.md not found' };
+    }
+    const dryContent = dryBytes.toString('utf-8');
+    let result = runPruneCore(dryContent);
+    let dryCutoff = cutoff;
+    let wouldArchive = result.archivedSections;
+    if (result.archivedSections.length > 0) {
+      // The same decision the real run makes, with the archive read-only: an interrupted run's
+      // block is completed at its cutoff, and its entries are not counted as archived again.
+      const archiveBytes = readArchiveSnapshot(archivePath);
+      const block = archiveBytes === null ? null : parseLastArchiveBlock(archiveBytes.toString('utf-8'));
+      const chosen = chooseCutoffRun(block, result, cutoff, currentPhase, (atCutoff) => runPruneCore(dryContent, atCutoff));
+      result = chosen.run;
+      dryCutoff = chosen.cutoff;
+      wouldArchive = subtractPendingBlock(block === null ? null : block.sections, result.archivedSections).remainder;
+    }
+    const totalPruned = wouldArchive.reduce((sum, s) => sum + s.count, 0);
     return finish({
       pruned: false,
       dry_run: true,
-      cutoff_phase: cutoff,
+      cutoff_phase: dryCutoff,
       keep_recent: keepRecent,
-      sections: result.archivedSections.map(s => ({ section: s.section, entries_would_archive: s.count })),
+      sections: wouldArchive.map(s => ({ section: s.section, entries_would_archive: s.count })),
       total_would_archive: totalPruned,
       note: totalPruned > 0 ? 'Run without --dry-run to actually prune' : 'Nothing to prune',
     }, totalPruned > 0 ? 'true' : 'false');
@@ -7752,7 +7806,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): R
     let result = runPruneCore(content);
     if (result.archivedSections.length > 0) {
       const published = publishPrunedToArchive(
-        statePath, archivePath, result, (atCutoff) => runPruneCore(content, atCutoff), cutoff, keepRecent,
+        statePath, archivePath, result, (atCutoff) => runPruneCore(content, atCutoff), cutoff, currentPhase, keepRecent,
       );
       result = published.run;
       effectiveCutoff = published.cutoff;
