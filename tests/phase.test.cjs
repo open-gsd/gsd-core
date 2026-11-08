@@ -19339,29 +19339,35 @@ describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
   // heading after a closed comment is still a real milestone heading.
   const roadmapWithTail = (...tail) => ['# Roadmap', '', '### Phase 1: One', '**Goal:** a', '', ...tail].join('\n');
   const HEADING_AFTER_UNCLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '');
-  const HEADING_ON_UNCLOSED_COMMENT_LINE = roadmapWithTail('<!-- ## v2.0 Next', '');
+  const HEADING_AFTER_FENCED_UNCLOSED_COMMENT = roadmapWithTail('```', '<!--', '```', '## v2.0 Next', '');
+  const HEADING_AFTER_MID_LINE_UNCLOSED_COMMENT = roadmapWithTail('prose with a stray <!-- opener', '## v2.0 Next', '');
+  const HEADING_IN_FENCE_AFTER_TILDE_LINE = roadmapWithTail('```', '~~~', '## v2.0 Next', '```', '');
   const HEADING_INSIDE_CLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '-->', '');
   const HEADING_AFTER_CLOSED_COMMENT = roadmapWithTail('<!-- note -->', '## v2.0 Next', '');
   const HEADING_AFTER_REFORMING_COMMENT = roadmapWithTail('<!-<!-- c -->-', '## v2.0 Next', ' -->', '');
 
   for (const [shape, roadmap] of [
     ['a versioned heading after an unclosed HTML comment', HEADING_AFTER_UNCLOSED_COMMENT],
-    ['a versioned heading on the line of an unclosed HTML comment', HEADING_ON_UNCLOSED_COMMENT_LINE],
     ['a versioned heading inside a closed HTML comment', HEADING_INSIDE_CLOSED_COMMENT],
+    ['a versioned heading inside a ``` fence that holds a ~~~ line', HEADING_IN_FENCE_AFTER_TILDE_LINE],
   ]) {
     test(`${shape}, STATE milestone v1.0: behaves as a roadmap with no recognized milestone heading`, () => {
       setup({ roadmap, milestone: 'v1.0' });
       const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
       assert.equal(result.success, true, result.error);
       assert.equal(JSON.parse(result.output).phase_number, 2);
+      const written = roadmapBytes().toString('utf-8').split('\n');
+      assert.equal(written.filter((line) => /^### Phase 2: New thing$/.test(line)).length, 1, 'ROADMAP.md must carry the written phase heading');
     });
   }
 
   for (const [shape, roadmap] of [
     ['a versioned heading after a closed HTML comment', HEADING_AFTER_CLOSED_COMMENT],
-    // `<!-<!-- c -->-` is not a comment opener once `<!-- c -->` is blanked in
-    // one pass: the heading below it stays visible, as the shared blanking sees it.
+    // Pins existing blanking behaviour: `<!-- c -->` is blanked in one pass, so
+    // `<!-<!-- c -->-` never re-forms an opener and the heading below it stays visible.
     ['a versioned heading after a re-forming `<!-<!-- c -->-` sequence', HEADING_AFTER_REFORMING_COMMENT],
+    ['a versioned heading after a ``` fence that holds an unclosed <!--', HEADING_AFTER_FENCED_UNCLOSED_COMMENT],
+    ['a versioned heading after a prose line with a mid-line unclosed <!--', HEADING_AFTER_MID_LINE_UNCLOSED_COMMENT],
   ]) {
     test(`${shape}, STATE milestone v1.0: the heading is recognized, so the unresolved milestone refuses`, () => {
       setup({ roadmap, milestone: 'v1.0' });

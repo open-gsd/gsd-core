@@ -4677,6 +4677,24 @@ describe('milestoneVersionAtOffset (#5679)', () => {
   });
 });
 
+describe('#5726: blankFencesAndComments properties', () => {
+  const { blankFencesAndComments } = roadmapParser;
+  const PIECES = ['<!--', '-->', '```', '~~~', '`', '~', '\n', '\r\n', ' ', '  ', '## v2.0 X', 'a', '<', '!', '-'];
+  const docs = fc.array(fc.constantFrom(...PIECES), { maxLength: 40 }).map((c) => c.join(''));
+
+  test('output is same-length, keeps every newline in place, and never invents a comment opener', () => {
+    fc.assert(fc.property(docs, (input) => {
+      const out = blankFencesAndComments(input);
+      assert.strictEqual(out.length, input.length);
+      for (let i = 0; i < input.length; i++) {
+        if (input[i] === '\n') assert.strictEqual(out[i], '\n', `newline moved at ${i}`);
+        else assert.notStrictEqual(out[i], '\n', `newline invented at ${i}`);
+        if (out.startsWith('<!--', i)) assert.ok(input.startsWith('<!--', i), `opener invented at ${i}`);
+      }
+    }), { numRuns: 500, seed: 5726 });
+  });
+});
+
 // ─── isClosedMilestoneHeading (#5726) ────────────────────────────────────────
 
 describe('#5726: isClosedMilestoneHeading', () => {
