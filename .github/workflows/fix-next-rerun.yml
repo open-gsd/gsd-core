@@ -1,0 +1,63 @@
+# #6076: Tests no longer triggers on label events (a label change used to start a
+# full run and cancel the one in flight). When `fix-next` is added or removed,
+# this workflow re-runs ONLY the `Base branch health` job of the PR's latest
+# Tests run. GitHub re-runs its dependent `Required tests`; the other lanes keep
+# their results. The job reads the PR's current labels from the API, so the
+# re-run sees the label as it is now.
+#
+# pull_request_target is safe here: nothing is checked out, no PR code runs, and
+# the label name, repository and head sha reach the script through env only.
+name: fix-next re-run
+
+on:
+  pull_request_target:
+    types: [labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: fix-next-rerun-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  rerun-base-health:
+    name: Re-run Base branch health
+    if: github.event.label.name == 'fix-next'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: write
+    steps:
+      - name: Re-run Base branch health on the latest Tests run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # A job can only be re-run once its run has completed, so wait (bounded)
+          # for the latest Tests run to finish before re-running the one job.
+          deadline=$(( $(date +%s) + 85 * 60 ))
+          while :; do
+            run=$(gh run list --workflow test.yml --commit "$HEAD_SHA" --event pull_request --limit 1 --json databaseId,status)
+            run_id=$(jq -r '.[0].databaseId // empty' <<<"$run")
+            if [ -z "$run_id" ]; then
+              echo "No Tests run for $HEAD_SHA yet; when it starts, Base branch health reads the label from the API."
+              exit 0
+            fi
+            status=$(jq -r '.[0].status' <<<"$run")
+            [ "$status" = "completed" ] && break
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Tests run $run_id is still $status; re-run Base branch health by hand once it completes."
+              exit 1
+            fi
+            echo "Tests run $run_id is $status; waiting for it to complete."
+            sleep 30
+          done
+          job_id=$(gh run view "$run_id" --json jobs --jq '.jobs[] | select(.name == "Base branch health") | .databaseId' | head -n1)
+          if [ -z "$job_id" ]; then
+            echo "::error::Tests run $run_id has no Base branch health job."
+            exit 1
+          fi
+          echo "Re-running Base branch health (job $job_id) on Tests run $run_id."
+          gh run rerun "$run_id" --job "$job_id"
