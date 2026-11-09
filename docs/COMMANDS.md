@@ -1081,6 +1081,16 @@ Run all remaining phases autonomously.
 /gsd-autonomous --text              # Run with text-mode prompts
 ```
 
+**Smart discuss question classes.** Without `--interactive`, each phase's discuss step classifies every grey-area question:
+
+| Class | Examples | Handling |
+|-------|----------|----------|
+| Technical, reversible | file layout, naming, internal data shapes, error-handling patterns, test approach | Decided without a prompt; shown in one "Decided autonomously" block |
+| Technical, hard to reverse | persisted schema, public API/URL contracts, auth model, new external dependency, data migrations | Asked with a ✅ Recommended answer ("Accept all" per area) |
+| Product / UX / preference | — | Asked neutrally: 2–3 options with trade-offs, no recommendation, no pre-selection |
+
+An unsure question is treated as hard to reverse, or as product. Autonomous decisions are written to the phase `CONTEXT.md` under `### Decided autonomously` and to `DISCUSSION-LOG.md` as `[auto]` lines; they are reversed by editing `CONTEXT.md` or re-running discuss before planning. See [Review or reverse an autonomous decision](how-to/run-phases-autonomously.md#review-or-reverse-an-autonomous-decision).
+
 ### `/gsd-debug`
 
 Systematic debugging with persistent state.
