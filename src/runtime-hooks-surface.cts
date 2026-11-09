@@ -712,16 +712,18 @@ function powerShellQuote(value: string): string {
 }
 
 /**
- * A hook script path as a PowerShell argument. A local-install path anchored on
- * `"$CLAUDE_PROJECT_DIR"/...` becomes a double-quoted `$env:CLAUDE_PROJECT_DIR`
- * expansion; any other path is a single-quoted literal.
+ * A hook script path as a PowerShell argument. A path anchored on
+ * `"$CLAUDE_PROJECT_DIR"/...` (local installs) or `$HOME/...` (portable installs)
+ * becomes an expanding PowerShell expression; any other path is a single-quoted
+ * literal. A path carrying some OTHER shell variable (`$FOO`) is a POSIX token
+ * with no PowerShell spelling here: null, and the caller leaves the entry alone.
  */
-function powerShellScriptArg(scriptPath: string): string {
-  // `"$CLAUDE_PROJECT_DIR"/...` (local installs) and `$HOME/...` (portable installs)
-  // are the two shell-variable-anchored spellings; PowerShell has both variables.
-  const anchored = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/.*)$/) || scriptPath.match(/^\$HOME(\/.*)$/);
+function powerShellScriptArg(scriptPath: string, opts: { literal?: boolean } = {}): string | null {
+  const projectDir = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/.*)$/);
+  const homeDir = scriptPath.match(/^\$HOME(\/.*)$/);
+  const anchored = projectDir || homeDir;
   if (anchored) {
-    const variable = scriptPath.startsWith('$HOME') ? '$HOME' : '$env:CLAUDE_PROJECT_DIR';
+    const variable = projectDir ? '$env:CLAUDE_PROJECT_DIR' : '$HOME';
     const suffix = anchored[1];
     // Plain suffixes keep the readable double-quoted expansion; any character
     // PowerShell treats specially inside double quotes (including the curly
@@ -729,6 +731,9 @@ function powerShellScriptArg(scriptPath: string): string {
     if (!/["`$\u201C\u201D\u201E]/.test(suffix)) return `"${variable}${suffix}"`;
     return `(${variable} + ${powerShellQuote(suffix)})`;
   }
+  // A real filesystem path (the installer's own configDir) may contain `$`; a
+  // token read back from settings.json may not (it would never expand).
+  if (!opts.literal && scriptPath.includes('$')) return null;
   return powerShellQuote(shellCmdProjection.posixNormalize(scriptPath));
 }
 
@@ -744,7 +749,7 @@ function buildPowerShellHookCommand(scriptToken: string, opts?: NodeNormOpts): s
   // The `exit` tail: `powershell -Command` collapses a native exit code to 0/1
   // unless the script exits with it, and a blocking guard denies with exit 2. A
   // runner that never started leaves $LASTEXITCODE null and exits 1, not 0.
-  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })`;
+  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })`;
 }
 
 /**
@@ -755,7 +760,65 @@ function buildPowerShellLocalHookCommand(
   opts: { localPrefix?: string | null; hookFile?: string | null } & NodeNormOpts,
 ): string | null {
   if (!opts.localPrefix || !opts.hookFile) return null;
-  return buildPowerShellHookCommand(powerShellScriptArg(`${opts.localPrefix}/hooks/${opts.hookFile}`), opts);
+  const arg = powerShellScriptArg(`${opts.localPrefix}/hooks/${opts.hookFile}`);
+  return arg === null ? null : buildPowerShellHookCommand(arg, opts);
+}
+
+/**
+ * The statusLine spelling. Claude Code runs a statusLine command through Git Bash
+ * when it is installed and through PowerShell when it is not, and a statusLine has
+ * no `shell` key to pin that. One command line that both hosts run is
+ * `powershell -NoProfile -Command "..."` with a body free of `$`, backticks and
+ * backslashes (all special inside bash double quotes). null when a path carries
+ * one of those, so the statusLine is skipped rather than written broken.
+ */
+function buildPowerShellStatusLineCommand(scriptPath: string, opts?: NodeNormOpts): string | null {
+  const execPath = (opts && opts.execPath) || (typeof process.execPath === 'string' ? process.execPath : '');
+  if (!execPath) return null;
+  const baked = shellCmdProjection.posixNormalize(normalizeNodePath(execPath, opts));
+  const script = shellCmdProjection.posixNormalize(scriptPath);
+  if ([baked, script].some((p) => /["`$\\]/.test(p))) return null;
+  const b = powerShellQuote(baked);
+  const sc = powerShellQuote(script);
+  return `powershell -NoProfile -Command "if (Test-Path -LiteralPath ${b}) { & ${b} ${sc} } else { & node ${sc} }"`;
+}
+
+const POWERSHELL_STATUSLINE_COMMAND = /^powershell -NoProfile -Command "if \(Test-Path -LiteralPath '(?:[^']|'')*'\) \{ & '(?:[^']|'')*' '((?:[^']|'')*)' \} else \{ & node '((?:[^']|'')*)' \}"$/;
+
+function unquotePowerShell(value: string): string {
+  return value.replace(/(['\u2018\u2019\u201A\u201B])\1/g, '$1');
+}
+
+/**
+ * Read the script back out of a PowerShell runner or statusLine command, as the
+ * POSIX path/token pair projectLegacySettingsHookCommand takes. null when the
+ * command is not one of GSD's PowerShell shapes.
+ */
+function parsePowerShellScript(command: string): { scriptPath: string; scriptToken: string } | null {
+  const status = command.match(POWERSHELL_STATUSLINE_COMMAND);
+  if (status) {
+    const scriptPath = unquotePowerShell(status[2]);
+    return { scriptPath, scriptToken: JSON.stringify(scriptPath) };
+  }
+  const runner = command.replace(/^&\s+/, '').trim().match(/^\(\(@\('(?:[^']|'')*'\) \+ @\(Get-Command node [\s\S]*?Select-Object -First 1\)\s+(.+?); exit \$\(if [\s\S]*\)$/);
+  if (!runner) return null;
+  const arg = runner[1];
+  let m = arg.match(/^'((?:[^']|'')*)'$/);
+  if (m) {
+    const scriptPath = unquotePowerShell(m[1]);
+    return { scriptPath, scriptToken: JSON.stringify(scriptPath) };
+  }
+  m = arg.match(/^"\$env:CLAUDE_PROJECT_DIR(\/[^"]*)"$/) || arg.match(/^\(\$env:CLAUDE_PROJECT_DIR \+ '((?:[^']|'')*)'\)$/);
+  if (m) {
+    const token = `"$CLAUDE_PROJECT_DIR"${unquotePowerShell(m[1])}`;
+    return { scriptPath: token, scriptToken: token };
+  }
+  m = arg.match(/^"\$HOME(\/[^"]*)"$/) || arg.match(/^\(\$HOME \+ '((?:[^']|'')*)'\)$/);
+  if (m) {
+    const rel = unquotePowerShell(m[1]);
+    return { scriptPath: `$HOME${rel}`, scriptToken: `"$HOME${escapePosixDoubleQuoted(rel)}"` };
+  }
+  return null;
 }
 
 // Recognizes buildPowerShellHookCommand's output once the `& ` call operator is stripped.
@@ -779,8 +842,8 @@ function projectPowerShellHookShell(settings: Settings): boolean {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {
         if (!h || !isPowerShellRunnerCommand(h.command) || !isManagedHookCommand(h.command, { surface: 'settings-json' })) continue;
-        if ((h as { shell?: string }).shell === 'powershell') continue;
-        (h as { shell?: string }).shell = 'powershell';
+        if (h.shell === 'powershell') continue;
+        h.shell = 'powershell';
         changed = true;
       }
     }
@@ -796,6 +859,7 @@ interface HookEntry {
   command?: string;
   args?: unknown[];
   timeout?: number;
+  shell?: string;
 }
 
 interface HookGroup {
@@ -813,9 +877,7 @@ interface Settings {
 interface RewriteOpts {
   platform?: string;
   runtime?: string;
-  // #5850: test/seam injection for Git Bash discovery and the baked node path.
-  env?: NodeJS.ProcessEnv;
-  existsSync?: (p: string) => boolean;
+  // #5850: the baked node path (a test seam; Git Bash discovery plays no part).
   execPath?: string;
 }
 
@@ -831,12 +893,28 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
   const platform = opts.platform || process.platform;
   const usePowerShell = usesPowerShellHookShell({ platform, runtime: opts.runtime });
   let changed = false;
-  // #5850: the managed statusLine is a command like a hook; on the PowerShell
-  // path it is converted too (a POSIX chain there fails the same way).
+  // #5850: the managed statusLine is a command like a hook. It is converted to the
+  // shell-neutral PowerShell spelling on the PowerShell path, and back to the POSIX
+  // chain when a PowerShell statusLine reaches a POSIX host (shared config root).
   const statusLine = (settings as { statusLine?: HookEntry }).statusLine;
-  const statusLineGroups: HookGroup[] = usePowerShell && statusLine && typeof statusLine.command === 'string'
+  const statusLineGroups: HookGroup[] = statusLine && typeof statusLine.command === 'string'
+    && (usePowerShell || POWERSHELL_STATUSLINE_COMMAND.test(statusLine.command))
     ? [{ hooks: [statusLine] }]
     : [];
+  const toPowerShell = (h: HookEntry, scriptPath: string): string | null => (
+    h === statusLine
+      ? buildPowerShellStatusLineCommand(scriptPath, opts)
+      : (() => {
+        const arg = powerShellScriptArg(scriptPath);
+        return arg === null ? null : buildPowerShellHookCommand(arg, opts);
+      })()
+  );
+  const assign = (h: HookEntry, command: string | null): void => {
+    if (!command || h.command === command) return;
+    h.command = command;
+    if (h.shell === 'powershell' && !usePowerShell) delete h.shell;
+    changed = true;
+  };
   for (const entries of [...Object.values(settings.hooks), statusLineGroups]) {
     if (!Array.isArray(entries)) continue;
     for (const entry of entries) {
@@ -844,6 +922,24 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
       for (const h of entry.hooks) {
         if (!h || typeof h.command !== 'string') continue;
         if (Array.isArray(h.args) && h.args.length > 0) continue;
+
+        if (!usePowerShell && platform !== 'win32') {
+          // #5850: a PowerShell entry on a POSIX host (a config root shared with
+          // Windows) is a syntax error in bash; converge it back to the POSIX chain.
+          const ps = parsePowerShellScript(h.command);
+          if (ps) {
+            if (!isManagedHookBasename(ps.scriptPath, { surface: 'settings-json' })) continue;
+            assign(h, projectLegacySettingsHookCommand({
+              runnerToken,
+              scriptPath: ps.scriptPath,
+              scriptToken: ps.scriptToken,
+              runtime: opts.runtime || 'generic',
+              platform,
+            }));
+            continue;
+          }
+        }
+
         let trimmed = h.command.trim();
         const hadPowerShellCallOperator = platform === 'win32' && /^&\s+/.test(trimmed);
         if (hadPowerShellCallOperator) {
@@ -852,27 +948,21 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
         if (usePowerShell) {
           // #5850: already the PowerShell runner: nothing to do. A POSIX chain
           // (or a legacy bare/foreign-node entry) is re-projected below.
-          if (POWERSHELL_RUNNER_COMMAND.test(trimmed)) continue;
+          if (POWERSHELL_RUNNER_COMMAND.test(trimmed) || POWERSHELL_STATUSLINE_COMMAND.test(trimmed)) continue;
           const chain = trimmed.match(/^"\$\(for n in [\s\S]*?printf '%s' "\$n" && break; done\)"\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/);
           if (chain) {
             const chainScript = chain[1] || chain[2] || chain[3] || '';
             if (!isManagedHookBasename(chainScript, { surface: 'settings-json' })) continue;
-            const converted = buildPowerShellHookCommand(powerShellScriptArg(chainScript), opts);
-            if (!converted || h.command === converted) continue;
-            h.command = converted;
-            changed = true;
+            assign(h, toPowerShell(h, chainScript));
             continue;
           }
           // The #3662 bash resolver shape needs bash too; its script is a plain
-          // or `$HOME`-relative path, both spelled for PowerShell by powerShellScriptArg.
+          // or `$HOME`-relative path, both spelled for PowerShell.
           const resolver = trimmed.match(/^(?:"[^"]*bash(?:\.exe)?"|bash)\s+"[^"]*gsd-node-runner\.sh"\s+"[^"]*"\s+(?:"([^"]+)"|(\S+))\s*$/);
           if (resolver) {
             const resolverScript = resolver[1] || resolver[2] || '';
             if (!isManagedHookBasename(resolverScript, { surface: 'settings-json' })) continue;
-            const converted = buildPowerShellHookCommand(powerShellScriptArg(resolverScript), opts);
-            if (!converted || h.command === converted) continue;
-            h.command = converted;
-            changed = true;
+            assign(h, toPowerShell(h, resolverScript));
             continue;
           }
         }
@@ -900,10 +990,7 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
         if (!isManagedHookBasename(scriptPath, { surface: 'settings-json' })) continue;
 
         if (usePowerShell) {
-          const converted = buildPowerShellHookCommand(powerShellScriptArg(scriptPath), opts);
-          if (!converted || h.command === converted) continue;
-          h.command = converted;
-          changed = true;
+          assign(h, toPowerShell(h, scriptPath));
           continue;
         }
 
@@ -1603,6 +1690,8 @@ function cleanupOrphanedCodexContextMonitorScript(targetDir: string): CleanupCod
 // ---------------------------------------------------------------------------
 
 interface BuildHookCommandOpts {
+  /** #5850: the command is for settings.json `statusLine` (shell-neutral PowerShell spelling). */
+  statusLine?: boolean;
   portableHooks?: boolean;
   platform?: string;
   runtime?: string;
@@ -1765,7 +1854,8 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     const scriptPath = opts.portableHooks
       ? `${projectPortableHookBaseDir({ configDir, homeDir: os.homedir() })}/hooks/${hookName}`
       : shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName;
-    return track(buildPowerShellHookCommand(powerShellScriptArg(scriptPath), opts));
+    if (opts.statusLine) return track(buildPowerShellStatusLineCommand(scriptPath, opts));
+    return track(buildPowerShellHookCommand(powerShellScriptArg(scriptPath, { literal: true }) as string, opts));
   }
 
   if (opts.portableHooks) {

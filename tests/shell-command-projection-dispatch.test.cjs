@@ -1864,8 +1864,6 @@ describe('bug #3413: installer hook surfaces consume runtime-aware projection', 
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
-      env: { ProgramFiles: 'C:\\Program Files' },
-      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
     assert.equal(cmd.startsWith('& '), true, `Claude hook command must use the PowerShell call operator: ${cmd}`);
     assert.ok(!cmd.includes('$(for'), cmd);
@@ -1882,8 +1880,6 @@ describe('bug #3413: installer hook surfaces consume runtime-aware projection', 
     const changed = rewriteLegacyManagedNodeHookCommands(settings, '"/usr/local/bin/node"', {
       platform: 'win32',
       runtime: 'claude',
-      env: { ProgramFiles: 'C:\\Program Files' },
-      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
     assert.equal(changed, true);
     const command = settings.hooks.SessionStart[0].hooks[0].command;
@@ -2092,8 +2088,6 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
     const changed = rewriteLegacyManagedNodeHookCommands(settings, winRunner, {
       platform: 'win32',
       runtime: 'claude',
-      env: { ProgramFiles: 'C:\\Program Files' },
-      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
     assert.equal(changed, true);
     const rewritten = settings.hooks.PostToolUse[0].hooks[0].command;

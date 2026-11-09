@@ -13968,8 +13968,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     platform: process.platform,
   }), targetDir, hookFile, hookOpts);
   const statuslineCommand = isGlobal
-    ? buildHookCommand(targetDir, 'gsd-statusline.js', hookOpts)
-    : localCmd('gsd-statusline.js');
+    ? buildHookCommand(targetDir, 'gsd-statusline.js', { ...hookOpts, statusLine: true })
+    // #5850: a local statusLine has no `$`-free PowerShell spelling (the project
+    // dir is a shell variable); it is skipped on Windows rather than written broken.
+    : (localUsesPowerShell ? null : localCmd('gsd-statusline.js'));
   const updateCheckCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-check-update.js', hookOpts)
     : localCmd('gsd-check-update.js');
@@ -14250,7 +14252,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       // #3002 CR: don't write { type: 'command', command: null } — the
       // runtime's settings schema rejects null commands and the failure
       // surfaces as a confusing parse error rather than a usable diagnostic.
-      console.warn(`  ${yellow}⚠${reset}  Skipped statusline registration — Node executable path unavailable (process.execPath is empty). See #2979 / #3002.`);
+      console.warn(`  ${yellow}⚠${reset}  Skipped statusline registration — Node executable path unavailable (process.execPath is empty), or a local Windows install (no shell-neutral statusline spelling). See #2979 / #3002 / #5850.`);
     } else {
       settings.statusLine = {
         type: 'command',

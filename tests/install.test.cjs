@@ -3193,8 +3193,6 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
-      env: { ProgramFiles: 'C:\\Program Files' },
-      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
     assert.ok(cmd.startsWith('& '), `Claude hook command must use the PowerShell call operator: ${cmd}`);
     assert.ok(!cmd.includes('$(for'), `no POSIX runner chain on Windows: ${cmd}`);
@@ -3367,8 +3365,6 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, {
       platform: 'win32',
       runtime: 'claude',
-      env: { ProgramFiles: 'C:\\Program Files' },
-      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
     assert.equal(changed, true);
     const command = settings.hooks.SessionStart[0].hooks[0].command;

@@ -11,6 +11,13 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const helpers = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const shellCmdProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -234,10 +241,12 @@ describe('#5850 rewriter and settings projection', () => {
     assert.ok(settings.hooks.PreToolUse[1].hooks[0].command.endsWith(`"$HOME/.claude/hooks/${GUARD}"${EXIT}`), settings.hooks.PreToolUse[1].hooks[0].command);
   });
 
-  test('a managed statusLine chain converts and the second run is a no-op', () => {
+  test('a managed statusLine chain converts to the shell-neutral PowerShell spelling and the second run is a no-op', () => {
     const settings = { hooks: {}, statusLine: { type: 'command', command: oldChain.replace(GUARD, 'gsd-statusline.js') } };
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), true);
-    assert.ok(settings.statusLine.command.startsWith('& '));
+    const cmd = settings.statusLine.command;
+    assert.ok(cmd.startsWith('powershell -NoProfile -Command "if (Test-Path -LiteralPath '), cmd);
+    assert.ok(cmd.includes("& node 'C:/Users/u/.claude/hooks/gsd-statusline.js'"), cmd);
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), false);
   });
 
@@ -297,5 +306,140 @@ describe('#5850 stamping and recognition end to end', () => {
     for (const cmd of [ps, chain]) {
       assert.equal(shellCmdProjection.isManagedHookCommand(cmd, { surface: 'settings-json', configDir: CONFIG_DIR }), true, cmd);
     }
+  });
+});
+
+describe('#5850 statusLine spelling', () => {
+  test('buildHookCommand with statusLine emits a spelling both Git Bash and PowerShell run', () => {
+    const cmd = hooksSurface.buildHookCommand(CONFIG_DIR, 'gsd-statusline.js', win({ statusLine: true }));
+    assert.ok(cmd.startsWith('powershell -NoProfile -Command "if (Test-Path -LiteralPath '), cmd);
+    // Inside bash double quotes `$`, backtick and backslash are special: the body carries none.
+    assert.doesNotMatch(cmd, /[`$\\]/);
+    assert.doesNotMatch(cmd, POSIX_ONLY);
+    assert.equal(shellCmdProjection.isManagedHookCommand(cmd, { surface: 'settings-json' }), true);
+  });
+
+  test('a statusLine path bash would expand is skipped, not written broken', () => {
+    for (const dir of ['C:/Users/$x/.claude', 'C:/Users/a`b/.claude', 'C:/Users/a"b/.claude']) {
+      assert.equal(hooksSurface.buildHookCommand(dir, 'gsd-statusline.js', win({ statusLine: true })), null, dir);
+    }
+  });
+
+  test('statusLine is ignored off win32 and for other runtimes', () => {
+    const linux = hooksSurface.buildHookCommand('/home/u/.claude', 'gsd-statusline.js', { platform: 'linux', runtime: 'claude', execPath: '/usr/bin/node', statusLine: true });
+    assert.ok(linux.startsWith('"$(for n in '), linux);
+  });
+});
+
+describe('#5850 a PowerShell entry reaching a POSIX host converges back', () => {
+  const linux = { platform: 'linux', runtime: 'claude' };
+
+  test('a PowerShell runner entry (and its shell key) becomes the POSIX chain', () => {
+    const ps = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win());
+    const settings = settingsWith([ps]);
+    settings.hooks.PreToolUse[0].hooks[0].shell = 'powershell';
+    const runner = hooksSurface.buildNodeRunnerChainToken({ execPath: '/usr/bin/node' });
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), true);
+    const hook = settings.hooks.PreToolUse[0].hooks[0];
+    assert.ok(hook.command.startsWith('"$(for n in '), hook.command);
+    assert.ok(hook.command.endsWith(`"C:/Users/u/.claude/hooks/${GUARD}"`), hook.command);
+    assert.equal('shell' in hook, false);
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), false);
+  });
+
+  test('local and portable PowerShell spellings convert back to their POSIX anchors', () => {
+    const local = hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: '"$CLAUDE_PROJECT_DIR"/.claude', hookFile: GUARD, execPath: EXEC_PATH });
+    const home = os.homedir().replace(/\\/g, '/');
+    const portable = hooksSurface.buildHookCommand(`${home}/.claude`, GUARD, win({ portableHooks: true }));
+    const settings = settingsWith([local, portable]);
+    const runner = hooksSurface.buildNodeRunnerChainToken({ execPath: '/usr/bin/node' });
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), true);
+    const [localHook, portableHook] = settings.hooks.PreToolUse.map((e) => e.hooks[0].command);
+    assert.ok(localHook.endsWith(`"$CLAUDE_PROJECT_DIR"/.claude/hooks/${GUARD}`), localHook);
+    assert.ok(portableHook.endsWith(`"$HOME/.claude/hooks/${GUARD}"`), portableHook);
+  });
+
+  test('a PowerShell statusLine becomes the POSIX chain again', () => {
+    const status = hooksSurface.buildHookCommand(CONFIG_DIR, 'gsd-statusline.js', win({ statusLine: true }));
+    const settings = { hooks: {}, statusLine: { type: 'command', command: status } };
+    const runner = hooksSurface.buildNodeRunnerChainToken({ execPath: '/usr/bin/node' });
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), true);
+    assert.ok(settings.statusLine.command.startsWith('"$(for n in '), settings.statusLine.command);
+  });
+
+  test('a PowerShell entry is left alone on win32 for a runtime that never writes it', () => {
+    const ps = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win());
+    const settings = settingsWith([ps]);
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), { platform: 'win32', runtime: 'gemini' }), false);
+  });
+});
+
+describe('#5850 token edge cases', () => {
+  test('a legacy token carrying an unexpanded shell variable is left alone', () => {
+    const cmd = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"`;
+    const settings = settingsWith([cmd]);
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), false);
+    assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, cmd);
+  });
+
+  test('a real configDir containing a dollar sign is a literal path', () => {
+    const cmd = hooksSurface.buildHookCommand('C:/Users/a$b/.claude', GUARD, win());
+    assert.ok(cmd.includes(`'C:/Users/a$b/.claude/hooks/${GUARD}'`), cmd);
+  });
+
+  test('projectPortableHookBaseDir respects the home boundary', () => {
+    assert.equal(shellCmdProjection.projectPortableHookBaseDir({ configDir: '/home/u/.claude', homeDir: '/home/u' }), '$HOME/.claude');
+    assert.equal(shellCmdProjection.projectPortableHookBaseDir({ configDir: '/home/ux/.claude', homeDir: '/home/u' }), '/home/ux/.claude');
+  });
+
+  test('isManagedHookCommand undoes quote doubling only inside the single-quoted literal', () => {
+    const cmd = `& ((@('D:/n.exe') + @()) | Select-Object -First 1) 'C:/Users/O''Brien/.claude/hooks/${GUARD}'`;
+    assert.equal(shellCmdProjection.isManagedHookCommand(cmd, { surface: 'settings-json', configDir: "C:/Users/O'Brien/.claude" }), true);
+    const outside = `node C:/Users/O''Brien/.claude/hooks/${GUARD}`;
+    assert.equal(shellCmdProjection.isManagedHookCommand(outside, { surface: 'settings-json', configDir: "C:/Users/O'Brien/.claude" }), false);
+  });
+
+  test('only .exe node results are launched (a .cmd shim would swallow the exit code)', () => {
+    assert.ok(hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win()).includes("Where-Object { $_.Source -like '*.exe' }"));
+  });
+});
+
+const WIN32_INSTALL_PROBE = `
+Object.defineProperty(process, 'platform', { value: 'win32' });
+const path = require('node:path');
+const fs = require('node:fs');
+const { install, finishInstall } = require(path.join(process.env.PROBE_REPO, 'bin', 'install.js'));
+const result = install(true, 'claude');
+finishInstall(result.settingsPath, result.settings, result.statuslineCommand, true, 'claude', true, result.configDir);
+const settings = JSON.parse(fs.readFileSync(result.settingsPath, 'utf8'));
+const hooks = [];
+for (const entries of Object.values(settings.hooks || {})) {
+  for (const entry of entries) for (const h of entry.hooks || []) hooks.push(h);
+}
+process.stdout.write('PROBE_JSON ' + JSON.stringify({
+  total: hooks.length,
+  chain: hooks.filter((h) => /\\$\\(for n in/.test(h.command)).length,
+  powershell: hooks.filter((h) => h.command.startsWith('& ')).length,
+  unstamped: hooks.filter((h) => h.command.startsWith('& ') && h.shell !== 'powershell').length,
+  statusLine: settings.statusLine && settings.statusLine.command,
+}) + '\\n');
+`;
+
+describe('#5850 the installer writes the shell key', () => {
+  test('install + finishInstall on a win32 host write PowerShell hooks stamped shell powershell and a neutral statusLine', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5850-win32-'));
+    t.after(() => helpers.cleanup(home));
+    const result = runNode(['-e', WIN32_INSTALL_PROBE], {
+      cwd: path.join(__dirname, '..'),
+      env: helpers.installSpawnEnv({ HOME: home, USERPROFILE: home, PROBE_REPO: path.join(__dirname, '..'), GSD_TEST_MODE: '1' }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    const line = result.stdout.split('\n').find((entry) => entry.startsWith('PROBE_JSON '));
+    assert.ok(line, `probe reported nothing: outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
+    const probe = JSON.parse(line.slice('PROBE_JSON '.length));
+    assert.ok(probe.powershell > 0, JSON.stringify(probe));
+    assert.equal(probe.chain, 0, JSON.stringify(probe));
+    assert.equal(probe.unstamped, 0, JSON.stringify(probe));
+    assert.ok(String(probe.statusLine).startsWith('powershell -NoProfile -Command "if (Test-Path'), JSON.stringify(probe));
   });
 });
