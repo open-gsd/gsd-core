@@ -1364,3 +1364,183 @@ describe('execute-phase: stall surveillance must not steer a working executor (#
     }
   });
 });
+
+/**
+ * #5966: a plain run (no --wave) re-reads phase-plan-index at each wave boundary.
+ *
+ * Before this, step 1 read the index once and ready-wave-gate.md forbade dispatching a
+ * not-ready plan "in this run", while the partial-wave footer ("Continue remaining
+ * waves"), 2b ("the executor wave loop dispatches every ready plan of the earliest
+ * ready wave onward") and step 9 ("Proceed to next wave.") implied the run crosses
+ * into waves whose plans became ready mid-run. These rows pin the written refresh:
+ * scope fixed at the first read, the re-read at step 9, its stop conditions, the
+ * dispatch path it reuses, and the plain-run stop rule that keeps a stopped run out
+ * of phase verification.
+ */
+describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
+  const STEPS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps');
+  const read = (p) => fs.readFileSync(p, 'utf-8');
+  const flat = (text) => text.replace(/\s+/g, ' ');
+  const workflow = () => read(WORKFLOW_PATH);
+  const refresh = () => read(path.join(STEPS_DIR, 'wave-refresh.md'));
+  const gate = () => read(path.join(STEPS_DIR, 'ready-wave-gate.md'));
+  const partial = () => read(path.join(STEPS_DIR, 'partial-wave.md'));
+
+  function stepBlock(content, name) {
+    const open = `<step name="${name}">`;
+    const start = content.indexOf(open);
+    assert.ok(start >= 0, `step ${name} should exist`);
+    const end = content.indexOf('</step>', start);
+    assert.ok(end > start, `step ${name} should be closed`);
+    return content.substring(start, end + '</step>'.length);
+  }
+
+  test('#5966 row 1: the readiness rule is scoped to the read, not the run', () => {
+    const text = flat(gate());
+    assert.ok(!/never be dispatched in this run/.test(text),
+      'the run-scoped wording is what forbade the refresh');
+    assert.match(text, /never be dispatched before the read that finds its dependencies complete/,
+      'the rule keeps its strictness, scoped to the read that finds the dependencies complete');
+    assert.match(text, /the run stops at the waiting condition when nothing is ready, at step 1 or at a refresh/,
+      'the fail-closed paragraph must not read as "a not-ready plan ends the run"');
+  });
+
+  test('#5966 row 2: step 9 reads the refresh fragment when no wave filter is set', () => {
+    const step = stepBlock(workflow(), 'execute_waves');
+    const nine = step.substring(step.indexOf('9. **Proceed to next wave.**'));
+    assert.ok(nine.startsWith('9. **Proceed to next wave.**'), 'step 9 should exist');
+    assert.match(nine, /Without `WAVE_FILTER`, read and follow `execute-phase\/steps\/wave-refresh\.md`/,
+      'a plain run must reach the refresh at step 9; --wave keeps partial-wave.md');
+    assert.match(flat(refresh()), /A plain run here is one without `--wave` or `--interactive`/);
+    assert.match(flat(refresh()), /`--interactive`, and a Copilot run that takes `check_interactive_mode`'s inline path \(`COPILOT_SEQUENTIAL`\), run plans inline instead of `execute_waves` and never read this fragment/,
+      '--interactive and the Copilot inline path keep their meaning');
+    assert.match(flat(stepBlock(workflow(), 'check_interactive_mode')), /plans run sequentially \*\*inline\*\* \(no subagent spawning, ignoring wave grouping\)/,
+      'the host still sends --interactive inline, away from execute_waves');
+  });
+
+  test('#5966 row 3: step 1 fixes the run scope, not-ready and blocked plans included', () => {
+    const step = stepBlock(workflow(), 'discover_and_group_plans');
+    assert.match(step, /record `RUN_SCOPE` from this read/,
+      'the original plan set must be recorded where the first read happens');
+    const text = flat(refresh());
+    assert.match(text, /every incomplete plan in that first read that the `--gaps-only` filter \(when set\) keeps/,
+      'a --gaps-only run keeps its gap-closure scope at every refresh');
+    assert.match(text, /whatever its `ready` or `blocked_by` value/,
+      'a plan that is not ready at the first read must be in scope, or no refresh could ever add it');
+    assert.match(text, /A refresh never widens it/, 'the scope is fixed');
+    assert.match(text, /A plan id that was not in that first read is never dispatched by this run/,
+      'a plan added mid-run stays out of this run');
+  });
+
+  test('#5966 row 4: the refresh re-reads the index from the orchestrator worktree, inside the scope', () => {
+    const text = refresh();
+    assert.match(text, /ORCHESTRATOR_WT=\$\(git rev-parse --show-toplevel 2>\/dev\/null\) \|\| \{/,
+      'fenced blocks are separate shells: the re-read block must re-derive the root itself');
+    assert.match(text, /case "\$\(git rev-parse --abbrev-ref HEAD 2>\/dev\/null\)" in agent-\*\|worktree-agent-\*\|worktree-wf_\*\) .*exit 1 ;; esac/,
+      'the re-read must refuse inside an agent worktree, as the execute_waves guard does');
+    assert.ok(!/ORCHESTRATOR_WT:-/.test(text), 'no fallback to the drifted cwd');
+    assert.match(text, /PLAN_INDEX=\$\(cd "\$ORCHESTRATOR_WT" && gsd_run query phase-plan-index "\$\{PHASE_NUMBER\}"\)/);
+    const t = flat(text);
+    assert.match(t, /Apply § Filtering from step 1 again, the #4628 readiness skip and the `blocked_by` skip included/,
+      'readiness and the halted-plan skip still apply at every refresh');
+    assert.match(t, /keep only plans in `RUN_SCOPE`/, 'the refresh stays inside the original scope');
+    assert.match(t, /drop every plan this run already dispatched/,
+      'a failed plan the user continued past must not be re-dispatched by a refresh');
+    assert.match(t, /drop every plan that depends, directly or through another dropped plan, on a plan this run saw fail at step 6 or 7 and the user continued past/,
+      'a failed spot-check leaves a SUMMARY, which the index reads as complete; its dependents must still not run');
+    assert.match(t, /From here on, a plan's JSON \(`id`, `files_modified` and the rest\) comes from this read, not step 1's/);
+  });
+
+  test('#5966 row 5: the stop conditions are written down, and checked before the re-read', () => {
+    const text = flat(refresh());
+    assert.match(text, /a checkpoint is still awaiting the user's response/, 'checkpoint stop');
+    assert.match(text, /a failure is unresolved: a plan of the finished wave failed, and neither a retry completed it nor the user chose to continue at step 6 or 7/,
+      'unresolved-failure stop, with its retry and Continue exceptions');
+    assert.match(text, /every plan of the finished wave failed: `failure_handling`'s systemic stop/,
+      'the systemic all-failed stop agrees with failure_handling');
+    assert.match(text, /Stop on no progress:\*\* the refreshed selection is empty while an incomplete plan in `RUN_SCOPE` remains/,
+      'no-progress stop');
+    assert.match(text, /it can never select the same plans again/,
+      'the approved "same plans as last time" case is closed by the dispatched-plan drop, and says so');
+    assert.ok(text.indexOf('Stop instead of refreshing') < text.indexOf('PLAN_INDEX=$('),
+      'checkpoint and failure stops are checked before the index is re-read');
+  });
+
+  test('#5966 row 6: a plain run that stops with incomplete plans never verifies or completes the phase', () => {
+    const text = flat(refresh());
+    assert.match(text, /Report every failed or incomplete plan in `RUN_SCOPE` by name with its reason/);
+    assert.match(text, /Do NOT run `verify_phase_goal`, and do NOT mark the phase complete in ROADMAP or STATE/);
+    assert.match(text, /headed `## Phase \{X\}: \{Name\} Execution Stopped` instead of `Execution Complete`/,
+      'a stopped run must not print the "Execution Complete" heading');
+    assert.match(text, /it replaces `aggregate_results` for this run/);
+    assert.match(refresh(), /\n\/gsd:execute-phase \{phase\} \$\{GSD_WS\} +# Continue remaining waves once the reasons above are cleared\n/,
+      'the stop footer re-runs the plain command, never a --wave form');
+    assert.match(text, /Present the footer below, then exit: skip the rest of `execute-phase\.md`/,
+      'the stop must end the run, not fall back into the host flow');
+    const content = workflow();
+    const sectionEnd = content.indexOf('<!-- /gsd:section -->', content.indexOf('<!-- gsd:section id="partial-wave"'));
+    const guard = content.indexOf('A plain run that stopped at the wave-boundary refresh stops here');
+    assert.ok(sectionEnd >= 0 && guard > sectionEnd,
+      'the host stop must sit outside the --wave-gated partial-wave section, or a plain run never reads it');
+    assert.ok(guard < content.indexOf('<step name="verify_phase_goal">'),
+      'the stop must come before verify_phase_goal');
+    assert.match(flat(content.substring(guard, guard + 400)), /never run `verify_phase_goal`/);
+  });
+
+  test('#5966 row 7: the partial-wave text and its footer agree with the refresh', () => {
+    const text = partial();
+    assert.match(text, /# Continue remaining waves/, 'the footer still advertises the plain command');
+    assert.match(text, /A plain run re-reads at every wave boundary instead, and stops by the same rule below/,
+      'partial-wave must no longer read as the only re-read');
+    assert.match(flat(refresh()), /This is the partial-wave rule \(`partial-wave\.md`\) applied to a plain run/);
+  });
+
+  test('#5966 row 8: 2b names the refresh as what adds newly ready plans, and its stop', () => {
+    const text = gate().replace(/>\s*/g, '').replace(/\s+/g, ' ');
+    assert.match(text, /the executor wave loop dispatches every ready plan of the earliest ready wave onward/,
+      '2b keeps its own wording');
+    assert.match(text, /the wave-boundary refresh adds each plan whose dependencies complete during the run/);
+    assert.match(text, /A refresh that finds nothing ready stops by `wave-refresh\.md`'s rule, naming these plans in this report's form/,
+      'one stop rule, not two reports for the same condition');
+  });
+
+  test('#5966 row 9: a refreshed wave takes step 1\'s dispatch path, limited to that wave', () => {
+    const text = flat(refresh());
+    assert.match(text, /First run the pre-wave dependency check \(step 7b\) on that wave's plans, since it ran before this refresh chose them/,
+      'the key-links check must see the plans the refresh actually dispatches');
+    assert.match(text, /\*\*Dispatch\*\* the earliest wave of the refreshed selection/, 'the earliest wave, never a later one');
+    assert.match(text, /`cross_ai_delegation` over that wave's plans only/,
+      'cross-AI delegation must not mark ready plans outside the refreshed wave (or outside RUN_SCOPE)');
+    assert.match(text, /then `execute_waves` from its entry, the cwd-drift guard first/,
+      're-entering execute_waves must not skip its first action');
+    assert.match(text, /When delegation handles all of them, run this fragment again from step 1/);
+    const delegation = flat(stepBlock(workflow(), 'cross_ai_delegation'));
+    assert.match(delegation, /When that empties the list, a run without `--wave`, `--interactive` or `COPILOT_SEQUENTIAL` goes on to the wave-boundary refresh/,
+      'a selection cross-AI handled entirely must still refresh, not fall through to verification');
+  });
+
+  test('#5966 row 10: a plan added mid-run keeps a finished scope out of verification', () => {
+    const text = flat(refresh());
+    assert.match(text, /If the index lists an incomplete plan whose id was not in step 1's read, stop as below and name it/,
+      'the loop may only complete into verification when no incomplete plan is left in the phase from this run\'s view');
+  });
+
+  test('#5966 row 11: failure handling no longer offers to attempt not-ready dependents', () => {
+    const content = workflow();
+    const fh = content.substring(content.indexOf('<failure_handling>'), content.indexOf('</failure_handling>'));
+    assert.ok(fh.length > 0, 'failure_handling should exist');
+    assert.ok(!/user chooses attempt or skip/.test(fh), '"attempt" meant dispatching a dependent whose predecessor failed');
+    assert.match(flat(fh), /its Wave 2 dependents are never dispatched in this run \(not ready while it has no SUMMARY, #4628; dropped by the refresh when the user continues past a failed spot-check\)/);
+    assert.match(flat(fh), /unless a retry completes it, a plain run's refresh stops on the dependents/,
+      'a successful retry must not stop the run on dependents that became ready');
+    assert.ok(!/continuing may cascade into dependent plan failures/.test(content),
+      'step 7.3 must not imply continuing dispatches dependents of a failed plan');
+    assert.match(flat(content), /continuing never dispatches its dependents in this run \(#4628; `wave-refresh\.md`\)/);
+  });
+
+  test('#5966 row 12: COMMANDS.md states the plain-run behaviour and its exclusions', () => {
+    const doc = flat(read(COMMANDS_DOC_PATH));
+    assert.match(doc, /\*\*Waves \(#5966\):\*\* without `--wave` or `--interactive`, the run re-reads the plan index after each wave/);
+    assert.match(doc, /On Copilot, which runs plans inline, a run is unchanged/);
+  });
+});
