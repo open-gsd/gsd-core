@@ -331,6 +331,8 @@ Execute all plans in a phase with wave-based parallelization, or run a specific 
 **Prerequisites:** Phase has PLAN.md files
 **Produces:** per-plan `{phase}-{N}-SUMMARY.md`, git commits, and `{phase}-VERIFICATION.md` when the phase is fully complete
 
+**Waves (#5966):** without `--wave` or `--interactive`, the run re-reads the plan index after each wave and dispatches the plans that have become ready, within the plans it started with. It stops on a checkpoint awaiting you, an unresolved failure or no progress; if it stops with plans still incomplete it names them, skips phase verification and leaves the phase open, and re-running the command continues. On Copilot, which runs plans inline, a run is unchanged.
+
 **Package install failures (v1.42.1):** If a plan's install step fails, the executor surfaces a `checkpoint:human-verify` and stops. It does not auto-install a similarly-named alternative. This is intentional — silently substituting package names is how slopsquatting spreads. Respond to the checkpoint after verifying the package on its registry page.
 
 ```bash
