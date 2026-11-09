@@ -963,21 +963,14 @@ describe('--check full-content comparison (FIX 4)', () => {
 
 const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
 const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
-const { scanWiredPoints, scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
+const { scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
 
 describe('declared loop points are dispatched (#5848)', () => {
-  test('every point a host declares has a render-hooks call site in the host or its auxiliary hosts', () => {
-    const undispatched = [];
-    for (const { file, auxiliaryHosts = [] } of STEP_WORKFLOWS) {
-      const hostText = fs.readFileSync(path.join(WORKFLOWS_ROOT, file), 'utf8');
-      const declared = parseLoopHostBlock(hostText, file).points;
-      const wired = new Set(scanWiredPoints(hostText));
-      for (const aux of auxiliaryHosts) {
-        for (const p of scanWiredPoints(fs.readFileSync(path.join(WORKFLOWS_ROOT, aux.file), 'utf8'))) wired.add(p);
-      }
-      for (const p of declared) if (!wired.has(p)) undispatched.push(file + ' declares ' + p);
-    }
-    assert.deepEqual(undispatched, [], 'declared but never rendered: ' + undispatched.join('; '));
+  // Acceptance criterion (#5848): every declared point of a workflow has a dispatch site. The
+  // enforcement lives in buildContract; its rejection is covered below ('buildContract rejects a host
+  // that declares a point with no call site'), and this runs it over the real workflows.
+  test('every declared point of every real workflow has a dispatch site (#5848 acceptance criterion)', () => {
+    assert.doesNotThrow(() => buildContract(WORKFLOWS_ROOT));
   });
 
   test('execute:pre is rendered before the first wave and dispatches contribution, step and gate', () => {

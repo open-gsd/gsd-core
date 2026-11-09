@@ -820,8 +820,12 @@ describe('buildOverlayRepo: a directory that vanishes mid-walk is skipped (#5848
       cleanup(root);
     }
     const overlays = made.filter((d) => path.basename(d).startsWith('gsd-2930-overlay-'));
-    assert.equal(overlays.length, 1, 'buildOverlayRepo created exactly one overlay dir');
-    assert.equal(fs.existsSync(overlays[0]), false, 'a throwing walk removes its own overlay dir');
+    try {
+      assert.equal(overlays.length, 1, 'buildOverlayRepo created exactly one overlay dir');
+      assert.equal(fs.existsSync(overlays[0]), false, 'a throwing walk removes its own overlay dir');
+    } finally {
+      for (const d of overlays) cleanup(d);
+    }
   });
 
   test('a non-ENOENT error at the recursive readdirSync still propagates', () => {
@@ -852,7 +856,11 @@ describe('buildOverlayRepo: a directory that vanishes mid-walk is skipped (#5848
       cleanup(root);
     }
     const overlays = made.filter((d) => path.basename(d).startsWith('gsd-2930-overlay-'));
-    assert.equal(overlays.length, 1, 'buildOverlayRepo created exactly one overlay dir');
-    assert.equal(fs.existsSync(overlays[0]), false, 'a throwing walk removes its own overlay dir');
+    try {
+      assert.equal(overlays.length, 1, 'buildOverlayRepo created exactly one overlay dir');
+      assert.equal(fs.existsSync(overlays[0]), false, 'a throwing walk removes its own overlay dir');
+    } finally {
+      for (const d of overlays) cleanup(d);
+    }
   });
 });
