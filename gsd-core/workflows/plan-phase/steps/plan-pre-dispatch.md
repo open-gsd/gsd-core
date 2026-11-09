@@ -36,8 +36,8 @@ echo "PHASE_DIR=${PHASE_DIR}"
 
 For each remaining active entry where `kind == "step"` (exactly one of `ref.skill`, `ref.agent`, `ref.command` is set):
 
-- **`ref.skill`** → `Skill(skill="gsd-${ref.skill}", args="${PHASE} ${GSD_WS}")`, appending `--auto` to `args` only when `AUTO_CHAIN` is `true`. Prepend `gsd-` to `ref.skill`.
-- **`ref.agent`** → print `◆ Spawning ${ref.agent}... (runs in a subagent — no output until it returns; expected, not a freeze)`, then `Agent(prompt=filled_hook_fragment, subagent_type=ref.agent, model="{researcher_model}")` with the hook's `fragment.inline` as the prompt body, phase fields filled. Omit `model=` when `researcher_model` is `"inherit"` or empty (#2517).
+- **`ref.skill`** → `Skill(skill="gsd-${ref.skill}", args="${context.phase} ${GSD_WS}")`, appending `--auto` to `args` only when `AUTO_CHAIN` is `true`. Prepend `gsd-` to `ref.skill`.
+- **`ref.agent`** → print `◆ Spawning ${ref.agent}... (runs in a subagent — no output until it returns; expected, not a freeze)`, then `Agent(prompt=filled_hook_fragment, subagent_type=ref.agent, model="{researcher_model}")` with the hook's `fragment.inline` as the prompt body, phase fields taken from the envelope by the table. Omit `model=` when `researcher_model` is `"inherit"` or empty (#2517).
 - **`ref.command`** → validate it IN-CONTEXT before any shell use: the value must match `^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$`. Check it yourself — never by pasting it into a shell command to be tested there. A value that fails is a malformed manifest: record a warning naming the `capId`, skip it, continue. Only a value that passed is run:
 
   ```bash
@@ -45,7 +45,7 @@ For each remaining active entry where `kind == "step"` (exactly one of `ref.skil
   gsd_run ${ref.command} --phase "${context.phase}" --raw
   ```
 
-  The envelope has no `context`: pass `--phase "${PHASE_NUMBER}"` or no `--phase`, per the phase-argument table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md`.
+  Phase argument: the table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md` decides. Check `context.phase` against its token pattern before it goes into the command. With no `context` it gives `--phase "${PHASE_NUMBER}"` or no `--phase`.
 
 Wait for each result before the next hook. A step is advisory: on error record a warning naming the `capId` and continue, unless `onError == "halt"` — then surface the error and stop the plan-phase workflow.
 

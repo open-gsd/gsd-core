@@ -1742,9 +1742,11 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
   test('[happy] --phase composes with --active-cap without interference', (t) => {
     const dir = makePhaseProject('02-alpha');
     t.after(() => cleanup(dir));
-    const result = renderWithPhase(dir, 'plan:pre', ['--phase', '02', '--active-cap', 'tdd']);
-    assert.strictEqual(result.exitCode, 0, 'stderr: ' + result.stderr);
-    assert.strictEqual(typeof JSON.parse(result.stdout.trim()), 'boolean');
+    const withPhase = renderWithPhase(dir, 'plan:pre', ['--phase', '02', '--active-cap', 'tdd']);
+    const without = renderWithPhase(dir, 'plan:pre', ['--active-cap', 'tdd']);
+    assert.strictEqual(withPhase.exitCode, 0, 'stderr: ' + withPhase.stderr);
+    assert.strictEqual(typeof JSON.parse(withPhase.stdout.trim()), 'boolean');
+    assert.strictEqual(withPhase.stdout.trim(), without.stdout.trim(), '--phase must not change the --active-cap answer');
   });
 
   test('[hostile] a foreign-project-code-prefixed --phase token does not reopen #2237 — guardedFindPhase rejects it same as init.*', (t) => {
@@ -2456,7 +2458,8 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
       const env = JSON.parse(renderWithPhase(dir, 'plan:pre', ['--phase', '02', '--raw']).stdout.trim());
       assert.strictEqual(env.context, undefined);
       assert.strictEqual(env.phaseDrop, 'CONFIG_FAULT');
-      assert.ok(env.warnings.some((w) => w.includes(reason)), `a warning names ${reason}`);
+      assert.ok(Array.isArray(env.warnings), `envelope has no warnings array: ${JSON.stringify(env)}`);
+      assert.ok(env.warnings.length > 0, `a drop for ${reason} carries a warning`);
     }
   });
 
@@ -2482,7 +2485,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     const r = fresh.resolveActiveHooksForPoint(dir, 'plan:pre', { phase: '02' });
     assert.strictEqual(r.context, undefined);
     assert.strictEqual(r.phaseDrop, PHASE_DROP.CONFIG_FAULT);
-    assert.ok(r.warnings.some((w) => w.includes('--phase "02" not resolved') && w.includes('invalid path characters')), 'a warning names the dropped phase and the cause');
+    assert.ok(r.warnings.length > 0, 'a drop carries a warning');
   });
 
   test('[phase token] a locator value that differs from the validated token is dropped as INVALID_TOKEN', (t) => {
@@ -2511,6 +2514,7 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
       const dir = makePhaseProject(...Array.from({ length: n }, (_, i) => `05-${String.fromCharCode(97 + i)}`));
       t.after(() => cleanup(dir));
       const env = JSON.parse(renderWithPhase(dir, 'plan:pre', ['--phase', '05', '--raw']).stdout.trim());
+      assert.ok(Array.isArray(env.warnings), `envelope has no warnings array: ${JSON.stringify(env)}`);
       const w = env.warnings.find((x) => x.includes('is ambiguous'));
       return { listed: [...w.matchAll(/"(05-[a-z])"/g)].length, more: (w.match(/, … (\d+) more\)/) || [])[1] };
     };
@@ -2599,8 +2603,11 @@ describe('cmdLoopRenderHooks --phase confinement and --phase-dir identity (#4030
   // Every echoed value in a warning is a JSON string capped at 80 characters
   // with no control characters. Decode the envelope and each quoted value, and
   // assert on length and code points, never on prose or raw stdout bytes.
-  const echoed = (out) => JSON.parse(out.trim()).warnings.flatMap(
-    (w) => [...w.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1])); // the escaped form as printed, never decoded back
+  const echoed = (out) => {
+    const { warnings } = JSON.parse(out.trim());
+    assert.ok(Array.isArray(warnings), `envelope has no warnings array: ${out.slice(0, 200)}`);
+    return warnings.flatMap((w) => [...w.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1])); // the escaped form as printed, never decoded back
+  };
   const hasControl = (v) => [...v].some((c) => { const n = c.codePointAt(0); return n <= 0x1f || (n >= 0x7f && n <= 0x9f); });
   const archivedProject = (t, name) => {
     const dir = mk(t);

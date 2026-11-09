@@ -29,12 +29,9 @@ the render-hooks invocation was scoped to — **authoritative over `STATE.curren
 artifact-order/mtime inference** for any dispatch below that needs a phase, since
 `STATE.current_phase` is project lifecycle status, not a claim about this invocation's scope,
 and the two diverge whenever one phase is being planned or verified while another still
-executes. Absent `context` means `--phase` was omitted, or it was dropped: it matched no
-directory or several, matched only an archived milestone's phase, resolved to a directory
-outside the project's `.planning/phases` tree, disagreed with `--phase-dir`, was not a safe
-phase token (`INVALID_TOKEN`), or could not be resolved because `.planning/config.json` or the
-planning directory is unusable (`CONFIG_FAULT`); `--phase-dir` without `--phase` is dropped too. Every case except an omitted `--phase` appends a warning to
-`warnings`, and the envelope's `phaseDrop` carries the typed reason code. A dropped token is never passed on; the phase-argument table under `ref.command` says when the host's own `PHASE_NUMBER` stands in.
+executes. Absent `context` means `--phase` was omitted or dropped. A drop appends a warning to
+`warnings` and sets the envelope's `phaseDrop` code; the phase-argument table under
+`ref.command` maps each code to the phase argument. A dropped token is never passed on.
 
 ## Dispatch rules by `kind`
 
@@ -51,10 +48,6 @@ Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.c
 - `ref.skill` present → dispatch via the Skill tool with skill id `gsd-<ref.skill>`. When
   the phase-argument table below gives a phase argument, pass it as the skill's args (e.g.
   `args="${context.phase}"`), plus whatever else that host's own dispatch already appends.
-  Skills diverge sharply on what an omitted phase argument does: some (e.g.
-  `code-review`) exit with "Phase not found"; others (e.g. `validate-phase`, whose
-  `argument-hint` documents "optional, defaults to last completed phase") silently fall back
-  to artifact-order inference, exactly the failure mode this field exists to close.
 - `ref.agent` present → dispatch via the Agent tool with `subagent_type` = `ref.agent`. If
   `context` is present, include `context.phase` / `context.phaseDir` in the agent's prompt so
   it operates on the task-local phase rather than inferring one. When it is absent, the

@@ -1428,5 +1428,5 @@ BEGIN at `evolve_project`, running the full set through `offer_next_phase`.
 </process>
 
 <closing_notes>
-Agent failure, quota limit, resume, or short context: read `gsd-core/workflows/execute-phase/steps/closing-notes.md`.
+Agent failure, quota limit, resume, or a 1M+ context window: read `gsd-core/workflows/execute-phase/steps/closing-notes.md`.
 </closing_notes>
