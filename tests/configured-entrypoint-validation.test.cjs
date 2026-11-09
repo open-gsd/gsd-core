@@ -881,6 +881,7 @@ process.stdout.write('PROBE_JSON ' + JSON.stringify({
 function gsd5100RunWin32InstallProbe(t, runtime, { preamble = '' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-win32-'));
   t.after(() => helpers.cleanup(home));
+  // The preamble must come first so the probe's existsSync stub wraps the preamble's.
   const result = runNode(['-e', preamble + GSD_5100_WIN32_INSTALL_PROBE], {
     cwd: path.join(__dirname, '..'),
     env: helpers.installSpawnEnv({
@@ -984,3 +985,39 @@ test('#5888 the #5100 win32 install probe is independent of a WSL host', (t) => 
     `the win32 install probe must reach install() on a WSL host; got ${JSON.stringify(probe)}`,
   );
 });
+
+// #5888 positive control: without the probe's isolation stubs, the faked-win32
+// installer must still take its WSL exit, both from WSL_DISTRO_NAME and from the
+// GSD_5888_FAKE_WSL_HOST preamble. Keeps the WSL warning covered and proves the
+// preamble actually presents WSL, so the #5888 case above can't pass vacuously.
+const GSD_5888_BARE_WIN32_REQUIRE = `
+Object.defineProperty(process, 'platform', { value: 'win32' });
+require(require('node:path').join(process.env.PROBE_REPO, 'bin', 'install.js'));
+`;
+
+function gsd5888RunBareWin32Require(t, { preamble = '', wslDistroName }) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5888-wsl-'));
+  t.after(() => helpers.cleanup(home));
+  return runNode(['-e', preamble + GSD_5888_BARE_WIN32_REQUIRE], {
+    cwd: path.join(__dirname, '..'),
+    env: helpers.installSpawnEnv({
+      HOME: home,
+      USERPROFILE: home,
+      PROBE_REPO: path.join(__dirname, '..'),
+      GSD_TEST_MODE: '1',
+      WSL_DISTRO_NAME: wslDistroName,
+    }),
+    timeoutMs: INSTALL_TIMEOUT_MS,
+  });
+}
+
+for (const [label, opts] of [
+  ['WSL_DISTRO_NAME', { wslDistroName: 'Ubuntu' }],
+  ['/proc/version via GSD_5888_FAKE_WSL_HOST', { wslDistroName: '', preamble: GSD_5888_FAKE_WSL_HOST }],
+]) {
+  test(`#5888 a faked-win32 installer on a WSL host still exits with the WSL warning (${label})`, (t) => {
+    const result = gsd5888RunBareWin32Require(t, opts);
+    assert.equal(result.exitCode, 1, `expected exit 1; got outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
+    assert.match(result.stderr, /Detected WSL with Windows-native Node\.js/);
+  });
+}
