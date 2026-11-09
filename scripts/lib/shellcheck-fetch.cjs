@@ -17,9 +17,11 @@
  *
  * The download retries a transient failure (HTTP 408/429/5xx, network error,
  * request timeout) up to DOWNLOAD_ATTEMPTS times, sleeping DOWNLOAD_BACKOFF_MS
- * between attempts (#6095). The worst case is bounded: DOWNLOAD_ATTEMPTS x
- * (MAX_REDIRECTS + 1) hops x DOWNLOAD_TIMEOUT_MS, plus 7s of backoff. A
- * non-transient failure (404, too many redirects) fails at once.
+ * between attempts (#6095). The attempt count and the DOWNLOAD_BACKOFF_MS
+ * sleeps are bounded; total wall time is not bounded by this module, because
+ * DOWNLOAD_TIMEOUT_MS is a per-hop socket idle timeout (a body that keeps
+ * trickling bytes never trips it). The CI job's timeout-minutes is the outer
+ * bound. A non-transient failure (404, too many redirects) fails at once.
  *
  * Zip-slip defense: unlike `decompress`, which wrote extracted files using
  * PATHS TAKEN FROM THE ARCHIVE (the exact defect class in GHSA-mp2f-45pm-
@@ -68,9 +70,11 @@ const MAX_REDIRECTS = 5;
 // SHELLCHECK_TIMEOUT_MS bound on the ShellCheck subprocess. A bare `timeout`
 // option on the request does NOT abort it by itself — Node only emits a
 // 'timeout' event, which must be handled by destroying the request (see the
-// `req.on('timeout', ...)` below). With downloadWithRetry the total is
-// bounded: DOWNLOAD_ATTEMPTS x (MAX_REDIRECTS + 1) hops x this value, plus
-// the DOWNLOAD_BACKOFF_MS sleeps between attempts.
+// `req.on('timeout', ...)` below). This is a per-hop IDLE timeout (socket
+// inactivity): a stalled hop fails after it, but a body that keeps trickling
+// bytes never trips it. downloadWithRetry bounds the attempt count and the
+// DOWNLOAD_BACKOFF_MS sleeps; total wall time is not bounded by this module
+// (the CI job's timeout-minutes is the outer bound).
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 // Total download attempts and the sleeps (ms) between them: a sleep of
@@ -108,7 +112,9 @@ function httpsGetFollowingRedirects(url, redirectsLeft = MAX_REDIRECTS, requestF
         if (status >= 300 && status < 400 && res.headers.location) {
           res.resume(); // drain so the socket can be reused/closed
           if (redirectsLeft <= 0) {
-            reject(new Error(`too many redirects fetching ${url}`));
+            const err = new Error(`too many redirects fetching ${url}`);
+            err.code = 'TOO_MANY_REDIRECTS';
+            reject(err);
             return;
           }
           const next = new URL(res.headers.location, url).toString();
@@ -150,7 +156,7 @@ function isTransientDownloadError(err) {
   if (typeof status === 'number') {
     return status === 408 || status === 429 || (status >= 500 && status <= 599);
   }
-  return !/^too many redirects/.test((err && err.message) || '');
+  return !(err && err.code === 'TOO_MANY_REDIRECTS');
 }
 
 /**

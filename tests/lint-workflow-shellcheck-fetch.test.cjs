@@ -453,9 +453,14 @@ describe('#6095 download retry', () => {
   }
 
   test('row 8: "too many redirects" is not retried', async () => {
-    const { getFn, calls } = makeGetFn([new Error(`too many redirects fetching ${URL_}`)]);
+    const tooMany = Object.assign(new Error(`too many redirects fetching ${URL_}`), { code: 'TOO_MANY_REDIRECTS' });
+    const { getFn, calls } = makeGetFn([tooMany]);
     const { sleep, sleeps } = makeSleep();
-    await assert.rejects(downloadWithRetry(URL_, { getFn, sleep }), /too many redirects/);
+    await assert.rejects(downloadWithRetry(URL_, { getFn, sleep }), (err) => {
+      assert.equal(err.code, 'TOO_MANY_REDIRECTS');
+      assert.match(err.message, /too many redirects/);
+      return true;
+    });
     assert.equal(calls.length, 1);
     assert.equal(sleeps.length, 0);
   });
@@ -489,7 +494,40 @@ describe('#6095 download retry', () => {
     for (const s of [408, 429, 500, 599]) assert.equal(isTransientDownloadError(withStatus(s)), true, `${s}`);
     assert.equal(isTransientDownloadError(withStatus(600)), false);
     assert.equal(isTransientDownloadError(new Error('socket hang up')), true);
-    assert.equal(isTransientDownloadError(new Error('too many redirects fetching x')), false);
+    assert.equal(
+      isTransientDownloadError(Object.assign(new Error('too many redirects fetching x'), { code: 'TOO_MANY_REDIRECTS' })),
+      false,
+    );
+  });
+
+  test('row 8b: the too-many-redirects rejection of httpsGetFollowingRedirects carries code TOO_MANY_REDIRECTS and an unchanged message', async () => {
+    const steps = Array.from({ length: MAX_REDIRECTS + 1 }, (_, n) => ({
+      status: 302,
+      headers: { location: `https://example.invalid/hop-${n + 1}` },
+    }));
+    let i = 0;
+    const requestFn = (_url, _options, callback) => {
+      const req = new EventEmitter();
+      req.destroy = () => {};
+      const step = steps[i++];
+      process.nextTick(() => {
+        const res = new EventEmitter();
+        res.statusCode = step.status;
+        res.headers = step.headers;
+        res.resume = () => {};
+        callback(res);
+      });
+      return req;
+    };
+    await assert.rejects(
+      httpsGetFollowingRedirects('https://example.invalid/start', MAX_REDIRECTS, requestFn),
+      (err) => {
+        assert.equal(err.code, 'TOO_MANY_REDIRECTS');
+        assert.match(err.message, /^too many redirects fetching /);
+        assert.equal(isTransientDownloadError(err), false);
+        return true;
+      },
+    );
   });
 
   // row 10
