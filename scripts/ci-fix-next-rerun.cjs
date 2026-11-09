@@ -55,14 +55,20 @@ async function rerunBaseHealth({
     // and could cancel that newer run.
     if (run.conclusion === 'cancelled') return { action: 'skip', reason: 'run-cancelled', runId };
 
-    const currentHead = (await gh(['api', `repos/${repo}/pulls/${prNumber}`, '--jq', '.head.sha'])).trim();
-    if (currentHead !== headSha) return { action: 'skip', reason: 'head-moved', runId };
+    // A run waiting for approval has not executed; there is nothing to re-run.
+    if (run.conclusion === 'action_required') return { action: 'skip', reason: 'run-awaiting-approval', runId };
+
+    const readHead = async () => (await gh(['api', `repos/${repo}/pulls/${prNumber}`, '--jq', '.head.sha'])).trim();
+    if ((await readHead()) !== headSha) return { action: 'skip', reason: 'head-moved', runId };
 
     const view = JSON.parse(await gh(['run', 'view', runId, '--json', 'jobs']));
     const jobs = view && Array.isArray(view.jobs) ? view.jobs : [];
     const job = jobs.find((j) => j && j.name === BASE_HEALTH_JOB_NAME);
     if (!job) return { action: 'error', reason: 'no-job', runId };
     const jobId = String(job.databaseId);
+
+    // Second read immediately before the re-run, to shrink the stale-run window.
+    if ((await readHead()) !== headSha) return { action: 'skip', reason: 'head-moved', runId };
 
     await gh(['run', 'rerun', runId, '--job', jobId]);
     return { action: 'rerun', reason: 'rerun', runId, jobId };
@@ -135,6 +141,8 @@ if (require.main === module) {
 module.exports = {
   BASE_HEALTH_JOB_NAME,
   TESTS_WORKFLOW_FILE,
+  DEFAULT_DEADLINE_MS,
+  GH_TIMEOUT_MS,
   rerunBaseHealth,
   main,
 };

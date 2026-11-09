@@ -10,6 +10,9 @@
 # its job cannot see the label, so for such a run push a commit after applying
 # fix-next.
 #
+# The script re-checks the PR head sha right before the re-run; a seconds-wide
+# window between that last check and the re-run itself remains.
+#
 # pull_request_target is safe here: only the BASE sha's `scripts/` is checked
 # out (trusted code, never the PR's), no PR code runs, and the repository, PR
 # number and head sha reach the script through env only.
@@ -35,6 +38,7 @@ jobs:
     permissions:
       actions: write
       contents: read
+      pull-requests: read
     steps:
       # base sha only — trusted code, never the PR's
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

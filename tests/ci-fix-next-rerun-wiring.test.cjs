@@ -12,7 +12,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
 
-const { BASE_HEALTH_JOB_NAME, TESTS_WORKFLOW_FILE } = require('../scripts/ci-fix-next-rerun.cjs');
+const {
+  BASE_HEALTH_JOB_NAME, TESTS_WORKFLOW_FILE, DEFAULT_DEADLINE_MS, GH_TIMEOUT_MS,
+} =require('../scripts/ci-fix-next-rerun.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
@@ -66,8 +68,12 @@ describe('#6076 workflow wiring', () => {
       assert.equal(job.if, "github.event.label.name == 'fix-next'");
     });
 
-    test('job permissions are exactly actions: write + contents: read', () => {
-      assert.deepEqual(job.permissions, { actions: 'write', contents: 'read' });
+    test('job permissions are exactly actions: write + contents: read + pull-requests: read', () => {
+      assert.deepEqual(job.permissions, { actions: 'write', contents: 'read', 'pull-requests': 'read' });
+    });
+
+    test('job timeout covers the script deadline plus four gh calls', () => {
+      assert.ok(DEFAULT_DEADLINE_MS + 4 * GH_TIMEOUT_MS < job['timeout-minutes'] * 60000);
     });
 
     test('the only checkout is the base sha, sparse, without persisted credentials', () => {

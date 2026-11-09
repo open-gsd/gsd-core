@@ -121,6 +121,22 @@ describe('rerunBaseHealth', () => {
     assert.ok(!gh.calls.some((c) => c[0] === 'api'));
   });
 
+  test('action_required -> skip run-awaiting-approval, no rerun and no head read', async () => {
+    const { result, gh } = await run({ 'run list': completed('action_required') });
+    assert.deepEqual(result, { action: 'skip', reason: 'run-awaiting-approval', runId: '111' });
+    assert.ok(!gh.calls.some((c) => c[0] === 'run' && c[1] === 'rerun'));
+    assert.ok(!gh.calls.some((c) => c[0] === 'api'));
+  });
+
+  test('head matches on the first read but moves before the rerun -> skip head-moved, no rerun', async () => {
+    const { result, gh } = await run({
+      'run list': completed(), api: [SHA, 'b'.repeat(40)], 'run view': jobsBody, 'run rerun': '',
+    });
+    assert.deepEqual(result, { action: 'skip', reason: 'head-moved', runId: '111' });
+    assert.equal(gh.calls.filter((c) => c[0] === 'api').length, 2);
+    assert.ok(!gh.calls.some((c) => c[1] === 'rerun'));
+  });
+
   test('PR head moved -> skip head-moved, no rerun', async () => {
     const { result, gh } = await run({ 'run list': completed(), api: `${'b'.repeat(40)}\n` });
     assert.deepEqual(result, { action: 'skip', reason: 'head-moved', runId: '111' });
@@ -158,7 +174,7 @@ describe('rerunBaseHealth', () => {
   test('property: any completed non-cancelled conclusion re-runs when head matches', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.constantFrom('success', 'failure', 'timed_out', 'skipped', 'action_required'),
+        fc.constantFrom('success', 'failure', 'timed_out', 'skipped'),
         fc.integer({ min: 1, max: 1e9 }),
         async (conclusion, id) => {
           const { result } = await run({
@@ -203,6 +219,12 @@ describe('main() env validation', () => {
       }
     });
   }
+
+  test('PR_NUMBER " 7 " is trimmed and accepted', async () => {
+    const h = harness({ ...baseEnv, PR_NUMBER: ' 7 ' });
+    assert.equal(await h.exec(h.gh), 0);
+    assert.equal(h.err.join(''), '');
+  });
 
   for (const [len, ok] of [[39, false], [40, true], [41, false]]) {
     test(`HEAD_SHA of ${len} hex chars -> ${ok ? 'accepted' : 'error exit 1'}`, async () => {
