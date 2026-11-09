@@ -299,7 +299,13 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
     }
   }
 
-  place(root, tmpRepo, entries, true);
+  try {
+    place(root, tmpRepo, entries, true);
+  } catch (err) {
+    // The caller never receives tmpRepo when the walk throws, so nothing else can remove it.
+    fs.rmSync(tmpRepo, { recursive: true, force: true });
+    throw err;
+  }
 
   if (skipped.length > 0) {
     // Not thrown: a source that left the tree mid-walk is genuinely not part of
@@ -308,7 +314,7 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
     // surface later as a confusing "file missing" in an unrelated assertion, or
     // as nothing at all for a test that never touches it.
     warn(
-      `buildOverlayRepo: ${skipped.length} source file(s) vanished mid-walk and were ` +
+      `buildOverlayRepo: ${skipped.length} source path(s) vanished mid-walk and were ` +
       `omitted from the overlay (likely a concurrent atomic replace, e.g. hooks/dist — ` +
       `run \`npm run build:hooks\` to regenerate it):\n  ` +
       skipped.join('\n  '),
