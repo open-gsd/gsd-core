@@ -45,6 +45,7 @@
       "aliases": [],
       "positionals": 2,
       "flags": {
+        "json": "boolean",
         "terms": "value"
       },
       "required": [],
@@ -333,7 +334,10 @@
       "positionals": 1,
       "flags": {
         "cwd-target": "value",
+        "force-isolation": "value",
         "json": "boolean",
+        "phase": "value",
+        "plan": "value",
         "prompt": "value"
       },
       "required": [],
@@ -459,6 +463,7 @@
       ],
       "positionals": 3,
       "flags": {
+        "archive-phases": "boolean",
         "archive-quick": "boolean",
         "confirm": "boolean",
         "dry-run": "boolean",
@@ -495,7 +500,9 @@
       "verb": "phase-plan-index",
       "aliases": [],
       "positionals": 2,
-      "flags": {},
+      "flags": {
+        "json": "boolean"
+      },
       "required": [],
       "workstreamScoped": false
     },
@@ -593,12 +600,12 @@
       "flags": {
         "harness-flag": "value",
         "isolation": "value",
+        "json": "boolean",
         "phase": "value",
-        "plan": "value"
+        "plan": "value",
+        "worktree": "boolean"
       },
-      "required": [
-        "isolation"
-      ],
+      "required": [],
       "workstreamScoped": false,
       "eq": [
         "harness-flag"
@@ -620,7 +627,9 @@
       "verb": "research-store.get",
       "aliases": [],
       "positionals": 3,
-      "flags": {},
+      "flags": {
+        "kind": "value"
+      },
       "required": [],
       "workstreamScoped": false
     },
@@ -796,6 +805,7 @@
         "agent": "value",
         "as": "value",
         "explicit": "boolean",
+        "json": "boolean",
         "model": "value",
         "prompt-file": "value",
         "repo-root": "value",
@@ -956,7 +966,8 @@
         "dry-run": "boolean"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "todo.match-phase",

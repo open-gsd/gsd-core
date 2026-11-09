@@ -806,6 +806,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigNewProject({ args, cwd, raw }) {
+    // A flag is a dash followed by a letter (`-x`, `--force`); `-1` is a negative-number JSON argument.
+    // Today's wording is kept here ahead of the seam, which only knows `--` tokens (#5268 pins both).
+    const declaredFlags = new Set((specFor('config-new-project').booleanFlags ?? []).map((f) => `--${f}`));
+    for (const a of args.slice(1)) {
+      if (typeof a === 'string' && /^--?[A-Za-z]/.test(a) && !declaredFlags.has(a)) {
+        error(`Unknown flag for config-new-project: ${a}`, ERROR_REASON.USAGE);
+      }
+    }
     const parsed = parseNamedArgsOrExit(args, specFor('config-new-project'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-new-project',
@@ -2770,9 +2778,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeInspectDispatchIsolation({ args, cwd, raw }) {
-    // The recording-only knobs (--force-isolation, --phase, --plan) are not declared for this verb
-    // in the CLI surface registry, so the seam refuses them before anything is resolved.
     const parsed = parseNamedArgsOrExit(args, specFor('inspect-dispatch-isolation'), error);
+    // The recording-only knobs (--force-isolation, --phase, --plan) are declared in the CLI surface
+    // registry only so they reach this refusal, which says why they have no read-path meaning.
+    const RECORDING_ONLY_ARGS = ['--force-isolation', '--phase', '--plan'];
+    const rejected = RECORDING_ONLY_ARGS.filter((flag) => args.indexOf(flag) !== -1);
+    if (rejected.length > 0) {
+      error(
+        `inspect-dispatch-isolation: ${rejected.join(', ')} ${rejected.length === 1 ? 'is a' : 'are'} recording-only argument${rejected.length === 1 ? '' : 's'} and cannot be used on the inspection verb — it resolves the runtime's DECLARED capability and records nothing. Use 'query dispatch-isolation' if you need the override applied and the decision recorded.`,
+        ERROR_REASON.USAGE,
+      );
+    }
     // #2486: sentinel-free sibling of `dispatch-isolation` for INSPECTION
     // surfaces — /gsd:health's W025 check and /gsd:settings' Worktrees
     // branching. The dispatch verb above intentionally records its resolved
@@ -3253,9 +3269,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (subcommand === 'complete') {
             // #4096: this verb's flag surface is closed. `--dry-run` is parsed
             // and plumbed (mirroring routeMilestone / #2118), and any OTHER
-            // flag fails loudly in the seam instead of being silently ignored —
-            // an accepted-but-ignored safety flag converts a deliberate preview
-            // into the mutation it was meant to avoid.
+            // flag fails loudly instead of being silently ignored — an
+            // accepted-but-ignored safety flag converts a deliberate preview
+            // into the mutation it was meant to avoid. Any dash-led token after
+            // the filename is refused here, ahead of the seam, with that wording.
+            const declaredFlags = new Set((specFor('todo.complete').booleanFlags ?? []).map((f) => `--${f}`));
+            for (const a of args.slice(3)) {
+              if (typeof a === 'string' && a.startsWith('-') && !declaredFlags.has(a)) {
+                error(`Unknown flag for todo complete: ${a}`, ERROR_REASON.USAGE);
+              }
+            }
             const parsed = parseNamedArgsOrExit(args, specFor('todo.complete'), error);
             commands.cmdTodoComplete(cwd, args[2], { dryRun: parsed['dry-run'] }, raw);
           } else if (subcommand === 'match-phase') {

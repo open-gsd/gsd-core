@@ -84,7 +84,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'migrate-config': { positionals: 1 },
 
   // ─── research ──────────────────────────────────────────────────────────────
-  'research-store.get': { positionals: 3 },
+  // The usage line names `[--kind <k>]` for get; the handler never reads it but callers pass it (research-cli tests).
+  'research-store.get': { positionals: 3, valueFlags: ['kind'] },
   'research-store.put': {
     positionals: 3,
     valueFlags: ['confidence', 'content', 'kind', 'provider', 'source'],
@@ -152,17 +153,21 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     booleanFlags: JSON_FLAG,
   },
   'dispatch-capacity': { positionals: 1, booleanFlags: JSON_FLAG },
-  // --force-isolation, --phase and --plan are explicitly refused by this verb (RECORDING_ONLY_ARGS).
+  // --force-isolation, --phase and --plan are read by the router only to refuse them with the
+  // "recording-only" message (RECORDING_ONLY_ARGS), so they are declared to reach that check.
   'inspect-dispatch-isolation': {
     positionals: 1,
-    valueFlags: ['cwd-target', 'prompt'],
+    valueFlags: ['cwd-target', 'force-isolation', 'phase', 'plan', 'prompt'],
     booleanFlags: JSON_FLAG,
   },
+  // A missing or invalid --isolation prints the verb's usage line, so it is not a requiredFlag.
+  // `--json` is accepted and ignored. `--worktree` is Cursor's bare harness flag: the legacy space
+  // form `--harness-flag --worktree` reads no value and the stray `--worktree` is tolerated.
   'record-dispatch-isolation': {
     positionals: 1,
     valueFlags: ['harness-flag', 'isolation', 'phase', 'plan'],
     eqFlags: ['harness-flag'],
-    requiredFlags: ['isolation'],
+    booleanFlags: ['json', 'worktree'],
   },
   'resolve-dispatch-type': { positionals: 1, valueFlags: ['requested'], booleanFlags: JSON_FLAG },
   'resolve-agent': { positionals: 1, valueFlags: ['name'], booleanFlags: JSON_FLAG },
@@ -177,11 +182,13 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
 
   // ─── milestone / progress / uat / todo ─────────────────────────────────────
   // `scan --terms a,b <phase>` exits sdk_unknown_command from the handler's phase check today; free words keep that reason.
-  'assumption-delta.scan': { positionals: 2, freePositionals: true, valueFlags: ['terms'] },
+  // `--json` is passed by the shipped plan-pre probe (capabilities/assumption-delta/fragments/plan-pre.md); the output is JSON either way.
+  'assumption-delta.scan': { positionals: 2, freePositionals: true, valueFlags: ['terms'], booleanFlags: JSON_FLAG },
   'milestone.archive-quick': { positionals: 3, booleanFlags: DRY_RUN },
   'milestone.complete': {
     positionals: 3,
-    booleanFlags: ['archive-quick', 'confirm', 'dry-run', 'force', 'no-archive-phases'],
+    // `--archive-phases` is the documented default spelled out; nothing reads it, callers pass it (milestone tests).
+    booleanFlags: ['archive-phases', 'archive-quick', 'confirm', 'dry-run', 'force', 'no-archive-phases'],
     // A bare --release-map reads as '' (not null) so the handler can refuse it with today's exit reason.
     valueFlags: ['release-map'],
     bareEmptyFlags: ['release-map'],
@@ -192,7 +199,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'uat.classify-coverage': { positionals: 2, valueFlags: ['file', 'summary'] },
   'uat.complete-session': { positionals: 3, valueFlags: ['message'] },
   'uat.render-checkpoint': { positionals: 2, valueFlags: ['file'] },
-  'todo.complete': { positionals: 3, booleanFlags: DRY_RUN },
+  // The router refuses any dash-led token other than --dry-run itself (#4096); extra bare words were always ignored.
+  'todo.complete': { positionals: 3, freePositionals: true, booleanFlags: DRY_RUN },
   'todo.match-phase': { positionals: 3 },
   // `--phase` is value; `--name` swallows the words up to the next flag.
   scaffold: { positionals: 2, valueFlags: ['phase'], multiwordFlags: ['name'] },
@@ -202,7 +210,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     eqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
     nonEmptyFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
   },
-  'phase-plan-index': { positionals: 2 },
+  // `--json` is accepted and ignored: the index is JSON either way and callers pass it.
+  'phase-plan-index': { positionals: 2, booleanFlags: JSON_FLAG },
   'state-snapshot': { positionals: 1 },
   'summary-extract': { positionals: 2, valueFlags: ['fields'] },
   websearch: { positionals: 2, valueFlags: ['freshness', 'limit'] },
@@ -327,7 +336,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'review-lane.invoke': {
     positionals: 2,
     valueFlags: [...RUN_LANE_COMMON, 'agent', 'as', 'model', 'prompt-file', 'slug'],
-    booleanFlags: ['explicit'],
+    // `--json` is documented for this verb (docs/how-to/fix-a-refused-reviewer-lane.md) and always passed by callers; the result is JSON either way.
+    booleanFlags: ['explicit', 'json'],
     requiredFlags: ['slug'],
   },
   'review-lane.plan': { positionals: 2, valueFlags: RUN_LANE_COMMON },
