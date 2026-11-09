@@ -4,10 +4,11 @@
  *
  * Establishes the exact contract every extracted rule builds onto: the
  * frozen `SEVERITY`/`REMEDY_ACTION`/`REMEDY_RISK` enums, the
- * `Diagnostic`/`Remedy`/`Rule` shapes, the `RULES` container (the 32 rules
- * extracted from `cmdValidateHealth`, `src/verify.cts:1616-2577`, are
- * concatenated in from each rule-group file under
- * `src/health-diagnostic-rules/`), the `evaluateRules` evaluator, and the
+ * `Diagnostic`/`Remedy`/`Rule` shapes, the `RULES` container (the 35 rules
+ * — 31 extracted from `cmdValidateHealth`, `src/verify.cts:1616-2577`, plus
+ * the new W028, W029, W030 and W031 — are concatenated in from the nine
+ * rule-group files under `src/health-diagnostic-rules/`), the
+ * `evaluateRules` evaluator, and the
  * `applyRepairs` `--repair`/`--backfill` dispatcher — whose per-action
  * handlers are REAL here (ported behavior-preserving from
  * `verify.cts:2405-2553`'s repair switch), not stubs.
@@ -62,8 +63,11 @@ type Rule = healthDiagnosticTypesMod.Rule;
 // ─── Rule table ─────────────────────────────────────────────────────────────
 
 // Populated by concatenating each rule group's exported `RULES` array (design
-// doc, "Rule table organization" section) — the 32 rule functions extracted
-// from `cmdValidateHealth`, `src/verify.cts:1616-2577`.
+// doc, "Rule table organization" section) — the rule functions extracted
+// from `cmdValidateHealth`, `src/verify.cts:1616-2577`, plus the rules added
+// since (W028, W029, W030, W031). The count is locked by
+// `tests/health-diagnostic.test.cjs` and
+// `scripts/lint-health-diagnostic-rule-table.cjs`.
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import rootExistenceMod = require('./health-diagnostic-rules/root-existence.cjs');
