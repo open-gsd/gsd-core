@@ -54,7 +54,7 @@ const { DEFAULT_TIMEOUT_MS: SEAM_FALLBACK_TIMEOUT_MS } = require('./process-seam
  *
  * Evidence (TIMEOUT_EVIDENCE.PROBE_TIMEOUT_MS): worst observed 7424ms on darwin (p50 111ms, p99 3411ms of recorded spawns),
  * margin 2.02x; CI seam spawn-stall records, 188 runs since 2026-10-25.
- * 125 call sites spawn outside the seam and are not covered; tracked in #6058 #6059.
+ * 62 call sites spawn outside the seam and are not covered; tracked in #6058 #6059.
  */
 const PROBE_TIMEOUT_MS = 15000;
 
@@ -423,7 +423,7 @@ const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.
  * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
  */
 const TIMEOUT_EVIDENCE = Object.freeze({
-  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 9, darwin: 490, linux: 311 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 125, unseenSitesTrackedBy: '#6058 #6059', source: CI_SOURCE, window: CI_WINDOW },
+  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 9, darwin: 490, linux: 311 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 62, unseenSitesTrackedBy: '#6058 #6059', source: CI_SOURCE, window: CI_WINDOW },
   HOOK_FANOUT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 23514, worstPlatform: 'win32', p50Ms: 2326, p99Ms: 7563, samples: { win32: 266, darwin: 978, linux: 173 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 4669, worstPlatform: 'win32', p50Ms: 2344, p99Ms: 4669, samples: { win32: 12 }, lanes: { win32: 551, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 58, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
   GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 10114, worstPlatform: 'win32', p50Ms: 2558, p99Ms: 7180, samples: { win32: 116, darwin: 4, linux: 148 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 10, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },

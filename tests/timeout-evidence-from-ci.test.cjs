@@ -127,6 +127,57 @@ describe('census and classification', () => {
     assert.deepEqual(resolved.unusedResolutions.map((o) => o.file), ['tests/gone.test.cjs']);
   });
 
+  describe('exclusion resolutions', () => {
+    const SPAWNER_FILE = { 'tests/spawner.test.cjs': "const projection = require('../src/shell-command-projection.cjs');\nprojection.execArgvQuarantined('git', [], { timeoutMs: CLASS_A_MS });\n" };
+    const UNDER_TEST = { file: 'tests/spawner.test.cjs', callee: 'projection.execArgvQuarantined', kind: 'UNDER_TEST', reason: 'asserts the spawner outcomes' };
+
+    function buildWith(files, resolutions) {
+      const view = viewOf(files);
+      return script.buildSites(script.censusRepo(view, NAMES), script.createClassifier(view), resolutions);
+    }
+
+    test('an under-test callee is excluded from sites and unresolved sites and reported with its kind and reason', () => {
+      const r = buildWith(SPAWNER_FILE, [UNDER_TEST]);
+      assert.deepEqual(r.sites, []);
+      assert.deepEqual(r.unresolvedSites, []);
+      assert.deepEqual(r.unusedResolutions, []);
+      assert.deepEqual(r.excludedSites.map((x) => [x.file, x.line, x.kind, x.reason]), [['tests/spawner.test.cjs', 2, 'UNDER_TEST', 'asserts the spawner outcomes']]);
+    });
+
+    test('an exempt direct spawn is excluded, not counted as a raw site', () => {
+      const files = { 'tests/raw.test.cjs': "const cp = require('node:child_process');\ncp.spawnSync('git', [], { timeout: CLASS_A_MS });\n" };
+      assert.equal(buildWith(files, []).sites[0].cls, 'DIRECT');
+      const r = buildWith(files, [{ file: 'tests/raw.test.cjs', callee: 'cp.spawnSync', kind: 'EXEMPT', reason: 'deliberate' }]);
+      assert.deepEqual(r.sites, []);
+      assert.deepEqual(r.excludedSites.map((x) => x.kind), ['EXEMPT']);
+    });
+
+    test('a resolution of an exclusion kind with a missing, empty or blank reason throws; an unknown kind throws', () => {
+      for (const reason of [undefined, '', '   ']) {
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, reason }]), /requires a non-empty reason/);
+      }
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, kind: 'BOGUS' }]), /unknown kind/);
+    });
+
+    test('an under-test resolution that matches nothing is reported as unused', () => {
+      const r = buildWith({ 'tests/other.test.cjs': 'const x = 1;\n' }, [UNDER_TEST]);
+      assert.deepEqual(r.unusedResolutions.map((o) => o.file), ['tests/spawner.test.cjs']);
+      assert.deepEqual(r.excludedSites, []);
+    });
+
+    test('the agent-skills stdio exemption matches exactly one site and leaves the file\'s other direct sites counted', () => {
+      const src = "const { spawnSync } = require('child_process');\n" +
+        "spawnSync('node', [], { timeout: CLASS_A_MS });\n" +
+        "spawnSync('node', [], { stdio: ['ignore', 1, 'pipe'], timeout: CLASS_A_MS });\n" +
+        "spawnSync('node', [], { timeout: CLASS_A_MS });\n";
+      const exemption = script.MANUAL_RESOLUTIONS.find((o) => o.file === 'tests/agent-skills.test.cjs');
+      assert.equal(exemption.kind, 'EXEMPT');
+      const r = buildWith({ 'tests/agent-skills.test.cjs': src }, [exemption]);
+      assert.deepEqual(r.excludedSites.map((x) => x.line), [3]);
+      assert.deepEqual(r.sites.map((x) => [x.line, x.cls]), [[2, 'DIRECT'], [4, 'DIRECT']]);
+    });
+  });
+
   test('constantsFromTimeouts keeps measured, mirror and backstop names and drops fixture data', () => {
     const T = {
       CLASS_A_MS: 1, CLASS_B_MS: 2, CLASS_C_MS: 3, CLASS_D_MS: 4,
