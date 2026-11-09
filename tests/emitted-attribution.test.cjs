@@ -134,8 +134,8 @@ const FRESH_FIXTURE_GIT_TIMEOUT_MS = 30_000;
 const HEAVY_REAL_TREE_TEST_TIMEOUT_MS = 480_000;
 
 /**
- * Runs the exact same script as the shared EMITTED_RUNTIME_BUILD_TIMEOUT_MS constant
- * (scripts/build-hooks.js) but at 4x that constant's bound. This site
+ * Runs the exact same script (scripts/build-hooks.js) as the shared BUILD_TIMEOUT_MS
+ * class norm in tests/helpers/timeouts.cjs (30000ms) but at 4x that norm's bound. This site
  * sits inside "differential attribution over the real tree", the single
  * heaviest test in the suite, where elevated system load plausibly
  * justifies the wider margin -- not equalized to the lighter shared norm
