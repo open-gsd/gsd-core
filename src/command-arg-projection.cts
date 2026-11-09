@@ -72,28 +72,49 @@ export interface NamedArgSpec {
    */
   eqFlags?: string[];
   /**
-   * Present without a value (no next token, a flag-shaped next token, or
-   * `--name=`) is InvalidArgs `Missing value for --name`; an absent flag stays
-   * `null`. Subset of `valueFlags`. Reader: resolve-execution, loop
-   * render-hooks, milestone `--release-map` and the eq-form readers.
+   * Present without a value is InvalidArgs `Missing value for --name`; an absent
+   * flag stays `null`. Subset of `valueFlags`. "Without a value" means no next
+   * token, a flag-shaped next token, an empty next token (`--name ''`), or an
+   * empty / whitespace-only `--name=` value; `emptyValueFlags` and
+   * `emptyEqFlags` relax the two empty forms. A whitespace-only NEXT token is a
+   * value. For a `repeatableFlags` member the LAST occurrence is the one
+   * checked (the one a last-wins reader takes). Reader: loop render-hooks,
+   * context-predicates, resolve-execution, update-context, effort sync.
    */
   nonEmptyFlags?: string[];
   /**
+   * A literal empty next token (`--name ''`) is a value, not a missing one; it
+   * surfaces as `''`. Subset of `nonEmptyFlags`. Reader: resolve-execution,
+   * update-context.
+   */
+  emptyValueFlags?: string[];
+  /**
+   * `--name=` (and a whitespace-only `--name= `) is a value, not a missing one;
+   * it surfaces as typed (`''`). Subset of `eqFlags` and `nonEmptyFlags`.
+   * Reader: resolve-execution, update-context, effort sync.
+   */
+  emptyEqFlags?: string[];
+  /**
    * A bare `--name` yields `''` instead of `null`, so presence is read from
-   * `data`. Subset of `valueFlags`. Reader: stamp-codebase-map `--files`.
+   * `data`. Subset of `valueFlags`. Reader: stamp-codebase-map `--files`,
+   * milestone complete `--release-map`.
    */
   bareEmptyFlags?: string[];
   /**
    * `data[name]` is a `string[]` of every occurrence's value, in order; an
-   * occurrence with no value (absent or flag-shaped next token, or `--name=`)
-   * contributes nothing. Subset of `valueFlags`. Reader: prompt-budget
-   * `--plan-file`, restore-custom-files `--config-dir` (last wins).
+   * occurrence with no value (absent, empty or flag-shaped next token, or
+   * `--name=`) contributes nothing, so a required repeatable flag needs at least
+   * one non-empty value. Subset of `valueFlags`. Reader: prompt-budget
+   * `--plan-file`, restore-custom-files `--config-dir` (last wins, with
+   * `nonEmptyFlags`).
    */
   repeatableFlags?: string[];
   /**
    * Each occurrence starts a run collecting non-`--` tokens up to the next
-   * list flag of this spec (`--` tokens inside a run are skipped by extraction
-   * but still validated); repeated runs merge. `data[name]` is a `string[]`.
+   * list flag of this spec. A token consumed as the value of a value,
+   * optional-value or eq flag is not collected; any other flag token inside a
+   * run is skipped by extraction but still validated (a bare `--` is skipped
+   * and accepted). Repeated runs merge. `data[name]` is a `string[]`.
    * Independent kind: disjoint from every other kind. This is gsd-tools.cjs
    * `collectListFlagValues`. Reader: commit `--files`/`--files-removed`,
    * commit-to-subrepo `--files`.
@@ -211,7 +232,10 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
       `parseNamedArgs: spec.unknownFlagMessage must be a string containing the {flag} placeholder — received ${JSON.stringify(spec.unknownFlagMessage)}.`,
     );
   }
-  for (const kind of VALUE_SUBSET_KINDS) assertSubsetOfValueFlags(spec, kind);
+  for (const kind of VALUE_SUBSET_KINDS) assertSubsetOf(spec, kind, 'valueFlags');
+  assertSubsetOf(spec, 'emptyValueFlags', 'nonEmptyFlags');
+  assertSubsetOf(spec, 'emptyEqFlags', 'nonEmptyFlags');
+  assertSubsetOf(spec, 'emptyEqFlags', 'eqFlags');
   for (const kind of INDEPENDENT_KINDS) assertIndependentKind(spec, kind);
   if (spec.passthroughAfter !== undefined && spec.passthroughAfter !== '--') {
     throw new TypeError(
@@ -241,15 +265,15 @@ function assertStringArray(spec: Record<string, unknown>, kind: string): string[
   return list;
 }
 
-function assertSubsetOfValueFlags(spec: Record<string, unknown>, kind: string): void {
+function assertSubsetOf(spec: Record<string, unknown>, kind: string, parent: string): void {
   const list = assertStringArray(spec, kind);
   if (list === null) return;
-  const declared = Array.isArray(spec.valueFlags) ? spec.valueFlags : [];
+  const declared = Array.isArray(spec[parent]) ? (spec[parent] as unknown[]) : [];
   const stray = list.filter((f) => !declared.includes(f));
   if (stray.length > 0) {
     throw new TypeError(
-      `parseNamedArgs: spec.${kind} must be a subset of spec.valueFlags — ` +
-        `not declared as value flags: ${stray.join(', ')}`,
+      `parseNamedArgs: spec.${kind} must be a subset of spec.${parent} — ` +
+        `not declared in ${parent}: ${stray.join(', ')}`,
     );
   }
 }
@@ -290,18 +314,36 @@ function missingRequired(spec: NamedArgSpec, data: ParsedNamedArgs): NamedArgsRe
 }
 
 /**
+ * Whether the occurrence of a `nonEmptyFlags` member carries no value, per the
+ * `emptyValueFlags` / `emptyEqFlags` relaxations: no next token or a flag-shaped
+ * one always counts as missing; an empty next token and an empty or
+ * whitespace-only `--f=` value count unless relaxed.
+ */
+function lacksValue(args: string[], spec: NamedArgSpec, flag: string, occ: Occurrence): boolean {
+  if (occ.inline !== null) {
+    return occ.inline.trim() === '' && !(spec.emptyEqFlags ?? []).includes(flag);
+  }
+  const next = args[occ.index + 1];
+  if (next === undefined || isFlagToken(next)) return true;
+  return next === '' && !(spec.emptyValueFlags ?? []).includes(flag);
+}
+
+/**
  * First `nonEmptyFlags` member (declaration order) that is present (`--f` or
- * `--f=` occurs) but whose extracted value is `null` or `''`, as an InvalidArgs
- * result with today's wording (`Missing value for --f`); else null.
+ * `--f=` occurs) without a value, as an InvalidArgs result with today's wording
+ * (`Missing value for --f`); else null. The first occurrence is checked, except
+ * for a repeatable flag, whose last occurrence is.
  */
 function missingValue(
+  args: string[],
   spec: NamedArgSpec,
-  data: ParsedNamedArgs,
   occurrences: Map<string, Occurrence[]>,
 ): NamedArgsResult | null {
   for (const flag of spec.nonEmptyFlags ?? []) {
-    if (!occurrences.has(flag)) continue;
-    if (data[flag] === null || data[flag] === '') {
+    const occs = occurrences.get(flag);
+    if (occs === undefined) continue;
+    const occ = (spec.repeatableFlags ?? []).includes(flag) ? occs[occs.length - 1] : occs[0];
+    if (lacksValue(args, spec, flag, occ)) {
       return {
         ok: false,
         kind: 'InvalidArgs',
@@ -337,9 +379,14 @@ function indexOccurrences(args: string[], eq: Set<string>): Map<string, Occurren
   return map;
 }
 
-/** The value an occurrence carries: `null` when absent, empty, or flag-shaped. */
-function occurrenceValue(args: string[], occ: Occurrence): string | null {
-  if (occ.inline !== null) return occ.inline === '' ? null : occ.inline;
+/**
+ * The value an occurrence carries: `null` when absent or flag-shaped, or when
+ * `--f=` is empty (unless `emptyEqFlags` makes it a value).
+ */
+function occurrenceValue(args: string[], spec: NamedArgSpec, flag: string, occ: Occurrence): string | null {
+  if (occ.inline !== null) {
+    return occ.inline === '' && !(spec.emptyEqFlags ?? []).includes(flag) ? null : occ.inline;
+  }
   const next = args[occ.index + 1];
   return next !== undefined && !isFlagToken(next) ? next : null;
 }
@@ -351,10 +398,13 @@ function extractValueFlag(
   occs: Occurrence[],
 ): string | string[] | null {
   if ((spec.repeatableFlags ?? []).includes(flag)) {
-    return occs.map((o) => occurrenceValue(args, o)).filter((v): v is string => v !== null);
+    // An empty or flag-shaped value contributes nothing to a repeatable flag.
+    return occs
+      .map((o) => occurrenceValue(args, spec, flag, o))
+      .filter((v): v is string => v !== null && v !== '');
   }
   if (occs.length === 0) return null;
-  const value = occurrenceValue(args, occs[0]);
+  const value = occurrenceValue(args, spec, flag, occs[0]);
   const bareEmpty = (spec.bareEmptyFlags ?? []).includes(flag) && occs[0].inline === null;
   return value === null && bareEmpty ? '' : value;
 }
@@ -363,14 +413,22 @@ function extractValueFlag(
  * Every occurrence of `--flag` starts a run of non-`--` tokens that ends at
  * the next list flag of the spec (gsd-tools.cjs `collectListFlagValues`).
  */
-function collectListValues(args: string[], flag: string, stops: Set<string>): string[] {
+function collectListValues(args: string[], flag: string, stops: Set<string>, sets: FlagSets): string[] {
   const values: string[] = [];
   args.forEach((a, i) => {
     if (a !== `--${flag}`) return;
-    for (const b of args.slice(i + 1)) {
+    let j = i + 1;
+    while (j < args.length) {
+      const b = args[j];
       if (stops.has(b)) break;
-      if (isFlagToken(b)) continue;
+      if (isFlagToken(b)) {
+        // Step over exactly what the walk steps over, so a word the walk reads
+        // as a flag's value is never also collected; a bare `--` advances by 1.
+        j += advanceOverFlag(args, j, sets) ?? 1;
+        continue;
+      }
       values.push(b);
+      j += 1;
     }
   });
   return values;
@@ -392,7 +450,8 @@ function extractData(
   }
   const listFlags = spec.listFlags ?? [];
   const stops = new Set(listFlags.map((f) => `--${f}`));
-  for (const flag of listFlags) data[flag] = collectListValues(args, flag, stops);
+  const sets = buildFlagSets(spec);
+  for (const flag of listFlags) data[flag] = collectListValues(args, flag, stops, sets);
   for (const flag of spec.multiwordFlags ?? []) data[flag] = parseMultiwordArg(args, flag);
   return data;
 }
@@ -478,6 +537,11 @@ function walkTokens(args: string[], spec: NamedArgSpec): NamedArgsResult | null 
   while (i < args.length) {
     const tok = args[i];
     if (spec.rejectShortFlags === true && SHORT_FLAG_RE.test(tok)) return unknownFlag(tok, sets, spec);
+    if (inListRun && tok === '--') {
+      // collectListFlagValues skipped every `--`-prefixed token inside a run, so a bare `--` is accepted there.
+      i += 1;
+      continue;
+    }
     if (isFlagToken(tok)) {
       const advance = advanceOverFlag(args, i, sets);
       if (advance === null) return unknownFlag(tok, sets, spec);
@@ -544,7 +608,7 @@ export function parseNamedArgs(args: string[], spec: NamedArgSpec): NamedArgsRes
 
   const invalid =
     (spec.positionals === 'rest' ? null : walkTokens(head, spec)) ??
-    missingValue(spec, data, occurrences) ??
+    missingValue(head, spec, occurrences) ??
     missingRequired(spec, data);
   return invalid ?? { ok: true, data };
 }
