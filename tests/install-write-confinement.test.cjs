@@ -3693,7 +3693,7 @@ describe('#3712 in-process home confinement', () => {
     // FAT32, exFAT and some SMB shares report ino 0 for every entry, so dev+ino
     // match for any two directories there; sameDirectory() must fall back to the
     // native realpaths (#4030 reuses it for the --phase-dir cross-check).
-    test('sameDirectory: with ino 0 the realpaths decide (different directories no, two spellings of one yes)', { skip: process.platform === 'win32' && 'needs a symlink' }, (t) => {
+    test('sameDirectoryByRealpath: with ino 0 the realpaths decide (different directories no, two spellings of one yes)', { skip: process.platform === 'win32' && 'needs a symlink' }, (t) => {
       const root = createTempDir('gsd-4030-ino0-');
       t.after(() => cleanup(root));
       const a = path.join(root, 'a');
@@ -3702,11 +3702,11 @@ describe('#3712 in-process home confinement', () => {
       fs.mkdirSync(a);
       fs.mkdirSync(b);
       fs.symlinkSync(a, link, 'dir');
-      assert.strictEqual(testHomeGuard.sameDirectory(a, path.join(root, 'a', '..', 'a')), true, 'positive control: same path');
+      assert.strictEqual(testHomeGuard.sameDirectoryByRealpath(a, path.join(root, 'a', '..', 'a')), true, 'positive control: same path');
       const real = fs.statSync;
       t.mock.method(fs, 'statSync', (p, o) => Object.assign(Object.create(real(p, o)), { ino: 0n }));
-      assert.strictEqual(testHomeGuard.sameDirectory(a, b), false, 'ino 0 on both is not evidence of identity');
-      assert.strictEqual(testHomeGuard.sameDirectory(a, link), true, 'a symlink spelling of the same directory still matches');
+      assert.strictEqual(testHomeGuard.sameDirectoryByRealpath(a, b), false, 'ino 0 on both is not evidence of identity');
+      assert.strictEqual(testHomeGuard.sameDirectoryByRealpath(a, link), true, 'a symlink spelling of the same directory still matches');
     });
 
     // Review of #3725, Major 2, raised as a question rather than a finding: on
