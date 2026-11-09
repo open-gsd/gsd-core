@@ -350,6 +350,23 @@ let furtherReading = false;
 let subscriptJoins = false;
 let joinCandidate = false;
 
+// The further reading resolves commands the plain one does not (`A+=b bash -c
+// '…'`), so it reads payloads the plain reading never tokenizes, and next's
+// findParenClose recurses once per `"$(` in them: a long run overflows the
+// stack in this reading alone, and the throw would end it before the rest of
+// the line. So where it descends into a payload (findSecretRead at depth > 0)
+// an overflow leaves that payload unread, as the plain reading leaves it, and
+// the line's scan goes on. The plain path pays only the one test above.
+let furtherPayloadGuarded = false;
+function readPayloadUnlessTooDeep(command, depth) {
+  furtherPayloadGuarded = true;
+  try {
+    return unlessTooDeep(() => findSecretRead(command, depth), () => null);
+  } finally {
+    furtherPayloadGuarded = false;
+  }
+}
+
 // Runs `read` with this file's further-reading state off, then restores it.
 // #4432 decides once per command whether every command on the line is a
 // read-only reader (`exemption.bashReadOnly`), on the first secret-named token
@@ -815,12 +832,21 @@ function tokenize(str) {
   let atCommandStart = true;
   let onlyRedirects = true;
   let reservedOk = true;
-  let afterTime = 0; // 1 after `time`, 2 after `time -p`
   let redirectTarget = false;
-  let subscriptsOpen = true;
-  // The `)` closing each `((`'s inner paren, filled by dparenClose, and what
-  // is left of this call's walk allowance for it.
-  const dparen = { closes: new Map(), budget: DPAREN_WALK_PER_CHAR * str.length + DPAREN_WALK_BASE };
+  // The rest of the further reading's state, in one object a closure below
+  // holds, so it lives outside tokenize's stack frame (next's size; see
+  // curlOperandOpensSecret): `afterTime` is 1 after `time` and 2 after
+  // `time -p`; `closes` holds the `)` closing each `((`'s inner paren
+  // (dparenClose) and `budget` what is left of this call's walk allowance for
+  // it; `subscriptsOpen` turns false at an unclosed subscript, which ends
+  // bash's parse; `close` is scratch for the subscript just read.
+  const further = {
+    afterTime: 0,
+    closes: new Map(),
+    budget: DPAREN_WALK_PER_CHAR * str.length + DPAREN_WALK_BASE,
+    subscriptsOpen: true,
+    close: -1,
+  };
 
   const flush = () => {
     if (!hasWord) return;
@@ -839,8 +865,8 @@ function tokenize(str) {
   };
   // The word in `buf`, just pushed, moves the further reading's command position.
   const noteCommandPosition = () => {
-    const wasAfterTime = afterTime;
-    afterTime = 0;
+    const wasAfterTime = further.afterTime;
+    further.afterTime = 0;
     if (redirectTarget) {
       redirectTarget = false;
       reservedOk = false;
@@ -849,9 +875,9 @@ function tokenize(str) {
       // the command word is behind us
     } else if (reservedOk && quoted === 'none' && ASSIGNMENT_PREFIX_WORDS.has(buf)) {
       onlyRedirects = true;
-      afterTime = buf === 'time' ? 1 : 0;
+      further.afterTime = buf === 'time' ? 1 : 0;
     } else if (wasAfterTime === 1 && quoted === 'none' && buf === '-p') {
-      afterTime = 2;
+      further.afterTime = 2;
     } else if (wasAfterTime !== 0 && quoted === 'none' && buf === '--') {
       // `time -p --` and `time --` still take a command
     } else if (FURTHER_ASSIGNMENT_RE.test(buf)) {
@@ -870,7 +896,7 @@ function tokenize(str) {
     atCommandStart = true;
     onlyRedirects = true;
     reservedOk = true;
-    afterTime = 0;
+    further.afterTime = 0;
     redirectTarget = false;
   };
   const op = (text, read, dup) => {
@@ -1085,12 +1111,7 @@ function tokenize(str) {
       if (ch === '(' && furtherReading && str[i] === '(') {
         sep('(');
         i++;
-        let close = dparen.closes.get(i);
-        if (close === undefined && dparen.budget > 0) {
-          close = unlessTooDeep(() => dparenClose(str, i, dparen), () => { dparen.budget = 0; return str.length; });
-        }
-        if (close === undefined) close = str.length;
-        if (str[close + 1] === ')') atCommandStart = false;
+        if (str[dparenCloseFor(str, i, further) + 1] === ')') atCommandStart = false;
       }
       continue;
     }
@@ -1102,17 +1123,17 @@ function tokenize(str) {
 
     // bash's token_is_ident reads the RAW word: a name spelled through a quote,
     // a backslash or a substitution (`\a[`, `$(x)a[`) takes no subscript.
-    if (ch === '[' && furtherReading && atCommandStart && !redirectTarget && subscriptsOpen
+    if (ch === '[' && furtherReading && atCommandStart && !redirectTarget && further.subscriptsOpen
         && quoted === 'none' && isRawNameBefore(str, i, buf.length)) {
       if (!subscriptJoins) {
         joinCandidate = true;
       } else {
-        const close = unlessTooDeep(() => subscriptClose(str, i), () => -1);
-        if (close === -1) {
-          subscriptsOpen = false;
+        further.close = subscriptCloseUnlessTooDeep(str, i);
+        if (further.close === -1) {
+          further.subscriptsOpen = false;
         } else {
-          buf += str.slice(i, close + 1);
-          i = close + 1;
+          buf += str.slice(i, further.close + 1);
+          i = further.close + 1;
           continue;
         }
       }
@@ -1205,9 +1226,12 @@ function isRawNameBefore(str, i, len) {
 // tokenize call share `dparen.budget`, DPAREN_WALK_PER_CHAR walks of the string
 // (plus DPAREN_WALK_BASE), each charged the distance it walked. Once it is spent
 // a `((` is read as two subshells, which leaves the next word at a command's
-// start. Only a walk that never closes spends it, and in every shape measured
-// such a walk had already met a quote bash reports unterminated, so bash runs
-// nothing after it.
+// start, so a spent allowance can change how the rest of the line reads. Two
+// things spend it: a walk that never closes and an overflow caught in one
+// (unlessTooDeep). In the shapes measured, a walk that never closed had met
+// either a quote bash reports unterminated (bash then runs nothing after it)
+// or a comment or case pattern inside a `$(…)` in the body, the class the
+// changeset lists as not covered.
 // The further reading's own scanners (dparenClose, subscriptClose) can reach
 // next's findParenClose inside a `${…}`, which the plain tokenizer skips whole,
 // and findParenClose recurses once per `"$(`. So a run of them there overflows
@@ -1221,6 +1245,19 @@ function unlessTooDeep(read, unclosed) {
     if (e instanceof RangeError) return unclosed();
     throw e;
   }
+}
+
+// The tokenizer's two further-reading lookups, kept out of tokenize so its
+// stack frame stays next's size (see curlOperandOpensSecret).
+function dparenCloseFor(str, i, dparen) {
+  let close = dparen.closes.get(i);
+  if (close === undefined && dparen.budget > 0) {
+    close = unlessTooDeep(() => dparenClose(str, i, dparen), () => { dparen.budget = 0; return str.length; });
+  }
+  return close === undefined ? str.length : close;
+}
+function subscriptCloseUnlessTooDeep(str, i) {
+  return unlessTooDeep(() => subscriptClose(str, i), () => -1);
 }
 
 const DPAREN_WALK_PER_CHAR = 4;
@@ -1780,6 +1817,21 @@ const CURL_WORD_LAUNCHERS = new Map([
 // operands get curl's value reading. A `curl` word anywhere else is an operand
 // (`grep curl …`, `apt-get install curl …`), so the words after it are judged
 // as before.
+// Whether operand `k` is one of curl's arguments that opens a secret. The
+// argument map is built once per operand list. A helper, not a local in
+// findSecretRead, so that function's stack frame stays next's size: the plain
+// reading must overflow at the same depth next's does, or a command next
+// denies at that edge would crash to an allow here.
+const curlArgumentsByOperands = new WeakMap();
+function curlOperandOpensSecret(base, operands, k) {
+  let args = curlArgumentsByOperands.get(operands);
+  if (args === undefined) {
+    args = curlArguments(base, operands);
+    curlArgumentsByOperands.set(operands, args);
+  }
+  return Boolean(args[k]) && (curlValueNamesSecret(operands[k].text) || curlCertOpensSecret(operands, k));
+}
+
 function curlArguments(base, operands) {
   const marks = new Uint8Array(operands.length);
   markCurlArguments(base, operands, 0, operands.length, marks, 0);
@@ -2230,6 +2282,7 @@ function findSecretReadUnderOtherReadings(command) {
 
 // Returns the offending token text, or null.
 function findSecretRead(command, depth) {
+  if (furtherReading && depth > 0 && !furtherPayloadGuarded) return readPayloadUnlessTooDeep(command, depth);
   const { tokens, nested } = tokenize(command);
 
   for (const sub of nested) {
@@ -2334,13 +2387,10 @@ function findSecretRead(command, depth) {
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
-    const curlArgs = curlArguments(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
       if (operandNamesSecret(operands[k].text)) return operands[k].text;
-      if (curlArgs[k] && (curlValueNamesSecret(operands[k].text) || curlCertOpensSecret(operands, k))) {
-        return operands[k].text;
-      }
+      if (curlOperandOpensSecret(base, operands, k)) return operands[k].text;
     }
   }
   return null;
@@ -2575,10 +2625,8 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // The command xargs runs as GNU xargs reads its options, past the wrappers
   // resolveCommand unwraps (#5779): the curl reading below follows it even
   // where next's walk above finds another word or none (`xargs -l curl -s …`).
-  const runs = xargsCommandIndex(operands, 0, operands.length);
-  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
-  const toCurl = subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text));
-  if (subIdx === -1 && !toCurl) return null; // no sub-command: xargs defaults to echo
+  const curl = xargsCurlTarget(operands);
+  if (subIdx === -1 && curl === null) return null; // no sub-command: xargs defaults to echo
 
   const subBase = subIdx === -1 ? '' : lastSegment(operands[subIdx].text).toLowerCase();
   if (SHELL_INTERPRETERS.has(subBase)) {
@@ -2587,7 +2635,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
     if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
-  if (!toCurl && NON_READING_COMMANDS.has(subBase)) return null;
+  if (curl === null && NON_READING_COMMANDS.has(subBase)) return null;
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
@@ -2598,12 +2646,30 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
+  return xargsPipedReadsSecret(operands, prevCmd.operands, curl);
+}
+
+// The curl that `xargs` runs, as { runs, subCmd } (the index of the command
+// xargs runs, and of the curl behind its wrappers), or null. The xargs-to-curl
+// reading lives in this helper and the next, not in scanXargsPipe, so that
+// function's stack frame stays next's size: it is on the stack under a piped
+// sub-shell's scan (see curlOperandOpensSecret).
+function xargsCurlTarget(operands) {
+  const runs = xargsCommandIndex(operands, 0, operands.length);
+  const subCmd = runs === -1 ? -1 : launchedCommandIndex(operands, runs, operands.length);
+  return subCmd !== -1 && CURL_COMMANDS.has(commandName(operands[subCmd].text)) ? { runs, subCmd } : null;
+}
+
+// The piped word that names a secret the xargs sub-command reads, or null.
+function xargsPipedReadsSecret(operands, piped, curl) {
   // They become curl's arguments when that command is curl: `xargs sudo curl`.
   // A piped word is a cert option's value where the sub-command's cert option
   // has its value slot open to the input: the option is the last word (xargs
   // appends the input), or its value holds the replace string
   // (`xargs -I{} curl --cert {}`, `-E{}`).
-  const rep = toCurl ? xargsReplaceString(operands, 0, runs) : null;
+  const toCurl = curl !== null;
+  const subCmd = toCurl ? curl.subCmd : -1;
+  const rep = toCurl ? xargsReplaceString(operands, 0, curl.runs) : null;
   let certPiped = false;
   for (let k = toCurl ? subCmd + 1 : operands.length; k < operands.length && !certPiped; k++) {
     const t = operands[k].text;
@@ -2614,7 +2680,6 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
       certPiped = rep === null ? !next : next !== undefined && next.text.includes(rep);
     }
   }
-  const piped = prevCmd.operands;
   // And where a piped word is such an option put in by the replace string, the
   // sub-command word after that string is its value
   // (`printf -E | xargs -I{} curl {} f:pw`).
@@ -2763,6 +2828,29 @@ let input = '';
 const stdinTimeout = setTimeout(() => allow(undefined), 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
+// The further reading (#5779), run after the plain scans allowed. A function
+// of its own, not inline in the handler below, so the handler's stack frame
+// stays next's size: the plain scans run on top of it, and a larger frame
+// would overflow them a nesting level earlier than next, at an edge where
+// next denies.
+function readFurther(command, tool) {
+  furtherReading = true;
+  joinCandidate = false;
+  try {
+    for (const joins of [false, true]) {
+      if (joins && !joinCandidate) break;
+      subscriptJoins = joins;
+      const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+      if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
+      const furtherSpawn = findDebuggerCliSpawn(command, 0);
+      if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
+    }
+  } finally {
+    furtherReading = false;
+    subscriptJoins = false;
+  }
+}
+
 process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
@@ -2821,21 +2909,7 @@ process.stdin.on('end', () => {
     // does is the adapter's: Claude Code reads a hook that times out as no
     // decision, so the verdict above stands; Pi fails this guard closed on a
     // timeout and refuses the command.
-    furtherReading = true;
-    joinCandidate = false;
-    try {
-      for (const joins of [false, true]) {
-        if (joins && !joinCandidate) break;
-        subscriptJoins = joins;
-        const furtherHit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-        if (furtherHit !== null) emitBlock('secret-read', tool, furtherHit);
-        const furtherSpawn = findDebuggerCliSpawn(command, 0);
-        if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
-      }
-    } finally {
-      furtherReading = false;
-      subscriptJoins = false;
-    }
+    readFurther(command, tool);
     allow(undefined);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.
