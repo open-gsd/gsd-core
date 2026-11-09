@@ -78,7 +78,7 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
 
-If `--wave` is absent, preserve the current behavior of executing all incomplete waves in the phase.
+If `--wave` is absent, execute the phase's incomplete waves; without `--interactive`, step 9 re-reads the plan index at each wave boundary (`execute-phase/steps/wave-refresh.md`, #5966).
 </step>
 
 <step name="initialize" priority="first">
@@ -348,6 +348,8 @@ Parse JSON for: `phase`, `plans[]`, `waves`, `incomplete`, `runnable`, `ready_pl
 
 **Filtering:** Skip plans where `has_summary: true`. Additionally skip any plan whose `blocked_by` array is non-empty (#2830) — it depends, directly or transitively, on a plan that halted at a designed stop rather than completing — and report it by name: "Skipping {plan.id}: blocked by halted {blocked_by.join(', ')}". Never silently drop a blocked plan from the report; it must appear by name with its reason, not merely vanish from the executable list. This rule is additive to the `has_summary` skip, not a replacement for it. Additionally skip any incomplete plan with `ready: false` (#4628 — see `execute-phase/steps/ready-wave-gate.md`; never dispatch a not-ready plan). If `--gaps-only`: also skip plans whose `gap_closure` is not `true` — but first confirm every plan object carries a `gap_closure` key. If any lacks it, the index cannot answer the filter (an older gsd-tools): STOP and report "--gaps-only cannot read gap_closure from phase-plan-index — refusing to report an empty selection" rather than filtering. A key the index never emitted must not surface as "No matching incomplete plans" (#4924). If `WAVE_FILTER` is set: also skip plans whose `wave` does not equal `WAVE_FILTER`.
 
+**Run scope (#5966):** without `WAVE_FILTER`, record `RUN_SCOPE` from this read as `execute-phase/steps/wave-refresh.md` § The run's original scope defines it; every later wave is chosen inside it.
+
 **Wave safety check:** If `WAVE_FILTER` is set and there are still incomplete plans in any lower wave that match the current execution mode, STOP and tell the user to finish earlier waves first. Do not let Wave 2+ execute while prerequisite earlier-wave plans remain incomplete.
 
 **If all filtered — do NOT exit unconditionally (#2868).** "No plan work left" and "phase fully
@@ -437,7 +439,7 @@ This updates Status, Last Activity, Current focus, Current Position, and plan co
 <step name="cross_ai_delegation">
 **Optional step 2.5 — Delegate plans to an external AI runtime.** Runs after plan discovery, before wave execution. Activates when `--cross-ai` forces all incomplete plans, `--no-cross-ai` disables it entirely, or (default) a plan's `cross_ai: true` frontmatter agrees with the `workflow.cross_ai_execution` config. **Only `ready` plans are eligible (#4628) — a not-ready plan is never delegated over incomplete predecessors.** If no plan is marked, skip to execute_waves; if marked but `workflow.cross_ai_command` is unset, error and tell the user to set it.
 
-For each marked plan: build a self-contained prompt from the plan's `<objective>`/`<tasks>` plus PROJECT.md context, warn on a dirty working tree, then run the configured command **wrapped in `gsd_run run-with-timeout "${CROSS_AI_TIMEOUT}"` (config `workflow.cross_ai_timeout`, default 300s) — never run it unbounded** — with the prompt piped to **stdin, never shell-interpolated, to prevent injection**. On success (exit 0): validate the captured SUMMARY output is non-empty and structurally valid before writing it as the plan's SUMMARY.md, update STATE/ROADMAP, mark handled. On failure (non-zero exit, or the summary fails that validation): show the error, warn about possible partial edits, and offer **retry** / **skip** (falls back to the normal executor) / **abort**. Successfully handled plans are removed from execute_waves' list; skipped-to-fallback plans remain in it.
+For each marked plan: build a self-contained prompt from the plan's `<objective>`/`<tasks>` plus PROJECT.md context, warn on a dirty working tree, then run the configured command **wrapped in `gsd_run run-with-timeout "${CROSS_AI_TIMEOUT}"` (config `workflow.cross_ai_timeout`, default 300s) — never run it unbounded** — with the prompt piped to **stdin, never shell-interpolated, to prevent injection**. On success (exit 0): validate the captured SUMMARY output is non-empty and structurally valid before writing it as the plan's SUMMARY.md, update STATE/ROADMAP, mark handled. On failure (non-zero exit, or the summary fails that validation): show the error, warn about possible partial edits, and offer **retry** / **skip** (falls back to the normal executor) / **abort**. Successfully handled plans are removed from execute_waves' list; skipped-to-fallback plans remain in it. When that empties the list, a run without `--wave`, `--interactive` or `COPILOT_SEQUENTIAL` goes on to the wave-boundary refresh (`execute-phase/steps/wave-refresh.md`, #5966) instead of `execute_waves`.
 
 Exact bash and per-branch wording: `gsd-core/workflows/execute-phase/detail/elaboration.md` § 2.
 </step>
@@ -1077,14 +1079,14 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **Step 7.2 — `class == "classify-handoff-bug"`:**
    If error contains `classifyHandoffIfNeeded is not defined`, treat as Claude runtime bug. Run the same step-5 spot-checks; PASS => treat as success, FAIL => fall through.
    **Step 7.3 — `class == "unknown-failure"`:**
-   Report failed plan and ask Continue/Stop; continuing may cascade into dependent plan failures.
+   Report failed plan and ask Continue/Stop; continuing never dispatches its dependents in this run (#4628; `wave-refresh.md`).
 
 @~/.claude/gsd-core/references/execute-phase-quota-recovery.md
 
 @~/.claude/gsd-core/references/execute-phase-between-wave-reset.md
 
 8. **Execute checkpoint plans between waves** — see `<checkpoint_handling>`.
-9. **Proceed to next wave.**
+9. **Proceed to next wave.** Without `WAVE_FILTER`, read and follow `execute-phase/steps/wave-refresh.md` (#5966): it re-reads `phase-plan-index` within the run's original scope, picks the next wave, and owns the stop conditions.
 </step>
 <step name="checkpoint_handling">
 Plans with `autonomous: false` require user interaction.
@@ -1161,6 +1163,8 @@ re-verification route runs them too (#5118).
 <!-- gsd:section id="partial-wave" when="flag:--wave" -->
 If `section_manifest` is `null` or `"partial-wave"` is in its `included` list: read and execute `gsd-core/workflows/execute-phase/steps/partial-wave.md`. Otherwise skip — do not read the file.
 <!-- /gsd:section -->
+
+A plain run that stopped at the wave-boundary refresh stops here as well: report them and present the footer from `execute-phase/steps/wave-refresh.md`, and never run `verify_phase_goal` (#5966).
 
 <step name="verify_phase_goal">
 Verify phase achieved its GOAL, not just completed tasks: read and execute
@@ -1407,7 +1411,7 @@ For 1M+ context models, consider:
 - **Quota / rate-limit (any runtime — #3095):** Agent return body contains a sentinel like `usage limit`, `rate limit`, `429`, `too many requests`, `RESOURCE_EXHAUSTED`, `usage_limit_reached`. Route via `gsd_run query agent.classify-failure` → `class: "quota-exceeded"`. Do not offer retry-now; the right action is wait-for-reset and resume.
 - **classifyHandoffIfNeeded false failure:** Agent reports "failed" but error is `classifyHandoffIfNeeded is not defined` → Claude Code bug, not GSD. Spot-check (SUMMARY exists, commits present) → if pass, treat as success
 - **Agent fails mid-plan:** Missing SUMMARY.md → report, ask user how to proceed
-- **Dependency chain breaks:** Wave 1 fails → Wave 2 dependents likely fail → user chooses attempt or skip
+- **Dependency chain breaks:** Wave 1 fails → its Wave 2 dependents are never dispatched in this run (not ready while it has no SUMMARY, #4628; dropped by the refresh when the user continues past a failed spot-check) → user retries the failed plan or continues past it; unless a retry completes it, a plain run's refresh stops on the dependents (`wave-refresh.md`)
 - **All agents in wave fail:** Systemic issue → stop, report for investigation
 - **Checkpoint unresolvable:** "Skip this plan?" or "Abort phase execution?" → record partial progress in STATE.md
 </failure_handling>

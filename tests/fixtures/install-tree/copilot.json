@@ -464,6 +464,7 @@
   "gsd-core/workflows/execute-phase/steps/threat-id-gate.md",
   "gsd-core/workflows/execute-phase/steps/verify-phase-goal.md",
   "gsd-core/workflows/execute-phase/steps/wave-post-gate-hooks.md",
+  "gsd-core/workflows/execute-phase/steps/wave-refresh.md",
   "gsd-core/workflows/execute-phase/steps/worktree-base-check.md",
   "gsd-core/workflows/execute-phase/steps/worktree-recovery-policy.md",
   "gsd-core/workflows/execute-plan.md",
