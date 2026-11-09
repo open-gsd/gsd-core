@@ -695,6 +695,7 @@
       "required": [],
       "workstreamScoped": false,
       "freePositionals": true,
+      "rejectShortFlags": true,
       "eq": [
         "attempt",
         "effort",

@@ -80,6 +80,9 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     nonEmptyFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
     emptyValueFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
     emptyEqFlags: ['attempt', 'effort', 'failure-class', 'fast-mode'],
+    // Any dash-led token that is not a declared flag was `Unknown flag for resolve-execution`.
+    rejectShortFlags: true,
+    unknownFlagMessage: 'Unknown flag for resolve-execution: {flag}',
   },
   'config-set': { positionals: 3, booleanFlags: DRY_RUN },
   // The choices JSON is the one positional, wherever --dry-run sits; the handler refuses a second one.
