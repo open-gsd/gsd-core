@@ -20,7 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
-import { updateTableCell, resetQuickTaskRows, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
+import { updateTraceabilityCell, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
 import { requireSafePath, PathAcceptance, type ContainedPath } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
@@ -52,6 +52,9 @@ const {
   extractCurrentMilestone,
   getMilestoneInfo,
   sliceMilestoneWindow,
+  classifyMilestoneScalar,
+  readStateMilestoneScalar,
+  sameMilestoneVersion,
 } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
@@ -110,49 +113,6 @@ interface MilestoneCompleteOptions {
   // `<version>-RELEASE-MAP.json` and rendered into the MILESTONES.md entry.
   // Absent, the command's output and on-disk effects are unchanged.
   releaseMap?: string | null;
-}
-
-/**
- * Scope an `updateTableCell` call to the `## Traceability` (or
- * `## Traceability Status`) heading's own section — up to the next H1/H2
- * heading — instead of handing it the WHOLE REQUIREMENTS.md content.
- *
- * F1 (#2245 review, BLOCKER): `updateTableCell` binds to the FIRST GFM table
- * found in whatever text it is given. The shipped requirements template
- * (gsd-core/templates/requirements.md) puts an `## Out of Scope` table
- * (`| Feature | Reason |`, no `Status` column) BEFORE `## Traceability` — so
- * an unscoped whole-file call targets the Out-of-Scope table instead, fails
- * with `{ok:false, reason:'unknown column: Status'}`, and the real
- * Traceability row is never flipped, while the checkbox surface still flips
- * and the command reports success (the #2140 silent-divergence class one
- * level deeper). Mirrors phase.cts's `editProgressHeadingSlice` scoping of
- * `## Progress` writes to that heading's own slice.
- *
- * Falls back to running `updateTableCell` against the whole `text` when no
- * `## Traceability` heading exists — matching the previous (unscoped)
- * behaviour for a REQUIREMENTS.md whose traceability table sits under some
- * other heading, or with no heading at all (never worse than before this fix).
- */
-function updateTraceabilityCell(
-  text: string,
-  match: (row: Record<string, string>, index: number) => boolean,
-  column: string,
-  newValue: string | ((current: string) => string),
-): ReturnType<typeof updateTableCell> {
-  const headingMatch = text.match(/^##[ \t]+Traceability(?:[ \t]+Status)?\b/im);
-  if (!headingMatch || headingMatch.index === undefined) {
-    return updateTableCell(text, match, column, newValue);
-  }
-  const headingOffset = headingMatch.index;
-  const before = text.slice(0, headingOffset);
-  const fromHeading = text.slice(headingOffset);
-  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
-  const scoped = nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
-  const after = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
-
-  const result = updateTableCell(scoped, match, column, newValue);
-  if (!result.ok) return result;
-  return { ok: true, value: before + result.value + after };
 }
 
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
@@ -319,7 +279,9 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // Surface traceability drift: checkbox reconciled (this run or before) but the
     // table has no row for this ID. This is what makes a partial reconcile
     // distinguishable from a full one (#2140).
-    if (hasTable && doneCheckbox && !hasRow) {
+    // #5844: a row in a table with no Status column is still a row; only the
+    // Status write is impossible there, so existence is read directly.
+    if (hasTable && doneCheckbox && !hasRow && !traceabilityRowExists(reqContent, reqId)) {
       tableUnmatched.push(reqId);
     }
   }
@@ -741,13 +703,14 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       try {
         const stateRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
         if (stateRaw) {
-          const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
-          if (milestoneMatch) stateVersion = milestoneMatch[1].trim();
+          // One owner for the STATE `milestone:` scalar (#5726): quoted, null and
+          // empty values and a body `milestone:` line are not drift.
+          stateVersion = classifyMilestoneScalar(readStateMilestoneScalar(stateRaw)).version;
         }
       } catch {
         /* skip — stateVersion stays null, scan still runs */
       }
-      if (stateVersion !== null && stateVersion !== version) {
+      if (stateVersion !== null && !sameMilestoneVersion(stateVersion, version)) {
         // #2946: emit a WARNING so the suspicious STATE mismatch is visible
         // rather than silently disarming the guard. Plain-text diagnostic on
         // stderr, matching the existing [gsd-tools] WARNING convention

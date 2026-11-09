@@ -18,7 +18,24 @@ export interface TestReportCase {
   group: string | null;
   groupIdentities: string[];
   status: TestStatus;
+  /**
+   * True for a test FILE that crashed at load (#5721): vitest's JUnit reporter emits one case whose
+   * `name` and `classname` are both the file name, jest-junit one whose classname is
+   * `Test suite failed to run`, node:test TAP a `test failed` entry named by the file. It asserted
+   * nothing, so it can never be a RED target.
+   */
+  loadFailure?: true;
 }
+
+/**
+ * A name that is a JS/TS test source file, as opposed to a Java class or method. Limited to the
+ * extensions vitest, jest and node:test load: a wider list (`go`, `rs`, `py`, ...) would flag a
+ * Surefire class-level entry whose FQN ends in that segment (`com.acme.go`, #4724).
+ */
+const TEST_FILE_NAME = /\.[cm]?[jt]sx?$/;
+
+/** jest-junit's classNameTemplate for a suite that produced no results (utils/buildJsonResults.js). */
+const JEST_SUITE_FAILED_TO_RUN = 'Test suite failed to run';
 
 export interface TestReport {
   format: ReportFormat;
@@ -83,12 +100,18 @@ function parseTap(output: string): TestReport {
       skipped ||= Boolean(parent.closingTestPoint?.skip);
       todo ||= Boolean(parent.closingTestPoint?.todo);
     }
+    // node:test reports a file that exits non-zero without a failing subtest as `not ok N - <file>`
+    // with `error: 'test failed'` / `code: 'ERR_TEST_FAILURE'` (#5721): it asserted nothing.
+    const diag = result.diag as Record<string, unknown> | null;
+    const fileFailure = !result.ok && diag?.['error'] === 'test failed' && diag['code'] === 'ERR_TEST_FAILURE'
+      && TEST_FILE_NAME.test(result.name);
     report.tests.push({
       name: result.name,
       identities: [...new Set([result.name, result.fullname])],
       group: null,
       groupIdentities: [],
       status: skipped ? TestStatus.Skipped : todo ? TestStatus.Todo : result.ok ? TestStatus.Passed : TestStatus.Failed,
+      ...(fileFailure ? { loadFailure: true as const } : {}),
     });
   }
   if (!completed) report.issues.push('Incomplete TAP stream');
@@ -126,6 +149,8 @@ function parseJunit(output: string): TestReport {
         group: className || null,
         groupIdentities: className ? [className, className.split('.').at(-1)!] : [],
         status: TestStatus.Passed,
+        ...(className === JEST_SUITE_FAILED_TO_RUN || (name === className && TEST_FILE_NAME.test(name))
+          ? { loadFailure: true as const } : {}),
       };
     } else if (current && parent === 'testcase') {
       if (tag.name === 'failure' || tag.name === 'error') {

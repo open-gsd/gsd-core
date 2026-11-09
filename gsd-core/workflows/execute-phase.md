@@ -335,12 +335,6 @@ All subsequent commits go to this branch. User handles merging.
 From init JSON: `phase_dir`, `plan_count`, `incomplete_count`.
 
 Report: "Found {plan_count} plans in {phase_dir} ({incomplete_count} incomplete)"
-
-**Update STATE.md for phase start:**
-```bash
-gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
-```
-This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
 </step>
 
 <step name="discover_and_group_plans">
@@ -432,6 +426,12 @@ Report:
 | 1 | 01-01, 01-02 | {from plan objectives, 3-8 words} |
 | 2 | 01-03 | ... |
 ```
+
+**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** Every all-filtered arm above has already exited or jumped to `aggregate_results` / `update_roadmap`; reaching here means the post-filter list is non-empty. A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
+```bash
+gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+```
+This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
 </step>
 
 <step name="cross_ai_delegation">
@@ -1184,7 +1184,21 @@ Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the p
 
 **Step A: Persist human verification items as UAT file.**
 
-Create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
+Merge or skip — never blindly create (#5845). A `{phase_num}-UAT.md` may already hold a human's recorded results (from `/gsd:verify-work`, or from an earlier run before gap-closure) that cannot be re-derived. Check first:
+
+```bash
+UAT_FILE="{phase_dir}/{phase_num}-UAT.md"
+if test -f "$UAT_FILE"; then echo "UAT_EXISTS"; else echo "UAT_ABSENT"; fi
+```
+
+**If `UAT_EXISTS`:** read the file and merge in place. Never reset, overwrite, or replace it, and do not rename it aside (`phase uat-passed` reads `{phase_num}-UAT.round1.md` in the phase directory as a live blocker).
+- Keep every recorded result exactly as written, including `result:` values other than `[pending]`, `source:`/`coverage_id:` lines, `## Gaps`, and `## Deferred Follow-Ups`. Keep `status` and `started` unchanged (`/gsd:verify-work` resume recomputes the status from the rows).
+- For each `human_verification` item in VERIFICATION.md, compare its description to the existing `### N. {description}` test entries. Items not already present (matched by description, case-insensitive with whitespace collapsed) are appended under `## Tests` as the next numbered entry with `expected:` from VERIFICATION.md and `result: [pending]`. Items already present are left untouched.
+- Recompute the `## Summary` counts (`total`, `passed`, `issues`, `pending`, `skipped`, `blocked`) from the merged test list; set `updated` to now.
+- If nothing to append (every item already present), do not write the file and do not commit; continue to Step B.
+- Otherwise commit the merged file with the command below.
+
+**If `UAT_ABSENT`:** create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
 
 ```markdown
 ---

@@ -10,6 +10,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, retryRenameSync } from './shell-command-projection.cjs';
+import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1121,7 +1125,9 @@ function computeBracketPlan(cwd: string): MigrationPlan {
 
   let configData: Record<string, unknown> = {};
   try {
-    configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    // Bounded read (#5759): a FIFO/device/oversized config is treated like an absent one.
+    const rawConfig = readConfigFileBounded(configPath);
+    if (rawConfig !== null) configData = JSON.parse(rawConfig) as Record<string, unknown>;
   } catch { /* config may not exist */ }
 
   const projectCode = typeof configData['project_code'] === 'string' && configData['project_code'].length > 0
@@ -1364,7 +1370,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // that created the directory refused two-milestone roadmaps the
   // tooling's own commands produced.
   const slugify = (text: string): string => (
-    coreUtilsMod.generateSlugInternal(text.replace(/\(INSERTED\)/i, '').trim()) ?? ''
+    coreUtilsMod.generateSlugInternal(stripInsertedMarker(text)) ?? ''
   );
 
   // #4144 round 7 W2, corrected round 8 B1: a plan-level ambiguity check
@@ -1686,14 +1692,15 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // bullet stayed legacy after an otherwise-done migration, so the
   // bracket-mode milestone id set carried the stale legacy token alongside
   // the bracket ones.
-  const CHECKLIST_BULLET_PREFIX_SRC = '[-*]\\s*\\[[ x]\\]\\s*\\*{0,2}';
+  // #5764: the prefix is the phase-entry grammar's (line-anchored, indent included).
+  const CHECKLIST_BULLET_PREFIX_SRC = phaseEntryPrefixSrc();
   const CHECKLIST_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, undefined, true);
   const mnnChecklistRe = new RegExp(
-    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
+    `(${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
   const legacyChecklistRe = new RegExp(
-    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
+    `(${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
 
@@ -1919,7 +1926,9 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
   // ── Check config for existing convention ─────────────────────────────────
   let configData: Record<string, unknown> = {};
   try {
-    configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+    // Bounded read (#5759): a FIFO/device/oversized config is treated like an absent one.
+    const rawConfig = readConfigFileBounded(configPath);
+    if (rawConfig !== null) configData = JSON.parse(rawConfig) as Record<string, unknown>;
   } catch { /* config may not exist */ }
 
   if (configData['phase_id_convention'] === 'milestone-prefixed') {
@@ -2068,8 +2077,9 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
     if (roadmapEdits.some(e => e.lineIndex === i)) continue;
 
     // Match checklist items: "- [ ] **Phase N:**" or "- [x] Phase N:"  (also decimal)
+    // The entry prefix (marker, box, bold token) is the phase-entry grammar's (#5764).
     const checklistMatch = line.match(
-      new RegExp(`^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2}Phase\\s+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*[:\\s*])`, 'i')
+      new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*[:\\s*])`, 'i')
     );
     if (checklistMatch) {
       const legacyNum = checklistMatch[2];
@@ -2099,7 +2109,7 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
 
       if (newId) {
         const newLine = line.replace(
-          new RegExp(`^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2}Phase\\s+)${PHASE_NUMBER_TOKEN_SOURCE}(\\s*[:\\s*])`, 'i'),
+          new RegExp(`(${phaseEntryPrefixSrc()}Phase[ \\t]+)${PHASE_NUMBER_TOKEN_SOURCE}(\\s*[:\\s*])`, 'i'),
           `$1${newId}$2`
         );
         if (newLine !== line) {
@@ -2462,8 +2472,17 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     if (plan.phases.length > 0 || plan.roadmapEdits.length > 0) {
       let configData: Record<string, unknown> = {};
       try {
-        configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-      } catch { /* config may not exist yet */ }
+        // Bounded read (#5759): the stamp below is written to configPath, so a FIFO/device/
+        // oversized config is refused (and rolled back) rather than read or written blindly.
+        const rawConfig = readConfigFileBounded(configPath);
+        if (rawConfig !== null) configData = JSON.parse(rawConfig) as Record<string, unknown>;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENXIO' || code === 'EISDIR' || code === 'EFBIG') {
+          throw new Error(`config.json cannot be updated: it is not a regular file within the size limit (${code})`);
+        }
+        /* config may not exist yet, or may not parse */
+      }
 
       configData['phase_id_convention'] = plan.targetConvention ?? 'milestone-prefixed';
       snapshotFile(configPath);

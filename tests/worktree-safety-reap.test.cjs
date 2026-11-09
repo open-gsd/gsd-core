@@ -57,7 +57,7 @@ const LOCK_OWNER_PID = '4242';
 // AND a `.git/worktrees/<name>/` admin-directory mutation AND one or more
 // reapOrphanWorktrees invocations, more subprocess work per test than the
 // plain fixture-setup case the norm is sized for.
-const GIT_TIMEOUT_MS = 30000;
+const REAP_FIXTURE_GIT_TIMEOUT_MS = 30000;
 
 // ─── Path + git helpers ──────────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ function resolvedTmpDir() {
 
 /** Run git for FIXTURE SETUP; throws on anything but a clean exit. */
 function git(args, cwd) {
-  const r = runGit(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
+  const r = runGit(args, { cwd, timeoutMs: REAP_FIXTURE_GIT_TIMEOUT_MS });
   throwIfFailed(r, `git ${args.join(' ')}`);
   return r.stdout;
 }
@@ -85,7 +85,7 @@ function git(args, cwd) {
  * `passthrough` so a test can fault one argv and leave every other call intact.
  */
 function realExecGit(args, opts = {}) {
-  const r = runGit(args, { cwd: opts.cwd, timeoutMs: GIT_TIMEOUT_MS });
+  const r = runGit(args, { cwd: opts.cwd, timeoutMs: REAP_FIXTURE_GIT_TIMEOUT_MS });
   return {
     exitCode: r.exitCode,
     stdout: r.stdout,
@@ -122,7 +122,7 @@ function initRepo(dir) {
   git(['commit', '-m', 'initial commit'], dir);
   // Exit code deliberately unchecked: the rename fails harmlessly when the
   // repo was already initialised on `main`.
-  runGit(['branch', '-m', 'master', 'main'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+  runGit(['branch', '-m', 'master', 'main'], { cwd: dir, timeoutMs: REAP_FIXTURE_GIT_TIMEOUT_MS });
 }
 
 /** Locate `.git/worktrees/<name>/` for a linked worktree. */

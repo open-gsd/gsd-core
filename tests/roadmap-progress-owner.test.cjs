@@ -73,9 +73,54 @@ describe('#5761 owner: where the Progress table is', () => {
   test('## Progressive and ### Progress are not Progress headings', () => {
     assert.equal(findProgressSection(`## Progressive Enhancement\n\n${REAL}`), null);
     assert.equal(findProgressSection(`### Progress\n\n${REAL}`), null);
-    // The archive-span scan (roadmap-parser) asks this same question: level 1 is not the Progress section.
+    // By default the Progress section is a level-2 heading; the archive-span probe widens it with `levels` (below).
     assert.equal(findProgressSection(`# Progress\n\n${REAL}`), null);
     assert.equal(findProgressSection('Progress is made.\n| Progress |\n'), null);
+  });
+
+  // The archive-span probe (roadmap-parser `scanArchiveSpans`) always took a level-1 `# Progress`
+  // as a Progress heading too; epic #5692 promises no behavior change for existing ROADMAP files.
+  test('levels: [1, 2] also finds a level-1 # Progress; ### and an in-prose mention still do not match', () => {
+    const levels = [1, 2];
+    assert.notEqual(findProgressSection(`# Progress\n\n${REAL}`, { levels }), null);
+    assert.notEqual(findProgressSection(`## Progress\n\n${REAL}`, { levels }), null);
+    assert.equal(findProgressSection(`### Progress\n\n${REAL}`, { levels }), null);
+    assert.equal(findProgressSection(`# Progressive\n\n${REAL}`, { levels }), null);
+    assert.equal(findProgressSection(`\`\`\`md\n# Progress\n\`\`\`\n`, { levels }), null);
+  });
+
+  // The owner's heading rule is CommonMark's (the sectionizer's), shared by every reader: up to three
+  // leading spaces still make a heading. The pre-owner readers matched column zero only; this is
+  // the one rule the epic unifies them on, pinned here so it cannot drift per reader.
+  test('an ATX heading indented up to three spaces is a Progress heading; four spaces is code', () => {
+    assert.notEqual(findProgressSection(`   ## Progress\n\n${REAL}`), null);
+    assert.equal(findProgressSection(`    ## Progress\n\n${REAL}`), null);
+    assert.notEqual(findProgressSection(` # Progress\n\n${REAL}`, { levels: [1, 2] }), null);
+  });
+
+  // The workstream inventory always read a milestone table that sits outside an existing
+  // `## Progress` section; the section-scoped default (derive, state contract) still does not.
+  test("sectionMiss: 'document' reads a table outside a table-less Progress section; the default does not", () => {
+    const content = `## Progress\n\nnothing tracked yet\n\n## Notes\n\n${REAL}`;
+    assert.equal(locateRoadmapProgress(content).table, null);
+    const loc = locateRoadmapProgress(content, { sectionMiss: 'document' });
+    assert.deepEqual(phaseCells(loc.rows), ['3. Alpha', '4. Beta', '5. Gamma']);
+    assert.notEqual(loc.section, null, 'the section is still reported');
+  });
+
+  // Pre-owner the inventory probed `Phase|Milestone` over the whole document before it looked for
+  // `Phase|Plans Complete`, so a milestone table anywhere beat a flat table in the section.
+  test("sectionMiss: 'document' probes each column set over the section and then the document, in order", () => {
+    const flat = '| Phase | Plans Complete | Status | Completed |\n| --- | --- | --- | --- |\n| 1. A | 1/1 | Complete | - |\n';
+    const content = `## Progress\n\n${flat}\n## Notes\n\n${REAL}`;
+    const columns = [['Phase', 'Milestone'], ['Phase', 'Plans Complete']];
+    assert.deepEqual(phaseCells(locateRoadmapProgress(content, { columns, sectionMiss: 'document' }).rows), ['3. Alpha', '4. Beta', '5. Gamma']);
+    assert.deepEqual(phaseCells(locateRoadmapProgress(content, { columns }).rows), ['1. A'], 'the default stays section-scoped');
+  });
+
+  test("sectionMiss: 'document' never overrides a Progress section that holds its own table (#2012 decoy stays avoided)", () => {
+    const content = `## Notes\n\n${DECOY}\n## Progress\n\n${REAL}`;
+    assert.deepEqual(phaseCells(locateRoadmapProgress(content, { sectionMiss: 'document' }).rows), ['3. Alpha', '4. Beta', '5. Gamma']);
   });
 
   test('CRLF content resolves like LF content', () => {
@@ -191,6 +236,15 @@ describe('#5761 readers agree with the owner', () => {
     for (const [name, content] of Object.entries(CORPUS)) {
       assert.deepEqual(viaInventory(content), expectedCount(content), name);
     }
+  });
+
+  // Epic #5692 promises no behavior change for existing ROADMAP files: the inventory read a
+  // milestone table that sits outside an existing `## Progress` section before the owner, and still does.
+  test('workstream inventory still reads a milestone table outside a table-less ## Progress section', () => {
+    const wsDir = seedWorkstream(tmp, { name: 'ws-outside' });
+    fs.writeFileSync(path.join(wsDir, 'STATE.md'), 'milestone: v2.0\nstatus: executing\n');
+    fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), `## Progress\n\nnothing tracked yet\n\n## Notes\n\n${REAL}`);
+    assert.equal(inspectWorkstream(tmp, 'ws-outside', { active: null }).roadmap_phase_count, 3);
   });
 
   test('positive control: a deliberately divergent reader goes red', () => {
