@@ -9,6 +9,7 @@
 
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -122,13 +123,94 @@ describe('#5867 plan unit across planning.sub_repos', () => {
     }
   });
 
-  test('[boundary] since is applied in the repo that holds it, the other repo is unfiltered', () => {
+  test('[boundary] since filters the repo that holds it by ancestry and the others by its commit time', () => {
     const ws = makeWorkspace(['api', 'web']);
+    commit(ws.repos.web, 'w0.js', 'feat(01-01): w before', 1_699_999_000);
     const first = commit(ws.repos.api, 'a1.js', 'feat(01-01): a1', 1_700_000_000);
     const second = commit(ws.repos.api, 'a2.js', 'feat(01-01): a2', 1_700_000_100);
     const web = commit(ws.repos.web, 'w.js', 'feat(01-01): w', 1_700_000_050);
+    const atBoundary = commit(ws.repos.web, 'w2.js', 'feat(01-01): w at the boundary', 1_700_000_000);
     const scope = planScope(ws, { commitsOnly: true, since: first });
     assert.deepEqual(scope.commits.map((c) => c.sha), [second, web]);
+    assert.ok(!scope.commits.some((c) => c.sha === atBoundary), 'a commit made at the since time is not newer than it');
+  });
+
+  test('[negative] a since commit no repo holds is unresolvable, never an unfiltered scope', () => {
+    const ws = makeWorkspace(['api']);
+    commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    const scope = planScope(ws, { commitsOnly: true, since: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' });
+    assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.reason, 'since-not-found');
+  });
+
+  test('[happy] the quick unit is merged across sub-repos the same way', () => {
+    const ws = makeWorkspace(['api', 'web']);
+    const a = commit(ws.repos.api, 'a.js', 'fix(quick-260101-abc): a', 1_700_000_000);
+    const w = commit(ws.repos.web, 'w.js', 'fix(quick-260101-abc): w', 1_700_000_100);
+    const scope = resolveEvaluationScope(ws.root, { kind: 'quick', id: 'quick-260101-abc' }, { commitsOnly: true });
+    assert.deepEqual(scope.commits.map((c) => c.sha), [w, a]);
+  });
+
+  test('[happy] the legacy top-level sub_repos key, blank and duplicate entries and spelling variants resolve once', () => {
+    const ws = makeWorkspace(['app'], { subRepos: ['app'] });
+    write(ws.root, '.planning/config.json', JSON.stringify({ sub_repos: ['./app', 'app/', '  ', 'app', '.'] }));
+    const sha = commit(ws.repos.app, 'src/x.js', 'feat(01-01): x', 1_700_000_000);
+    const scope = planScope(ws);
+    assert.deepEqual(scope.commits.map((c) => c.sha), [sha]);
+    assert.deepEqual(scope.changedFiles, ['app/src/x.js']);
+  });
+
+  test('[independence] a sub-repo with no commits yet, or a ref only another repo has, contributes nothing', () => {
+    const ws = makeWorkspace(['api', 'fresh']);
+    const sha = commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    const empty = planScope(ws, { commitsOnly: true });
+    assert.equal(empty.status, 'resolved');
+    assert.deepEqual(empty.commits.map((c) => c.sha), [sha]);
+    ws.repos.api.git('branch', 'only-api');
+    commit(ws.repos.fresh, 'f.js', 'feat(01-01): f', 1_700_000_100);
+    const byRef = planScope(ws, { commitsOnly: true, ref: 'only-api' });
+    assert.equal(byRef.status, 'resolved');
+    assert.deepEqual(byRef.commits.map((c) => c.sha), [sha]);
+  });
+
+  test('[negative] a ref no repo has is unresolvable', () => {
+    const ws = makeWorkspace(['api']);
+    commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    const scope = planScope(ws, { commitsOnly: true, ref: 'no-such-ref' });
+    assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.reason, 'git-failed:rev-parse');
+  });
+
+  test('[boundary] more than 64 sub_repos entries are refused (limit, limit+1)', () => {
+    const names = Array.from({ length: 65 }, (_, i) => `r${i}`);
+    const ws = makeWorkspace([], { subRepos: names });
+    assert.equal(planScope(ws, { commitsOnly: true }).reason, 'sub-repo-too-many');
+    const atLimit = makeWorkspace([], { subRepos: names.slice(0, 64) });
+    assert.match(planScope(atLimit, { commitsOnly: true }).reason, /^sub-repo-unreadable:r0:/);
+  });
+
+  test('[property] the merged list is the newest-first slice of every repo\'s commits, whatever the times and limit', () => {
+    fc.assert(fc.property(
+      fc.array(fc.tuple(fc.boolean(), fc.integer({ min: 0, max: 40 })), { minLength: 1, maxLength: 7 }),
+      fc.integer({ min: 1, max: 9 }),
+      (spec, max) => {
+        const ws = makeWorkspace(['api', 'web']);
+        // Commit times never decrease along one repo's history (the shape git itself assumes).
+        const last = { api: 1_700_000_000, web: 1_700_000_000 };
+        const made = spec.map(([inApi, delta], i) => {
+          const name = inApi ? 'api' : 'web';
+          last[name] += delta;
+          return { time: last[name], order: i, sha: commit(ws.repos[name], `f${i}.js`, `feat(01-01): c${i}`, last[name]) };
+        });
+        const expected = [...made].sort((a, b) => b.time - a.time || b.order - a.order).slice(0, max);
+        const got = planScope(ws, { commitsOnly: true, maxCommits: max }).commits.map((c) => c.sha);
+        assert.equal(got.length, Math.min(max, made.length));
+        // Times never decrease down the list, and ties may fall either way: compare the time profile.
+        const timeOf = new Map(made.map((m) => [m.sha, m.time]));
+        assert.deepEqual(got.map((sha) => timeOf.get(sha)), expected.map((m) => m.time));
+        cleanup(ws.root);
+      },
+    ), { numRuns: 8 });
   });
 
   test('[independence] a workspace root that is itself a repo keeps contributing its commits', () => {
@@ -157,7 +239,7 @@ describe('#5867 unreadable or hostile sub_repos', () => {
     commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
     const scope = planScope(ws, { commitsOnly: true });
     assert.equal(scope.status, 'unresolvable');
-    assert.match(scope.reason, /ghost/);
+    assert.equal(scope.reason, 'sub-repo-unreadable:ghost:not-a-directory');
     assert.deepEqual(scope.commits, []);
   });
 
@@ -168,30 +250,41 @@ describe('#5867 unreadable or hostile sub_repos', () => {
     commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
     const scope = planScope(ws, { commitsOnly: true });
     assert.equal(scope.status, 'unresolvable');
-    assert.match(scope.reason, /plain/);
+    assert.match(scope.reason, /^sub-repo-unreadable:plain:/);
   });
 
-  test('[negative] a directory inside the root repo that is not its own repo is refused, never read through the parent', () => {
+  test('[independence] a plain folder of the root repo is covered by the root repo, not refused', () => {
     const ws = makeWorkspace([], { rootIsRepo: true, subRepos: ['inner'] });
     write(ws.root, 'inner/x.js', 'x\n');
-    commit(ws.rootRepo, 'inner/y.js', 'feat(01-01): y', 1_700_000_000);
+    const sha = commit(ws.rootRepo, 'inner/y.js', 'feat(01-01): y', 1_700_000_000);
     const scope = planScope(ws, { commitsOnly: true });
-    assert.equal(scope.status, 'unresolvable');
-    assert.match(scope.reason, /inner/);
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.commits.map((c) => c.sha), [sha]);
   });
 
-  for (const [label, entry] of [
-    ['a parent-escaping path', '../outside'],
-    ['an absolute path', path.join(os.tmpdir(), 'elsewhere')],
-    ['a nested parent segment', 'a/../../outside'],
-    ['a NUL byte', 'app\0x'],
-    ['a non-string entry', 42],
+  test('[negative] a plain folder under a non-root parent repo is refused, never read through that parent', () => {
+    const parent = makeWorkspace([], { rootIsRepo: true, subRepos: [] });
+    const ws = { root: path.join(parent.root, 'ws') };
+    write(ws.root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: ['inner'] } }));
+    write(ws.root, 'inner/x.js', 'x\n');
+    commit(parent.rootRepo, 'ws/inner/y.js', 'feat(01-01): y', 1_700_000_000);
+    const scope = planScope(ws, { commitsOnly: true });
+    assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.reason, 'sub-repo-unreadable:inner:not-a-repo-root');
+  });
+
+  for (const [label, entry, expected] of [
+    ['a parent-escaping path', '../outside', /^sub-repo-escapes-root:\.\.\/outside$/],
+    ['an absolute path', path.join(os.tmpdir(), 'elsewhere'), /^sub-repo-escapes-root:/],
+    ['a nested parent segment', 'a/../../outside', /^sub-repo-escapes-root:\.\.\/outside$/],
+    ['a NUL byte', 'app\0x', /^sub-repo-escapes-root:/],
+    ['a non-string entry', 42, /^sub-repo-invalid:0$/],
   ]) {
     test(`[hostile] ${label} in sub_repos is refused as unresolvable`, () => {
       const ws = makeWorkspace([], { subRepos: [entry] });
       const scope = planScope(ws, { commitsOnly: true });
       assert.equal(scope.status, 'unresolvable');
-      assert.match(scope.reason, /sub-repo/);
+      assert.match(scope.reason, expected);
     });
   }
 
@@ -209,6 +302,7 @@ describe('#5867 unreadable or hostile sub_repos', () => {
     }
     const scope = planScope(ws, { commitsOnly: true });
     assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.reason, 'sub-repo-escapes-root:link');
     assert.deepEqual(scope.commits, []);
   });
 });
@@ -292,6 +386,17 @@ describe('#5867 the check evaluation-scope verb and commitIsAncestor', () => {
     commit(ws.repos.web, 'w.js', 'feat(01-01): w', 1_700_000_200);
     assert.equal(commitIsAncestor(ws.root, red, green), true);
     assert.equal(commitIsAncestor(ws.root, green, red), false);
+  });
+
+  test('[negative] a timeout in one repo is never read as "no" because another repo answered false', () => {
+    const ws = makeWorkspace(['api', 'web']);
+    const red = commit(ws.repos.api, 'a.js', 'test(01-01): red', 1_700_000_000);
+    const green = commit(ws.repos.api, 'b.js', 'feat(01-01): green', 1_700_000_100);
+    const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const timingOutInApi = (args, opts) => (opts && fs.realpathSync(opts.cwd) === fs.realpathSync(ws.repos.api.dir)
+      ? { exitCode: 1, stdout: '', stderr: '', timedOut: true }
+      : execGit(args, opts));
+    assert.equal(commitIsAncestor(ws.root, green, red, timingOutInApi), null);
   });
 
   test('[negative] commitIsAncestor is null when no sub-repo knows the commits', () => {
