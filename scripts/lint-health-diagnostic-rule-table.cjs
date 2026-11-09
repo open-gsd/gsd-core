@@ -52,8 +52,12 @@
  *
  * The design doc assumed fixtures would live as separate files at
  * `tests/fixtures/health-diagnostic/<code>.*`. That did not happen during
- * implementation — all 8 rule-group test files
- * (`tests/health-diagnostic-rules/*.test.cjs`) build fixtures INLINE via
+ * implementation — every test file this guard scans (each
+ * `tests/health-diagnostic-rules/*.test.cjs`, plus
+ * `tests/health-diagnostic.test.cjs`; see `findHealthDiagnosticTestFiles`.
+ * The directory is not one file per rule group: `consistency.test.cjs`
+ * covers `validate.consistency`'s rules, and W028's tests live in
+ * `tests/health-diagnostic.test.cjs`) builds fixtures INLINE via
  * real temp directories (`createTempDir()` from `tests/helpers.cjs`) and a
  * real, non-mocked `buildPlanningSnapshot(tmpCwd)` call (see
  * `tests/health-diagnostic-rules/root-existence.test.cjs`). This guard
