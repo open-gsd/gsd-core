@@ -658,7 +658,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    EXPECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD)
    ```
 
-   **Durable wave manifest (#4853).** When worktrees are in use and `WAVE_WORKTREE_MANIFEST` is unset, read and execute the bash block under `## Durable wave manifest` in `execute-phase/steps/executor-isolation-dispatch.md`. It resolves wave `N` (1–999), refuses a tracked or pre-existing manifest, and writes `{phase_dir}/wave-{N}-manifest.json`.
+   **Durable wave manifest (#4853).** When worktrees are in use and `WAVE_WORKTREE_MANIFEST` is unset, read and execute the bash block under `## Durable wave manifest` in `execute-phase/steps/executor-isolation-dispatch.md`.
 
    **Isolation model.** The block below is the **`harness-worktree`** path. For `orchestrator-worktree` use the dispatch below it; for `none` use sequential mode. Both are detailed in `execute-phase/steps/executor-isolation-dispatch.md`.
 
@@ -835,7 +835,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    ```bash
    SKIP_HOOKS=$(gsd_run query config-get workflow.worktree_skip_hooks --raw 2>/dev/null || echo "false")
    if [ "$SKIP_HOOKS" = "true" ]; then
-     # Stash uncommitted changes under named ref so we always pop (#3542: refs/stash is shared across worktrees; executors forbidden from stash per <destructive_git_prohibition> in agents/gsd-executor.md).
+     # Stash uncommitted changes under a named ref so we always pop (bare `git stash` strands them on hook/script failure). #3542: `refs/stash` is shared across worktrees, so this helper runs ONLY in the orchestrator's main checkout after all wave worktrees have been merged + removed; executors are forbidden from running any `git stash` subcommand (see `<destructive_git_prohibition>` in `agents/gsd-executor.md`).
      STASH_BEFORE=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
      git stash push -u -m "gsd-post-wave-hook-$$" -- ":(top,exclude,glob).planning/**/wave-[1-9]-manifest.json" ":(top,exclude,glob).planning/**/wave-[1-9][0-9]-manifest.json" ":(top,exclude,glob).planning/**/wave-[1-9][0-9][0-9]-manifest.json" >/dev/null 2>&1 || true
      STASH_AFTER=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
@@ -923,7 +923,6 @@ increases monotonically across waves. `{status}` is `complete` (success),
    done < "$WT_PATHS_FILE"
    rm -f "$WT_PATHS_FILE"
    git worktree prune
-   # Owned residual: agent branch or path names this wave. Detached HEAD matches the path. #4853
    RESIDUAL_OWNED=0
    if [ "$CLEANUP_FAILED" -eq 0 ]; then
      RESIDUAL_OWNED=$(gsd_run query worktree.residual-owned --manifest "$WAVE_WORKTREE_MANIFEST" --raw) || { echo "⚠ could not list worktrees; preserving manifest at $WAVE_WORKTREE_MANIFEST" >&2; CLEANUP_FAILED=1; RESIDUAL_OWNED=1; }

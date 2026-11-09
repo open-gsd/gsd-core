@@ -1758,11 +1758,31 @@ describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
 }
 
 describe('durable wave worktree manifest contract (#4853)', () => {
-  const childProcess = require('node:child_process');
   const os = require('node:os');
   const { cleanup, readFileNormalized } = require('./helpers.cjs');
   const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { runHook, runGit, runNode } = require('./helpers/process-seam.cjs');
   const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+  // Measured constant: unseenSites is 0, so these spawns go through the seam.
+  function runBashFile(scriptPath, options = {}) {
+    const result = runHook(scriptPath, [], {
+      interpreter: 'bash',
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  function runNodeFile(args, options = {}) {
+    const result = runNode(args, {
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  }
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -1797,12 +1817,7 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     // The extracted tail calls gsd_run. The workflow defines that earlier;
     // a standalone snippet does not.
     fs.writeFileSync(scriptPath, `gsd_run() { node "${GSD_TOOLS}" "$@"; }\n${cleanupTailBash}\n`);
-    return childProcess.spawnSync('bash', [scriptPath], {
-      cwd: repo,
-      env: { ...process.env, WAVE_WORKTREE_MANIFEST: manifestPath },
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    return runBashFile(scriptPath, { cwd: repo, env: { ...process.env, WAVE_WORKTREE_MANIFEST: manifestPath } });
   }
 
   test('cleanup-tail bash removes residual worktrees and cleans up manifest on success', (t) => {
@@ -2014,11 +2029,7 @@ ${creationBash}
     fs.writeFileSync(scriptPath, script);
 
     // Initial creation: succeeds
-    const res1 = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: repo,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res1 = runBashFile(scriptPath, { cwd: repo });
     assert.equal(res1.status, 0, `initial manifest creation must succeed. stderr: ${res1.stderr?.toString()}`);
     const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
     assert.equal(fs.existsSync(manifestPath), true, 'manifest must be created on disk');
@@ -2026,11 +2037,7 @@ ${creationBash}
     assert.deepEqual(manifestContent.worktrees, [], 'newly created manifest must have empty worktrees array');
 
     // Second execution with pre-existing manifest: must block with exit non-zero
-    const res2 = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: repo,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res2 = runBashFile(scriptPath, { cwd: repo });
     assert.notEqual(res2.status, 0, 'dispatch block must exit non-zero when pre-existing manifest exists');
     const stderr2 = (res2.stderr || '').toString();
     assert.match(stderr2, /BLOCKED: pre-existing wave manifest found at/, 'stderr must report pre-existing manifest guard');
@@ -2057,17 +2064,64 @@ ${creationBash}
     // Run the exact extracted command from execute-phase.md
     const scriptPath = path.join(root, 'test-wx.sh');
     fs.writeFileSync(scriptPath, `ORCH_ROOT="${root}" MANIFEST="${manifestPath}" ${nodeLine}\n`);
-    const writeRes = childProcess.spawnSync(
-      'bash',
-      [scriptPath],
-      {
-        cwd: root,
-        stdio: 'pipe',
-        timeout: HOOK_FANOUT_TIMEOUT_MS,
-      },
-    );
+    const writeRes = runBashFile(scriptPath, { cwd: root });
     assert.notEqual(writeRes.status, 0, 'write with flag wx must fail non-zero when file already exists');
     assert.equal(fs.readFileSync(manifestPath, 'utf8'), 'pre-existing', 'file content must remain untouched');
+  });
+
+  test('dispatch refuses a manifest path that is a directory or a symlink', (t) => {
+    const { runHook } = require('./helpers/process-seam.cjs');
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-manifest-shape-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const runFor = (phaseName, occupy) => {
+      const phaseDir = path.join(repo, '.planning', 'phases', phaseName);
+      fs.mkdirSync(phaseDir, { recursive: true });
+      const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
+      occupy(manifestPath, phaseDir);
+      const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+      return runHook('-c', [script], {
+        interpreter: 'bash',
+        cwd: repo,
+        timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+      });
+    };
+
+    const dirRes = runFor('01-directory', (manifestPath) => {
+      fs.mkdirSync(manifestPath);
+    });
+    assert.notEqual(dirRes.exitCode, 0, `a directory at the manifest path must fail. stderr: ${dirRes.stderr}`);
+    assert.match(String(dirRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
+    assert.equal(fs.statSync(path.join(repo, '.planning', 'phases', '01-directory', 'wave-1-manifest.json')).isDirectory(), true);
+
+    const linkRes = runFor('02-symlink', (manifestPath, phaseDir) => {
+      const target = path.join(phaseDir, 'elsewhere.json');
+      fs.writeFileSync(target, '{"worktrees":[]}\n');
+      fs.symlinkSync(target, manifestPath);
+    });
+    assert.notEqual(linkRes.exitCode, 0, `a symlink at the manifest path must fail. stderr: ${linkRes.stderr}`);
+    assert.match(String(linkRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
+    assert.equal(fs.lstatSync(path.join(repo, '.planning', 'phases', '02-symlink', 'wave-1-manifest.json')).isSymbolicLink(), true);
   });
 
   test('execute-phase dispatch block fails with fatal when wave number cannot be resolved', (t) => {
@@ -2096,11 +2150,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-no-wave.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.notEqual(res.status, 0, 'must exit non-zero when wave number cannot be resolved');
     const stderr = (res.stderr || '').toString();
     assert.match(stderr, /FATAL: cannot resolve wave number before worktree dispatch/);
@@ -2130,11 +2180,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-wave-1000.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.notEqual(res.status, 0);
     assert.match((res.stderr || '').toString(), /FATAL: cannot resolve wave number before worktree dispatch/);
     assert.equal(fs.existsSync(path.join(phaseDir, 'wave-1000-manifest.json')), false);
@@ -2166,11 +2212,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-no-phase.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.notEqual(res.status, 0, 'must exit non-zero when neither PHASE_DIR nor PHASE_NUMBER is set');
     const stderr = (res.stderr || '').toString();
     assert.match(stderr, /FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch/);
@@ -2205,11 +2247,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-phase-num.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.equal(res.status, 0, `dispatch block with PHASE_NUMBER must succeed: ${res.stderr?.toString()}`);
     const expectedManifest = path.join(phaseDir, 'wave-1-manifest.json');
     assert.ok(fs.existsSync(expectedManifest), 'manifest must be created under discovered phase dir');
@@ -2247,11 +2285,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-tracked.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.notEqual(res.status, 0, 'must exit non-zero when manifest is tracked in git');
     const stderr = (res.stderr || '').toString();
     assert.match(stderr, /FATAL: wave manifest at .* is tracked by git/);
@@ -2276,14 +2310,10 @@ ${creationBash}
     const manifest1 = path.join(phase1, 'wave-1-manifest.json');
     fs.writeFileSync(manifest1, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
 
-    const res1 = childProcess.spawnSync(
-      'node',
-      [GSD_TOOLS, 'commit', '-m', 'docs(01): update plan 1'],
-      { cwd: root, stdio: 'pipe', timeout: HOOK_FANOUT_TIMEOUT_MS },
-    );
+    const res1 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(01): update plan 1'], { cwd: root });
     assert.equal(res1.status, 0, `implicit commit should succeed: ${res1.stderr?.toString()}`);
     assert.notEqual(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/01-sample/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/01-sample/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'wave-1-manifest.json must NOT be tracked after implicit commit',
     );
@@ -2309,19 +2339,15 @@ ${creationBash}
     const manifest2 = path.join(phase2, 'wave-1-manifest.json');
     fs.writeFileSync(manifest2, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
 
-    const res2 = childProcess.spawnSync(
-      'node',
-      [GSD_TOOLS, 'commit', '-m', 'docs(02): update plan 2', '--files', '.planning/phases/02-dir'],
-      { cwd: root, stdio: 'pipe', timeout: HOOK_FANOUT_TIMEOUT_MS },
-    );
+    const res2 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(02): update plan 2', '--files', '.planning/phases/02-dir'], { cwd: root });
     assert.equal(res2.status, 0, `explicit dir commit should succeed: ${res2.stderr?.toString()}`);
     assert.notEqual(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'wave-1-manifest.json must NOT be tracked after explicit directory commit',
     );
     assert.equal(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/02-dir/PLAN.md'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/PLAN.md'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'PLAN.md must be tracked after explicit directory commit',
     );
@@ -2346,14 +2372,10 @@ ${creationBash}
     const manifestPath = path.join(phase2, 'wave-1-manifest.json');
     fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
 
-    const res3 = childProcess.spawnSync(
-      'node',
-      [GSD_TOOLS, 'commit', '-m', 'docs(02): update state', '--files', '.planning/phases/02-dir/STATE.md', '.planning/phases/02-dir/wave-1-manifest.json'],
-      { cwd: root, stdio: 'pipe', timeout: HOOK_FANOUT_TIMEOUT_MS },
-    );
+    const res3 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(02): update state', '--files', '.planning/phases/02-dir/STATE.md', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root });
     assert.equal(res3.status, 0, `explicit file commit should succeed: ${res3.stderr?.toString()}`);
     assert.notEqual(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'wave-1-manifest.json must NOT be tracked even when explicitly passed in --files',
     );
@@ -2361,11 +2383,7 @@ ${creationBash}
     assert.deepEqual(json3.skipped_files, ['.planning/phases/02-dir/wave-1-manifest.json']);
 
     // Sole manifest in --files produces nothing_to_commit and reports skipped_files
-    const resSole = childProcess.spawnSync(
-      'node',
-      [GSD_TOOLS, 'commit', '-m', 'docs(02): try commit manifest only', '--files', '.planning/phases/02-dir/wave-1-manifest.json'],
-      { cwd: root, stdio: 'pipe', timeout: HOOK_FANOUT_TIMEOUT_MS },
-    );
+    const resSole = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(02): try commit manifest only', '--files', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root });
     assert.equal(resSole.status, 0, `sole manifest commit should exit 0 with nothing_to_commit: ${resSole.stderr?.toString()}`);
     const jsonSole = JSON.parse(resSole.stdout.toString());
     assert.equal(jsonSole.committed, false);
@@ -2391,17 +2409,13 @@ ${creationBash}
     const manifestPath = path.join(phase, 'wave-1-manifest.json');
     fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
 
-    const res = childProcess.spawnSync(
-      'node',
-      [GSD_TOOLS, 'commit', '-m', 'docs(01): default sweep with only wave manifest present'],
-      { cwd: root, stdio: 'pipe', timeout: HOOK_FANOUT_TIMEOUT_MS },
-    );
+    const res = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(01): default sweep with only wave manifest present'], { cwd: root });
     assert.equal(res.status, 0, `commit should exit 0: ${res.stderr?.toString()}`);
     const json = JSON.parse(res.stdout.toString());
     assert.equal(json.committed, false);
     assert.equal(json.reason, 'nothing_to_commit');
     assert.notEqual(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/01-sample/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/01-sample/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'manifest must not be tracked',
     );
@@ -2427,7 +2441,7 @@ ${creationBash}
     gitOrThrow(['add', '-f', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root });
     gitOrThrow(['commit', '-q', '-m', 'track manifest explicitly'], { cwd: root });
     assert.equal(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'manifest3 must initially be tracked',
     );
@@ -2437,20 +2451,16 @@ ${creationBash}
     fs.writeFileSync(path.join(phase3, 'PLAN.md'), '# Plan 3\n');
 
     // Run commit via gsd-tools
-    const res4 = childProcess.spawnSync(
-      'node',
-      [GSD_TOOLS, 'commit', '-m', 'docs(03): commit plan 3'],
-      { cwd: root, stdio: 'pipe', timeout: HOOK_FANOUT_TIMEOUT_MS },
-    );
+    const res4 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(03): commit plan 3'], { cwd: root });
     assert.equal(res4.status, 0, `commit should succeed: ${res4.stderr?.toString()}`);
     // Check that manifest3 is STILL tracked in git (NOT deleted/untracked by cmdCommit)
     assert.equal(
-      childProcess.spawnSync('git', ['ls-files', '--error-unmatch', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).status,
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'manifest3 must remain tracked in git (no accidental git rm --cached)',
     );
     // Check that the modified working tree changes were NOT committed (git diff shows modification against HEAD)
-    const diff = childProcess.spawnSync('git', ['diff', 'HEAD', '--', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS }).stdout.toString();
+    const diff = runGit(['diff', 'HEAD', '--', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).stdout;
     assert.match(diff, /modified/, 'working tree modification must NOT have been committed to git history');
   });
 
@@ -2524,11 +2534,7 @@ ${creationBash}
     assert.equal(isWaveManifestPath(nestedPlanningManifest, root), false);
 
     // Git pathspec exclude check: git ls-files with WAVE_MANIFEST_PATHSPEC_EXCLUDES should exclude wave manifests
-    const lsFiles = childProcess.spawnSync(
-      'git',
-      ['ls-files', '--others', '--', ...WAVE_MANIFEST_PATHSPEC_EXCLUDES],
-      { cwd: root, timeout: HOOK_FANOUT_TIMEOUT_MS },
-    ).stdout.toString().split('\n').filter(Boolean);
+    const lsFiles = runGit(['ls-files', '--others', '--', ...WAVE_MANIFEST_PATHSPEC_EXCLUDES], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).stdout.split('\n').filter(Boolean);
 
     assert.ok(!lsFiles.includes('.planning/wave-1-manifest.json'), 'git pathspec must exclude .planning/wave-1-manifest.json');
     assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-2-manifest.json'), 'git pathspec must exclude .planning/phases/01-foo/wave-2-manifest.json');
@@ -2609,11 +2615,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-dispatch.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.equal(res.status, 0, `dispatch block should resolve wave and create manifest: ${res.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDir, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
     assert.ok(!fs.existsSync(path.join(phaseDir, 'wave-1-manifest.json')), 'wave-1-manifest.json must NOT be created');
@@ -2653,11 +2655,7 @@ ${creationBash}
 `;
     const scriptPath = path.join(root, 'test-dispatch-gaps.sh');
     fs.writeFileSync(scriptPath, script);
-    const res = childProcess.spawnSync('bash', [scriptPath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const res = runBashFile(scriptPath, { cwd: root });
     assert.equal(res.status, 0, `dispatch block should resolve wave 3 for gap plan: ${res.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDir, 'wave-3-manifest.json')), 'wave-3-manifest.json must be created');
   });
@@ -2693,11 +2691,7 @@ ${creationBash}
 `;
     const scriptAgreePath = path.join(root, 'test-agree.sh');
     fs.writeFileSync(scriptAgreePath, scriptAgree);
-    const resAgree = childProcess.spawnSync('bash', [scriptAgreePath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const resAgree = runBashFile(scriptAgreePath, { cwd: root });
     assert.equal(resAgree.status, 0, `matching CURRENT_WAVE must succeed: ${resAgree.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDir, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
   });
@@ -2733,11 +2727,7 @@ ${creationBash}
 `;
     const scriptDisagreePath = path.join(root, 'test-disagree.sh');
     fs.writeFileSync(scriptDisagreePath, scriptDisagree);
-    const resDisagree = childProcess.spawnSync('bash', [scriptDisagreePath], {
-      cwd: root,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const resDisagree = runBashFile(scriptDisagreePath, { cwd: root });
     assert.notEqual(resDisagree.status, 0, 'disagreeing CURRENT_WAVE must fail with non-zero exit');
     assert.match(
       resDisagree.stderr?.toString() || '',
@@ -2777,11 +2767,7 @@ ${creationBash}
 `;
     const scriptWithoutPlansPath = path.join(rootIncomplete, 'test-without-plans.sh');
     fs.writeFileSync(scriptWithoutPlansPath, scriptWithoutPlans);
-    const resWithoutPlans = childProcess.spawnSync('bash', [scriptWithoutPlansPath], {
-      cwd: rootIncomplete,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const resWithoutPlans = runBashFile(scriptWithoutPlansPath, { cwd: rootIncomplete });
     assert.equal(resWithoutPlans.status, 0, `CURRENT_WAVE=2 succeeds directly on the orchestrator loop counter: ${resWithoutPlans.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDirInc, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
   });
@@ -2817,11 +2803,7 @@ ${creationBash}
 `;
     const scriptStaleAccPath = path.join(rootIncomplete, 'test-stale-acc.sh');
     fs.writeFileSync(scriptStaleAccPath, scriptStaleAcc);
-    const resStaleAcc = childProcess.spawnSync('bash', [scriptStaleAccPath], {
-      cwd: rootIncomplete,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const resStaleAcc = runBashFile(scriptStaleAccPath, { cwd: rootIncomplete });
     assert.equal(resStaleAcc.status, 0, `stale WAVE_WORKTREE_PLANS="03-01" does not derail CURRENT_WAVE=2: ${resStaleAcc.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDirInc, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
   });
@@ -2857,11 +2839,7 @@ ${creationBash}
 `;
     const scriptCommaAccPath = path.join(rootIncomplete, 'test-comma-acc.sh');
     fs.writeFileSync(scriptCommaAccPath, scriptCommaAcc);
-    const resCommaAcc = childProcess.spawnSync('bash', [scriptCommaAccPath], {
-      cwd: rootIncomplete,
-      stdio: 'pipe',
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const resCommaAcc = runBashFile(scriptCommaAccPath, { cwd: rootIncomplete });
     assert.equal(resCommaAcc.status, 0, `comma-separated WAVE_WORKTREE_PLANS="03-01,03-02" does not derail CURRENT_WAVE=2: ${resCommaAcc.stderr?.toString()}`);
     assert.ok(fs.existsSync(path.join(phaseDirInc, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
   });

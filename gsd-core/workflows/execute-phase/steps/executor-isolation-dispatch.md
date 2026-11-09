@@ -392,7 +392,12 @@ two paths cannot drift.
 
 The manifest is `{phase_dir}/wave-{N}-manifest.json` for wave `N` in `1..999`.
 Creation is exclusive (`wx`). A tracked manifest is fatal. A pre-existing
-manifest blocks until `worktree.cleanup-wave` reconciles it. `orchestrator_root`
+manifest, including a directory or symlink at that path, blocks until
+`worktree.cleanup-wave` reconciles it. The cleanup tail keeps the manifest
+when `worktree residual-owned` reports an agent whose branch or path names
+this wave; a detached HEAD matches the path. `wave-1` does not match
+`wave-10` or `wave-1x`, and a phase-directory name that contains `wave-<N>`
+is not itself that token. `orchestrator_root`
 is the dispatch-time `git rev-parse --show-toplevel`, so later cleanup pins to
 this orchestrator's worktree rather than `git worktree list`'s first entry (#630).
 
@@ -429,6 +434,12 @@ process.stdout.write(wave);
         exit 1
       fi
     done <<< "$EXISTING_MANIFESTS"
+  fi
+  # A directory or symlink is not a manifest the finder lists (`lstat` isFile is
+  # false), so the loop above does not see it. Refuse before the exclusive create.
+  if [ -e "$WAVE_WORKTREE_MANIFEST" ] || [ -L "$WAVE_WORKTREE_MANIFEST" ]; then
+    echo "BLOCKED: pre-existing wave manifest found at $WAVE_WORKTREE_MANIFEST from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest \"$WAVE_WORKTREE_MANIFEST\"" >&2
+    exit 1
   fi
   # Persist dispatch-time orchestrator root to manifest so wave-cleanup pins to orchestrator's OWN worktree (#630).
   ORCH_ROOT=$(git rev-parse --show-toplevel)

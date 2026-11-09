@@ -1503,5 +1503,15 @@ describe('assertWithinRoot / tryWithinRoot — narrowed export (#4653)', () => {
     assert.equal(isContainedIn('C:\\a\\b/../../evil', 'C:\\a\\b', path.win32), false);
     assert.equal(isContainedIn('C:\\a\\b/c', 'C:\\a\\b', path.win32), true);
     assert.equal(isContainedIn('C:\\a\\b/../../evil', 'C:\\a\\b', { sep: '\\' }), false);
+    // A trailing separator on the root is still that directory. normalize keeps
+    // it, so the fallback must not require a second separator.
+    assert.equal(isContainedIn('C:\\repo\\sub', 'C:\\repo\\', path.win32), true);
+    assert.equal(isContainedIn('C:\\repo\\', 'C:\\repo', path.win32), true);
+    assert.equal(isContainedIn('C:\\repo\\', 'C:\\repo2', path.win32), false);
+    // UNC share roots normalize with a trailing separator, and the share is
+    // case-insensitive. A sibling share is not inside.
+    assert.equal(isContainedIn('\\\\SERVER\\Share\\A', '\\\\server\\share', path.win32), true);
+    assert.equal(isContainedIn('\\\\server\\share\\a\\b', '\\\\server\\share', path.win32), true);
+    assert.equal(isContainedIn('\\\\server\\share-evil\\a', '\\\\server\\share', path.win32), false);
   });
 });

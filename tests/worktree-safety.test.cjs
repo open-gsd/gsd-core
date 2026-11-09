@@ -10372,6 +10372,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         const parsed = JSON.parse(cleanupRes.stdout);
         assert.equal(parsed.ok, false);
         assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
+        assert.match(cleanupRes.stderr.toString(), /unmanifested_worktrees_present/);
       } finally {
         cleanup(repoDir);
       }
@@ -10471,6 +10472,132 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       });
       assert.equal(result.ok, false);
       assert.equal(result.reason, 'unmanifested_worktrees_present');
+    });
+
+    test('an unresolvable agent that does not name this wave does not block', () => {
+      const ghost = path.join(os.tmpdir(), `agent-quick-unreadable-${Date.now()}`);
+      const manifestPath = path.join(os.tmpdir(), '.planning', 'wave-1-manifest.json');
+      const porcelain = `worktree ${ghost}\nbranch refs/heads/worktree-agent-quick\n`;
+      const result = executeWorktreeWaveCleanupPlan({
+        ok: true,
+        repoRoot: os.tmpdir(),
+        manifestPath,
+        action: 'cleanup_wave',
+        discovery: 'manifest',
+        reason: '',
+        entries: [],
+      }, {
+        execGit: (args) => {
+          if (args.join(' ') === 'worktree list --porcelain') {
+            return { exitCode: 0, stdout: porcelain, stderr: '' };
+          }
+          throw new Error(`unexpected git call: ${args.join(' ')}`);
+        },
+        statSync: () => {
+          const err = new Error('eacces');
+          err.code = 'EACCES';
+          throw err;
+        },
+      });
+      assert.equal(result.ok, true, 'an unreadable foreign agent is not this wave');
+      assert.equal(result.reason, 'empty_manifest');
+    });
+
+    test('wave-1 does not own wave-10 or wave-1x, and a phase directory named with wave-1 does not own a nested foreign agent', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wave-token-'));
+      try {
+        const phaseDir = path.join(repoDir, '.planning', 'phases', '04-wave-1-redesign');
+        const foreign = path.join(phaseDir, '.claude', 'worktrees', 'agent-quick');
+        const owned = path.join(phaseDir, '.claude', 'worktrees', 'worktree-agent-wave-1');
+        const wave1x = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1x');
+        const wave10 = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-10');
+        const wave1dash = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-notes');
+        for (const dir of [foreign, owned, wave1x, wave10, wave1dash]) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        const run = (manifestPath, wt, branch) => executeWorktreeWaveCleanupPlan({
+          ok: true,
+          repoRoot: repoDir,
+          manifestPath,
+          action: 'cleanup_wave',
+          discovery: 'manifest',
+          reason: '',
+          entries: [],
+        }, {
+          execGit: (args) => {
+            if (args.join(' ') === 'worktree list --porcelain') {
+              return { exitCode: 0, stdout: `worktree ${wt}\nbranch refs/heads/${branch}\n\n`, stderr: '' };
+            }
+            throw new Error(`unexpected git call: ${args.join(' ')}`);
+          },
+        });
+        const phaseManifest = path.join(phaseDir, 'wave-1-manifest.json');
+        const foreignResult = run(phaseManifest, foreign, 'worktree-agent-quick');
+        assert.equal(foreignResult.reason, 'empty_manifest', 'phase-directory wave-1 must not own a nested foreign agent');
+        const ownedResult = run(phaseManifest, owned, 'worktree-agent-wave-1');
+        assert.equal(ownedResult.reason, 'unmanifested_worktrees_present', 'an explicit wave-1 agent under that phase still counts');
+        const rootManifest = path.join(repoDir, '.planning', 'wave-1-manifest.json');
+        assert.equal(run(rootManifest, wave1x, 'worktree-agent-wave-1x').reason, 'empty_manifest', 'wave-1x is not wave 1');
+        assert.equal(run(rootManifest, wave10, 'worktree-agent-wave-10').reason, 'empty_manifest', 'wave-10 is not wave 1');
+        assert.equal(run(rootManifest, wave1dash, 'worktree-agent-wave-1-notes').reason, 'unmanifested_worktrees_present', 'wave-1-notes names wave 1');
+        const dottedPhase = path.join(repoDir, '.planning', 'phases', '01-v1.2');
+        const dottedAgent = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-dotted');
+        fs.mkdirSync(dottedAgent, { recursive: true });
+        const dotted = run(
+          path.join(dottedPhase, 'wave-1-manifest.json'),
+          dottedAgent,
+          'worktree-agent-01-v1X2-wave-1',
+        );
+        assert.equal(dotted.reason, 'empty_manifest', 'a dot in the phase name is literal, so 01-v1X2 is not 01-v1.2');
+        const shortPhase = path.join(repoDir, '.planning', 'phases', '01');
+        const wave101 = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-101');
+        fs.mkdirSync(wave101, { recursive: true });
+        const short = run(
+          path.join(shortPhase, 'wave-1-manifest.json'),
+          wave101,
+          'worktree-agent-wave-101',
+        );
+        assert.equal(short.reason, 'empty_manifest', 'phase name 01 must not turn wave-101 into wave-1');
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('cleanup-wave prints stderr when the manifest file is missing', () => {
+      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-missing-manifest-'));
+      const manifestPath = path.join(repoDir, '.planning', 'phases', '01-foundation', 'wave-1-manifest.json');
+      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+      const errs = [];
+      let stdout = '';
+      const origExitCode = process.exitCode;
+      try {
+        process.exitCode = 0;
+        cmdWorktreeCleanupWave(repoDir, ['--manifest', manifestPath], {
+          execGit: (args) => {
+            if (args.join(' ') === 'rev-parse --show-toplevel') {
+              return { exitCode: 0, stdout: `${repoDir}\n`, stderr: '', timedOut: false, error: null };
+            }
+            if (args[0] === 'ls-files') {
+              return {
+                exitCode: 1,
+                stdout: '',
+                stderr: 'error: pathspec did not match any file(s) known to git\n',
+                timedOut: false,
+                error: null,
+              };
+            }
+            throw new Error(`unexpected git call: ${args.join(' ')}`);
+          },
+          write: (s) => { stdout += s; },
+          writeErr: (s) => { errs.push(s); },
+        });
+        assert.equal(process.exitCode, 1);
+        assert.match(errs.join(''), /manifest_read_failed/);
+        assert.match(stdout, /manifest_read_failed/);
+      } finally {
+        process.exitCode = origExitCode;
+        cleanup(repoDir);
+      }
     });
 
     test('cleanup-wave ignores stale prunable worktree whose directory is gone', () => {

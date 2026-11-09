@@ -56,10 +56,16 @@ export function isContainedIn(
     // (`C:\a\b/../../evil`) is not inside `C:\a\b`; replacing slashes alone
     // used to report that it was. Same-separator `..` still takes the lexical
     // prefix above — that contract is unchanged.
+    //
+    // `normalize` keeps a trailing separator (`C:\repo\`) and adds one on a
+    // UNC share root (`\\server\share` → `\\server\share\`). Appending another
+    // separator would make `C:\repo\sub` miss `C:\repo\` and `\\SERVER\Share\A`
+    // miss `\\server\share`. One separator, and only when the operand lacks one.
     const normTarget = path.win32.normalize(resolvedTarget);
     const normRoot = path.win32.normalize(resolvedRoot);
-    if (normTarget === normRoot) return true;
-    return (normTarget + '\\').toLowerCase().startsWith((normRoot + '\\').toLowerCase()); // allow-handrolled-containment: Windows case-insensitive containment comparison fallback
+    if (normTarget.toLowerCase() === normRoot.toLowerCase()) return true;
+    const withSep = (p: string) => (p.endsWith('\\') || p.endsWith('/') ? p : `${p}\\`);
+    return withSep(normTarget).toLowerCase().startsWith(withSep(normRoot).toLowerCase()); // allow-handrolled-containment: Windows case-insensitive containment comparison fallback
   }
   return false;
 }
