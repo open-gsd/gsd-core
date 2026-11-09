@@ -774,17 +774,41 @@ describe('buildOverlayRepo: a directory that vanishes mid-walk is skipped (#5848
       return st;
     };
     let overlay;
+    const warnings = [];
     try {
-      assert.doesNotThrow(() => { overlay = buildOverlayRepo({}, { root }); });
+      assert.doesNotThrow(() => { overlay = buildOverlayRepo({}, { root, warn: (m) => warnings.push(m) }); });
     } finally {
       fs.statSync = realStat;
     }
     try {
       assert.equal(retired, true, 'the fixture must actually retire the directory');
+      assert.equal(warnings.length, 1, 'the skip is reported, not silent');
       assert.equal(fs.existsSync(path.join(overlay, 'keep.txt')), true);
-      assert.equal(fs.existsSync(path.join(overlay, 'gone', 'inner', 'f.txt')), false);
+      assert.equal(fs.existsSync(path.join(overlay, 'gone')), false, 'a retired directory leaves nothing behind');
     } finally {
       if (overlay) cleanup(overlay);
+      cleanup(root);
+    }
+  });
+
+  test('a directory an override targets that vanishes still throws (the override is not dropped silently)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5848-ovr-'));
+    const gone = path.join(root, 'gone');
+    fs.mkdirSync(gone);
+    const realStat = fs.statSync;
+    let retired = false;
+    fs.statSync = function patchedStat(p, ...rest) {
+      const st = realStat.call(this, p, ...rest);
+      if (p === gone && !retired) {
+        retired = true;
+        cleanup(gone);
+      }
+      return st;
+    };
+    try {
+      assert.throws(() => buildOverlayRepo({ 'gone/override.txt': 'z' }, { root }), { code: 'ENOENT' });
+    } finally {
+      fs.statSync = realStat;
       cleanup(root);
     }
   });

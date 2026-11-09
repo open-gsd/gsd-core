@@ -224,7 +224,6 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
   const skipped = [];
 
   function place(srcDir, destDir, pending, isTop) {
-    fs.mkdirSync(destDir, { recursive: true });
     const grouped = new Map();
     for (const e of pending) {
       const [head, ...rest] = e.parts;
@@ -233,15 +232,20 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
     }
     // Same TOCTOU window as the stat below, one level down: a directory listed by
     // its parent can be retired (a sibling test's temp dir inside the walked tree)
-    // before this recursion reads it. The root itself must exist, so only a
-    // nested directory is tolerated (#5848).
+    // before this recursion reads it. The root itself must exist, and a directory
+    // that a caller's override targets must not vanish silently, so only a nested
+    // directory with no pending override is skipped, and it is reported (#5848).
     let dirents;
     try {
       dirents = fs.readdirSync(srcDir, { withFileTypes: true });
     } catch (err) {
-      if (!isTop && isMissingPath(err)) return;
+      if (!isTop && pending.length === 0 && isMissingPath(err)) {
+        skipped.push(srcDir);
+        return;
+      }
       throw err;
     }
+    fs.mkdirSync(destDir, { recursive: true });
     for (const de of dirents) {
       if (isTop && OVERLAY_SKIP_TOP.has(de.name)) {
         fs.symlinkSync(path.join(srcDir, de.name), path.join(destDir, de.name));

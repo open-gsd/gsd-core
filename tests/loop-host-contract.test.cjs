@@ -982,11 +982,11 @@ describe('declared loop points are dispatched (#5848)', () => {
 
   test('execute:pre is rendered before the first wave and dispatches contribution, step and gate', () => {
     const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
-    const preIdx = text.indexOf('gsd_run loop render-hooks execute:pre');
-    const wavePreIdx = text.indexOf('gsd_run loop render-hooks execute:wave:pre');
+    const preIdx = text.indexOf('EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre');
+    const wavePreIdx = text.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
     assert.ok(preIdx !== -1, 'execute:pre call site must exist');
     assert.ok(preIdx < wavePreIdx, 'execute:pre must be rendered before the first wave dispatch site');
-    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase');
+    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase');
     assert.ok(preIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
     const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
     assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
