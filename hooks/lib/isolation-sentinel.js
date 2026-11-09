@@ -138,10 +138,10 @@ function sentinelPath(cwd) {
 /**
  * Resolve the project root a sentinel should be read from/written to, using
  * the SAME derivation gsd-tools.cjs's dispatcher applies to every `--cwd`
- * before invoking a route handler: `findProjectRoot(resolveMainWorktreeCwd(cwd))`
- * (gsd-core/bin/gsd-tools.cjs main(), :3506/:3603 — `record-dispatch-isolation`
- * and `dispatch-isolation` are not in SKIP_ROOT_RESOLUTION, so every write
- * goes through both steps).
+ * before invoking a route handler: `resolveProjectContext(cwd).projectRoot`
+ * (gsd-core/bin/gsd-tools.cjs main() — `record-dispatch-isolation` and
+ * `dispatch-isolation` are not in SKIP_ROOT_RESOLUTION, so every write goes
+ * through it).
  *
  * #3045 MINOR fix: the guard hooks previously read the sentinel from the raw
  * `data.cwd` / `workspace_roots[i]` the harness reports, with NO equivalent
@@ -154,7 +154,7 @@ function sentinelPath(cwd) {
  * written where it looked. Deriving both sides through this one function
  * closes that divergence.
  *
- * `findProjectRoot`/`resolveWorktreeRoot` are read from the sibling
+ * `resolveProjectContext` is read from the sibling
  * `gsd-core/bin/lib/*.cjs` modules staged alongside these hooks at install
  * time (same pattern the guard hooks already use for
  * capability-registry.cjs/runtime-name-policy.cjs) — two directories up from
@@ -180,10 +180,10 @@ function resolveSentinelRoot(cwd) {
     // cold-tree encounter.
     const { ensureRuntimeBuild } = require('../../gsd-core/bin/ensure-runtime-build.cjs');
     ensureRuntimeBuild();
-    const { resolveWorktreeRoot } = require('../../gsd-core/bin/lib/worktree-safety.cjs');
-    const { root } = resolveWorktreeRoot(cwd);
-    const { findProjectRoot } = require('../../gsd-core/bin/lib/project-root.cjs');
-    return findProjectRoot(root);
+    // #6043 (ADR-4908): the dispatcher resolves non-skip commands through the
+    // same seam, so the reader looks where the writer wrote.
+    const { resolveProjectContext } = require('../../gsd-core/bin/lib/project-context.cjs');
+    return resolveProjectContext(cwd).projectRoot;
   } catch {
     return cwd;
   }

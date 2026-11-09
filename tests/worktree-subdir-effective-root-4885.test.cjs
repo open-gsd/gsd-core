@@ -3,9 +3,10 @@
 /**
  * #4885: run from a SUBDIRECTORY of a linked worktree, the effective project root resolved to the main
  * checkout, so `commit` (and every planning write) landed in the wrong repository. The cwd has no
- * `.planning/` of its own, so resolveWorktreeContext skipped the local-planning shortcut and
- * remapped to dirname(git-common-dir). The worktree's OWN top-level holds the `.planning/` the
- * caller means, so it must win before the remap. Real git repositories, no mocks.
+ * `.planning/` of its own, so the resolver skipped the local-planning shortcut and remapped to
+ * dirname(git-common-dir). The worktree's OWN top-level holds the `.planning/` the caller means,
+ * so it must win before the remap. Since #6043 the one resolver is resolveProjectContext. Real git
+ * repositories, no mocks.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -16,7 +17,7 @@ const { spawnSync } = require('node:child_process');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { resolveWorktreeContext } = require('../gsd-core/bin/lib/worktree-safety.cjs');
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
 
 function git(cwd, args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
@@ -48,30 +49,33 @@ describe('#4885 effective root from a subdirectory of a linked worktree', () => 
   test('a subdirectory of a linked worktree that carries .planning at its root resolves to the worktree root', () => {
     const sub = path.join(wt, 'src', 'deep');
     fs.mkdirSync(sub, { recursive: true });
-    const r = resolveWorktreeContext(sub);
-    assert.equal(fs.realpathSync.native(r.effectiveRoot), fs.realpathSync.native(wt), `resolved ${r.effectiveRoot} (${r.reason})`);
-    assert.notEqual(fs.realpathSync.native(r.effectiveRoot), fs.realpathSync.native(main), 'must not remap to the main checkout');
+    const ctx = resolveProjectContext(sub);
+    assert.equal(fs.realpathSync.native(ctx.projectRoot), fs.realpathSync.native(wt), `resolved ${ctx.projectRoot} (${ctx.provenance.source})`);
+    assert.equal(fs.realpathSync.native(ctx.worktreeRoot), fs.realpathSync.native(wt));
+    assert.notEqual(fs.realpathSync.native(ctx.projectRoot), fs.realpathSync.native(main), 'must not remap to the main checkout');
   });
 
   test('the worktree root itself still resolves to itself', () => {
-    const r = resolveWorktreeContext(wt);
-    assert.equal(fs.realpathSync.native(r.effectiveRoot), fs.realpathSync.native(wt));
+    const ctx = resolveProjectContext(wt);
+    assert.equal(fs.realpathSync.native(ctx.projectRoot), fs.realpathSync.native(wt));
   });
 
-  test('a linked worktree with NO .planning anywhere still remaps to the main checkout (the intended design)', () => {
+  test('a linked worktree with NO .planning anywhere still falls back to the main checkout (the intended design)', () => {
     cleanup(path.join(wt, '.planning'));
     const sub = path.join(wt, 'src');
     fs.mkdirSync(sub, { recursive: true });
-    const r = resolveWorktreeContext(sub);
-    assert.equal(fs.realpathSync.native(r.effectiveRoot), fs.realpathSync.native(main));
-    assert.equal(r.reason, 'linked_worktree');
+    const ctx = resolveProjectContext(sub);
+    assert.equal(fs.realpathSync.native(ctx.projectRoot), fs.realpathSync.native(main));
+    assert.equal(ctx.provenance.source, 'main-checkout');
+    assert.equal(fs.realpathSync.native(ctx.worktreeRoot), fs.realpathSync.native(wt));
   });
 
   test('a subdirectory of the main checkout is unchanged', () => {
     const sub = path.join(main, 'pkg');
     fs.mkdirSync(sub);
-    const r = resolveWorktreeContext(sub);
-    assert.equal(r.reason, 'main_worktree');
+    const ctx = resolveProjectContext(sub);
+    assert.equal(ctx.isLinkedWorktree, false);
+    assert.equal(fs.realpathSync.native(ctx.projectRoot), fs.realpathSync.native(main));
   });
 
   test('gsd-tools commit run from the subdirectory lands in the worktree, not the main checkout', () => {

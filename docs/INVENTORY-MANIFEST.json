@@ -561,6 +561,7 @@
       "profile-pipeline-command-router.cjs",
       "profile-pipeline.cjs",
       "prohibition-enforcement.cjs",
+      "project-context.cjs",
       "project-root.cjs",
       "prompt-budget.cjs",
       "quick-batch-command-router.cjs",

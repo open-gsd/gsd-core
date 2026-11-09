@@ -364,20 +364,34 @@ describe('commit --files: pathspec honors declared scope (#2112)', () => {
     const outsideFile = path.join(outsideDir, 'secret.md');
     fs.writeFileSync(outsideFile, 's\n');
 
+    // #6043 (ADR-4908 §3): the commit verb now refuses before any staging, with
+    // the typed reason `outside_worktree` (it used to surface git's own
+    // rejection as `staging_failed`, #2608).
     const res = runGsdTools(
-      ['commit', 'docs: outside', '--files', path.resolve(outsideFile)],
+      ['commit', 'docs: outside', '--files', path.resolve(outsideFile), '--json-errors'],
       tmpDir,
     );
-    const parsed = JSON.parse(res.output);
+    assert.notStrictEqual(res.exitCode, 0, `refusal must exit non-zero: ${JSON.stringify(res)}`);
+    let parsed = null;
+    for (const text of [res.output, res.error]) {
+      for (const candidate of [text, ...String(text || '').split('\n').reverse()]) {
+        try {
+          const value = JSON.parse(candidate);
+          if (value && typeof value === 'object') { parsed = value; break; }
+        } catch {
+          // not JSON; try the next candidate
+        }
+      }
+      if (parsed) break;
+    }
+    assert.ok(parsed, `refusal must print a typed result: ${JSON.stringify(res)}`);
     assert.strictEqual(parsed.committed, false, 'out-of-repo path must not commit');
-    assert.strictEqual(parsed.reason, 'staging_failed', `out-of-repo: git rejects → staging_failed (#2608): ${res.output}`);
-    assert.strictEqual(parsed.file, path.resolve(outsideFile), 'the rejected path must be named');
-    assert.match(parsed.error, /outside repository/, "git's own rejection message must be preserved (#2608)");
+    assert.strictEqual(parsed.reason, 'outside_worktree', `out-of-repo: refused before staging (#6043): ${JSON.stringify(res)}`);
 
     // No new commit created (still at the single initial commit).
     const logCount = gitOrThrow(['rev-list', '--count', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
     assert.strictEqual(logCount, '1', 'no new commit must be created for an out-of-repo path');
-    // Index stays clean (git add failed → nothing staged).
+    // Index stays clean (refused before staging → nothing staged).
     const status = gitOrThrow(['status', '--porcelain'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
     assert.strictEqual(status, '', `index must be clean (no pollution): ${status}`);
   });
