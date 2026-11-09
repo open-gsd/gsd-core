@@ -6,6 +6,11 @@ tools: read, write, bash, grep, find
 ---
 
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <role>
 A completed phase has been submitted for verification. Verify that the phase goal is actually achieved in the codebase — SUMMARY.md claims are not evidence.
 
@@ -644,27 +649,7 @@ Deferred items are informational only — they do not require closure plans.
 
 ## MVP Mode Verification
 
-**When the phase under verification has `mode: mvp` in ROADMAP.md (resolved by the verify-work workflow):** Apply the goal-backward methodology, narrowed to the phase's user-story goal. Required reading: `@__GSD_PI_ENGINE_ROOT__/gsd-core/references/verify-mvp-mode.md`.
-
-**Core narrowing rule:** Goal-backward verification normally checks that the phase goal is observably true in the codebase. Under MVP mode, the phase goal IS a user story ("As a [user role], I want to [capability], so that [outcome]."). Verify the `[outcome]` clause is observably true — that is the success condition.
-
-**VERIFICATION.md output structure under MVP mode:**
-
-1. Top-level "User Flow Coverage" table: each step of the user story → expected → evidence in codebase → status. (Format defined in `gsd-core/references/verify-mvp-mode.md`.)
-2. Standard technical-check sections (API verification, error handling, etc.) follow below — only if the user flow coverage is complete.
-
-**User Story format guard:** Apply via the centralized verb instead of inlining the regex:
-
-```bash
-USER_STORY_VALID=$(gsd_run query user-story.validate --story "$PHASE_GOAL" --pick valid)
-```
-
-If `valid != true`, refuse to verify. Surface the discrepancy and ask the user to run `/gsd:mvp-phase ${PHASE}` to set a proper User Story goal. The verb owns the canonical regex `/^As a .+, I want to .+, so that .+\.$/` and surfaces per-error guidance in `errors[]` plus slot extractions in `slots`. Do NOT attempt to verify against a non-User Story goal under MVP mode — the User Flow Coverage section would be low-quality.
-
-**Mode is all-or-nothing per phase** (PRD decision Q1, inherited from Phase 1). The MVP Mode Verification rules apply to the whole phase or not at all.
-
-**Compatibility with existing verifier behavior:** When the phase mode is null/absent, this section is dormant. The existing goal-backward verification methodology is unchanged for non-MVP phases.
-
+Only when the phase has mode: mvp in ROADMAP.md: Read and follow `__GSD_PI_ENGINE_ROOT__/gsd-core/references/verify-mvp-mode.md`, including its Verifier contract, user-story validation and User Flow Coverage output. Otherwise this section is dormant; normal verification is unchanged.
 </mvp_mode_verification>
 
 <output>
@@ -675,7 +660,7 @@ If `valid != true`, refuse to verify. Surface the discrepancy and ask the user t
 
 **#4155 / #5095:** the fingerprint command adds the phase's own PLAN/SUMMARY files automatically (+superseded, nested `plans/`) and never counts the report itself — list only the changed implementation files (and any other evidence), ROOT-relative; planning-root docs are inert (#4623). `gsd_run query verification.fingerprint {phaseDir} {file}...`, copy the command's `covered_files` and `covered_digest` output verbatim — never hand-write either.
 
-Create `.planning/phases/{phase_dir}/{phase_num}-VERIFICATION.md`:
+Create `{phase_dir}/{phase_num}-VERIFICATION.md`:
 
 ```markdown
 ---
@@ -732,7 +717,7 @@ human_verification: # Only if status: human_needed
     why_human: "Why can't verify programmatically"
 ---
 
-# Phase {X}: {Name} Verification Report
+# {phase_display}: {Name} Verification Report
 
 **Phase Goal:** {goal from ROADMAP.md}
 **Verified:** {timestamp}
@@ -759,7 +744,7 @@ Only include this section if deferred items exist (from Step 9b).
 
 | # | Item | Addressed In | Evidence |
 |---|------|-------------|----------|
-| 1 | {truth} | Phase {N} | {matching goal or success criteria} |
+| 1 | {truth} | {phase_display} | {matching goal or success criteria} |
 
 ### Advisory (New Scope, Unevidenced)
 
@@ -844,7 +829,7 @@ Return with:
 
 **Status:** {passed | gaps_found | human_needed}
 **Score:** {N}/{M} must-haves verified
-**Report:** .planning/phases/{phase_dir}/{phase_num}-VERIFICATION.md
+**Report:** {phase_dir}/{phase_num}-VERIFICATION.md
 
 {If passed:}
 All must-haves verified. Phase goal achieved. Ready to proceed.

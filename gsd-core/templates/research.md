@@ -1,6 +1,13 @@
 # Research Template
 
-Template for `.planning/phases/XX-name/{phase_num}-RESEARCH.md` - comprehensive ecosystem research before planning.
+Template for `{phase_dir}/{padded_phase}-RESEARCH.md` - comprehensive ecosystem research before planning.
+
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
 
 **Purpose:** Document what Claude needs to know to implement a phase well - not just "which library" but "how do experts build this."
 
@@ -9,7 +16,7 @@ Template for `.planning/phases/XX-name/{phase_num}-RESEARCH.md` - comprehensive 
 ## File Template
 
 ```markdown
-# Phase [X]: [Name] - Research
+# {phase_display}: [Name] - Research
 
 **Researched:** [date]
 **Domain:** [primary technology/problem domain]
@@ -275,7 +282,7 @@ Things that couldn't be fully resolved:
 ## Good Example
 
 ```markdown
-# Phase 3: 3D City Driving - Research
+# {phase_display}: 3D City Driving - Research
 
 **Researched:** 2025-01-20
 **Domain:** Three.js 3D web game with driving mechanics
@@ -587,6 +594,6 @@ function useVehicleControls(rigidBodyRef) {
 - Code examples can be referenced in task actions
 
 **After creation:**
-- File lives in phase directory: `.planning/phases/XX-name/{phase_num}-RESEARCH.md`
+- File lives in phase directory: `{phase_dir}/{padded_phase}-RESEARCH.md`
 - Referenced during planning workflow
 - plan-phase loads it automatically when present

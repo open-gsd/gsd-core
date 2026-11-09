@@ -10,6 +10,11 @@ AI-SPEC.md locks four things before the planner creates tasks:
 This prevents the two most common AI development failures: choosing the wrong framework for the use case, and treating evaluation as an afterthought.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/ai-frameworks.md
 @~/.claude/gsd-core/references/ai-evals.md

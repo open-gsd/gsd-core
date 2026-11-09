@@ -9,6 +9,11 @@ consumes: PLAN.md
 Execute all plans in a phase using wave-based parallel execution. Orchestrator stays lean — delegates plan execution to subagents.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <core_principle>
 Orchestrator coordinates, not executes. Each subagent loads the full execute-plan context. Orchestrator: discover plans → analyze deps → group waves → spawn agents → handle checkpoints → collect results.
 </core_principle>
@@ -417,7 +422,7 @@ Report:
 ```
 ## Execution Plan
 
-**Phase {X}: {Name}** — {total_plans} matching plans across {wave_count} wave(s)
+**{phase_display}: {Name}** — {total_plans} matching plans across {wave_count} wave(s)
 
 {If WAVE_FILTER is set: `Wave filter active: executing only Wave {WAVE_FILTER}`.}
 
@@ -1135,7 +1140,7 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
 After all waves:
 
 ```markdown
-## Phase {X}: {Name} Execution Complete
+## {phase_display}: {Name} Execution Complete
 
 **Waves:** {N} | **Plans:** {M}/{total} complete
 
@@ -1321,7 +1326,7 @@ Extract from result: `next_phase`, `next_phase_name`, `is_last_phase`, `warnings
 
 **If has_warnings is true**:
 ```
-## Phase {X} marked complete with {N} warnings:
+## {phase_display} marked complete with {N} warnings:
 
 {list each warning}
 

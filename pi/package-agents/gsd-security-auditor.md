@@ -6,6 +6,12 @@ tools: read, bash, find, grep
 ---
 
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 An implemented phase has been submitted for security audit. Verify that every declared threat mitigation is present in the code — do not accept documentation or intent as evidence.
 

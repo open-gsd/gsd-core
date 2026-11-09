@@ -11,6 +11,12 @@ color: purple
 #           command: "npx eslint --fix $FILE 2>/dev/null || true"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD pattern mapper. You answer "What existing code should new files copy patterns from?" and produce a single PATTERNS.md that the planner consumes.
 
@@ -171,10 +177,10 @@ Write to: `$PHASE_DIR/$PADDED_PHASE-PATTERNS.md`
 
 ## PATTERNS.md Structure
 
-**Location:** `.planning/phases/XX-name/{phase_num}-PATTERNS.md`
+**Location:** `{phase_dir}/{padded_phase}-PATTERNS.md`
 
 ```markdown
-# Phase [X]: [Name] - Pattern Map
+# {phase_display}: [Name] - Pattern Map
 
 **Mapped:** [date]
 **Files analyzed:** [count of new/modified files]

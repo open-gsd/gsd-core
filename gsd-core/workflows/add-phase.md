@@ -4,6 +4,11 @@
 Add a new integer phase to the end of the current milestone in the roadmap. Automatically calculates next phase number, creates phase directory, and updates roadmap structure.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -65,7 +70,7 @@ The CLI handles:
 
 Extract from result: `phase_number`, `padded`, `name`, `slug`, `directory`.
 
-**If result includes a `warning` field:** the description read as goal-shaped (long and/or multi-sentence) rather than title-shaped, and was written verbatim as the `### Phase N:` header. The phase was still created — surface the warning to the user and suggest a short title with the detail moved to `**Goal:**` in ROADMAP.md.
+**If result includes a `warning` field:** the description read as goal-shaped (long and/or multi-sentence) rather than title-shaped, and was written verbatim as the `### {phase_display}:` header. The phase was still created — surface the warning to the user and suggest a short title with the detail moved to `**Goal:**` in ROADMAP.md.
 </step>
 
 <step name="update_project_state">
@@ -84,9 +89,9 @@ If "Roadmap Evolution" section doesn't exist, create it.
 Present completion summary:
 
 ```
-Phase {N} added to current milestone:
+{phase_display} added to current milestone:
 - Description: {description}
-- Directory: .planning/phases/{phase-num}-{slug}/
+- Directory: {directory}/
 - Status: Not planned yet
 
 Roadmap updated: .planning/ROADMAP.md
@@ -95,7 +100,7 @@ Roadmap updated: .planning/ROADMAP.md
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {N}: {description}**
+**{phase_display}: {description}**
 
 `/clear` then:
 

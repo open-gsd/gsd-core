@@ -2,6 +2,11 @@
 
 Implements @gsd-core/references/loop-hook-dispatch.md for `plan:pre`. Read `activeHooks` from `PLAN_PRE_HOOKS_JSON` in-context. This runs in **manual and auto-chain mode alike**, before the planner is spawned — a resolved hook is dispatched, never silently dropped.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 **Dedicated sections.** These `capId`s own a `plan:pre` step or gate that a named section of `plan-phase.md` already runs with its own mode-specific behavior. Skip their `step` and `gate` entries here so none runs twice; dispatch **every other** active `step` and `gate`, first-party or third-party, in array order. (Contributions are injected at §5.55 and §8, not here.)
 
 | capId | Section | What that section owns |

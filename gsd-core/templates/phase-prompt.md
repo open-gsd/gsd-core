@@ -1,13 +1,22 @@
 # Phase Prompt Template
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
 > **Note:** Planning methodology is in `agents/gsd-planner.md`.
 > This template defines the PLAN.md output format that the agent produces.
 
-Template for `.planning/phases/XX-name/{phase}-{plan}-PLAN.md` - executable phase plans optimized for parallel execution.
+Template for the resolved `{plan_path}` - executable phase plans optimized for parallel execution.
 
-**Naming:** Use `{phase}-{plan}-PLAN.md` format (e.g., `01-02-PLAN.md` for Phase 1, Plan 2)
+**Paths:** Resolve `{plan_path}` and `{summary_path}` from the reference sources above; sequential example: `01-02-PLAN.md` for Phase 1, Plan 2.
 
 ---
+
+For sequential projects, the summary paths below retain their legacy rendering. For other conventions, use the CLI/writer-returned artifact paths; do not project a display label into a path.
 
 ## File Template
 
@@ -128,7 +137,7 @@ Before declaring plan complete:
   </success_criteria>
 
 <output>
-After completion, create `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md`
+After completion, create `{summary_path}`
 </output>
 ```
 

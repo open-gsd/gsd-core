@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 const crypto = require('crypto');
+const { phaseIdCard } = require('../gsd-core/bin/lib/phase-id-card.cjs');
 const {
   isManagedHookBasename,
   isManagedHookCommand,
@@ -15274,6 +15275,11 @@ function installAllRuntimes(runtimes, isGlobal, isInteractive) {
       };
 
       printSummaries();
+      // #5027: one card per successful invocation, after every runtime's
+      // required writes. Match the roadmap migrator's title and stderr channel.
+      if (results.some(result => result && !result.skipped)) {
+        process.stderr.write(`${phaseIdCard({ title: 'Bracket phase-ID convention' })}\n`);
+      }
     } catch (error) {
       // Phase 4 install/update integration requires safe migrations to roll
       // back when later package/finalization materialization fails:

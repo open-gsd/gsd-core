@@ -59,7 +59,7 @@ const PROFILES = [
       'gsd_run query package-legitimacy check',
     ],
     outputContract: [
-      '.planning/phases/XX-name/{phase_num}-RESEARCH.md',
+      '{phase_dir}/{padded_phase}-RESEARCH.md',
       '## RESEARCH COMPLETE',
     ],
   },

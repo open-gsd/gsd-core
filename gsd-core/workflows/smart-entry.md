@@ -4,6 +4,11 @@ GSD smart entry — the state-aware front door. Detect the current project situa
 This is a *menu* front door, not a second router. For in-project forward motion (planning → executing → verify-pending) the recommended action is `/gsd:progress --next`, which delegates to the single gated advancement engine (`workflows/next.md`: Route 0 resume-incomplete-phase + Gates 1-3). smart-entry adds value only where `--next` cannot reach: pre-project, remediation (paused/blocked/verify-failed), and lifecycle exits (idle-stranded/complete). See `docs/adr/1787-gsd-next-smart-entry.md`.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's `execution_context` before starting.
 </required_reading>

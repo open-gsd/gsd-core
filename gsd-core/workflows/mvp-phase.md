@@ -2,6 +2,11 @@
 Guide the user through MVP-mode planning for a phase. Prompts for an "As a / I want to / So that" user story, runs SPIDR splitting check on the story, writes the result to ROADMAP.md, and delegates to `/gsd:plan-phase` (which auto-detects MVP via the roadmap mode field shipped in PRD Phase 1).
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 @~/.claude/gsd-core/references/user-story-template.md
 @~/.claude/gsd-core/references/spidr-splitting.md
@@ -154,8 +159,8 @@ Free-text response. Workflow parses to identify the split.
 d) Produce a split proposal. Example:
 
 > "Proposed split (Paths axis):
-> - **Phase ${PHASE} (this one):** Happy path — ${HAPPY_STORY}
-> - **Phase ${PHASE+1} (new):** Edge case — ${EDGE_STORY}
+> - **{phase_display} (this one):** Happy path — ${HAPPY_STORY}
+> - **{next_phase_display} (new):** Edge case — ${EDGE_STORY}
 >
 > Accept this split?"
 
@@ -167,7 +172,7 @@ Use `AskUserQuestion` [Accept / Modify / Reject].
 
 ## 5. Update ROADMAP.md
 
-Read `ROADMAP.md`. Find the section for `Phase ${PHASE}`. Apply two edits:
+Run `gsd_run query roadmap.get-phase "${PHASE}"` and locate its returned `section` in ROADMAP.md, preserving that exact heading. If `found` is false, stop. Apply two edits within that section:
 
 **Edit 1 — Update Goal line.**
 

@@ -37,6 +37,8 @@ const {
 } = require('./emitted-runtime.cjs');
 const { NEW_FILE_CAP, ACK_TRAILER_DELIM, normalizeAckReason } = require('./emitted-diff.cjs');
 const { runGit, OUTCOME } = require('./process-seam.cjs');
+const { START, END, readRegion } = require('../../scripts/gen-phase-id-convention.cjs');
+const { phaseIdConventionBlock } = require('../../gsd-core/bin/lib/phase-id-card.cjs');
 
 /** Default scan root: `gsd-core/workflows/` at repo root. */
 const DEFAULT_WORKFLOWS_DIR = path.join(__dirname, '..', '..', 'gsd-core', 'workflows');
@@ -151,6 +153,14 @@ function isTrivial(line) {
  * @returns {string[]}
  */
 function normalizeNonTrivialLines(content) {
+  if (content.includes(START)) {
+    const normalized = content.replace(/\r\n/g, '\n');
+    const region = readRegion(normalized, { start: START, end: END }, 'partition input');
+    const canonical = phaseIdConventionBlock();
+    if (!region.violation && region.body === canonical) {
+      content = normalized.split('\n').filter((_, i) => i < region.start || i > region.end).join('\n');
+    }
+  }
   return content
     .split(/\r?\n/)
     .map((l) => l.trim())

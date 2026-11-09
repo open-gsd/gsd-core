@@ -4,6 +4,11 @@ Start a new milestone cycle for an existing project. Loads project context, gath
 
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 
 Read all files referenced by the invoking prompt's execution_context before starting.
@@ -547,8 +552,8 @@ gsd_run query commit "docs: define milestone v[X.Y] requirements" --files "$REQU
 ```
 
 **Starting phase number:**
-- If `--reset-phase-numbers` is active, start at **Phase 1**
-- Otherwise, continue from the previous milestone's last phase number (v1.0 ended at phase 5 → v1.1 starts at phase 6)
+- If `--reset-phase-numbers` is active, start at phase index **1**
+- Otherwise, continue from the previous milestone's last phase index (v1.0 ended at index 5 → v1.1 starts at index 6)
 
 ```text
 Agent(prompt="
@@ -568,7 +573,7 @@ ${AGENT_SKILLS_ROADMAPPER}
 <instructions>
 Create roadmap for milestone v[X.Y]:
 1. Respect the selected numbering mode:
-   - `--reset-phase-numbers` → start at Phase 1
+   - `--reset-phase-numbers` → start at phase index 1
    - default behavior → continue from the previous milestone's last phase number
 2. Derive phases from THIS MILESTONE's requirements only
 3. Map every requirement to exactly one phase
@@ -601,7 +606,7 @@ Write files first, then return.
 
 ### Phase Details
 
-**Phase [N]: [Name]**
+**{phase_display}: [Name]**
 Goal: [goal]
 Requirements: [REQ-IDs]
 Success criteria:
@@ -700,7 +705,7 @@ Print a summary:
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase [N]: [Phase Name]** — [Goal]
+**{phase_display}: [Phase Name]** — [Goal]
 
 `/clear` then:
 

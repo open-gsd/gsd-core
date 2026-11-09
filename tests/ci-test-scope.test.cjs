@@ -1419,3 +1419,19 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
 });
   });
 }
+
+
+describe('#5027: convention check selected on content-only changes', () => {
+  for (const file of [
+    'agents/gsd-verifier.md',
+    'gsd-core/workflows/discuss-phase/templates/context.md',
+    'gsd-core/templates/roadmap.md',
+    'gsd-core/references/phase-id-convention.md',
+    'src/phase-id-card.cts',
+    'scripts/gen-phase-id-convention.cjs',
+  ]) {
+    test(`selects the card/evidence suite for ${file}`, () => {
+      assert.ok(scopeFor([file]).targeted_tests.includes('tests/phase-id-card.test.cjs'));
+    });
+  }
+});

@@ -5,6 +5,11 @@ Detect current project state and automatically advance to the next logical GSD w
 Reads project state to determine: discuss → plan → execute → verify → complete progression.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -169,7 +174,7 @@ If incomplete prior work is found, show a structured completeness report:
 ```
 ⚠ Prior phase has incomplete work
 
-Phase {N} — "{name}" has unresolved items:
+{phase_display} — "{name}" has unresolved items:
   • Plan {N}-{M} ({slug}): executed but no SUMMARY.md
   [... additional items ...]
 
@@ -190,7 +195,7 @@ Choice [S]:
 **If the user chooses "Continue and defer" (C):**
 1. For each incomplete item, create a backlog entry in `ROADMAP.md` under `## Backlog` using the existing `999.x` numbering scheme:
 ```markdown
-### Phase 999.{N}: Follow-up — Phase {src} incomplete plans (BACKLOG)
+### {backlog_phase_display}: Follow-up — Phase {src} incomplete plans (BACKLOG)
 
 **Goal:** Resolve plans that ran without producing summaries during Phase {src} execution
 **Source phase:** {src}

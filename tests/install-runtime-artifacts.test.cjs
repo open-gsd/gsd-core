@@ -38,7 +38,7 @@ const espree = require('espree');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
-const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
+const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture, installSpawnEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -8992,3 +8992,78 @@ describe('retargetInstalledIncludes (#5123)', () => {
     assert.equal(retarget(text, 'copilot', '/x'), text);
   });
 });
+
+// #5027: real installed convention-reference paths.
+const referenceNames = ['phase-id-convention.md', 'ui-registry-audit.md', 'verify-mvp-mode.md', 'minimal-context.md'];
+
+function installedFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const file = path.join(dir, entry.name);
+    return entry.isDirectory() ? installedFiles(file) : /\.(?:md|toml)$/.test(entry.name) ? [file] : [];
+  });
+}
+
+function resolveReadPath(pointer, home, project) {
+  if (pointer.startsWith('~/')) return path.join(home, pointer.slice(2));
+  if (pointer.startsWith('$HOME/')) return path.join(home, pointer.slice(6));
+  return path.resolve(project, pointer);
+}
+
+for (const runtime of ['claude', 'codex']) {
+  for (const scope of ['global', 'local']) {
+    test(`#5027 installed ${runtime} ${scope} Read references resolve on disk`, t => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-phase-read-paths-')));
+      t.after(() => cleanup(root));
+      const home = path.join(root, 'home');
+      const project = path.join(root, 'project');
+      fs.mkdirSync(home);
+      fs.mkdirSync(project);
+      const env = installSpawnEnv({ HOME: home, USERPROFILE: home, GSD_HOME: path.join(home, '.gsd') });
+      delete env.GSD_TEST_MODE;
+      const result = runNode([INSTALL_SCRIPT, `--${runtime}`, `--${scope}`, '--profile=full', '--no-sdk'], {
+        cwd: project, env, timeoutMs: INSTALL_TIMEOUT_MS,
+      });
+      assert.equal(result.exitCode, 0, `${result.summary}\n${result.stderr}`);
+      const config = path.join(scope === 'global' ? home : project, `.${runtime}`);
+      const agentExt = runtime === 'codex' ? 'toml' : 'md';
+      const mandatory = new Map([
+        [path.join(config, 'agents', `gsd-executor.${agentExt}`), 'phase-id-convention.md'],
+        [path.join(config, 'agents', `gsd-verifier.${agentExt}`), 'verify-mvp-mode.md'],
+        [path.join(config, 'agents', `gsd-ui-auditor.${agentExt}`), 'ui-registry-audit.md'],
+        [path.join(config, 'gsd-core', 'workflows', 'plan-phase.md'), 'phase-id-convention.md'],
+        [path.join(config, 'gsd-core', 'workflows', 'autonomous.md'), 'minimal-context.md'],
+      ]);
+      const files = [
+        ...installedFiles(path.join(config, 'agents')),
+        ...installedFiles(path.join(config, 'gsd-core', 'workflows')),
+      ];
+      const found = new Map();
+      const failures = [];
+      let referenceCount = 0;
+      for (const file of files) {
+        const text = fs.readFileSync(file, 'utf8');
+        for (const match of text.matchAll(/\bRead(?: and follow)? `([^`\r\n]{1,4096})`/g)) {
+          const pointer = match[1];
+          const name = pointer.split('/').at(-1);
+          if (!referenceNames.includes(name)) continue;
+          referenceCount += 1;
+          if (!found.has(file)) found.set(file, new Set());
+          found.get(file).add(name);
+          const resolved = resolveReadPath(pointer, home, project);
+          const withinConfig = path.relative(config, resolved);
+          if (withinConfig.startsWith('..') || path.isAbsolute(withinConfig)
+            || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+            failures.push(`${path.relative(config, file)}: Read ${pointer} -> ${resolved}`);
+          }
+        }
+      }
+      for (const [file, name] of mandatory) {
+        assert.ok(found.get(file)?.has(name), `${path.relative(config, file)} must retain Read ${name}`);
+      }
+      assert.ok(referenceCount >= 5, 'exercise convention, both retained lazy reads, and autonomous context template');
+      assert.equal(failures.length, 0,
+        `${failures.length} installed Read paths must point inside the runtime config and exist:\n${failures.slice(0, 5).join('\n')}`);
+      t.diagnostic(`${referenceCount} installed Read references checked across ${files.length} agent/workflow files`);
+    });
+  }
+}

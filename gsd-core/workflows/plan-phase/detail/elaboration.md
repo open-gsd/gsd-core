@@ -1,3 +1,8 @@
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
 
 # plan-phase — Detail
@@ -47,16 +52,18 @@ When the planner returns `## PHASE SPLIT RECOMMENDED`, it means the phase's sour
 - Which source items (REQ-IDs, D-XX decisions, RESEARCH items) go in each sub-phase
 - Why the split is necessary (context cost estimate, file count)
 
+Resolve each proposed sub-phase identity independently using the reference grammar; do not append letters to the parent display label. In the proposal below, the two display placeholders refer to those proposed sub-phases.
+
 **Present to user:**
 ```
-## Phase {X} exceeds context budget for full-fidelity implementation
+## {phase_display} exceeds context budget for full-fidelity implementation
 
 The planner found {N} source items that exceed the context budget when
 planned at full fidelity. Instead of reducing scope, we recommend splitting:
 
 **Option 1: Split into sub-phases**
-- Phase {X}a: {name} — {items} ({N} source items, ~{P}% context)
-- Phase {X}b: {name} — {items} ({M} source items, ~{Q}% context)
+- {phase_display}: {name} — {items} ({N} source items, ~{P}% context)
+- {next_phase_display}: {name} — {items} ({M} source items, ~{Q}% context)
 
 **Option 2: Proceed anyway** (planner will attempt all, quality may degrade past 50% context)
 

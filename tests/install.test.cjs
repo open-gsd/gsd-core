@@ -8519,3 +8519,105 @@ describe('#4377: --relative-includes emits project-relative @ includes for a loc
     );
   });
 });
+
+// #5027: the convention card belongs to a successful installer invocation,
+// including --all, after every runtime's required writes have completed.
+describe('#5027: successful installer invocation displays one titled card', () => {
+  const { phaseIdCard } = require('../gsd-core/bin/lib/phase-id-card.cjs');
+  const { installSpawnEnv } = require('./helpers.cjs');
+  const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const installPath = path.join(__dirname, '..', 'bin', 'install.js');
+  const card = phaseIdCard({ title: 'Bracket phase-ID convention' });
+  let root, savedEnv;
+  beforeEach(() => {
+    root = createTempDir('gsd-5027-finish-');
+    savedEnv = Object.fromEntries(['HOME', 'USERPROFILE', 'GSD_HOME'].map(key => [key, process.env[key]]));
+    for (const key of Object.keys(savedEnv)) process.env[key] = root;
+  });
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    cleanup(root);
+  });
+  function invocation(args, source = null, envOverrides = {}) {
+    const env = installSpawnEnv({ HOME: root, USERPROFILE: root, GSD_HOME: path.join(root, '.gsd'), ...envOverrides });
+    delete env.GSD_TEST_MODE;
+    return runNode(source ? ['-e', source] : [installPath, ...args, '--profile=core', '--no-sdk'], {
+      cwd: root, env, timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+  }
+  for (const scope of ['--global', '--local']) {
+    test(`single-runtime ${scope} emits one titled card on stderr`, () => {
+      const result = invocation(['--claude', scope]);
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(result.stderr.split(card).length - 1, 1);
+      assert.equal(result.stdout.includes('[GSD.02] 05.03-01'), false);
+      assert.ok(result.stdout.includes('Done!'), 'runtime onboarding remains reachable');
+    });
+  }
+  test('--all emits one titled card for the complete invocation', () => {
+    const result = invocation(['--all', '--global']);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.stderr.split(card).length - 1, 1);
+    assert.equal(result.stdout.includes('[GSD.02] 05.03-01'), false);
+    assert.ok((result.stdout.match(/Done!/g) || []).length > 1, 'multiple runtimes completed');
+  });
+  test('a later required settings-write failure emits no success card', () => {
+    // Keep the real multi-runtime installation/finalization path and fail only
+    // the OS write boundary: Kimi completes before Claude's settings rename.
+    const result = invocation([], `
+      process.env.GSD_TEST_MODE = '1';
+      process.argv = [process.execPath, ${JSON.stringify(installPath)}, '--profile=core', '--no-sdk'];
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const settingsPath = path.join(process.env.HOME, '.claude', 'settings.json');
+      const rename = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        if (path.resolve(to) === path.resolve(settingsPath)) throw new Error('required settings write failed');
+        return rename(from, to);
+      };
+      require(${JSON.stringify(installPath)}).installAllRuntimes(['kimi', 'claude'], true, false);
+    `);
+    assert.notEqual(result.exitCode, 0);
+    assert.match(result.stderr, /required settings write failed/);
+    assert.ok(result.stdout.includes('Done!'), 'failure occurred after the earlier runtime completed');
+    assert.equal((result.stdout + result.stderr).includes('[GSD.02] 05.03-01'), false);
+  });
+  for (const isGlobal of [true, false]) test(`settings-write failure (${isGlobal ? 'global' : 'local'}) emits no card`, () => {
+    const result = invocation([], `
+      process.env.GSD_TEST_MODE = '1';
+      process.argv = [process.execPath, ${JSON.stringify(installPath)}, '--profile=core', '--no-sdk'];
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const settingsPath = path.join(${isGlobal ? 'process.env.HOME' : 'process.cwd()'}, '.claude', ${JSON.stringify(isGlobal ? 'settings.json' : 'settings.local.json')});
+      const rename = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        if (path.resolve(to) === path.resolve(settingsPath)) throw new Error('required settings write failed');
+        return rename(from, to);
+      };
+      require(${JSON.stringify(installPath)}).installAllRuntimes(['claude'], ${isGlobal}, false);
+    `);
+    assert.notEqual(result.exitCode, 0, result.summary);
+    assert.match(result.stderr, /required settings write failed/);
+    assert.equal(result.stderr.includes(card), false);
+    assert.equal((result.stdout + result.stderr).includes('[GSD.02] 05.03-01'), false);
+  });
+  test('entrypoint validation failure emits no success card', () => {
+    // Cline's installed env-node hook is real; an empty PATH makes its
+    // interpreter unresolvable at the aggregate validation boundary.
+    const result = invocation(['--cline', '--global'], null, { PATH: '' });
+    assert.notEqual(result.exitCode, 0, result.summary);
+    assert.match(result.stderr, /Configured entrypoint validation failed/);
+    assert.equal(result.stderr.includes(card), false);
+    assert.equal((result.stdout + result.stderr).includes('[GSD.02] 05.03-01'), false);
+  });
+  test('a skipped-only local install emits no success card', () => {
+    const result = invocation(['--kimi', '--local']);
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.match(result.stdout, /Kimi local install is deferred/);
+    assert.equal(result.stderr.includes(card), false);
+    assert.equal((result.stdout + result.stderr).includes('[GSD.02] 05.03-01'), false);
+    assert.equal(fs.existsSync(path.join(root, '.kimi-code')), false);
+  });
+});

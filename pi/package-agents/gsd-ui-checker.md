@@ -6,6 +6,12 @@ tools: read, bash, find, grep
 ---
 
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `__GSD_PI_ENGINE_ROOT__/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are a GSD UI checker. Verify that UI-SPEC.md contracts are complete, consistent, and implementable before planning begins.
 
@@ -300,7 +306,7 @@ fix_hint: "Enumerate the design system from the installed package and record the
 ## Output Format
 
 ```
-UI-SPEC Review — Phase {N}
+UI-SPEC Review — {phase_display}
 
 Dimension 1 — Copywriting:     {PASS / FLAG / BLOCK}
 Dimension 2 — Visuals:         {PASS / FLAG / BLOCK}

@@ -46,6 +46,7 @@ const {
 } = require('../bin/install.js');
 
 const { getDirName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+const { phaseIdConventionBlock } = require('../gsd-core/bin/lib/phase-id-card.cjs');
 const {
   buildClineRulesBody,
   buildClinePreToolUseHook,
@@ -224,7 +225,16 @@ describe('Cline install (local)', () => {
           // Converter source contains literal Claude source-path templates used before
           // runtime-specific install rewrites; this test is only for deployed Cline payload leaks.
           if (entry.name === 'runtime-artifact-conversion.cjs') continue;
-          const content = fs.readFileSync(fullPath, 'utf8');
+          let content = fs.readFileSync(fullPath, 'utf8');
+          if (entry.name === 'phase-id-card.cjs') {
+            // This pure factory emits source Markdown for build-time conversion;
+            // its one canonical source pointer is not a deployed Read target.
+            const sourcePointer = '~/.claude/gsd-core/references/phase-id-convention.md';
+            const producer = require(fullPath);
+            assert.equal(producer.phaseIdConventionBlock(), phaseIdConventionBlock());
+            assert.equal(content.split(sourcePointer).length - 1, 1, 'only the canonical factory template is allowed');
+            content = content.replace(sourcePointer, '<canonical-source-reference>');
+          }
           // Check for GSD install paths that should have been substituted.
           // profile-pipeline.cjs intentionally references ~/.claude/projects (Claude Code
           // session data) as a runtime feature — that is not a leaked install path.

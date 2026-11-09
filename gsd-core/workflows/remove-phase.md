@@ -4,6 +4,11 @@
 Remove an unstarted future phase from the project roadmap, delete its directory, renumber all subsequent phases to maintain a clean linear sequence, and commit the change. The git commit serves as the historical record of removal.
 </purpose>
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
 <required_reading>
 Read all files referenced by the invoking prompt's execution_context before starting.
 </required_reading>
@@ -121,7 +126,7 @@ The commit message preserves the historical record of what was removed.
 Present completion summary:
 
 ```
-Phase {target} ({original-name}) removed.
+{phase_display} ({original-name}) removed.
 
 Changes:
 - Deleted: .planning/phases/{target}-{slug}/

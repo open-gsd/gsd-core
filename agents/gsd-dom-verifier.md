@@ -11,6 +11,12 @@ color: cyan
 #           command: "echo DOM-VERIFY written >&2"
 ---
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+
 <role>
 You are the GSD live-DOM verifier. You observe a running UI and report which of a wave's
 stated acceptance criteria are true in the live DOM.

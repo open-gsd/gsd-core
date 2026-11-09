@@ -2,6 +2,15 @@
 
 Template for `.planning/ROADMAP.md`.
 
+<!-- PHASE-ID-CONVENTION:START -->
+Resolve phase_id_convention independently of phase_naming. Use returned paths; never derive them from display labels.
+Use CLI display_id when present; otherwise use reference grammar. Before emitting identities, Read `~/.claude/gsd-core/references/phase-id-convention.md`.
+<!-- PHASE-ID-CONVENTION:END -->
+
+Copy only the fenced artifact body. Convention guidance is instruction text and must not appear in the artifact.
+
+For Progress cells, `phase_table_id` is the CLI `phase_number` with only the configured project-code prefix removed. Keep its numeric milestone/phase spelling; never substitute `display_id` in that machine-readable column. Sequential examples retain bare phase numbers.
+
 ## Initial Roadmap (v1.0 Greenfield)
 
 ```markdown
@@ -19,14 +28,14 @@ Template for `.planning/ROADMAP.md`.
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: [Name]** - [One-line description]
-- [ ] **Phase 2: [Name]** - [One-line description]
-- [ ] **Phase 3: [Name]** - [One-line description]
-- [ ] **Phase 4: [Name]** - [One-line description]
+- [ ] **{phase_display}: [Name]** - [One-line description]
+- [ ] **{phase_display}: [Name]** - [One-line description]
+- [ ] **{phase_display}: [Name]** - [One-line description]
+- [ ] **{phase_display}: [Name]** - [One-line description]
 
 ## Phase Details
 
-### Phase 1: [Name]
+### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
 **Depends on**: Nothing (first phase)
 **Requirements**: [REQ-01, REQ-02, REQ-03]  <!-- brackets optional, parser handles both formats -->
@@ -37,13 +46,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: [Number of plans, e.g., "3 plans" or "TBD"]
 
 Plans:
-- [ ] 01-01: [Brief description of first plan]
-- [ ] 01-02: [Brief description of second plan]
-- [ ] 01-03: [Brief description of third plan]
+- [ ] {padded_phase}-{plan_padded}: [Brief description of first plan]
+- [ ] {padded_phase}-{plan_padded}: [Brief description of second plan]
+- [ ] {padded_phase}-{plan_padded}: [Brief description of third plan]
 
-### Phase 2: [Name]
+### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 1
+**Depends on**: {dependency_phase_display}
 **Requirements**: [REQ-04, REQ-05]
 **Success Criteria** (what must be TRUE):
   1. [Observable behavior from user perspective]
@@ -51,22 +60,22 @@ Plans:
 **Plans**: [Number of plans]
 
 Plans:
-- [ ] 02-01: [Brief description]
-- [ ] 02-02: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
-### Phase 2.1: Critical Fix (INSERTED)
+### {phase_display}: Critical Fix (INSERTED)
 **Goal**: [Urgent work inserted between phases]
-**Depends on**: Phase 2
+**Depends on**: {dependency_phase_display}
 **Success Criteria** (what must be TRUE):
   1. [What the fix achieves]
 **Plans**: 1 plan
 
 Plans:
-- [ ] 02.1-01: [Description]
+- [ ] {padded_phase}-{plan_padded}: [Description]
 
-### Phase 3: [Name]
+### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 2
+**Depends on**: {dependency_phase_display}
 **Requirements**: [REQ-06, REQ-07, REQ-08]
 **Success Criteria** (what must be TRUE):
   1. [Observable behavior from user perspective]
@@ -75,12 +84,12 @@ Plans:
 **Plans**: [Number of plans]
 
 Plans:
-- [ ] 03-01: [Brief description]
-- [ ] 03-02: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
-### Phase 4: [Name]
+### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 3
+**Depends on**: {dependency_phase_display}
 **Requirements**: [REQ-09, REQ-10]
 **Success Criteria** (what must be TRUE):
   1. [Observable behavior from user perspective]
@@ -88,7 +97,7 @@ Plans:
 **Plans**: [Number of plans]
 
 Plans:
-- [ ] 04-01: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
 ## Progress
 
@@ -97,10 +106,10 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. [Name] | 0/3 | Not started | - |
-| 2. [Name] | 0/2 | Not started | - |
-| 3. [Name] | 0/2 | Not started | - |
-| 4. [Name] | 0/1 | Not started | - |
+| {phase_table_id}. [Name] | 0/3 | Not started | - |
+| {phase_table_id}. [Name] | 0/2 | Not started | - |
+| {phase_table_id}. [Name] | 0/2 | Not started | - |
+| {phase_table_id}. [Name] | 0/1 | Not started | - |
 ```
 
 <guidelines>
@@ -108,7 +117,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 - Phase count depends on granularity setting (coarse: 3-5, standard: 5-8, fine: 8-12)
 - Each phase delivers something coherent
 - Phases can have 1+ plans (split if >3 tasks or multiple subsystems)
-- Plans use naming: {phase}-{plan}-PLAN.md (e.g., 01-02-PLAN.md)
+- Use the resolved {plan_path}; sequential example: 01-02-PLAN.md
 - No time estimates (this isn't enterprise PM)
 - Progress table updated by execute workflow
 - Plan count can be "TBD" initially, refined during planning
@@ -123,7 +132,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 **After milestones ship:**
 - Collapse completed milestones in `<details>` tags
 - Add new milestone sections for upcoming work
-- Keep continuous phase numbering (never restart at 01)
+- Preserve resolved phase order within each milestone
 </guidelines>
 
 <status_values>
@@ -142,44 +151,44 @@ After completing first milestone, reorganize with milestone groupings:
 
 ## Milestones
 
-- ✅ **v1.0 MVP** - Phases 1-4 (shipped YYYY-MM-DD)
-- 🚧 **v1.1 [Name]** - Phases 5-6 (in progress)
-- 📋 **v2.0 [Name]** - Phases 7-10 (planned)
+- ✅ **{shipped_milestone_display} MVP** - Phases 1-4 (shipped YYYY-MM-DD)
+- 🚧 **{active_milestone_display} [Name]** - Phases 5-6 (in progress)
+- 📋 **{planned_milestone_display} [Name]** - Phases 7-10 (planned)
 
 ## Phases
 
 <details>
-<summary>✅ v1.0 MVP (Phases 1-4) - SHIPPED YYYY-MM-DD</summary>
+<summary>✅ {shipped_milestone_display} MVP (Phases 1-4) - SHIPPED YYYY-MM-DD</summary>
 
-### Phase 1: [Name]
+### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
 **Plans**: 3 plans
 
 Plans:
-- [x] 01-01: [Brief description]
-- [x] 01-02: [Brief description]
-- [x] 01-03: [Brief description]
+- [x] {padded_phase}-{plan_padded}: [Brief description]
+- [x] {padded_phase}-{plan_padded}: [Brief description]
+- [x] {padded_phase}-{plan_padded}: [Brief description]
 
 [... remaining v1.0 phases ...]
 
 </details>
 
-### 🚧 v1.1 [Name] (In Progress)
+## {active_milestone_display} [Name] 🚧 (In Progress)
 
 **Milestone Goal:** [What v1.1 delivers]
 
-#### Phase 5: [Name]
+#### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 4
+**Depends on**: {dependency_phase_display}
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: [Brief description]
-- [ ] 05-02: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
 [... remaining v1.1 phases ...]
 
-### 📋 v2.0 [Name] (Planned)
+## {planned_milestone_display} [Name] 📋 (Planned)
 
 **Milestone Goal:** [What v2.0 delivers]
 
@@ -189,14 +198,14 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Foundation | v1.0 | 3/3 | Complete | YYYY-MM-DD |
-| 2. Features | v1.0 | 2/2 | Complete | YYYY-MM-DD |
-| 5. Security | v1.1 | 0/2 | Not started | - |
+| {phase_table_id}. Foundation | v1.0 | 3/3 | Complete | YYYY-MM-DD |
+| {phase_table_id}. Features | v1.0 | 2/2 | Complete | YYYY-MM-DD |
+| {phase_table_id}. Security | v1.1 | 0/2 | Not started | - |
 ```
 
 **Notes:**
 - Milestone emoji: ✅ shipped, 🚧 in progress, 📋 planned
 - Completed milestones collapsed in `<details>` for readability
 - Current/future milestones expanded
-- Continuous phase numbering (01-99)
+- Configured phase identifiers and order
 - Progress table includes milestone column
