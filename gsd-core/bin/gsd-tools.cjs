@@ -4943,7 +4943,7 @@ const HOST_COMMAND_ROUTERS = {
         // Only a workstream init resolves (the directory its config loader reads): a --ws naming none adds no guard baseline.
         if (flagged && fs.statSync(planningDir(root, ws.ws), { throwIfNoEntry: false })?.isDirectory() === true) {
           if (!store.recordInitWorkstream(root, process.env.CLAUDE_CODE_SESSION_ID, ws.ws, now)) {
-            process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: no CLAUDE_CODE_SESSION_ID\n`);
+            process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard\n`);
           }
         } else {
           store.pruneInitWorkstreams(root, now);
