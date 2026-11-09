@@ -1637,8 +1637,8 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     }
   });
 
-  test('a carry keeps the newest 8 entries: 7, 8 and 9 records', () => {
-    for (const n of [7, 8, 9]) {
+  test('a carry keeps the newest E entries: E - 1, E and E + 1 records', () => {
+    for (const n of [E - 1, E, E + 1]) {
       createSessionScopedPointerAdapter(base, `${PREFIX}s1`).clear();
       for (let i = 0; i < n; i++) recordInitWorkstream(base, 's1', `w${i}`, T + i);
       const all = Array.from({ length: n }, (_, i) => `w${i}`);
