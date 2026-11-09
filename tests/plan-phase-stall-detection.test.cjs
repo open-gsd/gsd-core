@@ -1525,15 +1525,6 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(fs.existsSync(absent), false, 'the dangling target must not be created');
   });
 
-  test('a lost $TS falls back to the dispatch epoch stamped in the receipt name, so the threshold stays reachable', (t) => {
-    const f = fixture(t);
-    const checker = watchCallOf(sectionOf(readPlanPhase(), CHECKER_SECTION));
-    const stale = path.join(f.dir, `checker.${NOW - 11 * 60}.AbCdEfGh`);
-    assert.equal(watch('', stale, f.noPlans, checker.markers), 'stalled');
-    const fresh = path.join(f.dir, `checker.${NOW}.AbCdEfGh`);
-    assert.equal(watch('', fresh, f.noPlans, checker.markers), 'waiting');
-  });
-
   test('a receipt-routed ## ISSUES FOUND with no issue list fails closed (never counted as 0 issues)', () => {
     const step11 = sectionOf(readPlanPhase(), ['## 11. Handle Checker Return', '## 11a.']);
     assert.match(step11, /## ISSUES FOUND[^\n]*11a/, 'a missing issue list routes to 11a, never to a zero count');

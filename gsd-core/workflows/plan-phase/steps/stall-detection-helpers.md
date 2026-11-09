@@ -190,8 +190,8 @@ gsd_stall_should_recover() {
 # (with a `*` .gitignore); the file is NOT (a host Write tool may refuse to
 # overwrite a file the agent never read). Absolute because a subagent's cwd may
 # differ from the orchestrator's; `mktemp -u` keeps back-to-back dispatches in one
-# second distinct; EPOCH lets gsd_stall_watch recover the dispatch time if `$TS`
-# was lost between tool calls. SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
+# second distinct and EPOCH makes a leftover receipt's dispatch time readable.
+# SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
 # never leave the directory (the character lists are spelled out, not ranges, so
 # no locale can widen them). Fails closed (prints nothing, returns 1) on an empty
 # PHASE_DIR or one holding a quote, `$`, backtick, `<`, `>` or any control
@@ -310,12 +310,7 @@ gsd_return_marker() {
 gsd_stall_watch() {
   local dispatch_ts="$1" receipt="$2" artifact_glob="$3"; shift 3
   local markers=("$@")
-  # A lost `$TS` (shell state does not survive between tool calls) falls back to
-  # the EPOCH gsd_receipt_path stamped into the receipt name, then to "now".
-  if ! [[ "$dispatch_ts" =~ ^[0-9]+$ ]]; then
-    dispatch_ts="${receipt##*/}"; dispatch_ts="${dispatch_ts#*.}"; dispatch_ts="${dispatch_ts%%.*}"
-    [[ "$dispatch_ts" =~ ^[0-9]+$ ]] || dispatch_ts=$(date +%s)
-  fi
+  [[ "$dispatch_ts" =~ ^[0-9]+$ ]] || dispatch_ts=$(date +%s)
   sleep "$(( PLANNER_STALL_INTERVAL_MINUTES * 60 ))"
   local now elapsed marker_found artifact_fresh
   now=$(date +%s)
