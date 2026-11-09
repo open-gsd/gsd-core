@@ -210,7 +210,7 @@ Output: PostFeed and PostCard components wired to /api/feed.
 | **8 — 奈奎斯特合规性** | 当 `workflow.nyquist_validation` 已启用且 RESEARCH.md 存在时，每个任务有 `<automated>` 验证命令，连续 3 个任务的窗口内不缺少覆盖，且 VALIDATION.md 存在。 |
 | **9 — 跨计划数据契约** | 当计划共享数据管道时，其转换相互兼容——没有计划删除另一个计划需要原始形式的数据。 |
 | **10 — CLAUDE.md 合规性** | 计划遵守 `./CLAUDE.md` 中的项目特定约定、禁止模式、必需工具和安全要求。 |
-| **11 — 研究解决** | 当 RESEARCH.md 存在时，其 `## Open Questions` 部分在规划继续之前标记为 `(RESOLVED)`。 |
+| **11 — 研究解决** | 当 RESEARCH.md 存在时，其中每个未决问题（无论位于哪个标题下）只引用该阶段 CONTEXT.md `<decisions>` 中、Claude's Discretion 之外的 `D-NN`，且其中一个回答了该问题。只有 discuss-phase，或记录用户回答的编排器，才会写入这样的 `D-NN`。研究员自己写下的解决标记，包括 `(RESOLVED)` 后缀，都不算解决。 |
 | **12 — 模式合规性** | 当 PATTERNS.md 存在时，任务为每个新建或修改的文件引用正确的类比模式。 |
 
 ---

@@ -210,7 +210,7 @@ Output: PostFeed and PostCard components wired to /api/feed.
 | **8 — Nyquist 준수** | `workflow.nyquist_validation`이 활성화되고 RESEARCH.md가 있는 경우, 모든 태스크에 `<automated>` 검증 명령이 있고, 3개 태스크의 연속 구간이 커버리지 없이 없으며, VALIDATION.md가 있는지. |
 | **9 — 크로스 플랜 데이터 계약** | 플랜이 데이터 파이프라인을 공유하는 경우, 변환이 호환 가능한지 — 어떤 플랜도 다른 플랜이 원본 형식으로 필요한 데이터를 제거하지 않는지. |
 | **10 — CLAUDE.md 준수** | 플랜이 `./CLAUDE.md`의 프로젝트별 규칙, 금지된 패턴, 필수 도구, 보안 요구사항을 존중하는지. |
-| **11 — 리서치 해결** | RESEARCH.md가 있는 경우, 플래닝이 진행되기 전에 `## Open Questions` 섹션이 `(RESOLVED)`로 표시되어 있는지. |
+| **11 — 리서치 해결** | RESEARCH.md가 있는 경우, 어떤 제목 아래에 있든 그 안의 모든 미결 질문이 페이즈 CONTEXT.md `<decisions>` 안(Claude's Discretion 밖)의 `D-NN`만 인용하고, 그중 하나가 질문에 답하는지. 그런 `D-NN`은 discuss-phase 또는 사용자의 답을 기록하는 오케스트레이터만 쓴다. 리서처가 직접 쓴 해결 표시는 `(RESOLVED)` 접미사를 포함해 해결이 아니다. |
 | **12 — 패턴 준수** | PATTERNS.md가 있는 경우, 태스크가 각 새로운 또는 수정된 파일에 대해 올바른 유사 패턴을 참조하는지. |
 
 ---

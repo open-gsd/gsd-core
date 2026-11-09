@@ -210,7 +210,7 @@ Output: PostFeed and PostCard components wired to /api/feed.
 | **8 — Nyquist Compliance** | `workflow.nyquist_validation` が有効で RESEARCH.md が存在する場合、すべてのタスクに `<automated>` 検証コマンドがあり、連続する3タスクのウィンドウにカバレッジがなく、VALIDATION.md が存在する。 |
 | **9 — Cross-Plan Data Contracts** | プランがデータパイプラインを共有する場合、それらの変換が互換性を持つ — 別のプランが元の形式で必要とするデータをプランが削除しない。 |
 | **10 — CLAUDE.md Compliance** | プランが `./CLAUDE.md` のプロジェクト固有の規則、禁止パターン、必須ツール、セキュリティ要件を遵守している。 |
-| **11 — Research Resolution** | RESEARCH.md が存在する場合、プランニングを進める前にその `## Open Questions` セクションが `(RESOLVED)` とマークされている。 |
+| **11 — Research Resolution** | RESEARCH.md が存在する場合、見出しを問わずその中の未解決の質問はすべて、フェーズの CONTEXT.md の `<decisions>` 内（Claude's Discretion の外）にある `D-NN` だけを引用し、そのうち1つが質問に答えている。そうした `D-NN` を書くのは discuss-phase か、ユーザーの回答を記録するオーケストレーターだけである。リサーチャー自身が書いた解決の印は、`(RESOLVED)` 接尾辞を含め、解決にならない。 |
 | **12 — Pattern Compliance** | PATTERNS.md が存在する場合、タスクが新規または変更される各ファイルに対して正しいアナログパターンを参照している。 |
 
 ---
