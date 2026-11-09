@@ -14,7 +14,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const path = require('node:path');
 const fc = require('fast-check');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -983,11 +983,11 @@ describe('api-coverage CLI — STDIN + exit codes', () => {
   const CLI = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'api-coverage.cjs');
 
   function runCli(stdin) {
-    const r = spawnSync(process.execPath, [CLI, '--json'], {
+    const r = runNode([CLI, '--json'], {
       input: stdin,
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr };
   }
 

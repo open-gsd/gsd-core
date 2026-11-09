@@ -534,30 +534,24 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const GSD_TOOLS = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function run(args, cwd) {
-  try {
-    return {
-      ok: true,
-      stdout: execFileSync(process.execPath, [GSD_TOOLS, ...args], {
-        cwd,
-        encoding: 'utf-8',
-        timeout: PROBE_TIMEOUT_MS,
-      }),
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      stdout: (e.stdout && e.stdout.toString()) || '',
-      stderr: (e.stderr && e.stderr.toString()) || '',
-      code: e.status,
-    };
+  const r = runNode([GSD_TOOLS, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
+  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+    return { ok: true, stdout: r.stdout };
   }
+  return {
+    ok: false,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    // A timeout or spawn failure has no exit code; report the outcome summary instead.
+    code: r.outcome === OUTCOME.EXITED ? r.exitCode : r.summary,
+  };
 }
 
 function makeFixture() {

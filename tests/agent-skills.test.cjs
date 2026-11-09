@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
@@ -2147,8 +2147,13 @@ describe('regressions: workflows forward the started workstream to agent-skills 
 
   // Linux/Windows benches may have no zsh, and a Windows `bash` can resolve to a
   // WSL shim without node: probe for the exact capabilities the scripts need.
-  const shellUsable = (sh) => process.platform !== 'win32' &&
-    spawnSync(sh, ['-c', 'command -v sed >/dev/null && command -v node >/dev/null'], { timeout: PROBE_TIMEOUT_MS }).status === 0;
+  const shellUsable = (sh) => {
+    if (process.platform === 'win32') return false;
+    const probe = runHook('-c', ['command -v sed >/dev/null && command -v node >/dev/null'], {
+      interpreter: sh, timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    return probe.outcome === OUTCOME.EXITED && probe.exitCode === 0;
+  };
   const shells = ['bash', 'zsh'].filter(shellUsable);
   test('bash is available to execute the flag-parse tests (zsh runs additionally where installed)', (t) => {
     if (!shells.includes('bash')) t.skip('no usable bash on this platform');
@@ -2159,16 +2164,18 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     const { validateWorkstreamName } = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
     for (const name of ['a', 'ws-a', 'backend_api', 'v1.2', 'A9']) {
       assert.ok(validateWorkstreamName(name), `${name} is valid under the policy`);
-      const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+      const r = runHook('-c', [`${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
+        interpreter: 'bash', env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, timeoutMs: PROBE_TIMEOUT_MS,
       });
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, `--ws ${name}`);
     }
     for (const name of ['-x', '.x', '_x']) {
       assert.ok(!validateWorkstreamName(name), `${name} is invalid under the policy`);
-      const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+      const r = runHook('-c', [`${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
+        interpreter: 'bash', env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, timeoutMs: PROBE_TIMEOUT_MS,
       });
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, '', `${name} must not be captured`);
     }
   });
@@ -2180,12 +2187,12 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     describe(`flag parse and expansion under ${sh}`, () => {
       function expand(argumentsValue) {
         const script = `${CANONICAL_PARSE}\nset -- ${FLAG_EXPANSION}\nprintf '%s|%s' "$#" "$*"`;
-        const r = spawnSync(sh, ['-c', script], {
+        const r = runHook('-c', [script], {
+          interpreter: sh,
           env: { ...process.env, GSD_ARGS: argumentsValue },
-          encoding: 'utf-8',
-          timeout: PROBE_TIMEOUT_MS,
+          timeoutMs: PROBE_TIMEOUT_MS,
         });
-        assert.strictEqual(r.status, 0, r.stderr);
+        assertSeamExit(assert, r, 0, r.stderr);
         return r.stdout;
       }
 
@@ -2236,13 +2243,13 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     }
 
     function exec(sh, { script, argumentsValue }, printVars) {
-      const r = spawnSync(sh, ['-c', `${script}\n${printVars}`], {
+      const r = runHook('-c', [`${script}\n${printVars}`], {
+        interpreter: sh,
         cwd: proj,
         env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
-        encoding: 'utf-8',
-        timeout: PROBE_TIMEOUT_MS * 4,
+        timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
-      assert.strictEqual(r.status, 0, `${sh} failed: ${r.stderr}`);
+      assertSeamExit(assert, r, 0, `${sh} failed: ${r.stderr}`);
       return r.stdout;
     }
 
@@ -2277,12 +2284,13 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     test('--ws none is forwarded and fails loudly (reserved name), never resolving workstreams/none', (t) => {
       if (!shells.includes('bash')) return t.skip('no usable bash on this platform');
       const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
-      const r = spawnSync('bash', ['-c', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
+      const r = runHook('-c', [`${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
+        interpreter: 'bash',
         cwd: proj,
         env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
-        encoding: 'utf-8',
-        timeout: PROBE_TIMEOUT_MS * 4,
+        timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, '');
       assert.match(r.stderr, /Workstream name 'none' is reserved/);
       assert.strictEqual(fs.existsSync(path.join(proj, '.planning', 'workstreams', 'none')), false);
