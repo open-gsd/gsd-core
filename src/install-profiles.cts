@@ -40,7 +40,9 @@ const {
   deriveAgentName: _deriveAgentName,
   applyAgentFrontmatterExtensions: _applyAgentFrontmatterExtensions,
   appendAgentTools: _appendAgentTools,
+  _shieldAgentConverterPrefix,
 } = conversionModule as {
+  _shieldAgentConverterPrefix: (content: string, runtime: string, pathPrefix: string, convert: (shielded: string) => string) => string;
   applyAgentPathRewrites: (content: string, runtime: string, pathPrefix: string) => string;
   processAttribution: (content: string, attribution: string | null | undefined) => string;
   normalizeAgentBodyForRuntime: (content: string, runtime: string, cmdNames: string[]) => string;
@@ -994,7 +996,7 @@ interface AgentCtx {
 function stageAgentsForRuntimeWithConverter(
   srcAgentsDir: string,
   resolvedProfile: ResolvedProfile,
-  converter: (content: string, isGlobal?: boolean, meta?: { agentName: string }) => string,
+  converter: (content: string, isGlobal?: boolean, meta?: { agentName: string; pathPrefix?: string }) => string,
   isGlobal = false,
   agentCtx?: AgentCtx,
   excludeSuffixes?: readonly string[],
@@ -1061,7 +1063,9 @@ function stageAgentsForRuntimeWithConverter(
         // Step 3: validated canonical grants, before host conversion.
         content = _appendAgentTools(content, grants);
         // Step 4: converter (runtime-specific frontmatter/body transform)
-        content = converter(content, isGlobal, { agentName });
+        // #5715: the converter runs after the prefix pass above; shield the emitted prefix
+        // from it, except where the runtime declares no path rewrite (nothing was emitted).
+        content = _shieldAgentConverterPrefix(content, agentCtx.runtime, agentCtx.pathPrefix, (shielded) => converter(shielded, isGlobal, { agentName, pathPrefix: agentCtx.pathPrefix }));
         // Step 5: frontmatter extensions (effort/disallowedTools; no-op unless
         // the runtime declares hostBehaviors.agentFrontmatterExtensions)
         content = _applyAgentFrontmatterExtensions(content, { runtime: agentCtx.runtime, agentName, targetDir: agentCtx.targetDir });

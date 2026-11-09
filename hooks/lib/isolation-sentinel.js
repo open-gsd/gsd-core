@@ -29,6 +29,12 @@
 // of the same repo are separate directories on disk, so each gets its own
 // sentinel with no cross-worktree collision, no lock file needed.
 //
+// #5682: the single slot above is last-writer-wins, so two orchestrators sharing one checkout
+// overwrote each other's decision and the guard discarded the foreign record. The writer now ALSO
+// records each plan-scoped decision at `<cwd>/.gsd/dispatch-isolation/<phase>--<plan>.json`
+// (same payload, same cwd-derived location and forgery posture), and `readSentinel` consults the
+// record keyed by the dispatch's own phase/plan first, falling back to the single slot.
+//
 // #3045 SECURITY F3 (LOW, accepted risk — documented, not redesigned for):
 // the sentinel lives at a fixed, predictable, gitignored path inside the
 // PRIMARY checkout. An agent already running inside a legitimately isolated
@@ -63,6 +69,35 @@ const { parseDispatchIdentity } = require('./dispatch-identity.js');
 const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
 
 const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.json');
+
+// #5682: per-dispatch records, one file per `<phase>--<plan>` under this directory.
+const KEYED_SENTINEL_DIR = path.join('.gsd', 'dispatch-isolation');
+const SAFE_SENTINEL_KEY_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+// #5758: a real sentinel payload is under 300 bytes. Anything larger is not one, and the cap bounds
+// the read so a hostile or runaway record cannot be pulled into the hook.
+const SENTINEL_MAX_BYTES = 4096;
+
+/** #5682: strict allow-list for a phase/plan string that becomes a path segment. */
+function isSafeSentinelKey(s) {
+  return typeof s === 'string' && SAFE_SENTINEL_KEY_RE.test(s) && s !== '.' && s !== '..';
+}
+
+/** #5682: keyed record path for a dispatch, or null unless BOTH phase and plan are safe keys. */
+function keyedSentinelPath(root, phase, plan) {
+  if (!isSafeSentinelKey(phase) || !isSafeSentinelKey(plan)) return null;
+  return path.join(root, KEYED_SENTINEL_DIR, `${phase}--${plan}.json`);
+}
+
+/**
+ * #5682: phase-level keyed record path (`<phase>.json`, written when a decision carries no plan),
+ * or null unless the phase is a safe key. Two orchestrators recording plan-less decisions for
+ * different phases each keep their own file.
+ */
+function phaseSentinelPath(root, phase) {
+  if (!isSafeSentinelKey(phase)) return null;
+  return path.join(root, KEYED_SENTINEL_DIR, `${phase}.json`);
+}
 
 // #3045 SECURITY F2 fix: how long a written sentinel is trusted as "this
 // dispatch's decision" before a reader falls back to the conservative
@@ -174,14 +209,129 @@ function resolveSentinelRoot(cwd) {
  * per the repo's clock-seam convention, so staleness is testable without
  * asserting on wall-clock time.
  */
-function readSentinel(cwd, { clock = Date } = {}) {
+function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
   const root = resolveSentinelRoot(cwd);
-  let raw;
-  try {
-    raw = fs.readFileSync(sentinelPath(root), 'utf-8');
-  } catch {
-    return { present: false };
+
+  // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
+  // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
+  // well-formed and its contents agree with its own filename key; the legacy slot only when it
+  // applies to this dispatch. Among FRESH candidates the latest `writtenAt` wins, so a newer
+  // phase-level decision is not shadowed by an older plan-scoped one (and vice versa).
+  const gsdDir = path.join(root, '.gsd');
+  const keyedDirs = [gsdDir, path.join(root, KEYED_SENTINEL_DIR)];
+  const keyedCandidates = [];
+  if (dispatchIds) {
+    const planFile = keyedSentinelPath(root, dispatchIds.phase, dispatchIds.plan);
+    if (planFile) {
+      const c = parseSentinelFile(planFile, clock, keyedDirs);
+      if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
+    }
+    const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
+    if (phaseFile) {
+      const c = parseSentinelFile(phaseFile, clock, keyedDirs);
+      if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
+    }
   }
+
+  const legacy = parseSentinelFile(sentinelPath(root), clock, [gsdDir]);
+  const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+
+  const fresh = keyedCandidates.filter((c) => !c.stale);
+  if (legacyApplies && !legacy.stale) fresh.push(legacy);
+  if (fresh.length > 0) return latestWritten(fresh);
+
+  // Nothing fresh: a stale keyed record still feeds the aged-none path; otherwise the legacy
+  // slot is returned exactly as before.
+  if (keyedCandidates.length > 0) return latestWritten(keyedCandidates);
+  return legacy;
+}
+
+/** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
+function latestWritten(candidates) {
+  return candidates.reduce((best, c) => (c.writtenAt > best.writtenAt ? c : best));
+}
+
+/**
+ * lstat of `dir` when it is a real directory, not a link (lstat does not follow); otherwise null.
+ * Never throws.
+ */
+function lstatRealDirectory(dir) {
+  try {
+    // bigint: an NTFS file id is 64 bits and a JS number keeps 53, so ids are compared exactly.
+    const st = fs.lstatSync(dir, { bigint: true });
+    return st.isDirectory() && !st.isSymbolicLink() ? st : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Same filesystem object: equal dev and ino. A zero ino (some Windows volumes) cannot be compared. */
+function sameObject(a, b) {
+  return a.ino === 0n || b.ino === 0n || (a.dev === b.dev && a.ino === b.ino);
+}
+
+/**
+ * #5758: read one sentinel file as a bounded, non-blocking, link-refusing read of a regular file.
+ * Returns the text, or null for EVERY refusal (missing, link, FIFO, device, directory, oversized,
+ * short read, a hard link to another file, a parent directory that is a link), so a hostile record
+ * is exactly as absent as a missing one. `readFileSync` would block forever on a FIFO with no
+ * writer, follow a link to an endless device or to a file outside the project, and read without
+ * bound. The writers only ever produce a fresh temp file renamed into place (link count 1). A
+ * sentinel renamed over between the open and the fstat reads as nlink 0 and is refused for that one
+ * dispatch, which is the conservative no-sentinel decision.
+ *
+ * Parent directories are lstat-checked before the open and re-checked (same dev/ino, still a real
+ * directory) after it, and the opened file must be the object the pre-open lstat saw. Node has no
+ * openat, so this NARROWS the window for a parent swapped to a link between check and open; it does
+ * not close it.
+ */
+function readSentinelText(file, parentDirs) {
+  const parents = [];
+  for (const dir of parentDirs) {
+    const st = lstatRealDirectory(dir);
+    if (!st) return null;
+    parents.push({ dir, st });
+  }
+  let fd;
+  try {
+    const before = fs.lstatSync(file, { bigint: true });
+    if (!before.isFile() || before.size > BigInt(SENTINEL_MAX_BYTES)) return null;
+    // O_NONBLOCK makes an open of a FIFO swapped in after the lstat return at once; O_NOFOLLOW
+    // refuses a link swapped in. Windows lacks both flags (`|| 0`); lstat/fstat still guard.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd, { bigint: true });
+    if (!st.isFile() || st.nlink !== 1n || st.size > BigInt(SENTINEL_MAX_BYTES)) return null;
+    if (!sameObject(before, st)) return null;
+    const size = Number(st.size);
+    for (const p of parents) {
+      const after = lstatRealDirectory(p.dir);
+      if (!after || !sameObject(p.st, after)) return null;
+    }
+    const buf = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const n = fs.readSync(fd, buf, offset, size - offset, offset);
+      if (n === 0) return null;
+      offset += n;
+    }
+    return buf.toString('utf-8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* nothing left to release */ }
+    }
+  }
+}
+
+/**
+ * Parse and validate one sentinel file. Never throws. Shape: see `readSentinel`.
+ * `parentDirs` are the directories between the project root and the file that must be real
+ * directories (not links); a refusal anywhere reads as `{ present: false }`.
+ */
+function parseSentinelFile(file, clock, parentDirs = []) {
+  const raw = readSentinelText(file, parentDirs);
+  if (raw === null) return { present: false };
 
   let parsed;
   try {
@@ -348,7 +498,12 @@ function buildSentinelDiscard(sentinel, dispatchIds) {
 module.exports = {
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
+  KEYED_SENTINEL_DIR,
+  isSafeSentinelKey,
+  keyedSentinelPath,
+  phaseSentinelPath,
   SENTINEL_STALE_MS,
+  SENTINEL_MAX_BYTES,
   AGED_NONE_MAX_MS,
   sentinelPath,
   resolveSentinelRoot,
