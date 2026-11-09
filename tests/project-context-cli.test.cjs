@@ -15,10 +15,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 const { runGsdTools, cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const GIT_CFG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6043-gitcfg-'));
 const EMPTY_GITCONFIG = path.join(GIT_CFG_DIR, 'gitconfig');
@@ -36,12 +36,10 @@ const GIT_ENV = {
 };
 
 function git(args, cwd) {
-  return execFileSync('git', args, {
+  return gitOrThrow(args, {
     cwd,
     env: { ...process.env, ...GIT_ENV },
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: GIT_TIMEOUT_MS,
+    timeoutMs: GIT_TIMEOUT_MS,
   }).trim();
 }
 
@@ -50,7 +48,7 @@ function head(dir) {
 }
 
 function mkTmp(t) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6043-cli-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6043-cli-')));
   t.after(() => cleanup(dir));
   return dir;
 }
@@ -75,7 +73,7 @@ function mkRepo(dir, { planning = false, gitignore = '' } = {}) {
 
 function addWorktree(main, wtDir, branch) {
   git(['worktree', 'add', '-q', '-b', branch, wtDir], main);
-  return fs.realpathSync(wtDir);
+  return fs.realpathSync.native(wtDir);
 }
 
 function run(args, cwd, tmp) {
@@ -109,7 +107,7 @@ function assertRefused(res, reason) {
 /** Main checkout whose .planning exists ONLY in main (untracked), plus a linked worktree without it. */
 function mkMainOnlyPlanning(t, { gitignore = '' } = {}) {
   const tmp = mkTmp(t);
-  const main = fs.realpathSync(mkRepo(path.join(tmp, 'main'), { gitignore }));
+  const main = fs.realpathSync.native(mkRepo(path.join(tmp, 'main'), { gitignore }));
   const wt = addWorktree(main, path.join(tmp, 'wt'), 'feat-a');
   write(path.join(main, '.planning', 'config.json'), COMMIT_DOCS_ON);
   write(path.join(main, '.planning', 'STATE.md'), '# state\n');
@@ -121,7 +119,7 @@ function mkMainOnlyPlanning(t, { gitignore = '' } = {}) {
 /** Main checkout with tracked .planning, plus a linked worktree that has its own copy. */
 function mkTrackedPlanning(t) {
   const tmp = mkTmp(t);
-  const main = fs.realpathSync(mkRepo(path.join(tmp, 'main'), { planning: true }));
+  const main = fs.realpathSync.native(mkRepo(path.join(tmp, 'main'), { planning: true }));
   const wt = addWorktree(main, path.join(tmp, 'wt'), 'feat-a');
   const sub = path.join(wt, 'src', 'deep');
   fs.mkdirSync(sub, { recursive: true });
@@ -223,7 +221,7 @@ describe('project-context CLI: commit refuses to write outside the worktree', ()
 
   test('commit: refused outside_worktree from a linked worktree inside a planning.sub_repos workspace (ADR-4908 §3)', (t) => {
     const tmp = mkTmp(t);
-    const main = fs.realpathSync(mkRepo(path.join(tmp, 'main-repo')));
+    const main = fs.realpathSync.native(mkRepo(path.join(tmp, 'main-repo')));
     const ws = path.join(tmp, 'workspace');
     write(path.join(ws, 'README.md'), '# workspace\n');
     git(['init', '-q', '-b', 'main'], ws);
@@ -253,7 +251,7 @@ describe('project-context CLI: commit refuses to write outside the worktree', ()
 
     function mkLinked(t) {
       const tmp = mkTmp(t);
-      const repo = fs.realpathSync(mkRepo(path.join(tmp, 'real', 'repo'), { planning: true }));
+      const repo = fs.realpathSync.native(mkRepo(path.join(tmp, 'real', 'repo'), { planning: true }));
       const link = path.join(tmp, 'link');
       fs.symlinkSync(path.join(tmp, 'real'), link, 'dir');
       write(path.join(repo, '.planning', 'STATE.md'), '# state\n');
@@ -296,7 +294,7 @@ describe('project-context CLI: commit refuses to write outside the worktree', ()
 describe('project-context CLI: workspace and verb', () => {
   test('project-context: workspace sub_repos worktree config-path (#4908 comment)', (t) => {
     const tmp = mkTmp(t);
-    const main = fs.realpathSync(mkRepo(path.join(tmp, 'main-repo')));
+    const main = fs.realpathSync.native(mkRepo(path.join(tmp, 'main-repo')));
     const ws = path.join(tmp, 'workspace');
     write(path.join(ws, '.planning', 'config.json'), JSON.stringify({ planning: { sub_repos: ['wt-a'] } }));
     const wt = addWorktree(main, path.join(ws, 'wt-a'), 'feat-ws');
@@ -306,8 +304,8 @@ describe('project-context CLI: workspace and verb', () => {
     const res = run(['config-path', '--raw'], sub, tmp);
     assert.equal(res.exitCode, 0, JSON.stringify(res));
     assert.equal(
-      fs.realpathSync(res.output.trim()),
-      fs.realpathSync(path.join(ws, '.planning', 'config.json')),
+      fs.realpathSync.native(res.output.trim()),
+      fs.realpathSync.native(path.join(ws, '.planning', 'config.json')),
       'config-path resolves to the workspace, not the main checkout',
     );
   });
@@ -318,7 +316,7 @@ describe('project-context CLI: workspace and verb', () => {
     assert.equal(res.exitCode, 0, JSON.stringify(res));
     const ctx = JSON.parse(res.output);
     assert.equal(ctx.projectRoot, wt);
-    assert.equal(ctx.planningRoot, fs.realpathSync(path.join(wt, '.planning')));
+    assert.equal(ctx.planningRoot, fs.realpathSync.native(path.join(wt, '.planning')));
     assert.equal(ctx.worktreeRoot, wt);
     assert.equal(ctx.repoRoot, main);
     assert.equal(ctx.gitCommonDir, path.join(main, '.git'));

@@ -16,10 +16,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const {
   resolveProjectContext,
@@ -43,23 +43,21 @@ const GIT_ENV = {
 };
 
 function git(args, cwd) {
-  return execFileSync('git', args, {
+  return gitOrThrow(args, {
     cwd,
     env: { ...process.env, ...GIT_ENV },
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: GIT_TIMEOUT_MS,
+    timeoutMs: GIT_TIMEOUT_MS,
   }).trim();
 }
 
 function mkTmp(t, prefix = 'gsd-6043-') {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   t.after(() => cleanup(dir));
   return dir;
 }
 
 function real(p) {
-  return fs.realpathSync(p);
+  return fs.realpathSync.native(p);
 }
 
 function write(file, body = '') {
@@ -80,7 +78,7 @@ function mkRepo(dir, { planning = false } = {}) {
 
 function addWorktree(main, wtDir, branch) {
   git(['worktree', 'add', '-q', '-b', branch, wtDir], main);
-  return fs.realpathSync(wtDir);
+  return fs.realpathSync.native(wtDir);
 }
 
 function subdir(root, depth) {
