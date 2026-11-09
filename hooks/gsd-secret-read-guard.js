@@ -1122,10 +1122,15 @@ function isNamedFd(word) {
   return false;
 }
 
+// What ends a raw word to bash: a blank (space or tab), a newline, or one of
+// `;&|(<>`. Not every `\s`: a carriage return is part of a word to bash, so in
+// `env -u\r{fd}>f` the word is `-u\r{fd}` and there is no named fd.
+const RAW_WORD_BREAK_RE = /[ \t\n;&|(<>]/;
+
 // Whether `name` is the whole raw word in front of `i`: the same characters,
 // with any backslash-newline (removed before bash reads a word; the backslash
 // itself unescaped) skipped, and starting the word (at the start, or after a
-// blank, `;`, `&`, `|`, `(`, `<` or `>`).
+// RAW_WORD_BREAK_RE character).
 function isRawWordBefore(str, i, name) {
   let k = i;
   let n = name.length;
@@ -1137,7 +1142,7 @@ function isRawWordBefore(str, i, name) {
     n--;
   }
   while (continuation()) k -= 2;
-  return k === 0 || /[\s;&|(<>]/.test(str[k - 1]);
+  return k === 0 || RAW_WORD_BREAK_RE.test(str[k - 1]);
 }
 
 // Whether a backslash-newline whose backslash is itself unescaped ends at `k`.
@@ -1163,7 +1168,7 @@ function isRawNameBefore(str, i, len) {
     first = str[--k];
   }
   return n === len && n > 0 && !/[0-9]/.test(first)
-    && (k === 0 || /[\s;&|(<>]/.test(str[k - 1]));
+    && (k === 0 || RAW_WORD_BREAK_RE.test(str[k - 1]));
 }
 
 // Index of the `)` closing the paren opened just before `i`, as bash's
