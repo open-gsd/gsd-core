@@ -67,11 +67,13 @@ const RUN_LANE_COMMON = ['run-dir', 'repo-root', 'selected'];
 export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // ─── resolve / config ──────────────────────────────────────────────────────
   'resolve-model': { positionals: 2 },
-  // Positional may sit before or after --granularity (hand loop), so no boundary walk.
+  // Positional may sit before or after --granularity (hand loop), so no boundary walk. Stays 'rest':
+  // the router takes an undeclared --flag as its positional instead of rejecting it.
   'resolve-granularity': { positionals: 'rest', valueFlags: ['granularity'] },
   // Positional agent type may interleave with the hand-parsed flags.
   'resolve-execution': {
-    positionals: 'rest',
+    positionals: 1,
+    freePositionals: true,
     valueFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
     eqFlags: ['attempt', 'effort', 'failure-class', 'fast-mode'],
     nonEmptyFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
@@ -98,7 +100,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     valueFlags: ['phase', 'plan', 'range'],
     requiredFlags: ['range'],
   },
-  // Message tokens are variadic and precede the first list flag.
+  // Message tokens are variadic and precede the first list flag. Stays 'rest': the router silently
+  // drops undeclared --flags from the message, so dispatch does not reject them.
   commit: {
     positionals: 'rest',
     booleanFlags: ['amend', 'no-verify'],
@@ -109,7 +112,7 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'commit-docs-guard.enable': { positionals: 2 },
   'commit-to-subrepo': { positionals: 2, listFlags: ['files'] },
   // The message slot is optional, so the boundary moves (routePrSubrepo: messagePresent ? 2 : 1).
-  'pr-subrepo': { positionals: 'rest', valueFlags: ['branch', 'repo'] },
+  'pr-subrepo': { positionals: 1, freePositionals: true, valueFlags: ['branch', 'repo'] },
   'verify-summary': { positionals: 2, valueFlags: ['check-count'] },
 
   // ─── template / frontmatter ────────────────────────────────────────────────
@@ -126,7 +129,7 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // ─── small readers ─────────────────────────────────────────────────────────
   'current-timestamp': { positionals: 2 },
   'runtime-identity': { positionals: 1 },
-  // The runtime is a bare token OR a flag, in either order.
+  // The runtime is a bare token OR a flag, in either order. Stays 'rest': the router ignores undeclared flags.
   'project-instruction-file': { positionals: 'rest', valueFlags: ['runtime'], eqFlags: ['runtime'] },
   'list-todos': { positionals: 2 },
   'list-seeds': { positionals: 2 },
@@ -277,7 +280,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     requiredFlags: ['provider'],
     booleanFlags: ['verified'],
   },
-  // Package names are the variadic positionals.
+  // Package names are the variadic positionals. Stays 'rest': the router validates --ecosystem before
+  // unknown flags, so an undeclared flag is not the first rejection.
   'package-legitimacy.check': {
     positionals: 'rest',
     valueFlags: ['ecosystem'],

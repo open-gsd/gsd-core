@@ -500,13 +500,14 @@
     {
       "verb": "pr-subrepo",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 1,
       "flags": {
         "branch": "value",
         "repo": "value"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "progress.bar",
@@ -664,7 +665,7 @@
     {
       "verb": "resolve-execution",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 1,
       "flags": {
         "attempt": "value",
         "effort": "value",
@@ -674,6 +675,7 @@
       },
       "required": [],
       "workstreamScoped": false,
+      "freePositionals": true,
       "eq": [
         "attempt",
         "effort",

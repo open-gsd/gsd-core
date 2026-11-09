@@ -120,6 +120,15 @@ export interface NamedArgSpec {
    * entirely for that call (documented exemption, e.g. `init quick`).
    */
   positionals: number | 'rest';
+  /**
+   * Order-free or variadic positional words past the boundary (commit message
+   * words, package names) are accepted instead of reported as stray
+   * positionals; flag-shaped tokens are still validated, so an undeclared flag
+   * is still rejected. Requires a numeric `positionals`. Extraction is
+   * unchanged: the words are not added to `data`. Reader: resolve-execution,
+   * pr-subrepo.
+   */
+  freePositionals?: true;
 }
 
 export type ParsedNamedArgs = Record<string, string | boolean | null | string[]>;
@@ -168,6 +177,12 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
     throw new TypeError(
       'parseNamedArgs: spec.positionals must be a non-negative integer or the literal "rest" ' +
         `— received ${JSON.stringify(positionals)}.`,
+    );
+  }
+  if (spec.freePositionals !== undefined && (spec.freePositionals !== true || positionals === 'rest')) {
+    throw new TypeError(
+      'parseNamedArgs: spec.freePositionals must be true and cannot be combined with positionals "rest" ' +
+        `— received freePositionals ${JSON.stringify(spec.freePositionals)} with positionals ${JSON.stringify(positionals)}.`,
     );
   }
   for (const kind of VALUE_SUBSET_KINDS) assertSubsetOfValueFlags(spec, kind);
@@ -437,7 +452,7 @@ function walkTokens(args: string[], spec: NamedArgSpec): NamedArgsResult | null 
       i += advance;
       continue;
     }
-    if (!inListRun) {
+    if (!inListRun && spec.freePositionals !== true) {
       return {
         ok: false,
         kind: 'InvalidArgs',
