@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
 import { isContainedIn, tryWithinRoot, PathAcceptance } from './security.cjs';
+import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningRoot } = planningWorkspace;
@@ -1197,6 +1198,26 @@ function waveNumberFromManifestPath(manifestPath: string | undefined | null): nu
   return num >= 1 && num <= MAX_WAVE_NUMBER ? num : null;
 }
 
+/**
+ * Remove `token` only when a non-slug boundary (or an end) sits on both
+ * sides. The removed text becomes a newline so the two sides cannot join
+ * into a new token.
+ */
+function stripDelimitedToken(haystack: string, token: string): string {
+  if (!token) return haystack;
+  const parts = haystack.split(token);
+  if (parts.length === 1) return haystack;
+  const isBoundary = (ch: string) => ch === '' || /[^A-Za-z0-9._-]/.test(ch);
+  let out = parts[0];
+  for (let i = 1; i < parts.length; i++) {
+    const prev = out.slice(-1);
+    const next = parts[i].slice(0, 1);
+    out += isBoundary(prev) && isBoundary(next) ? '\n' : token;
+    out += parts[i];
+  }
+  return out;
+}
+
 /** Phase-directory basename, or null when the manifest sits directly under `.planning`. */
 function phaseTokenFromManifestPath(manifestPath: string | undefined | null): string | null {
   if (!manifestPath) return null;
@@ -1206,9 +1227,15 @@ function phaseTokenFromManifestPath(manifestPath: string | undefined | null): st
 }
 
 /**
- * True when `branch` or `worktreePath` names this phase's wave: a delimited
- * `wave-<N>` token (so wave-1 does not match wave-10) and, when the manifest
- * lives in a phase directory, that directory's name.
+ * True when `branch` or `worktreePath` names this phase's wave.
+ *
+ * The wave token is delimited on both sides: `wave-1` matches `wave-1` and
+ * `wave-1-notes`, and does not match `wave-10` or `wave-1x`. A phase-directory
+ * name that itself contains `wave-<N>` (for example `04-wave-1-redesign`) is
+ * the phase identity, not the worktree's wave, so those occurrences are
+ * removed before the wave test. A foreign agent nested under that directory
+ * does not become wave-owned. The agent's own `wave-<N>` outside that name
+ * still matches.
  */
 function worktreeNamesPhaseWave(
   branch: string | null,
@@ -1217,12 +1244,18 @@ function worktreeNamesPhaseWave(
   phaseToken: string | null,
 ): boolean {
   const haystack = `${branch || ''}\n${worktreePath}`;
-  const waveRe = new RegExp(`(?:^|[^A-Za-z0-9])wave-${wave}(?![0-9])`);
-  if (!waveRe.test(haystack)) return false;
+  // Drop the phase-directory name only where it is its own token. A raw
+  // split would cut a short name out of a longer one (`01` out of
+  // `wave-101` becomes `wave-1`). A newline keeps the cut from gluing the
+  // neighbours into a new `wave-<N>` token.
+  const waveHaystack = phaseToken ? stripDelimitedToken(haystack, phaseToken) : haystack;
+  const waveRe = new RegExp(`(?:^|[^A-Za-z0-9])wave-${wave}(?![A-Za-z0-9])`);
+  if (!waveRe.test(waveHaystack)) return false;
   if (!phaseToken) return true;
   if (haystack.split(/[/\\]/).includes(phaseToken)) return true;
+  // `.` is legal in a phase slug and is a regex metacharacter.
   if (!/^[A-Za-z0-9._-]+$/.test(phaseToken)) return false;
-  const phaseRe = new RegExp(`(?:^|[^A-Za-z0-9._-])${phaseToken}(?:[^A-Za-z0-9._-]|$)`);
+  const phaseRe = new RegExp(`(?:^|[^A-Za-z0-9._-])${escapeRegex(phaseToken)}(?:[^A-Za-z0-9._-]|$)`);
   return phaseRe.test(haystack);
 }
 
@@ -1262,10 +1295,12 @@ function countOwnedAgentWorktrees(
     const real = realpathOrSelf(resolved);
     const names = worktreeNamesPhaseWave(entry.branch, resolved, wave, phaseToken)
       || worktreeNamesPhaseWave(entry.branch, real.path, wave, phaseToken);
-    // A listed agent whose path will not resolve is present: skipping it would
-    // drop the manifest while the checkout is still there. A readable agent that
-    // does not name this wave is someone else's.
-    if (!names && !real.realpathFailed) continue;
+    // Names this wave: present, even when realpath fails (the checkout may
+    // still be there). Does not name this wave: someone else's, including
+    // when the path will not resolve. The branch and the unresolved path are
+    // enough to decide that; counting every unreadable foreign agent would
+    // block this wave on an unrelated failure.
+    if (!names) continue;
     try {
       const st = fs.statSync(resolved);
       if (!st.isDirectory()) continue;
@@ -1346,9 +1381,10 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
 
       const names = worktreeNamesPhaseWave(e.branch, resolvedPath, waveNum, phaseToken)
         || worktreeNamesPhaseWave(e.branch, real.path, waveNum, phaseToken);
-      // Unresolvable listed agent: present. A readable agent that does not name
-      // this wave belongs to another lane or a quick task.
-      if (!names && !real.realpathFailed) return false;
+      // Unresolvable listed agent that names this wave: present. One that does
+      // not name this wave belongs to another lane or a quick task, whether or
+      // not its path resolves.
+      if (!names) return false;
 
       try {
         const st = (deps.statSync || fs.statSync)(resolvedPath);
@@ -1998,10 +2034,12 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
   try {
     stat = fs.lstatSync(resolvedManifestPath);
   } catch (err) {
+    const message = (err as Error).message;
+    writeErr(`[gsd] worktree.cleanup-wave: manifest_read_failed — ${message}\n`);
     write(`${JSON.stringify({
       ok: false,
       reason: 'manifest_read_failed',
-      error: (err as Error).message,
+      error: message,
     }, null, 2)}\n`);
     process.exitCode = 1;
     return;
@@ -2021,10 +2059,12 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
   try {
     manifest = fs.readFileSync(resolvedManifestPath, 'utf8');
   } catch (err) {
+    const message = (err as Error).message;
+    writeErr(`[gsd] worktree.cleanup-wave: manifest_read_failed — ${message}\n`);
     write(`${JSON.stringify({
       ok: false,
       reason: 'manifest_read_failed',
-      error: (err as Error).message,
+      error: message,
     }, null, 2)}\n`);
     process.exitCode = 1;
     return;
@@ -2058,6 +2098,7 @@ function cmdWorktreeCleanupWave(cwd: string, args: string[] = [], deps: Record<s
   };
   write(`${JSON.stringify(response, null, 2)}\n`);
   if (!result.ok) {
+    writeErr(`[gsd] worktree.cleanup-wave: ${result.reason || 'cleanup_blocked'}\n`);
     process.exitCode = 1;
   }
 }
