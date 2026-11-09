@@ -14,8 +14,12 @@
  *                 samples        records seen per platform (win32/darwin/linux), non-negative integers,
  *                                at least one > 0; worstPlatform must have samples > 0.
  *                 p50Ms, p99Ms   optional; both or neither, positive, p50Ms <= p99Ms <= observedMaxMs.
- *                 unmeasuredPlatforms  required array; must equal exactly the platforms whose count
- *                                (samples, or lanes for a censored entry) is missing or 0.
+ *                 lanes          optional on an uncensored entry; same shape as samples. Lanes that ran
+ *                                the class's seam sites but recorded nothing at or above the
+ *                                slow-spawn threshold: "ran and recorded nothing".
+ *                 unmeasuredPlatforms  required array; must equal exactly the platforms with no data:
+ *                                count missing or 0 in samples AND in lanes (a censored entry has
+ *                                only lanes).
  *                 unseenSites    required non-negative integer: call sites of this constant the process
  *                                seam cannot see. When > 0, unseenSitesTrackedBy names the issue(s)
  *                                moving them, written "#N" or "#N #M".
@@ -90,7 +94,9 @@ function checkMeasured(name, value, entry, minMargin) {
     counts = entry.samples;
     countsOk = countsValid(entry.samples);
     if (!countsOk) add('invalid-samples', `samples must map win32/darwin/linux to non-negative integers with at least one > 0, got ${JSON.stringify(entry.samples)}`);
-    if (entry.lanes !== undefined) add('invalid-lanes', 'only a censored entry carries lanes; an uncensored entry counts samples');
+    if (entry.lanes !== undefined && !countsValid(entry.lanes)) {
+      add('invalid-lanes', `lanes, when given, must map win32/darwin/linux to non-negative integers with at least one > 0, got ${JSON.stringify(entry.lanes)}`);
+    }
     if (!PLATFORMS.has(entry.worstPlatform)) {
       add('invalid-platform', `worstPlatform must be win32, darwin or linux, got ${String(entry.worstPlatform)}`);
     } else if (countsOk && !(counts[entry.worstPlatform] > 0)) {
@@ -107,7 +113,9 @@ function checkMeasured(name, value, entry, minMargin) {
 
   // Only judged against a usable count map; a broken one is already reported above.
   if (countsOk) {
-    const expected = PLATFORM_LIST.filter((p) => !(counts[p] > 0));
+    // An uncensored entry's lanes also count: a lane that ran and recorded nothing is a measurement.
+    const laneCounts = !censored && countsValid(entry.lanes) ? entry.lanes : {};
+    const expected = PLATFORM_LIST.filter((p) => !(counts[p] > 0) && !(laneCounts[p] > 0));
     const stated = entry.unmeasuredPlatforms;
     const statedOk = Array.isArray(stated) && stated.every((p) => PLATFORMS.has(p)) && new Set(stated).size === stated.length;
     if (!statedOk || stated.length !== expected.length || !expected.every((p) => stated.includes(p))) {

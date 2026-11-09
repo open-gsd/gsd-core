@@ -29,6 +29,19 @@
  * Every numeric export carries a TIMEOUT_EVIDENCE entry (observed range, worst platform, margin,
  * source, or an exempt kind with a reason); tests/timeout-evidence.test.cjs enforces it. A
  * file-local constant must not reuse one of these export names.
+ *
+ * Reading an evidence entry. CI figures come from seam:spawn-stall records, which the process seam
+ * emits only for spawns that were killed or ran at or above the slow-spawn threshold (2000ms by
+ * default), so p50Ms and p99Ms are percentiles of the WORST platform's recorded spawns, not of every
+ * spawn. `samples` counts records per platform; `lanes` counts the CI lanes per platform that ran
+ * the class's seam sites, so a platform with lanes and no samples ran and recorded nothing at or
+ * above the threshold. A class with no record at all is censored: observedMaxMs is the threshold,
+ * not a measurement. `unmeasuredPlatforms` lists platforms with neither samples nor lanes.
+ * `unseenSites` counts call sites of the class that spawn outside the seam (raw child_process); the
+ * CI log cannot see them, and `unseenSitesTrackedBy` names the issues moving them onto the seam.
+ * SCAN_USAGE_ERROR, MALFORMED_INPUT_HOOK and REAL_REPO_GIT were moved onto the seam in the change
+ * that added this evidence, so the CI lanes in the window ran their previous form and cannot count:
+ * those three use the local harness only.
  */
 
 const { DEFAULT_GIT_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./git-fixture.cjs');
@@ -37,10 +50,11 @@ const { DEFAULT_TIMEOUT_MS: SEAM_FALLBACK_TIMEOUT_MS } = require('./process-seam
 /**
  * A single short CLI query or `node -e` probe against a temp fixture —
  * e.g. reading back a version string or a small piece of emitted state.
- * 15000ms is well over any observed duration for that class of call.
+ * The observed range is in the evidence entry below.
  *
- * Evidence (TIMEOUT_EVIDENCE.PROBE_TIMEOUT_MS): worst observed 7424ms on darwin,
- * margin 2.02x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.PROBE_TIMEOUT_MS): worst observed 7424ms on darwin (p50 111ms, p99 3411ms of recorded spawns),
+ * margin 2.02x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 116 call sites spawn outside the seam and are not covered; tracked in #6058 #6059.
  */
 const PROBE_TIMEOUT_MS = 15000;
 
@@ -66,8 +80,8 @@ const PROBE_TIMEOUT_MS = 15000;
  * `PROBE_TIMEOUT_MS` — this norm describes the fan-out shape, not `runHook` in
  * general.
  *
- * Evidence (TIMEOUT_EVIDENCE.HOOK_FANOUT_TIMEOUT_MS): worst observed 23514ms on win32,
- * margin 2.55x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.HOOK_FANOUT_TIMEOUT_MS): worst observed 23514ms on win32 (p50 2326ms, p99 7563ms of recorded spawns),
+ * margin 2.55x; CI seam spawn-stall records, 188 runs since 2026-10-25.
  */
 const HOOK_FANOUT_TIMEOUT_MS = 60000;
 
@@ -77,8 +91,10 @@ const HOOK_FANOUT_TIMEOUT_MS = 60000;
  * `DEFAULT_GIT_TIMEOUT_MS` rather than restating the literal, so the two
  * can never disagree.
  *
- * Evidence (TIMEOUT_EVIDENCE.GIT_TIMEOUT_MS): worst observed 4669ms on win32,
- * margin 3.21x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.GIT_TIMEOUT_MS): worst observed 4669ms on win32 (p50 2344ms, p99 4669ms of recorded spawns),
+ * margin 3.21x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * darwin and linux lanes ran these sites and recorded nothing at or above the slow-spawn threshold.
+ * 58 call sites spawn outside the seam and are not covered; tracked in #6060.
  */
 const GIT_TIMEOUT_MS = DEFAULT_GIT_TIMEOUT_MS;
 
@@ -88,19 +104,20 @@ const GIT_TIMEOUT_MS = DEFAULT_GIT_TIMEOUT_MS;
  * `GIT_FIXTURE_TIMEOUT_MS` for the full rationale (PR #3323); re-exported
  * here rather than restated so the two can never disagree.
  *
- * Evidence (TIMEOUT_EVIDENCE.GIT_FIXTURE_TIMEOUT_MS): worst observed 7958ms on darwin,
- * margin 7.53x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.GIT_FIXTURE_TIMEOUT_MS): worst observed 10114ms on win32 (p50 2561ms, p99 7180ms of recorded spawns),
+ * margin 5.93x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 96 records matching sites of this constant and another are credited to neither.
+ * 10 call sites spawn outside the seam and are not covered; tracked in #6060.
  */
 
 /**
  * Hooks bundling via `scripts/build-hooks.js` (not a full project build —
  * see per-site comments for sites that run a heavier build and therefore
- * keep a larger local value). 30000ms is well over any observed duration
- * for a hooks-only bundle pass.
+ * keep a larger local value). The observed range is in the evidence entry below.
  *
- * Evidence (TIMEOUT_EVIDENCE.BUILD_TIMEOUT_MS): no CI record at or above the 2000ms slow-spawn
- * threshold across 188 darwin / 556 win32 / 429 linux lanes since 2026-10-25, so the
- * observed bound is under 2000ms; margin at least 15x.
+ * Evidence (TIMEOUT_EVIDENCE.BUILD_TIMEOUT_MS): no seam spawn of this class reached 2000ms across 1181 lanes (win32 564, darwin 188,
+ * linux 429); margin at least 15x. CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * Every call site of this class runs through the seam.
  */
 const BUILD_TIMEOUT_MS = 30000;
 
@@ -111,8 +128,9 @@ const BUILD_TIMEOUT_MS = 30000;
  * commit in 12.7s — 60000 is too tight for this class of spawn under
  * load. 120000ms is the load-tested norm.
  *
- * Evidence (TIMEOUT_EVIDENCE.INSTALL_TIMEOUT_MS): worst observed 49839ms on win32,
- * margin 2.40x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.INSTALL_TIMEOUT_MS): worst observed 49839ms on win32 (p50 2864ms, p99 7842ms of recorded spawns),
+ * margin 2.40x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 16 call sites spawn outside the seam and are not covered; tracked in #6062.
  */
 const INSTALL_TIMEOUT_MS = 120000;
 
@@ -128,6 +146,7 @@ const INSTALL_TIMEOUT_MS = 120000;
  * one is a mirror of the seam's default ("no unbounded path") — collapsing
  * them would let a future, independent tune of either value silently move
  * the other.
+ * Evidence (TIMEOUT_EVIDENCE.SEAM_DEFAULT_TIMEOUT_MS): mirror — mirror of tests/helpers/process-seam.cjs DEFAULT_TIMEOUT_MS.
  */
 const SEAM_DEFAULT_TIMEOUT_MS = SEAM_FALLBACK_TIMEOUT_MS;
 
@@ -146,9 +165,9 @@ const SEAM_DEFAULT_TIMEOUT_MS = SEAM_FALLBACK_TIMEOUT_MS;
  * this migration's scope (naming, not tuning) does not permit. This norm
  * is for the even-lighter end of the spectrum PROBE_TIMEOUT_MS occupies.
  *
- * Evidence (TIMEOUT_EVIDENCE.QUICK_SPAWN_TIMEOUT_MS): no CI record at or above the 2000ms slow-spawn
- * threshold across 188 darwin / 389 win32 / 286 linux lanes since 2026-10-25, so the
- * observed bound is under 2000ms; margin at least 5x.
+ * Evidence (TIMEOUT_EVIDENCE.QUICK_SPAWN_TIMEOUT_MS): no seam spawn of this class reached 2000ms across 863 lanes (win32 389, darwin 188,
+ * linux 286); margin at least 5x. CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 26 call sites spawn outside the seam and are not covered; tracked in #6061.
  */
 const QUICK_SPAWN_TIMEOUT_MS = 10000;
 
@@ -163,6 +182,7 @@ const QUICK_SPAWN_TIMEOUT_MS = 10000;
  * Shared across >=2 files in batch #4515 of the ad hoc timeout literal
  * migration, epic #4445 -- that is why it lives here rather than as a
  * file-local constant.
+ * Evidence (TIMEOUT_EVIDENCE.FIXTURE_HOOK_TIMEOUT_SECONDS): fixture-data — seconds value inside a settings.json hook-entry fixture, not a spawn timeout.
  */
 const FIXTURE_HOOK_TIMEOUT_SECONDS = 5;
 
@@ -182,8 +202,9 @@ const FIXTURE_HOOK_TIMEOUT_SECONDS = 5;
  * migration, epic #4445 -- that is why it lives here rather than as a
  * file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.STAGED_HOOK_SCRIPT_TIMEOUT_MS): worst observed 5232ms on darwin,
- * margin 3.82x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.STAGED_HOOK_SCRIPT_TIMEOUT_MS): worst observed 5232ms on darwin (p50 4889ms, p99 5217ms of recorded spawns),
+ * margin 3.82x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 4 call sites spawn outside the seam and are not covered; tracked in #6061.
  */
 const STAGED_HOOK_SCRIPT_TIMEOUT_MS = 20000;
 
@@ -214,8 +235,10 @@ const STAGED_HOOK_SCRIPT_TIMEOUT_MS = 20000;
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.LOOP_HOOK_POINT_CLI_TIMEOUT_MS): worst observed 16895ms on win32,
- * margin 3.55x; CI seam spawn-stall log, 228 runs of next since 2026-10-25.
+ * Evidence (TIMEOUT_EVIDENCE.LOOP_HOOK_POINT_CLI_TIMEOUT_MS): worst observed 16895ms on win32 (p50 2359ms, p99 16895ms of recorded spawns),
+ * margin 3.55x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 19 records matching sites of this constant and another are credited to neither.
+ * 14 call sites spawn outside the seam and are not covered; tracked in #6063.
  */
 const LOOP_HOOK_POINT_CLI_TIMEOUT_MS = 60000;
 
@@ -239,8 +262,8 @@ const LOOP_HOOK_POINT_CLI_TIMEOUT_MS = 60000;
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.SCAN_USAGE_ERROR_TIMEOUT_MS): worst observed 108ms on darwin,
- * margin 46.29x; harness, 50 runs per site, darwin + linux; win32 not yet measured.
+ * Evidence (TIMEOUT_EVIDENCE.SCAN_USAGE_ERROR_TIMEOUT_MS): worst observed 108ms on darwin (p50 7ms, p99 46ms of 400 harness spawns),
+ * margin 46.29x; local harness on darwin and linux, 400 spawns per platform; win32 not measured.
  */
 const SCAN_USAGE_ERROR_TIMEOUT_MS = 5000;
 
@@ -256,8 +279,8 @@ const SCAN_USAGE_ERROR_TIMEOUT_MS = 5000;
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.MALFORMED_INPUT_HOOK_TIMEOUT_MS): worst observed 170ms on darwin,
- * margin 29.41x; harness, 50 runs per site, darwin + linux; win32 not yet measured.
+ * Evidence (TIMEOUT_EVIDENCE.MALFORMED_INPUT_HOOK_TIMEOUT_MS): worst observed 170ms on darwin (p50 78ms, p99 163ms of 150 harness spawns),
+ * margin 29.41x; local harness on darwin and linux, 150 spawns per platform; win32 not measured.
  */
 const MALFORMED_INPUT_HOOK_TIMEOUT_MS = 5000;
 
@@ -279,10 +302,10 @@ const MALFORMED_INPUT_HOOK_TIMEOUT_MS = 5000;
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.GENERATOR_SCRIPT_TIMEOUT_MS): no CI record at or above the 2000ms slow-spawn
- * threshold across 188 darwin / 0 win32 / 171 linux lanes since 2026-10-25, so the
- * observed bound is under 2000ms; margin at least 15x.
- * win32 lanes did not run these sites in the window.
+ * Evidence (TIMEOUT_EVIDENCE.GENERATOR_SCRIPT_TIMEOUT_MS): no seam spawn of this class reached 2000ms across 359 lanes (darwin 188,
+ * linux 171); margin at least 15x. CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * win32 not measured: no win32 lane ran these sites in the window.
+ * 8 call sites spawn outside the seam and are not covered; tracked in #6063.
  */
 const GENERATOR_SCRIPT_TIMEOUT_MS = 30000;
 
@@ -305,8 +328,8 @@ const GENERATOR_SCRIPT_TIMEOUT_MS = 30000;
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.REAL_REPO_GIT_TIMEOUT_MS): worst observed 262ms on darwin,
- * margin 114.50x; harness, 50 runs per site, darwin + linux; win32 not yet measured.
+ * Evidence (TIMEOUT_EVIDENCE.REAL_REPO_GIT_TIMEOUT_MS): worst observed 262ms on darwin (p50 37ms, p99 195ms of 350 harness spawns),
+ * margin 114.50x; local harness on darwin and linux, 350 spawns per platform; win32 not measured.
  */
 const REAL_REPO_GIT_TIMEOUT_MS = 30000;
 
@@ -323,6 +346,7 @@ const REAL_REPO_GIT_TIMEOUT_MS = 30000;
  * Shared across 2 files in batch #4522 of the ad hoc timeout literal
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
+ * Evidence (TIMEOUT_EVIDENCE.PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS): test-backstop — node:test per-test hang backstop around an algorithmic bound, not a spawn timeout.
  */
 const PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS = 60000;
 
@@ -343,10 +367,10 @@ const PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS = 60000;
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
  *
- * Evidence (TIMEOUT_EVIDENCE.GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS): no CI record at or above the 2000ms slow-spawn
- * threshold across 8 darwin / 0 win32 / 143 linux lanes since 2026-10-25, so the
- * observed bound is under 2000ms; margin at least 15x.
- * win32 lanes did not run these sites in the window.
+ * Evidence (TIMEOUT_EVIDENCE.GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS): worst observed 2270ms on win32 (p50 2036ms, p99 2270ms of recorded spawns),
+ * margin 13.21x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * darwin and linux lanes ran these sites and recorded nothing at or above the slow-spawn threshold.
+ * 4 call sites spawn outside the seam and are not covered; tracked in #6063.
  */
 const GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS = 30000;
 
@@ -366,6 +390,7 @@ const GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS = 30000;
  * Shared across 2 files in batch #4524 of the ad hoc timeout literal
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
+ * Evidence (TIMEOUT_EVIDENCE.TASK_RESOLVER_INVOKE_TIMEOUT_MS): fixture-data — invoke.timeoutMs value inside a task-content-resolver manifest fixture, not a spawn timeout.
  */
 const TASK_RESOLVER_INVOKE_TIMEOUT_MS = 10000;
 
@@ -378,13 +403,14 @@ const TASK_RESOLVER_INVOKE_TIMEOUT_MS = 10000;
  * Shared across 2 files in batch #4527 of the ad hoc timeout literal
  * migration, epic #4445 -- every site independently arrived at this exact
  * value -- that is why it lives here rather than as a file-local constant.
+ * Evidence (TIMEOUT_EVIDENCE.HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS): fixture-data — timeoutMs value inside an http-reachable reviewer-lane declaration fixture, schema-validated only, not a spawn timeout.
  */
 const HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS = 2000;
 
-const CI_SOURCE = 'seam:spawn-stall records in CI test-timings-<os>-job<N> artifacts; a record counts for a constant when its file names the constant at a timeout property and its timeoutMs equals the value';
-const CI_WINDOW = 'next CI runs since 2026-10-25: 228 runs, 1181 lane artifacts (darwin 188, win32 564, linux 429)';
-const HARNESS_SOURCE = 'local harness: each call site run 50 times through the process seam';
-const HARNESS_WINDOW = '2026-11-08: darwin node v26.13.0; linux node:24 v24.22.2; win32 not yet measured';
+const CI_SOURCE = 'seam:spawn-stall records (every seam spawn that ran >= 2000ms or was killed) in CI test-timings-<os>-job<N> artifacts, credited to a constant by call site: the record\'s test file (or a helper it requires) has a seam call site of that constant, its timeoutMs equals the value, and its command/argv match that site; records matching sites of two constants are credited to neither';
+const CI_WINDOW = 'test.yml runs (push and merge_group events, status success) created after 2026-10-25: 188 runs contained test-timings data (of 228 run directories downloaded), 1181 lane artifacts (win32 564, darwin 188, linux 429), spawn startedAt 2026-10-25T22:57:17.847Z to 2026-11-08T21:29:42.912Z';
+const HARNESS_SOURCE = 'local harness through the process seam, 50 spawns per entry (a script and invocation variant, or a git subcommand): SCAN_USAGE_ERROR 8 entries, MALFORMED_INPUT_HOOK 3 entries, REAL_REPO_GIT 7 entries; these call sites were moved onto the seam in this change, so CI lanes in the window ran their previous form and are not counted';
+const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.2; win32 not measured';
 
 /**
  * Evidence for every numeric constant in this module, checked by
@@ -392,20 +418,20 @@ const HARNESS_WINDOW = '2026-11-08: darwin node v26.13.0; linux node:24 v24.22.2
  * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
  */
 const TIMEOUT_EVIDENCE = Object.freeze({
-  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', samples: { darwin: 490, win32: 45, linux: 311 }, source: CI_SOURCE, window: CI_WINDOW },
-  HOOK_FANOUT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 23514, worstPlatform: 'win32', samples: { darwin: 1365, win32: 649, linux: 459 }, source: CI_SOURCE, window: CI_WINDOW },
-  GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 4669, worstPlatform: 'win32', samples: { darwin: 0, win32: 12, linux: 0 }, source: CI_SOURCE, window: CI_WINDOW },
-  GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7958, worstPlatform: 'darwin', samples: { darwin: 4, win32: 40, linux: 143 }, source: CI_SOURCE, window: CI_WINDOW },
-  INSTALL_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 49839, worstPlatform: 'win32', samples: { darwin: 5314, win32: 42609, linux: 1160 }, source: CI_SOURCE, window: CI_WINDOW },
-  STAGED_HOOK_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 5232, worstPlatform: 'darwin', samples: { darwin: 180, win32: 3, linux: 0 }, source: CI_SOURCE, window: CI_WINDOW },
-  LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 16895, worstPlatform: 'win32', samples: { darwin: 4, win32: 38, linux: 0 }, source: CI_SOURCE, window: CI_WINDOW },
-  BUILD_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, samples: { darwin: 188, win32: 556, linux: 429 }, source: CI_SOURCE, window: CI_WINDOW },
-  QUICK_SPAWN_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, samples: { darwin: 188, win32: 389, linux: 286 }, source: CI_SOURCE, window: CI_WINDOW },
-  GENERATOR_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, samples: { darwin: 188, win32: 0, linux: 171 }, source: CI_SOURCE, window: CI_WINDOW },
-  GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, samples: { darwin: 8, win32: 0, linux: 143 }, source: CI_SOURCE, window: CI_WINDOW },
-  SCAN_USAGE_ERROR_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 108, worstPlatform: 'darwin', samples: { darwin: 200, linux: 200 }, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
-  MALFORMED_INPUT_HOOK_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 170, worstPlatform: 'darwin', samples: { darwin: 75, linux: 75 }, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
-  REAL_REPO_GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 262, worstPlatform: 'darwin', samples: { darwin: 175, linux: 175 }, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
+  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 12, darwin: 490, linux: 311 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 116, unseenSitesTrackedBy: '#6058 #6059', source: CI_SOURCE, window: CI_WINDOW },
+  HOOK_FANOUT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 23514, worstPlatform: 'win32', p50Ms: 2326, p99Ms: 7563, samples: { win32: 266, darwin: 978, linux: 173 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
+  GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 4669, worstPlatform: 'win32', p50Ms: 2344, p99Ms: 4669, samples: { win32: 12 }, lanes: { win32: 551, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 58, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
+  GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 10114, worstPlatform: 'win32', p50Ms: 2561, p99Ms: 7180, samples: { win32: 118, darwin: 4, linux: 148 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 10, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
+  INSTALL_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 49839, worstPlatform: 'win32', p50Ms: 2864, p99Ms: 7842, samples: { win32: 56561, darwin: 6476, linux: 734 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 16, unseenSitesTrackedBy: '#6062', source: CI_SOURCE, window: CI_WINDOW },
+  STAGED_HOOK_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 5232, worstPlatform: 'darwin', p50Ms: 4889, p99Ms: 5217, samples: { win32: 3, darwin: 180 }, lanes: { win32: 562, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 4, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
+  LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 16895, worstPlatform: 'win32', p50Ms: 2359, p99Ms: 16895, samples: { win32: 18, darwin: 4 }, lanes: { win32: 371, darwin: 188, linux: 306 }, unmeasuredPlatforms: [], unseenSites: 14, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
+  BUILD_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
+  QUICK_SPAWN_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 389, darwin: 188, linux: 286 }, unmeasuredPlatforms: [], unseenSites: 26, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
+  GENERATOR_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { darwin: 188, linux: 171 }, unmeasuredPlatforms: ['win32'], unseenSites: 8, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
+  GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2270, worstPlatform: 'win32', p50Ms: 2036, p99Ms: 2270, samples: { win32: 2 }, lanes: { win32: 188, darwin: 8, linux: 221 }, unmeasuredPlatforms: [], unseenSites: 4, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
+  SCAN_USAGE_ERROR_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 108, worstPlatform: 'darwin', p50Ms: 7, p99Ms: 46, samples: { darwin: 400, linux: 400 }, unmeasuredPlatforms: ['win32'], unseenSites: 0, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
+  MALFORMED_INPUT_HOOK_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 170, worstPlatform: 'darwin', p50Ms: 78, p99Ms: 163, samples: { darwin: 150, linux: 150 }, unmeasuredPlatforms: ['win32'], unseenSites: 0, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
+  REAL_REPO_GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 262, worstPlatform: 'darwin', p50Ms: 37, p99Ms: 195, samples: { darwin: 350, linux: 350 }, unmeasuredPlatforms: ['win32'], unseenSites: 0, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
   SEAM_DEFAULT_TIMEOUT_MS: { kind: 'mirror', of: { module: 'tests/helpers/process-seam.cjs', export: 'DEFAULT_TIMEOUT_MS' } },
   PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS: { kind: 'test-backstop', reason: 'node:test per-test hang backstop around an algorithmic bound, not a spawn timeout' },
   FIXTURE_HOOK_TIMEOUT_SECONDS: { kind: 'fixture-data', reason: 'seconds value inside a settings.json hook-entry fixture, not a spawn timeout' },

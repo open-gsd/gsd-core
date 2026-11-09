@@ -169,7 +169,7 @@ describe('validateTimeoutEvidence', () => {
     assert.deepEqual(check(measured({ worstPlatform: 'darwin', samples: { linux: 3, darwin: 1 }, unmeasuredPlatforms: ['win32'] })), []);
   });
 
-  test('censored entries count lanes, not records', () => {
+  test('censored entries count lanes, not records, and lanes are never samples', () => {
     const all = ['win32', 'darwin', 'linux'];
     const bad = [
       censored({ lanes: undefined, samples: { linux: 3 } }),
@@ -180,10 +180,25 @@ describe('validateTimeoutEvidence', () => {
       censored({ lanes: { linux: -1 } }),
       censored({ lanes: { windows: 2 } }),
       censored({ samples: { linux: 3 } }),
-      measured({ lanes: { linux: 2 } }),
     ];
     for (const entry of bad) {
       assert.deepEqual(rulesOf(check(entry)), ['CLASS_A_MS:invalid-lanes'], JSON.stringify(entry));
+    }
+  });
+
+  test('an uncensored entry may carry lanes, which count as measured platforms', () => {
+    const entry = measured({
+      worstPlatform: 'win32',
+      samples: { win32: 12 },
+      lanes: { win32: 551, darwin: 188, linux: 429 },
+      unmeasuredPlatforms: [],
+    });
+    assert.deepEqual(check(entry), []);
+    assert.deepEqual(rulesOf(check({ ...entry, unmeasuredPlatforms: ['darwin'] })), ['CLASS_A_MS:unstated-unmeasured-platform']);
+    assert.deepEqual(rulesOf(check({ ...entry, lanes: { win32: 551, darwin: 0, linux: 429 } })), ['CLASS_A_MS:unstated-unmeasured-platform']);
+    assert.deepEqual(check({ ...entry, lanes: { win32: 551, darwin: 0, linux: 429 }, unmeasuredPlatforms: ['darwin'] }), []);
+    for (const bad of [{}, { linux: 0 }, { linux: 1.5 }, { linux: -1 }, { windows: 2 }]) {
+      assert.deepEqual(rulesOf(check({ ...entry, lanes: bad, unmeasuredPlatforms: ['darwin', 'linux'] })), ['CLASS_A_MS:invalid-lanes'], JSON.stringify(bad));
     }
   });
 
