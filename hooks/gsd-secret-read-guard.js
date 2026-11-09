@@ -354,14 +354,16 @@ let joinCandidate = false;
 // '…'`), so it reads payloads the plain reading never tokenizes, and next's
 // findParenClose recurses once per `"$(` in them: a long run overflows the
 // stack in this reading alone, and the throw would end it before the rest of
-// the line. So where it descends into a payload (findSecretRead at depth > 0)
-// an overflow leaves that payload unread, as the plain reading leaves it, and
-// the line's scan goes on. The plain path pays only the one test above.
+// the line. So where it descends into a payload (findSecretRead and
+// findDebuggerCliSpawn at depth > 0) an overflow leaves that payload unread, as
+// the plain reading leaves it, and the line's scan goes on. The frames this
+// adds under a payload are paid for by readFurther's fresh stack (below). The
+// plain path pays only the one test.
 let furtherPayloadGuarded = false;
-function readPayloadUnlessTooDeep(command, depth) {
+function readPayloadUnlessTooDeep(scan, command, depth) {
   furtherPayloadGuarded = true;
   try {
-    return unlessTooDeep(() => findSecretRead(command, depth), () => null);
+    return unlessTooDeep(() => scan(command, depth), () => null);
   } finally {
     furtherPayloadGuarded = false;
   }
@@ -2282,7 +2284,7 @@ function findSecretReadUnderOtherReadings(command) {
 
 // Returns the offending token text, or null.
 function findSecretRead(command, depth) {
-  if (furtherReading && depth > 0 && !furtherPayloadGuarded) return readPayloadUnlessTooDeep(command, depth);
+  if (furtherReading && depth > 0 && !furtherPayloadGuarded) return readPayloadUnlessTooDeep(findSecretRead, command, depth);
   const { tokens, nested } = tokenize(command);
 
   for (const sub of nested) {
@@ -2410,6 +2412,7 @@ function isDebuggerAgent(value) {
 
 // Returns the `--agent` value text of a debugger launch, or null.
 function findDebuggerCliSpawn(command, depth) {
+  if (furtherReading && depth > 0 && !furtherPayloadGuarded) return readPayloadUnlessTooDeep(findDebuggerCliSpawn, command, depth);
   const { tokens, nested } = tokenize(command);
 
   for (const sub of nested) {
@@ -2828,11 +2831,14 @@ let input = '';
 const stdinTimeout = setTimeout(() => allow(undefined), 3000);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
-// The further reading (#5779), run after the plain scans allowed. A function
-// of its own, not inline in the handler below, so the handler's stack frame
-// stays next's size: the plain scans run on top of it, and a larger frame
-// would overflow them a nesting level earlier than next, at an edge where
-// next denies.
+// The further reading (#5779), run after the plain scans allowed, from a
+// setImmediate of its own rather than inside the handler below. Two reasons,
+// both about the stack: the handler's frame stays next's size, so the plain
+// scans on top of it overflow at next's depth; and this reading starts on a
+// fresh stack, without the stream frames that deliver 'end' below it, which
+// outweigh the frames it adds on the way to a payload (the payload guard's
+// among them), so it reads a payload at least as deep as the handler could.
+// It ends the process itself, as the handler does.
 function readFurther(command, tool) {
   furtherReading = true;
   joinCandidate = false;
@@ -2845,6 +2851,9 @@ function readFurther(command, tool) {
       const furtherSpawn = findDebuggerCliSpawn(command, 0);
       if (furtherSpawn !== null) emitBlock('debugger-cli-spawn', tool, furtherSpawn);
     }
+    allow(undefined);
+  } catch {
+    crash(ON_CRASH, undefined);
   } finally {
     furtherReading = false;
     subscriptJoins = false;
@@ -2909,8 +2918,7 @@ process.stdin.on('end', () => {
     // does is the adapter's: Claude Code reads a hook that times out as no
     // decision, so the verdict above stands; Pi fails this guard closed on a
     // timeout and refuses the command.
-    readFurther(command, tool);
-    allow(undefined);
+    setImmediate(readFurther, command, tool);
   } catch {
     // Fail open — never block valid tool calls due to hook errors.
     // ON_CRASH is declared ALLOW at module top (#3911).
