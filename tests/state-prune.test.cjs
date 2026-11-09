@@ -478,6 +478,8 @@ describe('#5831: state prune never loses entries', () => {
   const scp = require('../gsd-core/bin/lib/shell-command-projection.cjs');
   const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
   const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
+  const PINNED_DAY = '2026-11-08';
+  function pinDay() { mock.method(realClock, 'localToday', () => PINNED_DAY); }
   const { makeFakeClock } = require('./helpers/clock.cjs');
 
   const PHASE1 = '- [Phase 1]: Decision one, only copy';
@@ -502,7 +504,7 @@ describe('#5831: state prune never loses entries', () => {
     archivePath = path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md');
     writeStateMd(tmpDir, stateLines(8, [...OLD_ENTRIES, PHASE7]));
     // A constant date: the production block heading and the expected one cannot straddle midnight.
-    mock.method(realClock, 'localToday', () => '2026-11-08');
+    pinDay();
   });
 
   afterEach(() => {
@@ -549,7 +551,7 @@ describe('#5831: state prune never loses entries', () => {
 
   /** The production plan for an append of `sections` (the entries actually written) onto `prior` (null = absent archive). */
   function planFor(prior, sections, cutoff, keepRecent) {
-    return stateLib.planStateArchiveAppend(prior, sections, { date: realClock.localToday(), cutoff, keepRecent });
+    return stateLib.planStateArchiveAppend(prior, sections, { date: PINNED_DAY, cutoff, keepRecent });
   }
 
   /** Assert a captured write is exactly the rendered production plan, and return that plan. */
@@ -635,6 +637,7 @@ describe('#5831: state prune never loses entries', () => {
       failWritesTo(archivePath, 'EIO');
       assert.throws(() => prune(3), (err) => err.code === 'EIO');
       mock.restoreAll();
+      pinDay();
 
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
       assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'archive bytes unchanged / still absent');
@@ -661,6 +664,7 @@ describe('#5831: state prune never loses entries', () => {
       failWritesTo(statePath, 'ENOSPC');
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
       mock.restoreAll();
+      pinDay();
 
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
       assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'archive restored exactly / removed again');
@@ -697,6 +701,7 @@ describe('#5831: state prune never loses entries', () => {
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
     mock.restoreAll();
+    pinDay();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO'], 'both the STATE.md and the restore cause');
@@ -734,6 +739,7 @@ describe('#5831: state prune never loses entries', () => {
       let thrown = null;
       try { prune(3); } catch (err) { thrown = err; }
       mock.restoreAll();
+      pinDay();
 
       assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
       assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO']);
@@ -774,6 +780,7 @@ describe('#5831: state prune never loses entries', () => {
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC' && !(err instanceof AggregateError),
         'the original STATE.md error propagates');
       mock.restoreAll();
+      pinDay();
 
       assert.strictEqual(writes.length, 1, 'the archive was published before the STATE.md write');
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md is byte-identical, kept entries and notes included');
@@ -789,6 +796,7 @@ describe('#5831: state prune never loses entries', () => {
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
     mock.restoreAll();
+    pinDay();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO']);
@@ -816,6 +824,7 @@ describe('#5831: state prune never loses entries', () => {
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
     mock.restoreAll();
+    pinDay();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO'], 'the STATE.md write cause and the re-read cause');
@@ -841,6 +850,7 @@ describe('#5831: state prune never loses entries', () => {
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
     mock.restoreAll();
+    pinDay();
 
     assert.ok(thrown instanceof AggregateError, 'the refused rollback is reported alongside the STATE.md error');
     assert.strictEqual(thrown.errors[0].code, 'ENOSPC');
@@ -864,6 +874,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     prune(3);
     mock.restoreAll();
+    pinDay();
 
     assert.ok(observed.length > 0, 'prune must write the archive');
     assert.deepStrictEqual(observed, observed.map(() => ({ lockHeld: true, stateUnchanged: true })));
@@ -971,6 +982,7 @@ describe('#5831: state prune never loses entries', () => {
       failWritesTo(archivePath, 'ENOSPC', (p, realWrite) => { if (p === archivePath) realWrite.call(fs, p, ''); });
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
       mock.restoreAll();
+      pinDay();
 
       assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive keeps its exact previous bytes / stays absent');
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
@@ -991,6 +1003,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     assert.throws(() => prune(3), (err) => err.code === 'EIO' && !(err instanceof AggregateError));
     mock.restoreAll();
+    pinDay();
 
     assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive is put back exactly');
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
@@ -1009,6 +1022,7 @@ describe('#5831: state prune never loses entries', () => {
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
     mock.restoreAll();
+    pinDay();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'ESTALE']);
@@ -1030,6 +1044,7 @@ describe('#5831: state prune never loses entries', () => {
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
     mock.restoreAll();
+    pinDay();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'EROFS']);
@@ -1369,6 +1384,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     assert.throws(() => prune(3), /disappeared while its lock was held/);
     mock.restoreAll();
+    pinDay();
 
     assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the archive is unchanged');
     assert.ok(lockReleased(), 'the STATE.md lock is released');
@@ -1383,6 +1399,7 @@ describe('#5831: state prune never loses entries', () => {
     failWritesTo(statePath, 'ENOSPC');
     assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
     mock.restoreAll();
+    pinDay();
 
     assert.strictEqual(writes.length, 0, 'the retry did not write the archive');
     assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the archive is unchanged');
