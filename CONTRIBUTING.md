@@ -1360,6 +1360,12 @@ self-apply it to bypass the gate. If other entries are queued ahead of the
 fix, the group is larger than one commit and the bypass is refused; dequeue
 the others first. Remove the label once the fix has merged.
 
+Adding or removing `fix-next` re-runs only `Base branch health` (and the
+dependent `Required tests`) through the `fix-next re-run` workflow, which reads
+the label from the API; no other label change starts a Tests run. If the PR's
+latest Tests run was cancelled or its head has moved, the workflow skips and the
+newer run reads the label itself.
+
 A push run that is still in flight, including a re-run of a failed run, never
 counts as healthy: a re-run whose previous attempt failed is red, otherwise the
 newest finished run decides. Re-running a red `next` run therefore does not

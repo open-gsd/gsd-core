@@ -12,6 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
 
+const { BASE_HEALTH_JOB_NAME, TESTS_WORKFLOW_FILE } = require('../scripts/ci-fix-next-rerun.cjs');
+
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
 function load(file) {
@@ -38,6 +40,12 @@ describe('#6076 workflow wiring', () => {
     assert.equal(step.env.PR_NUMBER, '${{ github.event.pull_request.number }}');
   });
 
+  test('parity: the script targets test.yml and the next-health job name', () => {
+    assert.equal(BASE_HEALTH_JOB_NAME, load('test.yml').jobs['next-health'].name);
+    assert.equal(TESTS_WORKFLOW_FILE, 'test.yml');
+    assert.ok(fs.existsSync(path.join(WORKFLOWS_DIR, TESTS_WORKFLOW_FILE)));
+  });
+
   describe('fix-next-rerun.yml', () => {
     const doc = load('fix-next-rerun.yml');
     const jobs = Object.values(doc.jobs);
@@ -58,17 +66,16 @@ describe('#6076 workflow wiring', () => {
       assert.equal(job.if, "github.event.label.name == 'fix-next'");
     });
 
-    test('job permissions are exactly actions: write', () => {
-      assert.deepEqual(job.permissions, { actions: 'write' });
+    test('job permissions are exactly actions: write + contents: read', () => {
+      assert.deepEqual(job.permissions, { actions: 'write', contents: 'read' });
     });
 
-    test('never checks out code', () => {
-      for (const step of job.steps) {
-        assert.ok(
-          !(typeof step.uses === 'string' && step.uses.startsWith('actions/checkout')),
-          'pull_request_target + actions:write must not check out PR code',
-        );
-      }
+    test('the only checkout is the base sha, sparse, without persisted credentials', () => {
+      const checkouts = job.steps.filter((s) => typeof s.uses === 'string' && s.uses.startsWith('actions/checkout'));
+      assert.equal(checkouts.length, 1);
+      assert.equal(checkouts[0].with.ref, '${{ github.event.pull_request.base.sha }}');
+      assert.equal(checkouts[0].with['persist-credentials'], false);
+      assert.equal(checkouts[0].with['sparse-checkout'], 'scripts');
     });
 
     test('no run block interpolates an expression', () => {
@@ -77,14 +84,18 @@ describe('#6076 workflow wiring', () => {
       }
     });
 
-    test('re-runs the Base branch health job', () => {
-      const scripts = job.steps.map((s) => s.run).filter((r) => typeof r === 'string').join('\n');
-      assert.ok(scripts.includes('Base branch health'));
+    test('the run step invokes the script with its inputs from env', () => {
+      const step = job.steps.find((s) => typeof s.run === 'string');
+      assert.ok(step.run.split('\n').some((l) => l.trim() === 'node scripts/ci-fix-next-rerun.cjs'));
+      assert.equal(step.env.PR_NUMBER, '${{ github.event.pull_request.number }}');
+      assert.equal(step.env.HEAD_SHA, '${{ github.event.pull_request.head.sha }}');
+      assert.equal(step.env.GH_REPO, '${{ github.repository }}');
     });
 
-    test('concurrency is per PR and cancels in progress', () => {
-      assert.ok(String(doc.concurrency.group).includes('github.event.pull_request.number'));
-      assert.equal(doc.concurrency['cancel-in-progress'], true);
+    test('concurrency is at job level, per PR, cancelling in progress; none at workflow level', () => {
+      assert.ok(!('concurrency' in doc), 'workflow-level concurrency would cancel on skipped label events');
+      assert.ok(String(job.concurrency.group).includes('github.event.pull_request.number'));
+      assert.equal(job.concurrency['cancel-in-progress'], true);
     });
 
     test('job has a bounded timeout', () => {

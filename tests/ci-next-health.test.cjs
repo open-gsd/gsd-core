@@ -732,7 +732,41 @@ describe('#6076 pull_request reads the PR\'s current labels from the API', () =>
     assert.match(`${result.stdout}${result.stderr}`, /label-read-failed/);
   });
 
-  for (const prNumber of ['0', 'abc', '']) {
+  test('12: CLI PR_NUMBER=" 7 " is trimmed -> labels requested for issue 7', async (t) => {
+    const dir = createTempDir('next-health-6076-12-');
+    const urls = [];
+    const api = await routedStub(() => ({ status: 200, body: [{ name: BYPASS_LABEL }] }), urls);
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: '', PR_NUMBER: ' 7 ' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 0, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.BYPASSED);
+    assert.ok(urls.some((u) => u.includes('/issues/7/labels')), `requested: ${urls.join(', ')}`);
+  });
+
+  test('13: CLI PR_NUMBER=7, labels route returns a non-array body, PR_LABELS has fix-next -> exit 1 RED', async (t) => {
+    const dir = createTempDir('next-health-6076-13-');
+    const api = await routedStub(() => ({ status: 200, body: { message: 'x' } }));
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: BYPASS_LABEL, PR_NUMBER: '7' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.RED);
+  });
+
+  for (const prNumber of ['0', 'abc', '', '-1', '07']) {
     test(`11: CLI PR_NUMBER=${JSON.stringify(prNumber)} makes no labels request; PR_LABELS decides`, async (t) => {
       const dir = createTempDir('next-health-6076-11-');
       const urls = [];

@@ -535,6 +535,16 @@ only supported runtime.
 | `qa-loop-walk` | `ubuntu-latest` | `product_changed == 'true'` | The QA smell-ratchet scenario walk (see "The QA smell ratchet" below) |
 | `required-tests` | `ubuntu-latest` | `always()` | Aggregates every job above into the one branch-protection-required check |
 
+The `Tests` workflow does not run on label events (#6076), so a label change
+never spends the matrix or cancels a run in flight. The one exception is a
+separate workflow, `fix-next re-run` (`.github/workflows/fix-next-rerun.yml`):
+when `fix-next` is added or removed it re-runs only the `Base branch health`
+job of the PR's latest `Tests` run (and so its dependent `Required tests`),
+reading the label from the API. It skips when the run was cancelled or the PR
+head has since moved. Logic and tests: `scripts/ci-fix-next-rerun.cjs`,
+`tests/ci-fix-next-rerun.test.cjs`. A `Tests` run that started before #6076
+merged ignores the API label; push a commit after applying `fix-next`.
+
 `full_matrix` fires on any changed `tests/**/*.test.cjs` file unconditionally (restored
 by #4421 after #962's narrowing let a real regression through undetected), plus a
 handful of curated `RULES` (workflow/installer/hooks/env-gate changes) — see

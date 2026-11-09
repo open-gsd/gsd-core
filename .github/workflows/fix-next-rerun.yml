@@ -5,8 +5,14 @@
 # their results. The job reads the PR's current labels from the API, so the
 # re-run sees the label as it is now.
 #
-# pull_request_target is safe here: nothing is checked out, no PR code runs, and
-# the label name, repository and head sha reach the script through env only.
+# A Tests run started before #6076 merged checked out the OLD next-health
+# script, which ignores PR_NUMBER and reads only the event's labels. Re-running
+# its job cannot see the label, so for such a run push a commit after applying
+# fix-next.
+#
+# pull_request_target is safe here: only the BASE sha's `scripts/` is checked
+# out (trusted code, never the PR's), no PR code runs, and the repository, PR
+# number and head sha reach the script through env only.
 name: fix-next re-run
 
 on:
@@ -15,49 +21,38 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: fix-next-rerun-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   rerun-base-health:
     name: Re-run Base branch health
     if: github.event.label.name == 'fix-next'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Job level, so a label event that skips this job (its `if` is false) cannot
+    # cancel a waiting fix-next run; only a later fix-next event replaces it.
+    concurrency:
+      group: fix-next-rerun-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       actions: write
+      contents: read
     steps:
+      # base sha only — trusted code, never the PR's
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+          persist-credentials: false
       - name: Re-run Base branch health on the latest Tests run
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # A job can only be re-run once its run has completed, so wait (bounded)
-          # for the latest Tests run to finish before re-running the one job.
-          deadline=$(( $(date +%s) + 85 * 60 ))
-          while :; do
-            run=$(gh run list --workflow test.yml --commit "$HEAD_SHA" --event pull_request --limit 1 --json databaseId,status)
-            run_id=$(jq -r '.[0].databaseId // empty' <<<"$run")
-            if [ -z "$run_id" ]; then
-              echo "No Tests run for $HEAD_SHA yet; when it starts, Base branch health reads the label from the API."
-              exit 0
-            fi
-            status=$(jq -r '.[0].status' <<<"$run")
-            [ "$status" = "completed" ] && break
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::Tests run $run_id is still $status; re-run Base branch health by hand once it completes."
-              exit 1
-            fi
-            echo "Tests run $run_id is $status; waiting for it to complete."
-            sleep 30
-          done
-          job_id=$(gh run view "$run_id" --json jobs --jq '.jobs[] | select(.name == "Base branch health") | .databaseId' | head -n1)
-          if [ -z "$job_id" ]; then
-            echo "::error::Tests run $run_id has no Base branch health job."
-            exit 1
+          if [ ! -f scripts/ci-fix-next-rerun.cjs ]; then
+            echo "::warning::scripts/ci-fix-next-rerun.cjs is absent on the base branch (bootstrap); skipping."
+            exit 0
           fi
-          echo "Re-running Base branch health (job $job_id) on Tests run $run_id."
-          gh run rerun "$run_id" --job "$job_id"
+          node scripts/ci-fix-next-rerun.cjs
