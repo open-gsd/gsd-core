@@ -116,7 +116,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(collect, /needing an answer or a user ruling/);
     assert.match(collect, /any heading/, 'step 1 must not key on one literal heading');
     assert.match(collect, /\bprose\b/, 'step 1 must collect questions written as prose');
-    assert.match(collect, /whatever status it claims/, 'a question the researcher calls closed is still collected');
+    assert.match(collect, /whatever status it claims \(resolved, decided, closed\)/, 'a question the researcher calls closed is still collected, whatever word it uses');
+    assert.match(collect, /needing an answer or a user ruling before planning/, 'the collection is bounded to what planning needs');
     // The exclusions sit after their marker, so they stay exclusions: one that moves in front of it, or a
     // marker reworded into a collection rule, fails here.
     const marker = collect.indexOf('Not one:');
@@ -262,6 +263,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(row, /return `## REVISION_CONFLICT` naming each question/, 'the planner cannot reach the property, so the loop must not spend iterations on it');
     assert.match(row, /the orchestrator asks and records each answer as a `D-NN`/, 'the conflict must name the route that can take effect inside the loop');
     assert.match(row, /Never add a decision yourself/);
+    // The two conditions that pick the route: a citation only on the question it answers, and the
+    // conflict only with no such D-NN.
+    assert.match(row, /on the question it answers in RESEARCH\.md/);
+    assert.match(row, /With no such `D-NN`, return `## REVISION_CONFLICT`/);
   });
 
   // revision-loop.md's Resolve step is the shared protocol plan-phase imports; quick restates it inline.
@@ -337,6 +342,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /never\s+mark\s+a\s+question\s+resolved,\s+decided\s+or\s+closed/i);
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
+    assert.match(rule, /using\s+the\s+decision's\s+real\s+number/, 'a placeholder D-NN must never reach RESEARCH.md');
     assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
     assert.match(rule, /a\s+factual\s+question\s+you\s+settled/);
     assert.match(rule, /No\s+source\s+settles\s+a\s+choice\s+that\s+needs\s+a\s+user\s+ruling/);
@@ -374,5 +380,58 @@ describe('researcher never resolves its own questions (#5438)', () => {
     // Worded as checker step 2: a Discretion D-NN rules on no question, its own included.
     assert.match(guide, /A Discretion `D-NN` is never a ruling, on that question or any other/);
     assert.match(guide, /every `D-NN` it cites is under CONTEXT\.md's `<decisions>`, outside Claude's Discretion, and one answers it/);
+  });
+});
+
+// One rule, restated on every prompt surface a model reads (CLAUDE.md "Generative Fix Divergence").
+// Each surface is pinned above by its own patterns; this suite asserts the shared tokens on all of
+// them at once, so a surface that drops one while the others keep it fails here by name.
+describe('the resolution rule says the same thing on every prompt surface (#5438)', () => {
+  const flat = (t) => t.replace(/\s+/g, ' ');
+  // Surfaces that tell a model what a valid citation is.
+  const citing = once(() => ({
+    'checker step 2': steps().find((l) => /\bpasses only\b/.test(l)) || '',
+    'checker required_property': (dim11().match(/required_property:\s*"([^"]*)"/) || [])[1] || '',
+    'checker success_criteria': flat((span(checker(), '<success_criteria>', /<\/success_criteria>/).match(/- \[ \] Research resolution checked[^\n]*\n[^\n]*/) || [''])[0]),
+    'researcher rule': flat(researchTemplateFence(researcher()).after),
+    'research template': flat(span(researchTemplate(), '\n**Open Questions:**\n', /\n\n/)),
+    'planner row': splitLines(plannerRevision()).find((l) => l.startsWith('| research_resolution |')) || '',
+  }));
+  // Surfaces that record a user's answer as a decision.
+  const recording = once(() => {
+    const loop = flat(read('gsd-core/references/revision-loop.md'));
+    const quick = flat(read('gsd-core/workflows/quick/steps/plan-checker-loop.md'));
+    const cut = (t) => { const at = t.indexOf('For a `research_resolution` conflict'); return at === -1 ? '' : t.slice(at, at + 600); };
+    return { 'revision-loop Resolve': cut(loop), 'quick conflict handler': cut(quick) };
+  });
+
+  test('every citing surface scopes a D-NN to <decisions>, excludes Claude\'s Discretion, and needs one that answers', () => {
+    for (const [name, text] of Object.entries(citing())) {
+      assert.ok(text, `surface not found: ${name}`);
+      assert.match(text, /<decisions>/, `${name} does not scope the D-NN to <decisions>`);
+      assert.match(text, /outside Claude's Discretion|\(not Discretion\)|Discretion entry is no ruling|Discretion `D-NN` is never a ruling/, `${name} drops the Discretion exclusion`);
+      assert.match(text, /one answers it|one of which answers it|one answering it|a decision that answers a question|on the question it answers/, `${name} drops the condition that a cited D-NN answers the question`);
+    }
+  });
+
+  test('every recording surface writes the answer under <decisions>, outside Claude\'s Discretion', () => {
+    for (const [name, text] of Object.entries(recording())) {
+      assert.ok(text, `surface not found: ${name}`);
+      assert.match(text, /<decisions>/, `${name} does not record under <decisions>`);
+      assert.match(text, /outside Claude's Discretion/, `${name} could record a ruling into the Discretion area`);
+      assert.match(text, /as the next unused `D-NN`/, `${name} does not record the answer as a citable D-NN`);
+    }
+  });
+
+  test('no surface keeps a run boundary the checker cannot locate', () => {
+    for (const [name, text] of Object.entries({ ...citing(), ...recording(), 'checker Dimension 11': dim11() })) {
+      assert.doesNotMatch(text, /recorded before|planning run/, `${name} still carries the run boundary`);
+    }
+  });
+
+  test('the agents that may write RESEARCH.md citations never add a decision themselves', () => {
+    assert.match(dim11(), /never the researcher or planner/);
+    assert.match(citing()['researcher rule'], /Never add a decision to CONTEXT\.md/);
+    assert.match(citing()['planner row'], /Never add a decision yourself/);
   });
 });
