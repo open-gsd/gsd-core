@@ -10,6 +10,7 @@ module.exports = {
   "tests/adr-index-gate.test.cjs",
   "tests/agent-install-check.test.cjs",
   "tests/agent-install-validation.test.cjs",
+  "tests/agent-query-contract.test.cjs",
   "tests/agent-skills.test.cjs",
   "tests/antigravity-upgrades.test.cjs",
   "tests/args-terminator-nonce.test.cjs",
