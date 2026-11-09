@@ -9,9 +9,20 @@
  * every violation, sorted by constant then rule, so one run reports all defects at once.
  *
  * Evidence kinds:
- *   measured      observedMaxMs + worstPlatform + samples + source; value >= minMargin * observed.
- *                 A censored entry (no record above the slow-spawn threshold) sets
- *                 censoredBelowMs, uses the threshold as observedMaxMs, and may omit the platform.
+ *   measured      observedMaxMs + worstPlatform + samples + source + unmeasuredPlatforms + unseenSites;
+ *                 value >= minMargin * observed.
+ *                 samples        records seen per platform (win32/darwin/linux), non-negative integers,
+ *                                at least one > 0; worstPlatform must have samples > 0.
+ *                 p50Ms, p99Ms   optional; both or neither, positive, p50Ms <= p99Ms <= observedMaxMs.
+ *                 unmeasuredPlatforms  required array; must equal exactly the platforms whose count
+ *                                (samples, or lanes for a censored entry) is missing or 0.
+ *                 unseenSites    required non-negative integer: call sites of this constant the process
+ *                                seam cannot see. When > 0, unseenSitesTrackedBy names the issue(s)
+ *                                moving them, written "#N" or "#N #M".
+ *                 A censored entry (no record above the slow-spawn threshold) sets censoredBelowMs,
+ *                 uses the threshold as observedMaxMs, and may omit the platform. It carries lanes
+ *                 instead of samples: lanes counts the CI lanes per platform that ran the class's
+ *                 seam sites (there are no records to count). It must not carry samples, p50Ms or p99Ms.
  *   mirror        of: { module, export }; the value must equal that export exactly.
  *   fixture-data  the value is fixture payload, not a spawn bound; needs a reason.
  *   test-backstop an outer guard around a test, not a spawn bound; needs a reason.
@@ -34,13 +45,19 @@ const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArr
 const isPositiveFinite = (v) => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
 
-function samplesValid(samples) {
-  if (!isPlainObject(samples)) return false;
-  const counts = Object.values(samples);
-  if (counts.length === 0) return false;
-  if (!counts.every((n) => Number.isInteger(n) && n >= 0)) return false;
-  return counts.some((n) => n > 0);
+/** A per-platform count map: known platform keys, non-negative integers, at least one > 0. */
+function countsValid(counts) {
+  if (!isPlainObject(counts)) return false;
+  const keys = Object.keys(counts);
+  if (keys.length === 0) return false;
+  if (!keys.every((k) => PLATFORMS.has(k))) return false;
+  const values = Object.values(counts);
+  if (!values.every((n) => Number.isInteger(n) && n >= 0)) return false;
+  return values.some((n) => n > 0);
 }
+
+const PLATFORM_LIST = ['win32', 'darwin', 'linux'];
+const TRACKER_RE = /^#\d+( #\d+)*$/;
 
 function checkMeasured(name, value, entry, minMargin) {
   const out = [];
@@ -51,6 +68,9 @@ function checkMeasured(name, value, entry, minMargin) {
   if (!observedOk) add('invalid-observed', `observedMaxMs must be a positive finite number, got ${String(observed)}`);
 
   const censored = entry.censoredBelowMs !== undefined;
+  // The per-platform count map: lanes for a censored entry, samples otherwise.
+  let counts;
+  let countsOk;
   if (censored) {
     if (!isPositiveFinite(entry.censoredBelowMs) || (observedOk && observed !== entry.censoredBelowMs)) {
       add('invalid-censor', `censored entry must state its threshold as observedMaxMs (censoredBelowMs ${String(entry.censoredBelowMs)}, observedMaxMs ${String(observed)})`);
@@ -58,12 +78,49 @@ function checkMeasured(name, value, entry, minMargin) {
     if (entry.worstPlatform !== null && entry.worstPlatform !== undefined && !PLATFORMS.has(entry.worstPlatform)) {
       add('invalid-platform', `worstPlatform must be win32, darwin, linux or null, got ${String(entry.worstPlatform)}`);
     }
-  } else if (!PLATFORMS.has(entry.worstPlatform)) {
-    add('invalid-platform', `worstPlatform must be win32, darwin or linux, got ${String(entry.worstPlatform)}`);
+    counts = entry.lanes;
+    countsOk = countsValid(entry.lanes);
+    if (entry.samples !== undefined || !countsOk) {
+      add('invalid-lanes', `censored entry must count lanes (platform keys, non-negative integers, at least one > 0) and carry no samples, got lanes ${JSON.stringify(entry.lanes)}, samples ${JSON.stringify(entry.samples)}`);
+    }
+    if (entry.p50Ms !== undefined || entry.p99Ms !== undefined) {
+      add('invalid-percentiles', 'censored entry has no records and must not carry p50Ms or p99Ms');
+    }
+  } else {
+    counts = entry.samples;
+    countsOk = countsValid(entry.samples);
+    if (!countsOk) add('invalid-samples', `samples must map win32/darwin/linux to non-negative integers with at least one > 0, got ${JSON.stringify(entry.samples)}`);
+    if (entry.lanes !== undefined) add('invalid-lanes', 'only a censored entry carries lanes; an uncensored entry counts samples');
+    if (!PLATFORMS.has(entry.worstPlatform)) {
+      add('invalid-platform', `worstPlatform must be win32, darwin or linux, got ${String(entry.worstPlatform)}`);
+    } else if (countsOk && !(counts[entry.worstPlatform] > 0)) {
+      add('invalid-platform', `worstPlatform ${entry.worstPlatform} has no samples`);
+    }
+    if (entry.p50Ms !== undefined || entry.p99Ms !== undefined) {
+      const { p50Ms, p99Ms } = entry;
+      const ordered = isPositiveFinite(p50Ms) && isPositiveFinite(p99Ms) && p50Ms <= p99Ms && (!observedOk || p99Ms <= observed);
+      if (!ordered) add('invalid-percentiles', `p50Ms and p99Ms must both be positive with p50Ms <= p99Ms <= observedMaxMs, got p50Ms ${String(p50Ms)}, p99Ms ${String(p99Ms)}, observedMaxMs ${String(observed)}`);
+    }
   }
 
-  if (!samplesValid(entry.samples)) add('invalid-samples', `samples must map platforms to non-negative integers with at least one > 0, got ${JSON.stringify(entry.samples)}`);
   if (!isNonEmptyString(entry.source)) add('missing-source', 'measured evidence must name its source');
+
+  // Only judged against a usable count map; a broken one is already reported above.
+  if (countsOk) {
+    const expected = PLATFORM_LIST.filter((p) => !(counts[p] > 0));
+    const stated = entry.unmeasuredPlatforms;
+    const statedOk = Array.isArray(stated) && stated.every((p) => PLATFORMS.has(p)) && new Set(stated).size === stated.length;
+    if (!statedOk || stated.length !== expected.length || !expected.every((p) => stated.includes(p))) {
+      add('unstated-unmeasured-platform', `unmeasuredPlatforms must list exactly the platforms with no data (${JSON.stringify(expected)}), got ${JSON.stringify(stated)}`);
+    }
+  }
+
+  const unseen = entry.unseenSites;
+  if (!Number.isInteger(unseen) || unseen < 0) {
+    add('invalid-unseen-sites', `unseenSites must be a non-negative integer, got ${String(unseen)}`);
+  } else if (unseen > 0 && !(isNonEmptyString(entry.unseenSitesTrackedBy) && TRACKER_RE.test(entry.unseenSitesTrackedBy))) {
+    add('invalid-unseen-sites', `unseenSites ${unseen} > 0 needs unseenSitesTrackedBy like "#123" or "#123 #456", got ${JSON.stringify(entry.unseenSitesTrackedBy)}`);
+  }
 
   if (observedOk && value < minMargin * observed) {
     add('margin-below-minimum', `value ${value} is ${(Math.floor((value / observed) * 100) / 100).toFixed(2)}x observed ${observed}; minimum is ${minMargin}x`);

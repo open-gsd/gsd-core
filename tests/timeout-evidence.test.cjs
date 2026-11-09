@@ -29,9 +29,22 @@ function measured(overrides = {}) {
     samples: { linux: 3 },
     source: 'synthetic-source',
     window: 'synthetic-window',
+    unmeasuredPlatforms: ['win32', 'darwin'],
+    unseenSites: 0,
     ...overrides,
   };
 }
+
+/** A valid censored `measured` entry: counts lanes, no samples, no percentiles. */
+function censored(overrides = {}) {
+  const entry = measured({ worstPlatform: null, censoredBelowMs: 2000, observedMaxMs: 2000, lanes: { linux: 2 }, ...overrides });
+  delete entry.samples;
+  if (overrides.samples !== undefined) entry.samples = overrides.samples;
+  if (entry.lanes === undefined) delete entry.lanes;
+  return entry;
+}
+
+const check = (entry, value = 1e6) => validateTimeoutEvidence({ CLASS_A_MS: value }, { CLASS_A_MS: entry });
 
 const rulesOf = (violations) => violations.map((v) => `${v.constant}:${v.rule}`);
 
@@ -71,7 +84,7 @@ describe('validateTimeoutEvidence', () => {
             { CLASS_A_MS: measured({ observedMaxMs: observed }) },
           );
           const passes = violations.length === 0;
-          return passes === (value >= 2 * observed);
+          return passes === (value >= MIN_TIMEOUT_MARGIN * observed);
         },
       ),
       { seed: 42, numRuns: 200 },
@@ -109,13 +122,11 @@ describe('validateTimeoutEvidence', () => {
   });
 
   test('censored entry states the threshold as its upper bound', () => {
-    const entry = measured({ worstPlatform: null, censoredBelowMs: 2000, observedMaxMs: 2000 });
-    assert.deepEqual(validateTimeoutEvidence({ CLASS_A_MS: 4000 }, { CLASS_A_MS: entry }), []);
+    assert.deepEqual(validateTimeoutEvidence({ CLASS_A_MS: 4000 }, { CLASS_A_MS: censored() }), []);
   });
 
   test('censored observation must equal its threshold', () => {
-    const entry = measured({ worstPlatform: null, censoredBelowMs: 2000, observedMaxMs: 1500 });
-    const violations = validateTimeoutEvidence({ CLASS_A_MS: 4000 }, { CLASS_A_MS: entry });
+    const violations = validateTimeoutEvidence({ CLASS_A_MS: 4000 }, { CLASS_A_MS: censored({ observedMaxMs: 1500 }) });
     assert.deepEqual(rulesOf(violations), ['CLASS_A_MS:invalid-censor']);
   });
 
@@ -127,6 +138,115 @@ describe('validateTimeoutEvidence', () => {
       );
       assert.deepEqual(rulesOf(violations), ['CLASS_A_MS:invalid-samples'], `samples=${JSON.stringify(bad)}`);
     }
+  });
+
+  test('measured evidence must name its source', () => {
+    for (const bad of [undefined, '']) {
+      assert.deepEqual(rulesOf(check(measured({ source: bad }))), ['CLASS_A_MS:missing-source'], `source=${String(bad)}`);
+    }
+  });
+
+  test('censored threshold must be positive', () => {
+    for (const bad of [0, -1, NaN]) {
+      assert.deepEqual(rulesOf(check(censored({ censoredBelowMs: bad }))), ['CLASS_A_MS:invalid-censor'], `censoredBelowMs=${String(bad)}`);
+    }
+  });
+
+  test('censored platform, when given, must be known', () => {
+    assert.deepEqual(rulesOf(check(censored({ worstPlatform: 'windows' }))), ['CLASS_A_MS:invalid-platform']);
+    assert.deepEqual(check(censored({ worstPlatform: 'linux' })), []);
+  });
+
+  test('samples keys are platforms', () => {
+    for (const bad of [{ linux: 3, windows: 1 }, { freebsd: 2 }]) {
+      assert.deepEqual(rulesOf(check(measured({ samples: bad }))), ['CLASS_A_MS:invalid-samples'], `samples=${JSON.stringify(bad)}`);
+    }
+  });
+
+  test('worst platform must have observations', () => {
+    const entry = measured({ worstPlatform: 'darwin', samples: { linux: 3, darwin: 0 } });
+    assert.deepEqual(rulesOf(check(entry)), ['CLASS_A_MS:invalid-platform']);
+    assert.deepEqual(check(measured({ worstPlatform: 'darwin', samples: { linux: 3, darwin: 1 }, unmeasuredPlatforms: ['win32'] })), []);
+  });
+
+  test('censored entries count lanes, not records', () => {
+    const all = ['win32', 'darwin', 'linux'];
+    const bad = [
+      censored({ lanes: undefined, samples: { linux: 3 } }),
+      censored({ lanes: undefined }),
+      censored({ lanes: {}, unmeasuredPlatforms: all }),
+      censored({ lanes: { linux: 0 }, unmeasuredPlatforms: all }),
+      censored({ lanes: { linux: 1.5 } }),
+      censored({ lanes: { linux: -1 } }),
+      censored({ lanes: { windows: 2 } }),
+      censored({ samples: { linux: 3 } }),
+      measured({ lanes: { linux: 2 } }),
+    ];
+    for (const entry of bad) {
+      assert.deepEqual(rulesOf(check(entry)), ['CLASS_A_MS:invalid-lanes'], JSON.stringify(entry));
+    }
+  });
+
+  test('percentiles are ordered and bounded by the max', () => {
+    const bad = [
+      { p50Ms: 10 },
+      { p99Ms: 50 },
+      { p50Ms: 0, p99Ms: 50 },
+      { p50Ms: 10, p99Ms: -1 },
+      { p50Ms: 60, p99Ms: 50 },
+      { p50Ms: 10, p99Ms: OBSERVED_MS + 1 },
+      { p50Ms: NaN, p99Ms: 50 },
+    ];
+    for (const pct of bad) {
+      assert.deepEqual(rulesOf(check(measured(pct))), ['CLASS_A_MS:invalid-percentiles'], JSON.stringify(pct));
+    }
+    assert.deepEqual(rulesOf(check(censored({ p50Ms: 10, p99Ms: 50 }))), ['CLASS_A_MS:invalid-percentiles']);
+  });
+
+  test('ordered percentiles pass', () => {
+    assert.deepEqual(check(measured({ p50Ms: 10, p99Ms: 50 })), []);
+    assert.deepEqual(check(measured({ p50Ms: 50, p99Ms: 50 })), []);
+    assert.deepEqual(check(measured({ p50Ms: 10, p99Ms: OBSERVED_MS })), []);
+  });
+
+  test('every unmeasured platform is stated, and only those', () => {
+    const bad = [
+      measured({ unmeasuredPlatforms: ['win32'] }),
+      measured({ unmeasuredPlatforms: [] }),
+      measured({ unmeasuredPlatforms: ['win32', 'darwin', 'linux'] }),
+      measured({ unmeasuredPlatforms: ['win32', 'darwin', 'darwin'] }),
+      measured({ unmeasuredPlatforms: ['win32', 'freebsd'] }),
+      measured({ unmeasuredPlatforms: undefined }),
+      measured({ unmeasuredPlatforms: 'win32' }),
+      measured({ samples: { linux: 3, darwin: 0 }, unmeasuredPlatforms: ['win32'] }),
+      censored({ unmeasuredPlatforms: ['win32'] }),
+    ];
+    for (const entry of bad) {
+      assert.deepEqual(rulesOf(check(entry)), ['CLASS_A_MS:unstated-unmeasured-platform'], JSON.stringify(entry));
+    }
+    assert.deepEqual(check(measured({ samples: { linux: 3, darwin: 0 } })), []);
+  });
+
+  test('sites the seam cannot see are counted and tracked', () => {
+    const bad = [
+      measured({ unseenSites: undefined }),
+      measured({ unseenSites: -1 }),
+      measured({ unseenSites: 1.5 }),
+      measured({ unseenSites: '3' }),
+      measured({ unseenSites: 3 }),
+      measured({ unseenSites: 3, unseenSitesTrackedBy: '' }),
+      measured({ unseenSites: 3, unseenSitesTrackedBy: '6058' }),
+      measured({ unseenSites: 3, unseenSitesTrackedBy: '#6058,#6059' }),
+    ];
+    for (const entry of bad) {
+      assert.deepEqual(rulesOf(check(entry)), ['CLASS_A_MS:invalid-unseen-sites'], JSON.stringify(entry));
+    }
+  });
+
+  test('counted, tracked unseen sites pass', () => {
+    assert.deepEqual(check(measured({ unseenSites: 0 })), []);
+    assert.deepEqual(check(measured({ unseenSites: 3, unseenSitesTrackedBy: '#6058' })), []);
+    assert.deepEqual(check(measured({ unseenSites: 2, unseenSitesTrackedBy: '#6058 #6059' })), []);
   });
 
   test('a mirror equal to its source passes', () => {

@@ -693,12 +693,12 @@ The throw-preserving companion to the process seam (`tests/helpers/git-fixture.c
 
 ### Timeout evidence record
 The measured backing for each class-norm timeout in `tests/helpers/timeouts.cjs` (#4689). Each export there has a `TIMEOUT_EVIDENCE` entry, and the entry has one of four kinds:
-- `measured`: the worst observed spawn duration (`observedMaxMs`), the `worstPlatform` it came from, `samples` per platform, plus `source` and `window`.
+- `measured`: the worst observed spawn duration (`observedMaxMs`), the `worstPlatform` it came from, `samples` per platform (records seen), optional `p50Ms` and `p99Ms`, plus `source` and `window`. `unmeasuredPlatforms` must list every platform with no data. `unseenSites` counts the call sites the seam cannot see, and when it is above 0, `unseenSitesTrackedBy` names the issue moving them. A censored entry counts `lanes` (the lanes that ran the class's seam sites) instead of `samples`.
 - `mirror`: a re-export of another module's own constant, named by `{ module, export }`.
 - `fixture-data`: a number inside a fixture document, never a spawn bound.
 - `test-backstop`: a `node:test` runaway guard.
 
-`validateTimeoutEvidence` (`tests/helpers/timeout-evidence.cjs`) is pure. It reports a constant with no entry, an entry for no constant, a measured constant below `MIN_TIMEOUT_MARGIN` (2) times its worst observation, and a mirror that no longer equals its source. `tests/timeout-evidence.test.cjs` runs it against the real exports, so a class that gets slower, or a constant added without evidence, fails the suite instead of timing out in CI.
+`validateTimeoutEvidence` (`tests/helpers/timeout-evidence.cjs`) is pure. It reports a constant with no entry, an entry for no constant, a measured constant below `MIN_TIMEOUT_MARGIN` (2) times its worst observation, and a mirror that no longer equals its source. `tests/timeout-evidence.test.cjs` runs it against the real exports. The check reads only the recorded data and never re-measures, so it fails when the recorded evidence no longer supports the value (a value lowered below 2x, a new measurement that breaks the floor, or a constant added without evidence). New measurements come from re-reading the CI `seam:spawn-stall` log.
 
 The CI source is the process seam's `seam:spawn-stall` log: spawns of 2000ms or more, uploaded in the `test-timings-*` artifacts from the ubuntu, Windows and macOS lanes. Only seam-routed spawns appear there. A class whose sites call `child_process` directly is invisible to the log, so it is measured with a harness instead, and the entry names the platforms the harness covered. When no spawn of a class reached the threshold on lanes that ran it, the entry is censored: `censoredBelowMs` = 2000, and the observation is an upper bound. The rule text lives in TESTING-STANDARDS.md, "Every new or changed timeout constant states its evidence".
 

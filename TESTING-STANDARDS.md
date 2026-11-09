@@ -221,14 +221,22 @@ Three kinds of constant are exempt from the margin, but must say which kind they
 - **Test backstop** — a `node:test` per-test `{ timeout }` that only turns a runaway into a failure; the test normally finishes in milliseconds.
 - **Mirror** — the same value as another module's own constant. A mirror re-exports that constant (`SEAM_DEFAULT_TIMEOUT_MS` is `process-seam.cjs`'s `DEFAULT_TIMEOUT_MS`). Restating the literal is not allowed.
 
-In `tests/helpers/timeouts.cjs` the evidence is data, not only prose. Every exported constant has a `TIMEOUT_EVIDENCE` entry: `measured` (observed maximum, worst platform, samples per platform, source, window), or one of the exempt kinds with its reason. The comment cites that entry. `tests/timeout-evidence.test.cjs` fails when:
+In `tests/helpers/timeouts.cjs` the evidence is data, not only prose. Every exported constant has a `TIMEOUT_EVIDENCE` entry: `measured` (observed maximum, worst platform, samples per platform, source, window, the platforms with no data, and the call sites the seam cannot see), or one of the exempt kinds with its reason. The comment cites that entry. `tests/timeout-evidence.test.cjs` fails when:
 
 - a constant has no entry;
 - an entry names no constant;
 - a measured constant is below 2x its worst observation;
 - a mirror no longer equals its source.
 
-When a class gets slower, the test fails before CI starts timing out. Update the measurement and, if needed, the value.
+The test checks only the recorded data. It never re-measures a spawn, so a class that gets slower does not fail it. It fails when the recorded evidence no longer supports the value: the value is lowered below 2x the observation, or a new measurement is recorded that breaks the 2x floor. New measurements come from re-reading the CI `seam:spawn-stall` log, then updating the entry and, if needed, the value.
+
+The fields of a `measured` entry:
+
+- `samples`: the number of log records seen per platform (win32, darwin, linux). The worst platform must have a count above 0.
+- `lanes`: used by a censored entry instead of `samples`. It counts the CI lanes per platform that ran the class's seam sites, because a censored entry has no records to count. A censored entry carries no `samples`.
+- `p50Ms`, `p99Ms`: optional percentiles of the recorded durations. Give both or neither, with `p50Ms <= p99Ms <= observedMaxMs`. A censored entry carries neither.
+- `unmeasuredPlatforms`: required. It lists every platform whose `samples` (or `lanes`) count is missing or 0, and only those.
+- `unseenSites`: required. The number of call sites of this constant that the process seam cannot see, so the log says nothing about them. When it is above 0, `unseenSitesTrackedBy` names the issue that moves them, written `#6058` or `#6058 #6059`.
 
 **Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`) for literals; `tests/timeout-evidence.test.cjs` for the evidence in `tests/helpers/timeouts.cjs`; code review for the comment shape of file-local constants. A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
 
