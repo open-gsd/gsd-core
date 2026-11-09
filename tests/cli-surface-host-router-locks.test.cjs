@@ -460,6 +460,15 @@ const CASES_B2 = [
   {"id":"loop dup fingerprint eq first","argv":["loop","render-hooks","plan:pre","--after-fingerprint=qq","--after-fingerprint","ph"],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: qq ("}},
   {"id":"rdi dup harness-flag space first","argv":["record-dispatch-isolation","--isolation","harness-worktree","--harness-flag","x","--harness-flag=--worktree"],"post":["node","-e","console.log(JSON.parse(require('fs').readFileSync('.gsd/dispatch-isolation-sentinel.json','utf8')).harness_flag)"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded","post":"x"}},
   {"id":"rdi dup harness-flag eq first","argv":["record-dispatch-isolation","--isolation","harness-worktree","--harness-flag=--worktree","--harness-flag","x"],"post":["node","-e","console.log(JSON.parse(require('fs').readFileSync('.gsd/dispatch-isolation-sentinel.json','utf8')).harness_flag)"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded","post":"--worktree"}},
+  {"id":"qta leading flag then word","argv":["quick-tasks-append","--status","ok","desc words"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant","contains":{"row":"desc words"},"excludes":{"row":"--status"}}},
+  {"id":"qta leading flag only","argv":["quick-tasks-append","--status","ok"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"requires --task"}},
+  {"id":"qta task flag wins over word","argv":["quick-tasks-append","word","--task","flagged"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant","contains":{"row":"flagged"}}},
+  {"id":"fm get positional field","argv":["frontmatter","get","f.md","title"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:title","json":{"title":"Hi"}}},
+  {"id":"fm get positional field via query","argv":["query","frontmatter.get","f.md","status"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:status","json":{"status":"complete"}}},
+  {"id":"fm get field flag","argv":["frontmatter","get","f.md","--field","title"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:title","json":{"title":"Hi"}}},
+  {"id":"fm get no field","argv":["frontmatter","get","f.md"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:status,title"}},
+  {"id":"fm get two positional fields","argv":["frontmatter","get","f.md","title","status"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"status\""}},
+  {"id":"fm get field flag and positional","argv":["frontmatter","get","f.md","--field","title","status"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"status\""}},
 ];
 
 function runCommand(argv, cwd) {
@@ -504,13 +513,18 @@ describe('gsd-tools host routers, batch 2: valid argv forms keep their behavior'
         const body = lastJsonLine(r.stderr);
         const reason = body && body.ok === false ? body.reason : null;
         const actual = { exit: r.exitCode, reason, shape: shapeOf(r.stdout) };
-        const { message, json, ...expected } = c.expect;
+        const { message, json, contains, excludes, ...expected } = c.expect;
         if (message !== undefined) {
           assert.ok(body && String(body.message).includes(message), `${c.id}: expected error to mention "${message}", got ${r.stderr.slice(0, 200)}`);
         }
         if (json !== undefined) {
           const parsed = JSON.parse(r.stdout);
           for (const [key, value] of Object.entries(json)) assert.deepEqual(parsed[key], value, `${c.id}: ${key}`);
+        }
+        if (contains !== undefined || excludes !== undefined) {
+          const parsed = JSON.parse(r.stdout);
+          for (const [key, value] of Object.entries(contains ?? {})) assert.ok(String(parsed[key]).includes(value), `${c.id}: ${key} should include ${value}: ${parsed[key]}`);
+          for (const [key, value] of Object.entries(excludes ?? {})) assert.ok(!String(parsed[key]).includes(value), `${c.id}: ${key} should not include ${value}: ${parsed[key]}`);
         }
         if (c.expect.stdout !== undefined) actual.stdout = r.stdout.trim().replace(/\s+/g, ' ');
         if (c.post) actual.post = runCommand(c.post, project).trim();
