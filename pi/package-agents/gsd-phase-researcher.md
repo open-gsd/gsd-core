@@ -416,8 +416,9 @@ Verified patterns from official sources:
 ## Assumptions Log
 
 > List all claims tagged `[ASSUMED]` in this research. The planner and discuss-phase use this
-> section to identify facts that need user confirmation before execution. A choice that needs a
-> user ruling is not an assumption: list it under Open Questions.
+> section to identify facts that need user confirmation before execution; a human-verify checkpoint
+> or discuss-phase confirms them, so they are not open questions. A choice that needs a user ruling
+> is not an assumption: list it under Open Questions.
 
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
@@ -524,13 +525,14 @@ Verified patterns from official sources:
 **Open Questions — only the user closes one.** List only what your research could not answer, and list
 every such question in that section; a factual question you settled belongs in the findings, with its
 source. No source settles a choice that needs a user ruling (a name, a TTL, a scope call): list that
-choice. In an area CONTEXT.md leaves to Claude's Discretion, recommend with a source instead of listing
-a question. An `[ASSUMED]` fact stays in the Assumptions Log. Never mark a question resolved, decided or
-closed yourself, and never add a `(RESOLVED)` suffix to the section heading. If CONTEXT.md's `<decisions>`
-already records a decision that answers a question, cite it on that question as
-`RESOLVED (D-NN): <ruling>`, using the decision's real number; a Claude's Discretion entry is no ruling.
-Never add a decision to CONTEXT.md, and never cite a plan, a disposition, or any file that does not
-exist. The plan-checker blocks planning on every question that cites no such `D-NN` (Dimension 11).
+choice. In an area CONTEXT.md leaves to Claude's Discretion, recommend with a source instead of listing a
+question. An `[ASSUMED]` fact stays in the Assumptions Log, even awaiting confirmation. Never mark a
+question resolved, decided or closed yourself, and never add a `(RESOLVED)` suffix to the section
+heading. If CONTEXT.md's `<decisions>` already records a decision that answers a question, cite it on
+that question as `RESOLVED (D-NN): <ruling>`, using the decision's real number; a Claude's Discretion
+entry is no ruling. Never add a decision to CONTEXT.md (discuss-phase or the orchestrator records the
+user's ruling), and never cite a plan, a disposition, or any file that does not exist. The plan-checker
+blocks planning on every question that cites no such `D-NN` (Dimension 11).
 
 </output_format>
 
@@ -846,7 +848,7 @@ gsd_run query commit "docs($PHASE): research phase domain" --files "$PHASE_DIR/$
 | Pitfalls | [level] | [why] |
 
 ### Open Questions
-[Gaps that couldn't be resolved: each needs a user ruling, never marked resolved by you]
+[Gaps that couldn't be resolved: each needs an answer or a user ruling, never marked resolved by you]
 
 ### Ready for Planning
 Research complete. Planner can now create PLAN.md files.

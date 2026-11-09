@@ -325,8 +325,11 @@ describe('researcher never resolves its own questions (#5438)', () => {
     const log = span(fence().body, '## Assumptions Log', /\n## /);
     assert.match(log, /facts\s+that\s+need\s+user\s+confirmation/);
     assert.match(log, /not\s+an\s+assumption:\s+list\s+it\s+under\s+Open\s+Questions/);
+    // Dimension 11 does not collect these rows, so the header names what confirms them instead.
+    // A blockquote: a wrap carries its `> ` into the gap between two words.
+    assert.match(log, /a[\s>]+human-verify[\s>]+checkpoint[\s>]+or[\s>]+discuss-phase[\s>]+confirms[\s>]+them,[\s>]+so[\s>]+they[\s>]+are[\s>]+not[\s>]+open[\s>]+questions/);
     assert.doesNotMatch(log, /decisions\s+that\s+need\s+user\s+confirmation/, 'the log header must not call its rows pending decisions');
-    assert.match(fence().after, /`\[ASSUMED\]`\s+fact\s+stays\s+in\s+the\s+Assumptions\s+Log/);
+    assert.match(fence().after, /`\[ASSUMED\]`\s+fact\s+stays\s+in\s+the\s+Assumptions\s+Log,\s+even\s+awaiting\s+confirmation/);
   });
 
   test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
@@ -340,7 +343,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /Claude's\s+Discretion,\s+recommend\s+with\s+a\s+source/);
     assert.match(rule, /Claude's\s+Discretion\s+entry\s+is\s+no\s+ruling/);
     assert.match(rule, /CONTEXT\.md's\s+`<decisions>`/);
-    assert.match(rule, /Never\s+add\s+a\s+decision\s+to\s+CONTEXT\.md/);
+    assert.match(rule, /Never\s+add\s+a\s+decision\s+to\s+CONTEXT\.md\s+\(discuss-phase\s+or\s+the\s+orchestrator\s+records\s+the\s+user's\s+ruling\)/);
     // Anchored on the negation: matching `cite a plan` alone passes when "never" becomes "always".
     assert.match(rule, /\bnever\s+cite\s+a\s+plan,\s+a\s+disposition\b/i);
   });
@@ -348,7 +351,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
   test('the return template leaves open questions to a user ruling', () => {
     const ret = span(researcher(), '\n### Open Questions\n', /\n### /);
     assert.doesNotMatch(ret, GATE_TOKEN);
-    assert.match(ret, /user ruling/);
+    // Step 1 collects a factual question that needs an answer, not only a ruling.
+    assert.match(ret, /each needs an answer or a user ruling/);
     assert.match(ret, /never marked resolved/i);
   });
 
@@ -367,6 +371,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(guide, /List every open question in that section/);
     assert.match(guide, /No source settles a choice that needs a user ruling/);
     assert.match(guide, /Claude's Discretion, recommend with a source/);
-    assert.match(guide, /Discretion entry is never a ruling/);
+    // Worded as checker step 2: a Discretion D-NN rules on no question, its own included.
+    assert.match(guide, /A Discretion `D-NN` is never a ruling, on that question or any other/);
+    assert.match(guide, /every `D-NN` it cites is under CONTEXT\.md's `<decisions>`, outside Claude's Discretion, and one answers it/);
   });
 });

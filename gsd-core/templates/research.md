@@ -583,8 +583,8 @@ function useVehicleControls(rigidBodyRef) {
 - Only the user closes an open question: never mark a question resolved, decided or closed yourself, and never add a `(RESOLVED)` suffix to the `## Open Questions` section heading
 - List every open question in that section, never in prose or under another heading
 - A cited source settles a factual question. No source settles a choice that needs a user ruling (a name, a TTL, a scope call): that stays an open question
-- In an area CONTEXT.md lists under Claude's Discretion, recommend with a source instead of listing a question. A Discretion entry is never a ruling on any other question
-- A question is resolved only when every `D-NN` it cites is recorded under CONTEXT.md's `<decisions>` and one answers it, as `RESOLVED (D-NN): <ruling>`; the plan-checker blocks planning on any other (Dimension 11)
+- In an area CONTEXT.md lists under Claude's Discretion, recommend with a source instead of listing a question. A Discretion `D-NN` is never a ruling, on that question or any other
+- A question is resolved only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and one answers it, as `RESOLVED (D-NN): <ruling>`; the plan-checker blocks planning on any other (Dimension 11)
 
 **Integration with planning:**
 - RESEARCH.md loaded as @context reference in PLAN.md
