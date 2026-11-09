@@ -3113,19 +3113,42 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
   });
   // Greedy covering: repeatedly take the shape (in a fixed order) that holds
   // the most pairs of choices not yet held, until every pair is held.
+  const shapeOf = (t, depth, choices) => ({
+    outer: t.slice(0, depth - 1).map((v) => choices[0][v]),
+    inner: Object.keys(WRAP)[t[depth - 1]],
+    prefix: SPAWN_PREFIXES[t[depth]],
+    at: t[depth + 1],
+    form: Object.keys(FORMS)[t[depth + 2]],
+  });
+  // A shape the command spells as chosen: buildSpawn rewrites a prefix at a
+  // dash level to `!` and `<(…)` there to `$(…)`, and writes a bare-word
+  // `eval` launch as the command; a pair held only by a rewritten shape would
+  // be held by no command.
+  const spelledAsChosen = ({ outer, inner, prefix, at, form }) => {
+    const chain = [...outer, inner];
+    const shells = ['bash'];
+    for (let i = 0; i < chain.length; i++) {
+      if (chain[i] === 'p' && shells[i] === 'dash') return false;
+      shells.push(STARTS[chain[i]] || shells[i]);
+    }
+    if (shells[at] === 'dash' && prefix !== '!') return false;
+    return !(inner === 'u' && at === chain.length && form !== 'plain');
+  };
+  // Of those, the plain reading denies exactly the ones with a prefix in front
+  // of `$(…)`, backquotes or `<(…)`, or `time` as the command or after `;` or
+  // `&&` (measured over every shape two and three deep). They are left out, so
+  // every pair is held by a command only the further reading denies.
+  const plainDenies = ({ outer, inner, prefix, at, form }) => ['n', 'b', 'p'].includes([...outer, inner][at])
+    || (prefix === 'time' && ['plain', 'seq', 'and'].includes(form));
   const coveringShapes = (depth) => {
     const outerKeys = Object.keys(WRAP).filter((k) => !INNERMOST_ONLY.has(k));
     const choices = [...Array(depth - 1).fill(outerKeys), Object.keys(WRAP), SPAWN_PREFIXES,
       Array.from({ length: depth + 1 }, (_, i) => i), Object.keys(FORMS)];
     let all = [[]];
     for (const values of choices) all = all.flatMap((t) => values.map((_, v) => [...t, v]));
-    // Only shapes the plain reading does not already deny, so that every pair
-    // is held by a command the further reading has to read: no prefix in front
-    // of `$(…)`, backquotes or `<(…)`, and no `time` (covered above).
     all = all.filter((t) => {
-      const at = t[depth + 1];
-      const carrier = at < depth ? (at < depth - 1 ? choices[0][t[at]] : Object.keys(WRAP)[t[depth - 1]]) : null;
-      return !['n', 'b', 'p'].includes(carrier) && SPAWN_PREFIXES[t[depth]] !== 'time';
+      const shape = shapeOf(t, depth, choices);
+      return spelledAsChosen(shape) && !plainDenies(shape);
     });
     // A pair of choices (field i = a, field j = b) is one small integer key.
     const pairKeys = all.map((t) => {
@@ -3148,18 +3171,12 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       for (const k of pairKeys[best]) if (open[k]) { open[k] = 0; openCount--; }
       picked.push(all[best]);
     }
-    return picked.map((t) => ({
-      outer: t.slice(0, depth - 1).map((v) => choices[0][v]),
-      inner: Object.keys(WRAP)[t[depth - 1]],
-      prefix: SPAWN_PREFIXES[t[depth]],
-      at: t[depth + 1],
-      form: Object.keys(FORMS)[t[depth + 2]],
-    }));
+    return picked.map((t) => shapeOf(t, depth, choices));
   };
   for (const depth of [2, 3]) {
     test(`denies a debugger spawn for every pair of grammar choices ${depth} payloads deep`, () => {
       const shapes = coveringShapes(depth);
-      assert.equal(shapes.length, { 2: 74, 3: 72 }[depth], 'covering set size');
+      assert.equal(shapes.length, { 2: 83, 3: 84 }[depth], 'covering set size');
       assert.deepEqual(shapes.map(buildSpawn).filter((cmd) => !deniedAsSpawn(cmd)), [], 'every command denied as a debugger spawn');
     });
   }
