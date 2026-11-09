@@ -45,7 +45,7 @@ For each remaining active entry where `kind == "step"` (exactly one of `ref.skil
   gsd_run ${ref.command} --phase "${context.phase}" --raw
   ```
 
-  Phase argument: the table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md` decides. Check `context.phase` against its token pattern before it goes into the command. With no `context` it gives `--phase "${PHASE_NUMBER}"` or no `--phase`.
+  Phase argument: the table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md` decides. Check `context.phase` against its token pattern before it goes into the command. With no `context`, `phaseDrop` picks `--phase "${PHASE_NUMBER}"` or no `--phase`.
 
 Wait for each result before the next hook. A step is advisory: on error record a warning naming the `capId` and continue, unless `onError == "halt"` — then surface the error and stop the plan-phase workflow.
 

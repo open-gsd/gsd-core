@@ -2515,7 +2515,8 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
       t.after(() => cleanup(dir));
       const env = JSON.parse(renderWithPhase(dir, 'plan:pre', ['--phase', '05', '--raw']).stdout.trim());
       assert.ok(Array.isArray(env.warnings), `envelope has no warnings array: ${JSON.stringify(env)}`);
-      const w = env.warnings.find((x) => x.includes('is ambiguous'));
+      assert.strictEqual(env.phaseDrop, PHASE_DROP.AMBIGUOUS);
+      const w = env.warnings[0];
       return { listed: [...w.matchAll(/"(05-[a-z])"/g)].length, more: (w.match(/, … (\d+) more\)/) || [])[1] };
     };
     assert.deepStrictEqual(echoedMore(4), { listed: 4, more: undefined });
