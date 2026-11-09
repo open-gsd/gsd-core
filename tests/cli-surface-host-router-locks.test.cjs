@@ -421,6 +421,43 @@ const CASES_B2 = [
   {"id":"scm files then flag","argv":["stamp-codebase-map","--files","--bogus"],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty"}},
   {"id":"scaffold ctx","argv":["scaffold","context","--phase","1"],"files":{".planning/phases/01-x/.keep":""},"exists":[".planning/phases/01-x/01-CONTEXT.md"],"expect":{"exit":0,"reason":null,"shape":"keys:created,path","exists":[".planning/phases/01-x/01-CONTEXT.md"]}},
   {"id":"scaffold ctx name","argv":["scaffold","context","--phase","1","--name","Two","Words"],"files":{".planning/phases/01-x/.keep":""},"exists":[".planning/phases/01-x/01-CONTEXT.md"],"expect":{"exit":0,"reason":null,"shape":"keys:created,path","exists":[".planning/phases/01-x/01-CONTEXT.md"]}},
+  // Review fixes (#6087): empty and padded values, duplicate flags (the seam is first-wins), stray words and
+  // trailing valueless flags, pinned on the behavior of the code before the migration where it was kept.
+  {"id":"uc runtime empty","argv":["update-context","--runtime",""],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc runtime eq empty","argv":["update-context","--runtime="],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc cfg empty","argv":["update-context","--config-dir",""],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc cfg eq empty","argv":["update-context","--config-dir="],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc runtime dup","argv":["update-context","--runtime","claude","--runtime","codex"],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"re effort empty","argv":["resolve-execution","gsd-executor","--effort",""],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re effort eq empty","argv":["resolve-execution","gsd-executor","--effort="],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re fast empty","argv":["resolve-execution","gsd-executor","--fast-mode",""],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re fast eq empty","argv":["resolve-execution","gsd-executor","--fast-mode="],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re host empty","argv":["resolve-execution","gsd-executor","--host",""],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re attempt empty","argv":["resolve-execution","gsd-executor","--attempt",""],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re attempt eq empty","argv":["resolve-execution","gsd-executor","--attempt="],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re fc empty","argv":["resolve-execution","gsd-executor","--failure-class",""],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re fc eq empty","argv":["resolve-execution","gsd-executor","--failure-class="],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"effort rt eq empty","argv":["effort","sync","--runtime="],"expect":{"exit":0,"reason":null,"shape":"keys:agents_dir,changes,dry_run,reason,skipped,synced"}},
+  {"id":"effort cfg eq empty","argv":["effort","sync","--config-dir="],"expect":{"exit":0,"reason":null,"shape":"keys:agents_dir,changes,dry_run,reason,skipped,synced"}},
+  {"id":"effort rt empty","argv":["effort","sync","--runtime",""],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"effort cfg empty","argv":["effort","sync","--config-dir",""],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop rt eq blank","argv":["loop","render-hooks","plan:pre","--runtime= "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop cfg eq blank","argv":["loop","render-hooks","plan:pre","--config-dir=  "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop cap eq blank","argv":["loop","render-hooks","plan:pre","--active-cap= "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop fp eq blank","argv":["loop","render-hooks","plan:pre","--after-fingerprint= "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop fp eq padded","argv":["loop","render-hooks","plan:pre","--after-fingerprint= ph"],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: ph ("}},
+  {"id":"loop rt eq padded","argv":["loop","render-hooks","plan:pre","--runtime= claude"],"expect":{"exit":0,"reason":null,"shape":"keys:activeHooks,point,rendered"}},
+  {"id":"prs stray word","argv":["pr-subrepo","msg","extra","--repo","r"],"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"extra\""}},
+  {"id":"prs stray word no msg","argv":["pr-subrepo","--repo","r","extra"],"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"extra\""}},
+  {"id":"rcf trailing bare","argv":["restore-custom-files","--config-dir","cfg","--config-dir"],"files":{"cfg/x.txt":"x"},"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rcf trailing flagval","argv":["restore-custom-files","--config-dir","cfg","--config-dir","--apply"],"files":{"cfg/x.txt":"x"},"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rcf empty then good","argv":["restore-custom-files","--config-dir","","--config-dir","cfg"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:applied,backup_dir,backup_found,eligible_count,entries,manifest_found,restored_count,skipped_count,warning_count"}},
+  {"id":"commit bare dashes in list","argv":["commit","dd","--files","a.txt","--","b.txt"],"git":true,"files":{"a.txt":"a\n","b.txt":"b\n"},"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"dd\n\nA\ta.txt\nA\tb.txt"}},
+  {"id":"re dup effort first wins","argv":["resolve-execution","gsd-executor","--effort","low","--effort","high"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile","json":{"effort":"low"}}},
+  {"id":"re dup effort space then eq","argv":["resolve-execution","gsd-executor","--effort","low","--effort=high"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile","json":{"effort":"low"}}},
+  {"id":"re dup effort eq then space","argv":["resolve-execution","gsd-executor","--effort=high","--effort","low"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile","json":{"effort":"high"}}},
+  {"id":"loop dup fingerprint first wins","argv":["loop","render-hooks","plan:pre","--after-fingerprint","ph","--after-fingerprint=qq"],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: ph ("}},
+  {"id":"loop dup fingerprint eq first","argv":["loop","render-hooks","plan:pre","--after-fingerprint=qq","--after-fingerprint","ph"],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: qq ("}},
 ];
 
 function runCommand(argv, cwd) {
@@ -465,9 +502,13 @@ describe('gsd-tools host routers, batch 2: valid argv forms keep their behavior'
         const body = lastJsonLine(r.stderr);
         const reason = body && body.ok === false ? body.reason : null;
         const actual = { exit: r.exitCode, reason, shape: shapeOf(r.stdout) };
-        const { message, ...expected } = c.expect;
+        const { message, json, ...expected } = c.expect;
         if (message !== undefined) {
           assert.ok(body && String(body.message).includes(message), `${c.id}: expected error to mention "${message}", got ${r.stderr.slice(0, 200)}`);
+        }
+        if (json !== undefined) {
+          const parsed = JSON.parse(r.stdout);
+          for (const [key, value] of Object.entries(json)) assert.deepEqual(parsed[key], value, `${c.id}: ${key}`);
         }
         if (c.expect.stdout !== undefined) actual.stdout = r.stdout.trim().replace(/\s+/g, ' ');
         if (c.post) actual.post = runCommand(c.post, project).trim();
