@@ -43,8 +43,9 @@ function fakeClock(values) {
   return { now, sleep, sleeps };
 }
 
-const completed = (conclusion = 'success') => [{ databaseId: 111, status: 'completed', conclusion }];
-const inProgress = [{ databaseId: 111, status: 'in_progress', conclusion: '' }];
+// `gh run list` bodies are JSON strings: a bare array route would be read by fakeGh as a response SEQUENCE.
+const completed = (conclusion = 'success') => JSON.stringify([{ databaseId: 111, status: 'completed', conclusion }]);
+const inProgress = JSON.stringify([{ databaseId: 111, status: 'in_progress', conclusion: '' }]);
 const jobsBody = { jobs: [{ name: 'Lint', databaseId: 5 }, { name: BASE_HEALTH_JOB_NAME, databaseId: 222 }] };
 
 function run(routes, clockValues = [0], extra = {}) {
@@ -59,7 +60,7 @@ function run(routes, clockValues = [0], extra = {}) {
 
 describe('rerunBaseHealth', () => {
   test('no Tests run for the sha -> skip no-run, nothing else called', async () => {
-    const { result, gh } = await run({ 'run list': [] });
+    const { result, gh } = await run({ 'run list': '[]' });
     assert.deepEqual(result, { action: 'skip', reason: 'no-run' });
     assert.equal(gh.calls.length, 1);
   });
@@ -178,7 +179,7 @@ describe('rerunBaseHealth', () => {
         fc.integer({ min: 1, max: 1e9 }),
         async (conclusion, id) => {
           const { result } = await run({
-            'run list': [{ databaseId: id, status: 'completed', conclusion }],
+            'run list': JSON.stringify([{ databaseId: id, status: 'completed', conclusion }]),
             api: SHA,
             'run view': jobsBody,
             'run rerun': '',
@@ -193,7 +194,7 @@ describe('rerunBaseHealth', () => {
 
 describe('main() env validation', () => {
   const baseEnv = { GH_REPO: REPO, PR_NUMBER: PR, HEAD_SHA: SHA };
-  const harness = (env, routes = { 'run list': [] }) => {
+  const harness = (env, routes = { 'run list': '[]' }) => {
     const out = [];
     const err = [];
     return {
