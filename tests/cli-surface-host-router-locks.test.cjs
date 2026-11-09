@@ -106,7 +106,7 @@ const CASES = [
   {"id":"drift-guard authority","argv":["drift-guard","authority"],"expect":{"exit":0,"reason":null,"shape":"scalar:string"}},
   {"id":"drift-guard severity","argv":["drift-guard","severity","--status","VERIFIED"],"expect":{"exit":0,"reason":null,"shape":"keys:hardBlock,severity"}},
   {"id":"drift-guard severity authority","argv":["drift-guard","severity","--status","MISSING","--authority","intel"],"expect":{"exit":0,"reason":null,"shape":"keys:hardBlock,severity"}},
-  {"id":"drift-guard severity no status","argv":["drift-guard","severity"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"drift-guard severity no status","argv":["drift-guard","severity"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --status"}},
   {"id":"drift-guard phase-status","argv":["drift-guard","phase-status"],"files":{".planning/STATE.md":"---\nstatus: executing\n---\n# Project State\n\n## Current Position\n\nPhase: 1\nStatus: executing\n",".planning/ROADMAP.md":"# Roadmap\n\n### Phase 1: First\n\n**Goal:** thing\n"},"expect":{"exit":0,"reason":null,"shape":"keys:authority,phase,reason,roadmapRank,roadmapStatus,stateRank,stateStatus,verdict"}},
   {"id":"drift-guard phase-status phase","argv":["drift-guard","phase-status","--phase","1"],"files":{".planning/STATE.md":"---\nstatus: executing\n---\n# Project State\n\n## Current Position\n\nPhase: 1\nStatus: executing\n",".planning/ROADMAP.md":"# Roadmap\n\n### Phase 1: First\n\n**Goal:** thing\n"},"expect":{"exit":0,"reason":null,"shape":"keys:authority,phase,reason,roadmapRank,roadmapStatus,stateRank,stateStatus,verdict"}},
   {"id":"drift-guard unknown","argv":["drift-guard","bogus"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
@@ -206,9 +206,13 @@ describe('gsd-tools host routers, batch 1: valid argv forms keep their behavior'
         const r = runTools(['--json-errors', ...c.argv], project);
         const body = lastJsonLine(r.stderr);
         const reason = body && body.ok === false ? body.reason : null;
+        const { message, ...expected } = c.expect;
+        if (message !== undefined) {
+          assert.ok(body && String(body.message).includes(message), `${c.id}: expected message to mention "${message}", got ${r.stderr.slice(0, 200)}`);
+        }
         assert.deepEqual(
           { exit: r.exitCode, reason, shape: shapeOf(r.stdout) },
-          c.expect,
+          expected,
           `${c.id}: stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`,
         );
       } finally {
@@ -336,7 +340,7 @@ const CASES_B2 = [
   {"id":"rl efa dashed value","argv":["review-lane","explicit-from-argv","--","--bogus","--run-dir","x"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
   {"id":"rl dispatch","argv":["review-lane","dispatch-step","--explicit","codex","--depth","standard","--base-sha","abc","--cap-id","c","--point","p"],"expect":{"exit":0,"reason":null,"shape":"keys:dispatched,ok,reason,results"}},
   {"id":"rl dispatch bare","argv":["review-lane","dispatch-step"],"expect":{"exit":0,"reason":null,"shape":"keys:dispatched,ok,reason,results"}},
-  {"id":"rl invoke noslug","argv":["review-lane","invoke"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"rl invoke noslug","argv":["review-lane","invoke"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --slug"}},
   {"id":"rl invoke unknown slug","argv":["review-lane","invoke","--slug","nope"],"expect":{"exit":0,"reason":null,"shape":"keys:detail,ok,reason,slug"}},
   {"id":"rl invoke explicit","argv":["review-lane","invoke","--slug","nope","--explicit","--as","x","--model","m","--agent","a","--prompt-file","p.md"],"expect":{"exit":0,"reason":null,"shape":"keys:detail,ok,reason,slug"}},
   {"id":"rl bogus","argv":["review-lane","bogus"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
@@ -361,13 +365,13 @@ const CASES_B2 = [
   {"id":"pb ok","argv":["prompt-budget","--budget","100000","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"exists":["out.md","out.json"],"expect":{"exit":0,"reason":null,"shape":"empty","exists":["out.md","out.json"]}},
   {"id":"pb two plans","argv":["prompt-budget","--budget","100000","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json","--plan-file","p2.md"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"exists":["out.md","out.json"],"expect":{"exit":0,"reason":null,"shape":"empty","exists":["out.md","out.json"]}},
   {"id":"pb optional","argv":["prompt-budget","--budget","100000","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json","--safety-margin-pct","5","--project-md-head-lines","2","--project-file","proj.md","--context-file","proj.md","--research-file","proj.md","--requirements-file","proj.md"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"exists":["out.md","out.json"],"expect":{"exit":0,"reason":null,"shape":"empty","exists":["out.md","out.json"]}},
-  {"id":"pb no budget","argv":["prompt-budget","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb no budget","argv":["prompt-budget","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --budget"}},
   {"id":"pb bad budget","argv":["prompt-budget","--budget","zero","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
-  {"id":"pb no plan","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
-  {"id":"pb no instr","argv":["prompt-budget","--budget","10","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
-  {"id":"pb no out","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb no plan","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --plan-file"}},
+  {"id":"pb no instr","argv":["prompt-budget","--budget","10","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --instructions-file"}},
+  {"id":"pb no out","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --output-prompt"}},
   {"id":"pb missing file","argv":["prompt-budget","--budget","10","--instructions-file","nope.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
-  {"id":"pb plan flagval","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb plan flagval","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --plan-file"}},
   {"id":"dcf nomanifest","argv":["detect-custom-files","--config-dir","cfg"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:custom_count,custom_files,manifest_found"}},
   {"id":"dcf missing","argv":["detect-custom-files"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
   {"id":"dcf nodir","argv":["detect-custom-files","--config-dir","nope"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
@@ -461,10 +465,14 @@ describe('gsd-tools host routers, batch 2: valid argv forms keep their behavior'
         const body = lastJsonLine(r.stderr);
         const reason = body && body.ok === false ? body.reason : null;
         const actual = { exit: r.exitCode, reason, shape: shapeOf(r.stdout) };
+        const { message, ...expected } = c.expect;
+        if (message !== undefined) {
+          assert.ok(body && String(body.message).includes(message), `${c.id}: expected error to mention "${message}", got ${r.stderr.slice(0, 200)}`);
+        }
         if (c.expect.stdout !== undefined) actual.stdout = r.stdout.trim().replace(/\s+/g, ' ');
         if (c.post) actual.post = runCommand(c.post, project).trim();
         if (c.exists) actual.exists = c.exists.filter((f) => fs.existsSync(path.join(project, f)));
-        assert.deepEqual(actual, c.expect, `${c.id}: stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`);
+        assert.deepEqual(actual, expected, `${c.id}: stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`);
       } finally {
         cleanup(project);
       }
