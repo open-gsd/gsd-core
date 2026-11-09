@@ -885,6 +885,11 @@ function gsd5100RunWin32InstallProbe(t, runtime) {
       PROBE_REPO: path.join(__dirname, '..'),
       PROBE_RUNTIME: runtime,
       GSD_TEST_MODE: '1',
+      // #5848: under a spoofed win32 os.tmpdir() reads TEMP/TMP, else the unset
+      // SystemRoot and yields the RELATIVE 'undefined\\temp' (a dir inside the repo
+      // root, the probe's cwd). Point both at an os.tmpdir()-based directory.
+      TEMP: home,
+      TMP: home,
       // #5100: portable hooks are what route a JS hook through the Git Bash
       // policy at all; without them the win32 branch never runs.
       GSD_PORTABLE_HOOKS: '1',

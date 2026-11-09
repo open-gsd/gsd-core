@@ -231,7 +231,18 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
       if (!grouped.has(head)) grouped.set(head, []);
       grouped.get(head).push({ parts: rest, content: e.content });
     }
-    for (const de of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    // Same TOCTOU window as the stat below, one level down: a directory listed by
+    // its parent can be retired (a sibling test's temp dir inside the walked tree)
+    // before this recursion reads it. The root itself must exist, so only a
+    // nested directory is tolerated (#5848).
+    let dirents;
+    try {
+      dirents = fs.readdirSync(srcDir, { withFileTypes: true });
+    } catch (err) {
+      if (!isTop && isMissingPath(err)) return;
+      throw err;
+    }
+    for (const de of dirents) {
       if (isTop && OVERLAY_SKIP_TOP.has(de.name)) {
         fs.symlinkSync(path.join(srcDir, de.name), path.join(destDir, de.name));
         continue;
