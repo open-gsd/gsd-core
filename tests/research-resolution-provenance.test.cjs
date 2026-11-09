@@ -11,19 +11,20 @@
  *
  * - Dimension 11 collects every question still needing an answer or a ruling, under any heading
  *   or in prose. A cited source closes a factual question only; a Claude's Discretion area of
- *   CONTEXT.md takes a sourced recommendation; an `[ASSUMED]` fact is not a question. It passes a
- *   question only on the provenance it accepts: every `D-NN` it cites sits under CONTEXT.md's
- *   `<decisions>`, outside Claude's Discretion, predating the planning run, and one answers it.
+ *   CONTEXT.md takes a sourced recommendation; an `[ASSUMED]` fact, even unconfirmed, is not a
+ *   question. It passes a question only on the provenance it accepts: every `D-NN` it cites sits
+ *   under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and one answers it. Only
+ *   discuss-phase or the orchestrator, recording the user's answer, writes such a `D-NN`.
  *   It blocks every other question, naming the citation shapes the forgery used (none, a plan, a
  *   "disposition"), and every question when CONTEXT.md is absent. Only the no-questions case
  *   reaches PASS.
  * - Its fix_hint routes to recording a user ruling, not to writing the marker: a decision already
- *   on record is cited; otherwise no decision is added during planning: the user rules in
- *   discuss-phase (or a source settles a factual gap), and a research re-run writes the citation.
+ *   on record is cited; otherwise the user rules, recorded by the orchestrator or by discuss-phase
+ *   and a research re-run, or a source settles a factual gap.
  * - `planner-revision.md` carries the same route as a `research_resolution` strategy row, ending
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself.
- * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape is a
- *   BLOCKER example.
+ * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
+ *   `D-NN` that decides something else, are a BLOCKER example.
  * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
  *   includes it.
  * - The researcher and `gsd-core/templates/research.md` forbid self-resolution, and
@@ -124,18 +125,21 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(excluded, /a fact settled with a cited source/, 'research findings are not questions');
     assert.match(excluded, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
     assert.match(excluded, /a question with a sourced recommendation in an area CONTEXT\.md lists under Claude's Discretion/, 'the exclusion binds per question, and CONTEXT.md decides what is delegated');
-    assert.match(excluded, /`\[ASSUMED\]` fact or risk naming no pending answer or ruling/, 'an Assumptions Log fact is not a question; a pending answer or ruling is, wherever it sits');
+    // A fact awaiting confirmation is confirmed by a human-verify checkpoint or discuss-phase, not
+    // here; a ruling written into the Assumptions Log is still a ruling, so it is still collected.
+    assert.match(excluded, /`\[ASSUMED\]` fact, even unconfirmed \(a ruling is never a fact\)/, 'an Assumptions Log fact is not a question, even awaiting confirmation; a ruling is never one');
   });
 
-  test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it and predates this run', () => {
+  test('a question passes only on a D-NN under CONTEXT.md <decisions> that answers it, which only the user\'s recorded answer writes', () => {
     assert.match(dim11(), /only\s+the\s+user\s+closes/i);
+    // The checker cannot see when a D-NN was added, so authorship is the rule, not a time boundary.
+    assert.match(dim11(), /discuss-phase or the orchestrator records the ruling as a `D-NN`, never the researcher or planner/);
     const pass = steps().find((l) => /\bpasses only\b/.test(l));
     assert.ok(pass, 'a step must state the one way a question passes');
     assert.ok(pass.includes('every `D-NN` it cites') && pass.includes("CONTEXT.md's `<decisions>`"), `pass rule not scoped to <decisions> for every citation: ${pass}`);
     assert.match(pass, /\bone answers\b/, 'one real citation must not carry a second that is missing, and one must answer');
     assert.match(pass, /outside Claude's Discretion/, 'a Discretion entry delegates the choice, so it records no ruling');
-    assert.match(pass, /not added during this planning run/, 'the checker is its own invocation, so the boundary must name the planning run');
-    assert.match(pass, /`git log -p`, `git diff HEAD` on CONTEXT\.md/, 'the not-added condition must name checks that see committed, staged and unstaged additions');
+    assert.doesNotMatch(dim11(), /planning run|recorded before/, 'a run boundary the checker cannot locate gives one input two verdicts');
   });
 
   test('no CONTEXT.md leaves every question a BLOCKER', () => {
@@ -147,12 +151,13 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(blocker, 'Process must carry a BLOCKER step');
     const cases = {
       'every other question': /every other question/i,
-      'any marking, any letter case': /however it is marked, in any letter case/,
+      'any marking, any letter case': /however marked, in any case/,
       'no D-NN': /no `D-NN`/,
       'a D-NN CONTEXT.md lacks': /CONTEXT\.md lacks/,
       'a D-NN outside <decisions>': /outside `<decisions>`/,
-      'a D-NN that decides something else': /decide something else/,
-      'a plan': /\bon a plan\b/,
+      'a D-NN that decides something else': /deciding something else/,
+      // "only": a valid answering D-NN must not turn into a blocker for also naming a plan.
+      'a plan': /resting only on a plan\b/,
       'a disposition': /"planning-time disposition"/,
       'the research itself': /research itself/,
       "another agent's output": /another agent/,
@@ -176,7 +181,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     for (const prop of props) {
       assert.match(prop, /cites only D-NNs/);
       assert.match(prop, /CONTEXT\.md <decisions> \(not Discretion\)/, 'the binding property must carry the rule step 2 enforces, or the planner can satisfy it where the checker refuses');
-      assert.match(prop, /recorded before this planning run/, 'the binding property must carry the not-added-this-run condition, naming the planning run');
+      assert.doesNotMatch(prop, /planning run|recorded before/, 'the binding property must hold only what the checker can see');
       assert.match(prop, /one of which answers it/);
     }
   });
@@ -188,11 +193,10 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
       assert.doesNotMatch(hint, /mark section as/i, `fix_hint still prescribes the marker: ${hint}`);
       assert.match(hint, /D-NN/);
       assert.match(hint, /<decisions>/);
-      // The BLOCKER goes to the planner's revision loop. It can cite a decision already on record,
-      // but never add one: the hint says so, and names who rules, what settles a factual gap, and
-      // who writes the citation.
-      assert.match(hint, /Cite a D-NN under <decisions> that already answers it/);
-      assert.match(hint, /Otherwise add no decision/);
+      // The BLOCKER goes to the planner's revision loop. It can cite a decision already on record;
+      // otherwise the user rules, and the hint names who records it and what settles a factual gap.
+      assert.match(hint, /Cite a D-NN under <decisions> that answers it/);
+      assert.match(hint, /Else the user rules \(orchestrator records a D-NN, or/);
       assert.match(hint, /a source settles a factual gap/);
       assert.match(hint, /\/gsd:discuss-phase/);
       assert.match(hint, /\/gsd:plan-phase --research/);
@@ -218,6 +222,19 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     }
 
     assert.match(dim11(), /^\*\*Example\b[^\n]*self-resolved[^\n]*\bBLOCKER\b/im);
+  });
+
+  test('a BLOCKER example cites a real D-NN that decides something else', () => {
+    // #5438's checker models follow the examples: a real D-NN under <decisions> is not enough.
+    const lines = splitLines(dim11());
+    const at = lines.findIndex((l) => /^\*\*Example\b/.test(l) && /\bBLOCKER\b/.test(l));
+    assert.notEqual(at, -1, 'Dimension 11 must carry a BLOCKER example');
+    assert.match(lines[at], /real (D-\d{2}) decides/, 'the label must say the cited D-NN is real but decides something else');
+    const id = lines[at].match(/real (D-\d{2})/)[1];
+    const open = lines.findIndex((l, i) => i > at && l.startsWith('```'));
+    const close = lines.findIndex((l, i) => i > open && l.startsWith('```'));
+    const body = lines.slice(open + 1, close);
+    assert.ok(body.some((l) => l.includes(`RESOLVED (${id}):`)), `the BLOCKER example must cite ${id}`);
   });
 
   test('success_criteria includes the research resolution check', () => {

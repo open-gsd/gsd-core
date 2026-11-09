@@ -597,16 +597,16 @@ issue:
 
 ## Dimension 11: Research Resolution (#1602, #5438)
 
-**Question:** Does every research question cite a user decision on record?
+**Question:** Does every research question cite a recorded user decision?
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
-The researcher writes RESEARCH.md, so its own resolution closes nothing. Only the user closes a question, recorded as a `D-NN` under CONTEXT.md's `<decisions>`.
+Only the user closes a question: discuss-phase or the orchestrator records the ruling as a `D-NN`, never the researcher or planner.
 
 **Process:**
-1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); a question with a sourced recommendation in an area CONTEXT.md lists under Claude's Discretion; an `[ASSUMED]` fact or risk naming no pending answer or ruling. None → PASS.
-2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and not added during this planning run (see `git log -p`, `git diff HEAD` on CONTEXT.md), and one answers it.
-3. Every other question is a BLOCKER, however it is marked, in any letter case: no `D-NN`; a cited `D-NN` CONTEXT.md lacks or holds outside `<decisions>`; only `D-NN`s that decide something else; or one resting on a plan, a "planning-time disposition", the research itself, or another agent's output.
+1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); a question with a sourced recommendation in an area CONTEXT.md lists under Claude's Discretion; an `[ASSUMED]` fact, even unconfirmed (a ruling is never a fact). None → PASS.
+2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and one answers it.
+3. Every other question is a BLOCKER, however marked, in any case: no `D-NN`; a `D-NN` CONTEXT.md lacks or holds outside `<decisions>`; only `D-NN`s deciding something else; or resting only on a plan, a "planning-time disposition", the research itself, or another agent's output.
 4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
 **Example — unresolved questions:**
@@ -614,24 +614,20 @@ The researcher writes RESEARCH.md, so its own resolution closes nothing. Only th
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "Every RESEARCH.md open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), recorded before this planning run, one of which answers it"
-  description: "RESEARCH.md open questions have no user decision on record"
-  file: "01-RESEARCH.md"
-  unresolved_questions:
-    - "Hash prefix — keep or change?"
-    - "Cache TTL — what duration?"
-  fix_hint: "Cite a D-NN under <decisions> that already answers it: 'RESOLVED (D-NN): <ruling>'. Otherwise add no decision: the user rules in /gsd:discuss-phase, or a source settles a factual gap; then re-run /gsd:plan-phase --research"
+  required_property: "Each open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), one of which answers it"
+  description: "01-RESEARCH.md: 'Hash prefix — keep or change?' cites no D-NN"
+  fix_hint: "Cite a D-NN under <decisions> that answers it: 'RESOLVED (D-NN): <ruling>'. Else the user rules (orchestrator records a D-NN, or /gsd:discuss-phase then /gsd:plan-phase --research), or a source settles a factual gap"
 ```
 
-**Example — self-resolved (BLOCKER):**
+**Example — self-resolved (BLOCKER); real D-01 decides the cache backend:**
 ```markdown
 ## Open Questions (RESOLVED)
 
-1. **Hash prefix** — RESOLVED: keep "guest_contract:" (planning-time disposition)
-2. **Cache TTL** — RESOLVED: 5 minutes, per plan 01-03
+1. **Hash prefix** — RESOLVED: keep "guest_contract:" (planning-time disposition, plan 01-03)
+2. **Cache TTL** — RESOLVED (D-01): 5 minutes
 ```
 
-**Example — resolved (PASS if `<decisions>` records D-03 and D-04):**
+**Example — PASS if `<decisions>` records D-03 and D-04:**
 ```markdown
 ## Open Questions
 
@@ -1070,8 +1066,8 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
-- [ ] Research resolution checked (if RESEARCH.md exists): every open question, under any heading,
-      cites only `D-NN`s under CONTEXT.md `<decisions>` (not Discretion), one answering it; else a blocker
+- [ ] Research resolution checked: every open question, any heading, cites only `D-NN`s under
+      CONTEXT.md `<decisions>` (not Discretion), one answering it
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
 - [ ] Cross-plan data contracts checked (no conflicting transforms on shared data)
