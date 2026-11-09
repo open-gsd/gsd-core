@@ -2155,6 +2155,18 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertBlocked(run(bash(`rg --pre sh KEY ${pq}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
   });
 
+  // #5518: the scan reads a Bash line more than one way, and the exemption
+  // holds only where the reading that met the path finds the line read-only.
+  // The plain reading pairs `${x:-'}'}` at its first `}`, so it reads `mv a b`
+  // below as quoted text; bash, and the reading that pairs as bash does, run it.
+  test('Bash exemption requires the line read-only under the reading that met the path', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    const pq = absq('.env.production');
+    assertBlocked(run(bash(`cat ${pq}; cat \${x:-'}'}; mv a b; cat "'"`)), 'mv after a misread expansion', { tool: 'Bash', path: p });
+    assertAllowed(run(bash(`cat ${pq}; cat \${x:-'}'}; cat "'"`)), 'the same line without the mv');
+  });
+
   // Row 13.
   test('ref:path never exempt', () => {
     listed('.env.production');

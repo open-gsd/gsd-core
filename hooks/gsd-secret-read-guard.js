@@ -90,7 +90,8 @@
 // when EVERY command on the line is one of cat/head/tail/grep/egrep/fgrep/rg/
 // wc/diff/cmp/sort/uniq/cut/nl/od (after wrapper resolution) with no `$( )`/
 // backtick/`<( )` body, heredoc or file-writing redirect or option; any other
-// command (mv, ln, cp, git, sh, awk, sed, …) withdraws it for the whole line. A Grep
+// command (mv, ln, cp, git, sh, awk, sed, …) withdraws it for the whole line,
+// judged under the reading of the line that met the path. A Grep
 // `glob` is never widened, and a colon-joined word (`HEAD:.env.production`)
 // never matches. An unreadable config or repository means no exemption.
 //
@@ -261,11 +262,31 @@ function isExemptSecret(tok) {
     exemption.checker = () => false;
     return false;
   }
-  if (exemption.bashLine !== null) {
-    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
-    if (exemption.bashReadOnly !== true) return false;
-  }
+  if (exemption.bashLine !== null && bashLineIsReadOnly() !== true) return false;
   return true;
+}
+
+// The Bash scan reads the line more than one way (#5518): with a `${ ` body
+// run as commands or read as text, and with a parameter expansion paired at
+// its first `}` or as bash pairs it. A reading can find a command another took
+// for text: the plain reading pairs `${x:-'}'}` at its first `}`, so in
+// `cat ${x:-'}'}; mv a b` it reads `mv a b` as quoted text, where bash, and
+// the paired reading, run it. So the line is judged read-only under the
+// reading that met the token, once per reading. Tokenizing the line again can
+// leave heredoc tags in funsubTags (a `${ … <<E; }` inside a parameter
+// expansion's word, under the paired reading), and nothing reads them after:
+// a false answer denies the token and ends the scan, a true one comes once the
+// line's commands are tokenized, and scanPairingParams resets the tags before
+// its next reading.
+function bashLineIsReadOnly() {
+  const reading = `${+readFunsubs}${+pairParams}${+heredocBodiesSkippedInSpans}${+heredocTagsAsWords}`;
+  if (exemption.bashReadOnly === null) exemption.bashReadOnly = new Map();
+  let readOnly = exemption.bashReadOnly.get(reading);
+  if (readOnly === undefined) {
+    readOnly = lineIsReadOnly(exemption.bashLine);
+    exemption.bashReadOnly.set(reading, readOnly);
+  }
+  return readOnly;
 }
 
 // `.env.<suffix>` names that are templates, not secrets (case-insensitive).
