@@ -2107,16 +2107,21 @@ async function main() {
   const eventsDir = mkdtempSync(join(tmpdir(), 'gsd-run-tests-events-'));
 
   // #5120 (ADR-4629 guard roster: no raw STATE.md write outside the seam): every
-  // chunk, and every subprocess its tests spawn, loads the raw STATE.md write
-  // check through NODE_OPTIONS and appends to one ledger for the run, read after
+  // chunk, and every subprocess its tests spawn that inherits NODE_OPTIONS, loads
+  // the raw STATE.md write check and appends to one ledger for the run, read after
   // the last chunk. Created empty here so a missing ledger means the check broke,
-  // never that nothing was written (#5170).
+  // never that nothing was written (#5170). The ledger path rides inside a per-run
+  // preload shim rather than only in the environment: tests/helpers/isolated-env.cjs,
+  // the mandated child-env helper, strips every GSD_* variable but keeps NODE_OPTIONS.
   const stateWriteLedgerPath = join(eventsDir, 'state-writes.ndjson');
   writeFileSync(stateWriteLedgerPath, '');
-  const stateWriteNodeOptions = nodeOptionsWithRequire(
-    process.env.NODE_OPTIONS,
-    join(__dirname, 'raw-state-write-guard.cjs'),
+  const stateWritePreloadPath = join(eventsDir, 'raw-state-write-preload.cjs');
+  writeFileSync(
+    stateWritePreloadPath,
+    `process.env[${JSON.stringify(STATE_WRITE_LEDGER_ENV)}] = ${JSON.stringify(stateWriteLedgerPath)};\n` +
+      `require(${JSON.stringify(join(__dirname, 'raw-state-write-guard.cjs'))});\n`,
   );
+  const stateWriteNodeOptions = nodeOptionsWithRequire(process.env.NODE_OPTIONS, stateWritePreloadPath);
 
   // #5071: when set, each chunk's per-file `test:summary` durations are
   // appended here (CI uploads the file per Windows shard; gen-test-timings

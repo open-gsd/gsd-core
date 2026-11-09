@@ -13,13 +13,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, RUN_TESTS_HARNESS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const RUNNER = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
-// The runner enforces its own per-chunk timeout; this outer bound sits above it
-// plus node --test start-up, as tests/run-tests-harness.test.cjs does.
-const RUNNER_TIMEOUT_MS = 120000;
+const ISOLATED_ENV_HELPER = path.join(__dirname, 'helpers', 'isolated-env.cjs');
+const BUILT_LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
 
 const GUARD_PATH = path.join(__dirname, '..', 'scripts', 'raw-state-write-guard.cjs');
 const {
@@ -41,15 +41,21 @@ function writeModule(dir, rel, body) {
   return file;
 }
 
-/** Run `script` in a child that loads the guard the way the runner does. */
+/**
+ * Run `script` in a child that loads the guard the way the runner does. The child's
+ * env is built with isolatedEnv (CONTRIBUTING: never a spread of the parent's env); it
+ * strips every GSD_* variable, so the ledger path is opted back in through `override`,
+ * the same opt-in the runner's preload shim makes for the suite.
+ */
 function runGuarded(dir, script, extraEnv = {}) {
   const ledger = path.join(dir, 'ledger.ndjson');
-  const env = { ...process.env, ...extraEnv, GSD_STATE_WRITE_LEDGER: ledger };
-  env.NODE_OPTIONS = nodeOptionsWithRequire(undefined, GUARD_PATH);
-  delete env.GSD_STATE_WRITE_TEST_FILE;
+  const env = isolatedEnv({
+    home: dir,
+    override: { ...extraEnv, GSD_STATE_WRITE_LEDGER: ledger, NODE_OPTIONS: nodeOptionsWithRequire(undefined, GUARD_PATH) },
+  });
   const r = spawnSync(process.execPath, [script], { cwd: dir, env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   assert.equal(r.status, 0, `child failed: ${r.stderr}`);
-  return readStateWriteLedger(ledger);
+  return readStateWriteLedger(ledger).entries;
 }
 
 describe('classifyStateWrite: the approved rule (#5120)', () => {
@@ -114,6 +120,7 @@ module.exports = async (target) => {
   fs.writeFileSync(target + '.src', 'e'); fs.copyFileSync(target + '.src', target);
   fs.cpSync(target + '.src', target);
   await fs.promises.writeFile(target, 'f');
+  await fs.promises.cp(target + '.src', target);
   await new Promise((res, rej) => fs.writeFile(target, 'g', (e) => (e ? rej(e) : res())));
   fs.writeFileSync(new URL('file://' + target.replace(/\\\\/g, '/').replace(/^([A-Za-z]):/, '/$1:')), 'h');
 };
@@ -122,7 +129,8 @@ module.exports = async (target) => {
     const entries = runGuarded(dir, main);
     assert.deepEqual(
       entries.map((e) => e.fn),
-      ['writeFileSync', 'writeFileSync', 'appendFileSync', 'renameSync', 'copyFileSync', 'cpSync', 'promises.writeFile', 'writeFile', 'writeFileSync'],
+      // fs.promises.cp is recorded once, as the fs.promises.copyFile it calls.
+      ['writeFileSync', 'writeFileSync', 'appendFileSync', 'renameSync', 'copyFileSync', 'cpSync', 'promises.writeFile', 'promises.copyFile', 'writeFile', 'writeFileSync'],
     );
     assert.ok(entries.every((e) => e.violation === true && e.lockHeld === false), JSON.stringify(entries));
     assert.ok(entries.every((e) => path.basename(e.callerFile) === 'writer.cjs'), 'attributed to the product frame, not the preload or node:fs');
@@ -174,6 +182,25 @@ createStateIO({ io: 'filesystem' }).write(${JSON.stringify(target)}, '# State\\n
       [{ fn: 'renameSync', violation: false, seam: true, lockHeld: true }],
       JSON.stringify(entries),
     );
+  });
+
+  test('the seam module\'s byte-exact restore (platformRestoreFileSync, #5831) onto STATE.md is a seam write, never a violation', (t) => {
+    const dir = createTempDir('rswg-restore-');
+    t.after(() => cleanup(dir));
+    const target = path.join(dir, '.planning', 'STATE.md');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'before');
+    // The real built seam module: the restore primitive publishes through the same
+    // tmp-and-rename path platformWriteSync uses (readModifyWriteStateMd's write-failure
+    // rollback and the roadmap-upgrade rollback both restore STATE.md through it).
+    writeModule(dir, 'gsd-core/bin/lib/restorer.cjs', `'use strict';
+const { platformRestoreFileSync } = require(${JSON.stringify(path.join(BUILT_LIB, 'shell-command-projection.cjs'))});
+module.exports = (target) => platformRestoreFileSync(target, Buffer.from('restored\\n'));
+`);
+    const main = writeModule(dir, 'tests/main.cjs', `require(${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/restorer.cjs'))})(${JSON.stringify(target)});`);
+    const entries = runGuarded(dir, main);
+    assert.deepEqual(entries.map((e) => [e.fn, e.seam, e.violation]), [['renameSync', true, false]], JSON.stringify(entries));
+    assert.equal(fs.readFileSync(target, 'utf8'), 'restored\n', 'the restore landed byte-exactly');
   });
 
   test('a rename onto STATE.md through the seam module\'s retryRenameSync is a violation (#5120 review)', (t) => {
@@ -231,11 +258,11 @@ process.exitCode = r.status;`);
     const main = writeModule(dir, 'tests/main.cjs', `const fs = require('node:fs'); const before = fs.writeFileSync;
 require(${JSON.stringify(GUARD_PATH)});
 process.stdout.write(String(fs.writeFileSync === before && !fs.writeFileSync.name.includes('guard')));`);
-    const env = { ...process.env };
-    delete env.GSD_STATE_WRITE_LEDGER;
-    delete env.NODE_OPTIONS;
+    // isolatedEnv strips GSD_STATE_WRITE_LEDGER; the parent's NODE_OPTIONS (the runner's
+    // shim, when this file runs under run-tests) is cleared so only the explicit require loads.
+    const env = isolatedEnv({ home: dir, override: { NODE_OPTIONS: '' } });
     const r = spawnSync(process.execPath, [main], { cwd: dir, env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    assert.equal(r.stdout, 'true');
+    assert.equal(r.stdout, 'true', r.stderr);
   });
 });
 
@@ -255,7 +282,7 @@ describe('nodeOptionsWithRequire', () => {
     const odd = path.join(dir, process.platform === 'win32' ? 'a b' : 'a\\b c');
     const preload = writeModule(odd, 'p.cjs', `process.env.RSWG_LOADED = 'yes';`);
     const main = writeModule(dir, 'main.cjs', `process.stdout.write(String(process.env.RSWG_LOADED));`);
-    const env = { ...process.env, NODE_OPTIONS: nodeOptionsWithRequire(undefined, preload) };
+    const env = isolatedEnv({ home: dir, override: { NODE_OPTIONS: nodeOptionsWithRequire(undefined, preload) } });
     const r = spawnSync(process.execPath, [main], { env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
     assert.equal(r.stdout, 'yes', r.stderr);
   });
@@ -267,32 +294,37 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
       { violation: false, seam: true, lockHeld: true },
       { violation: false, seam: true, lockHeld: false },
     ];
-    const r = formatStateWriteReport(entries);
+    const r = formatStateWriteReport({ entries, tornLines: 0 });
     assert.equal(r.failed, false);
     assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 2, of which without the STATE.md lock: 1)');
   });
 
   test('a violation fails the run and names the caller, destination and test file', () => {
     const entries = [{ violation: true, seam: false, lockHeld: false, fn: 'writeFileSync', destination: '/p/STATE.md', callerFile: '/r/gsd-core/bin/lib/x.cjs', callerLine: 7, testFile: '/r/tests/y.test.cjs' }];
-    const r = formatStateWriteReport(entries);
+    const r = formatStateWriteReport({ entries, tornLines: 0 });
     assert.equal(r.failed, true);
     assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 1 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0)');
     assert.equal(r.lines[1], '  writeFileSync /p/STATE.md from /r/gsd-core/bin/lib/x.cjs:7 (test: /r/tests/y.test.cjs)');
   });
 
   test('an unreadable ledger is unreadable evidence: it fails the run, never reads as zero (#5170)', () => {
-    assert.equal(readStateWriteLedger(path.join(__dirname, 'no-such-ledger.ndjson')), null);
-    const r = formatStateWriteReport(null);
+    const read = readStateWriteLedger(path.join(__dirname, 'no-such-ledger.ndjson'));
+    assert.deepEqual(read, { entries: null, tornLines: 0 });
+    const r = formatStateWriteReport(read);
     assert.equal(r.failed, true);
     assert.equal(r.lines[0], 'run-tests: raw STATE.md write check: ledger unreadable, so the check did not run');
   });
 
-  test('a torn last ledger line is skipped', (t) => {
+  test('a torn ledger line is counted and printed beside the zero, never dropped silently (#5120 review)', (t) => {
     const dir = createTempDir('rswg-ledger-');
     t.after(() => cleanup(dir));
     const file = path.join(dir, 'l.ndjson');
-    fs.writeFileSync(file, '{"violation":true}\n{"violati');
-    assert.deepEqual(readStateWriteLedger(file), [{ violation: true }]);
+    fs.writeFileSync(file, '{"seam":true,"lockHeld":true}\n{"violati');
+    const read = readStateWriteLedger(file);
+    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], tornLines: 1 });
+    const r = formatStateWriteReport(read);
+    assert.equal(r.failed, false, 'a torn line is not a violation');
+    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 1, of which without the STATE.md lock: 0, unreadable ledger lines: 1)');
   });
 });
 
@@ -305,11 +337,36 @@ module.exports = (target) => fs.writeFileSync(target, 'raw');
     writeModule(dir, 'a.test.cjs', testBody);
   }
   function runRunner(dir) {
-    const env = { ...process.env, GSD_TEST_DIR: dir };
-    delete env.NODE_TEST_CONTEXT;
-    delete env.RUN_TESTS_SHARD_RESERVE;
-    return runNode([RUNNER], { cwd: path.join(__dirname, '..'), env, timeoutMs: RUNNER_TIMEOUT_MS });
+    // isolatedEnv strips NODE_TEST_CONTEXT, every RUN_TESTS_* and every GSD_* variable; the
+    // runner's own input directory is opted back in.
+    const env = isolatedEnv({ home: dir, override: { GSD_TEST_DIR: dir } });
+    return runNode([RUNNER], { cwd: path.join(__dirname, '..'), env, timeoutMs: RUN_TESTS_HARNESS_TIMEOUT_MS });
   }
+
+  test('a product write inside a child built with isolatedEnv is still recorded: the ledger path rides in the preload shim (#5120 review)', (t) => {
+    const dir = createTempDir('rswg-runner-isolated-');
+    t.after(() => cleanup(dir));
+    const home = createTempDir('rswg-runner-isolated-home-');
+    t.after(() => cleanup(home));
+    seedRun(dir, `'use strict';
+const { test } = require('node:test');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { isolatedEnv } = require(${JSON.stringify(ISOLATED_ENV_HELPER)});
+test('passes', () => {
+  const writer = ${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/writer.cjs'))};
+  const target = path.join(${JSON.stringify(dir)}, 'STATE.md');
+  const r = spawnSync(process.execPath, ['-e', 'require(process.argv[1])(process.argv[2])', writer, target], { env: isolatedEnv({ home: ${JSON.stringify(home)} }), encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(r.stderr);
+});
+`);
+    const r = runRunner(dir);
+    assert.equal(typeof r.exitCode, 'number', 'the runner exited on its own');
+    assert.notEqual(r.exitCode, 0, 'the run fails although its only test passed');
+    assert.match(r.stderr, /run-tests: raw STATE\.md writes in product code: 1 \(seam writes onto STATE\.md: 0, of which without the STATE\.md lock: 0\)/);
+    // The attribution variable is stripped by isolatedEnv, so the test file reads unknown.
+    assert.match(r.stderr, /writeFileSync \S+STATE\.md from \S+writer\.cjs:3 \(test: unknown\)/);
+  });
 
   test('a product module raw-writing STATE.md under a passing test fails the run and is named', (t) => {
     const dir = createTempDir('rswg-runner-red-');

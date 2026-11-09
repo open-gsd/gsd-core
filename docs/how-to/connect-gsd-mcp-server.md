@@ -182,14 +182,18 @@ rather than a real marker.
 
 A `gsd_write_state` whose `path` names a file called `STATE.md` holds the
 STATE.md lock for the write and writes through GSD's STATE.md write seam, so
-it cannot interleave with another STATE.md writer (#5120). The seam writes
-normalized markdown (LF line endings, one trailing newline, blank-line runs
-collapsed, a blank line after a heading, a list or a closing fence that text
-follows; the frontmatter block is kept exactly), so the bytes on disk are the
-seam's rather than the exact `content`. A STATE.md held by another live writer
+it cannot interleave with another STATE.md writer (#5120). The bytes on disk
+are the seam's rather than the exact `content`: line endings become LF and
+the file ends in one newline; the seam's other spacing rules (a blank line
+after a heading, a list or a closing fence that text follows; blank-line runs
+collapsed) apply only where the write changed the document relative to the
+file it replaces, and to the whole document when the file is new; the
+frontmatter block is kept exactly. The write is the host's content as given:
+no sync or preservation pipeline runs. A STATE.md held by another live writer
 makes the write wait for the lock (up to 30 seconds); a lock that cannot be
-taken returns a tool error and writes nothing. Every other `path` is written
-exactly as given.
+taken returns a tool error and writes nothing. A `STATE.md` that is a
+symlink, a FIFO or a device is refused with a tool error, where the raw write
+used to follow it. Every other `path` is written exactly as given.
 
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.

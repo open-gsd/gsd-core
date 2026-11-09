@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, retryRenameSync, platformWriteSync } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync, platformRestoreFileSync } from './shell-command-projection.cjs';
 import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
@@ -2334,6 +2334,9 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
   const fileBackups = new Map<string, { existed: boolean; content: string }>();
   const stateMdPath = path.join(pDir, 'STATE.md');
+  // #5120: the STATE.md content this migration wrote, read back after the write,
+  // so the rollback restores STATE.md only while it still holds that content.
+  let stateMdWrittenContent: string | null = null;
   const snapshotFile = (filePath: string): void => {
     if (fileBackups.has(filePath)) return;
     try {
@@ -2452,17 +2455,20 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
             { resync: false },
           );
         } finally {
-          // #5120: a STATE.md this step did not change (the lock wait timed out,
-          // or the transform was a no-op under the lock) has nothing to roll back,
-          // and restoring the snapshot would overwrite whatever another writer put
-          // there. A write that failed part-way leaves different bytes, so its
-          // snapshot is kept for the restore.
-          if (!stateWritten) {
-            let current: string | null = null;
-            try { current = fs.readFileSync(stateMdPath, 'utf8'); } catch { /* unreadable: keep the snapshot */ }
-            if (current === fileBackups.get(stateMdPath)?.content) fileBackups.delete(stateMdPath);
-          }
+          // #5120: the snapshot is kept only for a STATE.md this step wrote. A step
+          // that wrote nothing (a no-op under the lock, a lock it never acquired, or
+          // a publish that failed before its rename; platformWriteSync publishes by
+          // tmp-and-rename, so the target keeps its prior bytes) has nothing to roll
+          // back, and the rollback must never put the snapshot over another writer's
+          // content.
+          if (!stateWritten) fileBackups.delete(stateMdPath);
         }
+        // Read back right after the write. The STATE.md lock is already released
+        // here, so a writer landing in the gap between that release and this read
+        // is not told apart from this migration's own write; the gap is a few
+        // microseconds and the read is the only post-write view available
+        // without re-deriving the pipeline (ADR-3408 section 8.3).
+        try { stateMdWrittenContent = fs.readFileSync(stateMdPath, 'utf8'); } catch { stateMdWrittenContent = null; }
         editedFiles.push('STATE.md');
       }
     }
@@ -2520,18 +2526,30 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       } catch { /* best-effort */ }
     }
     const notRestored: string[] = [];
+    let stateLeftAsFound = false;
     for (const [filePath, backup] of fileBackups) {
       try {
-        // #5120: STATE.md is restored under the STATE.md lock, through the
-        // STATE.md write seam (ADR-4629 guard roster: no raw STATE.md write
-        // outside the seam), like cmdStateMilestoneSwitch in src/state.cts.
-        // readModifyWriteStateMd is not used: it re-syncs the frontmatter, so
-        // the restored file would not be the backup. platformWriteSync
-        // normalizes every .md write (LF endings, blank-line runs collapsed, a
-        // blank line inserted after headings, lists and closing fences, one
-        // trailing newline), so a STATE.md the seam never wrote comes back in
-        // that form, which a git-tracked .planning/ shows as a modification.
-        if (backup.existed && filePath === stateMdPath) withStateLock(stateMdPath, () => platformWriteSync(stateMdPath, backup.content));
+        // #5120: STATE.md is restored under the STATE.md lock through the seam's
+        // byte-exact restore primitive (platformRestoreFileSync, #5831), so the
+        // backup comes back as the bytes it had (ADR-4629 guard roster: no raw
+        // STATE.md write outside the seam). It is an exact-content write that
+        // runs no sync or preservation pipeline, so it sits outside ADR-3408
+        // section 8.3's closed exception list; listing it there, or amending the
+        // list, is the maintainer's call and is recorded in the PR, not here.
+        // The restore happens only while STATE.md still holds what this
+        // migration wrote: another writer's content, landed since, is left as
+        // found and named in the error.
+        if (backup.existed && filePath === stateMdPath) {
+          withStateLock(stateMdPath, () => {
+            let now: string | null = null;
+            try { now = fs.readFileSync(stateMdPath, 'utf8'); } catch { now = null; }
+            if (stateMdWrittenContent !== null && now !== stateMdWrittenContent) {
+              stateLeftAsFound = true;
+              return;
+            }
+            platformRestoreFileSync(stateMdPath, Buffer.from(backup.content, 'utf8'));
+          });
+        }
         else if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       } catch {
@@ -2542,6 +2560,9 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     }
     if (notRestored.length > 0) {
       throw new Error(`Migration failed and was NOT fully rolled back (not restored: ${notRestored.join(', ')}): ${(err as Error).message}`);
+    }
+    if (stateLeftAsFound) {
+      throw new Error(`Migration failed and rolled back, except STATE.md: another writer changed it after this migration wrote it, so it is left as found: ${(err as Error).message}`);
     }
     throw new Error(`Migration failed and rolled back: ${(err as Error).message}`);
   }

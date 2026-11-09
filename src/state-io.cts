@@ -19,10 +19,17 @@
  * through the STATE.md write seam (`platformWriteSync`), the
  * cmdStateMilestoneSwitch shape, so a host writing through MCP
  * `gsd_write_state` cannot interleave with another STATE.md writer (the
- * #500/#905/#1230 lost-update family). The seam normalizes the markdown it
- * writes, so those bytes are the seam's, not the caller's; every other
- * destination is still written exactly as given. `configHome`
- * write-confinement (ADR-1239 Phase B / #1679) applies to the filesystem path.
+ * #500/#905/#1230 lost-update family). The seam writes LF line endings and
+ * one trailing newline, and normalizes spacing where the write changed the
+ * document (#5165; a new file is normalized whole), so those bytes are the
+ * seam's, not the caller's; it refuses a symlinked, FIFO or device target.
+ * It is an exact-content write under the lock: it runs no sync or
+ * preservation pipeline, so it sits outside ADR-3408 section 8.3's closed
+ * exception list (the maintainer's call, recorded in the #5120 PR). The
+ * first such write also loads state.cjs, which registers its process exit
+ * handler for held locks. Every other destination is still written exactly
+ * as given. `configHome` write-confinement (ADR-1239 Phase B / #1679)
+ * applies to the filesystem path.
  *
  * Minimal seam: the host-backend protocol is fixed when a real non-filesystem
  * host lands (Phase 5 / #1682).
@@ -52,7 +59,10 @@ export interface CreateStateIOOptions {
 
 /**
  * #5120: a STATE.md destination is written under the STATE.md lock, through the
- * write seam, like cmdStateMilestoneSwitch (src/state.cts). Loaded lazily: the
+ * write seam, the lock-then-platformWriteSync shape of cmdStateMilestoneSwitch
+ * (src/state.cts) without its transition: the host's content is written as
+ * given, so no sync or preservation pipeline runs (outside ADR-3408 section
+ * 8.3's closed exception list; see the module header). Loaded lazily: the
  * lock lives in state.cts, which pulls in most of the engine, and this module
  * is also the SDK's `createStateIO` surface (host-integration-sdk.cts), whose
  * other callers never write STATE.md. The lock wait is acquireStateLock's: a
