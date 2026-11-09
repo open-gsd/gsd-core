@@ -51,6 +51,8 @@ Initialize a new project with deep context gathering.
 **Prerequisites:** No existing `.planning/PROJECT.md`
 **Produces:** `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `config.json`, `research/`, `CLAUDE.md`
 
+> **Note:** the first milestone is implicit. No milestone identity is recorded at project start — no `MILESTONES.md`, no `milestone:` in `STATE.md` ([ADR-3180](adr/3180-planning-semantic-model-single-owner.md) §7.2 rule 5). The version and name are decided at the first `/gsd-complete-milestone <version>`. See [The implicit first milestone](USER-GUIDE.md#the-implicit-first-milestone).
+
 ```bash
 /gsd-new-project                    # Interactive mode
 /gsd-new-project --auto @prd.md     # Auto-extract from PRD
@@ -489,13 +491,17 @@ Archive milestone, tag release.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
+| `<version>` | No | Target milestone version (e.g. `v1.0`); required on a project's first milestone, otherwise read from the active milestone header in `ROADMAP.md` |
 | `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` evolution review and leaves `PROJECT.md` out of the archive commit |
 
 **Prerequisites:** Milestone audit complete (recommended)
 **Produces:** `MILESTONES.md` entry, git tag
 
+> **Note:** for the project's first milestone this command is also the identity *registration* — the version comes from the `<version>` argument, the name from the separate `--name` value the workflow passes alongside it, because nothing recorded them at `/gsd-new-project` time ([the first milestone is implicit](USER-GUIDE.md#the-implicit-first-milestone)). From the second milestone onward, `/gsd-new-milestone` records the identity as well, at cycle start.
+
 ```bash
-/gsd-complete-milestone
+/gsd-complete-milestone v1.0                # First milestone: name the version
+/gsd-complete-milestone                     # Later milestones: inferred from ROADMAP.md
 ```
 
 **Pre-close artifact audit.** Before archiving, the workflow runs `gsd-tools audit-open` and reports every unresolved item across nine categories:
@@ -1080,6 +1086,16 @@ Run all remaining phases autonomously.
 /gsd-autonomous --converge --all --max-cycles 5
 /gsd-autonomous --text              # Run with text-mode prompts
 ```
+
+**Smart discuss question classes.** Without `--interactive`, each phase's discuss step classifies every grey-area question:
+
+| Class | Examples | Handling |
+|-------|----------|----------|
+| Technical, reversible | file layout, naming, internal data shapes, error-handling patterns, test approach | Decided without a prompt; shown in one "Decided autonomously" block |
+| Technical, hard to reverse | persisted schema, public API/URL contracts, auth model, new external dependency, data migrations | Asked with a ✅ Recommended answer ("Accept all" per area) |
+| Product / UX / preference | — | Asked neutrally: 2–3 options with trade-offs, no recommendation, no pre-selection |
+
+An unsure question is treated as hard to reverse, or as product. Autonomous decisions are written to the phase `CONTEXT.md` under `### Decided autonomously` and to `DISCUSSION-LOG.md` as `[auto]` lines; they are reversed by editing `CONTEXT.md` or re-running discuss before planning. See [Review or reverse an autonomous decision](how-to/run-phases-autonomously.md#review-or-reverse-an-autonomous-decision).
 
 ### `/gsd-debug`
 
