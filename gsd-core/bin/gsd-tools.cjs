@@ -372,7 +372,7 @@ const smartEntryMod = require('./lib/smart-entry.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgsOrExit, isFlagToken } = require('./lib/command-arg-projection.cjs');
-const { specFor } = require('./lib/cli-surface.cjs');
+const { specFor, GLOBAL_FLAGS } = require('./lib/cli-surface.cjs');
 const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
 const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
 
@@ -693,16 +693,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeResolveGranularity({ args, cwd, raw }) {
-    const parsed = parseNamedArgsOrExit(args, specFor('resolve-granularity'), error);
+    const spec = specFor('resolve-granularity');
+    const parsed = parseNamedArgsOrExit(args, spec, error);
     // The phase-type positional may sit before or after --granularity: it is the first
     // non-flag token that is not the value --granularity consumed.
-    const [positional] = positionalWords(args, specFor('resolve-granularity'));
+    const [positional] = positionalWords(args, spec);
     commands.cmdResolveGranularity(cwd, positional, raw, parsed.granularity ?? undefined);
   }
 
   function routeResolveExecution({ args, cwd, raw }) {
     const spec = specFor('resolve-execution');
-    const parsed = parseNamedArgsOrExit(args, specFor('resolve-execution'), error);
+    const parsed = parseNamedArgsOrExit(args, spec, error);
     // #2296: the valid classes come from the classifier's own frozen enum, so
     // this validator can never drift from what `agent classify-failure` emits.
     const validFailureClasses = Object.values(AGENT_FAILURE_CLASSES);
@@ -1139,7 +1140,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   function routeCommit({ args, cwd, raw, error }) {
     const spec = specFor('commit');
-          const parsed = parseNamedArgsOrExit(args, specFor('commit'), error);
+          const parsed = parseNamedArgsOrExit(args, spec, error);
           // #4208: `--files` and `--files-removed` are two path lists, each
           // running from its flag to the NEXT LIST FLAG. A boolean flag
           // inside a list (`--files a --amend b`) is skipped, not a
@@ -1383,7 +1384,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // AGENTS.md cross-agent default applies. The first bare word also works
           // (lenient), and the flag wins over it.
           const pifSpec = specFor('project-instruction-file');
-          const pifParsed = parseNamedArgsOrExit(args, specFor('project-instruction-file'), error);
+          const pifParsed = parseNamedArgsOrExit(args, pifSpec, error);
           const pifRuntime = pifParsed.runtime
             || positionalWords(args, pifSpec).find((w) => !w.startsWith('-'))
             || '';
@@ -1486,9 +1487,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // Omitted, `status` stays undefined and `appendQuickTaskRow` falls
           // back to its own `'—'` default — unchanged for every existing
           // caller (fast.md, quick.md's non-VALIDATE_MODE branch).
-          const qtaParsed = parseNamedArgsOrExit(args, specFor('quick-tasks-append'), error);
+          const qtaSpec = specFor('quick-tasks-append');
+          const qtaParsed = parseNamedArgsOrExit(args, qtaSpec, error);
           // The positional description is the first free word, never a flag (`--status ok desc` reads `desc`).
-          const qtaTask = qtaParsed.task || positionalWords(args, specFor('quick-tasks-append'))[0];
+          const qtaTask = qtaParsed.task || positionalWords(args, qtaSpec)[0];
           if (!qtaTask) {
             error('quick-tasks-append requires --task <description> (or a positional description)', ERROR_REASON.USAGE);
           }
@@ -3107,7 +3109,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // skills only, never the persona fallback served to orchestrator-side injection.
           // The agent type is the first free word, whichever side of the flags it sits on.
           const agentSkillsSpec = specFor('agent-skills');
-          const agentSkillsFlags = parseNamedArgsOrExit(args, specFor('agent-skills'), error);
+          const agentSkillsFlags = parseNamedArgsOrExit(args, agentSkillsSpec, error);
           init.cmdAgentSkills(cwd, positionalWords(args, agentSkillsSpec)[0], raw, agentSkillsFlags.json, agentSkillsFlags['skills-only']);
   }
 
@@ -4274,7 +4276,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // `--ecosystem` is a required flag of the spec; an unknown --flag is a usage error
           // (it is never skipped along with the next arg).
           const plSpec = specFor('package-legitimacy.check');
-          const ecosystem = parseNamedArgsOrExit(args, specFor('package-legitimacy.check'), error).ecosystem;
+          const ecosystem = parseNamedArgsOrExit(args, plSpec, error).ecosystem;
           const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
           if (!VALID_ECOSYSTEMS.has(ecosystem)) {
             error('Usage: gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> ...', ERROR_REASON.USAGE);
@@ -5373,7 +5375,7 @@ async function main() {
   // discovering the command surface via subcommand help requests routed
   // through this dispatcher. Rendering top-level usage on --help is strictly
   // better UX than the old short-circuit that printed unrelated usage text.
-  const HELP_FLAGS = new Set(['-h', '--help', '-?', '--h', '--usage']);
+  const HELP_FLAGS = new Set(GLOBAL_FLAGS.helpTokens);
   if (args.some((a) => HELP_FLAGS.has(a))) {
     process.stdout.write(TOP_LEVEL_USAGE + '\n');
     return;
@@ -5382,7 +5384,7 @@ async function main() {
   // Reject version flags. AI agents sometimes hallucinate --version on tool
   // invocations; silently ignoring it can cause destructive operations to
   // proceed unchecked. (Help flags are handled above.)
-  const NEVER_VALID_FLAGS = new Set(['--version', '-v']);
+  const NEVER_VALID_FLAGS = new Set(GLOBAL_FLAGS.rejectedTokens);
   for (const arg of args) {
     if (NEVER_VALID_FLAGS.has(arg)) {
       error(`Unknown flag: ${arg}\ngsd-tools does not accept version flags. Run "gsd-tools" with no arguments for usage.`, ERROR_REASON.USAGE);
