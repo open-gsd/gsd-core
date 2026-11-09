@@ -588,3 +588,175 @@ describe('#6087 requiredFlags', () => {
     );
   });
 });
+
+describe('#6087 seam kinds', () => {
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+
+  // Oracle for T-K12: verbatim copy of collectListFlagValues from
+  // gsd-core/bin/gsd-tools.cjs:4892-4903 (the stop set is passed in because the
+  // original closes over COMMIT_LIST_FLAGS, gsd-tools.cjs:4880).
+  function collectListFlagValues(args, flag, COMMIT_LIST_FLAGS) {
+    const values = [];
+    args.forEach((a, i) => {
+      if (a !== flag) return;
+      for (const b of args.slice(i + 1)) {
+        if (COMMIT_LIST_FLAGS.has(b)) break;
+        if (b.startsWith('--')) continue;
+        values.push(b);
+      }
+    });
+    return values;
+  }
+
+  test('T-K1: eqFlags accepts --name=value', () => {
+    const result = parseNamedArgs(['--e=x'], { valueFlags: ['e'], eqFlags: ['e'], positionals: 0 });
+    assert.deepStrictEqual(result, { ok: true, data: { e: 'x' } });
+  });
+
+  test('T-K2: --e= is present without a value (null); InvalidArgs when also nonEmptyFlags', () => {
+    const plain = parseNamedArgs(['--e='], { valueFlags: ['e'], eqFlags: ['e'], positionals: 0 });
+    assert.strictEqual(plain.ok, true);
+    assert.strictEqual(plain.data.e, null);
+    const strict = parseNamedArgs(['--e='], {
+      valueFlags: ['e'], eqFlags: ['e'], nonEmptyFlags: ['e'], positionals: 0,
+    });
+    assert.strictEqual(strict.ok, false);
+    assert.strictEqual(strict.kind, 'InvalidArgs');
+    assert.strictEqual(strict.arg, '--e');
+    assert.strictEqual(strict.reason, 'Missing value for --e');
+    assert.strictEqual(strict.exitReason, ERROR_REASON.USAGE);
+  });
+
+  test('T-K3: --e=x without eqFlags is still an unknown flag', () => {
+    const result = parseNamedArgs(['--e=x'], { valueFlags: ['e'], positionals: 0 });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--e=x');
+  });
+
+  test('T-K4: nonEmptyFlags rejects a present flag without a value, keeps absent as null', () => {
+    const spec = { valueFlags: ['n'], booleanFlags: ['b'], nonEmptyFlags: ['n'], positionals: 0 };
+    assert.deepStrictEqual(parseNamedArgs([], spec), { ok: true, data: { n: null, b: false } });
+    for (const argv of [['--n'], ['--n', '--b']]) {
+      const result = parseNamedArgs(argv, spec);
+      assert.strictEqual(result.ok, false, argv.join(' '));
+      assert.strictEqual(result.kind, 'InvalidArgs');
+      assert.strictEqual(result.arg, '--n');
+      assert.strictEqual(result.reason, 'Missing value for --n');
+      assert.strictEqual(result.exitReason, ERROR_REASON.USAGE);
+    }
+    assert.deepStrictEqual(parseNamedArgs(['--n', 'v'], spec), { ok: true, data: { n: 'v', b: false } });
+  });
+
+  test('T-K5: bareEmptyFlags yields "" for a bare flag, null when absent', () => {
+    const spec = { valueFlags: ['f'], bareEmptyFlags: ['f'], positionals: 0 };
+    assert.strictEqual(parseNamedArgs([], spec).data.f, null);
+    assert.strictEqual(parseNamedArgs(['--f'], spec).data.f, '');
+    assert.strictEqual(parseNamedArgs(['--f', 'a,b'], spec).data.f, 'a,b');
+  });
+
+  test('T-K6: repeatableFlags collects every occurrence in order', () => {
+    const spec = { valueFlags: ['p'], repeatableFlags: ['p'], positionals: 0 };
+    assert.deepStrictEqual(parseNamedArgs([], spec).data.p, []);
+    assert.deepStrictEqual(parseNamedArgs(['--p', 'a'], spec).data.p, ['a']);
+    assert.deepStrictEqual(parseNamedArgs(['--p', 'a', '--p', 'b', '--p', 'c'], spec).data.p, ['a', 'b', 'c']);
+  });
+
+  test('T-K7: listFlags matches collectListFlagValues on the same argv', () => {
+    const spec = { listFlags: ['files', 'files-removed'], booleanFlags: ['amend'], positionals: 0 };
+    const result = parseNamedArgs(
+      ['--files', 'a', '--amend', 'b', '--files-removed', 'c', '--files', 'd'], spec,
+    );
+    assert.deepStrictEqual(result, {
+      ok: true,
+      data: { files: ['a', 'b', 'd'], 'files-removed': ['c'], amend: true },
+    });
+  });
+
+  test('T-K8: an undeclared flag inside a list run is still validated', () => {
+    const result = parseNamedArgs(['--files', 'a', '--zz', 'b'], { listFlags: ['files'], positionals: 0 });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--zz');
+  });
+
+  test('T-K9: multiwordFlags joins tokens up to the next flag; the flag is validated separately', () => {
+    const spec = { multiwordFlags: ['name'], booleanFlags: ['force'], positionals: 0 };
+    assert.deepStrictEqual(
+      parseNamedArgs(['--name', 'v1.0', 'Big', 'Release', '--force'], spec),
+      { ok: true, data: { name: 'v1.0 Big Release', force: true } },
+    );
+    assert.strictEqual(parseNamedArgs([], spec).data.name, null);
+    const bad = parseNamedArgs(['--name', 'a', '--nope'], spec);
+    assert.strictEqual(bad.ok, false);
+    assert.strictEqual(bad.arg, '--nope');
+  });
+
+  test('T-K10: passthroughAfter "--" returns later tokens unvalidated in data["--"]', () => {
+    const spec = { valueFlags: ['x'], passthroughAfter: '--', positionals: 0 };
+    const result = parseNamedArgs(['--x', '1', '--', '--anything', 'y'], spec);
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.data.x, '1');
+    assert.deepStrictEqual(result.data['--'], ['--anything', 'y']);
+    assert.deepStrictEqual(parseNamedArgs(['--x', '1'], spec).data['--'], []);
+  });
+
+  test('T-K11: malformed kind declarations throw a TypeError naming the kind and the flag', () => {
+    const subsetKinds = ['eqFlags', 'nonEmptyFlags', 'bareEmptyFlags', 'repeatableFlags'];
+    for (const kind of subsetKinds) {
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['a'], [kind]: ['a', 'stray'], positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes(kind) && err.message.includes('stray'),
+        kind,
+      );
+    }
+    for (const kind of [...subsetKinds, 'listFlags', 'multiwordFlags']) {
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['a'], [kind]: 'a', positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes(kind),
+        `${kind} non-array`,
+      );
+    }
+    for (const kind of ['listFlags', 'multiwordFlags']) {
+      for (const other of ['valueFlags', 'booleanFlags', 'optionalValueFlags']) {
+        assert.throws(
+          () => parseNamedArgs([], { [other]: ['dup'], [kind]: ['dup'], positionals: 0 }),
+          (err) => err instanceof TypeError && err.message.includes(kind) && err.message.includes('dup'),
+          `${kind} vs ${other}`,
+        );
+      }
+    }
+    assert.throws(
+      () => parseNamedArgs([], { listFlags: ['dup'], multiwordFlags: ['dup'], positionals: 0 }),
+      (err) => err instanceof TypeError && err.message.includes('dup'),
+    );
+    assert.throws(
+      () => parseNamedArgs([], { passthroughAfter: '-x', positionals: 0 }),
+      (err) => err instanceof TypeError && err.message.includes('passthroughAfter'),
+    );
+  });
+
+  test('T-K12 fc: listFlags extraction equals collectListFlagValues for random argv', () => {
+    const stop = new Set(['--files', '--files-removed']);
+    const spec = { listFlags: ['files', 'files-removed'], booleanFlags: ['amend'], positionals: 0 };
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom('--files', '--files-removed', '--amend', 'word', 'w2'), { maxLength: 10 }),
+        (argv) => {
+          const result = parseNamedArgs(argv, spec);
+          const firstList = argv.findIndex((t) => stop.has(t));
+          const lead = firstList === -1 ? argv : argv.slice(0, firstList);
+          const expectedOk = lead.every((t) => t.startsWith('--'));
+          assert.strictEqual(result.ok, expectedOk);
+          if (!expectedOk) return;
+          for (const flag of stop) {
+            assert.deepStrictEqual(
+              result.data[flag.slice(2)],
+              collectListFlagValues(argv, flag, stop),
+            );
+          }
+        },
+      ),
+    );
+  });
+});
