@@ -658,12 +658,13 @@ interface PlanRow {
   changedFiles: string[] | null;
   hasSummary: boolean;
   /**
-   * #5823 (additive, #2830's model): true iff this plan's own SUMMARY declares
-   * `status: halted` (a designed stop). Paired and read exactly as
-   * `phase-plan-index` does — see `readHalted`. False when no SUMMARY pairs,
-   * and when the paired SUMMARY is unreadable (a `summary_unreadable`
-   * diagnostic then names it). `hasSummary` is untouched and keeps its own,
-   * older pairing rule.
+   * #5823 (additive, #2830's model): true iff the SUMMARY paired with this
+   * plan declares `status: halted` (a designed stop). Paired and read exactly
+   * as `phase-plan-index` does — see `readHalted` — so the SUMMARY is usually
+   * the plan's own but, by canonical id, can be a bare-id SUMMARY written for
+   * another plan. False when no SUMMARY pairs, and when the paired SUMMARY is
+   * unreadable (a `summary_unreadable` diagnostic then names it). `hasSummary`
+   * is untouched and keeps its own, older pairing rule.
    */
   halted: boolean;
   /**
