@@ -2967,6 +2967,18 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       assertBlocked(runHook(bash(cmd)), 'deep payloads', { tool: 'Bash', path: '-d@.env' });
     });
   }
+  // The spawn scan reads a payload only the further reading reads through the
+  // same guard, with its own scan: a debugger launch inside one is denied.
+  for (const cmd of [
+    "! bash -c 'claude --agent gsd-debugger -p x'",
+    "A+=b bash -c 'claude --agent gsd-debugger -p x'",
+    "a[0]=x bash -c 'claude --agent gsd-debugger -p x'",
+    "! eval 'claude --agent gsd-debugger -p x'",
+  ]) {
+    test(`denies a debugger spawn inside a further-only payload (${cmd.slice(0, 14)}…)`, () => {
+      assertBlocked(runHook(bash(cmd)), 'spawn in payload', { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+  }
   test('denies a debugger spawn after a deep payload only the further reading reads', () => {
     const cmd = `A+=b ${DEEP_PAYLOAD}; A+=b claude --agent gsd-debugger -p x`;
     assertBlocked(runHook(bash(cmd)), 'spawn after deep payload', { code: 'debugger-cli-spawn', tool: 'Bash' });
