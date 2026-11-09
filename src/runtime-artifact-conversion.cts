@@ -2964,10 +2964,11 @@ function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array.
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertCopilotToolName(t));
   const uniqueTools = [...new Set(mappedTools)];
   const toolsArray = uniqueTools.length > 0
@@ -3396,7 +3397,9 @@ function convertClaudeAgentToCodexAgent(content) {
 
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const tools = extractFrontmatterField(frontmatter, 'tools') || '';
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const tools = parseFrontmatterTools(frontmatter).join(', ');
 
   const roleHeader = `<codex_agent_role>
 role: ${name}

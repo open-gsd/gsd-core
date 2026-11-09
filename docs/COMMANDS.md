@@ -51,6 +51,8 @@ Initialize a new project with deep context gathering.
 **Prerequisites:** No existing `.planning/PROJECT.md`
 **Produces:** `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`, `config.json`, `research/`, `CLAUDE.md`
 
+> **Note:** the first milestone is implicit. No milestone identity is recorded at project start — no `MILESTONES.md`, no `milestone:` in `STATE.md` ([ADR-3180](adr/3180-planning-semantic-model-single-owner.md) §7.2 rule 5). The version and name are decided at the first `/gsd-complete-milestone <version>`. See [The implicit first milestone](USER-GUIDE.md#the-implicit-first-milestone).
+
 ```bash
 /gsd-new-project                    # Interactive mode
 /gsd-new-project --auto @prd.md     # Auto-extract from PRD
@@ -489,13 +491,17 @@ Archive milestone, tag release.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
+| `<version>` | No | Target milestone version (e.g. `v1.0`); required on a project's first milestone, otherwise read from the active milestone header in `ROADMAP.md` |
 | `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` evolution review and leaves `PROJECT.md` out of the archive commit |
 
 **Prerequisites:** Milestone audit complete (recommended)
 **Produces:** `MILESTONES.md` entry, git tag
 
+> **Note:** for the project's first milestone this command is also the identity *registration* — the version comes from the `<version>` argument, the name from the separate `--name` value the workflow passes alongside it, because nothing recorded them at `/gsd-new-project` time ([the first milestone is implicit](USER-GUIDE.md#the-implicit-first-milestone)). From the second milestone onward, `/gsd-new-milestone` records the identity as well, at cycle start.
+
 ```bash
-/gsd-complete-milestone
+/gsd-complete-milestone v1.0                # First milestone: name the version
+/gsd-complete-milestone                     # Later milestones: inferred from ROADMAP.md
 ```
 
 **Pre-close artifact audit.** Before archiving, the workflow runs `gsd-tools audit-open` and reports every unresolved item across nine categories:
@@ -1081,6 +1087,16 @@ Run all remaining phases autonomously.
 /gsd-autonomous --text              # Run with text-mode prompts
 ```
 
+**Smart discuss question classes.** Without `--interactive`, each phase's discuss step classifies every grey-area question:
+
+| Class | Examples | Handling |
+|-------|----------|----------|
+| Technical, reversible | file layout, naming, internal data shapes, error-handling patterns, test approach | Decided without a prompt; shown in one "Decided autonomously" block |
+| Technical, hard to reverse | persisted schema, public API/URL contracts, auth model, new external dependency, data migrations | Asked with a ✅ Recommended answer ("Accept all" per area) |
+| Product / UX / preference | — | Asked neutrally: 2–3 options with trade-offs, no recommendation, no pre-selection |
+
+An unsure question is treated as hard to reverse, or as product. Autonomous decisions are written to the phase `CONTEXT.md` under `### Decided autonomously` and to `DISCUSSION-LOG.md` as `[auto]` lines; they are reversed by editing `CONTEXT.md` or re-running discuss before planning. See [Review or reverse an autonomous decision](how-to/run-phases-autonomously.md#review-or-reverse-an-autonomous-decision).
+
 ### `/gsd-debug`
 
 Systematic debugging with persistent state.
@@ -1318,6 +1334,41 @@ Extract reusable patterns, anti-patterns, and architectural decisions from compl
 ```
 
 ---
+
+### `gsd-tools verify plan-structure <PLAN.md> --replay`
+
+Opt-in replay of recorded criterion baselines (#4310, [ADR-4310](adr/4310-criterion-replay.md)).
+Without `--replay`, `verify plan-structure` reads text only and runs nothing. With it, the command
+of each `[HEAD=<value> EXPECT…]` notation is run at the project root, and the printed value is
+compared with the recorded `HEAD`. Nothing invokes the flag automatically; you run it by hand.
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `<PLAN.md>` | Yes | The plan to check. `--replay` may come before or after it |
+
+| Flag | Description |
+|------|-------------|
+| `--replay` | Run each criterion's command under the replay quarantine and compare its output with the recorded baseline |
+| `--raw` | Emit the JSON payload with no surrounding prose |
+
+**Produces:** the usual `verify plan-structure` JSON, plus a final `replay` key:
+`{ head_sha, results, mismatch_count, statuses }`. Each result is
+`{ line, text, argv, recorded, observed, outcome, rev_drift }`, where `outcome` is `match` or
+`mismatch`. Each status is `{ code, line, text, detail }`. Raw command output is never included.
+**Exit status:** unchanged by replay. A mismatch adds a warning and a status changes nothing. Only
+the static rules (B1 and the rest) decide validity.
+
+**Quarantine.** Replay never starts a shell:
+- Only `grep`, and `git` with `grep`, `ls-files`, `rev-parse` or `rev-list`, may run.
+- Pipes, redirects, globs, `$` expansion and command substitution are `disallowed`.
+- Absolute paths and `..` segments are `disallowed`.
+- Options come from an exact-match allowlist per program, so abbreviations like `--open-files=sh` are `disallowed`.
+- A path that resolves outside the project through a symlink is `disallowed`.
+- Each command gets 10 s and 64 KiB of output. A run replays at most 50 commands within 60 s.
+
+Status codes: `no_command`, `ambiguous_command`, `malformed_command`, `disallowed`,
+`cannot_run`, `timeout`, `output_cap`, `budget_exhausted`, `truncated`, `replay_error`. See
+[Replay recorded baselines](how-to/replay-recorded-baselines.md).
 
 ### `gsd-tools check verify-command-paths`
 

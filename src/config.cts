@@ -901,8 +901,10 @@ function loadConfigJson(cwd: string): Record<string, unknown> {
   const configPath = path.join(planningDir(cwd), 'config.json');
   let config: Record<string, unknown> = {};
   try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws.
+    const raw = configLoader.readConfigFileBounded(configPath);
+    if (raw !== null) {
+      config = JSON.parse(raw) as Record<string, unknown>;
     }
   } catch (err) {
     error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
@@ -1161,6 +1163,27 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 }
 
 /**
+ * #4432: one `hooks.secret_read_exempt` entry as a POSIX repo-relative file
+ * path, or null when it is not one. The secret-read guard
+ * (hooks/lib/secret-read-exemptions.js `normalizeExemptEntry`) applies the SAME
+ * rules when it reads the list, and is standalone because an installed hook
+ * cannot require `src/`. The duplication is deliberate and pinned: a parity test
+ * (tests/secret-read-exemptions.test.cjs) drives one corpus and a seeded
+ * property through both, so a value accepted here is a value the hook honors.
+ */
+function normalizeSecretReadExemptEntry(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null;
+  let s = entry.replace(/\\/g, '/');
+  while (s.startsWith('./')) s = s.slice(2);
+  if (s === '' || s === '.') return null;
+  if (s.startsWith('/') || s.endsWith('/')) return null;
+  if (/^[A-Za-z]:/.test(s)) return null;
+  if (s.includes('\0')) return null;
+  if (s.split('/').includes('..')) return null;
+  return s;
+}
+
+/**
  * The per-key VALUE rules, shared by `config-set` and `config-new-project`
  * (#5268). They were inline in `cmdConfigSet`, so `config-new-project` had no
  * way to apply them and wrote values `config-set` refuses for the same key.
@@ -1355,6 +1378,16 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
     }
   }
 
+  // #4432: files the secret-read guard may let agents read. Every entry must be
+  // a repo-relative file path; the guard drops anything else when it reads the
+  // list, so storing it would be accept-then-discard.
+  if (kp === 'hooks.secret_read_exempt') {
+    if (!Array.isArray(parsedValue) || parsedValue.some((entry) => normalizeSecretReadExemptEntry(entry) === null)) {
+      error(`Invalid hooks.secret_read_exempt '${val}'. Must be an array of repo-relative file paths `
+        + `(no leading '/', drive prefix, '..' segment or trailing '/'), e.g. [".env.production"].`);
+    }
+  }
+
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
   if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');
@@ -1460,8 +1493,11 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
 
   let config: Record<string, unknown> = {};
   try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws and
+    // is reported as an unreadable config below, never waited on.
+    const rawConfig = configLoader.readConfigFileBounded(configPath);
+    if (rawConfig !== null) {
+      config = JSON.parse(rawConfig) as Record<string, unknown>;
     } else {
       // #2702: when a workstream is active and has no config.json of its own, fall
       // back to the project ROOT config first — a key the user configured at root is
@@ -1566,8 +1602,10 @@ function resolveFromRootConfig(cwd: string, kp: string): { found: boolean; value
   const rootConfigPath = path.join(root, 'config.json');
   let rootConfig: Record<string, unknown>;
   try {
-    if (!fs.existsSync(rootConfigPath)) return { found: false, value: undefined };
-    rootConfig = JSON.parse(fs.readFileSync(rootConfigPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
+    const rawRoot = configLoader.readConfigFileBounded(rootConfigPath);
+    if (rawRoot === null) return { found: false, value: undefined };
+    rootConfig = JSON.parse(rawRoot) as Record<string, unknown>;
   } catch {
     // Unparseable root config → don't inherit (do not let a corrupt root file
     // change config-get's verdict). Fall through to schema default / error.
@@ -1742,4 +1780,5 @@ export = {
   setConfigValue,
   setConfigValues,
   isValidProtectedBranches,
+  normalizeSecretReadExemptEntry,
 };

@@ -589,14 +589,28 @@ function mockPartialWriteThenThrow(fsModule, matches, bytesBeforeThrow, options 
   const { code = 'ENOSPC', message = `${code}: simulated partial write failure` } = options;
   const shouldMatch = typeof matches === 'function' ? matches : () => true;
   const origWriteFileSync = fsModule.writeFileSync;
+  const origOpenSync = fsModule.openSync;
+  // With `resolveDescriptors`, a write through a descriptor is matched by the path
+  // it was opened under (the seam writes temp files via an exclusively-created fd).
+  const openedPaths = new Map();
+  if (options.resolveDescriptors === true) {
+    fsModule.openSync = (p, ...rest) => {
+      const fd = origOpenSync.call(fsModule, p, ...rest);
+      if (typeof p === 'string') openedPaths.set(fd, p);
+      return fd;
+    };
+  }
   fsModule.writeFileSync = (target, data, writeOptions) => {
-    if (!shouldMatch(target)) {
+    if (!shouldMatch(typeof target === 'number' && openedPaths.has(target) ? openedPaths.get(target) : target)) {
       return origWriteFileSync.call(fsModule, target, data, writeOptions);
     }
     origWriteFileSync.call(fsModule, target, String(data).slice(0, bytesBeforeThrow), writeOptions);
     throw Object.assign(new Error(message), { code });
   };
-  return () => { fsModule.writeFileSync = origWriteFileSync; };
+  return () => {
+    fsModule.writeFileSync = origWriteFileSync;
+    fsModule.openSync = origOpenSync;
+  };
 }
 
 /**

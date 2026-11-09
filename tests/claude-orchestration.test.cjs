@@ -24,9 +24,7 @@ const {
   detectWorkflowBackend,
   emitWorkflowScript,
   resolveWaveDispatch,
-  WORKFLOW_TOOL_FLOOR_VERSION,
   BACKEND_VALUES,
-  compareSemver,
 } = require('../gsd-core/bin/lib/claude-orchestration.cjs');
 
 const {
@@ -55,6 +53,9 @@ const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md
 const CAPABLE_HOST = {
   dispatch: { namedDispatch: true, nested: true, background: true, backgroundDispatch: false },
 };
+
+/** #4747: workflow availability resolved with no kill switch set. */
+const OPEN_AVAILABILITY = { disabled: false, reason: 'workflows_available' };
 
 /** Read the real capability declaration (data file — not a source grep). */
 function loadCap() {
@@ -119,7 +120,7 @@ describe('detectWorkflowBackend', () => {
     const r = detectWorkflowBackend({
       runtimeId: 'claude',
       hostIntegration: CAPABLE_HOST,
-      agentSdkVersion: '1.0.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       config: { 'claude_orchestration.enabled': false },
     });
     assert.strictEqual(r.available, false);
@@ -132,7 +133,7 @@ describe('detectWorkflowBackend', () => {
       const r = detectWorkflowBackend({
         runtimeId,
         hostIntegration: CAPABLE_HOST,
-        agentSdkVersion: '1.0.0',
+        workflowAvailability: OPEN_AVAILABILITY,
         config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'workflow' },
       });
       assert.strictEqual(r.backend, 'inline', runtimeId + ' should be inline');
@@ -141,11 +142,11 @@ describe('detectWorkflowBackend', () => {
     }
   });
 
-  test('Claude + auto + capable host + new-enough SDK -> workflow', () => {
+  test('Claude + auto + capable host + workflows available -> workflow', () => {
     const r = detectWorkflowBackend({
       runtimeId: 'claude',
       hostIntegration: CAPABLE_HOST,
-      agentSdkVersion: '1.2.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'auto' },
     });
     assert.strictEqual(r.backend, 'workflow');
@@ -156,7 +157,7 @@ describe('detectWorkflowBackend', () => {
     const r = detectWorkflowBackend({
       runtimeId: 'claude',
       hostIntegration: CAPABLE_HOST,
-      agentSdkVersion: '1.0.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'workflow' },
     });
     assert.strictEqual(r.backend, 'workflow');
@@ -167,7 +168,7 @@ describe('detectWorkflowBackend', () => {
     const r = detectWorkflowBackend({
       runtimeId: 'claude',
       hostIntegration: CAPABLE_HOST,
-      agentSdkVersion: '1.0.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'inline' },
     });
     assert.strictEqual(r.backend, 'inline');
@@ -178,88 +179,11 @@ describe('detectWorkflowBackend', () => {
     const r = detectWorkflowBackend({
       runtimeId: 'claude',
       hostIntegration: { dispatch: { nested: false, background: true } },
-      agentSdkVersion: '1.0.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'auto' },
     });
     assert.strictEqual(r.backend, 'inline');
     assert.strictEqual(r.available, false);
-  });
-
-  test('Claude + unknown agentSdkVersion -> inline fail-closed (criterion 3 fallback)', () => {
-    const r = detectWorkflowBackend({
-      runtimeId: 'claude',
-      hostIntegration: CAPABLE_HOST,
-      agentSdkVersion: undefined,
-      config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'auto' },
-    });
-    assert.strictEqual(r.backend, 'inline');
-    assert.strictEqual(r.available, false);
-    assert.match(r.reason, /version|sdk|unknown/i);
-  });
-
-  test('agent SDK version boundary: floor-1 -> inline, floor -> workflow, floor+patch -> workflow', () => {
-    const floor = WORKFLOW_TOOL_FLOOR_VERSION;
-    const [maj, min, pat] = floor.split('.').map((n) => parseInt(n, 10));
-    // Robust "below" derivation with full borrow chain (works for .0.0 floors too).
-    let below;
-    if (pat > 0) below = `${maj}.${min}.${pat - 1}`;
-    else if (min > 0) below = `${maj}.${min - 1}.999`;
-    else if (maj > 0) below = `${maj - 1}.999.999`;
-    else { assert.ok(false, 'cannot derive below for 0.0.0 floor'); return; }
-    const above = `${maj}.${min}.${pat + 1}`;
-    // Sanity: confirm below really is below per the comparator under test.
-    assert.ok(compareSemver(below, floor) < 0, below + ' must compare below ' + floor);
-
-    const cfg = { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'auto' };
-
-    const rBelow = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: below, config: cfg });
-    assert.strictEqual(rBelow.backend, 'inline', below + ' (floor-1) must be inline');
-
-    const rAt = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: floor, config: cfg });
-    assert.strictEqual(rAt.backend, 'workflow', floor + ' (exact floor) must be workflow');
-
-    const rAbove = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: above, config: cfg });
-    assert.strictEqual(rAbove.backend, 'workflow', above + ' (floor+patch) must be workflow');
-  });
-
-  test('config-level min_agent_sdk_version override raises/lowers the floor', () => {
-    const cfg = {
-      'claude_orchestration.enabled': true,
-      'claude_orchestration.execution_backend': 'auto',
-      'claude_orchestration.min_agent_sdk_version': '2.0.0',
-    };
-    const r1 = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: '1.9.9', config: cfg });
-    assert.strictEqual(r1.backend, 'inline', 'below raised floor -> inline');
-    const r2 = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: '2.0.0', config: cfg });
-    assert.strictEqual(r2.backend, 'workflow', 'at raised floor -> workflow');
-  });
-
-  test('execution_backend:"workflow" + SDK below floor -> inline (M-1: floor applies in both modes)', () => {
-    const cfg = {
-      'claude_orchestration.enabled': true,
-      'claude_orchestration.execution_backend': 'workflow',
-    };
-    const r = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: '0.3.0', config: cfg });
-    assert.strictEqual(r.backend, 'inline', 'workflow mode must still honor the SDK floor (fail-closed)');
-    assert.strictEqual(r.available, false);
-    assert.match(r.reason, /floor|version/);
-  });
-
-  test('pre-release of the floor (0.3.149-rc.1) -> inline (pre-release < GA per SemVer)', () => {
-    const cfg = { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'auto' };
-    // Explicitly assert the precedence rule: a pre-release tag is below the GA release.
-    assert.ok(compareSemver('0.3.149-rc.1', '0.3.149') < 0, 'pre-release must compare below GA');
-    const r = detectWorkflowBackend({ runtimeId: 'claude', hostIntegration: CAPABLE_HOST, agentSdkVersion: '0.3.149-rc.1', config: cfg });
-    assert.strictEqual(r.backend, 'inline', 'pre-release of the floor must not activate the BETA backend');
-    assert.strictEqual(r.available, false);
-  });
-
-  test('two pre-releases of the same triple order by their identifiers (SemVer §11)', () => {
-    assert.ok(compareSemver('0.3.149-rc.0', '0.3.149-rc.1') < 0, 'rc.0 < rc.1');
-    assert.ok(compareSemver('1.0.0-alpha.1', '1.0.0-alpha.2') < 0, 'alpha.1 < alpha.2');
-    assert.ok(compareSemver('1.0.0-rc.1', '1.0.0-rc.2') < 0, 'rc.1 < rc.2');
-    // numeric < alphanumeric at the same position
-    assert.ok(compareSemver('1.0.0-1', '1.0.0-alpha') < 0, 'numeric identifier < alphanumeric');
   });
 
   test('missing/empty input -> inline, never throws (Postel: liberal-in-input)', () => {
@@ -277,7 +201,6 @@ describe('detectWorkflowBackend', () => {
     fc.assert(fc.property(
       fc.record({
         runtimeId: fc.constantFrom('claude', 'codex', 'cursor', 'opencode'),
-        sdk: fc.option(fc.string({ minLength: 1, maxLength: 8 }).filter((s) => /^\d/.test(s)), { nil: undefined }),
         backend: fc.constantFrom('auto', 'workflow', 'inline'),
         enabled: fc.boolean(),
       }),
@@ -286,27 +209,12 @@ describe('detectWorkflowBackend', () => {
           'claude_orchestration.enabled': input.enabled,
           'claude_orchestration.execution_backend': input.backend,
         };
-        const a = detectWorkflowBackend({ runtimeId: input.runtimeId, hostIntegration: CAPABLE_HOST, agentSdkVersion: input.sdk, config: cfg });
-        const b = detectWorkflowBackend({ runtimeId: input.runtimeId, hostIntegration: CAPABLE_HOST, agentSdkVersion: input.sdk, config: cfg });
+        const a = detectWorkflowBackend({ runtimeId: input.runtimeId, hostIntegration: CAPABLE_HOST, workflowAvailability: OPEN_AVAILABILITY, config: cfg });
+        const b = detectWorkflowBackend({ runtimeId: input.runtimeId, hostIntegration: CAPABLE_HOST, workflowAvailability: OPEN_AVAILABILITY, config: cfg });
         assert.deepStrictEqual(a, b);
         assert.ok(['workflow', 'inline'].includes(a.backend));
       },
-    ));
-  });
-});
-
-// ─── 2. compareSemver helper ──────────────────────────────────────────────────
-
-describe('compareSemver', () => {
-  test('ordering', () => {
-    assert.ok(compareSemver('1.0.0', '0.9.9') > 0);
-    assert.ok(compareSemver('1.0.0', '1.0.0') === 0);
-    assert.ok(compareSemver('1.0.0', '1.0.1') < 0);
-    assert.ok(compareSemver('2.0.0', '1.9.9') > 0);
-  });
-  test('garbage versions compare as -1 (fail-closed)', () => {
-    assert.strictEqual(compareSemver('garbage', '1.0.0'), -1);
-    assert.strictEqual(compareSemver('1.0.0', ''), -1);
+    ), { seed: 4747001 });
   });
 });
 
@@ -489,7 +397,7 @@ describe('emitWorkflowScript', () => {
         assert.strictEqual(a.script, b.script);
         assert.deepStrictEqual(a.summary, b.summary);
       },
-    ));
+    ), { seed: 4747002 });
   });
 });
 
@@ -506,7 +414,7 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
   test('[happy] use_worktree omitted (default) -> isolation: "worktree" (backward-compatible default)', () => {
     const r = emitWorkflowScript(singleWaveManifest());
     assert.strictEqual(r.ok, true);
-    assert.match(r.script, /agent\("Implement the foo module", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
+    assert.match(r.script, /gsdRunAgent\("Implement the foo module", \{ agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA \}\)/);
   });
 
   test('[happy] use_worktree: true explicit -> isolation: "worktree" (same as default)', () => {
@@ -515,7 +423,7 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
       waves: [{ id: 'w1', plans: [{ id: 'p1', brief: 'b', files_modified: ['a.cts'], use_worktree: true }] }],
     });
     assert.strictEqual(r.ok, true);
-    assert.match(r.script, /agent\("b", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
+    assert.match(r.script, /gsdRunAgent\("b", \{ agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA \}\)/);
   });
 
   test('[negative] use_worktree: false -> isolation OMITTED entirely for that plan', () => {
@@ -524,8 +432,8 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
       waves: [{ id: 'w1', plans: [{ id: 'p1', brief: 'submodule plan', files_modified: ['vendor/lib.c'], use_worktree: false }] }],
     });
     assert.strictEqual(r.ok, true);
-    assert.match(r.script, /agent\("submodule plan", \{ agentType: "gsd-executor" \}\)/);
-    assert.ok(!/agent\("submodule plan"[^)]*isolation/.test(r.script), 'isolation must not appear for this plan\'s agent() call');
+    assert.match(r.script, /gsdRunAgent\("submodule plan", \{ agentType: "gsd-executor" \}\)/);
+    assert.ok(!/gsdRunAgent\("submodule plan"[^)]*isolation/.test(r.script), 'isolation must not appear for this plan\'s agent() call');
   });
 
   test('[happy] mixed wave: one worktree plan + one non-worktree plan in the SAME parallel() batch — each carries its own isolation independently', () => {
@@ -539,9 +447,9 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
     assert.strictEqual(r.ok, true);
     // Both plans have disjoint files_modified -> coalesce into ONE parallel() stage.
     assert.strictEqual(r.summary.stagesByWave[0].length, 1, 'non-overlapping plans share one stage');
-    assert.match(r.script, /agent\("normal plan", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
-    assert.match(r.script, /agent\("submodule plan", \{ agentType: "gsd-executor" \}\)/);
-    assert.ok(!/agent\("submodule plan"[^)]*isolation/.test(r.script), 'the submodule plan must never gain isolation from being batched with a worktree plan');
+    assert.match(r.script, /gsdRunAgent\("normal plan", \{ agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA \}\)/);
+    assert.match(r.script, /gsdRunAgent\("submodule plan", \{ agentType: "gsd-executor" \}\)/);
+    assert.ok(!/gsdRunAgent\("submodule plan"[^)]*isolation/.test(r.script), 'the submodule plan must never gain isolation from being batched with a worktree plan');
   });
 
   test('[negative] use_worktree with a non-boolean value -> ok:false (strict typing, no silent coercion)', () => {
@@ -586,7 +494,7 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
         assert.strictEqual(r.ok, true);
         for (const p of planSpecs) {
           const briefEsc = JSON.stringify(labelFor(p));
-          const idx = r.script.indexOf('agent(' + briefEsc + ',');
+          const idx = r.script.indexOf('gsdRunAgent(' + briefEsc + ',');
           assert.ok(idx !== -1, 'agent() call for plan must exist');
           const lineEnd = r.script.indexOf('\n', idx);
           const line = r.script.slice(idx, lineEnd === -1 ? undefined : lineEnd);
@@ -597,7 +505,7 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
           }
         }
       },
-    ));
+    ), { seed: 4747003 });
   });
 });
 
@@ -655,7 +563,7 @@ describe('#3674 — pre-extraction characterization (golden output pins)', () =>
     const input = {
       runtimeId: 'claude',
       hostIntegration: CAPABLE_HOST_3674,
-      agentSdkVersion: '1.2.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       config: { 'claude_orchestration.enabled': true, 'claude_orchestration.execution_backend': 'workflow' },
       phaseDir: '.planning/phases/01-resolve3674',
       runId: 'run-resolve-3674',
@@ -686,8 +594,11 @@ describe('#3674 — pre-extraction characterization (golden output pins)', () =>
 
     // Golden script captured verbatim from the unmodified pre-extraction
     // production code (`node -e` against `gsd-core/bin/lib/claude-orchestration.cjs`
-    // before any source under this phase was touched). Any divergence here is
-    // an observable behavior change in the emitted Workflow script.
+    // before any source under this phase was touched). The #4747 hand-back
+    // change (schema-validated worktree metadata, per-agent error capture)
+    // intentionally altered this golden; it was regenerated from the current
+    // emitter. Any further divergence is an observable behavior change in the
+    // emitted Workflow script.
     const GOLDEN_SCRIPT_3674 = [
       'export const meta = {',
       '  name: "gsd-execute-run-resolve-3674",',
@@ -710,19 +621,29 @@ describe('#3674 — pre-extraction characterization (golden output pins)', () =>
       '// resume: pass "run-resolve-3674" as the Workflow tool\'s resumeFromRunId input',
       '// (it is a tool parameter, NOT a script function).',
       '',
-      '// #3302: extract the executor-returned <worktree_metadata> JSON so the',
-      '// orchestrator can record it into WAVE_WORKTREE_MANIFEST after the run',
+      '// #3302 / #4747: worktree plans return schema-validated metadata (an object);',
+      '// the orchestrator records it into WAVE_WORKTREE_MANIFEST after the run',
       '// (worktree.record-agent -> worktree.cleanup-wave, the same manifest-scoped',
-      '// merge chain inline dispatch feeds). null = absent/unparseable/interrupted.',
+      '// merge chain inline dispatch feeds). null = absent/invalid/interrupted.',
+      'const GSD_WORKTREE_METADATA_SCHEMA = {"type":"object","properties":{"agent_id":{"type":"string","minLength":1},"worktree_path":{"type":"string","minLength":1},"branch":{"type":"string","minLength":1},"expected_base":{"type":"string","minLength":1}},"required":["agent_id","worktree_path","branch","expected_base"]}',
       'function gsdWorktreeMetadata(agentResult) {',
-      '  if (typeof agentResult !== \'string\') return null;',
-      '  const m = agentResult.match(/<worktree_metadata>([\\s\\S]*?)<\\/worktree_metadata>/);',
-      '  if (m === null) return null;',
+      '  if (agentResult === null || typeof agentResult !== \'object\' || Array.isArray(agentResult)) return null;',
+      '  const out = {};',
+      '  for (const k of GSD_WORKTREE_METADATA_SCHEMA.required) {',
+      '    const v = agentResult[k];',
+      '    if (typeof v !== \'string\' || v.length === 0) return null;',
+      '    out[k] = v;',
+      '  }',
+      '  return out;',
+      '}',
+      'function gsdAgentError(agentResult) {',
+      '  return (agentResult !== null && typeof agentResult === \'object\' && typeof agentResult.gsdAgentError === \'string\') ? agentResult.gsdAgentError : null;',
+      '}',
+      'async function gsdRunAgent(brief, opts) {',
       '  try {',
-      '    const parsed = JSON.parse(m[1]);',
-      '    return (parsed !== null && typeof parsed === \'object\') ? parsed : null;',
+      '    return await agent(brief, opts);',
       '  } catch (e) {',
-      '    return null;',
+      '    return { gsdAgentError: (e !== null && typeof e === \'object\' && typeof e.message === \'string\') ? e.message : String(e) };',
       '  }',
       '}',
       'const gsdAgentOutcomes = [];',
@@ -731,28 +652,28 @@ describe('#3674 — pre-extraction characterization (golden output pins)', () =>
       'phase("Wave w1")',
       '// Stage 0',
       'const gsdStage_0_0 = await parallel([',
-      '  () => agent("Plan P1", { agentType: "gsd-executor", isolation: "worktree" }),',
-      '  () => agent("Plan P3", { agentType: "gsd-executor", isolation: "worktree" }),',
+      '  () => gsdRunAgent("Plan P1", { agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA }),',
+      '  () => gsdRunAgent("Plan P3", { agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA }),',
       '])',
       'gsdAgentOutcomes.push(',
-      '  { plan: "p1", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_0_0[0]) },',
-      '  { plan: "p3", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_0_0[1]) }',
+      '  { plan: "p1", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_0_0[0]), error: gsdAgentError(gsdStage_0_0[0]) },',
+      '  { plan: "p3", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_0_0[1]), error: gsdAgentError(gsdStage_0_0[1]) }',
       ')',
       '// Stage 1 (sequential — files_modified overlap)',
       'const gsdStage_0_1 = await parallel([',
-      '  () => agent("Plan P2", { agentType: "gsd-executor", isolation: "worktree" }),',
+      '  () => gsdRunAgent("Plan P2", { agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA }),',
       '])',
       'gsdAgentOutcomes.push(',
-      '  { plan: "p2", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_0_1[0]) }',
+      '  { plan: "p2", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_0_1[0]), error: gsdAgentError(gsdStage_0_1[0]) }',
       ')',
       '',
       '// Wave w2',
       'phase("Wave w2")',
       'const gsdStage_1_0 = await parallel([',
-      '  () => agent("Plan P4", { agentType: "gsd-executor", isolation: "worktree" }),',
+      '  () => gsdRunAgent("Plan P4", { agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA }),',
       '])',
       'gsdAgentOutcomes.push(',
-      '  { plan: "p4", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_1_0[0]) }',
+      '  { plan: "p4", expects_worktree: true, metadata: gsdWorktreeMetadata(gsdStage_1_0[0]), error: gsdAgentError(gsdStage_1_0[0]) }',
       ')',
       'return gsdAgentOutcomes',
     ].join('\n');
@@ -892,7 +813,7 @@ describe('inline-fallback parity', () => {
       const r = detectWorkflowBackend({
         runtimeId,
         hostIntegration: CAPABLE_HOST,
-        agentSdkVersion: '1.0.0',
+        workflowAvailability: OPEN_AVAILABILITY,
         config: defaultCfg,
       });
       assert.strictEqual(r.backend, 'inline', runtimeId + ' default must be inline');
@@ -948,7 +869,7 @@ describe('#2686 — Workflow backend model threading', () => {
   // stop testing what it claims to test.
   const optionsOf = (script) => {
     const out = [];
-    const re = /\bagent\(/g;
+    const re = /\bgsdRunAgent\(/g;
     let m;
     while ((m = re.exec(script)) !== null) {
       const open = script.indexOf('{', m.index);
@@ -985,7 +906,7 @@ describe('#2686 — Workflow backend model threading', () => {
 
       const res = emit2686({ executorModel: inlineModel });
       assert.ok(res.ok, `emit failed: ${res.reason}`);
-      const calls = res.script.match(/agent\([\s\S]*?\{[^}]*\}/g) || [];
+      const calls = res.script.match(/gsdRunAgent\("[\s\S]*?\{[^}]*\}/g) || [];
       assert.ok(calls.length >= 2, `expected >=2 agent() calls, got ${calls.length}`);
       for (const call of calls) {
         assert.match(
@@ -1042,7 +963,7 @@ describe('#2686 — Workflow backend model threading', () => {
       ] }],
     });
     assert.ok(res.ok, `emit failed: ${res.reason}`);
-    const calls = res.script.match(/agent\([\s\S]*?\{[^}]*\}/g) || [];
+    const calls = res.script.match(/gsdRunAgent\("[\s\S]*?\{[^}]*\}/g) || [];
     assert.equal(calls.length, 2, 'per-plan options objects must remain one per plan');
 
     const noWt = calls.find((c) => c.includes('plan without isolation'));
@@ -1105,7 +1026,7 @@ describe('#2686 — Workflow backend model threading', () => {
       runtimeId: 'claude',
       hostIntegration: { dispatch: { nested: true, background: true } },
       config: { 'claude_orchestration.enabled': true },
-      agentSdkVersion: '99.0.0',
+      workflowAvailability: OPEN_AVAILABILITY,
       phaseDir: '.planning/phases/01-demo',
       runId: 'wf_test2686c',
       waves: WAVES_2686,
@@ -1185,7 +1106,7 @@ describe('#2686 — Workflow backend model threading', () => {
           }
         }
       }),
-      { numRuns: 300 },
+      { numRuns: 300, seed: 4747004 },
     );
   });
 });
@@ -1223,9 +1144,17 @@ const CAPABLE_HOST_2285 = { dispatch: { nested: true, background: true } };
 /** A descriptor that fails the nested/background dispatch gate. */
 const INCAPABLE_HOST = { dispatch: { nested: false, background: true } };
 
-const ABOVE_FLOOR_SDK = '0.3.150';
-const AT_FLOOR_SDK = WORKFLOW_TOOL_FLOOR_VERSION; // '0.3.149'
-const BELOW_FLOOR_SDK = '0.3.148';
+/**
+ * #4747: the CLI resolves workflow availability from the real settings scopes,
+ * so subprocess tests that expect the workflow backend isolate the user scope
+ * (CLAUDE_CONFIG_DIR -> fresh empty dir) and clear the env kill switch.
+ */
+function isolatedSettingsEnv(t) {
+  const cfgDir = createTempDir('gsd-4747-cfg-');
+  const managedDir = createTempDir('gsd-4747-managed-');
+  t.after(() => { cleanup(cfgDir); cleanup(managedDir); });
+  return { CLAUDE_CONFIG_DIR: cfgDir, CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managedDir, GSD_TEST_MODE: '1' };
+}
 
 function enabledConfig(overrides = {}) {
   return {
@@ -1254,7 +1183,7 @@ function baseInput(overrides = {}) {
   return {
     runtimeId: 'claude',
     hostIntegration: CAPABLE_HOST_2285,
-    agentSdkVersion: ABOVE_FLOOR_SDK,
+    workflowAvailability: OPEN_AVAILABILITY,
     config: enabledConfig(),
     ...singleWave(),
     ...overrides,
@@ -1264,7 +1193,7 @@ function baseInput(overrides = {}) {
 // ─── Section A: happy path — every gate satisfied → workflow backend ────────
 
 describe('A. resolveWaveDispatch — enabled + all gates satisfied → workflow backend with emitted script', () => {
-  test('[happy] enabled, claude runtime, capable host, SDK above floor, auto backend → backend:"workflow"', () => {
+  test('[happy] enabled, claude runtime, capable host, workflows available, auto backend → backend:"workflow"', () => {
     const result = resolveWaveDispatch(baseInput());
     assert.strictEqual(result.backend, 'workflow');
     assert.strictEqual(result.reason, 'workflow_backend_active');
@@ -1285,17 +1214,6 @@ describe('A. resolveWaveDispatch — enabled + all gates satisfied → workflow 
     assert.strictEqual(result.backend, 'workflow');
   });
 
-  test('[bva] SDK version boundary: floor-1 → inline, floor exact → workflow, floor+1 → workflow', () => {
-    const below = resolveWaveDispatch(baseInput({ agentSdkVersion: BELOW_FLOOR_SDK }));
-    assert.strictEqual(below.backend, 'inline', 'below floor must be inline');
-    assert.strictEqual(below.reason, 'agent_sdk_version_below_floor');
-
-    const at = resolveWaveDispatch(baseInput({ agentSdkVersion: AT_FLOOR_SDK }));
-    assert.strictEqual(at.backend, 'workflow', 'exactly at floor must activate workflow');
-
-    const above = resolveWaveDispatch(baseInput({ agentSdkVersion: ABOVE_FLOOR_SDK }));
-    assert.strictEqual(above.backend, 'workflow', 'above floor must activate workflow');
-  });
 });
 
 // ─── Section B: fail-closed contract — disabled / each gate individually failing → inline ──
@@ -1333,19 +1251,19 @@ describe('B. resolveWaveDispatch — fail-closed contract: disabled or any gate 
       expectedReason: 'workflow_tool_unavailable',
     },
     {
-      label: 'agent SDK version missing',
-      overrides: { agentSdkVersion: undefined },
-      expectedReason: 'agent_sdk_version_unknown',
+      label: 'workflow availability missing',
+      overrides: { workflowAvailability: undefined },
+      expectedReason: 'workflow_availability_unknown',
     },
     {
-      label: 'agent SDK version malformed (not semver)',
-      overrides: { agentSdkVersion: 'not-a-version' },
-      expectedReason: 'agent_sdk_version_unknown',
+      label: 'workflows disabled by env',
+      overrides: { workflowAvailability: { disabled: true, reason: 'workflows_disabled_by_env' } },
+      expectedReason: 'workflows_disabled_by_env',
     },
     {
-      label: 'agent SDK version below floor',
-      overrides: { agentSdkVersion: BELOW_FLOOR_SDK },
-      expectedReason: 'agent_sdk_version_below_floor',
+      label: 'workflow settings unreadable',
+      overrides: { workflowAvailability: { disabled: true, reason: 'workflow_settings_unreadable' } },
+      expectedReason: 'workflow_settings_unreadable',
     },
   ];
 
@@ -1372,7 +1290,7 @@ describe('B. resolveWaveDispatch — fail-closed contract: disabled or any gate 
         runtimeId: input.runtimeId,
         hostIntegration: input.hostIntegration,
         config: input.config,
-        agentSdkVersion: input.agentSdkVersion,
+        workflowAvailability: input.workflowAvailability,
       });
       assert.strictEqual(direct.backend, 'inline', `${label}: detectWorkflowBackend parity check must also be inline`);
       assert.strictEqual(result.reason, direct.reason, `${label}: resolveWaveDispatch must surface detectWorkflowBackend's own reason verbatim`);
@@ -1446,14 +1364,13 @@ describe('C. resolveWaveDispatch composes detectWorkflowBackend + emitWorkflowSc
       '--run-id', 'run-2285-1',
       '--phase-dir', '.planning/phases/01-foo',
       '--runtime', 'claude',
-      '--agent-sdk-version', ABOVE_FLOOR_SDK,
       // #2686: the router now DEFAULTS the executor model from project config,
       // so pin it on both sides — otherwise this compares a config-resolved CLI
       // run against a pure call that was given no model, and the equality this
       // test exists to prove would be testing the default instead of the seam.
       '--executor-model', 'sonnet',
       '--raw',
-    ], tmp);
+    ], tmp, isolatedSettingsEnv(t));
     assert.strictEqual(res.success, true, 'CLI command must succeed; stderr: ' + (res.error || ''));
     const parsed = JSON.parse(res.output);
 
@@ -1486,16 +1403,20 @@ describe('C. resolveWaveDispatch composes detectWorkflowBackend + emitWorkflowSc
     fc.assert(fc.property(
       fc.record({
         runtimeId: fc.oneof(fc.constant('claude'), fc.constant('codex'), fc.constant(undefined), fc.string()),
-        agentSdkVersion: fc.oneof(fc.constant(ABOVE_FLOOR_SDK), fc.constant(BELOW_FLOOR_SDK), fc.constant(undefined), fc.string()),
+        workflowAvailability: fc.constantFrom(
+          OPEN_AVAILABILITY,
+          { disabled: true, reason: 'workflows_disabled_by_env' },
+          undefined,
+        ),
         enabled: fc.boolean(),
         capableHost: fc.boolean(),
         backendPref: fc.constantFrom('auto', 'workflow', 'inline'),
       }),
-      ({ runtimeId, agentSdkVersion, enabled, capableHost, backendPref }) => {
+      ({ runtimeId, workflowAvailability, enabled, capableHost, backendPref }) => {
         const input = {
           runtimeId,
           hostIntegration: capableHost ? CAPABLE_HOST_2285 : INCAPABLE_HOST,
-          agentSdkVersion,
+          workflowAvailability,
           config: {
             'claude_orchestration.enabled': enabled,
             'claude_orchestration.execution_backend': backendPref,
@@ -1510,7 +1431,7 @@ describe('C. resolveWaveDispatch composes detectWorkflowBackend + emitWorkflowSc
           assert.ok(typeof result.script === 'string' && result.script.length > 0);
         }
       },
-    ));
+    ), { seed: 4747005 });
   });
 });
 
@@ -1620,13 +1541,13 @@ describe('F. Workflow backend never forces worktree isolation on a submodule / u
   test('[happy] resolveWaveDispatch (pure seam): the submodule plan\'s agent() call carries NO isolation, the normal plan\'s does', () => {
     const result = resolveWaveDispatch(baseInput({ ...waveWithSubmodulePlan() }));
     assert.strictEqual(result.backend, 'workflow');
-    assert.match(result.script, /agent\("normal plan", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
+    assert.match(result.script, /gsdRunAgent\("normal plan", \{ agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA \}\)/);
     // #2686: the options object legitimately gained an optional `model` key, so assert
     // the invariant this test exists to protect — agentType present, isolation absent —
     // rather than a frozen literal that any future additive key would break.
-    assert.match(result.script, /agent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
+    assert.match(result.script, /gsdRunAgent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
     assert.ok(
-      !/agent\("submodule plan"[^)]*isolation/.test(result.script),
+      !/gsdRunAgent\("submodule plan"[^)]*isolation/.test(result.script),
       'the submodule-touching plan must NEVER be emitted with forced worktree isolation',
     );
   });
@@ -1648,15 +1569,14 @@ describe('F. Workflow backend never forces worktree isolation on a submodule / u
       '--run-id', 'run-2285-submodule',
       '--phase-dir', '.planning/phases/01-foo',
       '--runtime', 'claude',
-      '--agent-sdk-version', ABOVE_FLOOR_SDK,
       '--raw',
-    ], tmp);
+    ], tmp, isolatedSettingsEnv(t));
     assert.strictEqual(res.success, true, 'CLI command must succeed; stderr: ' + (res.error || ''));
     const parsed = JSON.parse(res.output);
     assert.strictEqual(parsed.backend, 'workflow');
     // #2686: additive `model` key — see the note on the pure-seam test above.
-    assert.match(parsed.script, /agent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
-    assert.ok(!/agent\("submodule plan"[^)]*isolation/.test(parsed.script));
+    assert.match(parsed.script, /gsdRunAgent\("submodule plan", \{ agentType: "gsd-executor"[^}]*\}\)/);
+    assert.ok(!/gsdRunAgent\("submodule plan"[^)]*isolation/.test(parsed.script));
   });
 
   test('[negative] use_worktree defaults to true when omitted — a manifest with NO submodule info stays backward-compatible', () => {
@@ -1695,9 +1615,9 @@ describe('G. missing top-level `waves` key never silently exits 0 with no output
     const res = runGsdTools([
       'claude-orchestration', 'resolve-wave-dispatch',
       '--waves', wavesPath, '--run-id', 'run-x',
-      '--runtime', 'claude', '--agent-sdk-version', ABOVE_FLOOR_SDK,
+      '--runtime', 'claude',
       '--raw',
-    ], tmp);
+    ], tmp, isolatedSettingsEnv(t));
 
     assert.strictEqual(res.success, true, 'command must exit 0 (fail-closed to inline, not error); stderr: ' + (res.error || ''));
     assert.ok(res.output.length > 0, 'FAIL-SILENT REGRESSION: missing waves key must NOT produce empty stdout on exit 0');
@@ -1717,11 +1637,12 @@ describe('G. missing top-level `waves` key never silently exits 0 with no output
     const argsFor = (p) => [
       'claude-orchestration', 'resolve-wave-dispatch',
       '--waves', p, '--run-id', 'run-x',
-      '--runtime', 'claude', '--agent-sdk-version', ABOVE_FLOOR_SDK,
+      '--runtime', 'claude',
       '--raw',
     ];
-    const missingRes = runGsdTools(argsFor(missingKeyPath), tmp);
-    const nullRes = runGsdTools(argsFor(nullWavesPath), tmp);
+    const isolatedEnv = isolatedSettingsEnv(t);
+    const missingRes = runGsdTools(argsFor(missingKeyPath), tmp, isolatedEnv);
+    const nullRes = runGsdTools(argsFor(nullWavesPath), tmp, isolatedEnv);
     assert.strictEqual(missingRes.success, true);
     assert.strictEqual(nullRes.success, true);
     assert.deepStrictEqual(JSON.parse(missingRes.output), JSON.parse(nullRes.output), 'a missing `waves` key must behave identically to an explicit `waves: null`');
@@ -1980,13 +1901,14 @@ describe('#2590: emitted Workflow scripts satisfy the Workflow tool contract', (
     });
     assert.ok(/parallel\(\[/.test(script), 'parallel() expects an array of functions');
     assert.ok(
-      !/parallel\(\s*agent\(/.test(script),
+      !/parallel\(\s*(?:gsdRunAgent|agent)\(/.test(script),
       'passing agent() results directly both throws and starts every agent eagerly',
     );
     // Each agent must be wrapped in a thunk so parallel() can bound concurrency.
-    const agents = [...script.matchAll(/agent\("/g)].length;
-    const thunks = [...script.matchAll(/\(\) => agent\("/g)].length;
-    assert.equal(thunks, agents, 'every agent() must be wrapped in a () => thunk');
+    const agents = [...script.matchAll(/gsdRunAgent\("/g)].length;
+    const thunks = [...script.matchAll(/\(\) => gsdRunAgent\("/g)].length;
+    assert.ok(agents >= 2, 'one agent call per plan');
+    assert.equal(thunks, agents, 'every agent call must be wrapped in a () => thunk');
   });
 
   test('single-plan stages also emit an array (regression: the 1-plan branch)', () => {
@@ -1994,7 +1916,7 @@ describe('#2590: emitted Workflow scripts satisfy the Workflow tool contract', (
     // `parallel(\n agent(...)\n)` — valid-looking but the same defect.
     const { script } = emit();
     assert.ok(/parallel\(\[/.test(script));
-    assert.equal([...script.matchAll(/\(\) => agent\("/g)].length, 1);
+    assert.equal([...script.matchAll(/\(\) => gsdRunAgent\("/g)].length, 1);
   });
 
   test('per-plan worktree isolation still mirrors use_worktree', () => {
@@ -2004,8 +1926,8 @@ describe('#2590: emitted Workflow scripts satisfy the Workflow tool contract', (
         { id: 'b', brief: 'noiso', files_modified: ['b.ts'], use_worktree: false },
       ] }],
     });
-    assert.match(script, /agent\("iso", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
-    assert.match(script, /agent\("noiso", \{ agentType: "gsd-executor" \}\)/);
+    assert.match(script, /gsdRunAgent\("iso", \{ agentType: "gsd-executor", isolation: "worktree", schema: GSD_WORKTREE_METADATA_SCHEMA \}\)/);
+    assert.match(script, /gsdRunAgent\("noiso", \{ agentType: "gsd-executor" \}\)/);
   });
 });
 
@@ -2024,59 +1946,37 @@ describe('#2590: the backend is reachable without hand-passed flags', () => {
     return dir;
   }
 
-  function resolve(dir, extraArgs) {
+  function resolve(dir, env, extraArgs) {
     const result = runNode([
       TOOLS_2590, 'claude-orchestration', 'resolve-wave-dispatch',
       '--waves', 'waves.json', '--run-id', 'execute-1',
       '--phase-dir', '.planning/phases/01', '--raw',
       ...(extraArgs || []),
-    ], { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+    ], { cwd: dir, env: { ...process.env, ...env }, timeoutMs: PROBE_TIMEOUT_MS });
     throwIfFailed(result, 'gsd-tools claude-orchestration resolve-wave-dispatch');
     return JSON.parse(result.stdout);
   }
 
-  test('5+6. no --runtime and no --agent-sdk-version still reaches the version gate', (t) => {
+  test('5+6. no --runtime and no SDK flag still reaches the availability gate and activates', (t) => {
     const dir = repro();
     t.after(() => cleanup(dir));
-    const r = resolve(dir);
+    const r = resolve(dir, isolatedSettingsEnv(t));
     // Pre-fix this was `agent_sdk_version_unknown` (nothing resolved a
     // version) or `runtime_not_claude` (the divergent fallback). Either is a
-    // regression; the version gate must now be reached and answer truthfully.
-    assert.notEqual(r.reason, 'agent_sdk_version_unknown',
-      'the router must resolve the installed SDK version itself');
+    // regression; the runtime must fall back to the canonical chain and the
+    // availability gate must answer truthfully.
     assert.notEqual(r.reason, 'runtime_not_claude',
       'runtime must fall back to the canonical config.runtime > claude chain');
+    assert.equal(r.backend, 'workflow', `expected workflow backend, got ${JSON.stringify(r)}`);
   });
 
-  test('an SDK version above the floor activates the workflow backend end to end', (t) => {
+  test('the workflow backend activates end to end with no SDK flag', (t) => {
     const dir = repro();
     t.after(() => cleanup(dir));
-    const r = resolve(dir, ['--agent-sdk-version', '0.3.149']);
+    const r = resolve(dir, isolatedSettingsEnv(t));
     assert.equal(r.backend, 'workflow', `expected workflow backend, got ${JSON.stringify(r)}`);
     assert.ok(typeof r.script === 'string' && r.script.length > 0);
     assert.match(firstStatement(r.script), /^export const meta = \{/);
-  });
-
-  test('an explicit --agent-sdk-version still wins over the installed one', (t) => {
-    const dir = repro();
-    t.after(() => cleanup(dir));
-    // A deliberately ancient pin must be honored (and decline), proving the
-    // flag is not ignored now that a fallback exists.
-    const r = resolve(dir, ['--agent-sdk-version', '0.0.1']);
-    assert.equal(r.backend, 'inline');
-    assert.equal(r.reason, 'agent_sdk_version_below_floor');
-  });
-
-  test('GSD_AGENT_SDK_VERSION is honored between the flag and the installed version', (t) => {
-    const dir = repro();
-    t.after(() => cleanup(dir));
-    const result = runNode([
-      TOOLS_2590, 'claude-orchestration', 'resolve-wave-dispatch',
-      '--waves', 'waves.json', '--run-id', 'execute-1',
-      '--phase-dir', '.planning/phases/01', '--raw',
-    ], { cwd: dir, env: { ...process.env, GSD_AGENT_SDK_VERSION: '0.3.149' }, timeoutMs: PROBE_TIMEOUT_MS });
-    throwIfFailed(result, 'gsd-tools claude-orchestration resolve-wave-dispatch (GSD_AGENT_SDK_VERSION)');
-    assert.equal(JSON.parse(result.stdout).backend, 'workflow');
   });
 });
 
@@ -2089,8 +1989,8 @@ describe('#2590: the backend is reachable without hand-passed flags', () => {
 //
 //   code        — emitWorkflowScript captures each parallel() barrier's results
 //                 and top-level `return`s one { plan, expects_worktree, metadata }
-//                 outcome per dispatched plan (metadata extracted in-script from
-//                 the executor's <worktree_metadata> block, or null);
+//                 outcome per dispatched plan (metadata taken from the schema-
+//                 validated structured output of agent(), or null; #4747);
 //   instructions — the execute:wave:pre fragment bridges those outcomes into the
 //                 SAME record-agent -> cleanup-wave merge chain inline dispatch
 //                 uses, halting loudly when metadata cannot be captured.
@@ -2105,15 +2005,17 @@ const ASYNC_FUNCTION_3302 = Object.getPrototypeOf(async function () {}).construc
  * Execute an emitted Workflow script in a stub runtime mirroring the documented
  * tool contract (code.claude.com/docs/en/workflows): phase() groups progress,
  * parallel() takes an array of thunks and resolves to their results in thunk
- * order, agent() resolves to the agent's final message (or null when
- * interrupted), and the script's top-level `return` value is what the invoking
+ * order (a throwing thunk resolves to null), agent() resolves to the agent's
+ * final message — or, when called with a schema, the validated object — (or null
+ * when interrupted), and the script's top-level `return` value is what the invoking
  * model receives.
  */
 async function executeEmittedScript3302(script, agentStub) {
   const body = script.replace(/^export /m, '');
   const harness = [
     'const phase = () => {};',
-    'const parallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t)));',
+    // documented contract: parallel() never rejects; a throwing thunk resolves to null
+    'const parallel = async (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)));',
     'const agent = async (brief, opts) => agentStub(brief, opts);',
     body,
   ].join('\n');
@@ -2121,18 +2023,9 @@ async function executeEmittedScript3302(script, agentStub) {
   return await fn(agentStub);
 }
 
-/** An executor final message carrying a valid <worktree_metadata> block. */
+/** The schema-validated structured output a worktree executor returns (#4747). */
 function agentResultWithMetadata3302(fields) {
-  return [
-    '## PLAN COMPLETE',
-    '',
-    '<worktree_metadata>',
-    JSON.stringify(fields),
-    '</worktree_metadata>',
-    '',
-    '**Commits:**',
-    '- abc1234: fix(#000): example',
-  ].join('\n');
+  return fields;
 }
 
 describe('#3302: emitted Workflow script returns per-agent outcomes for the manifest bridge', () => {
@@ -2144,7 +2037,7 @@ describe('#3302: emitted Workflow script returns per-agent outcomes for the mani
     assert.strictEqual(ret.length, 2, 'one entry per dispatched plan');
   });
 
-  test('A2. entries are { plan, expects_worktree, metadata } with correct attribution', async () => {
+  test('A2. entries are { plan, expects_worktree, metadata, error } with correct attribution', async () => {
     const r = emitWorkflowScript(nonOverlappingManifest());
     // Distinct branch per brief proves the positional mapping through the
     // parallel() barrier attributes each agent's OWN metadata to its plan.
@@ -2165,8 +2058,9 @@ describe('#3302: emitted Workflow script returns per-agent outcomes for the mani
       assert.deepEqual(
         Object.keys(e.metadata).sort(),
         ['agent_id', 'branch', 'expected_base', 'worktree_path'],
-        'metadata is the parsed <worktree_metadata> JSON object',
+        'metadata is the validated structured-output object',
       );
+      assert.strictEqual(e.error, null, 'a clean agent run carries no error');
     }
   });
 
@@ -2194,12 +2088,16 @@ describe('#3302: emitted Workflow script returns per-agent outcomes for the mani
     assert.strictEqual(r.summary.worktreePlans, 1, 'summary counts only worktree plans');
   });
 
-  test('A4. null metadata is the loud-failure input: interrupted agent, missing block, bad JSON', async () => {
+  test('A4. null metadata is the loud-failure input: null result, missing field, prose, non-object', async () => {
+    const goodFields = { agent_id: 'a', worktree_path: '/wt/a', branch: 'b', expected_base: 'c' };
+    const missingField = { ...goodFields };
+    delete missingField.agent_id;
     const cases = [
       ['interrupted agent (agent() resolves to null)', null],
-      ['result without a <worktree_metadata> block', '## PLAN COMPLETE\n\n**Commits:** - x'],
-      ['unparseable JSON inside the block', '<worktree_metadata>{not json</worktree_metadata>'],
-      ['non-object JSON inside the block', '<worktree_metadata>"just a string"</worktree_metadata>'],
+      ['object missing a required field', missingField],
+      ['prose string carrying a <worktree_metadata> block (no longer parsed)',
+        '<worktree_metadata>' + JSON.stringify(goodFields) + '</worktree_metadata>'],
+      ['non-object result', 'just a string'],
     ];
     for (const [label, rawResult] of cases) {
       const r = emitWorkflowScript(singleWaveManifest());
@@ -2207,6 +2105,7 @@ describe('#3302: emitted Workflow script returns per-agent outcomes for the mani
       assert.strictEqual(ret.length, 1, label);
       assert.strictEqual(ret[0].expects_worktree, true, label);
       assert.strictEqual(ret[0].metadata, null, `${label} -> metadata null (orchestrator must HALT, #3302)`);
+      assert.strictEqual(ret[0].error, null, `${label} -> no thrown error recorded`);
     }
   });
 
