@@ -30,8 +30,9 @@ const GIT_BASH_VARIANTS = [
   ],
 ];
 const win = (extra) => ({ platform: 'win32', runtime: 'claude', execPath: EXEC_PATH, ...extra });
-// Exit-code propagation: `powershell -Command` maps a native exit 2 (a blocking guard's deny) to 1 unless the command exits with it.
-const EXIT = '; exit $LASTEXITCODE';
+// Exit-code propagation: `powershell -Command` maps a native exit 2 (a blocking guard's deny) to 1 unless the command exits with it;
+// a runner that never started leaves $LASTEXITCODE null and must exit 1, not 0.
+const EXIT = '; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })';
 const POSIX_ONLY = /\$\(|command -v|\[ -x|printf '%s'|; do |; done/;
 
 function settingsWith(commands) {
@@ -121,9 +122,25 @@ describe('#5850 unchanged surfaces', () => {
     assert.equal(hooksSurface.usesPowerShellHookShell(win({ hookShell: 'bash' })), false);
   });
 
-  test('portable hooks keep requiring bash (no command without it)', () => {
-    const cmd = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win({ portableHooks: true, env: {}, existsSync: () => false }));
-    assert.equal(cmd, null);
+  test('portable hooks on win32 claude are the PowerShell runner with a $HOME-relative script, with and without Git Bash', () => {
+    const os = require('node:os');
+    const home = os.homedir().replace(/\\/g, '/');
+    for (const [, bash] of GIT_BASH_VARIANTS) {
+      const cmd = hooksSurface.buildHookCommand(`${home}/.claude`, GUARD, win({ ...bash, portableHooks: true }));
+      assert.ok(typeof cmd === 'string' && cmd.startsWith('& '), cmd);
+      assert.doesNotMatch(cmd, POSIX_ONLY);
+      assert.ok(cmd.includes(`"$HOME/.claude/hooks/${GUARD}"`), cmd);
+      assert.ok(cmd.endsWith(EXIT), cmd);
+    }
+  });
+
+  test('portable PowerShell hooks register no bash resolver entrypoint', () => {
+    const os = require('node:os');
+    const entrypoints = [];
+    const cmd = hooksSurface.buildHookCommand(`${os.homedir().replace(/\\/g, '/')}/.claude`, GUARD, win({ portableHooks: true, env: {}, existsSync: () => false, configuredEntrypoints: entrypoints }));
+    assert.ok(cmd);
+    assert.equal(entrypoints.length, 1);
+    assert.ok(!entrypoints[0].scriptPath.endsWith('gsd-node-runner.sh'));
   });
 });
 
@@ -156,7 +173,7 @@ describe('#5850 quoting', () => {
     const dirChars = fc.constantFrom(...'abcXYZ019 \'$"`&;()%._-{}\u2018\u2019\u201A\u201B\u201C\u201D'.split(''));
     fc.assert(fc.property(fc.array(dirChars, { minLength: 1, maxLength: 20 }).map((a) => a.join('')), (dir) => {
       const cmd = hooksSurface.buildHookCommand(`C:/cfg/${dir}`, GUARD, win());
-      const m = cmd.match(/\) '(.*)'; exit \$LASTEXITCODE$/);
+      const m = cmd.match(/\) '(.*)'; exit \$\(if \(\$null -ne \$LASTEXITCODE\) \{ \$LASTEXITCODE \} else \{ 1 \}\)$/);
       assert.ok(m, cmd);
       const body = m[1];
       // Every quote delimiter inside the literal must appear doubled.
@@ -199,13 +216,13 @@ describe('#5850 rewriter and settings projection', () => {
     assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, 'node /home/me/my-custom-hook.js');
   });
 
-  test('the bash resolver shape converts when its script is a plain path and is kept for $HOME paths', () => {
+  test('the bash resolver shape converts for plain and $HOME-relative scripts', () => {
     const plain = `bash "C:/Users/u/.claude/hooks/gsd-node-runner.sh" "/usr/bin/node" "C:/Users/u/.claude/hooks/${GUARD}"`;
     const portable = `bash "$HOME/.claude/hooks/gsd-node-runner.sh" "/usr/bin/node" "$HOME/.claude/hooks/${GUARD}"`;
     const settings = settingsWith([plain, portable]);
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), true);
     assert.ok(settings.hooks.PreToolUse[0].hooks[0].command.startsWith('& '));
-    assert.equal(settings.hooks.PreToolUse[1].hooks[0].command, portable);
+    assert.ok(settings.hooks.PreToolUse[1].hooks[0].command.endsWith(`"$HOME/.claude/hooks/${GUARD}"${EXIT}`), settings.hooks.PreToolUse[1].hooks[0].command);
   });
 
   test('a managed statusLine chain converts and the second run is a no-op', () => {

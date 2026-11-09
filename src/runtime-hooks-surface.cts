@@ -717,14 +717,17 @@ function powerShellQuote(value: string): string {
  * expansion; any other path is a single-quoted literal.
  */
 function powerShellScriptArg(scriptPath: string): string {
-  const anchored = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/.*)$/);
+  // `"$CLAUDE_PROJECT_DIR"/...` (local installs) and `$HOME/...` (portable installs)
+  // are the two shell-variable-anchored spellings; PowerShell has both variables.
+  const anchored = scriptPath.match(/^"\$CLAUDE_PROJECT_DIR"(\/.*)$/) || scriptPath.match(/^\$HOME(\/.*)$/);
   if (anchored) {
+    const variable = scriptPath.startsWith('$HOME') ? '$HOME' : '$env:CLAUDE_PROJECT_DIR';
     const suffix = anchored[1];
     // Plain suffixes keep the readable double-quoted expansion; any character
     // PowerShell treats specially inside double quotes (including the curly
     // double quotes) moves the suffix into a single-quoted literal.
-    if (!/["`$\u201C\u201D\u201E]/.test(suffix)) return `"$env:CLAUDE_PROJECT_DIR${suffix}"`;
-    return `($env:CLAUDE_PROJECT_DIR + ${powerShellQuote(suffix)})`;
+    if (!/["`$\u201C\u201D\u201E]/.test(suffix)) return `"${variable}${suffix}"`;
+    return `(${variable} + ${powerShellQuote(suffix)})`;
   }
   return powerShellQuote(shellCmdProjection.posixNormalize(scriptPath));
 }
@@ -738,9 +741,10 @@ function buildPowerShellHookCommand(scriptToken: string, opts?: NodeNormOpts): s
   const execPath = (opts && opts.execPath) || (typeof process.execPath === 'string' ? process.execPath : '');
   if (!execPath) return null;
   const baked = powerShellQuote(shellCmdProjection.posixNormalize(normalizeNodePath(execPath, opts)));
-  // `; exit $LASTEXITCODE`: `powershell -Command` collapses a native exit code to
-  // 0/1 unless the script exits with it, and a blocking guard denies with exit 2.
-  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}; exit $LASTEXITCODE`;
+  // The `exit` tail: `powershell -Command` collapses a native exit code to 0/1
+  // unless the script exits with it, and a blocking guard denies with exit 2. A
+  // runner that never started leaves $LASTEXITCODE null and exits 1, not 0.
+  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })`;
 }
 
 /**
@@ -859,13 +863,12 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
             changed = true;
             continue;
           }
-          // The #3662 bash resolver shape needs bash too. Convert it when its
-          // script is a plain path; a `$HOME`-relative portable path has no
-          // PowerShell spelling here and is left as written.
+          // The #3662 bash resolver shape needs bash too; its script is a plain
+          // or `$HOME`-relative path, both spelled for PowerShell by powerShellScriptArg.
           const resolver = trimmed.match(/^(?:"[^"]*bash(?:\.exe)?"|bash)\s+"[^"]*gsd-node-runner\.sh"\s+"[^"]*"\s+(?:"([^"]+)"|(\S+))\s*$/);
           if (resolver) {
             const resolverScript = resolver[1] || resolver[2] || '';
-            if (resolverScript.includes('$') || !isManagedHookBasename(resolverScript, { surface: 'settings-json' })) continue;
+            if (!isManagedHookBasename(resolverScript, { surface: 'settings-json' })) continue;
             const converted = buildPowerShellHookCommand(powerShellScriptArg(resolverScript), opts);
             if (!converted || h.command === converted) continue;
             h.command = converted;
@@ -1650,7 +1653,8 @@ function configuredEntrypointsForHook(
     '/usr/bin/node',
   ].filter((candidate): candidate is string => Boolean(candidate));
 
-  if (!opts.portableHooks) {
+  // #5850: the PowerShell runner needs no bash resolver, portable or not.
+  if (!opts.portableHooks || usesPowerShellHookShell({ platform, runtime, hookShell: opts.hookShell })) {
     return [{ ...target, interpreterCandidates: nodeCandidates }];
   }
 
@@ -1754,6 +1758,16 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
   // exactly what breaks with exit 127 when the config root is shared across
   // environments with different node layouts.
 
+  // #5850: Claude on win32 always gets the PowerShell runner (owner ruling),
+  // portable installs included: the `$HOME`-relative script path is spelled for
+  // PowerShell and needs no bash resolver.
+  if (usesPowerShellHookShell({ platform, runtime, hookShell })) {
+    const scriptPath = opts.portableHooks
+      ? `${projectPortableHookBaseDir({ configDir, homeDir: os.homedir() })}/hooks/${hookName}`
+      : shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName;
+    return track(buildPowerShellHookCommand(powerShellScriptArg(scriptPath), opts));
+  }
+
   if (opts.portableHooks) {
     // Portable installs route through the staged resolver: the baked absolute
     // path travels as the resolver's FIRST argument (tried first, so the
@@ -1785,14 +1799,6 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       platform,
       hookShell,
     }));
-  }
-
-  // #5850: Claude on win32 always gets the PowerShell runner (owner ruling).
-  if (usesPowerShellHookShell({ platform, runtime, hookShell })) {
-    return track(buildPowerShellHookCommand(
-      powerShellScriptArg(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName),
-      opts,
-    ));
   }
 
   const chainRunner = buildNodeRunnerChainToken(opts);
