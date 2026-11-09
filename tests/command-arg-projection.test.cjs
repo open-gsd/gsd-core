@@ -587,6 +587,53 @@ describe('#6087 requiredFlags', () => {
       ),
     );
   });
+
+  // Repeatable required flags: an empty value contributes nothing, so the flag
+  // is satisfied iff at least one occurrence carries a non-empty value.
+  test('T-P2 fc: a repeatable required flag is satisfied iff some occurrence has a non-empty value', () => {
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(fc.constantFrom('a', 'b', 'c'), { minLength: 1, maxLength: 3 }).chain((valueFlags) => fc.tuple(
+          fc.constant(valueFlags),
+          fc.subarray(valueFlags),
+          fc.subarray(valueFlags),
+          fc.array(
+            fc.tuple(fc.constantFrom(...valueFlags), fc.constantFrom('', 'v', 'w1', '-x')),
+            { maxLength: 8 },
+          ),
+        )),
+        ([valueFlags, requiredFlags, repeatableFlags, pairs]) => {
+          const argv = pairs.flatMap(([flag, value]) => [`--${flag}`, value]);
+          const result = parseNamedArgs(argv, { valueFlags, requiredFlags, repeatableFlags, positionals: 0 });
+          const valuesOf = (flag) => pairs.filter(([f]) => f === flag).map(([, v]) => v);
+          const expectedOk = requiredFlags.every((f) => {
+            const vs = valuesOf(f);
+            return repeatableFlags.includes(f)
+              ? vs.some((v) => v !== '')
+              : vs.length > 0 && vs[0] !== '';
+          });
+          assert.strictEqual(result.ok, expectedOk);
+          if (result.ok) {
+            for (const f of repeatableFlags) {
+              assert.deepStrictEqual(result.data[f], valuesOf(f).filter((v) => v !== ''));
+            }
+          }
+        },
+      ),
+    );
+  });
+
+  test('T-R10: a repeatable required flag given only an empty value is InvalidArgs', () => {
+    const spec = { valueFlags: ['p'], repeatableFlags: ['p'], requiredFlags: ['p'], positionals: 0 };
+    for (const argv of [['--p', ''], ['--p', '', '--p', ''], ['--p'], ['--p=']]) {
+      const result = parseNamedArgs(argv, argv[0] === '--p=' ? { ...spec, eqFlags: ['p'] } : spec);
+      assert.strictEqual(result.ok, false, JSON.stringify(argv));
+      assert.strictEqual(result.arg, '--p');
+      assert.ok(result.reason.startsWith('missing required flag --p'), result.reason);
+    }
+    const mixed = parseNamedArgs(['--p', '', '--p', 'x'], spec);
+    assert.deepStrictEqual(mixed, { ok: true, data: { p: ['x'] } });
+  });
 });
 
 describe('#6087 seam kinds', () => {
@@ -874,5 +921,177 @@ describe('#6087 short flags and unknown-flag message', () => {
   test('the default unknown-flag message is unchanged without the option', () => {
     const result = parseNamedArgs(['verb', '--bogus'], base);
     assert.match(result.reason, /^unknown flag .*--bogus.*; accepted: --dry-run$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #6087 — list runs agree with the walk; present-without-value variants
+// ---------------------------------------------------------------------------
+
+describe('#6087 list runs and value flags agree', () => {
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+
+  // gsd-tools.cjs collectListFlagValues: a run ends at the next list flag and
+  // skips every other `--`-prefixed token.
+  function collectListFlagValues(args, flag, stops) {
+    const values = [];
+    args.forEach((a, i) => {
+      if (a !== flag) return;
+      for (const b of args.slice(i + 1)) {
+        if (stops.has(b)) break;
+        if (b.startsWith('--')) continue;
+        values.push(b);
+      }
+    });
+    return values;
+  }
+
+  test('T-L1: a word consumed as the value of a value flag inside a list run is not collected', () => {
+    const spec = { listFlags: ['files'], valueFlags: ['message'], positionals: 0 };
+    assert.deepStrictEqual(
+      parseNamedArgs(['--files', 'a', '--message', 'm', 'b'], spec),
+      { ok: true, data: { message: 'm', files: ['a', 'b'] } },
+    );
+  });
+
+  test('T-L2: values consumed by optional-value and eq flags inside a run are not collected', () => {
+    const spec = {
+      listFlags: ['files'], optionalValueFlags: ['wave'], valueFlags: ['e'], eqFlags: ['e'], positionals: 0,
+    };
+    const result = parseNamedArgs(['--files', 'a', '--wave', '2', 'b', '--e=zz', 'c'], spec);
+    assert.strictEqual(result.ok, true);
+    assert.deepStrictEqual(result.data.files, ['a', 'b', 'c']);
+  });
+
+  test('T-L3: a value flag whose next token is flag-shaped consumes nothing from the run', () => {
+    const spec = { listFlags: ['files'], valueFlags: ['message'], booleanFlags: ['amend'], positionals: 0 };
+    const result = parseNamedArgs(['--files', 'a', '--message', '--amend', 'b'], spec);
+    assert.deepStrictEqual(result.data.files, ['a', 'b']);
+    assert.strictEqual(result.data.message, null);
+  });
+
+  test('T-L4: a bare -- inside a list run is accepted and not collected', () => {
+    const spec = { listFlags: ['files'], positionals: 0 };
+    assert.deepStrictEqual(
+      parseNamedArgs(['--files', 'a', '--', 'b'], spec),
+      { ok: true, data: { files: ['a', 'b'] } },
+    );
+  });
+
+  test('T-L5: a bare -- outside a list run is still an unknown flag', () => {
+    const spec = { listFlags: ['files'], positionals: 0 };
+    const result = parseNamedArgs(['--', '--files', 'a'], spec);
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.arg, '--');
+  });
+
+  test('T-L6 fc: list extraction equals collectListFlagValues when no value flag is declared', () => {
+    const stops = new Set(['--files', '--files-removed']);
+    const spec = { listFlags: ['files', 'files-removed'], booleanFlags: ['amend'], positionals: 0 };
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom('--files', '--files-removed', '--amend', '--', 'word', 'w2'), { maxLength: 10 }),
+        (argv) => {
+          const result = parseNamedArgs(argv, spec);
+          const firstList = argv.findIndex((t) => stops.has(t));
+          const lead = firstList === -1 ? argv : argv.slice(0, firstList);
+          const expectedOk = lead.every((t) => t === '--amend');
+          assert.strictEqual(result.ok, expectedOk);
+          if (!expectedOk) return;
+          for (const flag of stops) {
+            assert.deepStrictEqual(result.data[flag.slice(2)], collectListFlagValues(argv, flag, stops));
+          }
+        },
+      ),
+    );
+  });
+
+  test('T-L7 fc: with a value flag declared, no collected word is one the walk consumed as its value', () => {
+    const spec = { listFlags: ['files'], valueFlags: ['message'], positionals: 0 };
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom('--files', '--message', 'w1', 'w2', 'w3'), { maxLength: 10 }),
+        (argv) => {
+          const result = parseNamedArgs(argv, spec);
+          if (!result.ok) return;
+          const expected = [];
+          let inRun = false;
+          for (let i = 0; i < argv.length; i += 1) {
+            const t = argv[i];
+            if (t === '--files') { inRun = true; continue; }
+            if (t === '--message') {
+              if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i += 1;
+              continue;
+            }
+            if (inRun) expected.push(t);
+          }
+          assert.deepStrictEqual(result.data.files, expected);
+        },
+      ),
+    );
+  });
+
+  describe('nonEmptyFlags variants', () => {
+    const base = { valueFlags: ['n'], eqFlags: ['n'], nonEmptyFlags: ['n'], positionals: 0 };
+    const missing = (result, flag) => {
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.kind, 'InvalidArgs');
+      assert.strictEqual(result.arg, `--${flag}`);
+      assert.strictEqual(result.reason, `Missing value for --${flag}`);
+      assert.strictEqual(result.exitReason, ERROR_REASON.USAGE);
+    };
+
+    test('T-N1: a whitespace-only --n= value is missing; a whitespace-only next token is a value', () => {
+      missing(parseNamedArgs(['--n= '], base), 'n');
+      missing(parseNamedArgs(['--n=\t '], base), 'n');
+      assert.deepStrictEqual(parseNamedArgs(['--n', ' '], base), { ok: true, data: { n: ' ' } });
+    });
+
+    test('T-N2: emptyValueFlags accepts an empty next token but not an absent or flag-shaped one', () => {
+      const spec = { ...base, booleanFlags: ['b'], emptyValueFlags: ['n'] };
+      assert.deepStrictEqual(parseNamedArgs(['--n', ''], spec), { ok: true, data: { n: '', b: false } });
+      missing(parseNamedArgs(['--n'], spec), 'n');
+      missing(parseNamedArgs(['--n', '--b'], spec), 'n');
+      missing(parseNamedArgs(['--n='], spec), 'n');
+    });
+
+    test('T-N3: emptyEqFlags accepts --n= (as "") but still refuses an empty next token', () => {
+      const spec = { ...base, booleanFlags: ['b'], emptyEqFlags: ['n'] };
+      assert.deepStrictEqual(parseNamedArgs(['--n='], spec), { ok: true, data: { n: '', b: false } });
+      assert.deepStrictEqual(parseNamedArgs(['--n= '], spec), { ok: true, data: { n: ' ', b: false } });
+      missing(parseNamedArgs(['--n', ''], spec), 'n');
+      missing(parseNamedArgs(['--n'], spec), 'n');
+    });
+
+    test('T-N4: emptyValueFlags with emptyEqFlags accepts every literal empty, refuses only a missing one', () => {
+      const spec = { ...base, emptyValueFlags: ['n'], emptyEqFlags: ['n'] };
+      assert.strictEqual(parseNamedArgs(['--n', ''], spec).data.n, '');
+      assert.strictEqual(parseNamedArgs(['--n='], spec).data.n, '');
+      missing(parseNamedArgs(['--n'], spec), 'n');
+    });
+
+    test('T-N5: the empty-value options must be subsets of nonEmptyFlags (and emptyEqFlags of eqFlags)', () => {
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['n'], emptyValueFlags: ['n'], positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes('emptyValueFlags') && err.message.includes('nonEmptyFlags'),
+      );
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['n'], nonEmptyFlags: ['n'], emptyEqFlags: ['n'], positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes('emptyEqFlags'),
+      );
+      assert.throws(
+        () => parseNamedArgs([], { ...base, emptyValueFlags: 'n' }),
+        (err) => err instanceof TypeError && err.message.includes('emptyValueFlags'),
+      );
+    });
+
+    test('T-N6: a repeatable nonEmpty flag is checked on its last occurrence (the one a last-wins reader takes)', () => {
+      const spec = { valueFlags: ['c'], repeatableFlags: ['c'], nonEmptyFlags: ['c'], booleanFlags: ['b'], positionals: 0 };
+      missing(parseNamedArgs(['--c', 'a', '--c'], spec), 'c');
+      missing(parseNamedArgs(['--c', 'a', '--c', '--b'], spec), 'c');
+      missing(parseNamedArgs(['--c', 'a', '--c', ''], spec), 'c');
+      assert.deepStrictEqual(parseNamedArgs(['--c', '', '--c', 'a'], spec), { ok: true, data: { c: ['a'], b: false } });
+      assert.deepStrictEqual(parseNamedArgs(['--c', 'a'], spec), { ok: true, data: { c: ['a'], b: false } });
+    });
   });
 });
