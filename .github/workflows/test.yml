@@ -648,8 +648,8 @@ jobs:
     # by default, which leaves today's behavior untouched. A maintainer sets it
     # when the merge queue is enforced, so Windows/macOS are first exercised on the
     # queue's merge-group commit rather than after merge, and unsets it to roll
-    # back. `required-tests` already accepts this job as skipped. A label applied
-    # after a run started does not re-run it: push a commit or dispatch the branch.
+    # back. `required-tests` already accepts this job as skipped. Applying the
+    # label starts a new run (#6073: `labeled` is a trigger type), which includes it.
     if: >-
       needs.changes.outputs.code_changed == 'true' &&
       needs.changes.outputs.full_matrix == 'true' &&
