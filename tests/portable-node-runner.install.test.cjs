@@ -234,7 +234,8 @@ describe('#3662 runtime-resolving managed hook runners', () => {
           });
           assert.ok(typeof emitted === 'string', `${hook} (portable=${portableHooks}) emitted nothing`);
           assert.ok(
-            !/(^|\s)["']?node["']?(\s|$)/.test(emitted),
+            // The PowerShell runner (win32) names `node` as a Get-Command argument, not a bare launch token.
+            !/(^|\s)["']?node["']?(\s|$)/.test(emitted.replace('Get-Command node ', 'Get-Command ')),
             `${hook} (portable=${portableHooks}) carries a bare node token: ${emitted}`,
           );
         }

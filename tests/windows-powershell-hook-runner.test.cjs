@@ -30,6 +30,8 @@ const GIT_BASH_VARIANTS = [
   ],
 ];
 const win = (extra) => ({ platform: 'win32', runtime: 'claude', execPath: EXEC_PATH, ...extra });
+// Exit-code propagation: `powershell -Command` maps a native exit 2 (a blocking guard's deny) to 1 unless the command exits with it.
+const EXIT = '; exit $LASTEXITCODE';
 const POSIX_ONLY = /\$\(|command -v|\[ -x|printf '%s'|; do |; done/;
 
 function settingsWith(commands) {
@@ -46,7 +48,7 @@ for (const [label, bash] of GIT_BASH_VARIANTS) {
       assert.doesNotMatch(cmd, POSIX_ONLY);
       assert.ok(cmd.includes("'D:/Program Files/nodejs/node.exe'"), 'baked node path is tried first');
       assert.ok(cmd.includes('Get-Command node'), 'PATH fallback is resolved in PowerShell');
-      assert.ok(cmd.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'`), cmd);
+      assert.ok(cmd.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'` + EXIT), cmd);
     });
 
     test('every managed JS hook emits the PowerShell form', () => {
@@ -60,6 +62,11 @@ for (const [label, bash] of GIT_BASH_VARIANTS) {
     test('the PowerShell command is recognized as a managed hook command', () => {
       const cmd = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win(bash));
       assert.equal(shellCmdProjection.isManagedHookCommand(cmd, { surface: 'settings-json', configDir: CONFIG_DIR }), true);
+    });
+
+    test('the command exits with the guard\'s exit code so a blocking exit 2 survives powershell -Command', () => {
+      const cmd = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win(bash));
+      assert.ok(cmd.endsWith(EXIT), cmd);
     });
 
     test('usesPowerShellHookShell is true for claude on win32', () => {
@@ -76,7 +83,7 @@ for (const [label, bash] of GIT_BASH_VARIANTS) {
         const cmd = entry.hooks[0].command;
         assert.ok(cmd.startsWith('& '), cmd);
         assert.doesNotMatch(cmd, POSIX_ONLY);
-        assert.ok(cmd.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'`), cmd);
+        assert.ok(cmd.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'` + EXIT), cmd);
       }
       assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, win(bash)), false);
     });
@@ -134,7 +141,7 @@ describe('#5850 quoting', () => {
   test('the local-install token uses $env:CLAUDE_PROJECT_DIR', () => {
     const cmd = hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: '"$CLAUDE_PROJECT_DIR"/.claude', hookFile: GUARD, execPath: EXEC_PATH });
     assert.ok(cmd.startsWith('& '), cmd);
-    assert.ok(cmd.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"`), cmd);
+    assert.ok(cmd.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"` + EXIT), cmd);
     assert.doesNotMatch(cmd, POSIX_ONLY);
   });
 
@@ -149,7 +156,7 @@ describe('#5850 quoting', () => {
     const dirChars = fc.constantFrom(...'abcXYZ019 \'$"`&;()%._-{}\u2018\u2019\u201A\u201B\u201C\u201D'.split(''));
     fc.assert(fc.property(fc.array(dirChars, { minLength: 1, maxLength: 20 }).map((a) => a.join('')), (dir) => {
       const cmd = hooksSurface.buildHookCommand(`C:/cfg/${dir}`, GUARD, win());
-      const m = cmd.match(/\) '(.*)'$/);
+      const m = cmd.match(/\) '(.*)'; exit \$LASTEXITCODE$/);
       assert.ok(m, cmd);
       const body = m[1];
       // Every quote delimiter inside the literal must appear doubled.
@@ -170,7 +177,7 @@ describe('#5850 rewriter and settings projection', () => {
     const settings = settingsWith([local]);
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), true);
     const cmd = settings.hooks.PreToolUse[0].hooks[0].command;
-    assert.ok(cmd.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"`), cmd);
+    assert.ok(cmd.endsWith(`"$env:CLAUDE_PROJECT_DIR/.claude/hooks/${GUARD}"` + EXIT), cmd);
   });
 
   test('legacy bare-node and foreign-absolute entries convert to the PowerShell runner', () => {
@@ -182,7 +189,7 @@ describe('#5850 rewriter and settings projection', () => {
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), true);
     for (const entry of settings.hooks.PreToolUse) {
       assert.ok(entry.hooks[0].command.startsWith('& ((@('), entry.hooks[0].command);
-      assert.ok(entry.hooks[0].command.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'`), entry.hooks[0].command);
+      assert.ok(entry.hooks[0].command.endsWith(`'C:/Users/u/.claude/hooks/${GUARD}'` + EXIT), entry.hooks[0].command);
     }
   });
 
@@ -221,5 +228,48 @@ describe('#5850 rewriter and settings projection', () => {
     assert.equal(settings.hooks.PreToolUse[0].hooks[0].shell, 'powershell');
     assert.equal('shell' in settings.hooks.PreToolUse[1].hooks[0], false);
     assert.equal(hooksSurface.projectPowerShellHookShell(settings), false);
+  });
+});
+
+describe('#5850 stamping and recognition end to end', () => {
+  test('a PowerShell-shaped command for a user-authored script is not stamped', () => {
+    const settings = settingsWith([hooksSurface.buildHookCommand(CONFIG_DIR, 'my-own-hook.js', win())]);
+    assert.equal(hooksSurface.projectPowerShellHookShell(settings), false);
+    assert.equal('shell' in settings.hooks.PreToolUse[0].hooks[0], false);
+  });
+
+  test('isManagedHookCommand with a configDir holding a quote delimiter still recognizes the PowerShell command', () => {
+    for (const dir of ['C:/Users/O\u2019Brien/.claude', "C:/Users/O'Brien/.claude"]) {
+      const cmd = hooksSurface.buildHookCommand(dir, GUARD, win());
+      assert.equal(shellCmdProjection.isManagedHookCommand(cmd, { surface: 'settings-json', configDir: dir }), true, cmd);
+    }
+  });
+
+  test('every JS hook the installer registers on win32 claude is stamped shell powershell', () => {
+    const scenarios = require('./fixtures/hook-registration/run-scenarios.cjs');
+    const rt = scenarios.settingsJsonRuntimes().find((r) => r.id === 'claude');
+    const out = scenarios.runOne(rt, scenarios.scenarioSpecs(rt)['global/win32-all-present']);
+    assert.equal(hooksSurface.projectPowerShellHookShell(out.settings), true);
+    let js = 0;
+    for (const entries of Object.values(out.settings.hooks)) {
+      for (const entry of entries) {
+        for (const h of entry.hooks) {
+          if (!/\.js'/.test(h.command)) continue;
+          js += 1;
+          assert.equal(h.shell, 'powershell', h.command);
+          assert.ok(h.command.startsWith('& '), h.command);
+          assert.doesNotMatch(h.command, POSIX_ONLY);
+        }
+      }
+    }
+    assert.ok(js > 0, 'the scenario registered no JS hooks');
+  });
+
+  test('uninstall recognizes both the PowerShell and the chain shape', () => {
+    const ps = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win());
+    const chain = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win({ hookShell: 'bash' }));
+    for (const cmd of [ps, chain]) {
+      assert.equal(shellCmdProjection.isManagedHookCommand(cmd, { surface: 'settings-json', configDir: CONFIG_DIR }), true, cmd);
+    }
   });
 });

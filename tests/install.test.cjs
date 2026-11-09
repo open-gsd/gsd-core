@@ -3198,7 +3198,7 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
     });
     assert.ok(cmd.startsWith('& '), `Claude hook command must use the PowerShell call operator: ${cmd}`);
     assert.ok(!cmd.includes('$(for'), `no POSIX runner chain on Windows: ${cmd}`);
-    assert.ok(cmd.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'"), cmd);
+    assert.ok(cmd.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $LASTEXITCODE"), cmd);
   });
 
   test('Windows .js hook with no runtime stays shell-neutral', () => {
@@ -3373,7 +3373,7 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     assert.equal(changed, true);
     const command = settings.hooks.SessionStart[0].hooks[0].command;
     assert.ok(command.startsWith('& ((@('), command);
-    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'"), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $LASTEXITCODE"), command);
   });
 
   test('does NOT touch user-authored bare-node hooks (filename not in managed allowlist)', () => {

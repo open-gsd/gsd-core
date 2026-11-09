@@ -738,7 +738,9 @@ function buildPowerShellHookCommand(scriptToken: string, opts?: NodeNormOpts): s
   const execPath = (opts && opts.execPath) || (typeof process.execPath === 'string' ? process.execPath : '');
   if (!execPath) return null;
   const baked = powerShellQuote(shellCmdProjection.posixNormalize(normalizeNodePath(execPath, opts)));
-  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}`;
+  // `; exit $LASTEXITCODE`: `powershell -Command` collapses a native exit code to
+  // 0/1 unless the script exits with it, and a blocking guard denies with exit 2.
+  return `& ((@(${baked}) + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) ${scriptToken}; exit $LASTEXITCODE`;
 }
 
 /**
@@ -772,7 +774,7 @@ function projectPowerShellHookShell(settings: Settings): boolean {
     for (const entry of entries) {
       if (!entry || !Array.isArray(entry.hooks)) continue;
       for (const h of entry.hooks) {
-        if (!h || !isPowerShellRunnerCommand(h.command)) continue;
+        if (!h || !isPowerShellRunnerCommand(h.command) || !isManagedHookCommand(h.command, { surface: 'settings-json' })) continue;
         if ((h as { shell?: string }).shell === 'powershell') continue;
         (h as { shell?: string }).shell = 'powershell';
         changed = true;

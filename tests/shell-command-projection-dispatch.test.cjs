@@ -1888,7 +1888,7 @@ describe('bug #3413: installer hook surfaces consume runtime-aware projection', 
     assert.equal(changed, true);
     const command = settings.hooks.SessionStart[0].hooks[0].command;
     assert.ok(command.startsWith('& ((@('), command);
-    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'"), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $LASTEXITCODE"), command);
   });
 });
 
@@ -2098,7 +2098,7 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
     assert.equal(changed, true);
     const rewritten = settings.hooks.PostToolUse[0].hooks[0].command;
     assert.ok(rewritten.startsWith('& ((@('), rewritten);
-    assert.ok(rewritten.endsWith('"$env:CLAUDE_PROJECT_DIR/.claude/hooks/gsd-context-monitor.js"'), rewritten);
+    assert.ok(rewritten.endsWith('"$env:CLAUDE_PROJECT_DIR/.claude/hooks/gsd-context-monitor.js"; exit $LASTEXITCODE'), rewritten);
     assert.ok(!rewritten.includes('\\"'), 'rewritten command must not contain escaped double-quotes');
   });
 });
