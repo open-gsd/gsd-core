@@ -33,7 +33,7 @@ const win = (extra) => ({ platform: 'win32', runtime: 'claude', execPath: EXEC_P
 // Exit-code propagation: `powershell -Command` maps a native exit 2 (a blocking guard's deny) to 1 unless the command exits with it;
 // a runner that never started leaves $LASTEXITCODE null and must exit 1, not 0.
 const EXIT = '; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })';
-const POSIX_ONLY = /\$\(|command -v|\[ -x|printf '%s'|; do |; done/;
+const POSIX_ONLY = /\$\(for n in|command -v|\[ -x|printf '%s'|; do |; done/;
 
 function settingsWith(commands) {
   return { hooks: { PreToolUse: commands.map((command) => ({ matcher: 'Read|Grep|Bash', hooks: [{ type: 'command', command }] })) } };
