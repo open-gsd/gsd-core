@@ -986,7 +986,7 @@ describe('declared loop points are dispatched (#5848)', () => {
     const wavePreIdx = text.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
     assert.ok(preIdx !== -1, 'execute:pre call site must exist');
     assert.ok(preIdx < wavePreIdx, 'execute:pre must be rendered before the first wave dispatch site');
-    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase');
+    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name');
     assert.ok(preIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
     const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
     assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
