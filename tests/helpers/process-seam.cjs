@@ -423,4 +423,5 @@ module.exports = {
   SPAWN_LOG_ENV,
   SLOW_SPAWN_ENV,
   SPAWN_RECORD_TYPE,
+  DEFAULT_TIMEOUT_MS,
 };

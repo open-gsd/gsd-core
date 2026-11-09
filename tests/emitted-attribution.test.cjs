@@ -67,7 +67,7 @@ const {
   BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 } = require('./helpers/emitted-runtime.cjs');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { runNode, runGit, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { EXPECTED_MANIFEST_COUNT, loadManifests } = require('./helpers/emitted-provenance.cjs');
 // ADR-3942 §6: scripts/lint-emitted-drift-ack.cjs (the legacy JSON-ack-file pre-merge
@@ -1530,9 +1530,13 @@ test(
     // proved that the hard way (#2767 review) when its first `git rev-parse HEAD` failed
     // closed. Reusing the SAME helper `buildBaselineAtRef` now uses (below) rather than
     // hand-rolling the flag here keeps the fix from silently diverging per call site.
-    const run = (...args) => execFileSync('git', [...safeDirArgs(REPO_ROOT), ...args], {
-      cwd: REPO_ROOT, encoding: 'utf8', timeout: REAL_REPO_GIT_TIMEOUT_MS, env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    const run = (...args) => {
+      const r = runGit([...safeDirArgs(REPO_ROOT), ...args], {
+        cwd: REPO_ROOT, timeoutMs: REAL_REPO_GIT_TIMEOUT_MS, env: gitEnv,
+      });
+      assertSeamExit(assert, r);
+      return r.stdout.trim();
+    };
 
     const headSha = run('rev-parse', 'HEAD');
     run('read-tree', 'HEAD');
@@ -1545,11 +1549,13 @@ test(
 
     // Precondition, ASSERTED not assumed: the synthetic commit truly lacks the file —
     // otherwise this test would prove nothing.
-    assert.throws(
-      () => execFileSync('git', [...safeDirArgs(REPO_ROOT), 'cat-file', '-e', `${syntheticSha}:scripts/gen-emitted-baseline.cjs`], {
-        cwd: REPO_ROOT, encoding: 'utf8', timeout: REAL_REPO_GIT_TIMEOUT_MS, stdio: 'pipe',
-      }),
-      /./,
+    const catFile = runGit(
+      [...safeDirArgs(REPO_ROOT), 'cat-file', '-e', `${syntheticSha}:scripts/gen-emitted-baseline.cjs`],
+      { cwd: REPO_ROOT, timeoutMs: REAL_REPO_GIT_TIMEOUT_MS },
+    );
+    assert.equal(catFile.outcome, OUTCOME.EXITED, catFile.summary);
+    assert.notEqual(
+      catFile.exitCode, 0,
       'the synthetic ref must genuinely lack the generator script for this test to prove anything',
     );
 
