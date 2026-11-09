@@ -3047,7 +3047,9 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       assert.deepEqual(allowed, [], 'every chain denied as a debugger spawn');
     });
   }
-  // The same space with more spellings. Carriers: `bash -c`, `bash -ec`,
+  // A wider space: more spellings, and the rows next's plain reading already
+  // denies are kept (a prefix in front of `$(…)`, backquotes or `<(…)`, and
+  // most `time` rows), so not every row here reaches the further reading. Carriers: `bash -c`, `bash -ec`,
   // `sh -c`, `dash -c`, `eval '…'`, `$(…)`, `<(…)`, and innermost only, `eval`
   // of bare words and backquotes. Prefixes: `!`, `A+=b`, `a[0]=x`, `a[0]+=x`,
   // `a[x y]=1`, `time`, `! A+=b`, `A+=b a[0]=x` and `{fd}>/dev/null`, on the
@@ -3056,7 +3058,10 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
   // as the command only). A level under `sh -c`/`dash -c` runs in dash, which
   // takes only `!` of these prefixes and has no `<(…)`, so there the prefix is
   // `!` and `<(…)` is `$(…)`: every command is a launch bash (or dash) runs.
-  // One payload deep the space is enumerated; two and three deep it is sampled.
+  // One payload deep the space is enumerated. Two and three deep, a covering
+  // set holds every pair of choices (each carrier position, the innermost
+  // carrier, the prefix, its position and its form) in at least one command
+  // the plain reading does not already deny, and the property samples the rest.
   const quoteWord = (s) => `'${s.replace(/'/g, "'\\''")}'`;
   const WRAP = {
     c: (s) => `bash -c ${quoteWord(s)}`, s: (s) => `sh -c ${quoteWord(s)}`,
@@ -3094,7 +3099,7 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
     const r = runHook(bash(cmd));
     return r.status === 2 && JSON.parse(r.stdout).code === 'debugger-cli-spawn';
   };
-  test('denies a further-only debugger spawn for every carrier, prefix and form one payload deep', () => {
+  test('denies a debugger spawn for every carrier, prefix and form one payload deep', () => {
     const cmds = new Set();
     for (const inner of Object.keys(WRAP)) {
       for (const prefix of SPAWN_PREFIXES) {
@@ -3106,7 +3111,59 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
     assert.equal(cmds.size, 694, 'distinct one-deep commands');
     assert.deepEqual([...cmds].filter((cmd) => !deniedAsSpawn(cmd)), [], 'every command denied as a debugger spawn');
   });
-  test('property: a further-only debugger spawn is denied through any carrier chain and prefix spelling', () => {
+  // Greedy covering: repeatedly take the shape (in a fixed order) that holds
+  // the most pairs of choices not yet held, until every pair is held.
+  const coveringShapes = (depth) => {
+    const outerKeys = Object.keys(WRAP).filter((k) => !INNERMOST_ONLY.has(k));
+    const choices = [...Array(depth - 1).fill(outerKeys), Object.keys(WRAP), SPAWN_PREFIXES,
+      Array.from({ length: depth + 1 }, (_, i) => i), Object.keys(FORMS)];
+    let all = [[]];
+    for (const values of choices) all = all.flatMap((t) => values.map((_, v) => [...t, v]));
+    // Only shapes the plain reading does not already deny, so that every pair
+    // is held by a command the further reading has to read: no prefix in front
+    // of `$(…)`, backquotes or `<(…)`, and no `time` (covered above).
+    all = all.filter((t) => {
+      const at = t[depth + 1];
+      const carrier = at < depth ? (at < depth - 1 ? choices[0][t[at]] : Object.keys(WRAP)[t[depth - 1]]) : null;
+      return !['n', 'b', 'p'].includes(carrier) && SPAWN_PREFIXES[t[depth]] !== 'time';
+    });
+    // A pair of choices (field i = a, field j = b) is one small integer key.
+    const pairKeys = all.map((t) => {
+      const keys = [];
+      for (let i = 0; i < t.length; i++) for (let j = i + 1; j < t.length; j++) keys.push(((i * 16 + t[i]) * 16 + j) * 16 + t[j]);
+      return keys;
+    });
+    const open = new Uint8Array(16 ** 4);
+    let openCount = 0;
+    for (const keys of pairKeys) for (const k of keys) if (!open[k]) { open[k] = 1; openCount++; }
+    const picked = [];
+    while (openCount > 0) {
+      let best = -1;
+      let bestGain = 0;
+      for (let n = 0; n < all.length; n++) {
+        let gain = 0;
+        for (const k of pairKeys[n]) gain += open[k];
+        if (gain > bestGain) { best = n; bestGain = gain; }
+      }
+      for (const k of pairKeys[best]) if (open[k]) { open[k] = 0; openCount--; }
+      picked.push(all[best]);
+    }
+    return picked.map((t) => ({
+      outer: t.slice(0, depth - 1).map((v) => choices[0][v]),
+      inner: Object.keys(WRAP)[t[depth - 1]],
+      prefix: SPAWN_PREFIXES[t[depth]],
+      at: t[depth + 1],
+      form: Object.keys(FORMS)[t[depth + 2]],
+    }));
+  };
+  for (const depth of [2, 3]) {
+    test(`denies a debugger spawn for every pair of grammar choices ${depth} payloads deep`, () => {
+      const shapes = coveringShapes(depth);
+      assert.equal(shapes.length, { 2: 74, 3: 72 }[depth], 'covering set size');
+      assert.deepEqual(shapes.map(buildSpawn).filter((cmd) => !deniedAsSpawn(cmd)), [], 'every command denied as a debugger spawn');
+    });
+  }
+  test('property: a debugger spawn is denied through any carrier chain and prefix spelling', () => {
     const shape = fc.integer({ min: 2, max: 3 }).chain((depth) => fc.record({
       outer: fc.array(fc.constantFrom(...Object.keys(WRAP).filter((k) => !INNERMOST_ONLY.has(k))), { minLength: depth - 1, maxLength: depth - 1 }),
       inner: fc.constantFrom(...Object.keys(WRAP)),
