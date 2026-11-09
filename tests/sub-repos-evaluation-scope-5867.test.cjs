@@ -348,6 +348,30 @@ describe('#5867 unreadable or hostile sub_repos', () => {
     });
   }
 
+  test('[hostile] a sub-repo .git/config cannot make a signed commit run a program', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell script fixture'); return; }
+    const ws = makeWorkspace(['app']);
+    const repo = ws.repos.app;
+    const first = commit(repo, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    const marker = path.join(ws.root, 'gpg-ran');
+    const program = path.join(ws.root, 'fake-gpg.sh');
+    fs.writeFileSync(program, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
+    // A commit object carrying a gpgsig header, so `git log` with showSignature would call gpg.
+    const tree = repo.git('rev-parse', `${first}^{tree}`);
+    const raw = `tree ${tree}\nparent ${first}\nauthor T <t@t.io> 1700000100 +0000\ncommitter T <t@t.io> 1700000100 +0000\n`
+      + 'gpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\nfeat(01-01): signed\n';
+    const objectFile = path.join(ws.root, 'signed-commit.txt');
+    fs.writeFileSync(objectFile, raw);
+    const signed = repo.git('hash-object', '-t', 'commit', '-w', objectFile);
+    repo.git('update-ref', 'HEAD', signed);
+    repo.git('config', 'log.showSignature', 'true');
+    repo.git('config', 'gpg.program', program);
+    const scope = planScope(ws);
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.commits.some((c) => c.sha === signed));
+    assert.equal(fs.existsSync(marker), false, 'gpg.program from the sub-repo config must never run');
+  });
+
   test('[hostile] a sub_repos symlink that resolves outside the workspace is refused', (t) => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-subrepos-out-'));
     dirs.push(outside);

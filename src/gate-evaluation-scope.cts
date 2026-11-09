@@ -324,10 +324,16 @@ function gitSubcommand(args: readonly string[]): string {
 }
 
 /**
- * git config a sub-repo's own `.git/config` must not override: a configured sub-repo is checkout
- * content, so no hook-like setting of it (an fsmonitor command) may run while the scope is read.
+ * git settings a `planning.sub_repos` workspace's own `.git/config` must not override: a configured
+ * repo is checkout content, so no setting that makes a read-only command run a program may apply
+ * (an fsmonitor command; `log.showSignature` with a `gpg.program` on a signed commit). Applied to
+ * every git call of the sub_repos path, root included; the single-repo path keeps its exact argv.
+ * Bounded by construction: at most MAX_SUB_REPOS + 1 repos, each a fixed number of calls, each
+ * bounded by the runner's timeout.
  */
-const SUB_REPO_GIT_HARDENING: readonly string[] = ['-c', 'core.fsmonitor=false'];
+const SUB_REPO_GIT_HARDENING: readonly string[] = [
+  '-c', 'core.fsmonitor=false', '-c', 'log.showSignature=false', '-c', 'gpg.program=false',
+];
 
 function makeGit(projectDir: string, runner: GitRunner, leading: readonly string[] = []): Git {
   return (args, cwd = projectDir) => {
@@ -399,8 +405,8 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
     // The first repo that holds both commits is authoritative (a clone's answer is the same).
     let rootGit: Git | null = null;
     try {
-      const rootTop = makeGit(projectDir, runner)(['rev-parse', '--show-toplevel']);
-      if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner);
+      const rootTop = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING)(['rev-parse', '--show-toplevel']);
+      if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING);
     } catch (error) {
       if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
     }
@@ -492,7 +498,7 @@ function realDir(dir: string): string {
 function openSources(projectDir: string, names: readonly string[], runner: GitRunner, ref: string): RepoSource[] {
   const sources: RepoSource[] = [];
   const seen = new Set<string>();
-  const rootGit = makeGit(projectDir, runner);
+  const rootGit = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING);
   try {
     const top = rootGit(['rev-parse', '--show-toplevel']);
     if (realDir(top) === realDir(projectDir)) {
