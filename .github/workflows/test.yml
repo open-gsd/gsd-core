@@ -8,6 +8,12 @@ on:
       - 'release/**'
       - 'hotfix/**'
   pull_request:
+    # #6073: `labeled`/`unlabeled` so adding or removing `fix-next` starts a new
+    # run. `next-health` reads the label from the event payload (PR_LABELS), and a
+    # re-run reuses the old payload, so only a run started by the label event can
+    # see the label change. Every label event runs the whole workflow: a skipped
+    # `Required tests` would count as passing, so no label event may skip it.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     branches:
       - next
       - main
