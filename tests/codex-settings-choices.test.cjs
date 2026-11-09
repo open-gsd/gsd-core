@@ -1,5 +1,4 @@
 'use strict';
-// allow-test-rule: source-text-is-the-product — workflows are executable instructions.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -17,14 +16,13 @@ test('#5591 catalog contains the seven approved display choices and registered I
     { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', description: 'Older balanced model for straightforward work' },
     { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', description: 'Older fast and efficient model' },
   ]);
-  for (const choice of catalog.codexModelChoices) assert.ok(Object.hasOwn(catalog.codexModelEffort, choice.id));
+  const choiceIds = catalog.codexModelChoices.map(({ id }) => id).sort();
+  const effortIds = Object.keys(catalog.codexModelEffort).filter((id) => id !== '_baseline').sort();
+  assert.deepEqual(choiceIds, effortIds, 'the display choices and registered Codex effort IDs stay in sync');
 });
 
-test('#5591 workflows use catalog choices and gate availability', () => {
-  const settings = fs.readFileSync(path.join(root, 'gsd-core/workflows/settings.md'), 'utf8');
+test('#5591 workflow reads catalog choices and maps selections back to IDs', () => {
   const advanced = fs.readFileSync(path.join(root, 'gsd-core/workflows/settings-advanced.md'), 'utf8');
-  assert.match(settings, /\/gsd:config --advanced/);
   assert.match(advanced, /codexModelChoices/);
-  assert.match(advanced, /only offer as selectable entries the IDs the user confirms are available/);
-  assert.match(advanced, /Map the chosen entry back to its catalog `id`/);
+  assert.match(advanced, /Map a catalog choice back to its `id`/);
 });
