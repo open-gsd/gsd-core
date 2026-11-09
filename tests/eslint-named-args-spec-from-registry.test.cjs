@@ -35,6 +35,16 @@ describe('named-args-spec-from-registry rule', () => {
         { code: "if (tok.startsWith('--')) {}" },
         { code: "args.indexOf('--');" },
         { code: "foo.indexOf('x');" },
+        // A spec variable initialised from specFor() in the same scope is a registry spec.
+        { code: "const spec = specFor('x'); parseNamedArgsOrExit(args, spec, error); positionalWords(args, spec);" },
+        { code: "function f() { const spec = specFor('x'); parseNamedArgs(args, spec); }" },
+        // Generic shape tests and non-flag cases stay valid.
+        { code: "switch (tok) { case 'plain': break; case '--': break; }" },
+        { code: "/^--$/.test(tok); /^foo/.test(tok); tok.match(/^-x/);" },
+        { code: "['a', 'b'].includes(tok); new Set(['a', '--']).has(tok);" },
+        { code: "const F = 'raw'; args.includes(F);" },
+        { code: "let F = '--raw'; args.includes(F);" },
+        { code: "const F = '--raw'; other.includes(F2);" },
       ],
       invalid: [
         {
@@ -68,6 +78,67 @@ describe('named-args-spec-from-registry rule', () => {
         {
           code: "args.find(a => a.startsWith('--project-dir='));",
           errors: [{ messageId: 'adhocFlag', data: { literal: '--project-dir=' } }],
+        },
+        // switch cases
+        {
+          code: "switch (tok) { case '--raw': break; }",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--raw' } }],
+        },
+        {
+          code: "switch (tok) { case 'a': case '--x': break; default: break; }",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--x' } }],
+        },
+        // regex literals
+        {
+          code: '/^--dry-run$/.test(tok);',
+          errors: [{ messageId: 'adhocFlag', data: { literal: '/^--dry-run$/' } }],
+        },
+        {
+          code: 'tok.match(/^--cwd=(.*)$/);',
+          errors: [{ messageId: 'adhocFlag', data: { literal: '/^--cwd=(.*)$/' } }],
+        },
+        {
+          code: '/^--ws(?:=|$)/.exec(tok);',
+          errors: [{ messageId: 'adhocFlag', data: { literal: '/^--ws(?:=|$)/' } }],
+        },
+        // flag sets and arrays
+        {
+          code: "new Set(['--raw', '--json']).has(tok);",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--raw' } }],
+        },
+        {
+          code: "const KNOWN = new Set(['a', '--x']);",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--x' } }],
+        },
+        {
+          code: "['--raw', '--json'].includes(tok);",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--raw' } }],
+        },
+        {
+          code: "['x', '--json'].indexOf(tok);",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--json' } }],
+        },
+        // an identifier bound to a flag literal
+        {
+          code: "const FLAG = '--raw'; args.includes(FLAG);",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--raw' } }],
+        },
+        {
+          code: "const FLAG = '--files'; function f() { return args.indexOf(FLAG); }",
+          errors: [{ messageId: 'adhocFlag', data: { literal: '--files' } }],
+        },
+        // a spec that is not initialised from specFor()
+        {
+          code: "const spec = { valueFlags: [] }; parseNamedArgs(args, spec);",
+          errors: [{ messageId: 'inlineSpec' }],
+        },
+        {
+          code: "let spec = specFor('x'); parseNamedArgs(args, spec);",
+          errors: [{ messageId: 'inlineSpec' }],
+        },
+        {
+          code: "const spec = other(); parseNamedArgs(args, spec);",
+          errors: [{ messageId: 'inlineSpec' }],
         },
       ],
     });
