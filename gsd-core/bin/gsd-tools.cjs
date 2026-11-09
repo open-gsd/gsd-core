@@ -320,60 +320,129 @@ try {
 } catch { /* advisory — never block */ }
 
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv, peekActiveWorkstream } = require('./lib/active-workstream-store.cjs');
-const { planningDir, planningRoot } = require('./lib/planning-workspace.cjs');
-const state = require('./lib/state.cjs');
-const phase = require('./lib/phase.cjs');
-const roadmap = require('./lib/roadmap.cjs');
+
+// #5865: every ./lib module below is required on first use instead of here, so
+// a command loads only the modules it runs. The requires above stay eager:
+// main() uses each of them before it dispatches any command except
+// run-with-timeout. Dispatch, its order and every command's output are
+// unchanged; only the moment each require() runs moves. One visible trace of
+// the move: a stack trace through a function binding below shows one more
+// frame, the wrapper's.
+//
+// A namespace binding (lazyModule) is a proxy that requires its module on the
+// first property access; a function binding (lazyFn) is a wrapper that
+// requires its module when it is first called. Both take the module from
+// loadLib(), which requires each id once and keeps what it got, so every
+// binding to a module uses one instance from its first use on, as every
+// binding did from load before. A module placed in require.cache before that
+// first use is the one used.
+//
+// A ./lib module's top-level code now runs at first use, or not at all. In the
+// ~220 modules these requires used to load (audited for #5865), the top-level
+// code that does more than define things is: the exit handlers in state and
+// planning-workspace, which remove only locks those modules take; reads of
+// shipped data files (configuration's two manifests, runtime-name-policy's
+// alias manifest, model-catalog's catalog, with GSD_MODEL_CATALOG as its
+// fallback path); learnings' capture of the home directory; and io's capture
+// of the temp directory (io stays eager). Nothing in this file changes those
+// inputs before a command runs. Code that reads argv or stdin sits behind
+// `require.main === module` and never runs on a require. No require that
+// runs while a module loads closes a cycle (the requires that close one in the
+// full graph, e.g. frontmatter and frontmatter-splice, sit inside functions and
+// run at call time), so the order modules load in cannot change what one sees
+// of another. tests/gsd-tools-lazy-lib-load.test.cjs
+// pins the load set.
+const loadedLibModules = new Map();
+function loadLib(id) {
+  let mod = loadedLibModules.get(id);
+  if (mod === undefined) {
+    mod = require(id);
+    loadedLibModules.set(id, mod);
+  }
+  return mod;
+}
+
+function lazyFn(id, name) {
+  return (...args) => loadLib(id)[name](...args);
+}
+
+function lazyModule(id) {
+  const load = () => loadLib(id);
+  return new Proxy(Object.create(null), {
+    get: (_target, key) => load()[key],
+    set: (_target, key, value) => { load()[key] = value; return true; },
+    has: (_target, key) => key in load(),
+    ownKeys: () => Reflect.ownKeys(load()),
+    getOwnPropertyDescriptor: (_target, key) => {
+      const desc = Object.getOwnPropertyDescriptor(load(), key);
+      // A proxy may not report a property as non-configurable when its target
+      // lacks it; the target here is an empty object, so report it configurable.
+      if (desc) desc.configurable = true;
+      return desc;
+    },
+  });
+}
+
+const planningDir = lazyFn('./lib/planning-workspace.cjs', 'planningDir');
+const planningRoot = lazyFn('./lib/planning-workspace.cjs', 'planningRoot');
+const state = lazyModule('./lib/state.cjs');
+const phase = lazyModule('./lib/phase.cjs');
+const roadmap = lazyModule('./lib/roadmap.cjs');
 // #3024: resolve skills root for the sync-skills workflow (install.js is not
 // shipped in installed trees; gsd-tools IS shipped, so the workflow calls this).
-const { getGlobalSkillsBase, isRegisteredRuntimeId } = require('./lib/runtime-homes.cjs');
+const getGlobalSkillsBase = lazyFn('./lib/runtime-homes.cjs', 'getGlobalSkillsBase');
+const isRegisteredRuntimeId = lazyFn('./lib/runtime-homes.cjs', 'isRegisteredRuntimeId');
 // #1561 — assumption-delta advisory checkpoint detector (pure function).
-const { detectAssumptionDelta } = require('./lib/assumption-delta.cjs');
-const verify = require('./lib/verify.cjs');
-const config = require('./lib/config.cjs');
-const estimateCli = require('./lib/estimate-cli.cjs');
-const template = require('./lib/template.cjs');
-const milestone = require('./lib/milestone.cjs');
-const milestoneReleaseTags = require('./lib/milestone-release-tags.cjs');
-const commands = require('./lib/commands.cjs');
-const runtimeIdentity = require('./lib/runtime-identity.cjs');
-const init = require('./lib/init.cjs');
-const frontmatter = require('./lib/frontmatter.cjs');
-const workstream = require('./lib/workstream.cjs');
-const docs = require('./lib/docs.cjs');
-const learnings = require('./lib/learnings.cjs');
-const gapChecker = require('./lib/gap-checker.cjs');
-const { routeStateCommand } = require('./lib/state-command-router.cjs');
-const { routeVerifyCommand } = require('./lib/verify-command-router.cjs');
-const { routeEvalCommand } = require('./lib/eval-command-router.cjs');
-const evalMod = require('./lib/eval.cjs');
-const { routeVerificationCommand } = require('./lib/verification-command-router.cjs');
-const { routePlanningCommand } = require('./lib/planning-command-router.cjs');
-const verification = require('./lib/verification.cjs');
-const { routeInitCommand } = require('./lib/init-command-router.cjs');
+const detectAssumptionDelta = lazyFn('./lib/assumption-delta.cjs', 'detectAssumptionDelta');
+const verify = lazyModule('./lib/verify.cjs');
+const config = lazyModule('./lib/config.cjs');
+const estimateCli = lazyModule('./lib/estimate-cli.cjs');
+const template = lazyModule('./lib/template.cjs');
+const milestone = lazyModule('./lib/milestone.cjs');
+const milestoneReleaseTags = lazyModule('./lib/milestone-release-tags.cjs');
+const commands = lazyModule('./lib/commands.cjs');
+const runtimeIdentity = lazyModule('./lib/runtime-identity.cjs');
+const init = lazyModule('./lib/init.cjs');
+const frontmatter = lazyModule('./lib/frontmatter.cjs');
+const workstream = lazyModule('./lib/workstream.cjs');
+const docs = lazyModule('./lib/docs.cjs');
+const learnings = lazyModule('./lib/learnings.cjs');
+const gapChecker = lazyModule('./lib/gap-checker.cjs');
+const routeStateCommand = lazyFn('./lib/state-command-router.cjs', 'routeStateCommand');
+const routeVerifyCommand = lazyFn('./lib/verify-command-router.cjs', 'routeVerifyCommand');
+const routeEvalCommand = lazyFn('./lib/eval-command-router.cjs', 'routeEvalCommand');
+const evalMod = lazyModule('./lib/eval.cjs');
+const routeVerificationCommand = lazyFn('./lib/verification-command-router.cjs', 'routeVerificationCommand');
+const routePlanningCommand = lazyFn('./lib/planning-command-router.cjs', 'routePlanningCommand');
+const verification = lazyModule('./lib/verification.cjs');
+const routeInitCommand = lazyFn('./lib/init-command-router.cjs', 'routeInitCommand');
 // Stale-bake guard (#1688): warns once when model config changed since agents
-// were last baked on static-frontmatter runtimes (codex/opencode). Lazy-required
-// here, invoked from case 'init' below.
-const { warnIfStaleBake } = require('./lib/stale-bake-guard.cjs');
-const loopResolver = require('./lib/loop-resolver.cjs');
-const brokenWindows = require('./lib/broken-windows.cjs');
-const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
-const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
-const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
-const { routeRoadmapCommand } = require('./lib/roadmap-command-router.cjs');
+// were last baked on static-frontmatter runtimes (codex/opencode). Invoked
+// from case 'init' below.
+const warnIfStaleBake = lazyFn('./lib/stale-bake-guard.cjs', 'warnIfStaleBake');
+const loopResolver = lazyModule('./lib/loop-resolver.cjs');
+const brokenWindows = lazyModule('./lib/broken-windows.cjs');
+const routePhaseCommand = lazyFn('./lib/phase-command-router.cjs', 'routePhaseCommand');
+const routePhasesCommand = lazyFn('./lib/phases-command-router.cjs', 'routePhasesCommand');
+const routeValidateCommand = lazyFn('./lib/validate-command-router.cjs', 'routeValidateCommand');
+const routeRoadmapCommand = lazyFn('./lib/roadmap-command-router.cjs', 'routeRoadmapCommand');
 // #3676 (Phase 4, epic #3344): quick-batch is a first-party, always-on
 // command family (like `/gsd:quick`) — wired directly into
 // HOST_COMMAND_ROUTERS, not the opt-in capability-registry/`activationKey`
 // path graphify uses.
-const { routeQuickBatchCommand } = require('./lib/quick-batch-command-router.cjs');
-const { routeCapabilityCommand } = require('./lib/capability-command-router.cjs');
-const { routeAgentCommand, AGENT_FAILURE_CLASSES } = require('./lib/agent-command-router.cjs');
-const smartEntryMod = require('./lib/smart-entry.cjs');
-const { routeCheckCommand } = require('./lib/check-command-router.cjs');
-const { routeTaskCommand } = require('./lib/task-command-router.cjs');
-const { parseNamedArgsOrExit, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
-const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
-const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
+const routeQuickBatchCommand = lazyFn('./lib/quick-batch-command-router.cjs', 'routeQuickBatchCommand');
+const routeCapabilityCommand = lazyFn('./lib/capability-command-router.cjs', 'routeCapabilityCommand');
+const agentCommandRouter = lazyModule('./lib/agent-command-router.cjs');
+const routeAgentCommand = lazyFn('./lib/agent-command-router.cjs', 'routeAgentCommand');
+const smartEntryMod = lazyModule('./lib/smart-entry.cjs');
+const routeCheckCommand = lazyFn('./lib/check-command-router.cjs', 'routeCheckCommand');
+const routeTaskCommand = lazyFn('./lib/task-command-router.cjs', 'routeTaskCommand');
+const parseNamedArgsOrExit = lazyFn('./lib/command-arg-projection.cjs', 'parseNamedArgsOrExit');
+const parseMultiwordArg = lazyFn('./lib/command-arg-projection.cjs', 'parseMultiwordArg');
+const cmdGitBaseBranch = lazyFn('./lib/git-base-branch.cjs', 'cmdGitBaseBranch');
+const getEffectiveAuthority = lazyFn('./lib/plan-drift-guard.cjs', 'getEffectiveAuthority');
+const classifyDriftSeverity = lazyFn('./lib/plan-drift-guard.cjs', 'classifyDriftSeverity');
+const comparePhaseStatus = lazyFn('./lib/plan-drift-guard.cjs', 'comparePhaseStatus');
 
 // ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
 // Non-family commands now run through their CJS handlers directly. Keep the
@@ -690,7 +759,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const positionals = [];
     // #2296: the valid classes come from the classifier's own frozen enum, so
     // this validator can never drift from what `agent classify-failure` emits.
-    const validFailureClasses = Object.values(AGENT_FAILURE_CLASSES);
+    const validFailureClasses = Object.values(agentCommandRouter.AGENT_FAILURE_CLASSES);
     const setFailureClass = (v) => {
       if (!validFailureClasses.includes(v)) {
         error(
