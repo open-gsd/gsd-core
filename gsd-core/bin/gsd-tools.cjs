@@ -2732,6 +2732,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
           let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
+          // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
           if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
             // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
             const ocv = require('./lib/opencode-version.cjs');
@@ -5145,6 +5146,7 @@ async function main() {
   // The argv splice must happen here too, otherwise the dispatcher below sees
   // "--json-errors" as an unknown command. Default off — human operators keep
   // their plain-text diagnostic.
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const jsonErrorsIdx = args.indexOf('--json-errors');
   if (jsonErrorsIdx !== -1) {
     setJsonErrorMode(true);
@@ -5168,6 +5170,7 @@ async function main() {
   // survive into the dispatcher and reproduce the same "Unknown command".
   resolveContractVersion({ argv: process.argv, env: process.env });
   for (let i = args.length - 1; i >= 0; i--) {
+    // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
     if (typeof args[i] === 'string' && args[i].startsWith('--exit-contract=')) {
       args.splice(i, 1);
     }
@@ -5190,7 +5193,9 @@ async function main() {
 
   // Optional cwd override for sandboxed subagents running outside project root.
   let cwd = process.cwd();
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const cwdEqArg = args.find(arg => arg.startsWith('--cwd='));
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const cwdIdx = args.indexOf('--cwd');
   if (cwdEqArg) {
     const value = cwdEqArg.slice('--cwd='.length).trim();
@@ -5216,7 +5221,9 @@ async function main() {
   // runs, and its result must skip that call entirely below. A relative
   // value resolves against process.cwd(), matching --cwd's own resolution.
   let projectDirExplicit = false;
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const projectDirEqArg = args.find(arg => arg.startsWith('--project-dir='));
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const projectDirIdx = args.indexOf('--project-dir');
   let projectDirValue;
   if (projectDirEqArg) {
@@ -5288,6 +5295,7 @@ async function main() {
     error(err.message || String(err));
   }
 
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const rawIndex = args.indexOf('--raw');
   const raw = rawIndex !== -1;
   if (rawIndex !== -1) args.splice(rawIndex, 1);
@@ -5295,6 +5303,7 @@ async function main() {
   // --pick <name>: extract a single field from JSON output (replaces jq dependency).
   // Supports dot-notation (e.g., --pick workflow.research) and bracket notation
   // for arrays (e.g., --pick directories[-1]).
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const pickIdx = args.indexOf('--pick');
   let pickField = null;
   if (pickIdx !== -1) {
@@ -5306,6 +5315,7 @@ async function main() {
   // --default <value>: for config-get, return this value instead of erroring
   // when the key is absent. Allows workflows to express optional config reads
   // without defensive `2>/dev/null || true` boilerplate (#1893).
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const defaultIdx = args.indexOf('--default');
   let defaultValue = undefined;
   if (defaultIdx !== -1) {
