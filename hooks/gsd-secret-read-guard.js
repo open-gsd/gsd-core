@@ -310,14 +310,10 @@ const WRAPPERS = new Map([
 //            `sudo -- A=b cmd` and `sudo -u -- A=b cmd` run a program named
 //            `A=b`. env still assigns there
 //   dash     a lone `-` is an option (env's `-i`)
-// sudo's getopt string takes a value for `-a` and `-c` on every build, whether
-// or not the build acts on them.
 const FURTHER_WRAPPERS = new Map([
   ...WRAPPERS,
   ['sudo', {
     ...WRAPPERS.get('sudo'),
-    short: `ac${WRAPPERS.get('sudo').short}`,
-    long: ['--auth-type', '--login-class', ...WRAPPERS.get('sudo').long],
     assigns: /^[^/=][^=]*=/,
     dashDashEndsAssigns: true,
   }],
