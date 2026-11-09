@@ -250,9 +250,17 @@ To pin a model for a specific installed agent, use `model_overrides` instead:
 }
 ```
 
-The Codex model catalog is maintained in [the Codex CLI model metadata](https://github.com/openai/codex/blob/126a0ee92ed2c5e73cd8a8f7e37563e8527552d7/codex-rs/models-manager/models.json). The model metadata advertises `ultra` for GPT-6.1 Sol, GPT-6 Astra, and GPT-6 Sol; GSD still rejects `ultra` as an orchestration policy.
-That catalog records GPT-6.1 Sol and GPT-6 Astra from Codex CLI 0.153.0, and GPT-6 Sol and GPT-6 Luna from 0.155.0. Check `codex debug models` and the `/model` selector for your installed CLI and account; availability can still depend on CLI version and account. GSD's orchestration policy
-continues to reject `ultra` even when a model advertises it.
+Reinstall GSD after changing `model_overrides` to update installed agent files.
+
+Advanced settings reads candidates with `gsd_run query codex-model-choices` and displays each
+entry's name, description, and exact ID. Confirm once which candidates appear in your Codex
+`/model` selector; that confirmed set is reused for all three tier prompts. Each numbered prompt
+also offers Keep current, Clear override, and Enter model ID. If the query fails or returns no
+choices, only those three options remain. Enter model ID asks for the exact ID; cancel leaves the
+tier unchanged. Other runtimes retain their existing prompts.
+
+Check `codex debug models` and `/model` for your installed CLI and account. Catalog entries do
+not guarantee availability. GSD rejects `ultra` as an orchestration policy even when advertised.
 
 ### Allocating for execution-heavy workflows on Codex
 
