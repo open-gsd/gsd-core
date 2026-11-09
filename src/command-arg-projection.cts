@@ -95,6 +95,26 @@ export interface NamedArgSpec {
    */
   emptyEqFlags?: string[];
   /**
+   * The `--name=value` form surfaces its value with surrounding whitespace
+   * trimmed; the space form (`--name value`) is passed through untouched. A
+   * whitespace-only `--name=` value is missing for `nonEmptyFlags`. Subset of
+   * `eqFlags`. Reader: loop render-hooks.
+   */
+  trimEqFlags?: string[];
+  /**
+   * Flag -> prefix: a `--name=value` whose value starts with the prefix counts
+   * as present without a value for `nonEmptyFlags` (the `--class==A` typo shape);
+   * the space form is unaffected. Keys must be a subset of `eqFlags` and
+   * `nonEmptyFlags`. Reader: context-predicates.
+   */
+  eqRejectPrefix?: Record<string, string>;
+  /**
+   * Template for the missing-value InvalidArgs `reason` of a `nonEmptyFlags`
+   * member; `{flag}` is replaced by `--name`. Default `Missing value for --name`.
+   * Keeps a verb's shipped wording inside the seam.
+   */
+  missingValueMessage?: string;
+  /**
    * A bare `--name` yields `''` instead of `null`, so presence is read from
    * `data`. Subset of `valueFlags`. Reader: stamp-codebase-map `--files`,
    * milestone complete `--release-map`.
@@ -236,6 +256,16 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
   assertSubsetOf(spec, 'emptyValueFlags', 'nonEmptyFlags');
   assertSubsetOf(spec, 'emptyEqFlags', 'nonEmptyFlags');
   assertSubsetOf(spec, 'emptyEqFlags', 'eqFlags');
+  assertSubsetOf(spec, 'trimEqFlags', 'eqFlags');
+  assertEqRejectPrefix(spec);
+  if (
+    spec.missingValueMessage !== undefined &&
+    (typeof spec.missingValueMessage !== 'string' || !spec.missingValueMessage.includes('{flag}'))
+  ) {
+    throw new TypeError(
+      `parseNamedArgs: spec.missingValueMessage must be a string containing the {flag} placeholder — received ${JSON.stringify(spec.missingValueMessage)}.`,
+    );
+  }
   for (const kind of INDEPENDENT_KINDS) assertIndependentKind(spec, kind);
   if (spec.passthroughAfter !== undefined && spec.passthroughAfter !== '--') {
     throw new TypeError(
@@ -275,6 +305,25 @@ function assertSubsetOf(spec: Record<string, unknown>, kind: string, parent: str
       `parseNamedArgs: spec.${kind} must be a subset of spec.${parent} — ` +
         `not declared in ${parent}: ${stray.join(', ')}`,
     );
+  }
+}
+
+function assertEqRejectPrefix(spec: Record<string, unknown>): void {
+  const map = spec.eqRejectPrefix;
+  if (map === undefined) return;
+  if (!isPlainObject(map) || !Object.values(map).every((p) => typeof p === 'string' && p !== '')) {
+    throw new TypeError('parseNamedArgs: spec.eqRejectPrefix must map flag names to non-empty prefix strings.');
+  }
+  const flags = Object.keys(map);
+  for (const parent of ['eqFlags', 'nonEmptyFlags']) {
+    const declared = Array.isArray(spec[parent]) ? (spec[parent] as unknown[]) : [];
+    const stray = flags.filter((f) => !declared.includes(f));
+    if (stray.length > 0) {
+      throw new TypeError(
+        `parseNamedArgs: spec.eqRejectPrefix must be a subset of spec.${parent} — ` +
+          `not declared in ${parent}: ${stray.join(', ')}`,
+      );
+    }
   }
 }
 
@@ -321,6 +370,8 @@ function missingRequired(spec: NamedArgSpec, data: ParsedNamedArgs): NamedArgsRe
  */
 function lacksValue(args: string[], spec: NamedArgSpec, flag: string, occ: Occurrence): boolean {
   if (occ.inline !== null) {
+    const prefix = spec.eqRejectPrefix?.[flag];
+    if (prefix !== undefined && occ.inline.startsWith(prefix)) return true;
     return occ.inline.trim() === '' && !(spec.emptyEqFlags ?? []).includes(flag);
   }
   const next = args[occ.index + 1];
@@ -348,7 +399,10 @@ function missingValue(
         ok: false,
         kind: 'InvalidArgs',
         arg: `--${flag}`,
-        reason: `Missing value for --${flag}`,
+        reason:
+          spec.missingValueMessage !== undefined
+            ? spec.missingValueMessage.split('{flag}').join(`--${flag}`)
+            : `Missing value for --${flag}`,
         exitReason: ERROR_REASON.USAGE,
       };
     }
@@ -385,7 +439,8 @@ function indexOccurrences(args: string[], eq: Set<string>): Map<string, Occurren
  */
 function occurrenceValue(args: string[], spec: NamedArgSpec, flag: string, occ: Occurrence): string | null {
   if (occ.inline !== null) {
-    return occ.inline === '' && !(spec.emptyEqFlags ?? []).includes(flag) ? null : occ.inline;
+    const inline = (spec.trimEqFlags ?? []).includes(flag) ? occ.inline.trim() : occ.inline;
+    return inline === '' && !(spec.emptyEqFlags ?? []).includes(flag) ? null : inline;
   }
   const next = args[occ.index + 1];
   return next !== undefined && !isFlagToken(next) ? next : null;

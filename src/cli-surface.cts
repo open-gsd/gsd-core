@@ -232,6 +232,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     valueFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
     eqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
     nonEmptyFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
+    // Only the `=` form was ever trimmed; a space-form value reaches the handler as typed.
+    trimEqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
   },
   // `--json` is accepted and ignored: the index is JSON either way and callers pass it.
   'phase-plan-index': { positionals: 2, booleanFlags: JSON_FLAG },
@@ -288,11 +290,12 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     ],
     repeatableFlags: ['plan-file'],
     // An empty --plan-file list counts as missing; --budget's value validation stays in the handler.
+    // Declaration order is the order a run missing several reports them; it mirrors the handler's old checks.
     requiredFlags: [
-      'plan-file',
       'budget',
       'instructions-file',
       'roadmap-file',
+      'plan-file',
       'output-prompt',
       'output-metadata',
     ],
@@ -305,6 +308,9 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     valueFlags: ['class', 'contains', 'prefix'],
     eqFlags: ['class', 'contains', 'prefix'],
     nonEmptyFlags: ['class', 'contains', 'prefix'],
+    // `--class==A` is a typo shape, never the literal `=A`; the space form `--class =A` is a value.
+    eqRejectPrefix: { class: '=', contains: '=', prefix: '=' },
+    missingValueMessage: 'context-predicates: {flag} requires a non-empty value',
   },
   'update-context': {
     positionals: 1,

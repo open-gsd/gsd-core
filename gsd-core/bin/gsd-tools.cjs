@@ -3321,8 +3321,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // artifact already exists) each take a value in the space or `=` form; the seam refuses
             // a flag that is present without one, before any of it is used.
             const loopParsed = parseNamedArgsOrExit(args, specFor('loop.render-hooks'), error);
-            // Values are trimmed (the `=` form always was), so `--runtime= claude` reads as `claude`.
-            const loopValue = (name) => (loopParsed[name] === null ? undefined : loopParsed[name].trim());
+            // The spec trims the `=` form (`--runtime= claude` reads as `claude`); a space-form value is as typed.
+            const loopValue = (name) => (loopParsed[name] === null ? undefined : loopParsed[name]);
             const loopConfigDir = loopValue('config-dir');
             loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
               configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
@@ -4189,8 +4189,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     const requireNonEmpty = (flagName, rawValue) => {
-      // A value starting with `=` is the `--class==A` double-equals typo shape; never accepted as a literal.
-      if (rawValue.trim() === '' || rawValue.startsWith('=')) {
+      // A whitespace-only space-form value is a value to the seam; this verb refuses it. The `--class==A`
+      // double-equals typo is the seam's (`eqRejectPrefix`), so the space form `--class =A` stays a literal.
+      if (rawValue.trim() === '') {
         error(`context-predicates: ${flagName} requires a non-empty value`, ERROR_REASON.USAGE);
         return null;
       }
