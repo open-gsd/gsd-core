@@ -395,6 +395,7 @@ describe('#5850 a PowerShell entry reaching a POSIX host converges back', () => 
     const entries = [
       hooksSurface.buildHookCommand(`${home}/my$dir/.claude`, GUARD, win({ portableHooks: true })),
       hooksSurface.buildHookCommand(`${home}/my"dir/.claude`, GUARD, win({ portableHooks: true })),
+      hooksSurface.buildHookCommand(`${home}/my\`dir/.claude`, GUARD, win({ portableHooks: true })),
       hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: '"$CLAUDE_PROJECT_DIR"/.cl$aude', hookFile: GUARD, execPath: EXEC_PATH }),
     ];
     for (const ps of entries) {
