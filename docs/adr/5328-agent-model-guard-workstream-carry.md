@@ -28,4 +28,4 @@ The workflows select a workstream with `--ws` on the `init` call (`gsd-core/work
 
 - `init --ws` gains a write side effect where the guard applies: one small file under the OS temp directory per session and project.
 - A line expires 12 hours after the `init --ws` that wrote it. While a carry holds an expired line, the hook allows every dispatch of that session. An unflagged `init` writes and clears no entry.
-- The carry is read through the bounded regular-file reader (a FIFO, a device or a file over the 2248-byte read cap, eight entries at their longest, reads as no carry) but not with `O_NOFOLLOW`. The session pointer files beside it in `os.tmpdir()` share that exposure; a planted link can only widen the accepted set by names, and the carry is not a security boundary.
+- The carry is read through the bounded regular-file reader (a FIFO, a device or a file over `INIT_WORKSTREAM_MAX_BYTES`, the size of eight entries at their longest, reads as no carry) but not with `O_NOFOLLOW`. The session pointer files beside it in `os.tmpdir()` share that exposure; a planted link can only widen the accepted set by names, and the carry is not a security boundary.
