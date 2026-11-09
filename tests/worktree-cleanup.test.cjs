@@ -486,7 +486,7 @@ describe('worktree cleanup after executor completes (#1496)', () => {
   const quickPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
   test('execute-phase.md includes worktree cleanup step', () => {
-    const content = fs.readFileSync(executePhasePath, 'utf8');
+    const content = fs.readFileSync(executePhasePath, 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     assert.ok(content.includes('Worktree cleanup'),
       'execute-phase should have a worktree cleanup step');
     assert.ok(content.includes('git worktree remove'),
@@ -564,8 +564,8 @@ describe('worktree merge: orchestrator file protection (#1756)', () => {
     );
   });
 
-  test('execute-phase.md cleanup-tail snippet still backs up STATE.md for custom deviations', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+  test('cleanup-tail snippet removes residual worktrees after custom merges', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf-8');
     // The cleanup-tail snippet (for deviations from the standard wave merge path)
     // uses git worktree remove directly — it doesn't use the SDK helper.
     // This snippet doesn't need STATE.md backup because it only removes worktrees
@@ -573,7 +573,7 @@ describe('worktree merge: orchestrator file protection (#1756)', () => {
     assert.match(
       content,
       /Cleanup-tail: remove residual agent worktrees after a cross-wave-dependency deviation/,
-      'execute-phase.md must contain the cleanup-tail snippet for custom merge deviations',
+      'the cleanup-tail fragment must cover custom merge deviations',
     );
   });
 
@@ -684,7 +684,7 @@ describe('worktree sequential dispatch', () => {
 
 describe('bug #3384: worktree cleanup workflow contracts', () => {
     test('execute-phase contract requires a cleanup manifest instead of global worktree discovery', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     assert.match(content, /WAVE_WORKTREE_MANIFEST/);
     assert.match(content, /worktree\.cleanup-wave/);
     // #1298: the per-agent manifest write now goes through the validated
@@ -754,7 +754,7 @@ test('#3425: helper cleanup path pins orchestrator CWD to primary worktree and c
 });
 
 test('#3425: cleanup-tail snippet carries the same primary-worktree pin before removal', () => {
-  const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+  const content = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
 
   assert.match(content, /Cleanup-tail: pin orchestrator CWD to its OWN worktree before cleanup-tail \(#3174, #630\)\./);
   // #630: cleanup-tail resolves the orchestrator root from the manifest, with first-entry fallback.
@@ -1387,7 +1387,7 @@ describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-workt
   });
 
   test('both cleanup guards resolve PRIMARY_WT from the manifest orchestrator_root (#630)', () => {
-    const content = readMd();
+    const content = readMd() + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     const readers = content.match(
       /PRIMARY_WT=\$\(MANIFEST="\$WAVE_WORKTREE_MANIFEST" node -e '[^']*orchestrator_root[^']*'\)/g,
     );
@@ -1398,7 +1398,7 @@ describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-workt
   });
 
   test('first-entry resolution survives only as a guarded fallback, never the sole resolver (#630)', () => {
-    const content = readMd();
+    const content = readMd() + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     // Every remaining first-entry resolution must be preceded by the `[ -n "$PRIMARY_WT" ] ||`
     // guard, i.e. it only runs when the manifest lookup produced nothing.
     const firstEntryLines = content.match(/^.*git worktree list --porcelain \| awk '\/\^worktree \/.*$/gm) || [];
@@ -1787,7 +1787,8 @@ describe('durable wave worktree manifest contract (#4853)', () => {
   const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
   function extractCleanupTailBash() {
-    const content = readFileNormalized(EXECUTE_PHASE_PATH);
+    const content = readFileNormalized(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'));
+    assert.match(readFileNormalized(EXECUTE_PHASE_PATH), /execute-phase\/steps\/worktree-cleanup-tail\.md/);
     const marker = 'Cleanup-tail snippet';
     const markerIdx = content.indexOf(marker);
     if (markerIdx === -1) {
