@@ -801,8 +801,9 @@ function tokenize(str) {
   let afterTime = 0; // 1 after `time`, 2 after `time -p`
   let redirectTarget = false;
   let subscriptsOpen = true;
-  // The `)` closing each `((`'s inner paren, filled by dparenClose.
-  const dparenCloses = new Map();
+  // The `)` closing each `((`'s inner paren, filled by dparenClose, and what
+  // is left of this call's walk allowance for it.
+  const dparen = { closes: new Map(), budget: DPAREN_WALK_PER_CHAR * str.length + DPAREN_WALK_BASE };
 
   const flush = () => {
     if (!hasWord) return;
@@ -1067,8 +1068,8 @@ function tokenize(str) {
       if (ch === '(' && furtherReading && str[i] === '(') {
         sep('(');
         i++;
-        let close = dparenCloses.get(i);
-        if (close === undefined) close = dparenClose(str, i, dparenCloses);
+        let close = dparen.closes.get(i);
+        if (close === undefined) close = dparen.budget > 0 ? dparenClose(str, i, dparen) : str.length;
         if (str[close + 1] === ')') atCommandStart = false;
       }
       continue;
@@ -1174,11 +1175,23 @@ function isRawNameBefore(str, i, len) {
 // Index of the `)` closing the paren opened just before `i`, as bash's
 // parse_matched_pair reads a `((` body (parse_dparen): quotes hide a paren,
 // `$'…'` and backquotes honour a backslash, and no heredoc body is skipped;
-// str.length when none does. It records into `closes`, keyed by the index
-// after each nested `(`, the close of every paren it passes, so the `((` of a
-// command cost one scan between them.
-function dparenClose(str, i, closes) {
+// str.length when none does. It records into `dparen.closes`, keyed by the
+// index after each nested `(`, the close of every paren it passes, so the `((`
+// of a command cost one scan between them.
+//
+// A scan that meets a quote no character closes walks to the end of the string
+// and records nothing for the `((` after it, so each of those walks again: a run
+// of `((x "${"(` cost a scan per `((`, 139 s at 990 KB. So the scans of one
+// tokenize call share `dparen.budget`, DPAREN_WALK_PER_CHAR walks of the string
+// (plus DPAREN_WALK_BASE), each charged the distance it walked. Once it is spent
+// a `((` is read as two subshells, the reading that leaves the next word at a
+// command's start: the further reading then looks at more, never less.
+const DPAREN_WALK_PER_CHAR = 4;
+const DPAREN_WALK_BASE = 4096;
+function dparenClose(str, i, dparen) {
+  const start = i;
   const opens = [];
+  let close = str.length;
   while (i < str.length) {
     const c = str[i];
     if (c === '\\') { i += 2; continue; }
@@ -1195,13 +1208,14 @@ function dparenClose(str, i, closes) {
     if (c === '(') {
       opens.push(i + 1);
     } else if (c === ')') {
-      if (opens.length === 0) return i;
-      closes.set(opens.pop(), i);
+      if (opens.length === 0) { close = i; break; }
+      dparen.closes.set(opens.pop(), i);
     }
     i++;
   }
-  for (const o of opens) closes.set(o, str.length);
-  return str.length;
+  dparen.budget -= (close === str.length ? str.length : close) - start;
+  for (const o of opens) dparen.closes.set(o, str.length);
+  return close;
 }
 
 // Index of the backquote closing a backquote span whose body starts at `k`,
