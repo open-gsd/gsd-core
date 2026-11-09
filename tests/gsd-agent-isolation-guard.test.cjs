@@ -59,7 +59,7 @@ const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
 const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
-const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-agent-isolation-guard.js');
+const { runHook, mkProject, writeConfig } = require('./helpers/agent-isolation-guard-fixtures.cjs');
 
 /**
  * Write a #3045 dispatch-isolation sentinel under `dir` (mirrors what
@@ -70,36 +70,6 @@ function writeSentinel(dir, { isolation, harnessFlag = null, phase = null, plan 
   const p = path.join(dir, SENTINEL_RELATIVE_PATH);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify({ isolation, harness_flag: harnessFlag, phase, plan, written_at: writtenAt }));
-}
-
-/**
- * Run the hook with a given payload against a given cwd.
- * GSD_RUNTIME is deleted by default so ambient environment can never leak a
- * runtime override into a test that expects the config.json `runtime` key
- * (or the 'claude' default) to be used instead.
- */
-function runHook(payload, cwd, extraEnv = {}) {
-  const env = { ...process.env };
-  delete env.GSD_RUNTIME;
-  Object.assign(env, extraEnv);
-  // Production code resolves the home directory via `os.homedir()` (correct,
-  // cross-platform), which on Windows reads `USERPROFILE`, not `HOME` —
-  // `os.homedir()` never honors `HOME` there. Tests below override `HOME` to
-  // redirect `os.homedir()` hermetically; mirror the override onto
-  // `USERPROFILE` too so that redirection actually takes effect on Windows
-  // instead of silently leaking the real CI runner's profile directory.
-  if ('HOME' in extraEnv) env.USERPROFILE = extraEnv.HOME;
-  // #5017: the defaults store root is GSD_HOME when set, and the test runner exports a sandbox
-  // GSD_HOME to every test — so redirecting only HOME no longer redirects the store. A test that
-  // redirects HOME redirects the store with it, unless it names GSD_HOME itself.
-  if ('HOME' in extraEnv && !('GSD_HOME' in extraEnv)) env.GSD_HOME = extraEnv.HOME;
-  const r = runHookSeam(HOOK_PATH, [], {
-    input: typeof payload === 'string' ? payload : JSON.stringify(payload),
-    cwd,
-    env,
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  return toLegacyResult(r);
 }
 
 /**
@@ -116,26 +86,17 @@ function readSentinelRaw(dir) {
   return JSON.parse(fs.readFileSync(sentinelFile(dir), 'utf-8'));
 }
 
+// Every isolation fixture's root config pins this profile (pinnedConfig), and the payload sends the executor's model
+// for it, so the isolation rows stay silent under the Agent-model guard whatever the default profile is (#5328 J5).
+const PINNED_PROFILE = 'balanced';
+const pinnedConfig = (config) => JSON.stringify({ model_profile: PINNED_PROFILE, ...config });
 function agentPayload(overrides = {}) {
   return {
     hook_event_name: 'PreToolUse',
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'gsd-executor', ...(overrides.tool_input || {}) },
+    tool_input: { subagent_type: 'gsd-executor', model: require('../gsd-core/bin/lib/model-profiles.cjs').MODEL_PROFILES['gsd-executor'][PINNED_PROFILE] },
     ...overrides,
   };
-}
-
-function mkProject(prefix) {
-  // #4734: git-inited with a real HEAD. Production GSD project roots are git
-  // repositories, and the guard's fallback now degrades to 'none' when the
-  // root has NO repository — a non-git fixture here would exercise that
-  // degrade instead of the fallback enforcement these suites pin. The
-  // dedicated non-git world lives in the #4734 describe below.
-  return createFixture({ prefix, planning: true, git: true, projectDoc: false });
-}
-
-function writeConfig(dir, content) {
-  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), content);
 }
 
 describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
@@ -148,13 +109,13 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
 
   before(() => {
     harnessProject = mkProject('gsd-aig-harness-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
 
     orchestratorProject = mkProject('gsd-aig-orch-');
-    writeConfig(orchestratorProject, JSON.stringify({}));
+    writeConfig(orchestratorProject, pinnedConfig({}));
 
     noneProject = mkProject('gsd-aig-none-');
-    writeConfig(noneProject, JSON.stringify({}));
+    writeConfig(noneProject, pinnedConfig({}));
 
     noGsdProject = createTempDir('gsd-aig-nogsd-');
 
@@ -191,7 +152,7 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
   });
 
   test('row 2: isolation="worktree" present -> allow', () => {
-    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree' } }), harnessProject);
+    const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: agentPayload().tool_input.model } }), harnessProject);
     assert.equal(r.status, 0, `stdout: ${r.stdout}`);
     assert.equal(r.stdout, '');
   });
@@ -295,7 +256,7 @@ describe('gsd-agent-isolation-guard.js: property — deny iff isolation param !=
 
   before(() => {
     harnessProject = mkProject('gsd-aig-prop-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
   });
 
   after(() => {
@@ -339,10 +300,10 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER regression — sentinel is
 
   before(() => {
     harnessProject = mkProject('gsd-aig-sentinel-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
 
     useWorktreesFalseProject = mkProject('gsd-aig-uwf-');
-    writeConfig(useWorktreesFalseProject, JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: false } }));
+    writeConfig(useWorktreesFalseProject, pinnedConfig({ runtime: 'claude', workflow: { use_worktrees: false } }));
   });
 
   after(() => {
@@ -443,7 +404,7 @@ describe('gsd-agent-isolation-guard.js: #3045 MAJOR 2 — undeterminable runtime
     // No `runtime` key at all — mirrors gsd-core/templates/config.json,
     // which ships every new project's scaffold WITHOUT one. GSD_RUNTIME is
     // deleted by runHook(), so this project has NO explicit runtime signal.
-    writeConfig(unconfiguredProject, JSON.stringify({}));
+    writeConfig(unconfiguredProject, pinnedConfig({}));
   });
 
   after(() => {
@@ -470,11 +431,11 @@ describe('gsd-agent-isolation-guard.js: #3045 BLOCKER 2 — default-install fail
 
   before(() => {
     harnessProject = mkProject('gsd-aig-b2-harness-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
 
     unconfiguredHarnessProject = mkProject('gsd-aig-b2-unconfigured-');
     // Mirrors gsd-core/templates/config.json exactly: no `runtime` key.
-    writeConfig(unconfiguredHarnessProject, JSON.stringify({}));
+    writeConfig(unconfiguredHarnessProject, pinnedConfig({}));
   });
 
   after(() => {
@@ -549,7 +510,7 @@ describe('gsd-agent-isolation-guard.js: #3045 SECURITY F2 — sentinel bound to 
 
   before(() => {
     harnessProject = mkProject('gsd-aig-f2-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
   });
 
   after(() => {
@@ -596,7 +557,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
 
   before(() => {
     harnessProject = mkProject('gsd-aig-4594-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
   });
 
   after(() => {
@@ -613,7 +574,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
     writeSentinel(harnessProject, { isolation: 'none', phase: '03', plan: '03-02-hardening' });
     t.after(() => cleanup(path.join(harnessProject, '.gsd')));
     const r = runHook(
-      agentPayload({ tool_input: { subagent_type: 'gsd-executor', prompt: 'Execute plan 02 of phase 03-auth.' } }),
+      agentPayload({ tool_input: { subagent_type: 'gsd-executor', model: agentPayload().tool_input.model, prompt: 'Execute plan 02 of phase 03-auth.' } }),
       harnessProject,
     );
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
@@ -627,6 +588,7 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
       agentPayload({
         tool_input: {
           subagent_type: 'gsd-executor',
+          model: agentPayload().tool_input.model,
           description: 'Run the executor',
           prompt: '[gsd:dispatch phase="03" plan="03-02-hardening"] Execute the plan.',
         },
@@ -686,7 +648,7 @@ describe('gsd-agent-isolation-guard.js: #3045 MAJOR — clock seam boundary cove
 
   before(() => {
     harnessProject = mkProject('gsd-aig-clock-');
-    writeConfig(harnessProject, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(harnessProject, pinnedConfig({ runtime: 'claude' }));
     // These tests call resolveIsolationState() directly, in-process (not via
     // runHook's subprocess, which already strips GSD_RUNTIME) — guard against
     // ambient env leakage from the CURRENT test process (repo hermeticity
@@ -791,7 +753,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     markerProject = mkProject('gsd-aig-3566-');
     // Mirrors gsd-core/templates/config.json exactly: no `runtime` key — the COMMON
     // scaffold shape since #2840 stopped copying runtime into project configs.
-    writeConfig(markerProject, JSON.stringify({}));
+    writeConfig(markerProject, pinnedConfig({}));
   });
 
   after(() => {
@@ -829,7 +791,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
 
   test('#3566: explicit config.json runtime still outranks the install marker', (t) => {
     const proj = mkProject('gsd-aig-3566-cfg-');
-    writeConfig(proj, JSON.stringify({ runtime: 'codex' }));
+    writeConfig(proj, pinnedConfig({ runtime: 'codex' }));
     t.after(() => cleanup(proj));
     setWorld(t, { marker: 'claude' });
     assert.deepEqual(identity(proj), { runtimeId: 'codex', confident: true });
@@ -887,7 +849,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
     setWorld(t, { marker: null });
     assert.deepEqual(identity(), { runtimeId: null, confident: false });
     const decision = guardModule.evaluateDispatch(
-      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor' }, cwd: markerProject },
+      { tool_name: 'Agent', tool_input: { subagent_type: 'gsd-executor', model: agentPayload().tool_input.model }, cwd: markerProject },
     );
     assert.equal(decision.action, 'allow');
   });
@@ -920,7 +882,7 @@ describe('gsd-agent-isolation-guard.js: #3566 — per-install .gsd-runtime marke
         const [envOn, cfgOn, mkOn, defOn] = actives;
         if (envOn) process.env.GSD_RUNTIME = envV;
         else delete process.env.GSD_RUNTIME;
-        writeConfig(proj, cfgOn ? JSON.stringify({ runtime: cfgV }) : JSON.stringify({}));
+        writeConfig(proj, cfgOn ? pinnedConfig({ runtime: cfgV }) : pinnedConfig({}));
         guardModule._setInstallRuntimeMarkerForTests(mkOn ? mkV : null);
         if (defOn) fs.writeFileSync(defaultsPath, JSON.stringify({ runtime: defV }));
         else fs.writeFileSync(defaultsPath, JSON.stringify({})); // no `runtime` key = no signal from the rung
@@ -1182,7 +1144,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   function writeUseWorktrees(dir, value) {
     fs.writeFileSync(
       path.join(dir, '.planning', 'config.json'),
-      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: value } }),
+      pinnedConfig({ runtime: 'claude', workflow: { use_worktrees: value } }),
     );
   }
 
@@ -1273,12 +1235,12 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     t.after(() => cleanup(dir));
     fs.writeFileSync(
       path.join(dir, '.planning', 'config.json'),
-      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: false } }),
+      pinnedConfig({ runtime: 'claude', workflow: { use_worktrees: false } }),
     );
     fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
     fs.writeFileSync(
       path.join(dir, '.planning', 'workstreams', 'alpha', 'config.json'),
-      JSON.stringify({ model_profile: 'balanced' }),
+      pinnedConfig({}),
     );
 
     const result = runGsdTools(
@@ -1299,7 +1261,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     t.after(() => cleanup(dir));
     fs.writeFileSync(
       path.join(dir, '.planning', 'config.json'),
-      JSON.stringify({ runtime: 'claude', workflow: { use_worktrees: false } }),
+      pinnedConfig({ runtime: 'claude', workflow: { use_worktrees: false } }),
     );
     fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
     fs.writeFileSync(
@@ -1356,8 +1318,8 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
     // Root opted out; the scoped project config omits the key. Under
     // GSD_PROJECT alone, config-get does NOT inherit root — and neither may
     // this resolver (the ws-env gate is the boundary).
-    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ workflow: { use_worktrees: false } }));
-    fs.writeFileSync(path.join(dir, '.planning', 'second-product', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), pinnedConfig({ workflow: { use_worktrees: false } }));
+    fs.writeFileSync(path.join(dir, '.planning', 'second-product', 'config.json'), pinnedConfig({ runtime: 'claude' }));
 
     const cfg = runGsdTools(['query', 'config-get', 'workflow.use_worktrees', '--raw', '--default', 'true'], dir,
       { GSD_RUNTIME: 'claude', HOME: dir, GSD_PROJECT: 'second-product' });
@@ -1372,7 +1334,7 @@ describe('#3045 CORE REDESIGN — dispatch-isolation records as an unconditional
   test('#3963: malformed workstream config falls back to the root under the gate', (t) => {
     const dir = createTempProject('gsd-3963-malformed-');
     t.after(() => cleanup(dir));
-    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ workflow: { use_worktrees: false } }));
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), pinnedConfig({ workflow: { use_worktrees: false } }));
     fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.planning', 'workstreams', 'alpha', 'config.json'), '{ not valid json');
 
@@ -1512,7 +1474,7 @@ describe('#3045 MINOR — writer/reader sentinel path derivation now agrees for 
     // documented shape where a linked worktree does NOT get its own copy
     // (git worktree only checks out tracked files).
     fs.mkdirSync(path.join(mainRepo, '.planning'));
-    fs.writeFileSync(path.join(mainRepo, '.planning', 'config.json'), JSON.stringify({}));
+    fs.writeFileSync(path.join(mainRepo, '.planning', 'config.json'), pinnedConfig({}));
 
     const linked = path.join(wtParent, 'linked');
     git(['worktree', 'add', linked, '-b', 'gsd-3045-minor-branch'], mainRepo);
@@ -1763,7 +1725,7 @@ describe('gsd-agent-isolation-guard.js: #3582 cold tree — RuntimeBuildError su
     t.after(cold.cleanup);
     const project = mkProject('gsd-aig-cold-');
     t.after(() => cleanup(project));
-    writeConfig(project, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(project, pinnedConfig({ runtime: 'claude' }));
 
     const env = { ...process.env };
     delete env.GSD_RUNTIME;
@@ -1934,7 +1896,7 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
   function mkNonGitProject(prefix) {
     const dir = createTempDir(prefix);
     fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
-    writeConfig(dir, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(dir, pinnedConfig({ runtime: 'claude' }));
     return dir;
   }
 
@@ -1942,7 +1904,7 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     // Mirror of mkNonGitProject with a real repository HEAD — the positive
     // control proving the git check, not something else, drives the degrade.
     const dir = createFixture({ prefix, planning: true, git: true, projectDoc: false });
-    writeConfig(dir, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(dir, pinnedConfig({ runtime: 'claude' }));
     return dir;
   }
 
@@ -1980,6 +1942,18 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
     const r = runHook(agentPayload(), project);
     assert.equal(r.status, 2, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+});
+
+describe('gsd-agent-isolation-guard.js: #5328 J5 — isolation fixtures stay silent under the Agent-model check', () => {
+  test('isolation fixtures pin the profile the payload model comes from', (t) => {
+    const dir = mkProject('gsd-aig-pin-');
+    t.after(() => cleanup(dir));
+    writeConfig(dir, pinnedConfig({ runtime: 'claude' }));
+    const r = runGsdTools(['resolve-model', 'gsd-executor'], dir);
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).model, agentPayload().tool_input.model);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8')).model_profile, PINNED_PROFILE);
   });
 });
 

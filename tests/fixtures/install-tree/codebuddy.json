@@ -678,6 +678,7 @@
   "hooks/gsd-workflow-guard.js",
   "hooks/gsd-worktree-path-guard.js",
   "hooks/gsd-write-guard.js",
+  "hooks/lib/agent-model-check.js",
   "hooks/lib/cli-exit.js",
   "hooks/lib/config-read.js",
   "hooks/lib/cursor-workspace.js",
