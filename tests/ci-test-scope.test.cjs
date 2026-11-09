@@ -399,6 +399,22 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
     assertInert(['.github/workflows/test.yml', '.github/workflows/release.yml']);
   });
 
+  test('CI yaml edit still targets the workflow-contract tests, never full_matrix', () => {
+    const required = [
+      'tests/ci-pr-mergeability.test.cjs',
+      'tests/ci-test-scope.test.cjs',
+      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/ci-conformance-pr-gating.test.cjs',
+      'tests/workflow-token-permissions.test.cjs',
+    ];
+    for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml', '.github/actions/x/action.yml']) {
+      const result = assertInert([file]);
+      for (const t of required) {
+        assert.ok(result.targeted_tests.includes(t), `${file}: ${t} missing from ${JSON.stringify(result.targeted_tests)}`);
+      }
+    }
+  });
+
   test('composite-action-only diff (.yml and .yaml): inert', () => {
     assertInert(['.github/actions/x/action.yml']);
     assertInert(['.github/actions/x/action.yaml']);
@@ -412,7 +428,9 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
     assertInert(['.github/ISSUE_TEMPLATE/config.yml']);
   });
 
-  test('every real tracked .github yaml file alone: no matrix, not product (parity with the filesystem)', () => {
+  // Reads the REAL repo tree on purpose: it guards the actual .github yaml files
+  // (a new file shape that escaped the CI-YAML match would fail here).
+  test('every tracked .github yaml file in this repo (real tree) alone: no matrix, not product', () => {
     const files = walkYaml(path.join(ROOT, '.github'));
     assert.ok(files.length > 0, 'precondition: .github holds yaml files');
     for (const file of files) assertInert([file]);
@@ -469,7 +487,7 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
       const result = classify(files);
       return result.code_changed === true && result.product_changed === false &&
         result.full_matrix === false && result.targeted_tests.length > 0;
-    }), { numRuns: 200 });
+    }), { numRuns: 200, seed: 6075 });
   });
 });
 

@@ -26,10 +26,47 @@ const WORKFLOW_LINT_TESTS = [
   'tests/lint-pr-check-project-dir.test.cjs',
 ];
 
+// #6075: tests that read `.github/**` YAML content (workflow contracts). A CI
+// YAML edit re-runs them in the targeted lane (never full_matrix). Several are
+// conformance-tier members; that does not flip full_matrix for a CI-YAML-only
+// change because classify() exempts isCiYaml(file) from the windows-hint
+// escalation and forces full_matrix=false when only CI YAML changed.
+const WORKFLOW_CONTRACT_TESTS = [
+  'tests/adr-218-release-version-validation.test.cjs',
+  'tests/adr-230-pr-target-policy.test.cjs',
+  'tests/ci-conformance-pr-gating.test.cjs',
+  'tests/ci-docs-guard-registry.test.cjs',
+  'tests/ci-full-lane-sharding.test.cjs',
+  'tests/ci-merge-group-wiring.test.cjs',
+  'tests/ci-pr-mergeability.test.cjs',
+  'tests/ci-test-job-timeout-budget.test.cjs',
+  'tests/ci-test-scope.test.cjs',
+  'tests/merge-commit-pr.test.cjs',
+  'tests/mutation-tap-runner-wiring.test.cjs',
+  'tests/mutation-workflow-base-ref.test.cjs',
+  'tests/policy-release-no-npm-self-upgrade.test.cjs',
+  'tests/policy-shell-pinning.test.cjs',
+  'tests/release-backmerge-invariants.test.cjs',
+  'tests/release-coverage-scope.test.cjs',
+  'tests/release-finalize-notes-5922.test.cjs',
+  'tests/release-finalize-syncs-next-version.test.cjs',
+  'tests/release-hotfix-empty-cherry-pick.test.cjs',
+  'tests/release-notes-real-os-5922.test.cjs',
+  'tests/release-shard-lane-sharding.test.cjs',
+  'tests/release-tarball-smoke-workflow.test.cjs',
+  'tests/require-issue-link-policy.test.cjs',
+  'tests/reviewed-or-maintainer-workflow.test.cjs',
+  'tests/security-scan.security.test.cjs',
+  'tests/self-test-report-workflow.test.cjs',
+  'tests/workflow-token-permissions.test.cjs',
+];
+
 // Workflows that gate merges, ship the product, or run security/cross-platform
-// suites. Kept as a registry of gating workflows (parity-checked against the
-// real filenames by tests/ci-pr-mergeability.test.cjs). Since #6075 a change to
-// any of them is CI YAML and, alone, runs only the workflow-lint tests.
+// suites. Kept as a registry of gating workflows. Enforced by the test
+// 'every protected workflow name refers to a real file' in
+// tests/ci-pr-mergeability.test.cjs (existence parity) and, at module load, by
+// missingProtectedWorkflows() below. Since #6075 a change to any of them is CI
+// YAML and, alone, runs only the workflow-lint and workflow-contract tests.
 const PROTECTED_WORKFLOWS = new Set([
   'test.yml',
   'install-smoke.yml',
@@ -60,6 +97,7 @@ const RULES = [
     tests: [
       ...WORKFLOW_LINT_TESTS,
       'tests/policy-lint-shallow-checkout.test.cjs',
+      ...WORKFLOW_CONTRACT_TESTS,
     ],
   },
   {
