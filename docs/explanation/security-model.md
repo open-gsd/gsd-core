@@ -320,8 +320,9 @@ dispatch, for every workstream an `init --ws` of the same session recorded
 selects; a model that matches any of them passes. The check allows where it cannot
 establish the workstream `init` used: a session whose record holds an entry older
 than 12 hours, and, where workstreams exist, a dispatch with no session id.
-Each `init` removes this project's record files whose newest entry is older
-than 7 days.
+Each `init` where the guard applies removes this project's record files
+that hold no readable entry from the last 7 days, an empty, unreadable or
+oversized file included.
 The legitimate-escalation record
 `.gsd/model-escalation-<agent>.json` is unauthenticated, so any
 orchestrator that passes a model of the same tier family within its

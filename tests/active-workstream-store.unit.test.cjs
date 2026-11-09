@@ -1557,7 +1557,7 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     clearSessionEnv();
   });
   afterEach(() => {
-    for (const key of ['init-ws-s1', 'init-ws-s2', 'init-ws-a_b', 'claude-code-session-id-x']) {
+    for (const key of [`${PREFIX}s1`, `${PREFIX}s2`, `${PREFIX}a_b`, 'claude-code-session-id-x']) {
       createSessionScopedPointerAdapter(base, key).clear();
     }
     restoreSessionEnv(saved);
@@ -1567,7 +1567,7 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
   test('a record for a session reads back for that session only, as "<name> <ms>", and returns true', () => {
     assert.equal(recordInitWorkstream(base, 's1', 'alpha', T), true);
     assert.deepEqual(peekInitWorkstream(base, 's1', T), ['alpha']);
-    assert.equal(raw('init-ws-s1'), `alpha ${T}`);
+    assert.equal(raw(`${PREFIX}s1`), `alpha ${T}`);
     assert.equal(peekInitWorkstream(base, 's2', T), null);
   });
 
@@ -1616,7 +1616,7 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     recordInitWorkstream(base, 's1', 'alpha', T);
     recordInitWorkstream(base, 's1', 'beta', T + 1);
     assert.deepEqual(peekInitWorkstream(base, 's1', T + 2), ['alpha', 'beta']);
-    assert.equal(raw('init-ws-s1'), `alpha ${T}\nbeta ${T + 1}`);
+    assert.equal(raw(`${PREFIX}s1`), `alpha ${T}\nbeta ${T + 1}`);
     recordInitWorkstream(base, 's1', 'alpha', T + 3);
     assert.deepEqual(peekInitWorkstream(base, 's1', T + 4), ['beta', 'alpha'], 'a repeated name moves to the newest slot');
   });
@@ -1630,16 +1630,16 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
 
   test('a record keeps an expired entry (the lapse stays visible) and drops it at the prune window: P-1, P, P+1', () => {
     for (const [delta, kept] of [[-1, true], [0, false], [1, false]]) {
-      createSessionScopedPointerAdapter(base, 'init-ws-s1').clear();
+      createSessionScopedPointerAdapter(base, `${PREFIX}s1`).clear();
       recordInitWorkstream(base, 's1', 'alpha', T);
       recordInitWorkstream(base, 's1', 'beta', T + P + delta);
-      assert.equal(raw('init-ws-s1'), kept ? `alpha ${T}\nbeta ${T + P + delta}` : `beta ${T + P + delta}`, `age ${P + delta}`);
+      assert.equal(raw(`${PREFIX}s1`), kept ? `alpha ${T}\nbeta ${T + P + delta}` : `beta ${T + P + delta}`, `age ${P + delta}`);
     }
   });
 
   test('a carry keeps the newest 8 entries: 7, 8 and 9 records', () => {
     for (const n of [7, 8, 9]) {
-      createSessionScopedPointerAdapter(base, 'init-ws-s1').clear();
+      createSessionScopedPointerAdapter(base, `${PREFIX}s1`).clear();
       for (let i = 0; i < n; i++) recordInitWorkstream(base, 's1', `w${i}`, T + i);
       const all = Array.from({ length: n }, (_, i) => `w${i}`);
       assert.deepEqual(peekInitWorkstream(base, 's1', T + n), all.slice(-E), `${n} records`);
@@ -1696,13 +1696,13 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     const fc = require('fast-check');
     const names = Array.from({ length: E + 4 }, (_, i) => `${i}`.padEnd(i % 2 ? N : 3, 'w')); // more names than E, long and short
     fc.assert(fc.property(fc.array(fc.constantFrom(...names), { minLength: 1, maxLength: 24 }), (seq) => {
-      createSessionScopedPointerAdapter(base, 'init-ws-s1').clear();
+      createSessionScopedPointerAdapter(base, `${PREFIX}s1`).clear();
       seq.forEach((name, i) => recordInitWorkstream(base, 's1', name, T + i));
       const got = peekInitWorkstream(base, 's1', T + seq.length);
       const lastOrder = [...new Set([...seq].reverse())].reverse(); // distinct names by last occurrence, oldest first
       const suffix = lastOrder.slice(lastOrder.length - got.length);
       return got.length === Math.min(E, lastOrder.length) && new Set(got).size === got.length && got.at(-1) === seq.at(-1) &&
-        got.every((n, i) => n === suffix[i]) && Buffer.byteLength(raw('init-ws-s1'), 'utf-8') + 1 <= B;
+        got.every((n, i) => n === suffix[i]) && Buffer.byteLength(raw(`${PREFIX}s1`), 'utf-8') + 1 <= B;
     }), { numRuns: 60 });
   });
 
@@ -1716,9 +1716,9 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     recordInitWorkstream(base, 's1', 'alpha', T);
     createSessionScopedPointerAdapter(base, 'claude-code-session-id-x').write('beta');
     recordInitWorkstream(base, 's2', 'gamma', T + P - 1);
-    assert.equal(raw('init-ws-s1'), `alpha ${T}`, 'a fresh carry is kept');
+    assert.equal(raw(`${PREFIX}s1`), `alpha ${T}`, 'a fresh carry is kept');
     recordInitWorkstream(base, 's2', 'gamma', T + P);
-    assert.equal(raw('init-ws-s1'), null, 'an expired carry is pruned');
+    assert.equal(raw(`${PREFIX}s1`), null, 'an expired carry is pruned');
     assert.equal(raw('claude-code-session-id-x'), 'beta', 'a session pointer is not a carry');
     assert.deepEqual(peekInitWorkstream(base, 's2', T + P), ['gamma']);
   });
@@ -1735,11 +1735,11 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
 
   test('a stray directory named like a carry cannot turn a recorded carry into "not recorded"', (t) => {
     const session = path.basename(base); // unique to this test, so its carry file names one session directory only
-    t.after(() => createSessionScopedPointerAdapter(base, `init-ws-${session}`).clear());
+    t.after(() => createSessionScopedPointerAdapter(base, `${PREFIX}${session}`).clear());
     recordInitWorkstream(base, session, 'alpha', T);
     const sessions = path.join(os.tmpdir(), 'gsd-workstream-sessions');
-    const dir = fs.readdirSync(sessions).map((d) => path.join(sessions, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${session}`)));
-    const stray = path.join(dir, 'init-ws-x');
+    const dir = fs.readdirSync(sessions).map((d) => path.join(sessions, d)).find((d) => fs.existsSync(path.join(d, `${PREFIX}${session}`)));
+    const stray = path.join(dir, `${PREFIX}x`);
     fs.mkdirSync(stray);
     t.after(() => cleanup(stray));
     assert.equal(recordInitWorkstream(base, session, 'beta', T + P), true);
@@ -1751,17 +1751,17 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     const dir = carryDir(t, session);
     const strays = [];
     for (let i = 0; i < 8; i++) {
-      const stray = path.join(dir, `init-ws-0stray${i}`);
+      const stray = path.join(dir, `${PREFIX}0stray${i}`);
       fs.mkdirSync(stray);
       strays.push(stray);
-      createSessionScopedPointerAdapter(base, `init-ws-old${i}`).write(`alpha ${T}`);
+      createSessionScopedPointerAdapter(base, `${PREFIX}old${i}`).write(`alpha ${T}`);
     }
     t.after(() => {
       strays.forEach((s) => cleanup(s));
-      for (let i = 0; i < 8; i++) createSessionScopedPointerAdapter(base, `init-ws-old${i}`).clear();
+      for (let i = 0; i < 8; i++) createSessionScopedPointerAdapter(base, `${PREFIX}old${i}`).clear();
     });
     assert.equal(recordInitWorkstream(base, session, 'beta', T + P), true);
-    for (let i = 0; i < 8; i++) assert.equal(raw(`init-ws-old${i}`), null, `old${i} is pruned`);
+    for (let i = 0; i < 8; i++) assert.equal(raw(`${PREFIX}old${i}`), null, `old${i} is pruned`);
   });
 
   test('surrounding whitespace in the carry file parses to the same name and write time', (t) => {
@@ -1843,26 +1843,26 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
   test('pruning an entry that vanished after the listing does not throw, still prunes later entries and removes with force', (t) => {
     const session = path.basename(base);
     const dir = carryDir(t, session);
-    createSessionScopedPointerAdapter(base, 'init-ws-zold').write(`alpha ${T}`);
-    t.after(() => createSessionScopedPointerAdapter(base, 'init-ws-zold').clear());
+    createSessionScopedPointerAdapter(base, `${PREFIX}zold`).write(`alpha ${T}`);
+    t.after(() => createSessionScopedPointerAdapter(base, `${PREFIX}zold`).clear());
     const realList = fs.readdirSync;
     const rm = t.mock.method(fs, 'rmSync');
     fs.readdirSync = (d, ...rest) => {
       const names = realList(d, ...rest);
-      return d === dir ? ['init-ws-0phantom', ...names] : names;
+      return d === dir ? [`${PREFIX}0phantom`, ...names] : names;
     };
     t.after(() => { fs.readdirSync = realList; });
     assert.equal(recordInitWorkstream(base, session, 'beta', T + P), true);
-    const forced = rm.mock.calls.filter((c) => path.basename(c.arguments[0]) === 'init-ws-0phantom').map((c) => c.arguments[1]?.force);
+    const forced = rm.mock.calls.filter((c) => path.basename(c.arguments[0]) === `${PREFIX}0phantom`).map((c) => c.arguments[1]?.force);
     assert.deepEqual(forced, [true], 'the vanished entry is removed with force');
-    assert.equal(raw('init-ws-zold'), null, 'a later expired carry is still pruned');
+    assert.equal(raw(`${PREFIX}zold`), null, 'a later expired carry is still pruned');
   });
 
   test('a FIFO named like a carry never blocks a read or a record', (t) => {
     const session = path.basename(base);
     const dir = carryDir(t, session);
     const fifoSession = `${session}-fifo`;
-    const fifo = path.join(dir, `init-ws-${fifoSession}`);
+    const fifo = path.join(dir, `${PREFIX}${fifoSession}`);
     const made = runHook(fifo, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS });
     if (made.exitCode !== 0) return t.skip('mkfifo is not available');
     t.after(() => cleanup(fifo));
