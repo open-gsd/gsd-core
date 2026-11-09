@@ -1701,9 +1701,9 @@ describe('#6029: config-get emits --default as the JSON value it spells', () => 
   });
 
   test('secret --default never leaks plaintext, on either output mode', () => {
-    const secret = 'sk-plaintext-should-not-leak';
+    const plaintext = 'sk-plaintext-should-not-leak';
     for (const raw of [true, false]) {
-      const out = runConfigGet(tmp, 'brave_search', { raw, def: secret });
+      const out = runConfigGet(tmp, 'brave_search', { raw, def: plaintext });
       assert.equal(raw ? out : JSON.parse(out), '****leak', `raw=${raw}`);
     }
   });
