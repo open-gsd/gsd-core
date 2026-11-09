@@ -620,10 +620,10 @@ function resolvePhaseContext(
         escapes = !realPhases || !realDir || path.dirname(realDir) !== realPhases;
       } catch { escapes = true; }
       // A supplied --phase-dir must name the same directory the token resolved
-      // to (real-home-guard's sameDirectoryByRealpath: dev+ino, so case/normalization is
+      // to (real-home-guard's sameDirectory: dev+ino, so case/normalization is
       // the filesystem's call). It only gates; the emitted phaseDir is always
       // the locator's value.
-      const sameDir = (): boolean => realHomeGuard.sameDirectoryByRealpath(path.resolve(cwd, phaseDirArg as string), resolvedDir);
+      const sameDir = (): boolean => realHomeGuard.sameDirectory(path.resolve(cwd, phaseDirArg as string), resolvedDir);
       if (escapes) {
         drop = PHASE_DROP.ESCAPES_ROOT;
         phaseWarnings.push(

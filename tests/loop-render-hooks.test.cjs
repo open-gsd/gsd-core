@@ -2281,11 +2281,10 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     const dir = makePhaseProject('05-widgets', '07-other');
     t.after(() => cleanup(dir));
     const realStat = fs.statSync;
-    fs.statSync = (p, ...rest) => {
+    t.mock.method(fs, 'statSync', (p, ...rest) => {
       const st = realStat(p, ...rest);
       return st && st.isDirectory() ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { ino: rest[0] && rest[0].bigint ? 0n : 0 }) : st;
-    };
-    t.after(() => { fs.statSync = realStat; });
+    });
     const result = resolveActiveHooksForPoint(dir, 'plan:pre', { phase: '05', phaseDir: '.planning/phases/07-other' });
     assert.strictEqual(result.context, undefined);
     assert.strictEqual(result.phaseDrop, PHASE_DROP.DIR_MISMATCH);

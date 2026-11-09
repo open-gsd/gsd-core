@@ -114,8 +114,9 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * job is refusing writes into the real home. `{ bigint: true }` reports the
  * true 64-bit values with no precision loss.
  *
- * Fails CLOSED, and "closed" here means returning FALSE. The sole caller is the
- * passwd-less marker branch, which READS a true as permission to proceed:
+ * Fails CLOSED, and "closed" here means returning FALSE. Both callers read a true as
+ * permission to proceed: the passwd-less marker branch, and loop-resolver's `--phase-dir`
+ * cross-check (#4030, "this input names that directory"). The marker branch:
  *
  *     if (marker && sameDirectory(marker, osMod.homedir())) return;   // allows
  *
@@ -132,21 +133,14 @@ function sameDirectory(a: string, b: string): boolean {
   if (path.resolve(a) === path.resolve(b)) return true;
   const ia = identify(a);
   const ib = identify(b);
-  if (ia.kind === 'ok' && ib.kind === 'ok') return ia.dev === ib.dev && ia.ino === ib.ino;
+  if (ia.kind === 'ok' && ib.kind === 'ok') {
+    if (ia.dev !== ib.dev || ia.ino !== ib.ino) return false;
+    if (ia.ino !== 0n) return true;
+    // FAT32, exFAT and some SMB shares report ino 0 for every entry: no identity, so the native
+    // realpaths must also match. A realpath that throws answers NO.
+    try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); } catch { return false; }
+  }
   return false;
-}
-
-/**
- * `sameDirectory` for a caller that reads a true as "this input names that directory"
- * (loop-resolver's `--phase-dir` cross-check, #4030). A filesystem that reports `ino` 0
- * for every entry (FAT32, exFAT, some SMB shares) gives no identity, so there the native
- * realpaths must also match. A realpath that throws answers NO.
- */
-function sameDirectoryByRealpath(a: string, b: string): boolean {
-  if (!sameDirectory(a, b)) return false;
-  const ia = identify(a);
-  if (ia.kind !== 'ok' || ia.ino !== 0n) return true;
-  try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); } catch { return false; }
 }
 
 type Identity =
@@ -467,4 +461,4 @@ function isInside(child: string, rootId: { dev: bigint; ino: bigint }): boolean 
   }
 }
 
-export = { assertTestHomeSandboxed, isTestHomeGuardRefusal, sameDirectoryByRealpath, SANDBOX_MARKER };
+export = { assertTestHomeSandboxed, isTestHomeGuardRefusal, sameDirectory, SANDBOX_MARKER };

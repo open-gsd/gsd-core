@@ -126,8 +126,9 @@ diverges from it whenever one phase plans/verifies while another executes.
   the same bare-tolerant spelling `guardedFindPhase` accepts as input and
   denotes the same phase this ADR's `context.phase` derives — not literally
   identical (`5` vs the normalized `05`), but the same phase either way — so
-  §5.6's `ref.skill` and `ref.agent` lines are unchanged. Its `ref.command` line takes
-  `context.phase`, with the fallback owned by the phase-argument table in `loop-hook-dispatch.md`. Formalizing `context` as a resolver-derived,
+  §5.6's `ref.skill` line is unchanged. Its `ref.agent` line takes the phase fields from
+  the envelope by the phase-argument table in `loop-hook-dispatch.md`, and its `ref.command` line takes
+  `context.phase`, with the fallback owned by the same table. Formalizing `context` as a resolver-derived,
   validated envelope field closes the gap with one seam that every point can
   rely on, instead of requiring each workflow to hand-roll its own
   phase-filling prose the way `plan-phase.md` happened to.
