@@ -114,7 +114,7 @@ A bounded child that runs to its timeout used to fail as `null !== 0`. Every spa
 slow or killed spawn leaves a line in the uploaded `test-timings-<os>-job<n>` artifact.
 
 1. Open the artifact's `.jsonl` and find lines with `"type":"seam:spawn-stall"`. A spawn is
-   recorded when it took 2 s or longer (`GSD_SEAM_SLOW_SPAWN_MS` changes the bound) or was killed.
+   recorded when it took 2 s or longer (`GSD_SEAM_SLOW_SPAWN_MS` changes the bound), was killed, or used at least half of its own timeout (a near-miss). Each record carries `boundFraction` (duration divided by timeout) and `nearMiss`.
 2. Read `file` (the test file), `command` and `argv` (first three arguments), `outcome`
    (`timed_out`, `killed`, `exited`), `signal`, `durationMs`, `timeoutMs`, `pid`, and the UTC
    `startedAt`/`endedAt`.
