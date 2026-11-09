@@ -15,6 +15,7 @@ module.exports = {
   "tests/adr-parser.unit.test.cjs",
   "tests/agent-install-check.test.cjs",
   "tests/agent-install-validation.test.cjs",
+  "tests/agent-query-contract.test.cjs",
   "tests/agent-skills.test.cjs",
   "tests/api-coverage.test.cjs",
   "tests/args-terminator-nonce.test.cjs",
