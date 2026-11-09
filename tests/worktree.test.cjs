@@ -540,7 +540,7 @@ describe('bug-2431: worktree teardown must surface locked-worktree errors', () =
   });
 
   test('execute-phase.md: no silent worktree remove pattern', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf-8');
     const silentRemovePattern = /git worktree remove[^\n]*--force\s+2>\/dev\/null\s*\|\|\s*true/;
     assert.ok(!silentRemovePattern.test(content), 'execute-phase.md: must not contain silent git worktree remove pattern');
   });
@@ -559,7 +559,7 @@ describe('bug-2431: worktree teardown must surface locked-worktree errors', () =
   });
 
   test('execute-phase.md: has lock-aware detection block', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf-8');
     assert.ok(
       content.includes('.git/worktrees/') && content.includes('locked'),
       'execute-phase.md: must include lock-aware detection'
@@ -579,7 +579,7 @@ describe('bug-2431: worktree teardown must surface locked-worktree errors', () =
   });
 
   test('execute-phase.md: has git worktree unlock retry', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf-8');
     assert.ok(content.includes('git worktree unlock'), 'execute-phase.md: must include "git worktree unlock" retry attempt');
   });
 
@@ -597,7 +597,7 @@ describe('bug-2431: worktree teardown must surface locked-worktree errors', () =
   });
 
   test('execute-phase.md: has user-visible warning on residual worktree', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf-8');
     assert.ok(
       content.includes('Residual worktree') || content.includes('manual cleanup'),
       'execute-phase.md: must include user-visible warning when worktree removal fails'
