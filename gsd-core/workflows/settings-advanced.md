@@ -450,12 +450,14 @@ If "Other (Group B or custom)" is selected, prompt the user to enter the runtime
 If the selected runtime differs from the stored `runtime` key, update `runtime` via
 `gsd_run query config-set runtime <value>` before proceeding to Step C.
 
-**Codex model choices:** If the selected runtime is `codex`, read `codexModelChoices` from
-`$(dirname "$GSD_TOOLS")/shared/model-catalog.json`. Display each entry's `name`, `description`,
+**Codex model choices:** If the selected runtime is `codex`, run
+`gsd_run query codex-model-choices` and read the `choices` array in its JSON output. The Model
+Catalog Module supplies this array from `codexModelChoices`. Display each entry's `name`, `description`,
 and `id` in a numbered list. These catalog entries are candidates, not a guarantee of account
 access. Ask the user to confirm the model appears in the current Codex `/model` selector before
-offering it as available. If the catalog cannot be read, keep the existing manual-ID path and
-do not invent display names or claim availability.
+offering it as available. If the query fails or returns no choices, use the same numbered text
+prompt with only Keep current, Clear override, and Enter model ID. Do not invent display names
+or claim availability.
 
 For Codex, do not use the `AskUserQuestion` block below. For each tier, use one numbered text
 prompt containing Keep current, Clear override, the account-confirmed catalog choices, and Enter
