@@ -240,7 +240,7 @@ function lineIsReadOnly(command) {
 function isExemptSecret(tok) {
   if (exemption.root === null) return false;
   if (exemption.bashLine !== null) {
-    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
+    if (exemption.bashReadOnly === null) exemption.bashReadOnly = underPlainReading(() => lineIsReadOnly(exemption.bashLine));
     if (exemption.bashReadOnly !== true) return false;
   }
   try {
@@ -349,6 +349,23 @@ let furtherReading = false;
 // word, so it is kept out of the pass whose denials it could otherwise lose.
 let subscriptJoins = false;
 let joinCandidate = false;
+
+// Runs `read` with this file's further-reading state off, then restores it.
+// #4432 decides once per command whether every command on the line is a
+// read-only reader (`exemption.bashReadOnly`), on the first secret-named token
+// it meets. When that token is first met in the further reading, the decision
+// must still be the plain reading's, or this reading could grant an exemption
+// the plain one withholds.
+function underPlainReading(read) {
+  const saved = [furtherReading, subscriptJoins, joinCandidate];
+  furtherReading = false;
+  subscriptJoins = false;
+  try {
+    return read();
+  } finally {
+    [furtherReading, subscriptJoins, joinCandidate] = saved;
+  }
+}
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -1069,7 +1086,10 @@ function tokenize(str) {
         sep('(');
         i++;
         let close = dparen.closes.get(i);
-        if (close === undefined) close = dparen.budget > 0 ? dparenClose(str, i, dparen) : str.length;
+        if (close === undefined && dparen.budget > 0) {
+          close = unlessTooDeep(() => dparenClose(str, i, dparen), () => { dparen.budget = 0; return str.length; });
+        }
+        if (close === undefined) close = str.length;
         if (str[close + 1] === ')') atCommandStart = false;
       }
       continue;
@@ -1087,7 +1107,7 @@ function tokenize(str) {
       if (!subscriptJoins) {
         joinCandidate = true;
       } else {
-        const close = subscriptClose(str, i);
+        const close = unlessTooDeep(() => subscriptClose(str, i), () => -1);
         if (close === -1) {
           subscriptsOpen = false;
         } else {
@@ -1184,8 +1204,25 @@ function isRawNameBefore(str, i, len) {
 // of `((x "${"(` cost a scan per `((`, 139 s at 990 KB. So the scans of one
 // tokenize call share `dparen.budget`, DPAREN_WALK_PER_CHAR walks of the string
 // (plus DPAREN_WALK_BASE), each charged the distance it walked. Once it is spent
-// a `((` is read as two subshells, the reading that leaves the next word at a
-// command's start: the further reading then looks at more, never less.
+// a `((` is read as two subshells, which leaves the next word at a command's
+// start. Only a walk that never closes spends it, and in every shape measured
+// such a walk had already met a quote bash reports unterminated, so bash runs
+// nothing after it.
+// The further reading's own scanners (dparenClose, subscriptClose) can reach
+// next's findParenClose inside a `${…}`, which the plain tokenizer skips whole,
+// and findParenClose recurses once per `"$(`. So a run of them there overflows
+// the stack in this reading alone, and the throw would end it and lose the
+// denials it makes ahead of the run. An overflow reads the span as unclosed
+// instead (`unclosed()`), and the scan goes on.
+function unlessTooDeep(read, unclosed) {
+  try {
+    return read();
+  } catch (e) {
+    if (e instanceof RangeError) return unclosed();
+    throw e;
+  }
+}
+
 const DPAREN_WALK_PER_CHAR = 4;
 const DPAREN_WALK_BASE = 4096;
 function dparenClose(str, i, dparen) {
