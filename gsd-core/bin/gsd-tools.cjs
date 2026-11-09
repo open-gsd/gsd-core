@@ -5854,7 +5854,13 @@ if (require.main === module) {
 // synthetic registry + requireModule injections.
 // ADR-1244 Phase 5: export dispatchOverlayCapabilityCommand + defaultRequireFromInstallRoot for
 // the third-party overlay dispatch + install-root confinement tests.
+/** Top-level host command names (fresh array each call). */
+function hostCommandNames() {
+  return Object.keys(HOST_COMMAND_ROUTERS);
+}
+
 module.exports = {
+  hostCommandNames,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,
   defaultRequireFromInstallRoot,
