@@ -250,7 +250,9 @@
         "authority": "value",
         "status": "value"
       },
-      "required": [],
+      "required": [
+        "status"
+      ],
       "workstreamScoped": false
     },
     {
@@ -551,7 +553,14 @@
         "roadmap-file": "value",
         "safety-margin-pct": "value"
       },
-      "required": [],
+      "required": [
+        "budget",
+        "instructions-file",
+        "output-metadata",
+        "output-prompt",
+        "plan-file",
+        "roadmap-file"
+      ],
       "workstreamScoped": false
     },
     {
@@ -794,7 +803,9 @@
         "selected": "value",
         "slug": "value"
       },
-      "required": [],
+      "required": [
+        "slug"
+      ],
       "workstreamScoped": false
     },
     {

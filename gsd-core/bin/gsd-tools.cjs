@@ -2002,7 +2002,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     const slug = parsedFlags.slug;
-    if (!slug) { error('review-lane invoke requires --slug'); return; }
     const entry = plans.find((p) => p.slug === slug);
     if (!entry || !entry.ok) {
       output({ slug, ok: false, reason: entry ? entry.reason : 'malformed_lane', detail: entry ? entry.detail : 'unknown lane' }, raw);
@@ -4028,27 +4027,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const requirementsFile = parsed['requirements-file'];
 
           // ── Validate required args ─────────────────────────────────────────
-          if (!budgetStr) {
-            throw new ExitError(1, 'Error: --budget <N> is required');
-          }
+          // Presence of the required flags is enforced by the spec's requiredFlags.
           const budget = parseInt(budgetStr, 10);
           if (!Number.isFinite(budget) || budget <= 0) {
             throw new ExitError(1, 'Error: --budget must be a positive integer');
-          }
-          if (!instructionsFile) {
-            throw new ExitError(1, 'Error: --instructions-file <path> is required');
-          }
-          if (!roadmapFile) {
-            throw new ExitError(1, 'Error: --roadmap-file <path> is required');
-          }
-          if (planFiles.length === 0) {
-            throw new ExitError(1, 'Error: at least one --plan-file <path> is required');
-          }
-          if (!outputPromptFile) {
-            throw new ExitError(1, 'Error: --output-prompt <path> is required');
-          }
-          if (!outputMetadataFile) {
-            throw new ExitError(1, 'Error: --output-metadata <path> is required');
           }
 
           // ── Validate and read required files ──────────────────────────────
@@ -4393,10 +4375,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
           if (subcommand === 'severity') {
             const statusVal = parsed.status;
-            if (!statusVal) {
-              error('drift-guard severity requires --status <VERIFIED|MISSING|AMBIGUOUS|UNCHECKABLE>', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-              return;
-            }
             const authorityForClassify = parsed.authority || effectiveAuthority;
             const result = classifyDriftSeverity({ status: statusVal, authority: authorityForClassify });
             output(result, raw);

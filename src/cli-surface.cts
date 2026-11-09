@@ -253,7 +253,15 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
       'safety-margin-pct',
     ],
     repeatableFlags: ['plan-file'],
-    // No requiredFlags: the handler refuses a missing flag with an untyped ExitError (no usage reason) today.
+    // An empty --plan-file list counts as missing; --budget's value validation stays in the handler.
+    requiredFlags: [
+      'plan-file',
+      'budget',
+      'instructions-file',
+      'roadmap-file',
+      'output-prompt',
+      'output-metadata',
+    ],
   },
 
   // ─── context / confidence / legitimacy / effort / stories / drift ──────────
@@ -295,10 +303,10 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'user-story.validate': { positionals: 2, valueFlags: ['story'] },
   'drift-guard.authority': { positionals: 2 },
   'drift-guard.phase-status': { positionals: 2, valueFlags: ['phase'] },
-  // --status stays a handler check: its absence exits with sdk_unknown_command today, not usage.
   'drift-guard.severity': {
     positionals: 2,
     valueFlags: ['authority', 'status'],
+    requiredFlags: ['status'],
   },
   'skills-root': { positionals: 2 },
 
@@ -320,7 +328,7 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     positionals: 2,
     valueFlags: [...RUN_LANE_COMMON, 'agent', 'as', 'model', 'prompt-file', 'slug'],
     booleanFlags: ['explicit'],
-    // No requiredFlags: a missing --slug exits with reason `unknown` today, and the seam would say `usage`.
+    requiredFlags: ['slug'],
   },
   'review-lane.plan': { positionals: 2, valueFlags: RUN_LANE_COMMON },
   'review-lane.sections': { positionals: 2, valueFlags: RUN_LANE_COMMON },
