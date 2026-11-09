@@ -46,9 +46,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: [Number of plans, e.g., "3 plans" or "TBD"]
 
 Plans:
-- [ ] {plan_display}: [Brief description of first plan]
-- [ ] {plan_display}: [Brief description of second plan]
-- [ ] {plan_display}: [Brief description of third plan]
+- [ ] {padded_phase}-{plan_padded}: [Brief description of first plan]
+- [ ] {padded_phase}-{plan_padded}: [Brief description of second plan]
+- [ ] {padded_phase}-{plan_padded}: [Brief description of third plan]
 
 ### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
@@ -60,8 +60,8 @@ Plans:
 **Plans**: [Number of plans]
 
 Plans:
-- [ ] {plan_display}: [Brief description]
-- [ ] {plan_display}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
 ### {phase_display}: Critical Fix (INSERTED)
 **Goal**: [Urgent work inserted between phases]
@@ -71,7 +71,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] {plan_display}: [Description]
+- [ ] {padded_phase}-{plan_padded}: [Description]
 
 ### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
@@ -84,8 +84,8 @@ Plans:
 **Plans**: [Number of plans]
 
 Plans:
-- [ ] {plan_display}: [Brief description]
-- [ ] {plan_display}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
 ### {phase_display}: [Name]
 **Goal**: [What this phase delivers]
@@ -97,7 +97,7 @@ Plans:
 **Plans**: [Number of plans]
 
 Plans:
-- [ ] {plan_display}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
 ## Progress
 
@@ -165,9 +165,9 @@ After completing first milestone, reorganize with milestone groupings:
 **Plans**: 3 plans
 
 Plans:
-- [x] {plan_display}: [Brief description]
-- [x] {plan_display}: [Brief description]
-- [x] {plan_display}: [Brief description]
+- [x] {padded_phase}-{plan_padded}: [Brief description]
+- [x] {padded_phase}-{plan_padded}: [Brief description]
+- [x] {padded_phase}-{plan_padded}: [Brief description]
 
 [... remaining v1.0 phases ...]
 
@@ -183,8 +183,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] {plan_display}: [Brief description]
-- [ ] {plan_display}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
+- [ ] {padded_phase}-{plan_padded}: [Brief description]
 
 [... remaining v1.1 phases ...]
 
