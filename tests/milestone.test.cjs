@@ -2362,9 +2362,9 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   test('behavioral: parity between executor resolver and the orchestrator plan identity (#4944)', (t) => {
     const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     const workflow = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md'), 'utf-8');
-    const ident = workflow.match(/grep -oE '([^']+)'/);
+    const ident = workflow.match(/grep -oE '([^']{1,200})'/);
     assert.ok(ident, 'execute-plan.md must publish the plan-identity expression');
-    const tokenRe = new RegExp(ident[1]);
+    const tokenRe = new RegExp(ident[1]); // allow-adhoc-regex-escape: the pattern is execute-plan.md's published grep -oE expression, applied as a regex
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
     // Nested plans/PLAN-NN.md has no phase-plan token for this expression.
@@ -2947,7 +2947,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     });
     fc.assert(fc.property(gen, ({ major, letter, tail, plan }) => {
       const phaseDir = path.join(tmpDir, '.planning', 'phases', 'dec-prop');
-      fs.rmSync(phaseDir, { recursive: true, force: true });
+      cleanup(phaseDir);
       fs.mkdirSync(phaseDir, { recursive: true });
       const paddedMajor = String(major).padStart(2, '0');
       const paddedPlan = String(plan).padStart(2, '0');
