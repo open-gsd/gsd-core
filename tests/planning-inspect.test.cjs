@@ -987,6 +987,45 @@ describe('planning inspect — phase completion and plan liveness', () => {
     ], 'the oracle itself must show both halts and both propagation paths, or agreement proves nothing');
     assert.strictEqual(phase.halted_count, 2);
   });
+
+  test('haltedAndBlockedByAgreeWithPhasePlanIndexWhenPlanOrderDecidesATokenResolution', (t) => {
+    // #5823: `phase-plan-index` resolves short-form and canonical-id tokens
+    // over its SORTED plan list; root files come before `plans/` in scan order
+    // but after it in sorted order, so these fixtures disagree unless the
+    // reader sorts the same way.
+    const fixtures = [
+      {
+        files: [
+          ['x-01-PLAN.md', ['wave: 1']], ['x-01-SUMMARY.md', ['status: halted']],
+          ['plans/PLAN-01.md', ['wave: 1']], ['plans/SUMMARY-01.md', ['status: complete']],
+          ['x-02-PLAN.md', ['depends_on: ["01"]']],
+        ],
+        expected: [['plans/PLAN-01.md', false, []], ['x-01', true, []], ['x-02', false, []]],
+      },
+      {
+        files: [
+          ['z-01-01-PLAN.md', ['wave: 1']], ['z-01-01-SUMMARY.md', ['status: halted']],
+          ['plans/PLAN-01-01.md', ['wave: 1']],
+          ['01-02-PLAN.md', ['depends_on: [01-01]']],
+        ],
+        expected: [['01-02', false, ['z-01-01']], ['plans/PLAN-01-01.md', false, []], ['z-01-01', true, []]],
+      },
+    ];
+    for (const { files, expected } of fixtures) {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const phaseDir = declarePhase(tmpDir, '1', 'Foo');
+      for (const [name, fm] of files) {
+        writePlanDoc(phaseDir, name, fm, ['<objective>', 'Ship it', '</objective>', '<tasks></tasks>']);
+      }
+      const index = runGsdTools(['phase-plan-index', '1'], tmpDir);
+      assert.strictEqual(index.success, true, `phase-plan-index should succeed: ${index.error}`);
+      const indexed = JSON.parse(index.output).plans.map((p) => [p.id, p.halted, p.blocked_by]);
+      const byId = new Map(parseInspect(tmpDir).phases[0].plans.map((p) => [p.id, p]));
+      assert.deepStrictEqual(indexed.map(([id]) => [id, byId.get(id).halted, byId.get(id).blocked_by]), indexed);
+      assert.deepStrictEqual(indexed, expected, 'the oracle must show the order-dependent resolution, or agreement proves nothing');
+    }
+  });
 });
 
 // ─── 5. Never-infer boundary ──────────────────────────────────────────────────
