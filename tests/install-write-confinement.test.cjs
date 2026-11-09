@@ -3690,6 +3690,23 @@ describe('#3712 in-process home confinement', () => {
       );
     });
 
+    // FAT32, exFAT and some SMB shares report ino 0 for every entry, so dev+ino
+    // match for any two directories there; sameDirectory() must fall back to the
+    // native realpaths (#4030 reuses it for the --phase-dir cross-check).
+    test('sameDirectory: two different directories reporting ino 0 are not the same', (t) => {
+      const root = createTempDir('gsd-4030-ino0-');
+      t.after(() => cleanup(root));
+      const a = path.join(root, 'a');
+      const b = path.join(root, 'b');
+      fs.mkdirSync(a);
+      fs.mkdirSync(b);
+      assert.strictEqual(testHomeGuard.sameDirectory(a, path.join(root, 'a', '..', 'a')), true, 'positive control: same path');
+      const real = fs.statSync;
+      fs.statSync = (p, o) => Object.assign(Object.create(real(p, o)), { ino: 0n });
+      t.after(() => { fs.statSync = real; });
+      assert.strictEqual(testHomeGuard.sameDirectory(a, b), false, 'ino 0 on both is not evidence of identity');
+    });
+
     // Review of #3725, Major 2, raised as a question rather than a finding: on
     // Windows Node derives st_dev/st_ino from BY_HANDLE_FILE_INFORMATION, and the
     // uniqueness guarantees are weaker than POSIX. If dev collapsed to a per-volume

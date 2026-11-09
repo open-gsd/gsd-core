@@ -92,6 +92,7 @@ if [ "$GAPS_MODE" = "true" ]; then GAPS_EXEC_FLAG="--gaps-only"; fi
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" $GRAN_PARAM $PRD_PARAM $INGEST_PARAM $RESEARCH_PHASE_PARAM $REVIEWS_PARAM $CHUNKED_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
 AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
 AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
 AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
@@ -295,18 +296,7 @@ If "Run discuss-phase first":
 
 ## 4.5. Resolve AI-SPEC Artifact
 
-AI integration activation is owned by the `ai-integration` capability's `plan:pre` step hook. The plan-phase host only discovers existing artifacts here so the planner can consume them; it must not read the capability's config key directly.
-
-```bash
-AI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-AI-SPEC.md 2>/dev/null | head -1)
-AI_SPEC_PATH="${AI_SPEC_FILE}"
-FRAMEWORK_LINE=""
-if [ -n "$AI_SPEC_FILE" ]; then
-  FRAMEWORK_LINE=$(grep "Selected Framework:" "${AI_SPEC_FILE}" | head -1)
-fi
-```
-
-If `AI_SPEC_FILE` is non-empty, pass `AI_SPEC_PATH` and `FRAMEWORK_LINE` to the planner in step 8 so it can reference the AI design contract. If it is empty, the active `ai-integration` capability hook in step 5.6 handles any AI-system nudge or `/gsd:ai-integration-phase` dispatch.
+Read and execute `gsd-core/workflows/plan-phase/steps/ai-spec-artifact.md`; it sets `AI_SPEC_PATH` and `FRAMEWORK_LINE` for step 8.
 
 ## 4.6. Context Drift Pre-Check (drift plan:pre gate)
 
@@ -314,8 +304,14 @@ Capability-driven dispatch, same lazy-init pattern already used elsewhere in thi
 `PLAN_PRE_HOOKS_JSON`:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick phase_number)}
 if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
-  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 fi
 ```
 
@@ -411,9 +407,15 @@ fi
 ```
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 PHASE_DESC=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section)
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick phase_number)}
 if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
-  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+  PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 fi
 ```
 
@@ -479,7 +481,13 @@ test -f "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md" && echo "VALIDATION_CREATED
 > Capability-driven dispatch. Resolves active `plan:pre` hooks via the capability registry; the security hook's `when` condition is evaluated by the registry.
 
 ```bash
-PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick phase_number)}
+PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 **Contribution dispatch (#3606):** inject every `kind == "contribution"` fragment from `PLAN_PRE_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md, in array order, into the role each entry's `into` names — planner-targeted ones land in the prompt block below, orchestrator-targeted ones in your working context. The security specialization below is one such contribution, not a replacement for the generic dispatch.
@@ -511,7 +519,13 @@ Continue to step 5.6. Security config is passed to the planner in step 8.
 > **Config semantics (cutover fix):** `workflow.ui_phase` gates UI-SPEC *generation* (step); `workflow.ui_safety_gate` gates the *planning block* (gate). Both-on = identical to OLD §5.6. Intended change: `{ui_phase:true, ui_safety_gate:false}` now auto-generates in pipelines but does NOT block manual planning (each key controls exactly what its description says).
 
 ```bash
-PLAN_PRE_HOOKS_JSON=${PLAN_PRE_HOOKS_JSON:-$(gsd_run loop render-hooks plan:pre --raw)}
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick phase_number)}
+PLAN_PRE_HOOKS_JSON=${PLAN_PRE_HOOKS_JSON:-$(gsd_run loop render-hooks plan:pre --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})}
 HOOKS_JSON="$PLAN_PRE_HOOKS_JSON"
 ```
 
@@ -713,20 +727,7 @@ PATTERNS_PATH="${PHASE_DIR}/${PADDED_PHASE}-PATTERNS.md"
 
 ## 7.9. Regenerate API-SURFACE.md (intel gate)
 
-> Capability-driven dispatch. Resolves active `plan:pre` step hooks via the capability registry; the intel hook's `when: intel.enabled` condition is evaluated by the registry — no inline config-get needed.
-
-Read the active intel step hook from `PLAN_PRE_HOOKS_JSON` where `kind == "step"` and `capId == "intel"`.
-
-**If no active intel step hook exists:** `API_SURFACE_PATH` stays empty; skip to step 8. The step-8 planner entry for API Surface is omitted when `API_SURFACE_PATH` is empty.
-
-**If an active intel step hook exists:**
-```bash
-gsd_run intel api-surface
-API_SURFACE_PATH="$(dirname "$STATE_PATH")/intel/API-SURFACE.md"
-echo "✓ API surface regenerated: ${API_SURFACE_PATH}"  # injected into step 8 as HINT
-```
-
-Continue to step 8.
+Read and execute `gsd-core/workflows/plan-phase/steps/api-surface-regen.md`; it sets `API_SURFACE_PATH` for step 8 (empty when no intel step hook is active).
 
 ## 7.95. Spec-less Probe Fallback (gate)
 
@@ -1295,9 +1296,7 @@ Offer: 1) Force proceed, 2) Provide guidance and retry, 3) Abandon
 
 ## 12.5. Plan Bounce (Optional External Refinement)
 
-**Skip if:** `--skip-bounce`, `--gaps`, or bounce not activated (`--bounce` flag or `workflow.plan_bounce` config; `--skip-bounce` always wins). Requires `workflow.plan_bounce_script` set to a valid script path — warn and skip if bounce is activated with no script configured.
-
-For each `*-PLAN.md`: back it up to `*-PLAN.pre-bounce.md`, invoke `${BOUNCE_SCRIPT}` with the plan file and `workflow.plan_bounce_passes` (default 2), validate the result's YAML frontmatter integrity, and restore from backup on either broken frontmatter or a non-zero script exit. After all plans are bounced, re-run the plan checker (step 10) on the modified plans, restoring any that fail. Commit surviving bounced plans if at least one survived (`refactor(${padded_phase}): bounce plans through external refinement`), display a `{survived}/{total}` summary, and remove all `*-PLAN.pre-bounce.md` backups. Exact banner text, messages, and commands: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 12.5.
+If `--bounce` or `workflow.plan_bounce` is on and not `--skip-bounce`/`--gaps`: read and execute `gsd-core/workflows/plan-phase/steps/plan-bounce.md`.
 
 ## 13. Requirements Coverage Gate
 
@@ -1464,8 +1463,9 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw)
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick phase_number)}
+PLAN_POST_HOOKS_JSON=$(gsd_run loop render-hooks plan:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 PHASE_REQ_IDS=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick phase_req_ids 2>/dev/null)
 PHASE_REQ_IDS="${PHASE_REQ_IDS:-TBD}"
 ```

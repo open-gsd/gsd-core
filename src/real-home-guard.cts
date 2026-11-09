@@ -114,25 +114,33 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * job is refusing writes into the real home. `{ bigint: true }` reports the
  * true 64-bit values with no precision loss.
  *
- * Fails CLOSED, and "closed" here means returning FALSE. The sole caller is the
- * passwd-less marker branch, which READS a true as permission to proceed:
+ * Fails CLOSED, and "closed" here means returning FALSE. The passwd-less marker
+ * branch READS a true as permission to proceed:
  *
  *     if (marker && sameDirectory(marker, osMod.homedir())) return;   // allows
  *
- * So "cannot tell" must answer NO. An earlier revision returned true for the
+ * (The second caller, loop-resolver's `--phase-dir` cross-check, only lets a
+ * matching directory through.) So "cannot tell" must answer NO. An earlier revision returned true for the
  * unknown/unknown case (both stats failing with something other than
  * ENOENT/ENOTDIR — EACCES, EPERM, EIO) on the reasoning that "cannot tell" should
  * make the caller refuse; that reasoning was inverted with respect to this
  * caller, and it turned an unreadable-stat environment into an unconditional
  * bypass for anyone who set the marker to any value at all. Reported in review of
  * #3725. Only two things now answer yes: the same resolved pathname, or two
- * readable identities that match.
+ * readable identities that match. A filesystem that reports `ino` 0 for every
+ * entry (FAT32, exFAT, some SMB shares) gives no identity, so there the native
+ * realpaths must also match.
  */
 function sameDirectory(a: string, b: string): boolean {
   if (path.resolve(a) === path.resolve(b)) return true;
   const ia = identify(a);
   const ib = identify(b);
-  if (ia.kind === 'ok' && ib.kind === 'ok') return ia.dev === ib.dev && ia.ino === ib.ino;
+  if (ia.kind === 'ok' && ib.kind === 'ok') {
+    if (ia.dev !== ib.dev || ia.ino !== ib.ino) return false;
+    // FAT32, exFAT and some SMB shares report ino 0 for every entry, so there the realpaths decide.
+    if (ia.ino !== 0n) return true;
+    try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); } catch { return false; }
+  }
   return false;
 }
 
@@ -454,4 +462,4 @@ function isInside(child: string, rootId: { dev: bigint; ino: bigint }): boolean 
   }
 }
 
-export = { assertTestHomeSandboxed, isTestHomeGuardRefusal, SANDBOX_MARKER };
+export = { assertTestHomeSandboxed, isTestHomeGuardRefusal, sameDirectory, SANDBOX_MARKER };

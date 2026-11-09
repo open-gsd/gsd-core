@@ -42,8 +42,10 @@ For each remaining active entry where `kind == "step"` (exactly one of `ref.skil
 
   ```bash
   # shellcheck disable=SC2086 # the validated command is a family and subcommand: splitting it into two words is intended
-  gsd_run ${ref.command} --phase "${PHASE_NUMBER}" --raw
+  gsd_run ${ref.command} --phase "${context.phase}" --raw
   ```
+
+  The envelope has no `context`: pass `--phase "${PHASE_NUMBER}"` or no `--phase`, per the phase-argument table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md`.
 
 Wait for each result before the next hook. A step is advisory: on error record a warning naming the `capId` and continue, unless `onError == "halt"` — then surface the error and stop the plan-phase workflow.
 
