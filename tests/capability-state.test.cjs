@@ -18,7 +18,11 @@ const fc = require('fast-check');
 
 const { cleanup, runGsdTools, installSpawnEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const {
+  PROBE_TIMEOUT_MS,
+  INSTALL_TIMEOUT_MS,
+  GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+} = require('./helpers/timeouts.cjs');
 
 const {
   resolveCapabilityState,
@@ -785,11 +789,17 @@ const { spawnSync } = require('node:child_process');
 
 const gsdToolsPath = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
+// This helper's `capability state` spawns run at
+// GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, not PROBE_TIMEOUT_MS (#5955): a block's
+// first spawn on a cold windows-latest runner was killed at the 15000ms probe
+// bound with no output, while the spawns after it took 0.5-2.4s. The bound is
+// a hang backstop, and the first-spawn latency stays visible in the test's
+// duration.
 function runCapabilityState(cwd, configDir) {
   const result = spawnSync(
     process.execPath,
     [gsdToolsPath, 'capability', 'state', '--config-dir', configDir, '--raw', '--cwd', cwd],
-    { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+    { encoding: 'utf8', timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS },
   );
   return result;
 }
@@ -1571,7 +1581,9 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--cwd', installedProjectDir,
           '--raw',
         ],
-        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+        // #5955: killed at the 20000ms bound on windows-latest, with its full
+        // JSON already written. Same backstop as runCapabilityState above.
+        { encoding: 'utf8', timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS },
       );
       assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
