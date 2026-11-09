@@ -456,7 +456,7 @@ describe('gsd-tools host routers, batch 2: valid argv forms keep their behavior'
           runCommand(['git', 'config', 'user.name', 'locks'], project);
         }
         for (const step of c.pre ?? []) runCommand(step, project);
-        for (const file of c.remove ?? []) fs.rmSync(path.join(project, file), { force: true });
+        for (const file of c.remove ?? []) cleanup(path.join(project, file));
         const r = runTools(['--json-errors', ...c.argv], project);
         const body = lastJsonLine(r.stderr);
         const reason = body && body.ok === false ? body.reason : null;

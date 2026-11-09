@@ -100,10 +100,10 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     valueFlags: ['phase', 'plan', 'range'],
     requiredFlags: ['range'],
   },
-  // Message tokens are variadic and precede the first list flag. Stays 'rest': the router silently
-  // drops undeclared --flags from the message, so dispatch does not reject them.
+  // Message tokens are variadic and precede the first list flag, so words past the verb are free.
   commit: {
-    positionals: 'rest',
+    positionals: 1,
+    freePositionals: true,
     booleanFlags: ['amend', 'no-verify'],
     listFlags: ['files', 'files-removed'],
   },
@@ -129,14 +129,15 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // ─── small readers ─────────────────────────────────────────────────────────
   'current-timestamp': { positionals: 2 },
   'runtime-identity': { positionals: 1 },
-  // The runtime is a bare token OR a flag, in either order. Stays 'rest': the router ignores undeclared flags.
-  'project-instruction-file': { positionals: 'rest', valueFlags: ['runtime'], eqFlags: ['runtime'] },
+  // The runtime is a bare token OR a flag, in either order, so the bare token is a free word.
+  'project-instruction-file': { positionals: 1, freePositionals: true, valueFlags: ['runtime'], eqFlags: ['runtime'] },
   'list-todos': { positionals: 2 },
   'list-seeds': { positionals: 2 },
   'verify-path-exists': { positionals: 2 },
   // `--task` falls back to a bare positional, so it is not unconditionally required.
   'quick-tasks-append': {
-    positionals: 'rest',
+    positionals: 1,
+    freePositionals: true,
     valueFlags: ['directory', 'quick-id', 'slug', 'status', 'task'],
   },
   'quick-tasks-migrate': { positionals: 1 },
@@ -165,8 +166,10 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   },
   'resolve-dispatch-type': { positionals: 1, valueFlags: ['requested'], booleanFlags: JSON_FLAG },
   'resolve-agent': { positionals: 1, valueFlags: ['name'], booleanFlags: JSON_FLAG },
+  // The agent type is a free word: `agent-skills --json <type>` and `agent-skills <type> --json` both work.
   'agent-skills': {
-    positionals: 2,
+    positionals: 1,
+    freePositionals: true,
     booleanFlags: ['json', 'skills-only'],
     workstreamScoped: true,
   },
@@ -179,8 +182,9 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'milestone.complete': {
     positionals: 3,
     booleanFlags: ['archive-quick', 'confirm', 'dry-run', 'force', 'no-archive-phases'],
+    // A bare --release-map reads as '' (not null) so the handler can refuse it with today's exit reason.
     valueFlags: ['release-map'],
-    nonEmptyFlags: ['release-map'],
+    bareEmptyFlags: ['release-map'],
     multiwordFlags: ['name'],
   },
   'progress.bar': { positionals: 2 },
@@ -190,8 +194,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'uat.render-checkpoint': { positionals: 2, valueFlags: ['file'] },
   'todo.complete': { positionals: 3, booleanFlags: DRY_RUN },
   'todo.match-phase': { positionals: 3 },
-  // `--phase` is value; `--name` swallows several tokens, so no boundary walk.
-  scaffold: { positionals: 'rest', valueFlags: ['phase'], multiwordFlags: ['name'] },
+  // `--phase` is value; `--name` swallows the words up to the next flag.
+  scaffold: { positionals: 2, valueFlags: ['phase'], multiwordFlags: ['name'] },
   'loop.render-hooks': {
     positionals: 3,
     valueFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
@@ -249,14 +253,7 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
       'safety-margin-pct',
     ],
     repeatableFlags: ['plan-file'],
-    requiredFlags: [
-      'budget',
-      'instructions-file',
-      'output-metadata',
-      'output-prompt',
-      'plan-file',
-      'roadmap-file',
-    ],
+    // No requiredFlags: the handler refuses a missing flag with an untyped ExitError (no usage reason) today.
   },
 
   // ─── context / confidence / legitimacy / effort / stories / drift ──────────
@@ -281,10 +278,10 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     requiredFlags: ['provider'],
     booleanFlags: ['verified'],
   },
-  // Package names are the variadic positionals. Stays 'rest': the router validates --ecosystem before
-  // unknown flags, so an undeclared flag is not the first rejection.
+  // Package names are the variadic positionals.
   'package-legitimacy.check': {
-    positionals: 'rest',
+    positionals: 2,
+    freePositionals: true,
     valueFlags: ['ecosystem'],
     requiredFlags: ['ecosystem'],
   },
@@ -323,7 +320,7 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     positionals: 2,
     valueFlags: [...RUN_LANE_COMMON, 'agent', 'as', 'model', 'prompt-file', 'slug'],
     booleanFlags: ['explicit'],
-    requiredFlags: ['slug'],
+    // No requiredFlags: a missing --slug exits with reason `unknown` today, and the seam would say `usage`.
   },
   'review-lane.plan': { positionals: 2, valueFlags: RUN_LANE_COMMON },
   'review-lane.sections': { positionals: 2, valueFlags: RUN_LANE_COMMON },

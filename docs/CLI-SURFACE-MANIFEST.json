@@ -31,13 +31,14 @@
     {
       "verb": "agent-skills",
       "aliases": [],
-      "positionals": 2,
+      "positionals": 1,
       "flags": {
         "json": "boolean",
         "skills-only": "boolean"
       },
       "required": [],
-      "workstreamScoped": true
+      "workstreamScoped": true,
+      "freePositionals": true
     },
     {
       "verb": "assumption-delta.scan",
@@ -76,7 +77,7 @@
     {
       "verb": "commit",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 1,
       "flags": {
         "amend": "boolean",
         "files": "list",
@@ -84,7 +85,8 @@
         "no-verify": "boolean"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "commit-docs-guard.disable",
@@ -461,13 +463,10 @@
         "force": "boolean",
         "name": "multiword",
         "no-archive-phases": "boolean",
-        "release-map": "value"
+        "release-map": "value-or-bare"
       },
       "required": [],
-      "workstreamScoped": false,
-      "nonEmpty": [
-        "release-map"
-      ]
+      "workstreamScoped": false
     },
     {
       "verb": "normalize-test-command",
@@ -480,14 +479,15 @@
     {
       "verb": "package-legitimacy.check",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 2,
       "flags": {
         "ecosystem": "value"
       },
       "required": [
         "ecosystem"
       ],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "phase-plan-index",
@@ -522,12 +522,13 @@
     {
       "verb": "project-instruction-file",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 1,
       "flags": {
         "runtime": "value"
       },
       "required": [],
       "workstreamScoped": false,
+      "freePositionals": true,
       "eq": [
         "runtime"
       ]
@@ -550,20 +551,13 @@
         "roadmap-file": "value",
         "safety-margin-pct": "value"
       },
-      "required": [
-        "budget",
-        "instructions-file",
-        "output-metadata",
-        "output-prompt",
-        "plan-file",
-        "roadmap-file"
-      ],
+      "required": [],
       "workstreamScoped": false
     },
     {
       "verb": "quick-tasks-append",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 1,
       "flags": {
         "directory": "value",
         "quick-id": "value",
@@ -572,7 +566,8 @@
         "task": "value"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "quick-tasks-migrate",
@@ -799,9 +794,7 @@
         "selected": "value",
         "slug": "value"
       },
-      "required": [
-        "slug"
-      ],
+      "required": [],
       "workstreamScoped": false
     },
     {
@@ -839,7 +832,7 @@
     {
       "verb": "scaffold",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 2,
       "flags": {
         "name": "multiword",
         "phase": "value"

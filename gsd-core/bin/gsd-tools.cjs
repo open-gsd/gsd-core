@@ -371,10 +371,35 @@ const { routeAgentCommand, AGENT_FAILURE_CLASSES } = require('./lib/agent-comman
 const smartEntryMod = require('./lib/smart-entry.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
-const { parseNamedArgsOrExit, parseMultiwordArg, isFlagToken } = require('./lib/command-arg-projection.cjs');
+const { parseNamedArgsOrExit, isFlagToken } = require('./lib/command-arg-projection.cjs');
 const { specFor } = require('./lib/cli-surface.cjs');
 const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
 const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
+
+/**
+ * Free positional words from `args[from..]` for a spec that sets `freePositionals`: every
+ * non-flag token that is not the value of a declared value flag. The walk mirrors the seam's
+ * own advance (a value flag takes the next token unless that is flag-shaped; an eq-form token
+ * takes none), so a word is never mistaken for a flag value or the reverse. Flag names come
+ * from the spec, never from literals.
+ */
+function positionalWords(args, spec, from = 1) {
+  const valued = new Set([...(spec.valueFlags ?? []), ...(spec.optionalValueFlags ?? [])]);
+  const eq = new Set(spec.eqFlags ?? []);
+  const words = [];
+  for (let i = from; i < args.length; i++) {
+    const tok = args[i];
+    if (!isFlagToken(tok)) {
+      words.push(tok);
+      continue;
+    }
+    const eqAt = tok.indexOf('=');
+    if (eqAt > 2 && eq.has(tok.slice(2, eqAt))) continue;
+    const next = args[i + 1];
+    if (valued.has(tok.slice(2)) && next !== undefined && !isFlagToken(next)) i += 1;
+  }
+  return words;
+}
 
 // ─── Bridge collapsed (Phase 4) ────────────────────────────────────────────────
 // Non-family commands now run through their CJS handlers directly. Keep the
@@ -671,102 +696,40 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const parsed = parseNamedArgsOrExit(args, specFor('resolve-granularity'), error);
     // The phase-type positional may sit before or after --granularity: it is the first
     // non-flag token that is not the value --granularity consumed.
-    const positional = args.slice(1).find((a, i, all) => !isFlagToken(a) && all[i - 1] !== '--granularity');
+    const [positional] = positionalWords(args, specFor('resolve-granularity'));
     commands.cmdResolveGranularity(cwd, positional, raw, parsed.granularity ?? undefined);
   }
 
   function routeResolveExecution({ args, cwd, raw }) {
-    const execArgs = args.slice(1);
-    let effortOverride;
-    let fastModeOverride;
-    let attempt;
-    let failureClass;
-    let host;
-    const positionals = [];
+    const spec = specFor('resolve-execution');
+    const parsed = parseNamedArgsOrExit(args, specFor('resolve-execution'), error);
     // #2296: the valid classes come from the classifier's own frozen enum, so
     // this validator can never drift from what `agent classify-failure` emits.
     const validFailureClasses = Object.values(AGENT_FAILURE_CLASSES);
-    const setFailureClass = (v) => {
-      if (!validFailureClasses.includes(v)) {
-        error(
-          `--failure-class must be one of: ${validFailureClasses.join(', ')}`,
-          ERROR_REASON.USAGE,
-        );
-      }
-      failureClass = v;
-    };
-    for (let i = 0; i < execArgs.length; i++) {
-      const a = execArgs[i];
-      if (a.startsWith('--effort=')) {
-        effortOverride = a.slice('--effort='.length);
-        continue;
-      }
-      if (a.startsWith('--fast-mode=')) {
-        const v = a.slice('--fast-mode='.length);
-        fastModeOverride = v === 'true' ? true : v === 'false' ? false : undefined;
-        continue;
-      }
-      if (a.startsWith('--attempt=')) {
-        const v = a.slice('--attempt='.length);
-        const n = parseInt(v, 10);
-        if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
-        attempt = n;
-        continue;
-      }
-      if (a.startsWith('--failure-class=')) {
-        setFailureClass(a.slice('--failure-class='.length));
-        continue;
-      }
-      if (a === '--effort') {
-        const val = execArgs[i + 1];
-        if (val === undefined || val.startsWith('--')) error('Missing value for --effort', ERROR_REASON.USAGE);
-        effortOverride = val;
-        i++;
-        continue;
-      }
-      if (a === '--fast-mode') {
-        const val = execArgs[i + 1];
-        if (val === undefined || val.startsWith('--')) error('Missing value for --fast-mode', ERROR_REASON.USAGE);
-        fastModeOverride = val === 'true' ? true : val === 'false' ? false : undefined;
-        i++;
-        continue;
-      }
-      if (a === '--attempt') {
-        const val = execArgs[i + 1];
-        if (val === undefined || val.startsWith('--')) error('Missing value for --attempt', ERROR_REASON.USAGE);
-        const n = parseInt(val, 10);
-        if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
-        attempt = n;
-        i++;
-        continue;
-      }
-      if (a === '--failure-class') {
-        const val = execArgs[i + 1];
-        if (val === undefined || val.startsWith('--')) error('Missing value for --failure-class', ERROR_REASON.USAGE);
-        setFailureClass(val);
-        i++;
-        continue;
-      }
-      if (a === '--host') {
-        const val = execArgs[i + 1];
-        if (val === undefined || val.startsWith('--')) error('Missing value for --host', ERROR_REASON.USAGE);
-        host = val;
-        i++;
-        continue;
-      }
-      if (a === '--raw') continue;
-      if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
-      positionals.push(a);
+    const failureClass = parsed['failure-class'] ?? undefined;
+    if (failureClass !== undefined && !validFailureClasses.includes(failureClass)) {
+      error(
+        `--failure-class must be one of: ${validFailureClasses.join(', ')}`,
+        ERROR_REASON.USAGE,
+      );
     }
+    const fastMode = parsed['fast-mode'];
+    const fastModeOverride = fastMode === 'true' ? true : fastMode === 'false' ? false : undefined;
+    let attempt;
+    if (parsed.attempt !== null) {
+      attempt = parseInt(parsed.attempt, 10);
+      if (!Number.isInteger(attempt) || attempt < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
+    }
+    const positionals = positionalWords(args, spec);
     if (positionals.length === 0) error('agent-type required', ERROR_REASON.USAGE);
     if (positionals.length > 1) error(`resolve-execution requires exactly one agent-type argument; got: ${positionals.join(', ')}`, ERROR_REASON.USAGE);
     const agentTypeArg = positionals[0];
     commands.cmdResolveExecution(cwd, agentTypeArg, raw, {
-      effortOverride,
+      effortOverride: parsed.effort ?? undefined,
       fastModeOverride,
       attempt,
       failureClass,
-      host,
+      host: parsed.host ?? undefined,
     });
   }
 
@@ -1053,21 +1016,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // guard below is therefore exactly the safe/unsafe boundary.
     const normalizePaddedPhase = (id) => (/^\d/.test(id) ? normalizePhaseName(id) : id);
 
-    const parsed = parseNamedArgsOrExit(
-      args,
-      { valueFlags: ['phase', 'plan', 'range'], positionals: 1 },
-      error,
-    );
+    // `--range` is a required flag of the spec, so the seam refuses a missing one.
+    const parsed = parseNamedArgsOrExit(args, specFor('select-revert-commits'), error);
     const rawPhase = parsed.phase;
     const rawPlan = parsed.plan;
     const range = parsed.range;
 
     if ((rawPhase && rawPlan) || (!rawPhase && !rawPlan)) {
       error('select-revert-commits requires exactly one of --phase <id> or --plan <id>', ERROR_REASON.USAGE);
-      return;
-    }
-    if (!range) {
-      error('select-revert-commits requires --range <git-revision-range>', ERROR_REASON.USAGE);
       return;
     }
     // Belt-and-suspenders alongside the --end-of-options guard below (mirrors
@@ -1180,8 +1136,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeCommit({ args, cwd, raw, error }) {
-    const amend = args.includes('--amend');
-          const noVerify = args.includes('--no-verify');
+    const spec = specFor('commit');
+          const parsed = parseNamedArgsOrExit(args, specFor('commit'), error);
           // #4208: `--files` and `--files-removed` are two path lists, each
           // running from its flag to the NEXT LIST FLAG. A boolean flag
           // inside a list (`--files a --amend b`) is skipped, not a
@@ -1193,16 +1149,15 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // A REPEATED list flag (`--files a --files b`) merges, as the old
           // slice-to-end parse merged it: every occurrence contributes its
           // run, and none of them ends another's silently.
-          const firstListFlag = args.findIndex((a, i) => i > 0 && COMMIT_LIST_FLAGS.has(a));
-          // Collect all positional args between command name and first flag,
+          // The seam's `listFlags` extraction implements exactly that contract.
+          const listTokens = new Set(spec.listFlags.map((f) => `--${f}`));
+          const firstListFlag = args.findIndex((a, i) => i > 0 && listTokens.has(a));
+          // Collect all positional args between command name and first list flag,
           // then join them — handles both quoted ("multi word msg") and
           // unquoted (multi word msg) invocations from different shells
-          const endIndex = firstListFlag !== -1 ? firstListFlag : args.length;
-          const messageArgs = args.slice(1, endIndex).filter(a => !a.startsWith('--'));
-          const message = messageArgs.join(' ') || undefined;
-          const files = collectListFlagValues(args, '--files');
-          const filesRemoved = collectListFlagValues(args, '--files-removed');
-          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved);
+          const head = firstListFlag !== -1 ? args.slice(0, firstListFlag) : args;
+          const message = positionalWords(head, spec).join(' ') || undefined;
+          commands.cmdCommit(cwd, message, parsed.files, raw, parsed.amend, parsed['no-verify'], parsed['files-removed']);
   }
 
   function routeCheckCommit({ args, cwd, raw, error }) {
@@ -1224,25 +1179,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeCommitToSubrepo({ args, cwd, raw, error }) {
-    const message = args[1];
-          const filesIndex = args.indexOf('--files');
-          const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
-          commands.cmdCommitToSubrepo(cwd, message, files, raw);
+    const parsed = parseNamedArgsOrExit(args, specFor('commit-to-subrepo'), error);
+          commands.cmdCommitToSubrepo(cwd, args[1], parsed.files, raw);
   }
 
   function routePrSubrepo({ args, cwd, raw, error }) {
-    const message = args[1];
-          // #3884: the commit message is an optional leading positional the
-          // caller owns (args[1]) — but when it is OMITTED, args[1] is itself
-          // the first flag (e.g. `--repo`), and a static `positionals: 2`
-          // treats that flag's own value as an unexpected trailing positional
-          // before cmdPrSubrepo's own "commit message required" guard ever
-          // runs. Widen the boundary only when args[1] genuinely looks like a
-          // message (not flag-shaped), mirroring the same fix applied to
-          // `state complete-phase`.
-          const messagePresent = message !== undefined && !message.startsWith('--');
-          const { repo, branch } = parseNamedArgsOrExit(args, { valueFlags: ['repo', 'branch'], positionals: messagePresent ? 2 : 1 }, error);
-          commands.cmdPrSubrepo(cwd, repo, branch, message, raw);
+    // #3884: the commit message is an optional leading positional the caller
+          // owns (args[1]); when it is OMITTED, args[1] is itself the first flag
+          // (e.g. `--repo`). The spec makes words past the verb free, so a flag's own
+          // value is never mistaken for a trailing positional before cmdPrSubrepo's
+          // own "commit message required" guard runs.
+          const { repo, branch } = parseNamedArgsOrExit(args, specFor('pr-subrepo'), error);
+          commands.cmdPrSubrepo(cwd, repo, branch, args[1], raw);
   }
 
   function routeVerifySummary({ args, cwd, raw, error }) {
@@ -1308,14 +1256,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           }
           // CJS fallback (SDK unavailable or unknown subcommand)
           if (subcommand === 'get') {
-            frontmatter.cmdFrontmatterGet(cwd, file, parseNamedArgsOrExit(args, { valueFlags: ['field'], positionals: 3 }, error).field, raw);
+            frontmatter.cmdFrontmatterGet(cwd, file, parseNamedArgsOrExit(args, specFor('frontmatter.get'), error).field, raw);
           } else if (subcommand === 'set') {
-            const { field, value } = parseNamedArgsOrExit(args, { valueFlags: ['field', 'value'], positionals: 3 }, error);
+            const { field, value } = parseNamedArgsOrExit(args, specFor('frontmatter.set'), error);
             frontmatter.cmdFrontmatterSet(cwd, file, field, value !== null ? value : undefined, raw);
           } else if (subcommand === 'merge') {
-            frontmatter.cmdFrontmatterMerge(cwd, file, parseNamedArgsOrExit(args, { valueFlags: ['data'], positionals: 3 }, error).data, raw);
+            frontmatter.cmdFrontmatterMerge(cwd, file, parseNamedArgsOrExit(args, specFor('frontmatter.merge'), error).data, raw);
           } else if (subcommand === 'validate') {
-            frontmatter.cmdFrontmatterValidate(cwd, file, parseNamedArgsOrExit(args, { valueFlags: ['schema'], positionals: 3 }, error).schema, raw);
+            frontmatter.cmdFrontmatterValidate(cwd, file, parseNamedArgsOrExit(args, specFor('frontmatter.validate'), error).schema, raw);
           } else {
             error('Unknown frontmatter subcommand. Available: get, set, merge, validate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
@@ -1409,17 +1357,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // source of truth (getProjectInstructionFile in runtime-name-policy.cjs).
           // No SDK bridge — pure local lookup, runs before .planning/ exists.
           const { getProjectInstructionFile } = require('./lib/runtime-name-policy.cjs');
-          // Parse --runtime <value> (space or = form); default to empty so the
-          // safe AGENTS.md cross-agent default applies.
-          const pifArgs = args.slice(1);
-          let pifRuntime = '';
-          for (let i = 0; i < pifArgs.length; i++) {
-            const a = pifArgs[i];
-            if (a === '--runtime' && pifArgs[i + 1] !== undefined) { pifRuntime = pifArgs[++i]; continue; }
-            if (a.startsWith('--runtime=')) { pifRuntime = a.slice('--runtime='.length); continue; }
-            // First positional that isn't a flag also works (lenient); otherwise ignore unknown flags.
-            if (!a.startsWith('-') && !pifRuntime) { pifRuntime = a; }
-          }
+          // --runtime <value> (space or = form); default to empty so the safe
+          // AGENTS.md cross-agent default applies. The first bare word also works
+          // (lenient), and the flag wins over it.
+          const pifSpec = specFor('project-instruction-file');
+          const pifParsed = parseNamedArgsOrExit(args, specFor('project-instruction-file'), error);
+          const pifRuntime = pifParsed.runtime
+            || positionalWords(args, pifSpec).find((w) => !w.startsWith('-'))
+            || '';
           // A retired runtime id now THROWS rather than resolving (#4709 AC#1).
           // Map it to the same clean single-line error routeSkillsRoot emits for
           // an unknown runtime — a CLI must not answer a bad flag value with a
@@ -1488,15 +1433,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // `awk NF-2` Quick Tasks column arithmetic. Row construction is delegated
           // to the pure appendQuickTaskRow (markdown-table.cjs); this case only
           // handles the I/O (read STATE.md, resolve date/commit, write STATE.md).
-          const qtaArgs = args.slice(1);
           // Ambiguous boundary (ADR-3473 §8.4 Item 2 note): this command accepts
-          // EITHER a positional free-text description (qtaArgs[0]) OR --task
+          // EITHER a positional free-text description (args[1]) OR --task
           // <value> — the same token index is a caller-owned positional in one
           // input shape and a flag in the other, which a single fixed
-          // `positionals` cursor cannot represent. `positionals: 'rest'`
-          // disables the boundary walk (as with `init quick`) so extraction
-          // (used for the --task form) and the `|| args[1]` fallback (used for
-          // the positional form) both keep working unchanged.
+          // `positionals` cursor cannot represent. The spec declares the
+          // description a free word (`freePositionals`), so the `|| args[1]`
+          // fallback (positional form) and the --task form both keep working,
+          // while an undeclared flag is refused.
           // #3356 defect 1: `--quick-id` / `--slug` / `--directory` are
           // OPTIONAL widenings. A caller with no quick id or task directory
           // (fast.md, the original #2133 caller) omits them and keeps the
@@ -1520,11 +1464,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // Omitted, `status` stays undefined and `appendQuickTaskRow` falls
           // back to its own `'—'` default — unchanged for every existing
           // caller (fast.md, quick.md's non-VALIDATE_MODE branch).
-          const qtaParsed = parseNamedArgsOrExit(
-            qtaArgs,
-            { valueFlags: ['task', 'quick-id', 'slug', 'directory', 'status'], positionals: 'rest' },
-            error,
-          );
+          const qtaParsed = parseNamedArgsOrExit(args, specFor('quick-tasks-append'), error);
           const qtaTask = qtaParsed.task || args[1];
           if (!qtaTask) {
             error('quick-tasks-append requires --task <description> (or a positional description)', ERROR_REASON.USAGE);
@@ -1625,10 +1565,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const cfgLoader = require('./lib/config-loader.cjs');
     const capabilityLoader = require('./lib/capability-loader.cjs');
 
-    const flag = (name) => {
-      const i = args.indexOf(name);
-      return i !== -1 && args[i + 1] && !String(args[i + 1]).startsWith('--') ? args[i + 1] : null;
-    };
     const sub = args[1];
     // Fail fast on an unrecognized subcommand. Without this check, `sub` fell through
     // to the `sub !== 'invoke'` usage-error branch far below (after loading the
@@ -1649,8 +1585,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       error(REVIEW_LANE_USAGE);
       return;
     }
-    const runDir = flag('--run-dir') || '.';
-    const repoRoot = flag('--repo-root') || cwd;
+    // Each sub declares its own flags (`--explicit` is a value under dispatch-step and a boolean
+    // under invoke), and the parse comes before any config, registry or lane work.
+    const parsedFlags = parseNamedArgsOrExit(args, specFor(`review-lane.${sub}`), error);
+    const runDir = parsedFlags['run-dir'] || '.';
+    const repoRoot = parsedFlags['repo-root'] || cwd;
 
     // Resolved config, read ONCE. Reading in-process (rather than shelling out to config-get per
     // key, as the legs did) is what removes the stringly `"null"` sentinel the bash had to test for.
@@ -1774,7 +1713,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       warn: (m) => process.stderr.write(`${m}\n`),
     });
 
-    const selected = (flag('--selected') || '')
+    const selected = (parsedFlags.selected || '')
       .split(',').map((s) => s.trim()).filter(Boolean);
     // #5266: `<slug>:available|missing` per openai-http lane. Host + default come from the lane
     // descriptor (resolveLanePlan), probing is runner.probeLane — review.md keeps no host table.
@@ -1826,8 +1765,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // flag-parsing surface — do not replicate inline bash parsing" for exactly this reason).
     // Everything after `--` is a candidate flag; matched lane slugs print sorted and comma-joined.
     if (sub === 'explicit-from-argv') {
-      const sepIdx = args.indexOf('--');
-      const candidateArgs = new Set(sepIdx === -1 ? [] : args.slice(sepIdx + 1));
+      const candidateArgs = new Set(parsedFlags['--']);
       const slugs = [];
       for (const lane of mergedLanes) {
         const flags = Array.isArray(lane.flags) ? lane.flags : [];
@@ -1916,17 +1854,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // requested slugs, not the whole roster.
     if (sub === 'dispatch-step') {
       const { dispatchReviewerLanes } = require('./lib/reviewer-step-dispatch.cjs');
-      const explicitFlags = (flag('--explicit') || '').split(',').map((s) => s.trim()).filter(Boolean);
-      const depth = flag('--depth') || '';
-      const baseSha = flag('--base-sha') || '';
+      const explicitFlags = (parsedFlags.explicit || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const depth = parsedFlags.depth || '';
+      const baseSha = parsedFlags['base-sha'] || '';
       // #4209: this command IS the reusable capability/step-dispatch trait check — see
       // gsd-core/references/loop-hook-dispatch.md for what supportsReviewerLanes means and why
       // this is the one place it's resolved. Calls the SAME resolver `loop render-hooks` uses,
       // `resolveActiveHooksForPoint`, directly in-process — no subprocess, no JSON re-parse, and
       // no exposure to `io.cjs`'s `@file:` overflow protocol (which only applies to the
       // rendered-string envelope this path never touches).
-      const capId = flag('--cap-id') || '';
-      const point = flag('--point') || '';
+      const capId = parsedFlags['cap-id'] || '';
+      const point = parsedFlags.point || '';
       let trait = false;
       if (capId && point) {
         try {
@@ -2063,7 +2001,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       return;
     }
 
-    const slug = flag('--slug');
+    const slug = parsedFlags.slug;
     if (!slug) { error('review-lane invoke requires --slug'); return; }
     const entry = plans.find((p) => p.slug === slug);
     if (!entry || !entry.ok) {
@@ -2080,9 +2018,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // lane's invocation. Everything the lane declares — probe, channels, timeout, empty-output
     // policy, handler — then applies to the instance unchanged, which is the whole reason to route
     // them here: a cross-cutting fix reaches instances for free.
-    const asIdentity = flag('--as');
-    const instanceModel = flag('--model');
-    const instanceAgent = flag('--agent');
+    const asIdentity = parsedFlags.as || null;
+    const instanceModel = parsedFlags.model || null;
+    const instanceAgent = parsedFlags.agent || null;
 
     if (asIdentity) {
       // Write under the INSTANCE name so two instances of one adapter never overwrite each other.
@@ -2163,7 +2101,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // to whichever channel this lane actually reads from (stdin, argv, an argv-embedded file
     // reference, or the http promptPath), so one flag serves every lane (#5049). It is no longer a
     // trim hand-off: nothing in review.md trims a prompt to fit a lane since #4559.
-    const promptOverride = flag('--prompt-file');
+    const promptOverride = parsedFlags['prompt-file'] || null;
     if (promptOverride) {
       entry.plan = applyPromptOverride(entry.plan, promptOverride, repoRoot);
     }
@@ -2231,7 +2169,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     const result = await runner.runLane(entry.plan, deps, {
       consentedHost,
-      explicitlyRequested: args.includes('--explicit'),
+      explicitlyRequested: parsedFlags.explicit,
       repoRoot,
     });
     output(result, raw);
@@ -3020,9 +2958,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //
     // Output: { recorded: true|false, path, error? }
     const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
-    const isoIdx = args.indexOf('--isolation');
-    const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
-    if (!isolation || !VALID_ISOLATION.has(isolation)) {
+    const parsed = parseNamedArgsOrExit(args, specFor('record-dispatch-isolation'), error);
+    const isolation = parsed.isolation;
+    if (!VALID_ISOLATION.has(isolation)) {
       error(
         'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
         '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>]',
@@ -3045,25 +2983,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // unambiguously and is never subject to that guard — any future runtime
     // whose registered flag happens to be bare-CLI-shaped benefits the same
     // way Cursor's does.
-    let harnessFlag = null;
-    const flagEqArg = args.find((a) => a.startsWith('--harness-flag='));
-    if (flagEqArg) {
-      const value = flagEqArg.slice('--harness-flag='.length);
-      harnessFlag = value.length > 0 ? value : null;
-    } else {
-      const flagIdx = args.indexOf('--harness-flag');
-      harnessFlag = flagIdx !== -1 && args[flagIdx + 1] && !args[flagIdx + 1].startsWith('--')
-        ? args[flagIdx + 1]
-        : null;
-    }
-    const phaseIdx = args.indexOf('--phase');
-    const phase = phaseIdx !== -1 && args[phaseIdx + 1] && !args[phaseIdx + 1].startsWith('--')
-      ? args[phaseIdx + 1]
-      : null;
-    const planIdx = args.indexOf('--plan');
-    const plan = planIdx !== -1 && args[planIdx + 1] && !args[planIdx + 1].startsWith('--')
-      ? args[planIdx + 1]
-      : null;
+    const harnessFlag = parsed['harness-flag'] || null;
+    const phase = parsed.phase || null;
+    const plan = parsed.plan || null;
 
     const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan });
     output(result, raw);
@@ -3151,15 +3073,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function routeAgentSkills({ args, cwd, raw, error }) {
     // --json emits typed IR { agent_type, block, skills_count } for test assertions
           // (#455). Default (no flag) outputs raw XML so workflow shell expansions work.
-          const jsonIdx = args.indexOf('--json');
-          const agentSkillsJsonMode = jsonIdx !== -1;
-          if (agentSkillsJsonMode) args.splice(jsonIdx, 1);
-          // #5122: the agent's own self-load asks for configured skills only,
-          // never the persona fallback served to orchestrator-side injection.
-          const skillsOnlyIdx = args.indexOf('--skills-only');
-          const agentSkillsOnly = skillsOnlyIdx !== -1;
-          if (agentSkillsOnly) args.splice(skillsOnlyIdx, 1);
-          init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode, agentSkillsOnly);
+          // #5122: `--skills-only` is the agent's own self-load, asking for configured
+          // skills only, never the persona fallback served to orchestrator-side injection.
+          // The agent type is the first free word, whichever side of the flags it sits on.
+          const agentSkillsSpec = specFor('agent-skills');
+          const agentSkillsFlags = parseNamedArgsOrExit(args, specFor('agent-skills'), error);
+          init.cmdAgentSkills(cwd, positionalWords(args, agentSkillsSpec)[0], raw, agentSkillsFlags.json, agentSkillsFlags['skills-only']);
   }
 
   function routeSkillManifest({ args, cwd, raw, error }) {
@@ -3258,31 +3177,28 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function routeMilestone({ args, cwd, raw, error }) {
     const subcommand = args[1];
           if (subcommand === 'complete') {
-            const milestoneName = parseMultiwordArg(args, 'name');
+            const parsed = parseNamedArgsOrExit(args, specFor('milestone.complete'), error);
+            const milestoneName = parsed.name;
             // #1871: archive phase dirs by default on milestone complete so the next
             // new-milestone never inherits un-archived dirs. --no-archive-phases opts out.
-            const archivePhases = !args.includes('--no-archive-phases');
-            const force = args.includes('--force');
+            const archivePhases = !parsed['no-archive-phases'];
+            const force = parsed.force;
             // #2118: --dry-run prints a preview plan without mutating.
-            const dryRun = args.includes('--dry-run');
+            const dryRun = parsed['dry-run'];
             // #2142: quick-task archival is opt-in (default OFF) — unlike
             // --no-archive-phases' inverted shape, absence of this flag means
             // "do nothing" rather than "skip a default-on behavior".
-            const archiveQuick = args.includes('--archive-quick');
+            const archiveQuick = parsed['archive-quick'];
             // #3726: explicit mutation opt-in — without --confirm (and without
             // --dry-run) the command refuses before touching anything. Distinct
             // from --force, which bypasses the narrow scope guards only.
-            const confirm = args.includes('--confirm');
+            const confirm = parsed.confirm;
             // #5706 (epic #3628): optional caller-supplied release map file.
-            // A flag with no usable value fails loud rather than being dropped.
-            let releaseMap = null;
-            const releaseMapIdx = args.indexOf('--release-map');
-            if (releaseMapIdx !== -1) {
-              const releaseMapValue = args[releaseMapIdx + 1];
-              if (typeof releaseMapValue !== 'string' || releaseMapValue.startsWith('--') || releaseMapValue.trim() === '') {
-                error('--release-map requires a file path (a JSON array of release-map entries)');
-              }
-              releaseMap = releaseMapValue;
+            // A flag with no usable value fails loud rather than being dropped: the spec reads a
+            // bare --release-map (no value, or a flag-shaped one) as '' and an absent one as null.
+            const releaseMap = parsed['release-map'];
+            if (releaseMap !== null && releaseMap.trim() === '') {
+              error('--release-map requires a file path (a JSON array of release-map entries)');
             }
             milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm, releaseMap }, raw);
           } else if (subcommand === 'archive-quick') {
@@ -3310,16 +3226,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const subcommand = args[1];
           if (subcommand === 'render-checkpoint') {
             const uat = require('./lib/uat.cjs');
-            const options = parseNamedArgsOrExit(args, { valueFlags: ['file'], positionals: 2 }, error);
+            const options = parseNamedArgsOrExit(args, specFor('uat.render-checkpoint'), error);
             uat.cmdRenderCheckpoint(cwd, options, raw);
           } else if (subcommand === 'classify-coverage') {
             const coverage = require('./lib/coverage.cjs');
-            const options = parseNamedArgsOrExit(args, { valueFlags: ['summary', 'file'], positionals: 2 }, error);
+            const options = parseNamedArgsOrExit(args, specFor('uat.classify-coverage'), error);
             coverage.cmdClassify(cwd, options, raw);
           } else if (subcommand === 'complete-session') {
             const uat = require('./lib/uat.cjs');
             const uatPath = args[2];
-            const options = parseNamedArgsOrExit(args, { valueFlags: ['message'], positionals: 3 }, error);
+            const options = parseNamedArgsOrExit(args, specFor('uat.complete-session'), error);
             return uat.cmdUatCompleteSession(cwd, uatPath, { message: options.message }, raw);
           } else {
             error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage, complete-session', ERROR_REASON.SDK_UNKNOWN_COMMAND);
@@ -3352,14 +3268,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   function routeScaffold({ args, cwd, raw, error }) {
     const scaffoldType = args[1];
-          // `--name` is multi-word (consumed separately by parseMultiwordArg,
-          // below) — a token count the single-token-per-flag boundary walk
-          // cannot represent. `positionals: 'rest'` disables that walk for
-          // this call, matching the existing (unchanged) permissive behavior
-          // for --name; --phase extraction is unaffected either way.
+          // `--name` is multi-word: the spec's `multiwordFlags` collects the words up to the
+          // next flag, a token count the single-token-per-flag boundary walk cannot represent.
+          const scaffoldParsed = parseNamedArgsOrExit(args, specFor('scaffold'), error);
           const scaffoldOptions = {
-            phase: parseNamedArgsOrExit(args, { valueFlags: ['phase'], positionals: 'rest' }, error).phase,
-            name: parseMultiwordArg(args, 'name'),
+            phase: scaffoldParsed.phase,
+            name: scaffoldParsed.name,
           };
           commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
   }
@@ -3368,74 +3282,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // loop render-hooks <point>
           const loopSubcommand = args[1];
           if (loopSubcommand === 'render-hooks') {
-            let loopConfigDir = null;
-            const configDirEqArg = args.find(arg => arg.startsWith('--config-dir='));
-            const configDirIdx = args.indexOf('--config-dir');
-            if (configDirEqArg) {
-              const value = configDirEqArg.slice('--config-dir='.length).trim();
-              if (!value) error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopConfigDir = value;
-            } else if (configDirIdx !== -1) {
-              const value = args[configDirIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopConfigDir = value;
-            }
-            // --active-cap <capId>: parse and validate before delegating
-            let loopActiveCap = undefined;
-            const activeCapEqArg = args.find(arg => arg.startsWith('--active-cap='));
-            const activeCapIdx = args.indexOf('--active-cap');
-            if (activeCapEqArg) {
-              const value = activeCapEqArg.slice('--active-cap='.length).trim();
-              if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopActiveCap = value;
-            } else if (activeCapIdx !== -1) {
-              const value = args[activeCapIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopActiveCap = value;
-            }
-            // --runtime <r> (#2003): explicit runtime override so the config-dir
-            // resolution bypasses the persisted-runtime fallback (GSD_RUNTIME →
-            // config.runtime). Mirrors the --config-dir dual-form (--runtime X /
-            // --runtime=X) and the capability-set --runtime precedent.
-            let loopRuntime = undefined;
-            const runtimeEqArg = args.find(arg => arg.startsWith('--runtime='));
-            const runtimeIdx = args.indexOf('--runtime');
-            if (runtimeEqArg) {
-              const value = runtimeEqArg.slice('--runtime='.length).trim();
-              if (!value) error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopRuntime = value;
-            } else if (runtimeIdx !== -1) {
-              const value = args[runtimeIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopRuntime = value;
-            }
-            // --after-fingerprint <phaseDir> (#5105 R2): gate out verify:post
-            // steps whose declared artifact already exists in phaseDir.
-            let loopAfterFingerprint = undefined;
-            const afterFpEqArg = args.find(arg => arg.startsWith('--after-fingerprint='));
-            const afterFpIdx = args.indexOf('--after-fingerprint');
-            if (afterFpEqArg) {
-              const value = afterFpEqArg.slice('--after-fingerprint='.length).trim();
-              if (!value) error('Missing value for --after-fingerprint', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              loopAfterFingerprint = value;
-            } else if (afterFpIdx !== -1) {
-              const value = args[afterFpIdx + 1];
-              if (!value || value.startsWith('--')) {
-                error('Missing value for --after-fingerprint', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-              }
-              loopAfterFingerprint = value;
-            }
+            // --config-dir, --active-cap <capId>, --runtime <r> (#2003: explicit runtime override so
+            // the config-dir resolution bypasses the persisted-runtime fallback) and
+            // --after-fingerprint <phaseDir> (#5105 R2: gate out verify:post steps whose declared
+            // artifact already exists) each take a value in the space or `=` form; the seam refuses
+            // a flag that is present without one, before any of it is used.
+            const loopParsed = parseNamedArgsOrExit(args, specFor('loop.render-hooks'), error);
+            const loopConfigDir = loopParsed['config-dir'];
             loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
               configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
-              activeCap: loopActiveCap,
-              runtime: loopRuntime,
-              afterFingerprint: loopAfterFingerprint,
+              activeCap: loopParsed['active-cap'] ?? undefined,
+              runtime: loopParsed.runtime ?? undefined,
+              afterFingerprint: loopParsed['after-fingerprint'] ?? undefined,
             });
           } else {
             error(
@@ -3692,11 +3550,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   async function routeDetectCustomFiles({ args, cwd, raw, error }) {
-    const configDirIdx = args.indexOf('--config-dir');
-          const configDir = configDirIdx !== -1 ? args[configDirIdx + 1] : null;
-          if (!configDir) {
-            error('Usage: gsd-tools detect-custom-files --config-dir <path>', ERROR_REASON.USAGE);
-          }
+    // `--config-dir` is a required flag of the spec; the seam refuses a missing or empty one.
+          const configDir = parseNamedArgsOrExit(args, specFor('detect-custom-files'), error)['config-dir'];
           const resolvedConfigDir = path.resolve(configDir);
           if (!fs.existsSync(resolvedConfigDir)) {
             error(`Config directory not found: ${resolvedConfigDir}`, ERROR_REASON.USAGE);
@@ -4002,14 +3857,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function routeRestoreCustomFiles({ args, error }) {
     // Last-wins so a duplicated flag resolves rather than erroring, matching
     // the rest of the gsd-tools flag surface.
-    let configDir = null;
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] !== '--config-dir') continue;
-      configDir = args[i + 1] === undefined ? null : args[i + 1];
-    }
-    const apply = args.includes('--apply');
+    const parsed = parseNamedArgsOrExit(args, specFor('restore-custom-files'), error);
+    const configDirs = parsed['config-dir'];
+    const configDir = configDirs[configDirs.length - 1];
+    const apply = parsed.apply;
 
-    if (configDir === null || configDir.trim() === '' || configDir.startsWith('--')) {
+    if (configDir.trim() === '') {
       error('Usage: gsd-tools restore-custom-files --config-dir <path> [--apply]', ERROR_REASON.USAGE);
     }
     const resolvedConfigDir = path.resolve(configDir);
@@ -4157,41 +4010,21 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   async function routePromptBudget({ args, cwd, raw, error }) {
     const promptBudget = require('./lib/prompt-budget.cjs');
 
-          // ── Collect multi-value --plan-file flags ──────────────────────────
-          const planFiles = [];
-          for (let i = 1; i < args.length; i++) {
-            if (args[i] === '--plan-file' && args[i + 1] && !args[i + 1].startsWith('--')) {
-              planFiles.push(args[i + 1]);
-              i++;
-            }
-          }
-
-          // ── Parse single-value flags ───────────────────────────────────────
-          const flagMap = new Map();
-          for (let i = 1; i < args.length; i++) {
-            const current = args[i];
-            const next = args[i + 1];
-            if (!current.startsWith('--')) continue;
-            if (!next || next.startsWith('--')) {
-              if (!flagMap.has(current)) flagMap.set(current, null);
-              continue;
-            }
-            if (!flagMap.has(current)) flagMap.set(current, next);
-            i++;
-          }
-          const getFlag = (flag) => flagMap.get(flag) ?? null;
-
-          const budgetStr = getFlag('--budget');
-          const instructionsFile = getFlag('--instructions-file');
-          const roadmapFile = getFlag('--roadmap-file');
-          const outputPromptFile = getFlag('--output-prompt');
-          const outputMetadataFile = getFlag('--output-metadata');
-          const safetyMarginStr = getFlag('--safety-margin-pct');
-          const projectMdHeadLinesStr = getFlag('--project-md-head-lines');
-          const projectFile = getFlag('--project-file');
-          const contextFile = getFlag('--context-file');
-          const researchFile = getFlag('--research-file');
-          const requirementsFile = getFlag('--requirements-file');
+          // The spec reads every value flag first-wins and `--plan-file` as a repeatable list
+          // (an occurrence without a value contributes nothing).
+          const parsed = parseNamedArgsOrExit(args, specFor('prompt-budget'), error);
+          const planFiles = parsed['plan-file'];
+          const budgetStr = parsed.budget;
+          const instructionsFile = parsed['instructions-file'];
+          const roadmapFile = parsed['roadmap-file'];
+          const outputPromptFile = parsed['output-prompt'];
+          const outputMetadataFile = parsed['output-metadata'];
+          const safetyMarginStr = parsed['safety-margin-pct'] || null;
+          const projectMdHeadLinesStr = parsed['project-md-head-lines'] || null;
+          const projectFile = parsed['project-file'];
+          const contextFile = parsed['context-file'];
+          const researchFile = parsed['research-file'];
+          const requirementsFile = parsed['requirements-file'];
 
           // ── Validate required args ─────────────────────────────────────────
           if (!budgetStr) {
@@ -4299,7 +4132,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // by one or more optional criteria (ANDed together)"); no selector is
   // silently dropped or overridden by another.
   //
-  // Flag parsing mirrors routePromptBudget's Map-based flagMap: the three
+  // Flags are read through the CLI surface spec (`context-predicates`): the three
   // known flags are recognized in both the space-separated `--flag value`
   // form and the inline-assignment `--flag=value` form (the latter is the
   // escape hatch for a flag-shaped selector value, e.g. `--contains=--dry-run`
@@ -4307,61 +4140,26 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // design, since a following `--...` token always reads as a missing value).
   // `--class=` (empty value) and `--class==A` (double-equals typo shape)
   // are rejected the same way under either form. On a duplicate flag the
-  // FIRST occurrence wins (`Map.set` only fires when the key is absent),
-  // which is deterministic across repeated invocations with identical argv.
+  // FIRST occurrence wins, which is deterministic across repeated invocations
+  // with identical argv.
   //
   // Prototype-pollution safety: selector values are only ever compared via
   // `===`/`.startsWith()`/`.includes()` against ordinary string fields — this
   // route never uses a user-supplied string as an object property key
   // (`obj[userValue] = ...`), so `--class __proto__` / `constructor` /
   // `prototype` are just non-matching ordinary strings, not property-access
-  // vectors. `flagMap` itself is a `Map`, immune to prototype pollution by
-  // construction.
+  // vectors. The parsed flags are an object keyed only by the spec's own fixed
+  // flag names, never by user input.
   function routeContextPredicates({ args, cwd, raw, error }) {
     const { parsePredicates, selectPredicates } = require('./lib/context-predicates.cjs');
 
-    const KNOWN_FLAGS = new Set(['--class', '--prefix', '--contains']);
-    const flagMap = new Map();
-    for (let i = 1; i < args.length; i++) {
-      const current = args[i];
-      if (typeof current !== 'string' || !current.startsWith('--')) continue;
-
-      // Inline-assignment escape hatch (`--flag=value`, mirrors the `--config-dir=`/
-      // `--runtime=` convention in routeUpdateContext elsewhere in this file). This is
-      // the ONLY way to pass a flag-shaped selector value (e.g. searching CONTEXT.md
-      // for the literal substring "--dry-run"): the space-separated form below always
-      // treats a following `--...` token as a missing value, by design, so it has no
-      // escape hatch on its own (#2928 review finding C).
-      const eqFlag = [...KNOWN_FLAGS].find((f) => current.startsWith(`${f}=`));
-      if (eqFlag) {
-        const value = current.slice(eqFlag.length + 1);
-        // Reject an empty value (`--class=`) and the `--class==A` double-equals typo
-        // shape (a value starting with `=`) the same way the pre-existing malformed-
-        // assignment behavior did — never silently accept "=A" as a literal value.
-        if (value === '' || value.startsWith('=')) {
-          error(`context-predicates: ${eqFlag} requires a non-empty value`, ERROR_REASON.USAGE);
-          return;
-        }
-        if (!flagMap.has(eqFlag)) flagMap.set(eqFlag, value);
-        continue;
-      }
-
-      if (!KNOWN_FLAGS.has(current)) {
-        error(`Unknown flag for context-predicates: ${current}`, ERROR_REASON.USAGE);
-        return;
-      }
-      const next = args[i + 1];
-      if (next === undefined || next.startsWith('--')) {
-        if (!flagMap.has(current)) flagMap.set(current, null);
-        continue;
-      }
-      if (!flagMap.has(current)) flagMap.set(current, next);
-      i++;
-    }
-
-    const hasClass = flagMap.has('--class');
-    const hasPrefix = flagMap.has('--prefix');
-    const hasContains = flagMap.has('--contains');
+    // The spec reads `--flag value` and `--flag=value`, refuses a selector that is present
+    // without a value (a following `--...` token reads as missing, `--class=` is empty), and
+    // keeps the FIRST occurrence of a duplicate.
+    const parsed = parseNamedArgsOrExit(args, specFor('context-predicates'), error);
+    const hasClass = parsed.class !== null;
+    const hasPrefix = parsed.prefix !== null;
+    const hasContains = parsed.contains !== null;
 
     if (!hasClass && !hasPrefix && !hasContains) {
       error(
@@ -4373,7 +4171,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     const requireNonEmpty = (flagName, rawValue) => {
-      if (rawValue === null || rawValue === undefined || rawValue.trim() === '') {
+      // A value starting with `=` is the `--class==A` double-equals typo shape; never accepted as a literal.
+      if (rawValue.trim() === '' || rawValue.startsWith('=')) {
         error(`context-predicates: ${flagName} requires a non-empty value`, ERROR_REASON.USAGE);
         return null;
       }
@@ -4382,17 +4181,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     const opts = {};
     if (hasClass) {
-      const v = requireNonEmpty('--class', flagMap.get('--class'));
+      const v = requireNonEmpty('--class', parsed.class);
       if (v === null) return;
       opts.klass = v;
     }
     if (hasPrefix) {
-      const v = requireNonEmpty('--prefix', flagMap.get('--prefix'));
+      const v = requireNonEmpty('--prefix', parsed.prefix);
       if (v === null) return;
       opts.prefix = v;
     }
     if (hasContains) {
-      const v = requireNonEmpty('--contains', flagMap.get('--contains'));
+      const v = requireNonEmpty('--contains', parsed.contains);
       if (v === null) return;
       opts.contains = v;
     }
@@ -4419,46 +4218,27 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // scope, runtime, gsdDir }. Optional --config-dir / --runtime carry the
           // workflow's execution_context hints (the one thing only it can know).
           const { loadUpdateContext } = require('./lib/update-context.cjs');
-          const ucArgs = args.slice(1);
-          let preferredConfigDir = '';
-          let preferredRuntime = '';
-          for (let i = 0; i < ucArgs.length; i++) {
-            const a = ucArgs[i];
-            if (a.startsWith('--config-dir=')) { preferredConfigDir = a.slice('--config-dir='.length); continue; }
-            if (a.startsWith('--runtime=')) { preferredRuntime = a.slice('--runtime='.length); continue; }
-            if (a === '--config-dir') {
-              const v = ucArgs[i + 1];
-              if (v === undefined || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
-              preferredConfigDir = v; i++; continue;
-            }
-            if (a === '--runtime') {
-              const v = ucArgs[i + 1];
-              if (v === undefined || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
-              preferredRuntime = v; i++; continue;
-            }
-            if (a === '--json') continue; // JSON is the only output; accepted for symmetry
-            if (a.startsWith('-')) error(`Unknown flag for update-context: ${a}`, ERROR_REASON.USAGE);
-          }
-          const ctx = loadUpdateContext({ preferredConfigDir, preferredRuntime });
+          // `--json` is declared but unread: JSON is the only output, accepted for symmetry.
+          const ucParsed = parseNamedArgsOrExit(args, specFor('update-context'), error);
+          const ctx = loadUpdateContext({
+            preferredConfigDir: ucParsed['config-dir'] ?? '',
+            preferredRuntime: ucParsed.runtime ?? '',
+          });
           process.stdout.write(JSON.stringify(ctx) + '\n');
   }
 
   async function routeClassifyConfidence({ args, cwd, raw, error }) {
     const researchProvider = require('./lib/research-provider.cjs');
-          const providerIdx = args.indexOf('--provider');
-          const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
-          if (!provider || provider.startsWith('--')) {
-            error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
-          }
-          const verified = args.includes('--verified');
-          const pkgIdx = args.indexOf('--package');
-          const pkg = pkgIdx !== -1 ? args[pkgIdx + 1] : null;
-          const ecoIdx = args.indexOf('--ecosystem');
-          const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
+          // `--provider` is a required flag of the spec; the seam refuses a missing or flag-shaped one.
+          const ccParsed = parseNamedArgsOrExit(args, specFor('classify-confidence'), error);
+          const provider = ccParsed.provider;
+          const verified = ccParsed.verified;
+          const pkg = ccParsed.package;
+          const ecosystem = ccParsed.ecosystem;
           let legitimacyVerdict = null;
-          if (pkg && (!pkg.startsWith('--'))) {
+          if (pkg) {
             const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
-            if (!ecosystem || ecosystem.startsWith('--') || !VALID_ECOSYSTEMS.has(ecosystem)) {
+            if (!ecosystem || !VALID_ECOSYSTEMS.has(ecosystem)) {
               error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
             }
             const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
@@ -4475,24 +4255,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (subcommand !== 'check') {
             error('Unknown package-legitimacy subcommand. Available: check', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
-          const ecoIdx = args.indexOf('--ecosystem');
-          const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
+          // `--ecosystem` is a required flag of the spec; an unknown --flag is a usage error
+          // (it is never skipped along with the next arg).
+          const plSpec = specFor('package-legitimacy.check');
+          const ecosystem = parseNamedArgsOrExit(args, specFor('package-legitimacy.check'), error).ecosystem;
           const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
-          if (!ecosystem || !VALID_ECOSYSTEMS.has(ecosystem)) {
+          if (!VALID_ECOSYSTEMS.has(ecosystem)) {
             error('Usage: gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> ...', ERROR_REASON.USAGE);
           }
-          // Collect positional package names.
-          // Only --ecosystem takes a value. Every non-flag arg is a package name.
-          // Any unknown --flag is a usage error (do not silently skip+consume the next arg).
-          const packages = [];
-          for (let i = 2; i < args.length; i++) {
-            const a = args[i];
-            if (a === '--ecosystem') { i++; continue; }
-            if (a.startsWith('--')) {
-              error(`package-legitimacy: unknown flag ${a}`, ERROR_REASON.USAGE);
-            }
-            packages.push(a);
-          }
+          // Every non-flag word past `check` that is not the --ecosystem value is a package name.
+          const packages = positionalWords(args, plSpec, 2);
           if (packages.length === 0) {
             error('Usage: gsd-tools package-legitimacy check --ecosystem <eco> <pkg1> <pkg2> ...', ERROR_REASON.USAGE);
           }
@@ -4508,31 +4280,15 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   function routeEffort({ args, cwd, raw, error }) {
     const subcommand = args[1];
           if (subcommand === 'sync') {
-            const effortSyncArgs = args.slice(2);
-            let dryRun = true;
-            let effortSyncConfigDir;
-            let effortSyncRuntime;
-            for (let i = 0; i < effortSyncArgs.length; i++) {
-              const a = effortSyncArgs[i];
-              if (a === '--apply') { dryRun = false; continue; }
-              if (a === '--dry-run') { dryRun = true; continue; }
-              if (a.startsWith('--config-dir=')) { effortSyncConfigDir = a.slice('--config-dir='.length); continue; }
-              if (a === '--config-dir') {
-                const v = effortSyncArgs[i + 1];
-                if (!v || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
-                effortSyncConfigDir = v; i++; continue;
-              }
-              if (a.startsWith('--runtime=')) { effortSyncRuntime = a.slice('--runtime='.length); continue; }
-              if (a === '--runtime') {
-                const v = effortSyncArgs[i + 1];
-                if (!v || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
-                effortSyncRuntime = v; i++; continue;
-              }
-              if (a === '--raw') continue;
-              if (a.startsWith('-')) error(`Unknown flag for effort sync: ${a}`, ERROR_REASON.USAGE);
-              error(`effort sync takes no positional arguments; got: ${a}`, ERROR_REASON.USAGE);
-            }
-            commands.cmdEffortSync(cwd, raw, { dryRun, configDir: effortSyncConfigDir, runtime: effortSyncRuntime });
+            const effortSyncParsed = parseNamedArgsOrExit(args, specFor('effort.sync'), error);
+            // Preview is the default; `--apply` writes. When both are given the preview wins, so a
+            // contradictory argv never writes.
+            const dryRun = !effortSyncParsed.apply || effortSyncParsed['dry-run'];
+            commands.cmdEffortSync(cwd, raw, {
+              dryRun,
+              configDir: effortSyncParsed['config-dir'] ?? undefined,
+              runtime: effortSyncParsed.runtime ?? undefined,
+            });
           } else {
             error('Unknown effort subcommand. Available: sync', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
@@ -4835,31 +4591,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
  * declares that file "All OS-facing I/O; single platform seam", and a private
  * duplicate here is what made it untrue.
  */
-const COMMIT_LIST_FLAGS = new Set(['--files', '--files-removed']);
-
-// #4208 review: hoisted out of routeCommit's closure so the parser is reachable
-// from a test. It is the whole of the two-list argument contract, and its edge
-// cases (a boolean flag inside a run, a repeated list flag, either order) were
-// already the subject of a review round -- a parser that only the CLI can reach
-// can only be tested by example, one spawn at a time.
-//
-// Every occurrence of `flag` contributes a run; a run ends at the next LIST
-// flag and skips boolean flags on the way, so no token strictly between one
-// list flag and the next is ever dropped. Repeated runs of the same flag merge,
-// as the pre-#4208 slice-to-end parse merged them.
-function collectListFlagValues(args, flag) {
-  const values = [];
-  args.forEach((a, i) => {
-    if (a !== flag) return;
-    for (const b of args.slice(i + 1)) {
-      if (COMMIT_LIST_FLAGS.has(b)) break;
-      if (b.startsWith('--')) continue;
-      values.push(b);
-    }
-  });
-  return values;
-}
-
 function resolveSpawnBinary(name, platform = process.platform, env = process.env) {
   const { resolveExecutableBinary } = require('./lib/shell-command-projection.cjs');
   return resolveExecutableBinary(name, { platform, env });
@@ -4907,12 +4638,12 @@ const HOST_COMMAND_ROUTERS = {
   // contract and this one mutates; ADR-2346 promotes a leaf to a family only at
   // >=3 verbs, and this is one.
   'stamp-codebase-map': ({ args, cwd, raw, error }) => {
-    const { files } = parseNamedArgsOrExit(args, { valueFlags: ['files'], positionals: 1 }, error);
-    // A value flag with no value parses to `null`, same as an absent one, so
-    // presence is read off `args`: a bare `--files` (an unquoted empty shell
-    // variable) must hit the empty-filter refusal, not widen to all seven.
-    const only = args.includes('--files')
-      ? String(files ?? '').split(',').map((f) => f.trim()).filter(Boolean)
+    const { files } = parseNamedArgsOrExit(args, specFor('stamp-codebase-map'), error);
+    // The spec reads a bare `--files` as '' and an absent one as null, so a bare
+    // `--files` (an unquoted empty shell variable) hits the empty-filter refusal
+    // instead of widening to all seven.
+    const only = files !== null
+      ? files.split(',').map((f) => f.trim()).filter(Boolean)
       : undefined;
     verify.cmdStampCodebaseMap(cwd, raw, only);
   },
@@ -5830,10 +5561,6 @@ module.exports = {
   // #3275: exported for tests — the shared PATH+PATHEXT resolver behind
   // review-lane invoke's `deps.spawn` / `deps.hasBinary` seams.
   resolveSpawnBinary,
-  // #4208 review: exported for tests — the two-list commit parser is otherwise
-  // reachable only by spawning the CLI, which a property test cannot afford.
-  collectListFlagValues,
-  COMMIT_LIST_FLAGS,
   // #3714 follow-up: exported for tests — the dispatch model-pin VALUE
   // policy (charset accept/render parity, max-length boundary, leading-char
   // anchor) is otherwise unreachable from outside the dispatchOverlayCapabilityCommand closure.
