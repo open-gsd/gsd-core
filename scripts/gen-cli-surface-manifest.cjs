@@ -29,29 +29,62 @@ const ALIASES_PATH = path.join(ROOT, 'gsd-core/bin/lib/command-aliases.cjs');
 const USAGE =
   'Usage: node scripts/gen-cli-surface-manifest.cjs [--write | --check] [--json] [--manifest-path <path>]';
 
-function loadSurface() {
-  if (!fs.existsSync(SURFACE_PATH)) {
-    throw new ExitError(
-      2,
-      `gen-cli-surface-manifest: compiled artifact not found at ${SURFACE_REL}.\nRun \`npm run build:lib\` first.`,
-    );
+// Each compiled module the manifest reads, beside the source it is built from. The registry
+// is read through its compiled form, so a stale compile would write or check a stale manifest.
+const COMPILED_PAIRS = [
+  { source: path.join(ROOT, 'src/cli-surface.cts'), compiled: SURFACE_PATH },
+  {
+    source: path.join(ROOT, 'src/command-arg-projection.cts'),
+    compiled: path.join(ROOT, 'gsd-core/bin/lib/command-arg-projection.cjs'),
+  },
+];
+
+/**
+ * Why the compiled registry cannot be trusted, or null when it is fresh: a compiled file that
+ * is missing, or older than the source beside it, means `npm run build:lib` has not run since
+ * the source changed. A source that is not on disk (an installed package) is not checked.
+ * Pairs are compared one to one: tsc leaves an unchanged module's output alone.
+ *
+ * @param {Array<{source: string, compiled: string}>} [pairs]
+ * @returns {string | null}
+ */
+function staleCompileProblem(pairs = COMPILED_PAIRS) {
+  for (const { source, compiled } of pairs) {
+    const rel = (p) => path.relative(ROOT, p) || p;
+    if (!fs.existsSync(compiled)) {
+      return `compiled artifact not found at ${rel(compiled)}. Run \`npm run build:lib\` first.`;
+    }
+    if (!fs.existsSync(source)) continue;
+    if (fs.statSync(source).mtimeMs > fs.statSync(compiled).mtimeMs) {
+      return (
+        `${rel(compiled)} is older than ${rel(source)}. Run \`npm run build:lib\` first ` +
+        '(if it emits nothing, delete tsconfig.build.tsbuildinfo and run it again).'
+      );
+    }
   }
+  return null;
+}
+
+function loadSurface() {
+  const problem = staleCompileProblem();
+  if (problem !== null) throw new ExitError(2, `gen-cli-surface-manifest: ${problem}`);
   return require(SURFACE_PATH);
 }
 
-/** canonical -> sorted aliases, across every `*_COMMAND_ALIASES` array. */
+/** canonical -> sorted, unique aliases, across every `*_COMMAND_ALIASES` array. */
 function aliasMap() {
   const mod = require(ALIASES_PATH);
-  const map = new Map();
+  const collected = new Map();
   for (const [key, value] of Object.entries(mod)) {
     if (!key.endsWith('_COMMAND_ALIASES') || !Array.isArray(value)) continue;
     for (const entry of value) {
       if (!entry || typeof entry.canonical !== 'string') continue;
-      const prior = map.get(entry.canonical) ?? [];
-      map.set(entry.canonical, prior.concat(entry.aliases ?? []));
+      const set = collected.get(entry.canonical) ?? new Set();
+      for (const alias of entry.aliases ?? []) set.add(alias);
+      collected.set(entry.canonical, set);
     }
   }
-  return map;
+  return new Map([...collected].map(([canonical, set]) => [canonical, [...set].sort()]));
 }
 
 const sorted = (list) => [...(list ?? [])].sort();
@@ -227,4 +260,4 @@ function main() {
 
 if (require.main === module) runMain(main);
 
-module.exports = { buildManifest, checkReport, serialize, MANIFEST_PATH };
+module.exports = { buildManifest, checkReport, serialize, staleCompileProblem, aliasMap, MANIFEST_PATH };
