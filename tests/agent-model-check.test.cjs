@@ -532,7 +532,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   // The init --ws carry lives under os.tmpdir(), keyed by project and session: clear every one a test makes.
   const carryStore = () => require('../gsd-core/bin/lib/active-workstream-store.cjs');
   function clearCarries(t, ...sessions) {
-    t.after(() => { for (const s of sessions) carryStore().createSessionScopedPointerAdapter(project, `init-ws-${s}`).clear(); });
+    t.after(() => { for (const s of sessions) carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}${s}`).clear(); });
   }
   function setupCarry(t, rootConfig, ...sessions) {
     pinWorkstreamEnv(t, undefined);
@@ -630,14 +630,14 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow', 'the unflagged init left the carry');
     assert.ok(initQuick('fresh', false).success);
     assert.equal(carryStore().peekInitWorkstream(project, 'fresh', PIN), null);
-    assert.equal(carryStore().createSessionScopedPointerAdapter(project, 'init-ws-fresh').read(), null, 'no carry file');
+    assert.equal(carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}fresh`).read(), null, 'no carry file');
   });
 
   test('init --ws naming no workstream directory records no carry; an existing workstream still does', (t) => {
     setupCarry(t, ISSUE_CONFIG, 'sess-ws', 'sess-nope');
     const r = runGsdTools(['query', 'init.quick', 't', '--ws=nope'], project, { ...PINNED, GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-nope' });
     assert.ok(r.success, r.error);
-    assert.equal(carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-nope').read(), null, 'no carry file');
+    assert.equal(carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}sess-nope`).read(), null, 'no carry file');
     assert.ok(initQuick('sess-ws').success);
     assert.deepEqual(carryStore().peekInitWorkstream(project, 'sess-ws', PIN), ['alpha']);
   });
@@ -671,7 +671,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
 
   test('an invalid carried name allows', (t) => {
     setupCarry(t, ISSUE_CONFIG, 'sess-bad');
-    carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-bad').write(`../x ${PIN}`);
+    carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}sess-bad`).write(`../x ${PIN}`);
     assert.equal(evaluate(inSession('sonnet', 'sess-bad')).action, 'allow');
   });
 
@@ -695,7 +695,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   test('a forged carry (no valid entry, or an entry the resolver cannot use) allows instead of failing the dispatch', (t) => {
     setupCarry(t, ISSUE_CONFIG, 'sess-bad');
     writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } }));
-    const carry = carryStore().createSessionScopedPointerAdapter(project, 'init-ws-sess-bad');
+    const carry = carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}sess-bad`);
     for (const text of ['garbage', `alpha\n../x ${PIN}`, `alpha ${PIN}\n../x ${PIN}`]) {
       carry.write(text);
       assert.equal(evaluate(inSession('sonnet', 'sess-bad')).action, 'allow', text.slice(0, 40));
@@ -733,7 +733,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const sessions = ['sw-minus', 'sw-at', 'sw-plus'];
     for (const config of [ISSUE_CONFIG, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }, { ...ISSUE_CONFIG, runtime: 'codex' }]) {
       setupCarry(t, config, 'sess-ws', ...sessions);
-      const adapter = (s) => carryStore().createSessionScopedPointerAdapter(project, `init-ws-${s}`);
+      const adapter = (s) => carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}${s}`);
       adapter('sw-minus').write(`alpha ${PIN - P + 1}`);
       adapter('sw-at').write(`alpha ${PIN - P}`);
       adapter('sw-plus').write(`alpha ${PIN - P - 1}`);

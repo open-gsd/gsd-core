@@ -1533,14 +1533,24 @@ describe('regressions: resolveActiveWorkstream rejects the reserved name none (#
 // The carry lives under os.tmpdir() beside the session pointers; every key a test writes is cleared after it.
 
 describe('recordInitWorkstream / peekInitWorkstream', () => {
-  const { recordInitWorkstream, peekInitWorkstream } = require('../gsd-core/bin/lib/active-workstream-store.cjs');
-  const W = require('../gsd-core/bin/lib/active-workstream-store.cjs').INIT_WORKSTREAM_MAX_AGE_MS;
-  const P = require('../gsd-core/bin/lib/active-workstream-store.cjs').INIT_WORKSTREAM_PRUNE_AGE_MS;
-  const { INIT_WORKSTREAM_MAX_ENTRIES: E, INIT_WORKSTREAM_NAME_MAX_BYTES: N, INIT_WORKSTREAM_MAX_BYTES: B } = require('../gsd-core/bin/lib/active-workstream-store.cjs');
+  const {
+    recordInitWorkstream, peekInitWorkstream, INIT_WORKSTREAM_KEY_PREFIX: PREFIX,
+    INIT_WORKSTREAM_MAX_AGE_MS: W, INIT_WORKSTREAM_PRUNE_AGE_MS: P,
+    INIT_WORKSTREAM_MAX_ENTRIES: E, INIT_WORKSTREAM_NAME_MAX_BYTES: N, INIT_WORKSTREAM_MAX_BYTES: B,
+  } = require('../gsd-core/bin/lib/active-workstream-store.cjs');
   const T = 1_000_000;
   let base;
   let saved;
   const raw = (key) => createSessionScopedPointerAdapter(base, key).read();
+  // The carry directory of `base`: a record for a throwaway session creates it, and the session's own files stay inside it.
+  const carryDir = (t, session) => {
+    t.after(() => createSessionScopedPointerAdapter(base, `${PREFIX}${session}`).clear());
+    recordInitWorkstream(base, session, 'alpha', T);
+    const sessions = path.join(os.tmpdir(), 'gsd-workstream-sessions');
+    return fs.readdirSync(sessions).map((d) => path.join(sessions, d)).find((d) => fs.existsSync(path.join(d, `${PREFIX}${session}`)));
+  };
+  // The carry file path of a throwaway session, so a test writes the raw bytes a carry holds.
+  const carryFile = (t, session) => path.join(carryDir(t, session), `${PREFIX}${session}`);
   beforeEach(() => {
     base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-unit-carry-'));
     saved = saveSessionEnv();
@@ -1636,11 +1646,28 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     }
   });
 
-  test('the carry caps: 8 entries, 255-byte names, a 2248-byte read cap that holds 8 entries at their longest', () => {
+  test('the carry caps: 8 entries, 255-byte names, a 2256-byte read cap that holds 8 entries at their longest', () => {
+    const longestNumberText = String(-0.0000012345678901234567); // 25 bytes: longer than String(-Number.MAX_VALUE), 24
+    assert.equal(longestNumberText.length, 25);
     assert.equal(E, 8);
     assert.equal(N, 255);
-    assert.equal(B, 2248);
-    assert.equal(B, E * (N + 1 + String(-Number.MAX_VALUE).length + 1));
+    assert.equal(B, 2256);
+    assert.equal(B, E * (N + 1 + longestNumberText.length + 1));
+  });
+
+  test('eight entries at the longest name and the longest write time are rewritten within the read cap', () => {
+    const at = -0.0000012345678901234567;
+    const names = Array.from({ length: E }, (_, i) => `${i}`.padEnd(N, 'w'));
+    names.forEach((name) => recordInitWorkstream(base, 's1', name, at));
+    assert.ok(Buffer.byteLength(raw(`${PREFIX}s1`), 'utf-8') + 1 <= B);
+    assert.equal(recordInitWorkstream(base, 's1', 'z'.padEnd(N, 'z'), at), true);
+    assert.ok(Buffer.byteLength(raw(`${PREFIX}s1`), 'utf-8') + 1 <= B);
+  });
+
+  test('a padded name is recorded as the owner trims it and reads back as that name', () => {
+    assert.equal(recordInitWorkstream(base, 's1', '  alpha \n', T), true);
+    assert.equal(raw(`${PREFIX}s1`), `alpha ${T}`);
+    assert.deepEqual(peekInitWorkstream(base, 's1', T), ['alpha']);
   });
 
   test('eight entries of the longest name all fit in one carry', () => {
@@ -1655,19 +1682,19 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.deepEqual(peekInitWorkstream(base, 's1', T + 1), ['a'.repeat(N)]);
   });
 
-  test('a record drops the oldest entries while the carry would pass the read cap (a hand-written long entry)', (t) => {
+  test('a record keeps only planted entries that pass the name rule and the name cap, so a rewritten carry stays within the read cap', (t) => {
     const session = path.basename(base);
     const file = carryFile(t, session);
-    const planted = `${'x'.repeat(B - 20)} ${T}`;
-    fs.writeFileSync(file, planted);
-    assert.deepEqual(peekInitWorkstream(base, session, T), ['x'.repeat(B - 20)], 'positive control: the planted carry is readable');
+    const tooLong = 'x'.repeat(N + 1);
+    fs.writeFileSync(file, [`${tooLong} ${T}`, `../x ${T}`, `ok ${T}`].join('\n'));
+    assert.deepEqual(peekInitWorkstream(base, session, T), [tooLong, '../x', 'ok'], 'positive control: the planted carry is readable');
     assert.equal(recordInitWorkstream(base, session, 'beta', T), true);
-    assert.deepEqual(peekInitWorkstream(base, session, T), ['beta']);
+    assert.deepEqual(peekInitWorkstream(base, session, T), ['ok', 'beta']);
   });
 
   test('property: after any sequence of records the carry is distinct, newest-last, at most E long and within B bytes', () => {
     const fc = require('fast-check');
-    const names = ['a', 'bb', 'c-1', 'd.2', 'e'.repeat(N), 'f'.repeat(200)];
+    const names = Array.from({ length: E + 4 }, (_, i) => `${i}`.padEnd(i % 2 ? N : 3, 'w')); // more names than E, long and short
     fc.assert(fc.property(fc.array(fc.constantFrom(...names), { minLength: 1, maxLength: 24 }), (seq) => {
       createSessionScopedPointerAdapter(base, 'init-ws-s1').clear();
       seq.forEach((name, i) => recordInitWorkstream(base, 's1', name, T + i));
@@ -1678,7 +1705,6 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
         got.every((n, i) => n === suffix[i]) && Buffer.byteLength(raw('init-ws-s1'), 'utf-8') + 1 <= B;
     }), { numRuns: 60 });
   });
-
 
   test('a carry file with no parseable entry reads as lapsed, not as absent', (t) => {
     const session = path.basename(base);
@@ -1720,14 +1746,6 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.deepEqual(peekInitWorkstream(base, session, T + P), ['beta']);
   });
 
-  // The carry directory of `base`: a record for a throwaway session creates it, and the session's own files stay inside it.
-  const carryDir = (t, session) => {
-    t.after(() => createSessionScopedPointerAdapter(base, `init-ws-${session}`).clear());
-    recordInitWorkstream(base, session, 'alpha', T);
-    const sessions = path.join(os.tmpdir(), 'gsd-workstream-sessions');
-    return fs.readdirSync(sessions).map((d) => path.join(sessions, d)).find((d) => fs.existsSync(path.join(d, `init-ws-${session}`)));
-  };
-
   test('an unreadable entry does not stop the prune of later expired carries', (t) => {
     const session = path.basename(base);
     const dir = carryDir(t, session);
@@ -1745,9 +1763,6 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.equal(recordInitWorkstream(base, session, 'beta', T + P), true);
     for (let i = 0; i < 8; i++) assert.equal(raw(`init-ws-old${i}`), null, `old${i} is pruned`);
   });
-
-  // The carry file path of a throwaway session, so a test writes the raw bytes a carry holds.
-  const carryFile = (t, session) => path.join(carryDir(t, session), `init-ws-${session}`);
 
   test('surrounding whitespace in the carry file parses to the same name and write time', (t) => {
     const session = path.basename(base);
@@ -1861,5 +1876,6 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.equal(recorded.timedOut, false, 'record returned instead of blocking');
     assert.equal(recorded.exitCode, 0, recorded.stderr);
     assert.equal(recorded.stdout.trim(), 'true');
+    assert.equal(fs.existsSync(fifo), false, 'the sweep removes the FIFO');
   });
 });

@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir, readBoundedRegularFile } from './shell-command-projection.cjs';
 import {
   isValidActiveWorkstreamName,
+  validateActiveWorkstreamName,
   isReservedWorkstreamName,
   reservedWorkstreamNameMessage,
 } from './workstream-name-policy.cjs';
@@ -537,8 +538,8 @@ const INIT_WORKSTREAM_MAX_ENTRIES = 8;
 /** The longest name a carry records: a workstream directory name (255 bytes; the charset is ASCII). */
 const INIT_WORKSTREAM_NAME_MAX_BYTES = 255;
 
-/** The read cap, above which a file is not a carry: every entry at its longest (name, space, the longest text of a Number, 24 bytes as in `-1.7976931348623157e+308`, newline). */
-const INIT_WORKSTREAM_MAX_BYTES = INIT_WORKSTREAM_MAX_ENTRIES * (INIT_WORKSTREAM_NAME_MAX_BYTES + 1 + 24 + 1);
+/** The read cap, above which a file is not a carry: every entry at its longest (name, space, the longest text of a Number, 25 bytes as in `-0.0000012345678901234567`, newline). The writer keeps at most INIT_WORKSTREAM_MAX_ENTRIES entries, each with a name that passes the name rule within INIT_WORKSTREAM_NAME_MAX_BYTES, so a file it writes stays within this cap. */
+const INIT_WORKSTREAM_MAX_BYTES = INIT_WORKSTREAM_MAX_ENTRIES * (INIT_WORKSTREAM_NAME_MAX_BYTES + 1 + 25 + 1);
 
 interface InitWorkstreamEntry { name: string; at: number }
 
@@ -576,12 +577,12 @@ function recordInitWorkstream(cwd: string, session: string | undefined, name: st
   const key = initWorkstreamKey(session);
   const scoped = key ? getSessionScopedWorkstreamFile(cwd, key) : null;
   const adapter = key ? createSessionScopedPointerAdapter(cwd, key) : null;
-  if (!scoped || !adapter || !validateWorkstreamName(name) || name.length > INIT_WORKSTREAM_NAME_MAX_BYTES) return false;
-  const kept = parseInitWorkstream(readCarry(scoped.filePath)).filter((e) => e.name !== name && withinAge(e.at, now, INIT_WORKSTREAM_PRUNE_AGE_MS));
-  kept.push({ name, at: now });
-  const text = (): string => kept.map((e) => `${e.name} ${e.at}`).join('\n');
-  while (kept.length > 1 && (kept.length > INIT_WORKSTREAM_MAX_ENTRIES || Buffer.byteLength(`${text()}\n`, 'utf-8') > INIT_WORKSTREAM_MAX_BYTES)) kept.shift();
-  adapter.write(text());
+  const { value } = validateActiveWorkstreamName(name);
+  const recordable = (n: string | null): n is string => n !== null && validateWorkstreamName(n) && n.length <= INIT_WORKSTREAM_NAME_MAX_BYTES;
+  if (!scoped || !adapter || !recordable(value)) return false;
+  const kept = parseInitWorkstream(readCarry(scoped.filePath)).filter((e) => e.name !== value && recordable(e.name) && withinAge(e.at, now, INIT_WORKSTREAM_PRUNE_AGE_MS));
+  kept.push({ name: value, at: now });
+  adapter.write(kept.slice(-INIT_WORKSTREAM_MAX_ENTRIES).map((e) => `${e.name} ${e.at}`).join('\n'));
   return true;
 }
 
@@ -602,6 +603,7 @@ export = {
   recordInitWorkstream,
   peekInitWorkstream,
   pruneInitWorkstreams,
+  INIT_WORKSTREAM_KEY_PREFIX,
   INIT_WORKSTREAM_MAX_AGE_MS,
   INIT_WORKSTREAM_PRUNE_AGE_MS,
   INIT_WORKSTREAM_MAX_ENTRIES,

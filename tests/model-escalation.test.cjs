@@ -80,7 +80,7 @@ test('property: the init --ws carry round-trips a valid name per session, other 
   const T = 1_000_000;
   const project = createTempDir('gsd-esc-carry-');
   const base = 'a'.repeat(159);
-  const clearAll = () => { for (const s of ['s1', 's2', base, `${base}b`]) store.createSessionScopedPointerAdapter(project, `init-ws-${s}`).clear(); };
+  const clearAll = () => { for (const s of ['s1', 's2', base, `${base}b`]) store.createSessionScopedPointerAdapter(project, `${store.INIT_WORKSTREAM_KEY_PREFIX}${s}`).clear(); };
   t.after(() => { clearAll(); cleanup(project); });
   fc.assert(fc.property(
     fc.constantFrom('alpha', 'b-2', 'c_3', 'd.4', '../x', 'a b', ''), fc.constantFrom('s1', 's2', undefined, ''),
@@ -112,7 +112,7 @@ test('recordInitWorkstream prunes this project\'s expired carries', (t) => {
   const { INIT_WORKSTREAM_PRUNE_AGE_MS: P } = store;
   const T = 1_000_000;
   const project = createTempDir('gsd-esc-prune-');
-  const raw = (s) => store.createSessionScopedPointerAdapter(project, `init-ws-${s}`);
+  const raw = (s) => store.createSessionScopedPointerAdapter(project, `${store.INIT_WORKSTREAM_KEY_PREFIX}${s}`);
   t.after(() => {
     for (const s of ['s1', 's2']) raw(s).clear();
     cleanup(project);
