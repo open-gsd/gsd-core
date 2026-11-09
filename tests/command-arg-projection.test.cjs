@@ -1135,5 +1135,38 @@ describe('#6087 list runs and value flags agree', () => {
         (err) => err instanceof TypeError && err.message.includes('missingValueMessage'),
       );
     });
+
+    test('T-N10: blankIsMissingFlags makes a whitespace-only value missing in both forms, with the verb wording', () => {
+      const spec = { ...base, blankIsMissingFlags: ['n'], missingValueMessage: 'verb: {flag} requires a non-empty value' };
+      for (const argv of [['--n', '  '], ['--n', ''], ['--n='], ['--n=  '], ['--n', '\t']]) {
+        const result = parseNamedArgs(argv, spec);
+        assert.strictEqual(result.ok, false, JSON.stringify(argv));
+        assert.strictEqual(result.reason, 'verb: --n requires a non-empty value', JSON.stringify(argv));
+        assert.strictEqual(result.arg, '--n', JSON.stringify(argv));
+      }
+      assert.deepStrictEqual(parseNamedArgs(['--n', ' v '], spec), { ok: true, data: { n: ' v ' } });
+      assert.deepStrictEqual(parseNamedArgs(['--n=v'], spec), { ok: true, data: { n: 'v' } });
+      // Without the option a whitespace-only space-form value stays a value.
+      assert.deepStrictEqual(parseNamedArgs(['--n', '  '], base), { ok: true, data: { n: '  ' } });
+    });
+
+    test('T-N11: blankIsMissingFlags overrides the empty relaxations and must be a subset of nonEmptyFlags', () => {
+      const relaxed = {
+        ...base,
+        blankIsMissingFlags: ['n'],
+        emptyValueFlags: ['n'],
+        emptyEqFlags: ['n'],
+      };
+      missing(parseNamedArgs(['--n', ' '], relaxed), 'n');
+      missing(parseNamedArgs(['--n=  '], relaxed), 'n');
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['n'], blankIsMissingFlags: ['n'], positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes('blankIsMissingFlags') && err.message.includes('nonEmptyFlags'),
+      );
+      assert.throws(
+        () => parseNamedArgs([], { ...base, blankIsMissingFlags: 'n' }),
+        (err) => err instanceof TypeError && err.message.includes('blankIsMissingFlags'),
+      );
+    });
   });
 });
