@@ -2070,7 +2070,6 @@ ${creationBash}
   });
 
   test('dispatch refuses a manifest path that is a directory or a symlink', (t) => {
-    const { runHook } = require('./helpers/process-seam.cjs');
     const creationBash = extractManifestCreationBash();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-manifest-shape-'));
     t.after(() => {
@@ -2091,7 +2090,10 @@ ${creationBash}
       fs.mkdirSync(phaseDir, { recursive: true });
       const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
       occupy(manifestPath, phaseDir);
-      const script = `
+      // A script file, not `bash -c`: Git Bash rewrites path-like text inside
+      // a -c argument, which breaks the absolute-path case pattern.
+      const scriptPath = path.join(root, `shape-${phaseName}.sh`);
+      fs.writeFileSync(scriptPath, `
 set -e
 gsd_run() {
   node "${GSD_TOOLS}" "$@"
@@ -2099,12 +2101,8 @@ gsd_run() {
 export CURRENT_WAVE=1
 export PHASE_DIR="${phaseDir}"
 ${creationBash}
-`;
-      return runHook('-c', [script], {
-        interpreter: 'bash',
-        cwd: repo,
-        timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-      });
+`);
+      return runBashFile(scriptPath, { cwd: repo });
     };
 
     const dirRes = runFor('01-directory', (manifestPath) => {
@@ -2114,14 +2112,25 @@ ${creationBash}
     assert.match(String(dirRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
     assert.equal(fs.statSync(path.join(repo, '.planning', 'phases', '01-directory', 'wave-1-manifest.json')).isDirectory(), true);
 
+    let symlinkBlocked = null;
     const linkRes = runFor('02-symlink', (manifestPath, phaseDir) => {
       const target = path.join(phaseDir, 'elsewhere.json');
       fs.writeFileSync(target, '{"worktrees":[]}\n');
-      fs.symlinkSync(target, manifestPath);
+      try {
+        fs.symlinkSync(target, manifestPath);
+      } catch (err) {
+        if (err && (err.code === 'EPERM' || err.code === 'ENOTSUP' || err.code === 'EACCES')) {
+          symlinkBlocked = err.code;
+          return;
+        }
+        throw err;
+      }
     });
-    assert.notEqual(linkRes.exitCode, 0, `a symlink at the manifest path must fail. stderr: ${linkRes.stderr}`);
-    assert.match(String(linkRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
-    assert.equal(fs.lstatSync(path.join(repo, '.planning', 'phases', '02-symlink', 'wave-1-manifest.json')).isSymbolicLink(), true);
+    if (symlinkBlocked === null) {
+      assert.notEqual(linkRes.exitCode, 0, `a symlink at the manifest path must fail. stderr: ${linkRes.stderr}`);
+      assert.match(String(linkRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
+      assert.equal(fs.lstatSync(path.join(repo, '.planning', 'phases', '02-symlink', 'wave-1-manifest.json')).isSymbolicLink(), true);
+    }
   });
 
   test('execute-phase dispatch block fails with fatal when wave number cannot be resolved', (t) => {
