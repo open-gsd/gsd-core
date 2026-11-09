@@ -8,6 +8,12 @@ on:
       - 'release/**'
       - 'hotfix/**'
   pull_request:
+    # #6073: `labeled`/`unlabeled` so adding or removing `fix-next` starts a new
+    # run. `next-health` reads the label from the event payload (PR_LABELS), and a
+    # re-run reuses the old payload, so only a run started by the label event can
+    # see the label change. Every label event runs the whole workflow: a skipped
+    # `Required tests` would count as passing, so no label event may skip it.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     branches:
       - next
       - main
@@ -642,8 +648,8 @@ jobs:
     # by default, which leaves today's behavior untouched. A maintainer sets it
     # when the merge queue is enforced, so Windows/macOS are first exercised on the
     # queue's merge-group commit rather than after merge, and unsets it to roll
-    # back. `required-tests` already accepts this job as skipped. A label applied
-    # after a run started does not re-run it: push a commit or dispatch the branch.
+    # back. `required-tests` already accepts this job as skipped. Applying the
+    # label starts a new run (#6073: `labeled` is a trigger type), which includes it.
     if: >-
       needs.changes.outputs.code_changed == 'true' &&
       needs.changes.outputs.full_matrix == 'true' &&
