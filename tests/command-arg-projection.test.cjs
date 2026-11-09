@@ -810,3 +810,69 @@ describe('#6087 freePositionals', () => {
     assert.deepStrictEqual(result, { ok: true, data: { a: 'one' } });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #6087 — short-flag rejection and per-verb unknown-flag wording live in the seam
+// ---------------------------------------------------------------------------
+
+describe('#6087 short flags and unknown-flag message', () => {
+  const base = { positionals: 1, freePositionals: true, booleanFlags: ['dry-run'] };
+
+  test('a short flag is an ordinary free word without rejectShortFlags', () => {
+    const result = parseNamedArgs(['verb', '-n'], base);
+    assert.equal(result.ok, true);
+  });
+
+  test('rejectShortFlags refuses a short flag past the boundary as an unknown flag', () => {
+    const result = parseNamedArgs(['verb', '-n'], { ...base, rejectShortFlags: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.kind, 'InvalidArgs');
+    assert.equal(result.arg, '-n');
+    assert.match(result.reason, /unknown flag/);
+  });
+
+  test('rejectShortFlags does not touch tokens inside the positional boundary', () => {
+    const result = parseNamedArgs(['-n', 'x'], { ...base, rejectShortFlags: true });
+    assert.equal(result.ok, true);
+  });
+
+  test('rejectShortFlags keeps -1 and - as ordinary positionals', () => {
+    for (const tok of ['-1', '-', '-1.5']) {
+      const result = parseNamedArgs(['verb', tok], { ...base, rejectShortFlags: true });
+      assert.equal(result.ok, true, tok);
+    }
+  });
+
+  test('rejectShortFlags still accepts declared long flags', () => {
+    const result = parseNamedArgs(['verb', '--dry-run'], { ...base, rejectShortFlags: true });
+    assert.deepStrictEqual(result, { ok: true, data: { 'dry-run': true } });
+  });
+
+  test('unknownFlagMessage replaces the default reason with the raw token substituted', () => {
+    const spec = { ...base, unknownFlagMessage: 'Unknown flag for todo complete: {flag}' };
+    const result = parseNamedArgs(['verb', '--bogus'], spec);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'Unknown flag for todo complete: --bogus');
+    assert.equal(result.arg, '--bogus');
+  });
+
+  test('unknownFlagMessage applies to a rejected short flag', () => {
+    const spec = { ...base, rejectShortFlags: true, unknownFlagMessage: 'Unknown flag for x: {flag}' };
+    const result = parseNamedArgs(['verb', '-n'], spec);
+    assert.equal(result.reason, 'Unknown flag for x: -n');
+  });
+
+  test('unknownFlagMessage without {flag} throws TypeError', () => {
+    assert.throws(() => parseNamedArgs(['verb'], { ...base, unknownFlagMessage: 'no placeholder' }), TypeError);
+    assert.throws(() => parseNamedArgs(['verb'], { ...base, unknownFlagMessage: 42 }), TypeError);
+  });
+
+  test('rejectShortFlags other than true throws TypeError', () => {
+    assert.throws(() => parseNamedArgs(['verb'], { ...base, rejectShortFlags: false }), TypeError);
+  });
+
+  test('the default unknown-flag message is unchanged without the option', () => {
+    const result = parseNamedArgs(['verb', '--bogus'], base);
+    assert.match(result.reason, /^unknown flag .*--bogus.*; accepted: --dry-run$/);
+  });
+});
