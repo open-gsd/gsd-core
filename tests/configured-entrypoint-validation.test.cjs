@@ -404,9 +404,13 @@ test('runtime config writers expose the exact configured entrypoints they emit',
     configPath: path.join(root, 'settings.json'),
     configuredEntrypoints: portable,
   }));
+  // #5850: Claude on win32 is the PowerShell runner (no bash resolver), so the
+  // staged gsd-node-runner.sh entrypoint exists on POSIX hosts only.
   assert.deepEqual(
     portable.map(entry => path.basename(entry.scriptPath)),
-    ['gsd-node-runner.sh', 'gsd-context-monitor.js'],
+    process.platform === 'win32'
+      ? ['gsd-context-monitor.js']
+      : ['gsd-node-runner.sh', 'gsd-context-monitor.js'],
   );
 });
 
