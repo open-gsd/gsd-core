@@ -342,6 +342,7 @@ describe('#5867 phase unit across planning.sub_repos', () => {
   test('[negative] a task commit on a side branch of its sub-repo is unreachable, not scope', () => {
     const ws = makeWorkspace(['api', 'web']);
     const a = commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
+    commit(ws.repos.web, 'ui/base.js', 'feat(01-01): base', 1_700_000_050);
     ws.repos.web.git('checkout', '-b', 'side');
     const side = commit(ws.repos.web, 'ui/side.js', 'feat(01-01): side', 1_700_000_100);
     ws.repos.web.git('checkout', 'main');
