@@ -48,12 +48,14 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=false for root markdown, got: ${JSON.stringify(result)}`);
   });
 
-  test('pipeline workflow (test.yml) alone — #6075: CI YAML is never test scope', () => {
+  test('pipeline workflow (test.yml) alone — #6075: inert lane, workflow lints only, no matrix', () => {
     const result = scopeFor(['.github/workflows/test.yml']);
-    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
-    assert.deepStrictEqual(result.targeted_tests, []);
+    assert.ok(result.targeted_tests.length > 0, JSON.stringify(result));
+    assert.ok(result.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'), JSON.stringify(result));
+    assert.ok(result.targeted_tests.includes('tests/pr-template-policy.test.cjs'), JSON.stringify(result));
     // #4641: classify() emits no windows_tests key at all.
     assert.strictEqual(Object.hasOwn(result, 'windows_tests'), false,
       `expected no windows_tests property, got keys: ${JSON.stringify(Object.keys(result))}`);
@@ -61,17 +63,17 @@ describe('ci-test-scope.cjs', () => {
 
   test('pipeline workflow (install-smoke.yml) alone — #6075: no matrix', () => {
     const result = scopeFor(['.github/workflows/install-smoke.yml']);
-    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
   });
 
-  test('formerly-inert workflow (stale.yml) alone — #6075: code_changed false, no targeted tests', () => {
+  test('workflow (stale.yml) alone — code_changed true, product_changed false, shallow-checkout lint targeted', () => {
     const result = scopeFor(['.github/workflows/stale.yml']);
-    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
-    assert.deepStrictEqual(result.targeted_tests, []);
+    assert.ok(result.targeted_tests.includes('tests/policy-lint-shallow-checkout.test.cjs'), JSON.stringify(result));
   });
 
   test('TS runtime sources (src/semver-compare.cts) — code_changed true, product_changed true, full_matrix false, semver tests targeted', () => {
@@ -99,9 +101,9 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=true for gsd-core/ change, got: ${JSON.stringify(result)}`);
   });
 
-  test('unknown/new workflow alone — #6075: CI YAML, no matrix (fail-safe removed)', () => {
+  test('unknown/new workflow alone — #6075: CI YAML, no matrix', () => {
     const result = scopeFor(['.github/workflows/brand-new-thing.yml']);
-    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
   });
@@ -114,20 +116,19 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=true for docs+code, got: ${JSON.stringify(result)}`);
   });
 
-  test('formerly-inert workflow (docs-required.yml) alone — #6075: code_changed false, no targeted tests', () => {
+  test('workflow (docs-required.yml) alone — #6075: code_changed true, product_changed false, no matrix', () => {
     const result = scopeFor(['.github/workflows/docs-required.yml']);
-    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
-    assert.deepStrictEqual(result.targeted_tests, []);
+    assert.ok(result.targeted_tests.length > 0, JSON.stringify(result));
   });
 
-  test('mixed docs + CI YAML — #6075: code_changed false', () => {
+  test('mixed docs + CI YAML — #6075: inert lane (code true, product false, no matrix)', () => {
     const result = scopeFor(['docs/x.md', '.github/workflows/stale.yml']);
-    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false);
-    assert.deepStrictEqual(result.targeted_tests, []);
   });
 
   test('mixed docs + src — product_changed true', () => {
@@ -368,16 +369,16 @@ describe('ci-test-scope superset invariant (#494, rescinded by #4421)', () => {
   });
 });
 
-describe('#6075 CI YAML is never test scope', () => {
+describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix', () => {
   const { classify } = require('../scripts/ci-test-scope.cjs');
 
-  const NONE = { code_changed: false, product_changed: false, full_matrix: false, targeted_tests: [] };
-  function assertNoScope(files) {
+  function assertInert(files) {
     const result = scopeFor(files);
-    assert.strictEqual(result.code_changed, false, `${files}: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.code_changed, true, `${files}: ${JSON.stringify(result)}`);
     assert.strictEqual(result.product_changed, false, `${files}: ${JSON.stringify(result)}`);
     assert.strictEqual(result.full_matrix, false, `${files}: ${JSON.stringify(result)}`);
-    assert.deepStrictEqual(result.targeted_tests, NONE.targeted_tests, `${files}: ${JSON.stringify(result)}`);
+    assert.ok(result.targeted_tests.length > 0, `${files}: ${JSON.stringify(result)}`);
+    assert.ok(!result.targeted_tests.includes('unit'), `${files}: ${JSON.stringify(result)}`);
     return result;
   }
 
@@ -390,52 +391,53 @@ describe('#6075 CI YAML is never test scope', () => {
     return out;
   }
 
-  test('workflows-only diff: no scope', () => {
-    assertNoScope(['.github/workflows/test.yml']);
-    assertNoScope(['.github/workflows/test.yml', '.github/workflows/release.yml']);
+  test('workflows-only diff: workflow-lint set targeted, no matrix', () => {
+    const one = assertInert(['.github/workflows/test.yml']);
+    assert.ok(one.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'), JSON.stringify(one));
+    assert.ok(one.targeted_tests.includes('tests/pr-template-policy.test.cjs'), JSON.stringify(one));
+    assert.ok(one.targeted_tests.includes('tests/lint-pr-check-project-dir.test.cjs'), JSON.stringify(one));
+    assertInert(['.github/workflows/test.yml', '.github/workflows/release.yml']);
   });
 
-  test('composite-action-only diff (.yml and .yaml): no scope', () => {
-    assertNoScope(['.github/actions/x/action.yml']);
-    assertNoScope(['.github/actions/x/action.yaml']);
+  test('composite-action-only diff (.yml and .yaml): inert', () => {
+    assertInert(['.github/actions/x/action.yml']);
+    assertInert(['.github/actions/x/action.yaml']);
   });
 
-  test('root .github config yaml (dependabot.yml): no scope', () => {
-    assertNoScope(['.github/dependabot.yml']);
+  test('root .github config yaml (dependabot.yml): inert', () => {
+    assertInert(['.github/dependabot.yml']);
   });
 
-  test('issue-form yaml (.github/ISSUE_TEMPLATE/config.yml): no scope', () => {
-    assertNoScope(['.github/ISSUE_TEMPLATE/config.yml']);
+  test('issue-form yaml (.github/ISSUE_TEMPLATE/config.yml): inert', () => {
+    assertInert(['.github/ISSUE_TEMPLATE/config.yml']);
   });
 
-  test('every real tracked .github yaml file alone: no scope (parity with the filesystem)', () => {
+  test('every real tracked .github yaml file alone: no matrix, not product (parity with the filesystem)', () => {
     const files = walkYaml(path.join(ROOT, '.github'));
     assert.ok(files.length > 0, 'precondition: .github holds yaml files');
-    for (const file of files) assertNoScope([file]);
+    for (const file of files) assertInert([file]);
   });
 
-  test('CI yaml + product code: the matrix decision is exactly the product code alone', () => {
+  test('CI yaml + product code: product behavior, workflow lints added', () => {
     const alone = scopeFor(['src/semver-compare.cts']);
     const mixed = scopeFor(['.github/workflows/test.yml', 'src/semver-compare.cts']);
     assert.strictEqual(mixed.code_changed, true, JSON.stringify(mixed));
     assert.strictEqual(mixed.product_changed, true, JSON.stringify(mixed));
     assert.strictEqual(mixed.full_matrix, alone.full_matrix);
-    assert.deepStrictEqual(mixed.targeted_tests, alone.targeted_tests);
+    for (const t of alone.targeted_tests) {
+      assert.ok(mixed.targeted_tests.includes(t), `${t} missing from ${JSON.stringify(mixed)}`);
+    }
   });
 
-  test('CI yaml + docs only: no scope', () => {
-    assertNoScope(['.github/workflows/test.yml', 'docs/x.md']);
+  test('CI yaml + docs only: inert (docs add nothing)', () => {
+    assertInert(['.github/workflows/test.yml', 'docs/x.md']);
   });
 
-  test('CI yaml + conformance-tier test file: full_matrix stays true', () => {
+  test('CI yaml + conformance-tier test file: full_matrix true', () => {
     const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
     const result = scopeFor(['.github/workflows/test.yml', CONFORMANCE_TIER_FILES[0]]);
     assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
-  });
-
-  test('CI yaml adds no reasons', () => {
-    const result = classify(['.github/workflows/test.yml', '.github/dependabot.yml']);
-    assert.deepStrictEqual(result.reasons, []);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
   });
 
   test('boundary: near-miss paths are NOT CI yaml', () => {
@@ -443,7 +445,7 @@ describe('#6075 CI YAML is never test scope', () => {
     // `.github/` under a product prefix is still product code.
     for (const file of ['gsd-core/.github/workflows/a.yml', 'src/.github/workflows/a.yml', 'tests/fixtures/.github/workflows/a.yml']) {
       const result = classify([file]);
-      assert.strictEqual(result.code_changed, true, `${file}: ${JSON.stringify(result)}`);
+      assert.strictEqual(result.product_changed, true, `${file}: ${JSON.stringify(result)}`);
     }
     for (const file of ['.github/workflows/test.yml.bak', '.github/workflows/test.yaml.txt', '.githubx/workflows/a.yml']) {
       const result = classify([file]);
@@ -458,15 +460,15 @@ describe('#6075 CI YAML is never test scope', () => {
     assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
   });
 
-  test('property: any list of .github yaml paths classifies as no scope', () => {
+  test('property: any list of .github yaml paths classifies as inert (code true, product false, full false)', () => {
     const fc = require('fast-check');
     const segment = fc.stringMatching(/^[a-z0-9][a-z0-9_-]{0,11}$/);
     const ciYamlPath = fc.tuple(fc.array(segment, { minLength: 0, maxLength: 3 }), segment, fc.constantFrom('yml', 'yaml'))
       .map(([dirs, name, ext]) => `.github/${[...dirs, `${name}.${ext}`].join('/')}`);
     fc.assert(fc.property(fc.array(ciYamlPath, { minLength: 1, maxLength: 5 }), files => {
       const result = classify(files);
-      return result.code_changed === false && result.product_changed === false &&
-        result.full_matrix === false && result.targeted_tests.length === 0 && result.reasons.length === 0;
+      return result.code_changed === true && result.product_changed === false &&
+        result.full_matrix === false && result.targeted_tests.length > 0;
     }), { numRuns: 200 });
   });
 });
@@ -1038,7 +1040,7 @@ describe('#4592 reachability-based full_matrix classifier', () => {
   });
 
   // Row 13: pairing a conformance-tier test file with a CI yaml file must
-  // still escalate (#6075: the yaml is ignored; the tier file decides).
+  // still escalate (#6075: CI yaml is inert; the tier file decides).
   test('full_matrix stays true when a conformance-tier test file is paired with a CI yaml file', () => {
     const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
     const tierFile = CONFORMANCE_TIER_FILES[0];
