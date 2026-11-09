@@ -1294,11 +1294,15 @@ describe('planning-inspect — halted plans (#5823)', () => {
     // Directory-in-file-position: unreadable on every platform, no chmod.
     fs.mkdirSync(path.join(dir, '1-01-SUMMARY.md'), { recursive: true });
     writeHaltPlan(dir, '1-02-PLAN.md', ['depends_on: [1-01]']);
+    // Positive control: a readable halt in the same phase still reads true.
+    writeHaltPlan(dir, '1-03-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '1-03-SUMMARY.md', ['status: halted']);
 
     const result = buildPlanningInspect(cwd);
     assert.deepStrictEqual(haltRows(result.phases[0]), [
       ['1-01', true, false, []],
       ['1-02', false, false, []],
+      ['1-03', true, true, []],
     ]);
     assert.deepStrictEqual(
       diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
@@ -1331,10 +1335,16 @@ describe('planning-inspect — halted plans (#5823)', () => {
     const outside = path.join(outsideDir, 'escaped-SUMMARY.md');
     writeAbs(outside, frontmatterDoc(['status: halted'], ['# Summary']));
     fs.symlinkSync(outside, path.join(dir, '1-01-SUMMARY.md'));
+    // Positive control: the same halt, inside the root, reads true.
+    writeHaltPlan(dir, '1-02-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '1-02-SUMMARY.md', ['status: halted']);
 
     const result = buildPlanningInspect(cwd);
-    assert.deepStrictEqual(haltRows(result.phases[0]), [['1-01', true, false, []]]);
-    assert.strictEqual(result.phases[0].halted_count, 0);
+    assert.deepStrictEqual(haltRows(result.phases[0]), [
+      ['1-01', true, false, []],
+      ['1-02', true, true, []],
+    ]);
+    assert.strictEqual(result.phases[0].halted_count, 1);
     assert.ok(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE));
   });
 
@@ -1388,17 +1398,99 @@ describe('planning-inspect — halted plans (#5823)', () => {
     writeHaltPlan(p1, '1-01-PLAN.md', ['wave: 1']);
     writeHaltSummary(p1, '1-01-SUMMARY.md', ['status: halted']);
     writeHaltPlan(p1, '1-02-PLAN.md', ['wave: 1']);
+    writeHaltSummary(p1, '1-02-SUMMARY.md', ['status: complete']);
+    writeHaltPlan(p1, '1-03-PLAN.md', ['wave: 1']);
     writeHaltPlan(p2, '2-01-PLAN.md', ['wave: 1']);
     writeHaltSummary(p2, '2-01-SUMMARY.md', ['status: halted']);
     writeHaltPlan(p2, '2-02-PLAN.md', ['wave: 1']);
     writeHaltSummary(p2, '2-02-SUMMARY.md', ['status: HALTED']);
 
     const result = buildPlanningInspect(cwd);
-    assert.deepStrictEqual(result.phases.map((p) => [p.dir, p.summary_count, p.halted_count]), [
-      ['01-foo', 1, 1],
-      ['02-bar', 2, 2],
+    assert.deepStrictEqual(result.phases.map((p) => [p.dir, p.plan_count, p.summary_count, p.halted_count]), [
+      ['01-foo', 3, 2, 1],
+      ['02-bar', 2, 2, 2],
     ]);
-    assert.deepStrictEqual(result.progress.completed_plans, { completed: 3, total: 4, percent: 75, scope: 'complete' });
-    assert.deepStrictEqual(result.progress.halted_plans, { completed: 3, total: 4, percent: 75, scope: 'complete' });
+    assert.deepStrictEqual(result.progress.completed_plans, { completed: 4, total: 5, percent: 80, scope: 'complete' });
+    assert.deepStrictEqual(result.progress.halted_plans, { completed: 3, total: 5, percent: 60, scope: 'complete' });
+  });
+  test('resolves depends_on tokens in phase-plan-index\'s sorted plan order when two plans share a short form or canonical id', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // Short form "01" names both `x-01` and `plans/PLAN-01.md`. Scan order puts
+    // the root file first; sorted order puts `plans/` first, so the token
+    // resolves to the un-halted nested plan and `x-02` is not blocked.
+    writeHaltPlan(dir, 'x-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'x-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'plans/PLAN-01.md', ['wave: 1']);
+    writeHaltSummary(dir, 'plans/SUMMARY-01.md', ['status: complete']);
+    writeHaltPlan(dir, 'x-02-PLAN.md', ['depends_on: ["01"]']);
+
+    const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
+    assert.strictEqual(byId.get('x-01').halted, true);
+    assert.deepStrictEqual(byId.get('x-02').blocked_by, []);
+  });
+
+  test('a canonical-id collision resolves to the plan that sorts last, as in phase-plan-index', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // Both `z-01-01-PLAN.md` and `plans/PLAN-01-01.md` have canonical id
+    // 01-01; the canonical map is last-write-wins over the sorted list.
+    writeHaltPlan(dir, 'z-01-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'z-01-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'plans/PLAN-01-01.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-02-PLAN.md', ['depends_on: [01-01]']);
+
+    const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
+    assert.deepStrictEqual(byId.get('01-02').blocked_by, ['z-01-01']);
+  });
+
+  test('a SUMMARY two plans halt-pair with, when unreadable, is named once', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '01-06-alpha-PLAN.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-06-beta-PLAN.md', ['wave: 1']);
+    fs.mkdirSync(path.join(dir, '01-06-SUMMARY.md'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(
+      diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
+      [['summary_unreadable', '01-06-SUMMARY.md', 'Summary file could not be read; whether this plan halted is unknown.']],
+    );
+  });
+
+  test('a SUMMARY a row already reported unreadable is not reported again by the halt read', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // `01-06` pairs the SUMMARY by filename (its row read reports it);
+    // `01-06-scaffolding` reaches the same file only through the halt read.
+    writeHaltPlan(dir, '01-06-PLAN.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-06-scaffolding-PLAN.md', ['wave: 1']);
+    fs.mkdirSync(path.join(dir, '01-06-SUMMARY.md'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(
+      diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
+      [['summary_unreadable', '01-06-SUMMARY.md', 'Summary file could not be read; file provenance for this plan is unknown.']],
+    );
+  });
+
+  test('a halted SUMMARY the completion rule does not pair is never counted as a halt', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // `01-06-review-SUMMARY.md` indexes under canonical id 01-06, but no
+    // summary candidate of `01-06-PLAN.md` names it, so `summary_count` does
+    // not count it — and `halted_count` must not either.
+    writeHaltPlan(dir, '01-06-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '01-06-review-SUMMARY.md', ['status: halted']);
+
+    const [phase] = buildPlanningInspect(cwd).phases;
+    assert.deepStrictEqual(haltRows(phase), [['01-06', false, false, []]]);
+    assert.strictEqual(phase.summary_count, 0);
+    assert.strictEqual(phase.halted_count, 0);
   });
 });
