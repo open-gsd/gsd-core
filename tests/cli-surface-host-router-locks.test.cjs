@@ -458,6 +458,8 @@ const CASES_B2 = [
   {"id":"re dup effort eq then space","argv":["resolve-execution","gsd-executor","--effort=high","--effort","low"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile","json":{"effort":"high"}}},
   {"id":"loop dup fingerprint first wins","argv":["loop","render-hooks","plan:pre","--after-fingerprint","ph","--after-fingerprint=qq"],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: ph ("}},
   {"id":"loop dup fingerprint eq first","argv":["loop","render-hooks","plan:pre","--after-fingerprint=qq","--after-fingerprint","ph"],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: qq ("}},
+  {"id":"rdi dup harness-flag space first","argv":["record-dispatch-isolation","--isolation","harness-worktree","--harness-flag","x","--harness-flag=--worktree"],"post":["node","-e","console.log(JSON.parse(require('fs').readFileSync('.gsd/dispatch-isolation-sentinel.json','utf8')).harness_flag)"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded","post":"x"}},
+  {"id":"rdi dup harness-flag eq first","argv":["record-dispatch-isolation","--isolation","harness-worktree","--harness-flag=--worktree","--harness-flag","x"],"post":["node","-e","console.log(JSON.parse(require('fs').readFileSync('.gsd/dispatch-isolation-sentinel.json','utf8')).harness_flag)"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded","post":"--worktree"}},
 ];
 
 function runCommand(argv, cwd) {

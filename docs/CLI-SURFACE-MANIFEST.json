@@ -276,6 +276,10 @@
       "nonEmpty": [
         "config-dir",
         "runtime"
+      ],
+      "emptyEq": [
+        "config-dir",
+        "runtime"
       ]
     },
     {
@@ -702,6 +706,19 @@
         "failure-class",
         "fast-mode",
         "host"
+      ],
+      "emptyValue": [
+        "attempt",
+        "effort",
+        "failure-class",
+        "fast-mode",
+        "host"
+      ],
+      "emptyEq": [
+        "attempt",
+        "effort",
+        "failure-class",
+        "fast-mode"
       ]
     },
     {
@@ -742,7 +759,10 @@
       "required": [
         "config-dir"
       ],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "nonEmpty": [
+        "config-dir"
+      ]
     },
     {
       "verb": "review-lane.availability",
@@ -1032,6 +1052,14 @@
         "runtime"
       ],
       "nonEmpty": [
+        "config-dir",
+        "runtime"
+      ],
+      "emptyValue": [
+        "config-dir",
+        "runtime"
+      ],
+      "emptyEq": [
         "config-dir",
         "runtime"
       ]

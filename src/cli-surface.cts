@@ -69,13 +69,17 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'resolve-model': { positionals: 2 },
   // The phase-type positional may sit before or after --granularity, so words past the boundary are free.
   'resolve-granularity': { positionals: 1, freePositionals: true, valueFlags: ['granularity'] },
-  // Positional agent type may interleave with the hand-parsed flags.
+  // Positional agent type may interleave with the hand-parsed flags. A flag without a next token (or with a
+  // flag-shaped one) is `Missing value`; a literal empty value (`--effort ''`, `--effort=`) was always a value,
+  // and the handler judges it (`--attempt ''` is "requires a non-negative integer").
   'resolve-execution': {
     positionals: 1,
     freePositionals: true,
     valueFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
     eqFlags: ['attempt', 'effort', 'failure-class', 'fast-mode'],
     nonEmptyFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
+    emptyValueFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
+    emptyEqFlags: ['attempt', 'effort', 'failure-class', 'fast-mode'],
   },
   'config-set': { positionals: 3, booleanFlags: DRY_RUN },
   // The choices JSON is the one positional, wherever --dry-run sits; the handler refuses a second one.
@@ -252,11 +256,13 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     valueFlags: ['config-dir'],
     requiredFlags: ['config-dir'],
   },
-  // Last --config-dir wins today; repeatable keeps every occurrence so the handler takes the last.
+  // Last --config-dir wins today; repeatable keeps every occurrence so the handler takes the last, and
+  // nonEmptyFlags checks that last occurrence (a trailing `--config-dir` with no value is a usage error).
   'restore-custom-files': {
     positionals: 1,
     valueFlags: ['config-dir'],
     repeatableFlags: ['config-dir'],
+    nonEmptyFlags: ['config-dir'],
     requiredFlags: ['config-dir'],
     booleanFlags: ['apply'],
   },
@@ -300,7 +306,11 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     positionals: 1,
     valueFlags: ['config-dir', 'runtime'],
     eqFlags: ['config-dir', 'runtime'],
+    // The workflow passes empty hints (`--runtime ""`, `--config-dir=`) when it has none; only a flag with
+    // no value token at all is refused.
     nonEmptyFlags: ['config-dir', 'runtime'],
+    emptyValueFlags: ['config-dir', 'runtime'],
+    emptyEqFlags: ['config-dir', 'runtime'],
     booleanFlags: JSON_FLAG,
   },
   // `--ecosystem` is required only when `--package` is given and stays in the handler.
@@ -322,7 +332,9 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     booleanFlags: ['apply', 'dry-run'],
     valueFlags: ['config-dir', 'runtime'],
     eqFlags: ['config-dir', 'runtime'],
+    // `--config-dir ''` is refused but `--config-dir=` was accepted (and means "no override").
     nonEmptyFlags: ['config-dir', 'runtime'],
+    emptyEqFlags: ['config-dir', 'runtime'],
   },
   'user-story.validate': { positionals: 2, valueFlags: ['story'] },
   'drift-guard.authority': { positionals: 2 },

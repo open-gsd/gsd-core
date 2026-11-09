@@ -89,6 +89,8 @@ function buildVerbEntry(verb, spec, aliases) {
   if (spec.rejectShortFlags) entry.rejectShortFlags = true;
   if ((spec.eqFlags ?? []).length > 0) entry.eq = sorted(spec.eqFlags);
   if ((spec.nonEmptyFlags ?? []).length > 0) entry.nonEmpty = sorted(spec.nonEmptyFlags);
+  if ((spec.emptyValueFlags ?? []).length > 0) entry.emptyValue = sorted(spec.emptyValueFlags);
+  if ((spec.emptyEqFlags ?? []).length > 0) entry.emptyEq = sorted(spec.emptyEqFlags);
   if (spec.passthroughAfter) entry.passthroughAfter = spec.passthroughAfter;
   if (spec.thirdParty) entry.thirdParty = true;
   return entry;

@@ -1191,7 +1191,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // (e.g. `--repo`). The spec makes words past the verb free, so a flag's own
           // value is never mistaken for a trailing positional before cmdPrSubrepo's
           // own "commit message required" guard runs.
-          const { repo, branch } = parseNamedArgsOrExit(args, specFor('pr-subrepo'), error);
+          const prSubrepoSpec = specFor('pr-subrepo');
+          const { repo, branch } = parseNamedArgsOrExit(args, prSubrepoSpec, error);
+          // At most the one optional message word may stand outside a flag: a second free word is the same
+          // stray positional the strict boundary (2 with a message, else 1) reported.
+          const prSubrepoWords = positionalWords(args, prSubrepoSpec);
+          const prSubrepoMessageCount = args[1] !== undefined && !isFlagToken(args[1]) ? 1 : 0;
+          if (prSubrepoWords.length > prSubrepoMessageCount) {
+            error(
+              `unexpected positional argument ${formatDiagnosticToken(prSubrepoWords[prSubrepoMessageCount])}`,
+              ERROR_REASON.USAGE,
+            );
+          }
           commands.cmdPrSubrepo(cwd, repo, branch, args[1], raw);
   }
 
@@ -3298,12 +3309,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // artifact already exists) each take a value in the space or `=` form; the seam refuses
             // a flag that is present without one, before any of it is used.
             const loopParsed = parseNamedArgsOrExit(args, specFor('loop.render-hooks'), error);
-            const loopConfigDir = loopParsed['config-dir'];
+            // Values are trimmed (the `=` form always was), so `--runtime= claude` reads as `claude`.
+            const loopValue = (name) => (loopParsed[name] === null ? undefined : loopParsed[name].trim());
+            const loopConfigDir = loopValue('config-dir');
             loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
               configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
-              activeCap: loopParsed['active-cap'] ?? undefined,
-              runtime: loopParsed.runtime ?? undefined,
-              afterFingerprint: loopParsed['after-fingerprint'] ?? undefined,
+              activeCap: loopValue('active-cap'),
+              runtime: loopValue('runtime'),
+              afterFingerprint: loopValue('after-fingerprint'),
             });
           } else {
             error(
