@@ -383,6 +383,7 @@
       "claude-orchestration.cjs",
       "cli-exit.cjs",
       "cli-skew-check.cjs",
+      "cli-surface.cjs",
       "clock.cjs",
       "clusters.cjs",
       "code-review-depth.cjs",

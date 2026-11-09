@@ -41,6 +41,7 @@ module.exports = {
   "tests/ci-rebase-check.test.cjs",
   "tests/ci-test-scope.test.cjs",
   "tests/claude-md.test.cjs",
+  "tests/cli-surface-host-router-locks.test.cjs",
   "tests/cline-install.test.cjs",
   "tests/close-phase-todos-padded-resolves.test.cjs",
   "tests/code-review-cicd.test.cjs",
