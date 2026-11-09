@@ -556,6 +556,13 @@ minimal `PATH` keep working, and a bare `node` lookup is never depended on. Re-r
 install or update from any of the environments converges stale runner paths — no mixed
 state where some hooks work in one environment and the rest in another.
 
+On Windows, Claude's managed JavaScript hooks are always PowerShell commands (carrying an
+explicit `shell: "powershell"`), portable installs included, so they work with or without Git
+Bash (#5850). The command tries the install-time node path first, then `node` on `PATH`, and
+portable installs spell the script path `$HOME`-relative. The bash resolver is used on POSIX
+hosts and for non-Claude runtimes. A config root shared between Windows and WSL therefore holds
+the PowerShell form after a Windows install and the bash form after a Linux install.
+
 To pin down which node a given environment picks, run the resolver directly with
 `GSD_NODE_RUNNER_NO_FALLBACKS=1` (first-argument-only resolution) — it prints a stderr
 diagnostic and exits non-zero when nothing resolves.
