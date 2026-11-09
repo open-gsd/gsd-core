@@ -318,6 +318,7 @@ module.exports = {
   "tests/verify-work-auto-transition.test.cjs",
   "tests/verify.test.cjs",
   "tests/vscode-browser-no-node-api.test.cjs",
+  "tests/windows-powershell-hook-runner.test.cjs",
   "tests/windsurf-hooks-bridge.test.cjs",
   "tests/workflow-guard.test.cjs",
   "tests/workflow-shell-pinning.test.cjs",
