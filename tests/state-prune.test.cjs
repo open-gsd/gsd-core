@@ -501,9 +501,22 @@ describe('#5831: state prune never loses entries', () => {
     statePath = path.join(tmpDir, '.planning', 'STATE.md');
     archivePath = path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md');
     writeStateMd(tmpDir, stateLines(8, [...OLD_ENTRIES, PHASE7]));
-    // A constant date: the production block heading and the expected one cannot straddle midnight.
-    mock.method(realClock, 'localToday', () => '2026-11-08');
+    pinToday();
   });
+
+  // A constant date: the production block heading and the expected one cannot straddle midnight.
+  function pinToday() {
+    mock.method(realClock, 'localToday', () => '2026-11-08');
+  }
+
+  /**
+   * Drop a test's I/O mocks and keep the date pinned. A bare mock.restoreAll()
+   * would also drop the pin, so a later plan would read the real date (#6072).
+   */
+  function restoreIoMocks() {
+    mock.restoreAll();
+    pinToday();
+  }
 
   afterEach(() => {
     mock.restoreAll();
@@ -634,7 +647,7 @@ describe('#5831: state prune never loses entries', () => {
 
       failWritesTo(archivePath, 'EIO');
       assert.throws(() => prune(3), (err) => err.code === 'EIO');
-      mock.restoreAll();
+      restoreIoMocks();
 
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
       assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'archive bytes unchanged / still absent');
@@ -660,7 +673,7 @@ describe('#5831: state prune never loses entries', () => {
 
       failWritesTo(statePath, 'ENOSPC');
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
-      mock.restoreAll();
+      restoreIoMocks();
 
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
       assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'archive restored exactly / removed again');
@@ -696,7 +709,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO'], 'both the STATE.md and the restore cause');
@@ -733,7 +746,7 @@ describe('#5831: state prune never loses entries', () => {
       }
       let thrown = null;
       try { prune(3); } catch (err) { thrown = err; }
-      mock.restoreAll();
+      restoreIoMocks();
 
       assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
       assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO']);
@@ -773,7 +786,7 @@ describe('#5831: state prune never loses entries', () => {
       damagingStateWrite(damage);
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC' && !(err instanceof AggregateError),
         'the original STATE.md error propagates');
-      mock.restoreAll();
+      restoreIoMocks();
 
       assert.strictEqual(writes.length, 1, 'the archive was published before the STATE.md write');
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md is byte-identical, kept entries and notes included');
@@ -788,7 +801,7 @@ describe('#5831: state prune never loses entries', () => {
     damagingStateWrite('truncated', true);
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO']);
@@ -815,7 +828,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['ENOSPC', 'EIO'], 'the STATE.md write cause and the re-read cause');
@@ -840,7 +853,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(thrown instanceof AggregateError, 'the refused rollback is reported alongside the STATE.md error');
     assert.strictEqual(thrown.errors[0].code, 'ENOSPC');
@@ -863,7 +876,7 @@ describe('#5831: state prune never loses entries', () => {
       return realWrite.call(fs, p, ...rest);
     });
     prune(3);
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(observed.length > 0, 'prune must write the archive');
     assert.deepStrictEqual(observed, observed.map(() => ({ lockHeld: true, stateUnchanged: true })));
@@ -970,7 +983,7 @@ describe('#5831: state prune never loses entries', () => {
       // itself (the direct-write fallback) truncates it before failing.
       failWritesTo(archivePath, 'ENOSPC', (p, realWrite) => { if (p === archivePath) realWrite.call(fs, p, ''); });
       assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
-      mock.restoreAll();
+      restoreIoMocks();
 
       assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive keeps its exact previous bytes / stays absent');
       assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
@@ -990,7 +1003,7 @@ describe('#5831: state prune never loses entries', () => {
       const e = new Error('EIO: simulated'); e.code = 'EIO'; throw e;
     });
     assert.throws(() => prune(3), (err) => err.code === 'EIO' && !(err instanceof AggregateError));
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.deepStrictEqual(bytesOrNull(archivePath), archiveBytes, 'the archive is put back exactly');
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md bytes unchanged');
@@ -1008,7 +1021,7 @@ describe('#5831: state prune never loses entries', () => {
     });
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'ESTALE']);
@@ -1029,7 +1042,7 @@ describe('#5831: state prune never loses entries', () => {
     mock.method(scp, 'platformRestoreFileSync', () => { const e = new Error('EROFS: simulated'); e.code = 'EROFS'; throw e; });
     let thrown = null;
     try { prune(3); } catch (err) { thrown = err; }
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.ok(thrown instanceof AggregateError, 'a combined error is thrown');
     assert.deepStrictEqual(thrown.errors.map(e => e.code), ['EIO', 'EROFS']);
@@ -1368,7 +1381,7 @@ describe('#5831: state prune never loses entries', () => {
       return realRead.call(scp, p, ...rest);
     });
     assert.throws(() => prune(3), /disappeared while its lock was held/);
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the archive is unchanged');
     assert.ok(lockReleased(), 'the STATE.md lock is released');
@@ -1382,7 +1395,7 @@ describe('#5831: state prune never loses entries', () => {
 
     failWritesTo(statePath, 'ENOSPC');
     assert.throws(() => prune(3), (err) => err.code === 'ENOSPC');
-    mock.restoreAll();
+    restoreIoMocks();
 
     assert.strictEqual(writes.length, 0, 'the retry did not write the archive');
     assert.deepStrictEqual(fs.readFileSync(archivePath), archiveBefore, 'the archive is unchanged');
