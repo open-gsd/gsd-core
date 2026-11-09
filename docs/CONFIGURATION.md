@@ -1911,22 +1911,18 @@ advertised set:
 | `gpt-5.6-sol` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `gpt-5.6-terra` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `gpt-5.6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh` |
-| `gpt-6.1-terra` | `low`, `medium`, `high`, `xhigh` |
-| `gpt-6-astra` | `low`, `medium`, `high`, `xhigh` |
-| `gpt-6-sol` | `low`, `medium`, `high`, `xhigh` |
-| `gpt-6-luna` | `low`, `medium`, `high`, `xhigh` |
+| `gpt-6.1-sol` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `gpt-6-astra` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `gpt-6-sol` | `low`, `medium`, `high`, `xhigh`, `max` |
+| `gpt-6-luna` | `low`, `medium`, `high`, `xhigh`, `max` |
 | any other / unknown id | `low`, `medium`, `high`, `xhigh`, `max` (family baseline) |
 
-The GPT-5.6 entries and family baseline retain their existing effort levels. The GPT-6 and
-GPT-6.1 entries use a conservative catalog subset (`low` through `xhigh`), which may be narrower
-than the runtime's capabilities. For these entries, `max` is rejected by the model-aware renderer.
-The model-less argv renderer still uses the unchanged family baseline. GSD refuses `ultra`
-regardless of the selected model. Actual model availability depends on the Codex runtime and account.
+The listed models and the family baseline pass `low` through `max` to Codex. GSD refuses
+`ultra` regardless of the selected model. Actual availability depends on the runtime and account.
 
 Three consequences:
 
-- **`max` reaches Codex for the existing GPT-5.6 models and family baseline.** It is no longer clamped to `xhigh`. Earlier GSD releases described `max`
+- **`max` reaches Codex.** It is no longer clamped to `xhigh`. Earlier GSD releases described `max`
   as Anthropic-only; that was accurate when written and Codex has since added it. If you set `max`
   for a Codex agent, your generated `model_reasoning_effort` now says `max` where it previously said
   `xhigh`.
@@ -2242,23 +2238,7 @@ This resolves `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5
 
 On the Claude runtime, tier resolution stays on Claude Code's adaptive tier aliases (`opus` / `sonnet` / `haiku`) unless you override a tier. An override value that names the current tier default collapses back to its alias (the same model in the always-accepted form); any other value — a pinned older generation such as `claude-opus-4-7`, a bare alias repointing the tier, or a non-Anthropic model id — is resolved verbatim, so `resolve-model` reports exactly what the profile pins. Setting `runtime: "claude"` alone (no overrides) changes nothing: aliases resolve exactly as they do with the key absent. `resolve_model_ids: true` remains the global switch for materializing full IDs on every agent.
 
-**Optional GPT-6 models.** The catalog also registers `gpt-6.1-sol`, `gpt-6.1-terra`,
-`gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`. Select one through the existing concrete model
-override path; no GPT-6 model replaces a built-in tier default or OpenAI provider preset.
-For example, to use Terra for the `sonnet` tier:
-
-```json
-{
-  "runtime": "codex",
-  "model_profile": "balanced",
-  "model_profile_overrides": {
-    "codex": { "sonnet": "gpt-6.1-terra" }
-  }
-}
-```
-
-This resolves `gsd-executor` to `gpt-6.1-terra` while other tiers keep their GPT-5.6 defaults.
-An explicit `model_overrides` entry for an agent still takes precedence.
+For a Codex model override example, see [Configure model profiles](how-to/configure-model-profiles.md#pin-a-codex-model).
 
 **Per-runtime overrides** — replace one or more tier defaults:
 

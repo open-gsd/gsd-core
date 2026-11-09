@@ -89,6 +89,11 @@ configure `model_overrides` manually in .planning/config.json to target specific
 models per agent.
 ```
 
+For Codex concrete model selection, use the existing runtime tier override flow in
+`/gsd:config --advanced` (Section 7). It reads provider-native model names and descriptions
+from the catalog and checks availability before offering a choice. Profile selection here
+continues to use the existing logical tiers and GPT-5.6 defaults.
+
 **Isolation resolution for the Worktrees question (#2486):** resolve the runtime's declared executor-isolation primitive and the current worktrees value before presenting the questions. Use `inspect-dispatch-isolation`, the **sentinel-free** inspection verb — never `dispatch-isolation`, whose #3045 contract records the resolved decision to the executor-dispatch sentinel as an unconditional side effect; a settings menu must not be able to stamp a sentinel the isolation guards then enforce against real dispatches. Sentinel-free is the exact claim: the shared CLI bootstrap still runs, but nothing it does can block a dispatch. The worktrees read deliberately carries no `--default`/fallback: an absent key must stay distinguishable from an explicit `false` (empty output = key absent), which the pre-selection rule below depends on.
 
 A failed query is not a capability verdict, so track the two apart: settings still fails closed, but

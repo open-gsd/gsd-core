@@ -95,8 +95,8 @@ describe('model-catalog: exported enums/maps', () => {
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-sol'].has('ultra'), true);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-terra'].has('ultra'), false);
     assert.equal(CODEX_MODEL_EFFORT['gpt-5.6-luna'].has('ultra'), false);
-    for (const model of ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
-      assert.deepEqual(CODEX_MODEL_EFFORT[model], new Set(['low', 'medium', 'high', 'xhigh']));
+    for (const model of ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna']) {
+      assert.deepEqual(CODEX_MODEL_EFFORT[model], new Set(['low', 'medium', 'high', 'xhigh', 'max']));
     }
   });
 
@@ -542,4 +542,13 @@ describe('model-catalog: EFFORT_ARGV.pi (#5557)', () => {
     assert.deepEqual(renderEffortArgv('pi', 'high', 'none'), { argv: [], value: null, host: 'pi' });
     assert.deepEqual(renderEffortArgv('pi', 'high', 'undocumented'), { argv: [], value: null, host: 'pi' });
   });
+});
+
+test('#5591 Codex model-aware and argv channels agree on supported effort', () => {
+  for (const model of Object.keys(CODEX_MODEL_EFFORT).filter(id => id !== '_baseline')) {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+      const expected = EFFORT_ARGV.codex.supported.has(level) ? level : null;
+      assert.equal(renderEffortForRuntime('codex', level, model).value, expected, `${model}: ${level}`);
+    }
+  }
 });
