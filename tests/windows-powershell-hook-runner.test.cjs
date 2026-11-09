@@ -325,6 +325,14 @@ describe('#5850 statusLine spelling', () => {
     }
   });
 
+  test('a portable install still gets an absolute-path statusLine', () => {
+    const home = os.homedir().replace(/\\/g, '/');
+    const cmd = hooksSurface.buildHookCommand(`${home}/.claude`, 'gsd-statusline.js', win({ portableHooks: true, statusLine: true }));
+    assert.ok(typeof cmd === 'string' && cmd.startsWith('powershell -NoProfile -Command "'), cmd);
+    assert.ok(cmd.includes(`'${home}/.claude/hooks/gsd-statusline.js'`), cmd);
+    assert.doesNotMatch(cmd, /[`$\\]/);
+  });
+
   test('statusLine is ignored off win32 and for other runtimes', () => {
     const linux = hooksSurface.buildHookCommand('/home/u/.claude', 'gsd-statusline.js', { platform: 'linux', runtime: 'claude', execPath: '/usr/bin/node', statusLine: true });
     assert.ok(linux.startsWith('"$(for n in '), linux);
@@ -365,6 +373,16 @@ describe('#5850 a PowerShell entry reaching a POSIX host converges back', () => 
     const runner = hooksSurface.buildNodeRunnerChainToken({ execPath: '/usr/bin/node' });
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), true);
     assert.ok(settings.statusLine.command.startsWith('"$(for n in '), settings.statusLine.command);
+  });
+
+  test('a PowerShell entry whose path bash would expand is left alone, not mis-converted', () => {
+    for (const dir of ['C:/Users/a$b/.claude', 'C:/Users/a`b/.claude']) {
+      const ps = hooksSurface.buildHookCommand(dir, GUARD, win());
+      const settings = settingsWith([ps]);
+      const runner = hooksSurface.buildNodeRunnerChainToken({ execPath: '/usr/bin/node' });
+      assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), false, dir);
+      assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, ps);
+    }
   });
 
   test('a PowerShell entry is left alone on win32 for a runtime that never writes it', () => {

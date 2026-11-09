@@ -803,20 +803,26 @@ function parsePowerShellScript(command: string): { scriptPath: string; scriptTok
   const runner = command.replace(/^&\s+/, '').trim().match(/^\(\(@\('(?:[^']|'')*'\) \+ @\(Get-Command node [\s\S]*?Select-Object -First 1\)\s+(.+?); exit \$\(if [\s\S]*\)$/);
   if (!runner) return null;
   const arg = runner[1];
+  // A path bash would expand or re-quote (`$`, backtick, `"`) has no faithful POSIX
+  // spelling here: refuse, and the entry stays as written.
+  const posixUnsafe = /["`$]/;
   let m = arg.match(/^'((?:[^']|'')*)'$/);
   if (m) {
     const scriptPath = unquotePowerShell(m[1]);
-    return { scriptPath, scriptToken: JSON.stringify(scriptPath) };
+    return posixUnsafe.test(scriptPath) ? null : { scriptPath, scriptToken: JSON.stringify(scriptPath) };
   }
   m = arg.match(/^"\$env:CLAUDE_PROJECT_DIR(\/[^"]*)"$/) || arg.match(/^\(\$env:CLAUDE_PROJECT_DIR \+ '((?:[^']|'')*)'\)$/);
   if (m) {
-    const token = `"$CLAUDE_PROJECT_DIR"${unquotePowerShell(m[1])}`;
+    const rel = unquotePowerShell(m[1]);
+    if (posixUnsafe.test(rel)) return null;
+    const token = `"$CLAUDE_PROJECT_DIR"${rel}`;
     return { scriptPath: token, scriptToken: token };
   }
   m = arg.match(/^"\$HOME(\/[^"]*)"$/) || arg.match(/^\(\$HOME \+ '((?:[^']|'')*)'\)$/);
   if (m) {
     const rel = unquotePowerShell(m[1]);
-    return { scriptPath: `$HOME${rel}`, scriptToken: `"$HOME${escapePosixDoubleQuoted(rel)}"` };
+    if (posixUnsafe.test(rel)) return null;
+    return { scriptPath: `$HOME${rel}`, scriptToken: `"$HOME${rel}"` };
   }
   return null;
 }
@@ -1854,7 +1860,11 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     const scriptPath = opts.portableHooks
       ? `${projectPortableHookBaseDir({ configDir, homeDir: os.homedir() })}/hooks/${hookName}`
       : shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName;
-    if (opts.statusLine) return track(buildPowerShellStatusLineCommand(scriptPath, opts));
+    // A statusLine is not shared across hosts and has no `$`-free `$HOME` spelling:
+    // it always carries the real absolute path, portable or not.
+    if (opts.statusLine) {
+      return track(buildPowerShellStatusLineCommand(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName, opts));
+    }
     return track(buildPowerShellHookCommand(powerShellScriptArg(scriptPath, { literal: true }) as string, opts));
   }
 
