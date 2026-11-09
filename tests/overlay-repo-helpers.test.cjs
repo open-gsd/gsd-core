@@ -769,7 +769,7 @@ describe('buildOverlayRepo: a directory that vanishes mid-walk is skipped (#5848
       const st = realStat.call(this, p, ...rest);
       if (p === gone && !retired) {
         retired = true;
-        fs.rmSync(gone, { recursive: true, force: true });
+        cleanup(gone);
       }
       return st;
     };
