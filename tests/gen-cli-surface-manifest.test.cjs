@@ -102,3 +102,59 @@ describe('gen-cli-surface-manifest.cjs --check / --write', () => {
     assert.equal(r.code, 2, `stdout=${r.stdout} stderr=${r.stderr}`);
   });
 });
+
+describe('gen-cli-surface-manifest.cjs compiled-artifact freshness', () => {
+  const { staleCompileProblem, aliasMap } = require('../scripts/gen-cli-surface-manifest.cjs');
+
+  function pair(dir, { sourceAgeS, compiledAgeS }) {
+    const source = path.join(dir, 'thing.cts');
+    const compiled = path.join(dir, 'thing.cjs');
+    fs.writeFileSync(source, '// src\n');
+    fs.writeFileSync(compiled, '// out\n');
+    const now = Date.now() / 1000;
+    fs.utimesSync(source, now - sourceAgeS, now - sourceAgeS);
+    fs.utimesSync(compiled, now - compiledAgeS, now - compiledAgeS);
+    return { source, compiled };
+  }
+
+  test('T-M8: a compiled file older than its source names npm run build:lib', (t) => {
+    const dir = withTmp(t);
+    const message = staleCompileProblem([pair(dir, { sourceAgeS: 10, compiledAgeS: 100 })]);
+    assert.ok(message, 'a stale compile must be reported');
+    assert.ok(message.includes('npm run build:lib'), message);
+    assert.ok(message.includes('thing.cjs') && message.includes('thing.cts'), message);
+  });
+
+  test('T-M9: a compiled file as new as, or newer than, its source passes', (t) => {
+    const dir = withTmp(t);
+    assert.equal(staleCompileProblem([pair(dir, { sourceAgeS: 100, compiledAgeS: 10 })]), null);
+    const dir2 = withTmp(t);
+    assert.equal(staleCompileProblem([pair(dir2, { sourceAgeS: 50, compiledAgeS: 50 })]), null);
+  });
+
+  test('T-M10: a missing compiled file is reported as not built', (t) => {
+    const dir = withTmp(t);
+    const source = path.join(dir, 'thing.cts');
+    fs.writeFileSync(source, '// src\n');
+    const message = staleCompileProblem([{ source, compiled: path.join(dir, 'thing.cjs') }]);
+    assert.ok(message && message.includes('npm run build:lib'), message);
+  });
+
+  test('T-M11: a source that is not on disk (an installed package) is not checked', (t) => {
+    const dir = withTmp(t);
+    const compiled = path.join(dir, 'thing.cjs');
+    fs.writeFileSync(compiled, '// out\n');
+    assert.equal(staleCompileProblem([{ source: path.join(dir, 'absent.cts'), compiled }]), null);
+  });
+
+  test('T-M12: the real compiled registry and seam are fresh in this checkout', () => {
+    assert.equal(staleCompileProblem(), null);
+  });
+
+  test('T-M13: duplicate aliases collapse to one sorted entry per canonical', () => {
+    const aliases = aliasMap();
+    for (const [canonical, list] of aliases) {
+      assert.deepEqual(list, [...new Set(list)].sort(), `${canonical}: aliases must be unique and sorted`);
+    }
+  });
+});
