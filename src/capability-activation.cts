@@ -5,12 +5,14 @@
  * activation uses one precedence chain and one prototype-pollution guard.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir, planningRoot } = planningWorkspaceMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 
 function _getNestedConfigValue(
   config: Record<string, unknown>,
@@ -42,7 +44,10 @@ function _readRawConfigKey(
   quiet = false,
 ): { found: boolean; value: unknown } {
   try {
-    const raw = fs.readFileSync(filePath, 'utf8');
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
+    // catch below, which reports the key as not found.
+    const raw = readConfigFileBounded(filePath);
+    if (raw === null) return { found: false, value: undefined };
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(raw) as Record<string, unknown>;

@@ -49,7 +49,9 @@ describe('ADR-857 phase 6 planning capability migration', () => {
 
   test('plan-phase generic plan:pre dispatch supports skill and agent step hooks', () => {
     const content = readPlanPhase();
-    const section = extractSection(content, '## 5.6.', '## 6.');
+    // #5982: §5.6 delegates its generic step/gate dispatch to a step file; the arms live there.
+    const stepFile = path.join(ROOT, 'gsd-core', 'workflows', 'plan-phase', 'steps', 'plan-pre-dispatch.md');
+    const section = extractSection(content, '## 5.6.', '## 6.') + '\n' + fs.readFileSync(stepFile, 'utf8');
     assert.match(section, /ref\.skill/);
     assert.match(section, /ref\.agent/);
     assert.match(section, /Agent\(/);
