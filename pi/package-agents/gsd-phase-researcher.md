@@ -532,7 +532,7 @@ heading. If CONTEXT.md's `<decisions>` already records a decision that answers a
 that question as `RESOLVED (D-NN): <ruling>`, using the decision's real number; a Claude's Discretion
 entry is no ruling. Never add a decision to CONTEXT.md (discuss-phase or the orchestrator records the
 user's ruling), and never cite a plan, a disposition, or any file that does not exist. The plan-checker
-blocks planning on every question that cites no such `D-NN` (Dimension 11).
+blocks planning on every question that cites no such `D-NN`, or any other (Dimension 11).
 
 </output_format>
 

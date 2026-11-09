@@ -23,8 +23,8 @@
  *   and a research re-run, or a source settles a factual gap.
  * - `planner-revision.md` carries the same route as a `research_resolution` strategy row, ending
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
- *   shared Resolve step (`revision-loop.md`, restated in quick) asks the user and records each
- *   answer as a `D-NN`, so the blocker clears inside the loop; under `--auto` nothing is recorded.
+ *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
+ *   so the blocker clears inside the loop; with no CONTEXT.md, or under `--auto`, nothing is recorded.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
  *   `D-NN` that decides something else, are a BLOCKER example.
  * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
@@ -263,37 +263,33 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(row, /return `## REVISION_CONFLICT` naming each question/, 'the planner cannot reach the property, so the loop must not spend iterations on it');
     assert.match(row, /the orchestrator asks and records each answer as a `D-NN`/, 'the conflict must name the route that can take effect inside the loop');
     assert.match(row, /Never add a decision yourself/);
+    // Step 2 holds EVERY cited D-NN to <decisions>, so one valid citation cannot carry a bad one.
+    assert.match(row, /dropping any other `D-NN` it cites/);
     // The two conditions that pick the route: a citation only on the question it answers, and the
     // conflict only with no such D-NN.
     assert.match(row, /on the question it answers in RESEARCH\.md/);
     assert.match(row, /With no such `D-NN`, return `## REVISION_CONFLICT`/);
   });
 
-  // revision-loop.md's Resolve step is the shared protocol plan-phase imports; quick restates it inline.
+  // revision-loop.md's Resolve step is the shared protocol plan-phase imports. Quick's checker is handed only
+  // PLAN.md and finds research by phase number, so Dimension 11 skips there and no such conflict reaches quick.
   const resolve = once(() => {
     const doc = read('gsd-core/references/revision-loop.md');
     return span(doc, '3. **Resolve**', /\n4\. \*\*Close\*\*/).replace(/\s+/g, ' ');
   });
-  const quickLoop = once(() => read('gsd-core/workflows/quick/steps/plan-checker-loop.md').replace(/\s+/g, ' '));
 
   test('the Resolve step records the user\'s answer as a D-NN, so adopting the alternative clears the blocker inside the loop', () => {
     assert.match(resolve(), /For a `research_resolution` conflict, adopting the alternative means the user rules here/);
     assert.match(resolve(), /ask each question the conflict names/);
     assert.match(resolve(), /record each answer under the checker's CONTEXT\.md `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`/);
     assert.match(resolve(), /`\/gsd:discuss-phase` or `\/gsd:plan-phase --research`/, 'leaving the loop stays open to the user');
+    // The checker reads the CONTEXT.md path plan-phase resolved at init; a file created mid-loop never reaches it.
+    assert.match(resolve(), /With no CONTEXT\.md there is nowhere to record, so the user leaves the loop for `\/gsd:discuss-phase`, which writes one/);
   });
 
   test('under --auto nothing is recorded, so the blocker escalates rather than passing on an answer nobody gave', () => {
     assert.match(resolve(), /Record only what the user said: under `--auto`, where no one is asked, record nothing/);
     assert.match(resolve(), /the same conflict returns and the Repeat rule below escalates it/);
-  });
-
-  test('quick carries the same route, and records nothing without its CONTEXT.md', () => {
-    const at = quickLoop().indexOf('For a `research_resolution` conflict');
-    assert.notEqual(at, -1, 'quick restates the protocol inline, so it must carry the route');
-    const clause = quickLoop().slice(at, at + 600);
-    assert.match(clause, /record each answer under `<decisions>` in `\$\{quick_id\}-CONTEXT\.md`, outside Claude's Discretion, as the next unused `D-NN`/);
-    assert.match(clause, /Without that file \(no `--discuss`\), record nothing/);
   });
 });
 
@@ -343,6 +339,8 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.match(rule, /`\(RESOLVED\)`\s+suffix\s+to\s+the\s+section\s+heading/);
     assert.match(rule, /RESOLVED \(D-NN\)/);
     assert.match(rule, /using\s+the\s+decision's\s+real\s+number/, 'a placeholder D-NN must never reach RESEARCH.md');
+    // Universal, as checker step 2: a question citing one valid D-NN and one that is not still blocks.
+    assert.match(rule, /cites\s+no\s+such\s+`D-NN`,\s+or\s+any\s+other\s+\(Dimension\s+11\)/);
     assert.match(rule, /list\s+every\s+such\s+question\s+in\s+that\s+section/);
     assert.match(rule, /a\s+factual\s+question\s+you\s+settled/);
     assert.match(rule, /No\s+source\s+settles\s+a\s+choice\s+that\s+needs\s+a\s+user\s+ruling/);
@@ -400,9 +398,8 @@ describe('the resolution rule says the same thing on every prompt surface (#5438
   // Surfaces that record a user's answer as a decision.
   const recording = once(() => {
     const loop = flat(read('gsd-core/references/revision-loop.md'));
-    const quick = flat(read('gsd-core/workflows/quick/steps/plan-checker-loop.md'));
     const cut = (t) => { const at = t.indexOf('For a `research_resolution` conflict'); return at === -1 ? '' : t.slice(at, at + 600); };
-    return { 'revision-loop Resolve': cut(loop), 'quick conflict handler': cut(quick) };
+    return { 'revision-loop Resolve': cut(loop) };
   });
 
   test('every citing surface scopes a D-NN to <decisions>, excludes Claude\'s Discretion, and needs one that answers', () => {
