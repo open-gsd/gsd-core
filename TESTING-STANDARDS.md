@@ -206,6 +206,34 @@ Import an existing class-norm constant from `tests/helpers/timeouts.cjs` (`PROBE
 
 **Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`). A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
 
+### One installer run per runtime configuration per file
+
+A real `bin/install.js` run is the most expensive thing a test can do. When several tests in one file install the **same** runtime configuration only to read different parts of the result, install it once with `installRuntimeFixture` from `tests/helpers/install-shared.cjs` (#4688):
+
+```javascript
+const { installRuntimeFixture } = require('./helpers/install-shared.cjs');
+
+test('settings.json registers the hooks', () => {
+  const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' });
+  // read-only assertions against configDir
+});
+
+test('settings.json registers the MCP companion', () => {
+  const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' }); // no second install
+  // read-only assertions against configDir
+});
+```
+
+| Behavior | Detail |
+|---|---|
+| Key | `runtime`, `scope`, `extraArgs` (order matters) and `extraEnv` (key order does not). Each distinct key installs once. |
+| Lifetime | One test file. `node --test` runs each file in its own process; every cached root is deleted when that process exits. |
+| Result | The same object `runMinimalInstall` returns (`configDir`, `root`, `manifest`, `stdout`, `stderr`), deep-frozen and shared by every caller with that key. |
+| Failure | A failed install throws exactly as `runMinimalInstall` does and is not cached; the next call retries. |
+| `root` | Rejected with a `TypeError`. A shared fixture owns its root. |
+
+**Use it only for read-only tests.** A test that writes into the installed tree, reinstalls, uninstalls, or seeds files before installing changes what every later test sees. Keep `runMinimalInstall` (a fresh root per call) for those. Do not register `t.after(() => cleanup(root))` on a shared fixture: it would delete the tree for the tests after it.
+
 ### Mutation testing — 80 % threshold
 
 Stryker runs in incremental mode (`--since origin/next`) on the `ubuntu-latest` / Node 24 CI leg as a PR-gating signal. The default threshold is **80 % mutation score** (killed / total mutants in the changed scope). PRs that drop below this threshold must either add tests that kill the surviving mutants or add the specific path to `stryker.config.mjs` with a documented reason.

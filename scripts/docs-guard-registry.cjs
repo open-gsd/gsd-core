@@ -180,6 +180,7 @@ const DOCS_GUARD_TESTS = {
   // against the milestone-release-map module's exported enums.
   'tests/milestone-release-map.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  'tests/smart-discuss-classification.test.cjs': ['docs/COMMANDS.md'],
   'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
   'tests/autonomous-converge.test.cjs': [
     'docs/COMMANDS.md',
