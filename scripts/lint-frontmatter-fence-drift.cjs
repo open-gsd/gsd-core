@@ -120,7 +120,7 @@ const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [path.join('scripts', 'changeset', 'parse.cjs'), new Set(['locateFrontmatterFence'])],
   [path.join('.opencode', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
   [path.join('.kilo', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
-  [path.join('src', 'report-parser.cts'), new Set(['recoverDuplicateKeyDiagnostic', 'decodedKeyWrites', 'countDecodedFailureTypeKeys'])],
+  [path.join('src', 'report-parser.cts'), new Set(['recoverDuplicateKeyDiagnostic', 'decodedKeyWrites'])],
 ]);
 
 // FRAGMENT-SCOPED exemptions for DETECTORS (#5105), each pinned to the exact

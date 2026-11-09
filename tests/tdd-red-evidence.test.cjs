@@ -1760,6 +1760,24 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.equal(masked.verdict, 'INVALID_RED');
     assert.ok(masked.evidence.report_errors.includes('Non-TAP data in report'),
       JSON.stringify(masked.evidence.report_errors));
+    // Third review finding: the repeated-code arm (sawLoadFailureCode) is untested —
+    // the signature code followed by a benign code write must refuse in the same way.
+    const maskedCode = classifyRedEvidence({
+      command: 'node --test crash.test.cjs', exitCode: 1,
+      output: output.replace(loadFailureDup.join('\n'), [
+        '  duration_ms: 28.3',
+        "  failureType: 'testCodeFailure'",
+        "  error: 'test failed'",
+        "  code: 'ERR_TEST_FAILURE'",
+        "  code: 'OTHER_CODE'",
+        "  stack: 'frame one'",
+        "  stack: 'frame two'",
+      ].join('\n')),
+      targetTest: 'crash.test.cjs',
+    });
+    assert.equal(maskedCode.verdict, 'INVALID_RED');
+    assert.ok(maskedCode.evidence.report_errors.includes('Non-TAP data in report'),
+      JSON.stringify(maskedCode.evidence.report_errors));
     // Control: a repeated error whose writes are BOTH ordinary values still recovers.
     const ordinaryDup = classifyRedEvidence({
       command: 'node --test crash.test.cjs', exitCode: 1,
@@ -1774,6 +1792,28 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     });
     assert.equal(ordinaryDup.verdict, 'RED_EVIDENCE_OK');
     assert.deepEqual(ordinaryDup.evidence.report_errors, []);
+  });
+
+  test('a recovered block carrying a lone CR is refused (review finding)', () => {
+    // Third review finding: the \r refusal has no test. js-yaml breaks lines on a
+    // bare CR while the segmentation splits on \n; a block containing one is
+    // refused whole rather than letting the two disagree on the key set.
+    const CR = String.fromCharCode(13);
+    const diag = [
+      "  failureType: 'testCodeFailure'",
+      "  error: 'a" + CR + "b'",
+      "  error: 'c'",
+      "  stack: 'frame one'",
+      "  stack: 'frame two'",
+    ];
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(diag),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'),
+      JSON.stringify(result.evidence.report_errors));
   });
 
   test('repeated keys alongside another YAML error stay refused', () => {

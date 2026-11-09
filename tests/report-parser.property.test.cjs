@@ -420,3 +420,29 @@ test('#5819 property: a repeated failureType key is never recovered, in any spel
     assert.ok(parseTestReport(output).issues.includes('Malformed TAP'));
   }));
 });
+
+// Third review finding: the masked-signature guard (#5721 per-write judgment) needs
+// a property. The generator writes the load-failure signature keys first and a
+// benign value last, in either key order; the block must always be refused.
+test('#5819 property: a masked load-failure signature is never recovered, in either key order', () => {
+  const maskedDiagReport = (target, benignError, benignCode, codeFirst) => [
+    'TAP version 13',
+    `# Subtest: ${target}`,
+    `not ok 1 - ${target}`,
+    '  ---',
+    '  duration_ms: 0.5',
+    "  failureType: 'testCodeFailure'",
+    ...(codeFirst
+      ? ["  code: 'ERR_TEST_FAILURE'", `  error: 'test failed'`]
+      : ["  error: 'test failed'", "  code: 'ERR_TEST_FAILURE'"]),
+    `  error: '${benignError}'`,
+    `  code: '${benignCode}'`,
+    '  ...',
+    '1..1\n',
+  ].join('\n');
+  fc.assert(fc.property(word, word, word, fc.boolean(), (target, benignError, benignCode, codeFirst) => {
+    const output = maskedDiagReport(target, benignError, benignCode, codeFirst);
+    assertBlocked(output);
+    assert.ok(parseTestReport(output).issues.includes('Malformed TAP'));
+  }));
+});
