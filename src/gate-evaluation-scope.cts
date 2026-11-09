@@ -401,8 +401,8 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
     if (names.length === 0) return isAncestor(makeGit(projectDir, runner), sha, of);
     // #5867: the commits of a `planning.sub_repos` workspace live in the sub-repos (and the
     // workspace root, when it is a repo itself). A repo that does not hold the commit cannot answer
-    // (exit 128 -> unanswered); any repo that does answer is authoritative.
-    // The first repo that holds both commits is authoritative (a clone's answer is the same).
+    // (exit 128 -> unanswered). The first repo that holds both commits is authoritative (a clone's
+    // answer is the same).
     let rootGit: Git | null = null;
     try {
       const rootTop = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING)(['rev-parse', '--show-toplevel']);
