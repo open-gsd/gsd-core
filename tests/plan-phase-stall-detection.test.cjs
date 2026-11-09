@@ -1594,17 +1594,22 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(s11a, /Checker return was empty or truncated/, 'control: the empty/truncated banner stays');
   });
 
-  test('both agent definitions carry the receipt rule; the checker writes it with Write, its only write', () => {
+  test('both agent definitions carry the receipt rule; the checker writes it through its shell and declares no Write', () => {
     const planner = readFileNormalized(path.join(REPO_ROOT, 'agents', 'gsd-planner.md'));
     const checker = readFileNormalized(path.join(REPO_ROOT, 'agents', 'gsd-plan-checker.md'));
     for (const [label, doc] of [['gsd-planner', planner], ['gsd-plan-checker', checker]]) {
       assert.match(doc, /<return_receipt>/, `${label} must define the <return_receipt> rule`);
     }
-    // #5182 AC5: a Bash write is refused by a read-only sandbox (Codex), so the checker
-    // declares Write (Group B) and the receipt is its only write.
-    assert.match(checker.match(/^tools:.*$/m)[0], /\bWrite\b/, 'the checker declares Write for its receipt');
-    const rule = checker.slice(checker.indexOf('**Return receipt (#5182):**'));
-    assert.doesNotMatch(rule.slice(0, RECEIPT_RULE_SCAN_CHARS), /printf/, 'no Bash printf write appears in the checker receipt rule');
+    // #5182 ruling 1 (issuecomment-6648383441): the checker keeps its read-only tools line
+    // and writes the receipt with one Bash printf; a refused write (a read-only sandbox) is
+    // noted in its return, never fatal.
+    const tools = checker.match(/^tools:.*$/m)[0];
+    assert.doesNotMatch(tools, /\bWrite\b/, 'the checker declares no Write');
+    assert.match(tools, /\bBash\b/, 'the checker holds Bash, which writes the receipt');
+    const rule = checker.slice(checker.indexOf('**Return receipt (#5182):**'), checker.indexOf('**Return receipt (#5182):**') + RECEIPT_RULE_SCAN_CHARS);
+    assert.match(rule, /printf '%s\\n' '## ISSUES FOUND' > 'PATH'/, 'the receipt is written with one Bash printf');
+    assert.match(rule, /refused/, 'a refused write is noted in the return, not fatal');
+    assert.doesNotMatch(rule, /Write tool/, 'the rule no longer names the Write tool');
     // The limit must hold on spawns that send no receipt (quick, quick-batch, import), so it
     // also lives in <anti_patterns>, outside the receipt-conditional rule.
     const anti = checker.slice(checker.indexOf('<anti_patterns>'), checker.indexOf('</anti_patterns>'));

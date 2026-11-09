@@ -74,14 +74,16 @@ The helper functions and the config values above do not persist between tool cal
 either: re-run this block in every fence that calls them.
 
 **Plan-checker receipt:** a checker that PASSES touches no `*-PLAN.md`, so its receipt
-is its only completion signal for this watch. The checker declares `Write` for that one
-file (a #767 Group B report-writer: Claude denies it only `Edit, MultiEdit`, and Codex
-derives `workspace-write` from its `tools:`), so it can write the receipt on both.
+is its only completion signal for this watch. The checker keeps its read-only `tools:`
+line (no `Write`; #767 Group A) and writes the one receipt line through its shell, with
+one Bash `printf` (`agents/gsd-plan-checker.md`). A refused write is not fatal: the
+checker notes it in its return and continues.
 
-**Known limit, hosts with no separate Write (OpenCode, Kilo, Copilot):** they grant Write
-and Edit as one `edit` permission, so the installer drops the checker's Write there and it
-stays read-only; no checker receipt is written. The wait ends on the completion result,
-as above, or as `stalled` at the threshold.
+**Known limit, a sandbox that refuses the shell write (Codex `read-only`):** Codex derives
+the checker's `sandbox_mode` from its `tools:` line, so a `read-only` sandbox refuses the
+`printf`; no checker receipt is written there. The wait ends on the completion result, as
+above, or as `stalled` at the threshold (#5182 ruling of 2026-11-05, acceptance criterion 5
+as amended; the gap is tracked in its sub-issue and ADR).
 
 **Known limit, kimi-code:** it dispatches `-planner` to its `plan` built-in and
 `-checker` to `explore`, and neither can write files (`runtime-aware-dispatch.md`),
