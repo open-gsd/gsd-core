@@ -16,6 +16,7 @@ const {
   CLI_SURFACE,
   UNDECLARED_VERBS,
   verbUniverse,
+  isCovered,
 } = require('../gsd-core/bin/lib/cli-surface.cjs');
 const { hostCommandNames } = require('../gsd-core/bin/gsd-tools.cjs');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
@@ -23,17 +24,20 @@ const { buildManifest } = require('../scripts/gen-cli-surface-manifest.cjs');
 const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 const { createTempProject, cleanup } = require('./helpers.cjs');
 
-const UNDECLARED_BASELINE = 0; // set by the P1a implementation commit to the P1a count, lowered by each later sub-PR (#6088-#6090)
+const UNDECLARED_BASELINE = 138; // set by the P1a implementation commit to the P1a count, lowered by each later sub-PR (#6088-#6090)
 const SENTINEL = '--zz-undeclared-6051';
 const USAGE = ERROR_REASON.USAGE; // src/io.cts:401 -> 'usage'
 
 // ─── pure parity logic ─────────────────────────────────────────────────────
 
-/** Argv for a manifest verb: verb tokens, numeric positionals as 'x', every required flag = 'v'. */
+/**
+ * Argv for a manifest verb: verb tokens, then 'x' fillers up to `positionals` (which counts the verb
+ * tokens too, e.g. `frontmatter get <file>` is 3), every required flag = 'v'.
+ */
 function baseArgv(mv) {
   const argv = mv.verb.split('.');
   if (typeof mv.positionals === 'number') {
-    for (let i = 0; i < mv.positionals; i += 1) argv.push('x');
+    while (argv.length < mv.positionals) argv.push('x');
   }
   return argv;
 }
@@ -115,11 +119,14 @@ function makeObserver(cwd) {
 // ─── T-C: coverage and ratchet ─────────────────────────────────────────────
 
 describe('verb universe coverage', () => {
+  // Design refinement (40-design.md, coverage rule): a host key whose router switches on a subcommand
+  // (e.g. 'milestone') is in the universe, but the registry declares its sub-verbs ('milestone.complete').
+  // A universe verb is covered when it is declared/undeclared itself or is the `<host>.` prefix of such a key.
   test('T-C1: every dispatchable verb is declared or listed as undeclared', () => {
     const universe = new Set(verbUniverse());
-    const covered = new Set([...Object.keys(CLI_SURFACE), ...UNDECLARED_VERBS]);
-    const missing = [...universe].filter((v) => !covered.has(v)).sort();
-    const stale = [...covered].filter((v) => !universe.has(v)).sort();
+    const missing = [...universe].filter((v) => !isCovered(v)).sort();
+    const keys = [...Object.keys(CLI_SURFACE), ...UNDECLARED_VERBS];
+    const stale = keys.filter((k) => !universe.has(k) && !universe.has(k.split('.')[0])).sort();
     assert.deepEqual(
       { missingFromRegistry: missing, notDispatchable: stale },
       { missingFromRegistry: [], notDispatchable: [] },

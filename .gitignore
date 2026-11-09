@@ -148,6 +148,8 @@ build/
 /gsd-core/bin/lib/context-utilization.cjs
 /gsd-core/bin/lib/artifacts.cjs
 /gsd-core/bin/lib/command-arg-projection.cjs
+# #6087: emitted artifact of src/cli-surface.cts — never edited.
+/gsd-core/bin/lib/cli-surface.cjs
 /gsd-core/bin/lib/clock.cjs
 /gsd-core/bin/lib/ui-safety-gate.cjs
 /gsd-core/bin/lib/ui-frontend-evidence.cjs

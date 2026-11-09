@@ -206,6 +206,8 @@ export default tseslint.config(
       // #3873: tsc-generated runtime artifact — lint the src/state-md-schema.cts source, not this.
       'gsd-core/bin/lib/state-md-schema.cjs',
       'gsd-core/bin/lib/command-arg-projection.cjs',
+      // #6087: tsc-generated runtime artifact — lint the src/cli-surface.cts source.
+      'gsd-core/bin/lib/cli-surface.cjs',
       'gsd-core/bin/lib/clock.cjs',
       'gsd-core/bin/lib/ui-safety-gate.cjs',
       // #3312: tsc-generated runtime artifact — lint the src/ui-frontend-evidence.cts source.
