@@ -10,6 +10,7 @@
  *
  * Shared helpers for command-family adapters to project argv tokens into
  * typed named values and multi-word segments.
+ * `requiredFlags` (ADR-4909 D1, #6087) turns a missing value-flag into InvalidArgs.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -29,6 +30,13 @@ type ErrorReasonValue = (typeof ERROR_REASON)[keyof typeof ERROR_REASON];
 
 export interface NamedArgSpec {
   valueFlags?: string[];
+  /**
+   * A required value flag (ADR-4909 D1, #6087). Members must be a subset of
+   * `valueFlags`; a missing, empty, or flag-shaped value is an InvalidArgs
+   * result. Declare a flag required only when its handler already fails
+   * without it (Hyrum's Law).
+   */
+  requiredFlags?: string[];
   booleanFlags?: string[];
   /**
    * Optional-value flags (added for `--wave`, ADR-3473 Bucket-A correction —
@@ -104,6 +112,39 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
         `— received ${JSON.stringify(positionals)}.`,
     );
   }
+  const requiredFlags = spec.requiredFlags;
+  if (requiredFlags !== undefined) {
+    if (!Array.isArray(requiredFlags) || !requiredFlags.every((f) => typeof f === 'string')) {
+      throw new TypeError('parseNamedArgs: spec.requiredFlags must be an array of strings.');
+    }
+    const declared = Array.isArray(spec.valueFlags) ? spec.valueFlags : [];
+    const stray = requiredFlags.filter((f) => !declared.includes(f));
+    if (stray.length > 0) {
+      throw new TypeError(
+        'parseNamedArgs: spec.requiredFlags must be a subset of spec.valueFlags — ' +
+          `not declared as value flags: ${stray.join(', ')}`,
+      );
+    }
+  }
+}
+
+/**
+ * First required flag (declaration order) whose extracted value is `null`
+ * (absent or flag-shaped) or `''`, as an InvalidArgs result; else null.
+ */
+function missingRequired(spec: NamedArgSpec, data: ParsedNamedArgs): NamedArgsResult | null {
+  for (const flag of spec.requiredFlags ?? []) {
+    if (data[flag] === null || data[flag] === '') {
+      return {
+        ok: false,
+        kind: 'InvalidArgs',
+        arg: `--${flag}`,
+        reason: `missing required flag --${flag} <value>`,
+        exitReason: ERROR_REASON.USAGE,
+      };
+    }
+  }
+  return null;
 }
 
 // Single predicate reused for both extraction (a value beginning with a
@@ -161,7 +202,7 @@ export function parseNamedArgs(args: string[], spec: NamedArgSpec): NamedArgsRes
   }
 
   if (spec.positionals === 'rest') {
-    return { ok: true, data };
+    return missingRequired(spec, data) ?? { ok: true, data };
   }
 
   const valueFlagSet = new Set(valueFlags);
@@ -213,7 +254,7 @@ export function parseNamedArgs(args: string[], spec: NamedArgSpec): NamedArgsRes
     };
   }
 
-  return { ok: true, data };
+  return missingRequired(spec, data) ?? { ok: true, data };
 }
 
 /**
