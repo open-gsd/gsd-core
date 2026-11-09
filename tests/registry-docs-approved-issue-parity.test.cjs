@@ -31,7 +31,11 @@ const ISSUE_STEP = '**Open an issue for the change**';
 const PR_STEP_TITLE = '**Open a PR**';
 const LABEL_ITEM = 'Linked issue has the';
 const CHANGESET_ITEM = '`.changeset/` fragment';
-const CHANGESET_TYPES = '`Added`,`Changed`';
+// The gate wording. The space form only, so no `approved-*` token reads as a label.
+const GATE = /approved issue/i;
+const { ALLOWED_TYPES } = require('../scripts/changeset/parse.cjs');
+// The types a registry PR may use: a new entry, an update, a removal (take-over mode T4).
+const CHANGESET_TYPES = '`Added`,`Changed`,`Removed`';
 // The PR step of each how-to that walks the process; the gate must come before it.
 // README and ENTRY have none here: checkReadmeSteps reads the README, and the template is the PR itself.
 const PR_STEP = {
@@ -45,7 +49,8 @@ function parseApprovalLabels(yamlText) {
   return m[1].split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-const changesetTypes = (line) => [...new Set(line.match(/`(?:Added|Changed|Deprecated|Removed)`/g))].sort().join();
+const TYPE_RE = new RegExp(`\`(?:${[...ALLOWED_TYPES].join('|')})\``, 'g');
+const changesetTypes = (line) => [...new Set(line.match(TYPE_RE))].sort().join();
 const lineWith = (text, needle) => text.split('\n').find((l) => l.includes(needle));
 const editLine = (text, needle, fn) => text.split('\n').map((l) => (l.includes(needle) ? fn(l) : l)).join('\n');
 
@@ -58,7 +63,7 @@ function checkGate(files) {
       out.push(`${p}: file missing or empty`);
       continue;
     }
-    const gate = text.search(/approved[ -]issue/i);
+    const gate = text.search(GATE);
     if (gate === -1) {
       out.push(`${p}: no approved-issue-first requirement`);
       continue;
@@ -79,7 +84,7 @@ function checkReadmeSteps(files) {
   const pr = lineWith(readme, PR_STEP_TITLE);
   if (issue === undefined) out.push(`${README}: issue step anchor not found`);
   else {
-    if (!/approved[ -]issue/i.test(issue)) out.push(`${README}: issue step no longer requires an approved issue`);
+    if (!GATE.test(issue)) out.push(`${README}: issue step no longer requires an approved issue`);
     if (pr !== undefined && readme.indexOf(issue) > readme.indexOf(pr)) out.push(`${README}: issue step comes after the PR step`);
   }
   if (pr === undefined) out.push(`${README}: PR step anchor not found`);
@@ -114,7 +119,7 @@ function checkChangeset(files) {
   const pr = typeof readme === 'string' ? lineWith(readme, PR_STEP_TITLE) : undefined;
   if (pr === undefined) return []; // checkReadmeSteps reports the missing step
   const out = [];
-  if (changesetTypes(pr) !== CHANGESET_TYPES) out.push(`${README}: PR step changeset types are not exactly Added, Changed`);
+  if (changesetTypes(pr) !== CHANGESET_TYPES) out.push(`${README}: PR step changeset types are not exactly Added, Changed, Removed`);
   const item = lineWith(files[ENTRY] || '', CHANGESET_ITEM);
   if (item === undefined) out.push(`${ENTRY}: changeset item not found`);
   else if (changesetTypes(item) !== changesetTypes(pr)) out.push(`${ENTRY}: changeset item types differ from ${README} PR step`);
@@ -182,8 +187,14 @@ describe('registry submission docs: approved issue first (#5299)', () => {
     assert.deepEqual(checkLabels(readDocs(), readLabels()), []);
   });
 
-  test('README PR step lists exactly the Added and Changed types and the template agrees', () => {
+  test('README PR step lists exactly the Added, Changed and Removed types and the template agrees', () => {
     assert.deepEqual(checkChangeset(readDocs()), []);
+  });
+
+  test('negative control: a PR step that also names Fixed is reported', () => {
+    const files = readDocs();
+    files[README] = editLine(files[README], PR_STEP_TITLE, (l) => `${l} Or \`Fixed\`.`);
+    assert.ok(checkApprovedIssueParity(files, readLabels()).includes(`${README}: PR step changeset types are not exactly Added, Changed, Removed`));
   });
 
   test('negative control: a README without the gate is reported', () => {
@@ -218,7 +229,10 @@ describe('registry submission docs: approved issue first (#5299)', () => {
 
   test('a README with a step inserted before the PR step still has parity', () => {
     const files = readDocs();
-    files[README] = files[README].replace(/^6\. /m, '6. **Extra step.**\n7. ');
+    const lines = files[README].split('\n');
+    lines.splice(lines.findIndex((l) => l.includes(PR_STEP_TITLE)), 0, 'An extra step.');
+    assert.notEqual(lines.join('\n'), files[README]);
+    files[README] = lines.join('\n');
     assert.deepEqual(checkApprovedIssueParity(files, readLabels()), []);
   });
 
@@ -284,10 +298,10 @@ describe('registry submission docs: approved issue first (#5299)', () => {
 
   test('negative control: a README and template that both lost their types are reported', () => {
     const files = readDocs();
-    const strip = (l) => l.replace(/`(?:Added|Changed)`/g, 'a type');
+    const strip = (l) => l.replace(/`(?:Added|Changed|Removed)`/g, 'a type');
     files[README] = editLine(files[README], PR_STEP_TITLE, strip);
     files[ENTRY] = editLine(files[ENTRY], CHANGESET_ITEM, strip);
-    assert.ok(checkApprovedIssueParity(files, readLabels()).includes(`${README}: PR step changeset types are not exactly Added, Changed`));
+    assert.ok(checkApprovedIssueParity(files, readLabels()).includes(`${README}: PR step changeset types are not exactly Added, Changed, Removed`));
   });
 
   test('negative control: a template without its changeset item is reported', () => {
