@@ -67,9 +67,8 @@ const RUN_LANE_COMMON = ['run-dir', 'repo-root', 'selected'];
 export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // ─── resolve / config ──────────────────────────────────────────────────────
   'resolve-model': { positionals: 2 },
-  // Positional may sit before or after --granularity (hand loop), so no boundary walk. Stays 'rest':
-  // the router takes an undeclared --flag as its positional instead of rejecting it.
-  'resolve-granularity': { positionals: 'rest', valueFlags: ['granularity'] },
+  // The phase-type positional may sit before or after --granularity, so words past the boundary are free.
+  'resolve-granularity': { positionals: 1, freePositionals: true, valueFlags: ['granularity'] },
   // Positional agent type may interleave with the hand-parsed flags.
   'resolve-execution': {
     positionals: 1,
@@ -79,7 +78,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     nonEmptyFlags: ['attempt', 'effort', 'failure-class', 'fast-mode', 'host'],
   },
   'config-set': { positionals: 3, booleanFlags: DRY_RUN },
-  'config-new-project': { positionals: 2, booleanFlags: DRY_RUN },
+  // The choices JSON is the one positional, wherever --dry-run sits; the handler refuses a second one.
+  'config-new-project': { positionals: 1, freePositionals: true, booleanFlags: DRY_RUN },
   'config-path': { positionals: 1 },
   'migrate-config': { positionals: 1 },
 
@@ -173,7 +173,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'history-digest': { positionals: 1 },
 
   // ─── milestone / progress / uat / todo ─────────────────────────────────────
-  'assumption-delta.scan': { positionals: 3, valueFlags: ['terms'] },
+  // `scan --terms a,b <phase>` exits sdk_unknown_command from the handler's phase check today; free words keep that reason.
+  'assumption-delta.scan': { positionals: 2, freePositionals: true, valueFlags: ['terms'] },
   'milestone.archive-quick': { positionals: 3, booleanFlags: DRY_RUN },
   'milestone.complete': {
     positionals: 3,
@@ -297,10 +298,10 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'user-story.validate': { positionals: 2, valueFlags: ['story'] },
   'drift-guard.authority': { positionals: 2 },
   'drift-guard.phase-status': { positionals: 2, valueFlags: ['phase'] },
+  // --status stays a handler check: its absence exits with sdk_unknown_command today, not usage.
   'drift-guard.severity': {
     positionals: 2,
     valueFlags: ['authority', 'status'],
-    requiredFlags: ['status'],
   },
   'skills-root': { positionals: 2 },
 

@@ -371,7 +371,8 @@ const { routeAgentCommand, AGENT_FAILURE_CLASSES } = require('./lib/agent-comman
 const smartEntryMod = require('./lib/smart-entry.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
-const { parseNamedArgsOrExit, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
+const { parseNamedArgsOrExit, parseMultiwordArg, isFlagToken } = require('./lib/command-arg-projection.cjs');
+const { specFor } = require('./lib/cli-surface.cjs');
 const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
 const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
 
@@ -662,22 +663,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // arrive via the destructured context.
 
   function routeResolveModel({ args, cwd, raw }) {
+    parseNamedArgsOrExit(args, specFor('resolve-model'), error);
     commands.cmdResolveModel(cwd, args[1], raw);
   }
 
   function routeResolveGranularity({ args, cwd, raw }) {
-    const granArgs = args.slice(1);
-    let granOverride;
-    const granPositionals = [];
-    for (let i = 0; i < granArgs.length; i++) {
-      const a = granArgs[i];
-      if (a === '--granularity' && granArgs[i + 1] !== undefined && !granArgs[i + 1].startsWith('--')) {
-        if (granOverride === undefined) { granOverride = granArgs[++i]; } else { ++i; }
-      } else {
-        granPositionals.push(a);
-      }
-    }
-    commands.cmdResolveGranularity(cwd, granPositionals[0], raw, granOverride);
+    const parsed = parseNamedArgsOrExit(args, specFor('resolve-granularity'), error);
+    // The phase-type positional may sit before or after --granularity: it is the first
+    // non-flag token that is not the value --granularity consumed.
+    const positional = args.slice(1).find((a, i, all) => !isFlagToken(a) && all[i - 1] !== '--granularity');
+    commands.cmdResolveGranularity(cwd, positional, raw, parsed.granularity ?? undefined);
   }
 
   function routeResolveExecution({ args, cwd, raw }) {
@@ -802,6 +797,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigSet({ args, cwd, raw }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('config-set'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-set',
       registryArgs: args.slice(1),
@@ -812,7 +808,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       error,
       output: output,
     });
-    if (!handled) config.cmdConfigSet(cwd, args[1], args[2], raw, { dryRun: args.includes('--dry-run') });
+    if (!handled) config.cmdConfigSet(cwd, args[1], args[2], raw, { dryRun: parsed['dry-run'] });
   }
 
   function routeConfigSetModelProfile({ args, cwd, raw }) {
@@ -847,6 +843,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigNewProject({ args, cwd, raw }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('config-new-project'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-new-project',
       registryArgs: args.slice(1),
@@ -859,54 +856,50 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     });
     if (handled) return;
     // #5268: this verb's flag surface is closed, as `todo complete`'s is
-    // (#4096). `--dry-run` is parsed and plumbed, and any OTHER flag fails loudly
-    // instead of being silently ignored: an accepted-but-ignored `--dry-run`
-    // wrote the config it was meant to preview. (`--raw` is spliced by the
-    // dispatcher before routing; it stays in the set as a guard against that
-    // splice ever moving.) The choices JSON is the one positional argument,
-    // wherever the flag sits, and a second one is refused for the same reason.
-    // A flag is a dash followed by a letter: `-1` is a (negative-number) JSON
-    // argument, refused below as choices that are not an object, not a flag.
-    const CONFIG_NEW_PROJECT_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
-    const positionals = [];
-    for (const a of args.slice(1)) {
-      if (typeof a === 'string' && /^--?[A-Za-z]/.test(a)) {
-        if (!CONFIG_NEW_PROJECT_KNOWN_FLAGS.has(a)) {
-          error(`Unknown flag for config-new-project: ${a}`, ERROR_REASON.USAGE);
-        }
-        continue;
-      }
-      positionals.push(a);
-    }
+    // (#4096). `--dry-run` is the only flag (declared in the CLI surface registry),
+    // and any OTHER flag fails loudly in the seam instead of being silently
+    // ignored: an accepted-but-ignored `--dry-run` wrote the config it was meant
+    // to preview. The choices JSON is the one positional argument, wherever the
+    // flag sits (the spec's freePositionals), and a second one is refused for the
+    // same reason. `-1` is a (negative-number) JSON argument, refused below as
+    // choices that are not an object, not a flag.
+    const positionals = args.slice(1).filter((a) => !isFlagToken(a));
     if (positionals.length > 1) {
       error(`Unexpected argument for config-new-project: ${positionals[1]}. Usage: config-new-project [choices-json] [--dry-run]`, ERROR_REASON.USAGE);
     }
-    config.cmdConfigNewProject(cwd, positionals[0], raw, { dryRun: args.includes('--dry-run') });
+    config.cmdConfigNewProject(cwd, positionals[0], raw, { dryRun: parsed['dry-run'] });
   }
 
-  function routeConfigPath({ cwd, raw, workstreamContext }) {
+  function routeConfigPath({ args, cwd, raw, workstreamContext }) {
+    parseNamedArgsOrExit(args, specFor('config-path'), error);
     config.cmdConfigPath(cwd, raw, workstreamContext);
   }
 
-  async function routeMigrateConfig({ cwd, raw }) {
+  async function routeMigrateConfig({ args, cwd, raw }) {
+    parseNamedArgsOrExit(args, specFor('migrate-config'), error);
     await config.cmdMigrateConfig(cwd, raw);
   }
 
   function routeResearchStore({ args, cwd, raw }) {
-    const researchStore = require('./lib/research-store.cjs');
     const subcommand = args[1];
+    if (subcommand !== 'get' && subcommand !== 'put') {
+      error('Unknown research-store subcommand. Available: get, put', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+      return;
+    }
+    const parsed = parseNamedArgsOrExit(args, specFor(`research-store.${subcommand}`), error);
+    const researchStore = require('./lib/research-store.cjs');
     const homeDir = process.env.HOME || require('os').homedir();
     if (subcommand === 'get') {
       const key = args[2];
       if (!key || key.startsWith('--')) {
-        error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
+        error('Usage: gsd-tools research-store get <key>', ERROR_REASON.USAGE);
       }
       if (!researchStore.isValidResearchKey(key)) {
         error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
       }
       const result = researchStore.getResearch(cwd, key, { homeDir });
       output(result, raw);
-    } else if (subcommand === 'put') {
+    } else {
       const key = args[2];
       if (!key || key.startsWith('--')) {
         error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
@@ -914,41 +907,15 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       if (!researchStore.isValidResearchKey(key)) {
         error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
       }
-      const contentIdx = args.indexOf('--content');
-      const sourceIdx = args.indexOf('--source');
-      const providerIdx = args.indexOf('--provider');
-      const confidenceIdx = args.indexOf('--confidence');
-      const kindIdx = args.indexOf('--kind');
-      function getFlagValue(idx, flagName) {
-        if (idx === -1) return null;
-        const val = args[idx + 1];
-        if (val === undefined || val.startsWith('--')) {
-          error(`research-store put: missing value for ${flagName}`, ERROR_REASON.USAGE);
-        }
-        return val;
-      }
-      const content = getFlagValue(contentIdx, '--content');
-      const source = getFlagValue(sourceIdx, '--source');
-      const provider = getFlagValue(providerIdx, '--provider');
-      const confidence = getFlagValue(confidenceIdx, '--confidence');
-      const kind = getFlagValue(kindIdx, '--kind');
-      if (!content || !source || !provider || !confidence || !kind) {
-        error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
-      }
+      const { content, source, provider, confidence, kind } = parsed;
       const entry = researchStore.putResearch(cwd, key, { content, source, provider, confidence, kind }, { homeDir });
       output(entry, raw);
-    } else {
-      error('Unknown research-store subcommand. Available: get, put', ERROR_REASON.SDK_UNKNOWN_COMMAND);
     }
   }
 
   function routeResearchPlan({ args, cwd, raw }) {
+    const { input: inputPath } = parseNamedArgsOrExit(args, specFor('research-plan'), error);
     const researchProvider = require('./lib/research-provider.cjs');
-    const inputIdx = args.indexOf('--input');
-    const inputPath = inputIdx !== -1 ? args[inputIdx + 1] : null;
-    if (!inputPath || inputPath.startsWith('--')) {
-      error('Usage: gsd-tools research-plan --input <path>', ERROR_REASON.USAGE);
-    }
     let planInput;
     try {
       const raw_ = fs.readFileSync(path.resolve(inputPath), 'utf8');
@@ -1239,14 +1206,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeCheckCommit({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('check-commit'), error);
     commands.cmdCheckCommit(cwd, raw);
   }
 
   function routeCommitDocsGuard({ args, cwd, raw, error }) {
     const subcommand = args[1];
     if (subcommand === 'enable') {
+      parseNamedArgsOrExit(args, specFor('commit-docs-guard.enable'), error);
       commands.cmdCommitDocsGuardEnable(cwd, raw);
     } else if (subcommand === 'disable') {
+      parseNamedArgsOrExit(args, specFor('commit-docs-guard.disable'), error);
       commands.cmdCommitDocsGuardDisable(cwd, raw);
     } else {
       error('Unknown commit-docs-guard subcommand. Available: enable, disable', ERROR_REASON.SDK_UNKNOWN_COMMAND);
@@ -1276,19 +1246,20 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeVerifySummary({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('verify-summary'), error);
     const summaryPath = args[1];
-          const countIndex = args.indexOf('--check-count');
-          const checkCount = countIndex !== -1 ? parseInt(args[countIndex + 1], 10) : 2;
+          const checkCount = parsed['check-count'] !== null ? parseInt(parsed['check-count'], 10) : 2;
           verify.cmdVerifySummary(cwd, summaryPath, checkCount, raw);
   }
 
   function routeTemplate({ args, cwd, raw, error }) {
     const subcommand = args[1];
           if (subcommand === 'select') {
+            parseNamedArgsOrExit(args, specFor('template.select'), error);
             template.cmdTemplateSelect(cwd, args[2], raw);
           } else if (subcommand === 'fill') {
             const templateType = args[2];
-            const { phase, plan, name, type, wave, fields: fieldsRaw } = parseNamedArgsOrExit(args, { valueFlags: ['phase', 'plan', 'name', 'type', 'wave', 'fields'], positionals: 3 }, error);
+            const { phase, plan, name, type, wave, fields: fieldsRaw } = parseNamedArgsOrExit(args, specFor('template.fill'), error);
             let fields = {};
             if (fieldsRaw) {
               const { safeJsonParse } = require('./lib/security.cjs');
@@ -1385,10 +1356,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // Rationale: it is a pure local formatter and avoids SDK bridge startup
           // in tight subprocess loops where Windows CI has shown intermittent
           // native crashes (0xC0000005 / 3221225477).
+          parseNamedArgsOrExit(args, specFor('current-timestamp'), error);
           commands.cmdCurrentTimestamp(args[1] || 'full', raw);
   }
 
-  function routeRuntimeIdentity({ raw }) {
+  function routeRuntimeIdentity({ args, raw }) {
+    parseNamedArgsOrExit(args, specFor('runtime-identity'), error);
     // #3146: report this runtime's package identity so a shipped workflow can
     // tell whether it reached THIS package's gsd-tools or a colliding one.
     // Kept on the CJS fast path for the same reason as current-timestamp — the
@@ -1398,6 +1371,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeSkillsRoot({ args, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('skills-root'), error);
     // #3024: resolve the global skills base directory for a runtime.
     // The sync-skills workflow previously shelled out to install.js --skills-root,
     // but install.js is not shipped in installed trees. gsd-tools IS shipped, so
@@ -1462,18 +1436,22 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeListTodos({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('list-todos'), error);
     commands.cmdListTodos(cwd, args[1], raw);
   }
 
   function routeListSeeds({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('list-seeds'), error);
     commands.cmdListSeeds(cwd, args[1], raw);
   }
 
   function routeVerifyPathExists({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('verify-path-exists'), error);
     commands.cmdVerifyPathExists(cwd, args[1], raw);
   }
 
-  function routeQuickTasksMigrate({ cwd, raw }) {
+  function routeQuickTasksMigrate({ args, cwd, raw }) {
+    parseNamedArgsOrExit(args, specFor('quick-tasks-migrate'), error);
     // #3730 (option b, maintainer decision 2026-09-02): the supported repair
     // path for a legacy Quick Tasks table GSD's own pre-registry prose created.
     // Silent no-op when the section is absent or the table is already canonical
@@ -2264,11 +2242,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // watch-mode runner (vitest/jest) cannot hang a verification gate. Shared
           // by the regression gate and the post-merge gate. args[1] is the raw
           // resolved command; --cwd (already parsed into `cwd`) locates package.json.
+          parseNamedArgsOrExit(args, specFor('normalize-test-command'), error);
           const testCommandNormalizer = require('./lib/normalize-test-command.cjs');
           testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
   }
 
   function routeResolvePackageManager({ args, cwd }) {
+    parseNamedArgsOrExit(args, specFor('resolve-package-manager'), error);
     // #5346: the gates' no-configured-command fallback asks here for the
     // project's package manager (packageManager field, then lockfile, else npm).
     // args[1] is the script name; --cwd (already parsed into `cwd`) locates package.json.
@@ -2276,6 +2256,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeDispatchShouldFlatten({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('dispatch-should-flatten'), error);
     // #1708 / #853: typed query replacing the `RUNTIME === 'codex'` prose rule.
           //
           // Resolves the current runtime (GSD_RUNTIME > config.runtime > per-install
@@ -2308,8 +2289,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               ? hostIntegration.shouldFlattenDispatch(dispatch)
               : true; // fail-closed: unknown runtime → inline
 
-            const jsonIdx = args.indexOf('--json');
-            if (jsonIdx !== -1) {
+            if (parsed.json) {
               output({
                 runtime: runtimeId,
                 shouldFlatten: shouldFlat,
@@ -2351,6 +2331,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeDispatchIsolation({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('dispatch-isolation'), error);
     // #2584 Phase 3 (#2627): typed query exposing the negotiated
     // `dispatch.isolation` to the execute-phase wave scheduler, so the
     // scheduler branches on a declared capability instead of on a runtime id.
@@ -2394,7 +2375,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // `per-plan-worktree-gate.md`) override the naturally-resolved mode
     // while still going through this single write path. Best-effort: a
     // sentinel write failure here must never fail the wave.
-    const decision = resolveDispatchIsolationDecision({ args, cwd });
+    const decision = resolveDispatchIsolationDecision({ parsed, cwd });
     const runtimeId = decision.runtimeId;
     let { isolation, exec, harnessFlag } = decision;
 
@@ -2404,8 +2385,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // ignored rather than erroring — this is a best-effort recording call,
     // not a hard usage gate. Forcing to 'none' clears harnessFlag/exec since
     // neither applies to sequential dispatch.
-    const forceIdx = args.indexOf('--force-isolation');
-    const forcedIsolation = forceIdx !== -1 ? args[forceIdx + 1] : undefined;
+    const forcedIsolation = parsed['force-isolation'];
     if (forcedIsolation && DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation)) {
       isolation = forcedIsolation;
       if (isolation === 'none') {
@@ -2414,14 +2394,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
     }
 
-    const phaseIdx = args.indexOf('--phase');
-    const phaseArg = phaseIdx !== -1 && args[phaseIdx + 1] && !args[phaseIdx + 1].startsWith('--')
-      ? args[phaseIdx + 1]
-      : null;
-    const planIdx = args.indexOf('--plan');
-    const planArg = planIdx !== -1 && args[planIdx + 1] && !args[planIdx + 1].startsWith('--')
-      ? args[planIdx + 1]
-      : null;
+    const phaseArg = parsed.phase || null;
+    const planArg = parsed.plan || null;
 
     // #3737: the project-level opt-out (workflow.use_worktrees === false) is
     // decided HERE, before the sentinel write — not only in the workflow
@@ -2451,7 +2425,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // a { recorded: false } result; this catch is defense in depth only.
     }
 
-    if (args.indexOf('--json') !== -1) {
+    if (parsed.json) {
       output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
     } else {
       process.stdout.write(isolation);
@@ -2497,6 +2471,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    *   default → same as --raw
    */
   function routeDispatchCapacity({ args, cwd, raw }) {
+    const capacityFlags = parseNamedArgsOrExit(args, specFor('dispatch-capacity'), error);
     const { UNDOCUMENTED, isPositiveSafeInteger } = require('./lib/host-integration.cjs');
 
     let runtimeId = null;
@@ -2557,7 +2532,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       reason = 'non_positive';
     }
 
-    if (args.indexOf('--json') !== -1) {
+    if (capacityFlags.json) {
       output({ runtime: runtimeId, capacity, declared, source, reason }, raw);
     } else {
       process.stdout.write(String(capacity));
@@ -2726,7 +2701,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * drift apart. Resolution only — the caller decides whether the decision is
    * recorded to the sentinel.
    */
-  function resolveDispatchIsolationDecision({ args, cwd }) {
+  function resolveDispatchIsolationDecision({ parsed, cwd }) {
     let isolation = 'none';
     let runtimeId = null;
     let exec = null;
@@ -2770,11 +2745,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
 
       if (isolation === 'orchestrator-worktree') {
-        const cwdIdx = args.indexOf('--cwd-target');
-        const cwdTarget = cwdIdx !== -1 ? args[cwdIdx + 1] : '';
+        const cwdTarget = parsed['cwd-target'];
         if (cwdTarget) {
-          const promptIdx = args.indexOf('--prompt');
-          const promptArg = promptIdx !== -1 ? args[promptIdx + 1] : undefined;
+          const promptArg = parsed.prompt ?? undefined;
           const hostIntegration = require('./lib/host-integration.cjs');
           // #3714: resolve an EXPLICIT, non-sentinel per-agent model pin for the
           // spawned worktree executor. Passing `null` as the runtime resolver
@@ -2859,6 +2832,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeInspectDispatchIsolation({ args, cwd, raw }) {
+    // The recording-only knobs (--force-isolation, --phase, --plan) are not declared for this verb
+    // in the CLI surface registry, so the seam refuses them before anything is resolved.
+    const parsed = parseNamedArgsOrExit(args, specFor('inspect-dispatch-isolation'), error);
     // #2486: sentinel-free sibling of `dispatch-isolation` for INSPECTION
     // surfaces — /gsd:health's W025 check and /gsd:settings' Worktrees
     // branching. The dispatch verb above intentionally records its resolved
@@ -2892,16 +2868,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //     caller receive a silently different answer, this verb REJECTS the
     //     recording-only knobs outright — they exist to be recorded, and a
     //     read has nothing to record.
-    const RECORDING_ONLY_ARGS = ['--force-isolation', '--phase', '--plan'];
-    const rejected = RECORDING_ONLY_ARGS.filter((flag) => args.indexOf(flag) !== -1);
-    if (rejected.length > 0) {
-      error(
-        `inspect-dispatch-isolation: ${rejected.join(', ')} ${rejected.length === 1 ? 'is a' : 'are'} recording-only argument${rejected.length === 1 ? '' : 's'} and cannot be used on the inspection verb — it resolves the runtime's DECLARED capability and records nothing. Use 'query dispatch-isolation' if you need the override applied and the decision recorded.`,
-        ERROR_REASON.USAGE,
-      );
-    }
-    const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ args, cwd });
-    if (args.indexOf('--json') !== -1) {
+    const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ parsed, cwd });
+    if (parsed.json) {
       output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
     } else {
       process.stdout.write(isolation);
@@ -3102,6 +3070,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeResolveDispatchType({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('resolve-dispatch-type'), error);
+    const requested = parsed.requested ?? '';
     // #2508 Phase 4 Option A: resolve a requested GSD subagent name to the
            // type an Agent() call should use on the current runtime. On
            // named-dispatch runtimes (Claude, OpenCode, …) the name is returned
@@ -3113,8 +3083,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
            //   --raw (default) → prints the resolved type (e.g. "gsd-planner" or "plan")
            //   --json          → prints { runtime, requested, resolved, dispatch }
            try {
-             const requestedIdx = args.indexOf('--requested');
-             const requested = requestedIdx !== -1 ? args[requestedIdx + 1] : '';
              const { resolveRuntime } = require('./lib/runtime-slash.cjs');
              const runtimeId = resolveRuntime(cwd);
              const registry = require('./lib/capability-registry.cjs');
@@ -3124,8 +3092,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
              const dispatch = runtimeEntry?.runtime?.hostIntegration?.dispatch ?? null;
              const hostIntegration = require('./lib/host-integration.cjs');
              const resolved = hostIntegration.resolveDispatchType(requested, dispatch);
-             const jsonIdx = args.indexOf('--json');
-             if (jsonIdx !== -1) {
+             if (parsed.json) {
                output({ runtime: runtimeId, requested, resolved, dispatch }, raw);
              } else {
                process.stdout.write(String(resolved));
@@ -3134,13 +3101,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
              // Fail-closed: on any error, echo the requested name unchanged
              // (named-dispatch is the GSD default; degrading to it preserves
              // behavior for every runtime already in the field).
-             const requestedIdx = args.indexOf('--requested');
-             const requested = requestedIdx !== -1 ? args[requestedIdx + 1] : '';
              process.stdout.write(String(requested));
            }
   }
 
   function routeResolveAgent({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('resolve-agent'), error);
     // #1689: resolve a per-plan agent_hint specialist name to the subagent_type
            // an Agent() call should use. Returns the name unchanged when a
            // matching agent file exists in the active runtime's agent dir(s);
@@ -3153,8 +3119,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
            //   --json          -> prints { runtime, requested, resolved, fallback }
     const FALLBACK = 'gsd-executor';
     try {
-      const nameIdx = args.indexOf('--name');
-      const requested = nameIdx !== -1 ? args[nameIdx + 1] : '';
+      const requested = parsed.name ?? '';
       const { resolveRuntime } = require('./lib/runtime-slash.cjs');
       const runtimeId = resolveRuntime(cwd);
       const { resolveAgentHint } = require('./lib/agent-install-check.cjs');
@@ -3171,8 +3136,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // the named agent did not resolve, or resolution errored). Requesting
       // gsd-executor explicitly and resolving to it is NOT a fallback.
       const fellBack = !resolvedOk;
-      const jsonIdx = args.indexOf('--json');
-      if (jsonIdx !== -1) {
+      if (parsed.json) {
         output({ runtime: runtimeId, requested: requested || null, resolved, fallback: fellBack }, raw);
       } else {
         process.stdout.write(String(resolved));
@@ -3203,6 +3167,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeHistoryDigest({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('history-digest'), error);
     commands.cmdHistoryDigest(cwd, raw);
   }
 
@@ -3223,6 +3188,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // deterministic detectAssumptionDelta, emitting the typed IR as JSON.
           const sub = args[1];
           if (sub === 'scan') {
+            const parsed = parseNamedArgsOrExit(args, specFor('assumption-delta.scan'), error);
             const phaseNum = args[2];
             // Reject missing or flag-shaped phase values (QA matrix: values that
             // look like flags). `scan --json` must not treat "--json" as a phase.
@@ -3236,8 +3202,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Terms are normalized (deduped, alphanumeric-only, capped) by
             // detectAssumptionDelta's resolveTerms.
             let termsOverride;
-            const termsIdx = args.indexOf('--terms');
-            const termsVal = termsIdx !== -1 ? args[termsIdx + 1] : undefined;
+            const termsVal = parsed.terms;
             if (typeof termsVal === 'string' && !termsVal.startsWith('-')) {
               const list = termsVal
                 .split(',')
@@ -3325,8 +3290,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // touch ROADMAP/REQUIREMENTS/MILESTONES.md, runs no completion
             // guards) — safe to call against an already-completed milestone,
             // unlike `milestone complete --archive-quick`.
-            const dryRun = args.includes('--dry-run');
-            milestone.cmdQuickArchive(cwd, args[2], { dryRun }, raw);
+            const parsed = parseNamedArgsOrExit(args, specFor('milestone.archive-quick'), error);
+            milestone.cmdQuickArchive(cwd, args[2], { dryRun: parsed['dry-run'] }, raw);
           } else if (subcommand === 'release-tags') {
             // #5705 (epic #3628 Phase 1): repository-scoped annotated release tags.
             milestoneReleaseTags.cmdMilestoneReleaseTags(cwd, args, raw);
@@ -3336,6 +3301,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeProgress({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('progress.bar'), error);
     const subcommand = args[1] || 'json';
           commands.cmdProgressRender(cwd, subcommand, raw);
   }
@@ -3361,6 +3327,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeStats({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('stats.json'), error);
     const subcommand = args[1] || 'json';
           commands.cmdStats(cwd, subcommand, raw);
   }
@@ -3370,19 +3337,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (subcommand === 'complete') {
             // #4096: this verb's flag surface is closed. `--dry-run` is parsed
             // and plumbed (mirroring routeMilestone / #2118), and any OTHER
-            // flag fails loudly instead of being silently ignored — an
-            // accepted-but-ignored safety flag converts a deliberate preview
-            // into the mutation it was meant to avoid. (`--raw` is spliced by
-            // the dispatcher before routing; it stays in the set as a guard
-            // against that splice ever moving.)
-            const TODO_COMPLETE_KNOWN_FLAGS = new Set(['--dry-run', '--raw']);
-            for (const a of args.slice(3)) {
-              if (typeof a === 'string' && a.startsWith('-') && !TODO_COMPLETE_KNOWN_FLAGS.has(a)) {
-                error(`Unknown flag for todo complete: ${a}`, ERROR_REASON.USAGE);
-              }
-            }
-            commands.cmdTodoComplete(cwd, args[2], { dryRun: args.includes('--dry-run') }, raw);
+            // flag fails loudly in the seam instead of being silently ignored —
+            // an accepted-but-ignored safety flag converts a deliberate preview
+            // into the mutation it was meant to avoid.
+            const parsed = parseNamedArgsOrExit(args, specFor('todo.complete'), error);
+            commands.cmdTodoComplete(cwd, args[2], { dryRun: parsed['dry-run'] }, raw);
           } else if (subcommand === 'match-phase') {
+            parseNamedArgsOrExit(args, specFor('todo.match-phase'), error);
             commands.cmdTodoMatchPhase(cwd, args[2], raw);
           } else {
             error('Unknown todo subcommand. Available: complete, match-phase', ERROR_REASON.SDK_UNKNOWN_COMMAND);
@@ -3485,38 +3446,41 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routePhasePlanIndex({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('phase-plan-index'), error);
     phase.cmdPhasePlanIndex(cwd, args[1], raw);
   }
 
   function routeStateSnapshot({ args, cwd, raw, error }) {
+    parseNamedArgsOrExit(args, specFor('state-snapshot'), error);
     state.cmdStateSnapshot(cwd, raw);
   }
 
   function routeSummaryExtract({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('summary-extract'), error);
     const summaryPath = args[1];
-          const fieldsIndex = args.indexOf('--fields');
-          const fields = fieldsIndex !== -1 ? args[fieldsIndex + 1].split(',') : null;
+          const fields = parsed.fields !== null ? parsed.fields.split(',') : null;
           commands.cmdSummaryExtract(cwd, summaryPath, fields, raw);
   }
 
   async function routeWebsearch({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('websearch'), error);
     const query = args[1];
-          const limitIdx = args.indexOf('--limit');
-          const freshnessIdx = args.indexOf('--freshness');
           await commands.cmdWebsearch(query, {
-            limit: limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : 10,
-            freshness: freshnessIdx !== -1 ? args[freshnessIdx + 1] : null,
+            limit: parsed.limit !== null ? parseInt(parsed.limit, 10) : 10,
+            freshness: parsed.freshness,
           }, raw);
   }
 
   function routeWorkstream({ args, cwd, raw, error }) {
     const subcommand = args[1];
+          const WORKSTREAM_SUBCOMMANDS = ['create', 'list', 'status', 'complete', 'set', 'get', 'progress'];
+          const parsed = WORKSTREAM_SUBCOMMANDS.includes(subcommand)
+            ? parseNamedArgsOrExit(args, specFor(`workstream.${subcommand}`), error)
+            : null;
           if (subcommand === 'create') {
-            const migrateNameIdx = args.indexOf('--migrate-name');
-            const noMigrate = args.includes('--no-migrate');
             workstream.cmdWorkstreamCreate(cwd, args[2], {
-              migrate: !noMigrate,
-              migrateName: migrateNameIdx !== -1 ? args[migrateNameIdx + 1] : null,
+              migrate: !parsed['no-migrate'],
+              migrateName: parsed['migrate-name'],
             }, raw);
           } else if (subcommand === 'list') {
             workstream.cmdWorkstreamList(cwd, raw);
@@ -3579,20 +3543,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   function routeLearnings({ args, cwd, raw, error }) {
     const subcommand = args[1];
+          const LEARNINGS_SUBCOMMANDS = ['list', 'query', 'copy', 'prune', 'delete'];
+          const parsed = LEARNINGS_SUBCOMMANDS.includes(subcommand)
+            ? parseNamedArgsOrExit(args, specFor(`learnings.${subcommand}`), error)
+            : null;
           if (subcommand === 'list') {
             learnings.cmdLearningsList(raw);
           } else if (subcommand === 'query') {
-            const tagIdx = args.indexOf('--tag');
-            const tag = tagIdx !== -1 ? args[tagIdx + 1] : null;
-            if (!tag) error('Usage: gsd-tools learnings query --tag <tag>', ERROR_REASON.USAGE);
-            learnings.cmdLearningsQuery(tag, raw);
+            learnings.cmdLearningsQuery(parsed.tag, raw);
           } else if (subcommand === 'copy') {
             learnings.cmdLearningsCopy(cwd, raw);
           } else if (subcommand === 'prune') {
-            const olderIdx = args.indexOf('--older-than');
-            const olderThan = olderIdx !== -1 ? args[olderIdx + 1] : null;
-            if (!olderThan) error('Usage: gsd-tools learnings prune --older-than <duration>', ERROR_REASON.USAGE);
-            learnings.cmdLearningsPrune(olderThan, raw);
+            learnings.cmdLearningsPrune(parsed['older-than'], raw);
           } else if (subcommand === 'delete') {
             const id = args[2];
             if (!id) error('Usage: gsd-tools learnings delete <id>', ERROR_REASON.USAGE);
@@ -3644,8 +3606,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeTeamsStatus({ args, cwd, raw, error }) {
+    const parsed = parseNamedArgsOrExit(args, specFor('teams-status'), error);
     const teamsStatus = require('./lib/teams-status.cjs');
-          teamsStatus.cmdTeamsStatus(cwd, { active: args.includes('--active') });
+          teamsStatus.cmdTeamsStatus(cwd, { active: parsed.active });
   }
 
   // #3023 follow-up (adversarial review finding): the shared hook bundle's
@@ -4582,10 +4545,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             return;
           }
 
-          const storyIdx = args.indexOf('--story');
-          const story = (storyIdx !== -1 && args[storyIdx + 1] && !args[storyIdx + 1].startsWith('--'))
-            ? args[storyIdx + 1]
-            : '';
+          const parsed = parseNamedArgsOrExit(args, specFor('user-story.validate'), error);
+
+          const story = parsed.story || '';
 
           // Canonical extraction regex — requires non-whitespace content in each slot
           // (\S.*? ensures the slot isn't whitespace-only).
@@ -4634,6 +4596,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           //   drift-guard authority                          → effective authority string
           //   drift-guard severity --status <S> [--authority <A>]  → {severity, hardBlock}
           const subcommand = args[1];
+          const DRIFT_GUARD_SUBCOMMANDS = ['authority', 'severity', 'phase-status'];
+          const parsed = DRIFT_GUARD_SUBCOMMANDS.includes(subcommand)
+            ? parseNamedArgsOrExit(args, specFor(`drift-guard.${subcommand}`), error)
+            : null;
 
           // Read config.json directly for both plan_review.source_grounding_authority
           // and intel.enabled. Neither key is in the config-loader.cjs whitelist that
@@ -4669,17 +4635,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           }
 
           if (subcommand === 'severity') {
-            const statusIdx = args.indexOf('--status');
-            const statusVal = statusIdx !== -1 ? args[statusIdx + 1] : undefined;
-            if (!statusVal || statusVal.startsWith('--')) {
+            const statusVal = parsed.status;
+            if (!statusVal) {
               error('drift-guard severity requires --status <VERIFIED|MISSING|AMBIGUOUS|UNCHECKABLE>', ERROR_REASON.SDK_UNKNOWN_COMMAND);
               return;
             }
-            const authIdx = args.indexOf('--authority');
-            const authVal = authIdx !== -1 ? args[authIdx + 1] : undefined;
-            const authorityForClassify = (authVal && !authVal.startsWith('--'))
-              ? authVal
-              : effectiveAuthority;
+            const authorityForClassify = parsed.authority || effectiveAuthority;
             const result = classifyDriftSeverity({ status: statusVal, authority: authorityForClassify });
             output(result, raw);
             return;
@@ -4699,10 +4660,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // is scoped to the body.
             const { stripFrontmatter } = require('./lib/frontmatter.cjs');
 
-            const phaseIdx = args.indexOf('--phase');
-            const phaseArg = (phaseIdx !== -1 && args[phaseIdx + 1] && !args[phaseIdx + 1].startsWith('--'))
-              ? args[phaseIdx + 1]
-              : undefined;
+            const phaseArg = parsed.phase || undefined;
 
             const dir = planningDir(cwd);
             const phaseConvention = resolvePhaseIdConvention(cwd);

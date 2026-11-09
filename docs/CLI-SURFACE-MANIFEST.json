@@ -42,12 +42,13 @@
     {
       "verb": "assumption-delta.scan",
       "aliases": [],
-      "positionals": 3,
+      "positionals": 2,
       "flags": {
         "terms": "value"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "check-commit",
@@ -118,12 +119,13 @@
     {
       "verb": "config-new-project",
       "aliases": [],
-      "positionals": 2,
+      "positionals": 1,
       "flags": {
         "dry-run": "boolean"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "config-path",
@@ -246,9 +248,7 @@
         "authority": "value",
         "status": "value"
       },
-      "required": [
-        "status"
-      ],
+      "required": [],
       "workstreamScoped": false
     },
     {
@@ -693,12 +693,13 @@
     {
       "verb": "resolve-granularity",
       "aliases": [],
-      "positionals": "rest",
+      "positionals": 1,
       "flags": {
         "granularity": "value"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "resolve-model",
