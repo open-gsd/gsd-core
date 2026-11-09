@@ -197,6 +197,8 @@ module.exports = {
   "tests/prepush-enterprise-email-hook.test.cjs",
   "tests/process-seam.test.cjs",
   "tests/profile-pipeline.test.cjs",
+  "tests/project-context-cli.test.cjs",
+  "tests/project-context.test.cjs",
   "tests/project-root.test.cjs",
   "tests/prune-orphaned-worktrees.test.cjs",
   "tests/quick-batch-command-router.stdin.test.cjs",

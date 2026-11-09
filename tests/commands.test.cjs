@@ -6337,56 +6337,32 @@ describe('gsd-tools.cjs dispatch/help/skip-list parity (DEFECT.GENERATIVE-FIX, #
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// resolveMainWorktreeCwd — #3050: gsd-tools must surface (not silently
-// swallow) a git_timed_out worktree-root resolution, since writing planning
-// artifacts to the wrong tree is the exact fail-open the issue names.
+// warnIfGitTimedOut — #3050: gsd-tools must surface (not silently swallow) a
+// git_timed_out worktree-root resolution, since writing planning artifacts to
+// the wrong tree is the exact fail-open the issue names. The remap rules the
+// retired resolveMainWorktreeCwd carried are encoded as legacyDispatchCwd
+// parity in tests/project-context.test.cjs (#6043).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('gsd-tools.cjs resolveMainWorktreeCwd (#3050)', () => {
-  const { resolveMainWorktreeCwd } = require('../gsd-core/bin/gsd-tools.cjs');
+describe('gsd-tools.cjs warnIfGitTimedOut (#3050, #6043)', () => {
+  const { warnIfGitTimedOut } = require('../gsd-core/bin/gsd-tools.cjs');
+  const ctxWith = (reason) => ({ worktreeRoot: '/repo/wt', provenance: { reason } });
 
-  test('emits a WARNING to stderr and still resolves the fallback root on git_timed_out', () => {
+  test('emits a WARNING to stderr naming the fallback root on git_timed_out', () => {
     const warnings = [];
-    const resolved = resolveMainWorktreeCwd('/repo/wt', {
-      existsSync: () => false,
-      resolveWorktreeRoot: () => ({ root: '/repo/wt', reason: 'git_timed_out' }),
-      writeWarning: (msg) => warnings.push(msg),
-    });
-    assert.equal(resolved, '/repo/wt');
+    warnIfGitTimedOut(ctxWith('git_timed_out'), (msg) => warnings.push(msg));
     assert.equal(warnings.length, 1, 'must emit exactly one warning on git_timed_out');
     assert.match(warnings[0], /git timed out/i);
     assert.match(warnings[0], /wrong tree/i);
+    assert.ok(warnings[0].includes('"/repo/wt"'), 'names the best-effort fallback root');
   });
 
-  test('does NOT warn on a benign reason (linked_worktree)', () => {
-    const warnings = [];
-    const resolved = resolveMainWorktreeCwd('/repo/wt', {
-      existsSync: () => false,
-      resolveWorktreeRoot: () => ({ root: '/repo', reason: 'linked_worktree' }),
-      writeWarning: (msg) => warnings.push(msg),
+  for (const reason of ['ok', 'not_git_repo', 'bare_main_worktree', 'git_unavailable']) {
+    test(`does NOT warn on provenance reason ${reason}`, () => {
+      const warnings = [];
+      warnIfGitTimedOut(ctxWith(reason), (msg) => warnings.push(msg));
+      assert.deepEqual(warnings, [], 'must not warn for any reason other than git_timed_out');
     });
-    assert.equal(resolved, '/repo');
-    assert.deepEqual(warnings, [], 'must not warn for a benign, definitive resolution');
-  });
-
-  test('does NOT warn on a benign reason (not_git_repo)', () => {
-    const warnings = [];
-    const resolved = resolveMainWorktreeCwd('/repo/wt', {
-      existsSync: () => false,
-      resolveWorktreeRoot: () => ({ root: '/repo/wt', reason: 'not_git_repo' }),
-      writeWarning: (msg) => warnings.push(msg),
-    });
-    assert.equal(resolved, '/repo/wt');
-    assert.deepEqual(warnings, []);
-  });
-
-  test('short-circuits (never calls resolveWorktreeRoot) when .planning already exists in cwd', () => {
-    const resolved = resolveMainWorktreeCwd('/repo/wt', {
-      existsSync: () => true,
-      resolveWorktreeRoot: () => { throw new Error('must not be called when .planning exists locally'); },
-      writeWarning: () => { throw new Error('must not warn when short-circuited'); },
-    });
-    assert.equal(resolved, '/repo/wt');
-  });
+  }
 });
 
 // ─── #4055 — a merged-and-deleted phase branch must not be resurrected ──────
