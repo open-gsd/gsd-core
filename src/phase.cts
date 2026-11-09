@@ -818,12 +818,12 @@ function normalizeDependencyToken(token: unknown): string {
 
 function resolveDependencyId(
   dep: string,
-  planMap: Map<string, RawPlan>,
+  planMap: Map<string, { id: string }>,
   canonicalToId: Map<string, string>,
   shortFormToId?: Map<string, string>,
 ): string | null {
   const lower = normalizeDependencyToken(dep);
-  if (planMap.has(lower)) return (planMap.get(lower) as RawPlan).id;
+  if (planMap.has(lower)) return (planMap.get(lower) as { id: string }).id;
   if (canonicalToId.has(lower)) return canonicalToId.get(lower) as string;
   return shortFormToId?.get(lower) ?? null;
 }
@@ -856,7 +856,7 @@ function resolveDependencyId(
 // this REAL implementation rather than a hand-rolled copy that could
 // silently disagree with it after a future change here (CLAUDE.md's
 // generative-fix-divergence rule).
-function buildShortFormToId(rawPlans: RawPlan[]): Map<string, string> {
+function buildShortFormToId(rawPlans: ReadonlyArray<{ id: string }>): Map<string, string> {
   const shortFormToId = new Map<string, string>();
   for (const p of rawPlans) {
     const canonical = extractCanonicalPlanId(p.id);
@@ -8255,6 +8255,10 @@ export = {
   computeDependencyLevels,
   buildShortFormToId,
   normalizeDependencyToken,
+  // #5823: `planning inspect` resolves depends_on edges for its additive
+  // halted/blocked_by fields through this same resolver, so the two readers
+  // cannot disagree about which token names which plan.
+  resolveDependencyId,
   // Test seam (#4304): the bracket renumber mapping is a disk and ROADMAP
   // bijection whose order must keep every rename destination free; exposed
   // so a property test can drive it over generated identity sets.

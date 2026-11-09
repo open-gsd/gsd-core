@@ -251,7 +251,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
 ].sort();
 
 const EXPECTED_PHASE_ROW_KEYS = [
-  'complete', 'dependencies', 'dir', 'goal', 'phase_id', 'plan_count', 'plans',
+  'complete', 'dependencies', 'dir', 'goal', 'halted_count', 'phase_id', 'plan_count', 'plans',
   'roadmap_acceptance', 'scope', 'summary_count', 'uat', 'verification',
 ].sort();
 
@@ -937,6 +937,55 @@ describe('planning inspect — phase completion and plan liveness', () => {
     const phase = payload.phases[0];
     assert.strictEqual(phase.plan_count, 1);
     assert.strictEqual(phase.summary_count, 1, 'a halted SUMMARY still counts as a completion record');
+    // #5823: the halt is now visible beside the unchanged count.
+    assert.strictEqual(phase.plans[0].hasSummary, true);
+    assert.strictEqual(phase.plans[0].halted, true);
+    assert.deepStrictEqual(phase.plans[0].blocked_by, []);
+    assert.strictEqual(phase.halted_count, 1);
+    assert.deepStrictEqual(payload.progress.completed_plans, { completed: 1, total: 1, percent: 100, scope: 'complete' });
+    assert.deepStrictEqual(payload.progress.halted_plans, { completed: 1, total: 1, percent: 100, scope: 'complete' });
+  });
+
+  test('haltedAndBlockedByAgreeWithPhasePlanIndexForEveryPlan', (t) => {
+    // #5823: the approval's condition is the SAME halt predicate and the SAME
+    // propagation `phase-plan-index` uses, so the oracle is that command's own
+    // output over one fixture: a halt, a direct and a short-form (#3897)
+    // dependent, an ordinary completion, a superseded dependent, and a
+    // slug-named plan whose SUMMARY carries only the bare id.
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const phaseDir = declarePhase(tmpDir, '1', 'Foo');
+    const plan = (name, fm) => writePlanDoc(phaseDir, name, fm, ['<objective>', 'Ship it', '</objective>', '<tasks></tasks>']);
+    const summary = (name, fm) => writeSummaryDoc(phaseDir, name, fm, ['# Summary']);
+    plan('1-01-PLAN.md', ['wave: 1']);
+    summary('1-01-SUMMARY.md', ['status: halted # designed stop']);
+    plan('1-02-PLAN.md', ['wave: 2', 'depends_on: [1-01]']);
+    plan('1-03-PLAN.md', ['wave: 3', 'depends_on: ["02"]']);
+    plan('1-04-PLAN.md', ['wave: 1']);
+    summary('1-04-SUMMARY.md', ['status: complete']);
+    plan('1-05-PLAN.md', ['status: superseded', 'depends_on: [1-01]']);
+    plan('01-06-scaffolding-PLAN.md', ['wave: 1']);
+    summary('01-06-SUMMARY.md', ['status: halted']);
+    plan('01-07-PLAN.md', ['wave: 2', 'depends_on: [01-06]']);
+
+    const index = runGsdTools(['phase-plan-index', '1'], tmpDir);
+    assert.strictEqual(index.success, true, `phase-plan-index should succeed: ${index.error}`);
+    const indexed = JSON.parse(index.output).plans.map((p) => [p.id, p.halted, p.blocked_by]);
+
+    const phase = parseInspect(tmpDir).phases[0];
+    const byId = new Map(phase.plans.map((p) => [p.id, p]));
+    const inspected = indexed.map(([id]) => [id, byId.get(id).halted, byId.get(id).blocked_by]);
+
+    assert.deepStrictEqual(inspected, indexed);
+    assert.deepStrictEqual(indexed, [
+      ['01-06-scaffolding', true, []],
+      ['01-07', false, ['01-06-scaffolding']],
+      ['1-01', true, []],
+      ['1-02', false, ['1-01']],
+      ['1-03', false, ['1-01']],
+      ['1-04', false, []],
+    ], 'the oracle itself must show both halts and both propagation paths, or agreement proves nothing');
+    assert.strictEqual(phase.halted_count, 2);
   });
 });
 

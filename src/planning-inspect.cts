@@ -92,10 +92,19 @@ import markdownTable = require('./markdown-table.cjs');
 const { parseMarkdownTable, matchTableSchema } = markdownTable;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { normalizeLineEndings } = coreUtilsMod;
+const { normalizeLineEndings, extractCanonicalPlanId, findUnsummarizedPlans } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import securityMod = require('./security.cjs');
 const { tryWithinRoot, PathAcceptance, isContainedIn } = securityMod;
+// #5823: the halt predicate and its propagation come from their #2830 owner,
+// and depends_on tokens resolve through phase-plan-index's own resolver, so
+// this reader and `phase-plan-index` cannot disagree about either.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planDependencyGraphMod = require('./plan-dependency-graph.cjs');
+const { computeHaltPropagation, isSummaryFileHalted, isSummaryFileBlocked, buildSummaryFileIndex } = planDependencyGraphMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseMod = require('./phase.cjs');
+const { resolveDependencyId, buildShortFormToId, normalizeDependencyToken } = phaseMod;
 
 /**
  * The wire schema version. A consumer MUST reject any value other than this
@@ -648,6 +657,23 @@ interface PlanRow {
   /** Plan-scoped `## Files Created/Modified`. `null` when no SUMMARY exists. */
   changedFiles: string[] | null;
   hasSummary: boolean;
+  /**
+   * #5823 (additive, #2830's model): true iff this plan's own SUMMARY declares
+   * `status: halted` (a designed stop). Paired and read exactly as
+   * `phase-plan-index` does — see `readHalted`. False when no SUMMARY pairs,
+   * and when the paired SUMMARY is unreadable (a `summary_unreadable`
+   * diagnostic then names it). `hasSummary` is untouched and keeps its own,
+   * older pairing rule.
+   */
+  halted: boolean;
+  /**
+   * #5823 (additive): the halted plan ids transitively upstream of this plan
+   * over the phase's live, canonically named plans — the node set, depends_on
+   * resolution and `computeHaltPropagation` pass `phase-plan-index` uses. Empty
+   * when nothing upstream halted, and always empty on a row outside that node
+   * set (a superseded or non-canonically named plan).
+   */
+  blocked_by: string[];
   tasks: TaskRow[];
   scope: Scope;
 }
@@ -771,6 +797,53 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
     scan.allPlanFiles.filter((f: string) => !scan.planFiles.includes(f)),
   );
 
+  // #5823: the halt read pairs a plan with its SUMMARY exactly as
+  // `cmdPhasePlanIndex` (`src/phase.cts`) does — a plan has a completion
+  // record when `findUnsummarizedPlans` (the #3183 rule `summary_count` also
+  // counts by) pairs it with a SUMMARY that is not `status: blocked` (#3345),
+  // and the file read is `buildSummaryFileIndex`'s, by plan id and then by
+  // canonical id. That is deliberately NOT `summaryForPlan`, the older rule
+  // behind `hasSummary`: the two differ on a slug-named plan whose SUMMARY
+  // carries only the bare id (`01-06-scaffolding-PLAN.md` with
+  // `01-06-SUMMARY.md`), and `halted` must agree with `phase-plan-index`
+  // while `hasSummary` keeps its meaning (#2830's back-compat rule).
+  const countableSummaryFiles = scan.summaryFiles.filter(
+    (f: string) => !isSummaryFileBlocked(path.join(phaseDir, f)),
+  );
+  const unsummarizedPlanFiles = new Set(findUnsummarizedPlans(scan.allPlanFiles, countableSummaryFiles));
+  const summaryFileByPlanId = buildSummaryFileIndex(scan.summaryFiles, extractCanonicalPlanId);
+
+  /**
+   * #5823: `isSummaryFileHalted` on the plan's paired SUMMARY, called only
+   * after `readDocument` has accepted it (a regular file contained in the
+   * planning root), so a SUMMARY symlinked out of the root is never read for
+   * its halt. (The `status: blocked` filter above, like `scanPhasePlans`'s own
+   * identical pass over the same files, does not check containment; it yields
+   * only that filter's boolean, as it did before #5823.)
+   * `rowSummaryFile` / `rowSummaryReadable` are what the row's own read
+   * already established: when the halt read pairs the same file, it is not
+   * read for containment twice, and an unreadable one is not reported twice.
+   * Any other paired SUMMARY that cannot be read gets its own
+   * `summary_unreadable`, so `halted: false` is never silently a non-answer.
+   */
+  function readHalted(planFile: string, rowSummaryFile: string | null, rowSummaryReadable: boolean): boolean {
+    if (unsummarizedPlanFiles.has(planFile)) return false;
+    const summaryFile =
+      summaryFileByPlanId.get(planIdFromFile(planFile)) ?? summaryFileByPlanId.get(extractCanonicalPlanId(planFile));
+    if (summaryFile === undefined) return false;
+    const summaryPath = path.join(phaseDir, summaryFile);
+    if (summaryFile === rowSummaryFile) return rowSummaryReadable && isSummaryFileHalted(summaryPath);
+    if (readDocument(summaryPath, planningRoot).text === null) {
+      diagnostics.push({
+        code: INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE,
+        subject: toPosix(summaryFile),
+        detail: 'Summary file could not be read; whether this plan halted is unknown.',
+      });
+      return false;
+    }
+    return isSummaryFileHalted(summaryPath);
+  }
+
   const rows: PlanRow[] = scan.allPlanFiles.map((planFile: string) => {
     const doc = readDocument(path.join(phaseDir, planFile), planningRoot);
     if (doc.text === null) {
@@ -791,6 +864,10 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
         plannedFiles: [],
         changedFiles: null,
         hasSummary: false,
+        // The plan body is unknown, but its SUMMARY's halt is still this
+        // plan's own fact, and its dependents' `blocked_by` needs it.
+        halted: readHalted(planFile, null, false),
+        blocked_by: [],
         tasks: [],
         scope: SCOPE.UNREADABLE,
       };
@@ -799,6 +876,7 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
     const parsed = parsePlanDocument(doc.text);
     const summaryFile = summaryForPlan(planFile, scan.summaryFiles);
     let provenance: SummaryProvenance | null = null;
+    let summaryReadable = false;
     if (summaryFile !== null) {
       const summaryDoc = readDocument(path.join(phaseDir, summaryFile), planningRoot);
       if (summaryDoc.text === null) {
@@ -808,6 +886,7 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
           detail: 'Summary file could not be read; file provenance for this plan is unknown.',
         });
       } else {
+        summaryReadable = true;
         provenance = parseSummaryProvenance(summaryDoc.text);
       }
     }
@@ -824,12 +903,46 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
       plannedFiles: parsed.filesModified,
       changedFiles: provenance === null ? null : provenance.planFiles,
       hasSummary: summaryFile !== null,
+      halted: readHalted(planFile, summaryFile, summaryReadable),
+      blocked_by: [],
       tasks: buildTaskRows(planFile, parsed, provenance, diagnostics),
       scope: SCOPE.COMPLETE,
     };
   });
 
+  assignHaltPropagation(rows.filter((row, i) => !row.superseded && planScan.isCanonicalPlanFile(scan.allPlanFiles[i])));
   return { rows, scope: scan.scope };
+}
+
+/**
+ * #5823: fill `blocked_by` on `live` (the phase's live, canonically named plan
+ * rows — `phase-plan-index`'s node set) the way `cmdPhasePlanIndex`
+ * (`src/phase.cts`) does: the same three-tier depends_on resolution
+ * (`resolveDependencyId`) and the same `computeHaltPropagation` pass. A token
+ * that resolves to no plan in the set is dropped, as there. One difference is
+ * forced by this command's contract: where `phase-plan-index` refuses a
+ * depends_on cycle outright, this read never fails, so the shared
+ * propagation's fail-closed answer stands — every non-halted plan it cannot
+ * order carries a non-empty `blocked_by`.
+ */
+function assignHaltPropagation(live: PlanRow[]): void {
+  const planMap = new Map(live.map((row) => [normalizeDependencyToken(row.id), row]));
+  const canonicalToId = new Map(
+    live.map((row) => [normalizeDependencyToken(extractCanonicalPlanId(row.id)), row.id]),
+  );
+  const shortFormToId = buildShortFormToId(live);
+  const { blockedBy } = computeHaltPropagation(
+    live.map((row) => ({
+      id: row.id,
+      resolvedDependsOn: row.dependsOn
+        .map((dep) => resolveDependencyId(String(dep), planMap, canonicalToId, shortFormToId))
+        .filter((id): id is string => id !== null),
+      halted: row.halted,
+    })),
+  );
+  for (const row of live) {
+    row.blocked_by = blockedBy.get(row.id) ?? [];
+  }
 }
 
 // ─── UAT ──────────────────────────────────────────────────────────────────────
@@ -1348,6 +1461,9 @@ function buildPlanningInspectResult(cwd: string): {
       uat: { unresolved: uat.items, scope: uat.scope },
       plan_count: phase.planCount,
       summary_count: phase.summaryCount,
+      // #5823 (additive): live plans whose own SUMMARY says `status: halted`.
+      // `summary_count` is unchanged and still counts them (#2830's model).
+      halted_count: plans.rows.filter((row) => !row.superseded && row.halted).length,
       plans: plans.rows,
       scope: folded,
     };
@@ -1372,6 +1488,16 @@ function buildPlanningInspectResult(cwd: string): {
     phaseRows.reduce((sum, p) => sum + p.plan_count, 0),
     phaseScope,
     'progress.completed_plans',
+    diagnostics,
+  );
+  // #5823 (additive): the halted share of the same live plan set. Halted
+  // plans stay inside `completed_plans` (#2830 kept a halted SUMMARY a
+  // completion record); this fraction is how a consumer tells them apart.
+  const haltedPlans = makeFraction(
+    phaseRows.reduce((sum, p) => sum + p.halted_count, 0),
+    phaseRows.reduce((sum, p) => sum + p.plan_count, 0),
+    phaseScope,
+    'progress.halted_plans',
     diagnostics,
   );
 
@@ -1400,6 +1526,7 @@ function buildPlanningInspectResult(cwd: string): {
     progress: {
       accepted_phases: acceptedPhases,
       completed_plans: completedPlans,
+      halted_plans: haltedPlans,
     },
     diagnostics,
   };
