@@ -303,7 +303,11 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
     place(root, tmpRepo, entries, true);
   } catch (err) {
     // The caller never receives tmpRepo when the walk throws, so nothing else can remove it.
-    fs.rmSync(tmpRepo, { recursive: true, force: true });
+    try {
+      fs.rmSync(tmpRepo, { recursive: true, force: true });
+    } catch {
+      // best-effort: the walk error below is the one worth reporting
+    }
     throw err;
   }
 
