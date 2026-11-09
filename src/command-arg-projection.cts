@@ -65,6 +65,54 @@ export interface NamedArgSpec {
    */
   optionalValueFlags?: string[];
   /**
+   * `--name=value` is also accepted (ADR-4909 D1 seam-kinds table). Subset of
+   * `valueFlags`. `--name=` counts as present without a value (`null`). Reader:
+   * resolve-execution, loop render-hooks, effort sync, update-context,
+   * context-predicates, project-instruction-file, record-dispatch-isolation.
+   */
+  eqFlags?: string[];
+  /**
+   * Present without a value (no next token, a flag-shaped next token, or
+   * `--name=`) is InvalidArgs `Missing value for --name`; an absent flag stays
+   * `null`. Subset of `valueFlags`. Reader: resolve-execution, loop
+   * render-hooks, milestone `--release-map` and the eq-form readers.
+   */
+  nonEmptyFlags?: string[];
+  /**
+   * A bare `--name` yields `''` instead of `null`, so presence is read from
+   * `data`. Subset of `valueFlags`. Reader: stamp-codebase-map `--files`.
+   */
+  bareEmptyFlags?: string[];
+  /**
+   * `data[name]` is a `string[]` of every occurrence's value, in order; an
+   * occurrence with no value (absent or flag-shaped next token, or `--name=`)
+   * contributes nothing. Subset of `valueFlags`. Reader: prompt-budget
+   * `--plan-file`, restore-custom-files `--config-dir` (last wins).
+   */
+  repeatableFlags?: string[];
+  /**
+   * Each occurrence starts a run collecting non-`--` tokens up to the next
+   * list flag of this spec (`--` tokens inside a run are skipped by extraction
+   * but still validated); repeated runs merge. `data[name]` is a `string[]`.
+   * Independent kind: disjoint from every other kind. This is gsd-tools.cjs
+   * `collectListFlagValues`. Reader: commit `--files`/`--files-removed`,
+   * commit-to-subrepo `--files`.
+   */
+  listFlags?: string[];
+  /**
+   * Collects tokens after the first `--name` up to the next `--`-prefixed
+   * token, joined with spaces, or `null` (the `parseMultiwordArg` semantics).
+   * Independent kind: disjoint from every other kind. Reader: milestone
+   * complete `--name`, scaffold `--name`.
+   */
+  multiwordFlags?: string[];
+  /**
+   * Tokens after the first literal `--` are not validated and are returned in
+   * `data['--']` (always `[]` when no `--` is present). Reader: review-lane
+   * explicit-from-argv. Flag extraction ignores those tokens.
+   */
+  passthroughAfter?: '--';
+  /**
    * Count of leading argv slots the CALLER owns and reads itself (args[0] =
    * family, args[1] = subcommand, plus any documented positional).
    * Validation begins at this index. 'rest' means the caller consumes all
@@ -74,10 +122,20 @@ export interface NamedArgSpec {
   positionals: number | 'rest';
 }
 
-export type ParsedNamedArgs = Record<string, string | boolean | null>;
+export type ParsedNamedArgs = Record<string, string | boolean | null | string[]>;
 
-export type NamedArgsResult =
-  | { ok: true; data: ParsedNamedArgs }
+/** Parsed shape when the spec declares no array-valued kind (listFlags, repeatableFlags, passthroughAfter). */
+export type ScalarNamedArgs = Record<string, string | boolean | null>;
+
+/** A NamedArgSpec that cannot yield array values; selects the `ScalarNamedArgs` overload. */
+export type ScalarNamedArgSpec = Omit<NamedArgSpec, 'repeatableFlags' | 'listFlags' | 'passthroughAfter'> & {
+  repeatableFlags?: undefined;
+  listFlags?: undefined;
+  passthroughAfter?: undefined;
+};
+
+export type NamedArgsResult<D = ParsedNamedArgs> =
+  | { ok: true; data: D }
   | { ok: false; kind: 'InvalidArgs'; arg: string; reason: string; exitReason: ErrorReasonValue };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -112,17 +170,59 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
         `— received ${JSON.stringify(positionals)}.`,
     );
   }
-  const requiredFlags = spec.requiredFlags;
-  if (requiredFlags !== undefined) {
-    if (!Array.isArray(requiredFlags) || !requiredFlags.every((f) => typeof f === 'string')) {
-      throw new TypeError('parseNamedArgs: spec.requiredFlags must be an array of strings.');
-    }
-    const declared = Array.isArray(spec.valueFlags) ? spec.valueFlags : [];
-    const stray = requiredFlags.filter((f) => !declared.includes(f));
-    if (stray.length > 0) {
+  for (const kind of VALUE_SUBSET_KINDS) assertSubsetOfValueFlags(spec, kind);
+  for (const kind of INDEPENDENT_KINDS) assertIndependentKind(spec, kind);
+  if (spec.passthroughAfter !== undefined && spec.passthroughAfter !== '--') {
+    throw new TypeError(
+      `parseNamedArgs: spec.passthroughAfter must be the literal "--" — received ${JSON.stringify(spec.passthroughAfter)}.`,
+    );
+  }
+}
+
+const VALUE_SUBSET_KINDS = [
+  'requiredFlags',
+  'eqFlags',
+  'nonEmptyFlags',
+  'bareEmptyFlags',
+  'repeatableFlags',
+] as const;
+
+// Kinds that own their tokens: a flag may not also be a plain value, boolean or
+// optional flag, nor belong to the other independent kind.
+const INDEPENDENT_KINDS = ['listFlags', 'multiwordFlags'] as const;
+
+function assertStringArray(spec: Record<string, unknown>, kind: string): string[] | null {
+  const list = spec[kind];
+  if (list === undefined) return null;
+  if (!Array.isArray(list) || !list.every((f) => typeof f === 'string')) {
+    throw new TypeError(`parseNamedArgs: spec.${kind} must be an array of strings.`);
+  }
+  return list;
+}
+
+function assertSubsetOfValueFlags(spec: Record<string, unknown>, kind: string): void {
+  const list = assertStringArray(spec, kind);
+  if (list === null) return;
+  const declared = Array.isArray(spec.valueFlags) ? spec.valueFlags : [];
+  const stray = list.filter((f) => !declared.includes(f));
+  if (stray.length > 0) {
+    throw new TypeError(
+      `parseNamedArgs: spec.${kind} must be a subset of spec.valueFlags — ` +
+        `not declared as value flags: ${stray.join(', ')}`,
+    );
+  }
+}
+
+function assertIndependentKind(spec: Record<string, unknown>, kind: string): void {
+  const list = assertStringArray(spec, kind);
+  if (list === null) return;
+  const others = ['valueFlags', 'booleanFlags', 'optionalValueFlags', ...INDEPENDENT_KINDS.filter((k) => k !== kind)];
+  for (const other of others) {
+    const clash = list.filter((f) => Array.isArray(spec[other]) && (spec[other] as unknown[]).includes(f));
+    if (clash.length > 0) {
       throw new TypeError(
-        'parseNamedArgs: spec.requiredFlags must be a subset of spec.valueFlags — ' +
-          `not declared as value flags: ${stray.join(', ')}`,
+        `parseNamedArgs: spec.${kind} must be disjoint from spec.${other} — ` +
+          `declared in both: ${clash.join(', ')}`,
       );
     }
   }
@@ -134,7 +234,8 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
  */
 function missingRequired(spec: NamedArgSpec, data: ParsedNamedArgs): NamedArgsResult | null {
   for (const flag of spec.requiredFlags ?? []) {
-    if (data[flag] === null || data[flag] === '') {
+    const value = data[flag];
+    if (value === null || value === '' || (Array.isArray(value) && value.length === 0)) {
       return {
         ok: false,
         kind: 'InvalidArgs',
@@ -145,6 +246,217 @@ function missingRequired(spec: NamedArgSpec, data: ParsedNamedArgs): NamedArgsRe
     }
   }
   return null;
+}
+
+/**
+ * First `nonEmptyFlags` member (declaration order) that is present (`--f` or
+ * `--f=` occurs) but whose extracted value is `null` or `''`, as an InvalidArgs
+ * result with today's wording (`Missing value for --f`); else null.
+ */
+function missingValue(
+  spec: NamedArgSpec,
+  data: ParsedNamedArgs,
+  occurrences: Map<string, Occurrence[]>,
+): NamedArgsResult | null {
+  for (const flag of spec.nonEmptyFlags ?? []) {
+    if (!occurrences.has(flag)) continue;
+    if (data[flag] === null || data[flag] === '') {
+      return {
+        ok: false,
+        kind: 'InvalidArgs',
+        arg: `--${flag}`,
+        reason: `Missing value for --${flag}`,
+        exitReason: ERROR_REASON.USAGE,
+      };
+    }
+  }
+  return null;
+}
+
+// One `--name` / `--name=value` token. `inline` is the text after `=` for an
+// eq-form token (eqFlags only), null for a bare `--name`.
+interface Occurrence {
+  index: number;
+  inline: string | null;
+}
+
+/** Single pass over argv: flag name -> its occurrences in argv order. */
+function indexOccurrences(args: string[], eq: Set<string>): Map<string, Occurrence[]> {
+  const map = new Map<string, Occurrence[]>();
+  args.forEach((tok, index) => {
+    if (!isFlagToken(tok)) return;
+    const eqAt = tok.indexOf('=');
+    const eqName = eqAt > 2 ? tok.slice(2, eqAt) : null;
+    const isEq = eqName !== null && eq.has(eqName);
+    const name = isEq ? eqName : tok.slice(2);
+    const list = map.get(name) ?? [];
+    list.push({ index, inline: isEq ? tok.slice(eqAt + 1) : null });
+    map.set(name, list);
+  });
+  return map;
+}
+
+/** The value an occurrence carries: `null` when absent, empty, or flag-shaped. */
+function occurrenceValue(args: string[], occ: Occurrence): string | null {
+  if (occ.inline !== null) return occ.inline === '' ? null : occ.inline;
+  const next = args[occ.index + 1];
+  return next !== undefined && !isFlagToken(next) ? next : null;
+}
+
+function extractValueFlag(
+  args: string[],
+  spec: NamedArgSpec,
+  flag: string,
+  occs: Occurrence[],
+): string | string[] | null {
+  if ((spec.repeatableFlags ?? []).includes(flag)) {
+    return occs.map((o) => occurrenceValue(args, o)).filter((v): v is string => v !== null);
+  }
+  if (occs.length === 0) return null;
+  const value = occurrenceValue(args, occs[0]);
+  const bareEmpty = (spec.bareEmptyFlags ?? []).includes(flag) && occs[0].inline === null;
+  return value === null && bareEmpty ? '' : value;
+}
+
+/**
+ * Every occurrence of `--flag` starts a run of non-`--` tokens that ends at
+ * the next list flag of the spec (gsd-tools.cjs `collectListFlagValues`).
+ */
+function collectListValues(args: string[], flag: string, stops: Set<string>): string[] {
+  const values: string[] = [];
+  args.forEach((a, i) => {
+    if (a !== `--${flag}`) return;
+    for (const b of args.slice(i + 1)) {
+      if (stops.has(b)) break;
+      if (isFlagToken(b)) continue;
+      values.push(b);
+    }
+  });
+  return values;
+}
+
+function extractData(
+  args: string[],
+  spec: NamedArgSpec,
+  occurrences: Map<string, Occurrence[]>,
+): ParsedNamedArgs {
+  const data: ParsedNamedArgs = {};
+  for (const flag of spec.valueFlags ?? []) {
+    data[flag] = extractValueFlag(args, spec, flag, occurrences.get(flag) ?? []);
+  }
+  // Boolean and optional-value flags (#2932: `--wave`-shaped) are presence
+  // tests; the optional value is deliberately not surfaced here.
+  for (const flag of [...(spec.booleanFlags ?? []), ...(spec.optionalValueFlags ?? [])]) {
+    data[flag] = occurrences.has(flag);
+  }
+  const listFlags = spec.listFlags ?? [];
+  const stops = new Set(listFlags.map((f) => `--${f}`));
+  for (const flag of listFlags) data[flag] = collectListValues(args, flag, stops);
+  for (const flag of spec.multiwordFlags ?? []) data[flag] = parseMultiwordArg(args, flag);
+  return data;
+}
+
+interface FlagSets {
+  value: Set<string>;
+  boolean: Set<string>;
+  optional: Set<string>;
+  eq: Set<string>;
+  list: Set<string>;
+  multiword: Set<string>;
+  accepted: string[];
+}
+
+function buildFlagSets(spec: NamedArgSpec): FlagSets {
+  const value = spec.valueFlags ?? [];
+  const bool = spec.booleanFlags ?? [];
+  const optional = spec.optionalValueFlags ?? [];
+  const list = spec.listFlags ?? [];
+  const multiword = spec.multiwordFlags ?? [];
+  return {
+    value: new Set(value),
+    boolean: new Set(bool),
+    optional: new Set(optional),
+    eq: new Set(spec.eqFlags ?? []),
+    list: new Set(list),
+    multiword: new Set(multiword),
+    accepted: [
+      ...value.map((f) => `--${f} <value>`),
+      ...bool.map((f) => `--${f}`),
+      ...optional.map((f) => `--${f} [value]`),
+      ...list.map((f) => `--${f} <values...>`),
+      ...multiword.map((f) => `--${f} <words...>`),
+    ],
+  };
+}
+
+/** Tokens consumed by the flag at `args[i]`, or null when the flag is not declared. */
+function advanceOverFlag(args: string[], i: number, sets: FlagSets): number | null {
+  const tok = args[i];
+  const eqAt = tok.indexOf('=');
+  if (eqAt > 2 && sets.eq.has(tok.slice(2, eqAt))) return 1;
+  const name = tok.slice(2);
+  const next = args[i + 1];
+  const hasValue = next !== undefined && !isFlagToken(next);
+  // A value flag whose next token is absent or flag-shaped resolves to `null`
+  // in `data` — NOT an error (#3180/behavior-lock). Advance by 1 so the
+  // following flag token is validated on its own merits.
+  if (sets.value.has(name) || sets.optional.has(name)) return hasValue ? 2 : 1;
+  if (sets.boolean.has(name) || sets.list.has(name)) return 1;
+  if (sets.multiword.has(name)) {
+    let n = 1;
+    while (args[i + n] !== undefined && !isFlagToken(args[i + n])) n++;
+    return n;
+  }
+  return null;
+}
+
+function unknownFlag(tok: string, sets: FlagSets): NamedArgsResult {
+  const reason =
+    sets.accepted.length > 0
+      ? `unknown flag ${formatDiagnosticToken(tok)}; accepted: ${sets.accepted.join(', ')}`
+      : `unknown flag ${formatDiagnosticToken(tok)}; this command accepts no flags`;
+  return { ok: false, kind: 'InvalidArgs', arg: tok, reason, exitReason: ERROR_REASON.USAGE };
+}
+
+/**
+ * Left-to-right cursor walk from `spec.positionals`. Once a list flag has
+ * been seen, non-flag tokens belong to its run (collectListFlagValues
+ * semantics: a run is only ended by another list flag, which restarts it) and
+ * are not stray positionals; `--` tokens inside a run are still validated.
+ */
+function walkTokens(args: string[], spec: NamedArgSpec): NamedArgsResult | null {
+  const sets = buildFlagSets(spec);
+  let inListRun = false;
+  let i = spec.positionals === 'rest' ? args.length : spec.positionals;
+  while (i < args.length) {
+    const tok = args[i];
+    if (isFlagToken(tok)) {
+      const advance = advanceOverFlag(args, i, sets);
+      if (advance === null) return unknownFlag(tok, sets);
+      if (sets.list.has(tok.slice(2))) inListRun = true;
+      i += advance;
+      continue;
+    }
+    if (!inListRun) {
+      return {
+        ok: false,
+        kind: 'InvalidArgs',
+        arg: tok,
+        reason: `unexpected positional argument ${formatDiagnosticToken(tok)}`,
+        exitReason: ERROR_REASON.USAGE,
+      };
+    }
+    i += 1;
+  }
+  return null;
+}
+
+/** Split argv at the first literal `--` (passthroughAfter) at/after the positional boundary. */
+function splitPassthrough(args: string[], spec: NamedArgSpec): { head: string[]; tail: string[] } {
+  if (spec.passthroughAfter === undefined) return { head: args, tail: [] };
+  const from = typeof spec.positionals === 'number' ? spec.positionals : 0;
+  const at = args.indexOf(spec.passthroughAfter, from);
+  return at === -1 ? { head: args, tail: [] } : { head: args.slice(0, at), tail: args.slice(at + 1) };
 }
 
 // Single predicate reused for both extraction (a value beginning with a
@@ -173,88 +485,20 @@ export function isFlagToken(tok: string): boolean {
  * left-to-right cursor walk from `spec.positionals`, per the design doc's
  * Kernighan's Law note — debuggable over clever, never a set-difference.
  */
+export function parseNamedArgs(args: string[], spec: ScalarNamedArgSpec): NamedArgsResult<ScalarNamedArgs>;
+export function parseNamedArgs(args: string[], spec: NamedArgSpec): NamedArgsResult;
 export function parseNamedArgs(args: string[], spec: NamedArgSpec): NamedArgsResult {
   assertValidSpec(spec);
-  const valueFlags = spec.valueFlags ?? [];
-  const booleanFlags = spec.booleanFlags ?? [];
-  const optionalValueFlags = spec.optionalValueFlags ?? [];
+  const { head, tail } = splitPassthrough(args, spec);
+  const occurrences = indexOccurrences(head, new Set(spec.eqFlags ?? []));
+  const data = extractData(head, spec, occurrences);
+  if (spec.passthroughAfter !== undefined) data['--'] = tail;
 
-  const firstIndex = new Map<string, number>();
-  for (let i = 0; i < args.length; i++) {
-    if (!firstIndex.has(args[i])) firstIndex.set(args[i], i);
-  }
-  const data: ParsedNamedArgs = {};
-  for (const flag of valueFlags) {
-    const idx = firstIndex.has(`--${flag}`) ? (firstIndex.get(`--${flag}`) as number) : -1;
-    data[flag] =
-      idx !== -1 && args[idx + 1] !== undefined && !isFlagToken(args[idx + 1])
-        ? args[idx + 1]
-        : null;
-  }
-  for (const flag of booleanFlags) {
-    data[flag] = firstIndex.has(`--${flag}`);
-  }
-  // Optional-value flags (#2932: `--wave`-shaped) — presence-only, exactly
-  // like booleanFlags. The value (if any) is deliberately not surfaced here;
-  // see the NamedArgSpec.optionalValueFlags JSDoc.
-  for (const flag of optionalValueFlags) {
-    data[flag] = firstIndex.has(`--${flag}`);
-  }
-
-  if (spec.positionals === 'rest') {
-    return missingRequired(spec, data) ?? { ok: true, data };
-  }
-
-  const valueFlagSet = new Set(valueFlags);
-  const booleanFlagSet = new Set(booleanFlags);
-  const optionalValueFlagSet = new Set(optionalValueFlags);
-  const flagList = [
-    ...valueFlags.map((f) => `--${f} <value>`),
-    ...booleanFlags.map((f) => `--${f}`),
-    ...optionalValueFlags.map((f) => `--${f} [value]`),
-  ];
-
-  let i = spec.positionals;
-  while (i < args.length) {
-    const tok = args[i];
-    if (isFlagToken(tok)) {
-      const name = tok.slice(2);
-      if (valueFlagSet.has(name)) {
-        // A value flag whose next token is absent or flag-shaped resolves to
-        // `null` in `data` (see the extraction loop above) — this is NOT an
-        // error (#3180/behavior-lock: emptyPrdValueIsFalsyAndTreatedAsAbsent,
-        // section-manifest-init-facts.test.cjs "flag-shaped value"). Advance
-        // by 1 so the following flag token is validated on its own merits on
-        // the next iteration.
-        const next = args[i + 1];
-        i += next !== undefined && !isFlagToken(next) ? 2 : 1;
-        continue;
-      }
-      if (booleanFlagSet.has(name)) {
-        i += 1;
-        continue;
-      }
-      if (optionalValueFlagSet.has(name)) {
-        const next = args[i + 1];
-        i += next !== undefined && !isFlagToken(next) ? 2 : 1;
-        continue;
-      }
-      const reason =
-        flagList.length > 0
-          ? `unknown flag ${formatDiagnosticToken(tok)}; accepted: ${flagList.join(', ')}`
-          : `unknown flag ${formatDiagnosticToken(tok)}; this command accepts no flags`;
-      return { ok: false, kind: 'InvalidArgs', arg: tok, reason, exitReason: ERROR_REASON.USAGE };
-    }
-    return {
-      ok: false,
-      kind: 'InvalidArgs',
-      arg: tok,
-      reason: `unexpected positional argument ${formatDiagnosticToken(tok)}`,
-      exitReason: ERROR_REASON.USAGE,
-    };
-  }
-
-  return missingRequired(spec, data) ?? { ok: true, data };
+  const invalid =
+    (spec.positionals === 'rest' ? null : walkTokens(head, spec)) ??
+    missingValue(spec, data, occurrences) ??
+    missingRequired(spec, data);
+  return invalid ?? { ok: true, data };
 }
 
 /**
@@ -269,6 +513,16 @@ export function parseNamedArgs(args: string[], spec: NamedArgSpec): NamedArgsRes
  * `fail` that actually returns, this still halts instead of falling through
  * with a half-built `ParsedNamedArgs`.
  */
+export function parseNamedArgsOrExit(
+  args: string[],
+  spec: ScalarNamedArgSpec,
+  fail: (message: string, exitReason?: ErrorReasonValue) => void,
+): ScalarNamedArgs;
+export function parseNamedArgsOrExit(
+  args: string[],
+  spec: NamedArgSpec,
+  fail: (message: string, exitReason?: ErrorReasonValue) => void,
+): ParsedNamedArgs;
 export function parseNamedArgsOrExit(
   args: string[],
   spec: NamedArgSpec,
