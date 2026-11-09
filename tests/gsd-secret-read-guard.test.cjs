@@ -3047,6 +3047,62 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       assert.deepEqual(allowed, [], 'every chain denied as a debugger spawn');
     });
   }
+  // The same space, sampled with more spellings than the enumeration can
+  // afford. Carriers: `bash -c`, `bash -ec`, `sh -c`, `dash -c`, `eval '…'`,
+  // `$(…)`, `<(…)`, and innermost only, `eval` of bare words and backquotes.
+  // Prefixes: `!`, `A+=b`, `a[0]=x`, `a[0]+=x`, `a[x y]=1`, `time`, `! A+=b`,
+  // `A+=b a[0]=x` and `{fd}>/dev/null`, on the launch or in front of any one
+  // carrier, as the command, after `;` or `&&`, or as an `if`/`while`
+  // condition. A level under `sh -c`/`dash -c` runs in dash, which takes only
+  // `!` of these prefixes and has no `<(…)`, so there the prefix is `!` and
+  // `<(…)` is `$(…)`: every sample is a launch bash (or dash) runs.
+  test('property: a further-only debugger spawn is denied through any carrier chain and prefix spelling', () => {
+    const quote = (s) => `'${s.replace(/'/g, "'\\''")}'`;
+    const WRAP = {
+      c: (s) => `bash -c ${quote(s)}`, s: (s) => `sh -c ${quote(s)}`,
+      d: (s) => `dash -c ${quote(s)}`, x: (s) => `bash -ec ${quote(s)}`,
+      e: (s) => `eval ${quote(s)}`, u: (s) => `eval ${s}`,
+      n: (s) => `echo $(${s})`, b: (s) => `echo \`${s}\``, p: (s) => `cat <(${s})`,
+    };
+    const INNERMOST_ONLY = new Set(['u', 'b']);
+    const STARTS = { c: 'bash', x: 'bash', s: 'dash', d: 'dash' };
+    const FORMS = {
+      plain: (p, s) => `${p} ${s}`,
+      seq: (p, s) => `true; ${p} ${s}`,
+      and: (p, s) => `true && ${p} ${s}`,
+      if: (p, s) => `if ${p} ${s}; then :; fi`,
+      while: (p, s) => `while ${p} ${s}; do break; done`,
+    };
+    const PREFIXES = ['!', 'A+=b', 'a[0]=x', 'a[0]+=x', 'a[x y]=1', 'time', '! A+=b', 'A+=b a[0]=x', '{fd}>/dev/null'];
+    const shape = fc.integer({ min: 1, max: 3 }).chain((depth) => fc.record({
+      outer: fc.array(fc.constantFrom(...Object.keys(WRAP).filter((k) => !INNERMOST_ONLY.has(k))), { minLength: depth - 1, maxLength: depth - 1 }),
+      inner: fc.constantFrom(...Object.keys(WRAP)),
+      prefix: fc.constantFrom(...PREFIXES),
+      at: fc.integer({ min: 0, max: depth }),
+      form: fc.constantFrom(...Object.keys(FORMS)),
+    }));
+    const build = ({ outer, inner, prefix, at, form }) => {
+      const chain = [...outer, inner];
+      const shells = ['bash'];
+      for (let i = 0; i < chain.length; i++) {
+        if (chain[i] === 'p' && shells[i] === 'dash') chain[i] = 'n';
+        shells.push(STARTS[chain[i]] || shells[i]);
+      }
+      const p = shells[at] === 'dash' ? '!' : prefix;
+      // `eval` of bare words takes the launch as words: no `;`, `&&` or keyword.
+      const launchForm = inner === 'u' && at === chain.length ? 'plain' : form;
+      let cmd = at === chain.length ? FORMS[launchForm](p, SPAWN) : SPAWN;
+      for (let i = chain.length - 1; i >= 0; i--) {
+        cmd = WRAP[chain[i]](cmd);
+        if (i === at) cmd = FORMS[form](p, cmd);
+      }
+      return cmd;
+    };
+    fc.assert(fc.property(shape, (s) => {
+      const r = runHook(bash(build(s)));
+      return r.status === 2 && JSON.parse(r.stdout).code === 'debugger-cli-spawn';
+    }), { seed: 5779, numRuns: 400 });
+  });
   test('denies a debugger spawn after a deep payload only the further reading reads', () => {
     const cmd = `A+=b ${DEEP_PAYLOAD}; A+=b claude --agent gsd-debugger -p x`;
     assertBlocked(runHook(bash(cmd)), 'spawn after deep payload', { code: 'debugger-cli-spawn', tool: 'Bash' });
