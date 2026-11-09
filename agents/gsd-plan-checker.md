@@ -695,7 +695,7 @@ issue:
 1. For each `<automated>` block piping a package-manager list command into grep with a `^` anchor: BLOCKER.
 2. For each `<automated>` block containing `2>/dev/null || echo` where the result feeds a `[ "$VAR" = ... ]` comparison: BLOCKER.
 3. For each `<automated>` block asserting a specific numeric count not cited as measured in this plan: WARNING.
-4. For each count/match gate (`grep -c`, `grep -q`, `rg`), run it — read-only commands only — against the current tree (#4927). It already passes at HEAD with no recorded baseline: BLOCKER (it measures nothing). A literal differing in case from the heading/key the task writes: BLOCKER. Never run a gate that builds, installs, or writes. See `planner-verify-command-grounding.md`.
+4. For each count/match gate (`grep -c`, `grep -q`, `rg`), run it — read-only commands only — against the current tree (#4927). Its baseline is the `[HEAD=<value> EXPECT<op><value>]` notation beside it (#4309), read from `verify plan-structure`, never re-derived: a `baseline_findings` B1 (already true at HEAD, no `GUARD MUTATION:`) is a BLOCKER, as is a gate that already passes at HEAD with no notation, or whose printed value differs from its notation's `HEAD`. A free-form `# baseline at HEAD:` comment (B2) is not a baseline: WARNING. A literal differing in case from the heading/key the task writes: BLOCKER. Never run a gate that builds, installs, or writes. See `planner-verify-command-grounding.md`.
 
 ## Dimension: Verify Command Path Resolvability (#2401)
 
