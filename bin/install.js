@@ -63,6 +63,8 @@ const { composeWorkflow } = require('../gsd-core/bin/lib/workflow-fragments.cjs'
 // #3072: THE shared composition-scope predicate (also consumed by the served
 // MCP catalog, src/mcp-catalog.cts) — see the comment at its call site below.
 const { shouldCompose } = require('../gsd-core/bin/lib/mcp-catalog.cjs');
+// #5637: per-install terminator for the typed-text capture heredoc.
+const { armArgsNonce, disarmArgsNonce, stampInstalledContent } =require('../gsd-core/bin/lib/args-terminator.cjs');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs');
 // #2873: cross-scope shadow detection — reports (never fails) when a
@@ -621,6 +623,8 @@ const {
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
+// #5759: bounded config.json reader shared with the runtime (non-blocking open, regular file, 1 MiB cap).
+const { readConfigFileBounded } = require(path.join(_gsdLibDir, 'config-file-read.cjs'));
 let _capabilityRegistry;
 try {
   _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
@@ -787,7 +791,9 @@ const {
   applyInstallerMigrationPlan,
   discoverInstallerMigrations,
   MANIFEST_SCHEMA_VERSION,
+  planInstallerMigrations,
   readInstallManifest,
+  readInstallState,
   recordHostGeneration,
   runInstallerMigrations,
 } = require(path.join(_gsdLibDir, 'installer-migrations.cjs'));
@@ -808,6 +814,19 @@ const {
 } = require(path.join(_gsdLibDir, 'surface.cjs'));
 const {
   assertDestWithinConfigHome,
+  resolveRuntimeArtifactDestination,
+  resolveRuntimeArtifactInstallRoot,
+  plannedActionsMutateCodexHooksInputs,
+  shouldInstallCombinedFamily,
+  isLegacyFlatLocalInstall,
+  shouldInstallStandaloneAgents,
+  codexAgentRolesEnabled,
+  copyWithPathReplacementSymlinkRefusalMessage,
+  installRuntimeArtifactsSymlinkRefusalMessage,
+  installOpencodeFamilySkillsSymlinkRefusalMessage,
+  installAgentsKindStandaloneSymlinkRefusalMessage,
+  installCodexConfigSymlinkRefusalMessage,
+  installCodexAgentTomlSymlinkRefusalMessage,
   createRuntimeArtifactInstallPlan,
   createRuntimeArtifactUninstallPlan,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-install-plan.cjs'));
@@ -875,6 +894,126 @@ function _resolveUserArtifactStagingRoot(configDir) {
     );
   }
   return stagingRoot;
+}
+
+function isSkillsRuntimeInstall(runtime, scope) {
+  const isGlobal = scope === 'global';
+  const behaviors = hostBehaviorsFor(runtime);
+  if (isLegacyFlatLocalInstall(behaviors, scope) && !isGlobal) return false; // legacy flat local path (descriptor-driven; #2086)
+  // #2875 Part 2 defect fix: a runtime whose LOCAL commands are embedded in a
+  // rules file rather than materialized as files (hostBehaviors.localCommandsViaRules
+  // — cline is the only declarant, capabilities/cline/capability.json) must not
+  // flip into this skills/commands-reporting branch merely because its local
+  // artifactLayout now also declares an `agents` kind (#2875 Part 2 cline-local
+  // agents regression fix). That branch's own verification reporting expects a
+  // skills/ or commands/ directory this runtime never writes locally and would
+  // spuriously fail; the `localCommandsViaRules` branch below (unchanged
+  // messaging) and the unconditional agents-materialization block further down
+  // (installAgentsKindStandalone) already cover this runtime/scope correctly.
+  if (!isGlobal && behaviors.localCommandsViaRules) return false;
+  const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
+  const layout = cap && cap.runtime && cap.runtime.artifactLayout;
+  if (!layout) return false;
+  const scopeLayout = isGlobal ? layout.global : layout.local;
+  return Array.isArray(scopeLayout) && scopeLayout.length > 0;
+}
+
+function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, installerMigrations) {
+  const check = (installRoot, destination, message) => {
+    if (hasExistingSymlinkBetween(path.resolve(installRoot), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+      throw new Error(message);
+    }
+  };
+
+  const coreDir = assertDestWithinConfigHome(configDir, path.join(configDir, 'gsd-core'));
+  check(configDir, coreDir, copyWithPathReplacementSymlinkRefusalMessage(coreDir, configDir));
+
+  const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope, _installedCapabilityRegistry);
+  const behaviors = hostBehaviorsFor(runtime);
+  const combinedFamily = shouldInstallCombinedFamily(behaviors);
+  const legacyFlatLocal = isLegacyFlatLocalInstall(behaviors, scope);
+  const skillsRuntime = isSkillsRuntimeInstall(runtime, scope);
+  const standaloneAgents = shouldInstallStandaloneAgents(Boolean(behaviors.pluginOnlyInstall), skillsRuntime);
+
+  for (const kind of layout.kinds) {
+    // These flat writers have no write-time trust check to front-run.
+    // Keep their existing behavior here; a new refusal needs separate approval.
+    if (combinedFamily && kind.kind === 'commands') continue;
+    if (legacyFlatLocal && (kind.kind === 'commands' || kind.kind === 'skills')) continue;
+    const installRoot = resolveRuntimeArtifactInstallRoot(configDir, kind);
+    const dest = resolveRuntimeArtifactDestination(configDir, kind);
+    if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+      if (combinedFamily && kind.kind === 'skills') {
+        throw new Error(installOpencodeFamilySkillsSymlinkRefusalMessage(dest, installRoot));
+      }
+      if ((standaloneAgents || combinedFamily) && kind.kind === 'agents') {
+        throw new Error(installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot));
+      }
+      throw new Error(installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot));
+    }
+  }
+
+  if (behaviors.tomlConfigInstall && codexAgentRolesEnabled(installMode, agentProfile)) {
+    const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
+    const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
+    check(configDir, configPath, installCodexConfigSymlinkRefusalMessage(configDir));
+    check(configDir, path.resolve(agentsTomlDir), installCodexConfigSymlinkRefusalMessage(configDir));
+    // The layout agents pass prunes gsd-* entries (including TOML symlinks)
+    // before installCodexConfig. Its leaf guard sees the replacement state,
+    // so front-running that guard here would introduce a new refusal.
+  }
+
+  if (resolveInstallPlan(runtime).installSurface === 'codex-toml') {
+    const migrations = installerMigrations || discoverInstallerMigrations({
+      migrationsDir: path.join(_gsdLibDir, 'installer-migrations'),
+    });
+    // Planning is read-only. A pending id alone says nothing about whether
+    // this install's hooks/config inputs change (002 can itself be a no-op).
+    // Defer only actual mutations of those inputs; the migration executor
+    // and reconciler retain authority over publication and write failures.
+    // baselineScan intentionally stays off: migration 000 only records,
+    // preserves, or prompts; it cannot mutate hooks/config inputs. The real
+    // baseline scan and prompt resolution remain with the migration executor.
+    const migrationPlan = planInstallerMigrations({ configDir, runtime, scope, migrations });
+    if (plannedActionsMutateCodexHooksInputs(migrationPlan.actions)) return;
+    const configPath = path.join(configDir, 'config.toml');
+    let configContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+    if (codexAgentRolesEnabled(installMode, agentProfile)) {
+      // The managed config block contains no roster-dependent fields (#2406).
+      // If that changes, pass the writer's selected roster to both projections.
+      configContent = mergeCodexConfigContent(configContent, generateCodexConfigBlock([], configDir));
+    }
+    const prepared = prepareCodexHooksConfig(configContent);
+    // Extended-event cleanup reconciles hooks.json even when SessionStart has
+    // no script/runner. Inline/scalar features may leave reconciliation off.
+    if (hasEnabledCodexHooksFeature(prepared.content)) {
+      hooksSurface.resolveCodexHooksJsonDestination(configDir);
+    }
+  }
+}
+
+function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
+  let content = composeWorkflow(source, { sourcePath });
+  const codexGsdPath = `${path.resolve(targetDir, 'gsd-core').replace(/\\/g, '/')}/`;
+  // Replace full .claude/gsd-core prefix so path resolves to the Codex
+  // GSD install before generic .claude → .codex conversion rewrites it.
+  // #5715: one pass, function replacement: a string replacement would expand `$&` in a
+  // config dir, and a second pass would rescan the path the first emitted.
+  content = content.replace(/(?:~|\$HOME)\/\.claude\/gsd-core\//g, () => codexGsdPath);
+  // Route TOML emit through the same full Claude→Codex conversion pipeline
+  // used on the `.md` emit path (#2639). Covers: slash-command rewrites,
+  // $ARGUMENTS → {{GSD_ARGS}}, /clear removal, anchored and bare .claude/
+  // paths, .claudeignore → .codexignore, and standalone "Claude" /
+  // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
+  // #5715: the converter runs after the path above was emitted; shield it from the converter.
+  return runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
+}
+
+function codexAgentTomlName(file, source) {
+  const { frontmatter } = extractFrontmatterAndBody(source);
+  // Resolve identity from converted frontmatter, matching the header
+  // conversion in prepareCodexAgentConfigContent.
+  return extractFrontmatterField(convertClaudeToCodexMarkdown(frontmatter), 'name') || file.replace(/\.md$/, '');
 }
 
 /**
@@ -1643,14 +1782,13 @@ const claudeToOpencodeTools = {
 const claudeToAntigravityTools = {
   // #4705: Antigravity-NATIVE tool names (see src/runtime-artifact-conversion.cts)
   Read: 'view_file',
-  Write: 'write_file',
+  Write: 'write_to_file',
   Edit: 'replace_file_content',
   Bash: 'run_command',
-  Glob: 'glob',
+  Glob: 'find_by_name',
   Grep: 'grep_search',
-  WebSearch: 'google_web_search',
-  WebFetch: 'web_fetch',
-  TodoWrite: 'write_todos',
+  WebSearch: 'search_web',
+  WebFetch: 'read_url_content',
 }
 
 // Tool name mapping from Claude/GSD agents to Kimi CLI module paths.
@@ -1719,13 +1857,16 @@ function convertAntigravityToolName(claudeTool) {
   // built-in tool; the lowercase fallback would emit an invalid
   // 'skill'/'slashcommand' name that fails frontmatter validation
   // (tools.N: Invalid tool name) and aborts the entire agent load (#1394).
+  // TodoWrite: exclude — agy 1.3.5 registers no todo tool, and an unknown name
+  // stops the agent from starting (#5447).
   if (
     claudeTool === 'Task' ||
     claudeTool === 'Agent' ||
     claudeTool === 'AskUserQuestion' ||
     claudeTool === 'ask_user' ||
     claudeTool === 'Skill' ||
-    claudeTool === 'SlashCommand'
+    claudeTool === 'SlashCommand' ||
+    claudeTool === 'TodoWrite'
   ) {
     return null;
   }
@@ -2159,43 +2300,11 @@ function parseKimiAgentSource(source) {
   };
 }
 
+// #5447: the tools list is read by the compiled module's parser (quoted entries,
+// `#` comments, inline and block lists), the one the runtime pipeline uses, so this
+// copy of the Antigravity and Kimi converters cannot diverge from it.
 function parseFrontmatterTools(frontmatter) {
-  if (!frontmatter) return [];
-  const lines = frontmatter.split(/\r?\n/);
-  const tools = [];
-  let collecting = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    if (collecting) {
-      if (trimmed.startsWith('- ')) {
-        tools.push(trimmed.slice(2).trim());
-        continue;
-      }
-      collecting = false;
-    }
-
-    if (trimmed === 'tools:' || trimmed === 'allowed-tools:') {
-      collecting = true;
-      continue;
-    }
-
-    if (trimmed.startsWith('tools:') || trimmed.startsWith('allowed-tools:')) {
-      const value = trimmed.slice(trimmed.indexOf(':') + 1).trim();
-      if (value) {
-        for (const tool of value.split(',')) {
-          const name = tool.trim();
-          if (name) tools.push(name);
-        }
-      } else {
-        collecting = true;
-      }
-    }
-  }
-
-  return tools;
+  return runtimeArtifactConversion.parseFrontmatterTools(frontmatter);
 }
 
 function addKimiAgentDiagnostic(diagnostics, code, message, value, source = null) {
@@ -2404,10 +2513,11 @@ function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array.
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertCopilotToolName(t));
   const uniqueTools = [...new Set(mappedTools)];
   const toolsArray = uniqueTools.length > 0
@@ -2503,10 +2613,11 @@ function convertClaudeAgentToAntigravityAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName)
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // Map tools to Antigravity equivalents (reuse existing convertAntigravityToolName).
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (e.g. agents/gsd-security-auditor.md) (#5447).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertAntigravityToolName(t)).filter(Boolean);
 
   // #2876: quote description for the same reason as the skill variant.
@@ -2686,7 +2797,15 @@ function convertSlashCommandsToTraeSkillMentions(content) {
   });
 }
 
-function convertClaudeToTraeMarkdown(content) {
+function convertClaudeToTraeMarkdown(content, pathPrefix) {
+  return runtimeArtifactConversion._shieldEmittedPrefix(
+    runtimeArtifactConversion._resolveTraeInstructionFileAtPrefix(content, pathPrefix),
+    pathPrefix,
+    convertClaudeToTraeMarkdownBody,
+  );
+}
+
+function convertClaudeToTraeMarkdownBody(content) {
   let converted = convertSlashCommandsToTraeSkillMentions(filterRuntimeNotesForTarget(content, 'trae'));
   converted = converted.replace(/\bBash\(/g, 'Shell(');
   converted = converted.replace(/\bEdit\(/g, 'StrReplace(');
@@ -2746,9 +2865,10 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\.\/\.claude\//g, './.trae/');
   converted = converted.replace(/\.claude\//g, '.trae/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
-  // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.trae');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.trae');
+  // Use negative lookahead (?![\w-]|\.\w) to preserve .claude-plugin, .claudeignore and .claude.json.
+  // #5715: an emitted prefix is shielded by convertClaudeToTraeMarkdown; the skills path runs this before the prefix pass, and the profile maps the own-dir forms.
+  converted = converted.replace(/~\/\.claude(?![\w-]|\.\w)/g, '~/.trae');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-]|\.\w)/g, () => '$HOME/.trae');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
@@ -2792,8 +2912,8 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   return `${fm}\n${body}`;
 }
 
-function convertClaudeAgentToTraeAgent(content) {
-  let converted = convertClaudeToTraeMarkdown(content);
+function convertClaudeAgentToTraeAgent(content, _isGlobal, meta) {
+  let converted = convertClaudeToTraeMarkdown(content, meta && meta.pathPrefix);
 
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
   if (!frontmatter) return converted;
@@ -4077,7 +4197,9 @@ function convertClaudeAgentToCodexAgent(content) {
 
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const tools = extractFrontmatterField(frontmatter, 'tools') || '';
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const tools = parseFrontmatterTools(frontmatter).join(', ');
 
   const roleHeader = `<codex_agent_role>
 role: ${name}
@@ -6554,14 +6676,35 @@ function splitTopLevelKeys(content) {
   return { topLevel: content.trim(), rest: '' };
 }
 
-function mergeCodexConfig(configPath, gsdBlock) {
-  // Case 1: No config.toml — create fresh
-  if (!fs.existsSync(configPath)) {
-    atomicWriteFileSync(configPath, gsdBlock + '\n');
-    return;
-  }
+/**
+ * #5301: the path a config write must target. atomicWriteFileSync ends in a
+ * rename(2) onto its destination, which REPLACES a symlink at that path rather than
+ * writing through it, so a dotfiles-managed `config.toml -> ~/dotfiles/codex.toml`
+ * became a plain file and the user's copy never saw the merge. With
+ * GSD_ALLOW_SYMLINKED_DEST the symlink is intentional: resolve it and write the
+ * file it points at, leaving the link itself alone. Without the opt-in the path is
+ * returned unchanged (the install-root symlink guard refuses such a layout before
+ * any write), and so does a dangling link (the guard cannot resolve it), so only a
+ * link whose target exists reaches the resolution below.
+ */
+function resolveSymlinkWriteTarget(filePath) {
+  if (!isSymlinkedDestOptIn()) return filePath;
+  let stat;
+  try { stat = fs.lstatSync(filePath); } catch (_) { return filePath; }
+  if (!stat.isSymbolicLink()) return filePath;
+  try { return fs.realpathSync(filePath); } catch (_) { return filePath; }
+}
 
-  const existing = fs.readFileSync(configPath, 'utf8');
+function mergeCodexConfig(configPath, gsdBlock) {
+  // #5301: the write lands on the symlink's target, never replaces the link.
+  configPath = resolveSymlinkWriteTarget(configPath);
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
+  atomicWriteFileSync(configPath, mergeCodexConfigContent(existing, gsdBlock));
+}
+
+function mergeCodexConfigContent(existing, gsdBlock) {
+  // Case 1: No config.toml — create fresh
+  if (existing === null) return gsdBlock + '\n';
   const eol = detectLineEnding(existing);
   // #2088 review: the bare `[agents]` table is purged below (Case 2/3 via
   // stripLeakedGsdCodexSections) to keep a single managed `[agents]`. Preserve
@@ -6620,8 +6763,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
     if (beforeSplit.rest) parts.push(beforeSplit.rest);
     parts.push(normalizedGsdBlock);
     if (afterTables) parts.push(afterTables);
-    atomicWriteFileSync(configPath, parts.join(eol + eol) + eol);
-    return;
+    return parts.join(eol + eol) + eol;
   }
 
   // Case 3: No marker — append GSD block
@@ -6632,7 +6774,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
     content = normalizedGsdBlock + eol;
   }
 
-  atomicWriteFileSync(configPath, content);
+  return content;
 }
 
 /**
@@ -6815,6 +6957,19 @@ function ensureCodexHooksFeature(configContent) {
   // No table headers — append [features] after top-level keys
   const needsGap = configContent.length > 0 && !configContent.endsWith(eol + eol);
   return { content: configContent + (needsGap ? eol : '') + featuresBlock, ownership: 'section' };
+}
+
+function prepareCodexHooksConfig(configContent) {
+  // Strip GSD-owned legacy blocks before migrating user hooks (#2698).
+  // Share this exact projection with preflight, including inline/scalar
+  // features values that ensureCodexHooksFeature deliberately preserves.
+  const stripped = stripStaleGsdHookBlocks(configContent);
+  const migrated = migrateCodexHooksMapFormat(stripped);
+  const feature = ensureCodexHooksFeature(migrated);
+  return {
+    content: setManagedCodexHooksOwnership(feature.content, feature.ownership),
+    migrated: migrated !== stripped,
+  };
 }
 
 function hasEnabledCodexHooksFeature(configContent) {
@@ -7231,7 +7386,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     hasExistingSymlinkBetween(resolvedTargetRoot, path.resolve(agentsTomlDir), { allowOptInFollow: symlinkOptIn })
   ) {
     throw new Error(
-      `installCodexConfig: a Codex config path under "${targetDir}" contains a symlink the install root does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      installCodexConfigSymlinkRefusalMessage(targetDir),
     );
   }
   fs.mkdirSync(agentsTomlDir, { recursive: true });
@@ -7269,12 +7424,9 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   const agentEntries = fs.readdirSync(agentsSrc).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
   const agents = [];
 
-  // Compute the Codex GSD install path (absolute, so subagents with empty $HOME work — #820)
-  const codexGsdPath = `${path.resolve(targetDir, 'gsd-core').replace(/\\/g, '/')}/`;
-
   for (const file of agentEntries) {
     const agentTomlSourcePath = path.join(agentsSrc, file);
-    let content = fs.readFileSync(agentTomlSourcePath, 'utf8');
+    const source = fs.readFileSync(agentTomlSourcePath, 'utf8');
     // #2995 (epic #1671 Phase 6.4): Codex embeds each agent's prompt into a
     // per-agent `.toml`, reading the source .md independently of the inline
     // agent loop — a separate emission path that must strip gsd:section
@@ -7282,17 +7434,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // Found by the exhaustive per-runtime emission sweep in
     // tests/agent-fragments-emission.install.test.cjs, not by call-graph
     // analysis, which is why that guard is behavioral rather than structural.
-    content = composeWorkflow(content, { sourcePath: agentTomlSourcePath });
-    // Replace full .claude/gsd-core prefix so path resolves to the Codex
-    // GSD install before generic .claude → .codex conversion rewrites it.
-    content = content.replace(/~\/\.claude\/gsd-core\//g, codexGsdPath);
-    content = content.replace(/\$HOME\/\.claude\/gsd-core\//g, codexGsdPath);
-    // Route TOML emit through the same full Claude→Codex conversion pipeline
-    // used on the `.md` emit path (#2639). Covers: slash-command rewrites,
-    // $ARGUMENTS → {{GSD_ARGS}}, /clear removal, anchored and bare .claude/
-    // paths, .claudeignore → .codexignore, and standalone "Claude" /
-    // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
-    content = convertClaudeToCodexMarkdown(content);
+    const content = prepareCodexAgentConfigContent(source, agentTomlSourcePath, targetDir);
     const { frontmatter } = extractFrontmatterAndBody(content);
     // #3897 security review F1 (blocker, post-merge): this loop used to key
     // the sandbox/hold decision off ONLY the filename stem while the emitted
@@ -7307,7 +7449,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // for that call; see `deriveCodexSandboxMode`'s doc in
     // `codex-agent-toml.cts` for the resolution.
     const fileStem = file.replace(/\.md$/, '');
-    const name = extractFrontmatterField(frontmatter, 'name') || fileStem;
+    const name = codexAgentTomlName(file, source);
     const description = extractFrontmatterField(frontmatter, 'description') || '';
 
     agents.push({ name, description: toSingleLine(description) });
@@ -7339,7 +7481,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
     if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath, { allowOptInFollow: symlinkOptIn })) {
       throw new Error(
-        `installCodexConfig: agent toml path "${agentTomlPath}" contains a symlink the install root does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+        installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath),
       );
     }
     fs.writeFileSync(agentTomlPath, tomlContent);
@@ -7955,7 +8097,9 @@ const RUNTIME_CONTENT_DISPATCH = {
     },
   },
   trae: {
-    md: (content) => convertClaudeToTraeMarkdown(content),
+    // #5715: the Trae converter shields (and resolves) the emitted prefix itself.
+    mdShieldsPrefix: true,
+    md: (content, ctx) => convertClaudeToTraeMarkdown(content, ctx && ctx.pathPrefix),
     js: (content) => {
       content = content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
         return `/gsd-${commandName}`;
@@ -8066,7 +8210,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
   if (hasExistingSymlinkBetween(resolvedConfinementRoot, resolvedDestDir, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `copyWithPathReplacement: destDir "${destDir}" contains a symlink the install root "${confinementRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      copyWithPathReplacementSymlinkRefusalMessage(destDir, confinementRoot),
     );
   }
   // Use the validated absolute path for all writes below so the gate validates
@@ -8138,6 +8282,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       if (shouldCompose(srcPath)) {
         content = composeWorkflow(content, { sourcePath: srcPath });
       }
+      // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+      content = stampInstalledContent(content);
 
       content = filterRuntimeNotesForTarget(content, runtime);
 
@@ -8156,33 +8302,8 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         // balanced masking grammar used by this path and the rewrite engine.
         const rewriteGenericPaths = (body) => {
           content = body;
-          const globalClaudeRegex = /~\/\.claude\//g;
-          const globalClaudeHomeRegex = /\$HOME\/\.claude\//g;
-          const localClaudeRegex = /\.\/\.claude\//g;
-          content = content.replace(globalClaudeRegex, pathPrefix);
-          content = content.replace(globalClaudeHomeRegex, pathPrefix);
-          content = content.replace(localClaudeRegex, `./${dirName}/`);
-          // #3544 review (Finding 1 fallout): guarded with the SAME
-          // negative-lookahead convention already used at ~:2859-2860 below
-          // ("preserve .claude-plugin and .claudeignore"). A naive `\b` here
-          // is satisfied by ANY non-word character, including '-' — so for a
-          // --config-dir whose name EXTENDS '.claude' (e.g. '.claude-work',
-          // pathPrefix '$HOME/.claude-work/'), this pass re-matched the
-          // '$HOME/.claude' PREFIX of its own slash-form output (lines above)
-          // and re-appended the full prefix, corrupting every emitted path to
-          // '$HOME/.claude-work-work/...'. Harmless no-op for the literal
-          // default '.claude' (self-replace with an identical string), which
-          // is why this went undetected until a non-default config-dir name
-          // was exercised.
-          content = content.replace(/~\/\.claude(?![\w-])/g, pathPrefix.replace(/\/$/, ''));
-          content = content.replace(/\$HOME\/\.claude(?![\w-])/g, pathPrefix.replace(/\/$/, ''));
-          content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-          content = content.replace(/~\/\.qwen\//g, pathPrefix);
-          content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
-          content = content.replace(/\.\/\.qwen\//g, `./${dirName}/`);
-          content = content.replace(/~\/\.hermes\//g, pathPrefix);
-          content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
-          content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
+          // #5715: every generic source form in ONE pass (no rescan of the emitted prefix).
+          content = runtimeArtifactConversion._rewriteSpecTreeConfigDirForms(content, pathPrefix, dirName);
           // #3544: restore @-file-reference lines to the tilde form Claude Code
           // actually expands — the SAME correction #3133 already applies to
           // skill/command bodies via _applyRuntimeRewrites's 'claude' case (see
@@ -8219,7 +8340,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       content = normalizeAgentBodyForRuntime(content, runtime, readGsdCommandNames());
 
       // Apply per-runtime .md converter (if any)
-      if (dispatch.md) content = dispatch.md(content, ctx);
+      // #5715: the generic pass above emitted `pathPrefix`; shield it from the converter
+      // (a converter that skips the generic pass emitted nothing to shield).
+      if (dispatch.md) {
+        content = runtimeArtifactConversion._shieldEmittedPrefix(
+          content,
+          dispatch.mdSkipGenericRewrite || dispatch.mdShieldsPrefix ? undefined : pathPrefix,
+          (shielded) => dispatch.md(shielded, ctx),
+        );
+      }
 
       // Re-run attribution after converter for runtimes that need it (copilot, antigravity)
       if (dispatch.mdReattributeAfter) content = processAttribution(content, getCommitAttribution(runtime));
@@ -10091,8 +10220,8 @@ const MANIFEST_NAME = 'gsd-file-manifest.json';
  * Compute SHA256 hash of file contents
  */
 function fileHash(filePath) {
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex');
+  // #5683: single owner of the per-file hash, shared with `effort sync`.
+  return require('../gsd-core/bin/lib/install-manifest-record.cjs').fileHash(filePath);
 }
 
 /**
@@ -11109,6 +11238,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       ? process.cwd()
       : path.join(process.cwd(), dirName);
 
+  // #5637: this install's typed-text heredoc terminator: the directory's existing nonce on a
+  // reinstall (so it changes nothing), a fresh one otherwise.
+  if (process.env.GSD_ARGS_NONCE_OFF !== '1') {
+    // Only a global install reuses its nonce; a project-local dir may be a committed clone.
+    armArgsNonce(targetDir, isGlobal);
+  } else {
+    disarmArgsNonce();
+    console.warn('  GSD_ARGS_NONCE_OFF=1: the typed-text heredoc terminator is NOT randomized in this install.');
+  }
+
   // #5161: this install's record of the skill dirs it writes starts empty,
   // whichever install path it takes.
   installEngine.clearWrittenSkillDirs();
@@ -11117,26 +11256,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // explicit install-time warning — never a silent Claude-shaped emit.
   if (isGlobal) {
     warnIfForeignAgentDest(runtime, targetDir, _installScopeId, Boolean(explicitConfigDir));
-  }
-
-  // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
-  // artifact orphaned by a PRIOR install run that died between staging and
-  // its own restore/discard, BEFORE this run's own preserve step stages
-  // anything new. This is the production entry point every install() call
-  // reaches — the only place this phase's durability fix is complete rather
-  // than merely callable (40-design.md "The inertness trap this design must
-  // avoid" / #1879-F15). Runs for every runtime, ahead of both the
-  // layout-driven path's _runLegacyInstallMigrations (site 1, inside
-  // installRuntimeArtifacts) and this function's own mainline gsd-core copy
-  // (site 4, below).
-  // #2875 defect fix: DEGRADE, never abort install, when the staging root
-  // itself cannot be resolved — skip this recovery pass rather than throw
-  // out of install() before it does anything.
-  {
-    const _installEntryStagingRoot = _tryResolveUserArtifactStagingRoot(targetDir);
-    if (_installEntryStagingRoot !== null) {
-      recoverOrphanedUserArtifacts(_installEntryStagingRoot, targetDir);
-    }
   }
 
   const locationLabel = isGlobal
@@ -11220,7 +11339,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // #5503: Codex registers agent roles in config.toml. That used to be gated on "minimal mode"
   // because minimal staged no agents; gate it on whether the resolved profile stages any.
   const _codexAgentRolesEnabled = () =>
-    !isMinimalMode(_effectiveInstallMode) || (_resolvedProfile.agents instanceof Set && _resolvedProfile.agents.size > 0);
+    codexAgentRolesEnabled(_effectiveInstallMode, _resolvedProfile);
+  // Preserve rollback eligibility from the original profile, before preflight
+  // resolves the committed surface for the later writers.
+  const _codexPreConfigRollbackArmed = _codexAgentRolesEnabled();
   const persistActiveProfileMarker = () => {
     try {
       writeActiveProfile(targetDir, _activeProfileName);
@@ -11244,6 +11366,36 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // handle re-applied surfaces, not the first install.
     localDirName: hostBehaviorsFor(runtime).localTargetIsProjectRoot === true ? undefined : getDirName(runtime),
   });
+
+  // Resolve the committed surface before preflight and keep that selection
+  // for every subsequent writer, including Codex's staged agent TOMLs.
+  if (isSkillsRuntimeInstall(runtime, _installScopeId)) {
+    const _committedSurface = readSurface(targetDir);
+    if (_committedSurface) {
+      _resolvedProfile = resolveSurface(
+        targetDir,
+        loadSkillsManifest(_commandsDir),
+        undefined,
+        _installedCapabilityRegistry,
+        _committedSurface,
+      );
+    }
+  }
+  // Preflight's role gate and _stageAgents use the same resolved profile;
+  // core's agent roles follow #5503's profile-derived selection too.
+  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, options.installerMigrations);
+
+  // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
+  // artifact orphaned by a PRIOR install run that died between staging and
+  // its own restore/discard, BEFORE this run's own preserve step stages
+  // anything new. Destination preflight runs before this recovery write;
+  // checks for destinations replaced before admission stay with the writers.
+  {
+    const _installEntryStagingRoot = _tryResolveUserArtifactStagingRoot(targetDir);
+    if (_installEntryStagingRoot !== null) {
+      recoverOrphanedUserArtifacts(_installEntryStagingRoot, targetDir);
+    }
+  }
 
   // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
   // Phase B / #1679) — collapses the prior 16-line assignment chain.
@@ -11595,7 +11747,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // The full restoreCodexSnapshot() (defined inside the config block) additionally
   // handles config.toml and the staged hooks/ tree, which are not yet touched
   // at this point in the pipeline.
-  const _codexPreConfigRollback = !hostBehaviorsFor(runtime).tomlConfigInstall || !_codexAgentRolesEnabled() ? null : () => {
+  const _codexPreConfigRollback = !hostBehaviorsFor(runtime).tomlConfigInstall || !_codexPreConfigRollbackArmed ? null : () => {
     rollbackInstallerMigrations();
     // skills/gsd-* — pass 1: restore snapshot entries (may be absent if deleted mid-install).
     const _earlySkillsDir = _resolveSkillsRootDir(runtime, targetDir, _installScopeId);
@@ -11796,25 +11948,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // install (ADR-1239 / #2087), replacing the bespoke inline block this comment
   // used to describe. Claude-local remains the one special-cased path
   // (copyWithPathReplacement + stale-skills cleanup).
-  const _isSkillsRuntime = (() => {
-    if (hostBehaviorsFor(runtime).localInstallStyle === 'legacy-flat' && !isGlobal) return false;  // legacy flat local path (descriptor-driven; #2086)
-    // #2875 Part 2 defect fix: a runtime whose LOCAL commands are embedded in a
-    // rules file rather than materialized as files (hostBehaviors.localCommandsViaRules
-    // — cline is the only declarant, capabilities/cline/capability.json) must not
-    // flip into this skills/commands-reporting branch merely because its local
-    // artifactLayout now also declares an `agents` kind (#2875 Part 2 cline-local
-    // agents regression fix). That branch's own verification reporting expects a
-    // skills/ or commands/ directory this runtime never writes locally and would
-    // spuriously fail; the `localCommandsViaRules` branch below (unchanged
-    // messaging) and the unconditional agents-materialization block further down
-    // (installAgentsKindStandalone) already cover this runtime/scope correctly.
-    if (!isGlobal && hostBehaviorsFor(runtime).localCommandsViaRules) return false;
-    const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
-    const layout = cap && cap.runtime && cap.runtime.artifactLayout;
-    if (!layout) return false;
-    const scopeLayout = isGlobal ? layout.global : layout.local;
-    return Array.isArray(scopeLayout) && scopeLayout.length > 0;
-  })();
+  const _isSkillsRuntime = isSkillsRuntimeInstall(runtime, _installScopeId);
 
   // Install the distribution-owned gsd-core tree before layout materialization.
   // installRuntimeArtifacts then provisions the durable Runtime Surface corpus
@@ -11883,19 +12017,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   if (_isSkillsRuntime) {
     // Layout-driven install for skills-based runtimes (full and minimal modes)
     const scope = _installScopeId;
-    // Preserve an existing Runtime Surface selection during upgrades. The
-    // installer refreshes the source corpus first, then emits exactly the
-    // already-committed selection instead of widening it to the base profile.
-    const _committedSurface = readSurface(targetDir);
-    if (_committedSurface) {
-      _resolvedProfile = resolveSurface(
-        targetDir,
-        loadSkillsManifest(_commandsDir),
-        undefined,
-        _installedCapabilityRegistry,
-        _committedSurface,
-      );
-    }
     // ADR-1239 upgrade 3 / #2088: a kind may declare an alternate install `home`
     // (e.g. Codex skills -> $HOME/.agents/skills) instead of the runtime's normal
     // configDir. Resolve the ACTUAL on-disk skills root here, descriptor-driven
@@ -12304,7 +12425,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // returns `null` without writing anything.
   if (hostBehaviorsFor(runtime).pluginOnlyInstall) {
     console.log(`  ${green}✓${reset} pi: no subagent files (programmatic dispatch, no named-dispatch toolkit)`);
-  } else if (_isSkillsRuntime) {
+  } else if (!shouldInstallStandaloneAgents(Boolean(hostBehaviorsFor(runtime).pluginOnlyInstall), _isSkillsRuntime)) {
     console.log(`  ${dim}↳${reset} Agents installed via descriptor-driven layout (${runtime})`);
   } else {
     const _standaloneProjectDir = isGlobal ? process.cwd() : targetDir;
@@ -13292,34 +13413,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // failure (#2760 fix 3) — not to the post-agent-merge state.
     const preWriteBackup = codexConfigPreInstallSnapshot;
     try {
-      let configContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '';
-      const eol = detectLineEnding(configContent);
-
-      // Strip ALL prior GSD-managed hook blocks BEFORE migration so the migration
-      // only touches user-authored hooks, not GSD-owned stale entries. Running
-      // strip after migration causes Shape 1 (legacy gsd-update-check filename)
-      // to be converted by migration before the strip regex can match it (#2698).
-      //
-      // Historical shapes stripped, in order:
-      //   Shape 1 — legacy gsd-update-check filename (pre-#1755): flat [[hooks]] + event
-      //   Shape 2 — flat [[hooks]] + event = "SessionStart" (#2637 era, never correct)
-      //   Shape 4 — correct two-block nested (strip before shape 3 to avoid orphaned header)
-      //   Shape 3 — single-block [[hooks.SessionStart]] without nested .hooks (#2760 era)
-      configContent = stripStaleGsdHookBlocks(configContent);
-
-      // Migrate legacy [hooks] map format and flat [[hooks]] AoT entries to the
-      // namespaced [[hooks.<EVENT>]] form after stripping GSD-managed stale blocks.
-      // Running migration after strip ensures only user-authored hooks are migrated
-      // (#2698 regression: migration before strip converts stale GSD blocks before
-      // the strip regexes can match their original shape).
-      const migratedContent = migrateCodexHooksMapFormat(configContent);
-      if (migratedContent !== configContent) {
-        configContent = migratedContent;
+      const existingConfigContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '';
+      const prepared = prepareCodexHooksConfig(existingConfigContent);
+      const configContent = prepared.content;
+      if (prepared.migrated) {
         console.log(`  ${green}✓${reset} Migrated legacy Codex [hooks] format to two-level nested AoT`);
       }
-
-      const codexHooksFeature = ensureCodexHooksFeature(configContent);
-      configContent = setManagedCodexHooksOwnership(codexHooksFeature.content, codexHooksFeature.ownership);
 
       // GSD-managed Codex hook payloads now live in hooks.json to avoid mixed
       // representation warnings when a single layer contains both hooks.json
@@ -13350,7 +13449,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // existing config; the snapshot restore below is a second line of
       // defense if even the rename fails.
       try {
-        atomicWriteFileSync(configPath, configContent, 'utf-8');
+        // #5301: write through an opted-in symlink instead of replacing it.
+        atomicWriteFileSync(resolveSymlinkWriteTarget(configPath), configContent, 'utf-8');
       } catch (writeErr) {
         // #2760 CR4 finding 1 — write failure must be loud and fatal. Wrap
         // with a `post-write` prefix the outer catch recognises so install
@@ -13848,14 +13948,18 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // skip managed-hook registration. Returning null from buildHookCommand on
   // global installs has the same effect. Better to skip than to emit a bare
   // `node` command that recreates the #2979 failure.
+  // #5850: Claude on Windows always gets the PowerShell runner (owner ruling).
+  const localUsesPowerShell = hooksSurface.usesPowerShellHookShell({ platform: process.platform, runtime });
   const localCmd = (hookFile) => localNodeRunner === null
     ? null
-    : hooksSurface.recordConfiguredHookCommand(projectShellCommandText({
-      runnerToken: localNodeRunner,
-      argTokens: [`${localPrefix}/hooks/${hookFile}`],
-      runtime,
-      platform: process.platform,
-    }), targetDir, hookFile, hookOpts);
+    : hooksSurface.recordConfiguredHookCommand(localUsesPowerShell
+      ? hooksSurface.buildPowerShellLocalHookCommand({ ...hookOpts, localPrefix, hookFile })
+      : projectShellCommandText({
+        runnerToken: localNodeRunner,
+        argTokens: [`${localPrefix}/hooks/${hookFile}`],
+        runtime,
+        platform: process.platform,
+      }), targetDir, hookFile, hookOpts);
   const localShellCmd = (hookFile) => hooksSurface.recordConfiguredHookCommand(buildLocalShellHookCommand({
     localPrefix,
     hookFile,
@@ -13864,8 +13968,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     platform: process.platform,
   }), targetDir, hookFile, hookOpts);
   const statuslineCommand = isGlobal
-    ? buildHookCommand(targetDir, 'gsd-statusline.js', hookOpts)
-    : localCmd('gsd-statusline.js');
+    ? buildHookCommand(targetDir, 'gsd-statusline.js', { ...hookOpts, statusLine: true })
+    // #5850: a local statusLine has no `$`-free PowerShell spelling (the project
+    // dir is a shell variable); it is skipped on Windows rather than written broken.
+    : (localUsesPowerShell ? null : localCmd('gsd-statusline.js'));
   const updateCheckCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-check-update.js', hookOpts)
     : localCmd('gsd-check-update.js');
@@ -13956,10 +14062,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // bare basename so an unrelated user command that merely mentions the same
   // filename can't false-positive into GSD's validated set.
   configuredEntrypoints.push(
-    ...settingsEntrypoints.filter(entry => {
-      const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
-      return registeredHookCommands.some(command => command.includes(hooksSegment));
-    }),
+    ...selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands),
   );
   const statuslineEntrypoints = settingsEntrypoints.filter(entry => entry.command === statuslineCommand);
   const updateBannerEntrypoints = settingsEntrypoints.filter(entry => entry.command === updateBannerCommand);
@@ -13989,7 +14092,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         const candidate = path.join(probeDir, '.planning', 'config.json');
         if (fs.existsSync(candidate)) {
           try {
-            const parsed = JSON.parse(stripJsonComments(fs.readFileSync(candidate, 'utf-8')));
+            // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
+            // catch below (treated as enabled) instead of blocking the installer.
+            const parsed = JSON.parse(stripJsonComments(readConfigFileBounded(candidate) ?? ''));
             if (parsed && typeof parsed === 'object' &&
                 parsed.workflow && parsed.workflow.use_worktrees === false) {
               worktreesEnabled = false;
@@ -14053,6 +14158,25 @@ function describeEntrypointConsequence(invalidRuntime) {
   if (invalidRuntime === 'codex') return 'reverted: its pre-install snapshot was restored';
   if (ENTRYPOINT_LEFT_UNREVERTED_RUNTIMES.has(invalidRuntime)) return 'NOT reverted: its config file is already written and was left on disk — fix the reported path and rerun install';
   return 'not persisted: this runtime writes its config after this check';
+}
+
+// #5100: select which tracked entrypoints reach the validation gate. A named
+// export (see module.exports) so tests can drive the fresh-vs-upgrade split
+// directly; the install() call site is covered by a child-process test that
+// runs the installer with win32 emulated.
+function selectConfiguredEntrypointsForValidation(settingsEntrypoints, registeredHookCommands) {
+  return (settingsEntrypoints || []).filter(entry => {
+    // A command-less entry never produced a registered command, so the
+    // segment match below can never keep it — but it is exactly the
+    // unresolved-bash entry the gate must see (buildHookCommand pushes it
+    // without a `command` when no Git Bash is found). Exempt it: without this
+    // a fresh install silently drops it (gate passes) while an upgrade keeps
+    // it via the persisted command (gate fails) — same host, opposite
+    // verdicts. Surface it in both cases and let the gate decide loudly.
+    if (entry.command === undefined) return true;
+    const hooksSegment = '/hooks/' + path.basename(entry.scriptPath);
+    return registeredHookCommands.some(command => command.includes(hooksSegment));
+  });
 }
 
 function assertConfiguredEntrypoints(entries) {
@@ -14128,7 +14252,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       // #3002 CR: don't write { type: 'command', command: null } — the
       // runtime's settings schema rejects null commands and the failure
       // surfaces as a confusing parse error rather than a usable diagnostic.
-      console.warn(`  ${yellow}⚠${reset}  Skipped statusline registration — Node executable path unavailable (process.execPath is empty). See #2979 / #3002.`);
+      console.warn(`  ${yellow}⚠${reset}  Skipped statusline registration — Node executable path unavailable (process.execPath is empty), or a local Windows install (no shell-neutral statusline spelling). See #2979 / #3002 / #5850.`);
     } else {
       settings.statusLine = {
         type: 'command',
@@ -14190,6 +14314,9 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // rejects at parse time. validateHookFields filters those out so the file
   // we write is always schema-valid.
   if (settingsPath && settings && plan.writesSharedSettings) {
+    // #5850: pin `shell: "powershell"` on PowerShell-form hooks so Claude Code
+    // does not depend on its own Git Bash detection to choose the shell.
+    hooksSurface.projectPowerShellHookShell(settings);
     writeSettings(settingsPath, validateHookFields(settings));
   }
 
@@ -15241,6 +15368,8 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #5100 — installer entrypoint-selection seam, exported for direct tests
+    selectConfiguredEntrypointsForValidation,
     // #3023 — shared hook bundle directory name, descriptor-driven
     SHARED_HOOKS_DIR_DEFAULT,
     resolveSharedHooksDirName,

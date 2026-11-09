@@ -492,7 +492,7 @@ tools: Read, Write, Bash, Skill, WebFetch, SlashCommand
     const toolsItems = result.split('\n').filter(l => l.startsWith('- ')).map(l => l.slice(2));
 
     assert.ok(toolsItems.includes('view_file'), 'maps Read -> view_file (#4705 native name)');
-    assert.ok(toolsItems.includes('web_fetch'), 'maps WebFetch -> web_fetch');
+    assert.ok(toolsItems.includes('read_url_content'), 'maps WebFetch -> read_url_content (#5447 agy-registered name)');
     assert.ok(!toolsItems.some(t => /\bskill\b/.test(t)), 'no invalid skill tool in Antigravity frontmatter');
     assert.ok(!toolsItems.some(t => /\bslashcommand\b/.test(t)), 'no invalid slashcommand tool in Antigravity frontmatter');
   });
@@ -2711,9 +2711,120 @@ Inspect source files.`;
 
   test('unmapped tools keep their lowercase grant (no silent restriction drop) (#4705)', () => {
     const result = convertClaudeAgentToAntigravityAgent(
-      `---\nname: e\ndescription: d\ntools: Glob, WebFetch\n---\n\nbody`);
-    assert.match(result, /- glob/, 'undocumented tools keep their mapped/lowercase grant');
-    assert.match(result, /- web_fetch/, 'WebFetch stays granted');
+      `---\nname: e\ndescription: d\ntools: Glob, WebFetch, NotebookEdit\n---\n\nbody`);
+    assert.match(result, /- find_by_name/, 'Glob stays granted under its agy name');
+    assert.match(result, /- read_url_content/, 'WebFetch stays granted under its agy name');
+    assert.match(result, /- notebookedit/, 'an unmapped tool keeps its lowercase grant');
+  });
+});
+
+// ── #5447 — Antigravity agent tools: names agy 1.3.5 registers; block lists ──
+// agy refuses to start an agent whose tools list holds any name it does not
+// register, so one wrong mapping disabled every installed gsd-* agent. Agents
+// whose `tools:` is a YAML block list collapsed to a single `- - read` entry.
+describe('#5447 — Antigravity agent tools start in agy 1.3.5', () => {
+  test('Write/Glob/WebSearch/WebFetch map to the names agy registers (#5447)', () => {
+    const result = convertClaudeAgentToAntigravityAgent(
+      `---\nname: e\ndescription: d\ntools: Read, Write, Edit, Bash, Glob, Grep, WebSearch, WebFetch\n---\n\nbody`);
+    assert.match(result,
+      /tools:\n- view_file\n- write_to_file\n- replace_file_content\n- run_command\n- find_by_name\n- grep_search\n- search_web\n- read_url_content\n/);
+    for (const unregistered of ['write_file', 'glob', 'google_web_search', 'web_fetch']) {
+      assert.ok(!result.includes(`- ${unregistered}\n`), `${unregistered} is not registered by agy and must not be emitted`);
+    }
+  });
+
+  test('TodoWrite is dropped rather than emitted as an unregistered name (#5447)', () => {
+    const result = convertClaudeAgentToAntigravityAgent(
+      `---\nname: e\ndescription: d\ntools: Read, TodoWrite\n---\n\nbody`);
+    assert.match(result, /tools:\n- view_file\n---/);
+    assert.doesNotMatch(result, /todo/i);
+  });
+
+  test('a YAML block-list tools field converts like the inline form (#5447)', () => {
+    const input = [
+      '---',
+      'name: gsd-security-auditor',
+      'description: d',
+      'tools:',
+      '  - Read',
+      '  - Bash',
+      '  - Glob',
+      '  - Grep',
+      '  - Skill',
+      'color: red',
+      '---',
+      '',
+      'body',
+    ].join('\n');
+    const result = convertClaudeAgentToAntigravityAgent(input);
+    assert.match(result, /tools:\n- view_file\n- run_command\n- find_by_name\n- grep_search\ncolor: red\n---/);
+    assert.doesNotMatch(result, /- - /, 'block-list items must not collapse into a nested entry');
+  });
+
+  // The agy vocabulary, spelled out here rather than read back from the converter,
+  // so a table edit cannot silently reshape what this asserts.
+  const AGY = {
+    Read: 'view_file', Write: 'write_to_file', Edit: 'replace_file_content', Bash: 'run_command',
+    Glob: 'find_by_name', Grep: 'grep_search', WebSearch: 'search_web', WebFetch: 'read_url_content',
+  };
+  const DROPPED = new Set(['TodoWrite', 'Skill', 'Task', 'Agent', 'AskUserQuestion', 'SlashCommand']);
+  const expectedTools = (names) => names.filter((n) => !DROPPED.has(n)).map((n) => AGY[n] || n.toLowerCase());
+  const toolsOf = (converted) => {
+    const lines = converted.split(/\r?\n/);
+    const at = lines.indexOf('tools:');
+    const out = [];
+    for (let i = at + 1; at !== -1 && i < lines.length && lines[i].startsWith('- '); i++) out.push(lines[i].slice(2));
+    return out;
+  };
+
+  test('the shipped block-list agents keep every tool, exactly (#5447)', () => {
+    const expected = {
+      'gsd-security-auditor': ['view_file', 'run_command', 'find_by_name', 'grep_search'],
+      'gsd-nyquist-auditor': ['view_file', 'write_to_file', 'replace_file_content', 'run_command', 'find_by_name', 'grep_search'],
+    };
+    for (const agent of Object.keys(expected)) {
+      const source = fs.readFileSync(path.join(__dirname, '..', 'agents', `${agent}.md`), 'utf8');
+      assert.deepStrictEqual(toolsOf(convertClaudeAgentToAntigravityAgent(source)), expected[agent], agent);
+    }
+  });
+
+  test('a CRLF block-list tools field converts like the LF form (#5447)', () => {
+    const lines = ['---', 'name: e', 'description: d', 'tools:', '  - Read', '  - Glob', '  - TodoWrite', '---', '', 'body'];
+    const lf = convertClaudeAgentToAntigravityAgent(lines.join('\n'));
+    const crlf = convertClaudeAgentToAntigravityAgent(lines.join('\r\n'));
+    assert.deepStrictEqual(toolsOf(crlf), ['view_file', 'find_by_name']);
+    assert.deepStrictEqual(toolsOf(crlf), toolsOf(lf));
+  });
+
+  test('property: inline and block forms of one tools list convert identically, to registered names (#5447)', () => {
+    const fc = require('fast-check');
+    const VOCAB = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'TodoWrite', 'Skill', 'Task', 'NotebookEdit'];
+    fc.assert(fc.property(fc.uniqueArray(fc.constantFrom(...VOCAB), { minLength: 1, maxLength: VOCAB.length }), (names) => {
+      const inline = `---\nname: e\ndescription: d\ntools: ${names.join(', ')}\n---\n\nbody`;
+      const block = `---\nname: e\ndescription: d\ntools:\n${names.map((n) => `  - ${n}`).join('\n')}\n---\n\nbody`;
+      const want = expectedTools(names);
+      assert.deepStrictEqual(toolsOf(convertClaudeAgentToAntigravityAgent(inline)), want);
+      assert.deepStrictEqual(toolsOf(convertClaudeAgentToAntigravityAgent(block)), want);
+    }), { seed: 5447, numRuns: 100 });
+  });
+
+  // #5447 review (Finding 2): bin/install.js carries its own copy of the converter.
+  // Quoted entries and `#` comments were read differently by its tools parser than by
+  // the compiled module's, so the installed agent depended on which path ran.
+  test('bin/install.js and the compiled module convert quoted and commented tools identically (#5447)', () => {
+    const compiled = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+    const fixtures = [
+      '---\nname: e\ndescription: d\ntools: "Read", \'Glob\', Grep\n---\n\nbody',
+      '---\nname: e\ndescription: d\ntools:\n  - "Read"\n  - \'Bash\'\n  - Grep\n---\n\nbody',
+      '---\nname: e\ndescription: d\ntools: Read, Glob # note\n---\n\nbody',
+    ];
+    for (const source of fixtures) {
+      assert.strictEqual(
+        convertClaudeAgentToAntigravityAgent(source),
+        compiled.convertClaudeAgentToAntigravityAgent(source),
+        JSON.stringify(source),
+      );
+    }
   });
 });
 
@@ -2769,5 +2880,192 @@ describe('converters read the frontmatter block the one fence owner finds', () =
     );
     const preambled = 'Preamble\n\n---\nname: x\n---\nBody\n';
     assert.strictEqual(rac.injectEffortFrontmatter(preambled, 'high'), preambled);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #5790: the Copilot and Codex agent converters read `tools:` through the
+// block-list-aware reader, in the module and in the bin/install.js mirror.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#5790: Copilot and Codex agent converters read block-list tools', () => {
+  const installJs = require('../bin/install.js');
+  const moduleJs = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const copies = [
+    ['module', moduleJs],
+    ['bin/install.js', installJs],
+  ];
+
+  const agent = (toolsLines) =>
+    `---\nname: gsd-x\ndescription: Does a thing\n${toolsLines}\ncolor: blue\n---\n\nBody\n`;
+  const BLOCK = agent('tools:\n  - Read\n  - Bash\n  - Grep');
+  const INLINE = agent('tools: Read, Bash, Grep');
+
+  const copilotToolsLine = (out) => out.split('\n').find((l) => l.startsWith('tools:'));
+  const codexToolsLine = (out) => out.split('\n').find((l) => l.startsWith('tools:') && !l.startsWith('tools: ['));
+
+  for (const [label, mod] of copies) {
+    describe(label, () => {
+      test('#5790 row 1: block-list tools convert to every declared Copilot tool', () => {
+        const block = mod.convertClaudeAgentToCopilotAgent(BLOCK);
+        const inline = mod.convertClaudeAgentToCopilotAgent(INLINE);
+        assert.strictEqual(block, inline);
+        assert.doesNotMatch(copilotToolsLine(block), /-/);
+        assert.strictEqual(JSON.parse(copilotToolsLine(block).slice(7).replace(/'/g, '"')).length, 3);
+      });
+
+      test('#5790 row 2: block-list tools convert to every declared Codex role-header tool', () => {
+        const block = mod.convertClaudeAgentToCodexAgent(BLOCK);
+        assert.strictEqual(codexToolsLine(block), 'tools: Read, Bash, Grep');
+        assert.strictEqual(block, mod.convertClaudeAgentToCodexAgent(INLINE));
+      });
+
+      test('#5790 row 3: inline tools keep their output', () => {
+        assert.strictEqual(codexToolsLine(mod.convertClaudeAgentToCodexAgent(INLINE)), 'tools: Read, Bash, Grep');
+        assert.match(copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(INLINE)), /^tools: \['read', 'execute', 'search'\]$/);
+      });
+
+      test('#5790 row 4: a comment after `tools:` is ignored and the block list is read', () => {
+        const commented = agent('tools: # note\n  - Read\n  - Bash\n  - Grep');
+        assert.strictEqual(mod.convertClaudeAgentToCopilotAgent(commented), mod.convertClaudeAgentToCopilotAgent(INLINE));
+        assert.strictEqual(mod.convertClaudeAgentToCodexAgent(commented), mod.convertClaudeAgentToCodexAgent(INLINE));
+      });
+
+      test('#5790 row 5: no tools key gives an empty tool set', () => {
+        const none = agent('').replace('\n\ncolor', '\ncolor');
+        assert.match(mod.convertClaudeAgentToCopilotAgent(none), /\ntools: \[\]\n/);
+        assert.match(mod.convertClaudeAgentToCodexAgent(none), /\ntools: \npurpose:/);
+      });
+
+      test('#5790 row 6: a one-item block list yields one tool', () => {
+        const one = agent('tools:\n  - Read');
+        assert.match(mod.convertClaudeAgentToCopilotAgent(one), /\ntools: \['read'\]\n/);
+        assert.match(mod.convertClaudeAgentToCodexAgent(one), /\ntools: Read\npurpose:/);
+      });
+
+      test('#5790 boundary: a two-item block list yields exactly those two tools in both converters', () => {
+        const two = agent('tools:\n  - Read\n  - Bash');
+        const copilot = copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(two));
+        assert.strictEqual(copilot, "tools: ['read', 'execute']");
+        assert.doesNotMatch(copilot, /-/);
+        const codex = codexToolsLine(mod.convertClaudeAgentToCodexAgent(two));
+        assert.strictEqual(codex, 'tools: Read, Bash');
+        assert.doesNotMatch(codex, /-/);
+      });
+
+      test('#5790 boundary: an empty block list (next key follows) yields no tools', () => {
+        const empty = agent('tools:');
+        assert.match(mod.convertClaudeAgentToCopilotAgent(empty), /\ntools: \[\]\n/);
+        assert.match(mod.convertClaudeAgentToCodexAgent(empty), /\ntools: \npurpose:/);
+      });
+
+      test('#5790 row 7/9: every shipped agent converts to the tool set of its parsed source', () => {
+        const dir = path.join(__dirname, '..', 'agents');
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+        assert.ok(files.length > 0);
+        for (const f of files) {
+          const src = fs.readFileSync(path.join(dir, f), 'utf8');
+          const lines = splitLines(src);
+          const names = [];
+          let inBlock = false;
+          for (const line of lines.slice(1)) {
+            if (line.trim() === '---') break;
+            if (inBlock && line.trim().startsWith('- ')) { names.push(line.trim().slice(2).trim()); continue; }
+            inBlock = false;
+            if (line.startsWith('tools:')) {
+              const inline = line.slice('tools:'.length).trim();
+              if (inline) names.push(...inline.split(',').map((s) => s.trim()).filter(Boolean));
+              else inBlock = true;
+            }
+          }
+          assert.ok(names.length > 0, `${f} declares tools`);
+          const synthetic = agent(`tools: ${names.join(', ')}`);
+          const codex = mod.convertClaudeAgentToCodexAgent(src);
+          const copilot = mod.convertClaudeAgentToCopilotAgent(src);
+          assert.strictEqual(codexToolsLine(codex), codexToolsLine(mod.convertClaudeAgentToCodexAgent(synthetic)), `${f} codex`);
+          assert.strictEqual(copilotToolsLine(copilot), copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(synthetic)), `${f} copilot`);
+          assert.doesNotMatch(copilotToolsLine(copilot), /'-/, `${f} copilot list marker`);
+          assert.doesNotMatch(codexToolsLine(codex), /^tools: -/, `${f} codex list marker`);
+        }
+      });
+
+      test('#5790 row 9: for every shipped agent only the tools line depends on the list spelling', () => {
+        const dir = path.join(__dirname, '..', 'agents');
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+        assert.ok(files.length > 0);
+        const withoutFirst = (out, isToolsLine) => {
+          const lines = out.split('\n');
+          const idx = lines.findIndex(isToolsLine);
+          assert.ok(idx >= 0, 'converted output has a tools line');
+          lines.splice(idx, 1);
+          return lines;
+        };
+        const toInline = (src) => {
+          const lines = src.split('\n');
+          const out = [];
+          let inFrontmatter = false;
+          for (let i = 0; i < lines.length; i++) {
+            const bare = lines[i].replace(/\r$/, '');
+            if (i === 0 && bare === '---') { inFrontmatter = true; out.push(lines[i]); continue; }
+            if (inFrontmatter && bare.trim() === '---') { inFrontmatter = false; out.push(lines[i]); continue; }
+            if (inFrontmatter && bare === 'tools:') {
+              const names = [];
+              while (i + 1 < lines.length && lines[i + 1].replace(/\r$/, '').trim().startsWith('- ')) {
+                names.push(lines[i + 1].replace(/\r$/, '').trim().slice(2).trim());
+                i++;
+              }
+              out.push(`tools: ${names.join(', ')}`);
+              continue;
+            }
+            out.push(lines[i]);
+          }
+          return out.join('\n');
+        };
+        for (const f of files) {
+          const src = fs.readFileSync(path.join(dir, f), 'utf8');
+          const inlined = toInline(src);
+          assert.deepStrictEqual(
+            withoutFirst(mod.convertClaudeAgentToCopilotAgent(src), (l) => l.startsWith('tools:')),
+            withoutFirst(mod.convertClaudeAgentToCopilotAgent(inlined), (l) => l.startsWith('tools:')),
+            `${f} copilot non-tools lines`,
+          );
+          assert.deepStrictEqual(
+            withoutFirst(mod.convertClaudeAgentToCodexAgent(src), (l) => l.startsWith('tools:') && !l.startsWith('tools: [')),
+            withoutFirst(mod.convertClaudeAgentToCodexAgent(inlined), (l) => l.startsWith('tools:') && !l.startsWith('tools: [')),
+            `${f} codex non-tools lines`,
+          );
+        }
+      });
+
+      test('#5790 allowed-tools parity: Copilot and Codex read tools through the same parser as Antigravity', () => {
+        for (const spelling of ['allowed-tools: Read, Bash, Grep', 'allowed-tools:\n  - Read\n  - Bash\n  - Grep']) {
+          const src = agent(spelling);
+          const declared = moduleJs.parseFrontmatterTools(src.split('---')[1]);
+          assert.deepStrictEqual(declared, ['Read', 'Bash', 'Grep'], 'fixture declares three tools');
+
+          const antigravity = mod.convertClaudeAgentToAntigravityAgent(src)
+            .split('\n')
+            .filter((l) => l.startsWith('- '))
+            .map((l) => l.slice(2));
+          assert.deepStrictEqual(antigravity, declared.map((t) => moduleJs.convertAntigravityToolName(t)).filter(Boolean));
+
+          const copilot = copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(src));
+          assert.strictEqual(copilot, "tools: ['read', 'execute', 'search']");
+          assert.deepStrictEqual(
+            [...copilot.matchAll(/'([^']+)'/g)].map((m) => m[1]),
+            [...new Set(declared.map((t) => moduleJs.convertCopilotToolName(t)))],
+          );
+
+          assert.strictEqual(codexToolsLine(mod.convertClaudeAgentToCodexAgent(src)), `tools: ${declared.join(', ')}`);
+        }
+      });
+    });
+  }
+
+  test('#5790 row 8: bin/install.js and the module produce identical output', () => {
+    for (const src of [BLOCK, INLINE, agent('tools:\n  - Read'), agent('tools:')]) {
+      assert.strictEqual(installJs.convertClaudeAgentToCopilotAgent(src), moduleJs.convertClaudeAgentToCopilotAgent(src));
+      assert.strictEqual(installJs.convertClaudeAgentToCodexAgent(src), moduleJs.convertClaudeAgentToCodexAgent(src));
+    }
   });
 });

@@ -1,6 +1,6 @@
 # Inventário de Superfícies Entregues do GSD
 
-> Registro autoritativo de toda superfície GSD entregue: comandos, agentes, workflows, referências, módulos de CLI e hooks. Quando a documentação ampla (AGENTS.md, COMMANDS.md, ARCHITECTURE.md, CLI-TOOLS.md) divergir do sistema de arquivos, este arquivo e a árvore do repositório são a fonte de verdade.
+> Registro autoritativo de toda superfície GSD entregue: comandos, agentes, workflows, referências, módulos de CLI e hooks. Quando a documentação ampla (reference/agents.md, COMMANDS.md, ARCHITECTURE.md, CLI-TOOLS.md) divergir do sistema de arquivos, este arquivo e a árvore do repositório são a fonte de verdade.
 
 ## Como Usar Este Arquivo
 
@@ -14,7 +14,7 @@ Este é o registro autoritativo de toda superfície do GSD Core entregue. Veja o
 
 ## Agentes
 
-Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se [`docs/AGENTS.md`](AGENTS.md) apresenta um cartão de função completo (*primary*), um stub resumido na seção "Agentes Avançados e Especializados" (*advanced stub*), ou nenhuma cobertura (*inventory only*).
+Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se [`docs/reference/agents.md`](reference/agents.md) apresenta um cartão de função completo (*primary*), um stub resumido na seção "Agentes Avançados e Especializados" (*advanced stub*), ou nenhuma cobertura (*inventory only*).
 
 | Agente | Função (uma linha) | Invocado por | Documento primário |
 |--------|--------------------|--------------|--------------------|
@@ -52,7 +52,7 @@ Registro completo em `agents/gsd-*.md`. A coluna "Documento primário" indica se
 | gsd-doc-classifier | Classifica um único documento de planejamento como ADR, PRD, SPEC, DOC ou UNKNOWN; invocado em paralelo para processar o corpus de documentos. | `/gsd-ingest-docs` | advanced stub |
 | gsd-doc-synthesizer | Sintetiza documentos de planejamento classificados em um único contexto consolidado com regras de precedência, detecção de ciclos e relatório de conflitos em três categorias. | `/gsd-ingest-docs` | advanced stub |
 
-**Nota de cobertura.** `docs/AGENTS.md` fornece cartões de função completos para os agentes primários, além de stubs concisos para os agentes avançados. O Resumo de Permissões de Ferramenta de Agente nesse arquivo cobre apenas os agentes primários; as listas de ferramentas dos agentes avançados estão capturadas no frontmatter de cada agente em `agents/gsd-*.md`.
+**Nota de cobertura.** `docs/reference/agents.md` fornece cartões de função completos para os agentes primários, além de stubs concisos para os agentes avançados. O Resumo de Permissões de Ferramenta de Agente nesse arquivo cobre apenas os agentes primários; as listas de ferramentas dos agentes avançados estão capturadas no frontmatter de cada agente em `agents/gsd-*.md`.
 
 ---
 
@@ -488,7 +488,7 @@ Listagem completa: `hooks/`.
 
 - Quando um novo comando, agente, workflow, referência, módulo de CLI ou hook for entregue, atualize a seção correspondente aqui antes que a versão seja liberada.
 - Os testes de guarda de drift em `tests/` (veja "Como Usar Este Arquivo" acima) asseguram que todo arquivo entregue está enumerado neste inventário. Um novo arquivo sem uma linha correspondente aqui falhará no CI.
-- Quando o sistema de arquivos divergir das contagens de `docs/ARCHITECTURE.md` ou de documentações de subconjunto curado (p. ex. o registro primário do `docs/AGENTS.md`), este arquivo é a fonte de verdade.
+- Quando o sistema de arquivos divergir das contagens de `docs/ARCHITECTURE.md` ou de documentações de subconjunto curado (p. ex. o registro primário do `docs/reference/agents.md`), este arquivo é a fonte de verdade.
 
 ## Relacionados
 

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const childProcess = require('node:child_process');
+const fc = require('fast-check');
 
 const {
   execGit,
@@ -29,8 +30,10 @@ const {
   escapePowerShellSingleQuoted,
   escapePosixDoubleQuoted,
   escapeSingleQuotedShellLiteral,
+  shellSingleQuote,
   retryRenameSync,
   contentChangedAfterNormalize,
+  GIT_LOCATION_ENV_VARS,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
@@ -86,6 +89,133 @@ describe('execGit', () => {
   test('respects cwd option', () => {
     const result = execGit(['status', '--porcelain'], { cwd: tmpDir });
     assert.strictEqual(result.exitCode, 0);
+  });
+
+  // #5548: cwd selects the repository; inherited location vars must not redirect it.
+  describe('inherited repository-location env (#5548)', () => {
+    const VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_AUTHOR_NAME'];
+    let other, saved;
+    beforeEach(() => {
+      other = createTempGitProject();
+      saved = Object.fromEntries(VARS.map(k => [k, process.env[k]]));
+    });
+    afterEach(() => {
+      for (const k of VARS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      cleanup(other);
+    });
+    const gitDir = (dir) => fs.realpathSync.native(path.join(dir, '.git'));
+
+    test('GIT_DIR set to another repo does not redirect cwd', () => {
+      process.env.GIT_DIR = gitDir(other);
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir });
+      assert.strictEqual(r.exitCode, 0, r.stderr);
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(tmpDir));
+    });
+
+    test('GIT_WORK_TREE set to another dir does not redirect cwd', () => {
+      process.env.GIT_WORK_TREE = fs.realpathSync.native(other);
+      const r = execGit(['rev-parse', '--show-toplevel'], { cwd: tmpDir });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), fs.realpathSync.native(tmpDir));
+    });
+
+    test('GIT_INDEX_FILE set to another repo index does not receive cwd staging', () => {
+      process.env.GIT_INDEX_FILE = path.join(gitDir(other), 'index');
+      fs.writeFileSync(path.join(tmpDir, 'f5548.txt'), 'x');
+      assert.strictEqual(execGit(['add', 'f5548.txt'], { cwd: tmpDir }).exitCode, 0);
+      delete process.env.GIT_INDEX_FILE;
+      assert.ok(execGit(['ls-files'], { cwd: tmpDir }).stdout.split('\n').includes('f5548.txt'));
+    });
+
+    test('other env (author) is still inherited', () => {
+      process.env.GIT_AUTHOR_NAME = 'Inherited Author';
+      const r = execGit(['var', 'GIT_AUTHOR_IDENT'], { cwd: tmpDir });
+      assert.equal(r.stdout.split(' <')[0], 'Inherited Author');
+    });
+
+    test('explicit opts.env GIT_DIR still wins (opt-out)', () => {
+      const r = execGit(['rev-parse', '--absolute-git-dir'], { cwd: tmpDir, env: { GIT_DIR: gitDir(other) } });
+      assert.strictEqual(fs.realpathSync.native(r.stdout), gitDir(other));
+    });
+  });
+
+  // #5048: execGit is the shared seam behind every git call the tool makes,
+  // including the read-only ones. Left at git's default, a read refreshes the
+  // index and takes an optional .git/index.lock to write the refreshed copy
+  // back, so it can lose a race against a real `git add`/`git commit` and fail
+  // it with `Unable to create '.git/index.lock': File exists`.
+  describe('GIT_OPTIONAL_LOCKS (#5048)', () => {
+    // Deterministic env capture, mirroring the execTool mock convention used
+    // below: spawnSync is fully mocked, so no real spawn runs.
+    function captureGitSpawnOptions(opts) {
+      const original = childProcess.spawnSync;
+      let captured = null;
+      childProcess.spawnSync = (file, args, options) => {
+        captured = { file, args, options };
+        return { status: 0, stdout: '', stderr: '' };
+      };
+      try {
+        execGit(['status', '--porcelain'], opts);
+      } finally {
+        childProcess.spawnSync = original;
+      }
+      return captured;
+    }
+
+    test('defaults to GIT_OPTIONAL_LOCKS=0', () => {
+      const captured = captureGitSpawnOptions();
+      assert.ok(captured, 'spawnSync was not called');
+      assert.equal(captured.file, 'git');
+      assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '0');
+    });
+
+    test('the non-interactive defaults are preserved', () => {
+      const captured = captureGitSpawnOptions();
+      assert.equal(captured.options.env.GIT_TERMINAL_PROMPT, '0');
+      assert.equal(captured.options.env.GCM_INTERACTIVE, 'never');
+    });
+
+    test('the env inherits the parent environment', () => {
+      // A minimal env would drop PATH, HOME and the user's git config, so the
+      // assertion is over the whole inherited surface, not one key.
+      //
+      // The keys execGit sets on purpose are not inherited and are asserted by the
+      // sibling rows: a parent that already carries one (the Windows runner sets
+      // GCM_INTERACTIVE=Never) must not turn the intended override into a failure.
+      const OVERRIDDEN_ON_PURPOSE = new Set(['GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT', 'GCM_INTERACTIVE']);
+      const captured = captureGitSpawnOptions();
+      for (const key of Object.keys(process.env)) {
+        if (OVERRIDDEN_ON_PURPOSE.has(key.toUpperCase())) continue;
+        if (GIT_LOCATION_ENV_VARS.includes(key.toUpperCase())) continue; // scrubbed on purpose (#5548)
+        assert.deepEqual(
+          captured.options.env[key], process.env[key],
+          `env must inherit ${key} from the parent process`);
+      }
+    });
+
+    test('a caller can opt back in through opts.env', () => {
+      // A writing command, or a status whose index refresh the caller wants
+      // persisted, must be able to turn the default back off. opts.env is
+      // spread last precisely so this override wins.
+      const captured = captureGitSpawnOptions({ env: { GIT_OPTIONAL_LOCKS: '1' } });
+      assert.equal(captured.options.env.GIT_OPTIONAL_LOCKS, '1');
+    });
+
+    test('argv and the spawn bounds are unchanged', () => {
+      // Only the env may change: a rewritten argv or a dropped timeout would
+      // be a behavior change smuggled in under this fix. The timeout is a
+      // fixture value proving execGit still forwards the caller's own option —
+      // execGit is fully mocked above, so no wall clock is involved.
+      const EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS = 4321;
+      const captured = captureGitSpawnOptions({
+        cwd: tmpDir,
+        timeout: EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS,
+      });
+      assert.deepEqual(captured.args, ['status', '--porcelain']);
+      assert.equal(captured.options.cwd, tmpDir);
+      assert.equal(captured.options.timeout, EXEC_GIT_OPTION_PASSTHROUGH_TIMEOUT_MS);
+      assert.equal(captured.options.encoding, 'utf-8');
+      assert.equal(captured.options.windowsHide, true);
+    });
   });
 });
 
@@ -1730,15 +1860,16 @@ describe('bug #2236: hookShell parameter routes PowerShell call operator', () =>
 });
 
 describe('bug #3413: installer hook surfaces consume runtime-aware projection', () => {
-  test('buildHookCommand emits shell-neutral Claude hook command on Windows', () => {
+  test('buildHookCommand emits the PowerShell runner for Claude on Windows (#5850)', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
     });
-    assert.equal(cmd.startsWith('& '), false, `Claude hook command must not use PowerShell prefix: ${cmd}`);
+    assert.equal(cmd.startsWith('& '), true, `Claude hook command must use the PowerShell call operator: ${cmd}`);
+    assert.ok(!cmd.includes('$(for'), cmd);
   });
 
-  test('rewriteLegacyManagedNodeHookCommands removes stale PowerShell prefix for Claude on Windows', () => {
+  test('rewriteLegacyManagedNodeHookCommands rewrites a stale PowerShell-prefixed hook to the PowerShell runner for Claude on Windows (#5850)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
@@ -1751,10 +1882,9 @@ describe('bug #3413: installer hook surfaces consume runtime-aware projection', 
       runtime: 'claude',
     });
     assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '"/usr/local/bin/node" "C:/Users/me/.claude/hooks/gsd-check-update.js"',
-    );
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    assert.ok(command.startsWith('& ((@('), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })"), command);
   });
 });
 
@@ -1943,7 +2073,7 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
   // ran during the user's 1.5.0 -> 1.6.0 local update. Managed node hooks get
   // the absolute runner + clean anchored path; a non-node-prefixed managed .sh
   // hook (already correct) is left untouched.
-  test('rewriteLegacyManagedNodeHookCommands produces clean anchored node commands on Windows', () => {
+  test('rewriteLegacyManagedNodeHookCommands produces PowerShell commands anchored on $env:CLAUDE_PROJECT_DIR on Windows (#5850)', () => {
     const settings = {
       hooks: {
         PostToolUse: [
@@ -1961,10 +2091,8 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
     });
     assert.equal(changed, true);
     const rewritten = settings.hooks.PostToolUse[0].hooks[0].command;
-    assert.equal(
-      rewritten,
-      '"C:/Program Files/nodejs/node.exe" "$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js',
-    );
+    assert.ok(rewritten.startsWith('& ((@('), rewritten);
+    assert.ok(rewritten.endsWith('"$env:CLAUDE_PROJECT_DIR/.claude/hooks/gsd-context-monitor.js"; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })'), rewritten);
     assert.ok(!rewritten.includes('\\"'), 'rewritten command must not contain escaped double-quotes');
   });
 });
@@ -2261,8 +2389,9 @@ describe('bug #580: local .sh hooks on Claude/Windows must NOT wrap with bash.ex
  * the CJS layer routes through. Its contract:
  *
  *   1. mkdirSync(dirname, { recursive: true }) — ensure parent exists.
- *   2. writeFileSync(<tmpPath>, content) — write to a sibling tmpfile
- *      named `<filePath>.tmp.<pid>`.
+ *   2. openSync(<tmpPath>, O_CREAT|O_EXCL) then writeFileSync(<fd>, content) —
+ *      write to a sibling tmpfile named `<filePath>.tmp.<pid>.<12 hex>`, created
+ *      exclusively so a planted link or FIFO is never followed (#5759).
  *   3. renameSync(<tmpPath>, filePath) — atomic publish.
  *   4. On any error in steps 2-3: unlinkSync(<tmpPath>) (best-effort)
  *      then writeFileSync(filePath, content) directly as a fallback.
@@ -2305,13 +2434,14 @@ const mkScratch = (name) => createTempDir(`fs-fault-${name}-`);
 
 /**
  * Enumerate orphan tmp files left behind by platformWriteSync. The
- * tmp shape is `<filename>.tmp.<pid>`; we match that pattern strictly
+ * tmp shape is `<filename>.tmp.<pid>.<12 hex>`; we match that pattern strictly
  * so a test that happens to write a real `*.tmp.123` doesn't get a
  * false positive.
  */
+const TMP_NAME_RE = /\.tmp\.\d+\.[0-9a-f]{12}$/;
 function orphanTmpFiles(dir) {
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((n) => /\.tmp\.\d+$/.test(n));
+  return fs.readdirSync(dir).filter((n) => TMP_NAME_RE.test(n));
 }
 
 // ─── Happy path baseline ────────────────────────────────────────────────────
@@ -2424,21 +2554,21 @@ test('platformWriteSync falls back when initial tmp writeFileSync fails (ENOSPC)
   t.after(() => cleanup(dir));
   const file = path.join(dir, 'config.json');
 
-  // Make the FIRST writeFileSync (to .tmp.<pid>) fail with ENOSPC. The
-  // SECOND writeFileSync (the fallback, direct to filePath) succeeds.
+  // Make the FIRST writeFileSync (through the exclusive tmp's descriptor) fail with ENOSPC.
+  // The SECOND writeFileSync (the fallback, through the target's descriptor) succeeds.
   let writeCalls = 0;
   const realWrite = fs.writeFileSync;
   const writeMock = mock.method(fs, 'writeFileSync', function (target, data, opts) {
     writeCalls++;
+    // Both writes go through an open descriptor (#5759), never a path.
+    assert.equal(typeof target, 'number', 'platformWriteSync writes through a descriptor');
     if (writeCalls === 1) {
-      // First call is to the tmp path.
-      assert.match(String(target), /\.tmp\.\d+$/, 'first write must be to the tmp path');
+      // First call is to the tmp file's descriptor.
       const err = new Error('ENOSPC: no space left on device');
       err.code = 'ENOSPC';
       throw err;
     }
-    // Second call is the fallback to the real target.
-    assert.equal(target, file, 'fallback write must target the original file path');
+    // Second call is the fallback to the real target; the file content below proves it.
     return realWrite.call(fs, target, data, opts);
   });
   t.after(() => writeMock.mock.restore());
@@ -2581,7 +2711,7 @@ test('platformWriteSync never leaks a tmp file after a successful happy-path wri
   }
   // 25 real files, 0 tmp orphans.
   const entries = fs.readdirSync(dir);
-  const tmpCount = entries.filter((n) => /\.tmp\.\d+$/.test(n)).length;
+  const tmpCount = entries.filter((n) => TMP_NAME_RE.test(n)).length;
   const realCount = entries.length - tmpCount;
   assert.equal(realCount, 25);
   assert.equal(tmpCount, 0);
@@ -3120,5 +3250,94 @@ describe('path export projection — escaping (#3118)', () => {
       assert.ok(fs.statSync(to).isFile());
       assert.equal(fs.existsSync(from), false);
     });
+  });
+});
+
+// #4039: `shellSingleQuote` is the ONE POSIX single-quote implementation, owned by the
+// shell-command projection seam. capability-lifecycle used to carry a private copy (#1460);
+// these tests pin the shared export's behavior so the removed copy's output is preserved
+// byte-for-byte.
+
+// The exact expression of the private helper #4039 removed from capability-lifecycle.cts.
+function referenceQuote(value) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+// Decode ONE POSIX shell word made only of single-quoted runs and backslash-escaped
+// single quotes (the only forms shellSingleQuote emits). Returns null when the word is
+// anything else, so a malformed token fails the round-trip instead of decoding loosely.
+function decodePosixSingleQuotedWord(word) {
+  let out = '';
+  let i = 0;
+  while (i < word.length) {
+    if (word[i] === "'") {
+      const close = word.indexOf("'", i + 1);
+      if (close === -1) return null;
+      out += word.slice(i + 1, close);
+      i = close + 1;
+    } else if (word[i] === '\\' && word[i + 1] === "'") {
+      out += "'";
+      i += 2;
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+describe('shellSingleQuote (#4039)', () => {
+  test('is exported by the shell-command projection module', () => {
+    assert.equal(typeof shellSingleQuote, 'function');
+  });
+
+  test('empty string becomes an empty quoted token', () => {
+    assert.equal(shellSingleQuote(''), "''");
+  });
+
+  test('plain path is wrapped in single quotes', () => {
+    assert.equal(shellSingleQuote('/a/b'), "'/a/b'");
+  });
+
+  test('a path with a space stays one token (#1460 install-prefix shape)', () => {
+    assert.equal(shellSingleQuote('/Users/Bob Smith/.claude/x.js'), "'/Users/Bob Smith/.claude/x.js'");
+  });
+
+  test('embedded quote count boundaries: 0, 1, 2', () => {
+    assert.equal(shellSingleQuote('ab'), "'ab'");
+    assert.equal(shellSingleQuote("a'b"), "'a'\\''b'");
+    assert.equal(shellSingleQuote("a''b"), "'a'\\'''\\''b'");
+  });
+
+  test('leading and trailing quotes are escaped', () => {
+    assert.equal(shellSingleQuote("'x'"), "''\\''x'\\'''");
+  });
+
+  test('shell metacharacters, newline and tab pass through verbatim inside the quotes', () => {
+    const hostile = '$(rm -rf ~); `id` "x" \\ & | * ? < > # ! \n\t';
+    assert.equal(shellSingleQuote(hostile), "'" + hostile + "'");
+  });
+
+  test('inner escape stays unwrapped (its callers supply their own quotes)', () => {
+    assert.equal(escapeSingleQuotedShellLiteral("a'b"), "a'\\''b");
+  });
+
+  test('property: output is byte-identical to the removed capability-lifecycle helper', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary' }), (s) => {
+        assert.equal(shellSingleQuote(s), referenceQuote(s));
+      }),
+      { seed: 4039, numRuns: 500 },
+    );
+  });
+
+  test('property: output is one POSIX word that decodes back to the input', () => {
+    fc.assert(
+      fc.property(fc.string({ unit: 'binary' }), (s) => {
+        const quoted = shellSingleQuote(s);
+        assert.ok(quoted.startsWith("'") && quoted.endsWith("'"));
+        assert.equal(decodePosixSingleQuotedWord(quoted), s);
+      }),
+      { seed: 4039, numRuns: 500 },
+    );
   });
 });

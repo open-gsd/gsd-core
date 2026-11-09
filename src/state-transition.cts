@@ -20,11 +20,12 @@ import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stat
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
 import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { deriveProgressFromRoadmap, milestoneVersionOf, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
+import { milestoneVersionOf } from './roadmap-progress.cjs';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { comparePhaseNum } = phaseIdMod;
+const { comparePhaseNum, parsePhaseFromProse } = phaseIdMod;
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -312,6 +313,14 @@ export const FRONTMATTER_BODY_SOURCE: Readonly<Record<string, readonly string[]>
 const SESSION_SCOPED_KEYS: ReadonlySet<string> = new Set(['stopped_at', 'paused_at']);
 
 /**
+ * #4998 review: the `## Session` fields with no frontmatter key. `state-snapshot`
+ * reads them from the session section only, with fenced blocks blanked, so
+ * `state update` / `state patch` write them there too — never a fenced example
+ * above the live line, and never an archive section's copy.
+ */
+const SESSION_BODY_FIELDS: ReadonlySet<string> = new Set(['resume file', 'last session', 'last date']);
+
+/**
  * The `(primary, fallback)` label pair for a session-scoped frontmatter KEY.
  */
 function sessionLabelsForKey(key: string): { primary: string; fallback: string | null } | null {
@@ -322,7 +331,8 @@ function sessionLabelsForKey(key: string): { primary: string; fallback: string |
 
 /**
  * The same pair, resolved from a BODY LABEL the caller named (`Stopped At`,
- * `Stopped at`, `Paused At`). `null` for anything else.
+ * `Stopped at`, `Paused At`, or a SESSION_BODY_FIELDS label as named). `null`
+ * for anything else.
  *
  * Deliberately does NOT accept a frontmatter key. An earlier cut resolved both
  * spellings through one function and used it for the write, which made
@@ -333,7 +343,13 @@ function sessionLabelsForKey(key: string): { primary: string; fallback: string |
  */
 function sessionLabelsForBodyField(field: string): { primary: string; fallback: string | null } | null {
   const key = frontmatterKeyForBodyField(field);
-  return key === null ? null : sessionLabelsForKey(key);
+  if (key !== null) return sessionLabelsForKey(key);
+  return SESSION_BODY_FIELDS.has(field.trim().toLowerCase()) ? { primary: field, fallback: null } : null;
+}
+
+/** #4998 review: whether `state update` / `state patch` write the body field `field` inside the session section. */
+export function isSessionScopedBodyField(field: string): boolean {
+  return sessionLabelsForBodyField(field) !== null;
 }
 
 /**
@@ -1451,7 +1467,7 @@ function beginPhaseCore(
       tryField('Current Phase Name', intent.phaseName);
     }
     tryField('Current Plan', String(startPlan));
-    if (intent.planCount) {
+    if (intent.planCount != null) {
       tryField('Total Plans in Phase', String(intent.planCount));
     }
 
@@ -1601,7 +1617,7 @@ function mutateCurrentPositionFirstTime(
   }
 
   // Plan line.
-  const planValue = `${intent.startPlan} of ${intent.planCount || '?'}`;
+  const planValue = `${intent.startPlan} of ${intent.planCount ?? '?'}`;
   if (/^Plan:/m.test(sectionBody)) {
     sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${planValue}`);
   } else {
@@ -1732,6 +1748,109 @@ const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)(?:\s.*)?$/;
 function planNumberFrom(digits: string): number | null {
   const n = Number(digits);
   return Number.isSafeInteger(n) ? n : null;
+}
+
+/** Everything the plan-position grammar extracts from one STATE.md document. */
+interface PlanFields {
+  legacyPlan: string | null;
+  planField: string | null;
+  legacyNMatch: RegExpExecArray | null;
+  legacyNofMMatch: RegExpExecArray | null;
+  planNofMMatch: RegExpExecArray | null;
+  planNMatch: RegExpExecArray | null;
+  current: number | null;
+  total: number | null;
+}
+
+/**
+ * The one plan-position parse: legacy pair first, then the hybrid, then
+ * compound. `advancePlanCore` and `readPlanPosition` both consume it, so the
+ * precedence is decided in exactly one place (#5786).
+ *
+ * These branches decide ONE thing: which numbers the position is read from.
+ * They deliberately do not record which FIELD supplied them, because the
+ * advance write path writes every spelling back from its own raw text (#3791
+ * review round 6, B1/M1).
+ *
+ * Every branch reads its numbers out of an ANCHORED match's capture groups.
+ * Nothing here calls parseInt on a raw field value, so a value the grammar
+ * does not fully describe cannot half-parse into a plausible number.
+ */
+function parsePlanFields(content: string): PlanFields {
+  const legacyPlan = stateExtractField(content, 'Current Plan');
+  const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
+  const planField = stateExtractField(content, 'Plan');
+
+  const legacyNMatch = legacyPlan ? PLAN_SHAPE_N.exec(legacyPlan) : null;
+  const legacyNofMMatch = legacyPlan ? PLAN_SHAPE_N_OF_M.exec(legacyPlan) : null;
+  const totalNMatch = legacyTotal ? PLAN_SHAPE_N.exec(legacyTotal) : null;
+  const planNofMMatch = planField ? PLAN_SHAPE_N_OF_M.exec(planField) : null;
+  const planNMatch = planField ? PLAN_SHAPE_N.exec(planField) : null;
+
+  let current: number | null = null;
+  let total: number | null = null;
+
+  if (legacyPlan && legacyTotal && (legacyNMatch || legacyNofMMatch) && totalNMatch) {
+    // Legacy pair wins whenever both fields are present and both are readable,
+    // even if the Current Plan value also carries an "of M" — the explicit
+    // sibling field is the stated intent, so it supplies the total.
+    current = planNumberFrom((legacyNMatch ?? legacyNofMMatch)![1]);
+    total = planNumberFrom(totalNMatch[1]);
+  } else if (legacyNofMMatch) {
+    // Hybrid: legacy field name, compound value, no readable Total Plans
+    // sibling. Written by hand (and by agents) often enough to be worth
+    // reading — #3784.
+    current = planNumberFrom(legacyNofMMatch[1]);
+    total = planNumberFrom(legacyNofMMatch[2]);
+  } else if (planNofMMatch) {
+    current = planNumberFrom(planNofMMatch[1]);
+    total = planNumberFrom(planNofMMatch[2]);
+  }
+  // No branch for a bare `Plan: N` paired with a `Total Plans in Phase: M`
+  // sibling and no `Current Plan` at all (#3791 review round 6, M2). A revision
+  // of this PR accepted it; base did not (its `else if (planField)` arm had no
+  // `of M` match and errored via NaN), and it is out of #3784's scope, which is
+  // the hybrid `Current Plan: N of M`. It cannot be given the schema-row +
+  // forcing-test coupling the other shapes have, either: `Plan` is body-only,
+  // `buildStateFrontmatter` never reads it into frontmatter, so there is no
+  // `current_*` key to hang a row on. An accepted shape with no schema row and
+  // no forcing test is exactly the drift this diff is otherwise built to
+  // prevent, so the shape is refused and named in the error instead.
+
+  return { legacyPlan, planField, legacyNMatch, legacyNofMMatch, planNofMMatch, planNMatch, current, total };
+}
+
+/**
+ * Read the recorded plan position out of a STATE.md document through the one
+ * plan-position grammar, or `null` when no readable position is recorded
+ * (`Plan: 1 of ?`, `Total Plans in Phase: TBD`, no field at all). #5786.
+ */
+export function readPlanPosition(content: string): { current: number; total: number } | null {
+  const { current, total } = parsePlanFields(content);
+  return current === null || total === null ? null : { current, total };
+}
+
+/**
+ * The plan total a STATE.md document records, for the `init --validate`
+ * plan-count check: a readable `Total Plans in Phase` first, else the
+ * of-M total read straight from the plan fields: `Current Plan`'s of-M is
+ * tried first, then `Plan`'s, and convertibility is checked per field (an
+ * unconvertible `Current Plan` M falls through to `Plan`'s M), unlike
+ * `parsePlanFields`, which commits to the first matching field. The fallback
+ * does not go through the legacy pair, so an unconvertible `Total Plans in
+ * Phase` beside `Current Plan: N of M` still yields M. `null` when neither
+ * yields a convertible M. #5786.
+ */
+export function readRecordedPlanTotal(content: string): number | null {
+  // An explicit `Total Plans in Phase` wins over an `of M` in either plan field.
+  const raw = stateExtractField(content, 'Total Plans in Phase');
+  const match = raw ? PLAN_SHAPE_N.exec(raw) : null;
+  const t = match ? planNumberFrom(match[1]) : null;
+  if (t !== null) return t;
+  const { legacyNofMMatch, planNofMMatch } = parsePlanFields(content);
+  const fromCurrentPlan = legacyNofMMatch ? planNumberFrom(legacyNofMMatch[2]) : null;
+  if (fromCurrentPlan !== null) return fromCurrentPlan;
+  return planNofMMatch ? planNumberFrom(planNofMMatch[2]) : null;
 }
 
 /**
@@ -1959,48 +2078,10 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // `planSourceField`/`planRawValue` pair here and then wrote the OTHER
   // spelling from this one's numbers, which is precisely how a field ended up
   // holding a value nothing had derived for it.
-  const legacyPlan = stateExtractField(content, 'Current Plan');
-  const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
-  const planField = stateExtractField(content, 'Plan');
-
-  // Every branch below reads its numbers out of an ANCHORED match's capture
-  // groups. Nothing here calls parseInt on a raw field value, so a value the
-  // grammar does not fully describe cannot half-parse into a plausible number.
-  const legacyNMatch = legacyPlan ? PLAN_SHAPE_N.exec(legacyPlan) : null;
-  const legacyNofMMatch = legacyPlan ? PLAN_SHAPE_N_OF_M.exec(legacyPlan) : null;
-  const totalNMatch = legacyTotal ? PLAN_SHAPE_N.exec(legacyTotal) : null;
-  const planNofMMatch = planField ? PLAN_SHAPE_N_OF_M.exec(planField) : null;
-  const planNMatch = planField ? PLAN_SHAPE_N.exec(planField) : null;
-
-  let parsedCurrent: number | null = null;
-  let parsedTotal: number | null = null;
-
-  if (legacyPlan && legacyTotal && (legacyNMatch || legacyNofMMatch) && totalNMatch) {
-    // Legacy pair wins whenever both fields are present and both are readable,
-    // even if the Current Plan value also carries an "of M" — the explicit
-    // sibling field is the stated intent, so it supplies the total.
-    parsedCurrent = planNumberFrom((legacyNMatch ?? legacyNofMMatch)![1]);
-    parsedTotal = planNumberFrom(totalNMatch[1]);
-  } else if (legacyNofMMatch) {
-    // Hybrid: legacy field name, compound value, no readable Total Plans
-    // sibling. Written by hand (and by agents) often enough to be worth
-    // reading — #3784.
-    parsedCurrent = planNumberFrom(legacyNofMMatch[1]);
-    parsedTotal = planNumberFrom(legacyNofMMatch[2]);
-  } else if (planNofMMatch) {
-    parsedCurrent = planNumberFrom(planNofMMatch[1]);
-    parsedTotal = planNumberFrom(planNofMMatch[2]);
-  }
-  // No branch for a bare `Plan: N` paired with a `Total Plans in Phase: M`
-  // sibling and no `Current Plan` at all (#3791 review round 6, M2). A revision
-  // of this PR accepted it; base did not (its `else if (planField)` arm had no
-  // `of M` match and errored via NaN), and it is out of #3784's scope, which is
-  // the hybrid `Current Plan: N of M`. It cannot be given the schema-row +
-  // forcing-test coupling the other shapes have, either: `Plan` is body-only,
-  // `buildStateFrontmatter` never reads it into frontmatter, so there is no
-  // `current_*` key to hang a row on. An accepted shape with no schema row and
-  // no forcing test is exactly the drift this diff is otherwise built to
-  // prevent, so the shape is refused and named in the error instead.
+  const {
+    legacyPlan, planField, legacyNMatch, legacyNofMMatch, planNofMMatch, planNMatch,
+    current: parsedCurrent, total: parsedTotal,
+  } = parsePlanFields(content);
 
   if (parsedCurrent === null || parsedTotal === null) {
     return { content: reassemble(body), updated: [], data: { error: true } };
@@ -2219,8 +2300,12 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
  * position; the caller combines this with "the phase is already complete in
  * ROADMAP.md" so a first-time out-of-order completion (#2028) still
  * transitions. An unparseable or absent current phase is "not past".
+ * #5676: under `milestone-prefixed` the id is the whole `M-NN` (`3-02`, not `3`); that read goes
+ * through `parsePhaseFromProse` (the #5626 grammar owner), so the two cannot drift.
  */
-export function isStatePastPhase(content: string, phaseNum: string | number, sourcePath?: string): boolean {
+export function isStatePastPhase(
+  content: string, phaseNum: string | number, sourcePath?: string, convention?: string | null,
+): boolean {
   const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
   const fromFm = fm['current_phase'];
   let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
@@ -2229,9 +2314,14 @@ export function isStatePastPhase(content: string, phaseNum: string | number, sou
     raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
   }
   // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
-  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
-  if (!m) return false;
-  return comparePhaseNum(m[1], String(phaseNum)) > 0;
+  let id: string | null = null;
+  if (raw !== null) {
+    id = convention === 'milestone-prefixed'
+      ? parsePhaseFromProse(raw, 'milestone-prefixed').phase
+      : (/^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw)?.[1] ?? null);
+  }
+  if (id === null) return false;
+  return comparePhaseNum(id, String(phaseNum)) > 0;
 }
 
 /**
@@ -2962,7 +3052,19 @@ function patchCore(
     // `^field:` pattern — e.g. `status` matching both the frontmatter key
     // and a `Status:` body line). Frontmatter is only consulted when the
     // body has no match for this key.
-    const replaced = stateReplaceField(body, field, value);
+    // #4998: a session field is written the way `state update` writes it —
+    // inside the session section, never a fenced example there — so the
+    // patch agrees with the session readers the frontmatter sync uses.
+    const sessionWriteLabels = sessionLabelsForBodyField(field);
+    let replaced: string | null;
+    if (sessionWriteLabels) {
+      const inSession = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, value);
+      // Unchanged is a miss only when the field is absent: one already holding
+      // the value matched (#4488), as stateReplaceField reports it.
+      replaced = inSession !== body || sessionSourceExists(body, sessionWriteLabels) ? inSession : null;
+    } else {
+      replaced = stateReplaceField(body, field, value);
+    }
     if (replaced !== null) {
       body = replaced;
       updated.push(field);
@@ -3037,10 +3139,10 @@ function updateCore(
   const sessionWriteLabels = sessionLabelsForBodyField(intent.field);
   let result: string | null;
   if (sessionWriteLabels) {
-    // Replace-only by contract: unchanged content means the field is not in the
-    // session section, which is a miss, not a write.
+    // Replace-only by contract: the session writer never inserts a missing field.
     const replaced = stateReplaceFieldInSession(body, sessionWriteLabels.primary, sessionWriteLabels.fallback, intent.value);
-    result = replaced === body ? null : replaced;
+    // A field already holding the value matched; unchanged with no field is the miss (#4488).
+    result = replaced !== body || sessionSourceExists(body, sessionWriteLabels) ? replaced : null;
   } else {
     result = stateReplaceField(body, intent.field, intent.value);
   }

@@ -1,7 +1,7 @@
 {
   "id": "kimi-code",
   "role": "runtime",
-  "version": "1.18.0",
+  "version": "1.20.1",
   "title": "Kimi Code CLI",
   "description": "Kimi Code CLI (Moonshot AI, Node) — Agent Skills auto-discovered at ~/.kimi-code/skills; global AGENTS.md at ~/.kimi-code/AGENTS.md; native config.toml + [[hooks]] bus; three built-in subagents (coder/explore/plan), NO custom named subagents; background dispatch; tier-2 support. Distinct from Python kimi-cli (the 'kimi' capability) per ADR-1239 EoS — Kimi Code cannot dispatch named subagents so the kimi-agents YAML layout does NOT apply; persona injection rides the existing ${AGENT_SKILLS_*} workflow fallback. Install-layout, agent-install-check, and install-time decision (kimi vs kimi-code) land in follow-up PRs; this descriptor is the EoS foundation.",
   "tier": "core",
@@ -146,6 +146,8 @@
     "evidenceClass": "source-grounded",
     "requiresBinaries": [],
     "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.kimi-code",
+    "contextWindowTokens": 262144,
+    "contextWindowConfigKey": "review.context_window_tokens.kimi-code",
     "modelConfigKey": "review.models.kimi-code",
     "effortConfigKey": null,
     "defaultEffort": null,
@@ -160,7 +162,12 @@
     "review.max_prompt_tokens_per_reviewer.kimi-code": {
       "type": "number",
       "default": -1,
-      "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+      "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+    },
+    "review.context_window_tokens.kimi-code": {
+      "type": "number",
+      "default": -1,
+      "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
     },
     "review.timeouts.kimi-code": {
       "type": "number",

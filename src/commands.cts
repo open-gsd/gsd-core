@@ -9,8 +9,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
-import { execGit, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
+import { execGit, GIT_LOCATION_ENV_VARS, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { stripInsertedMarker } from './phase-entry-grammar.cjs';
+import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
 import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -29,6 +31,9 @@ const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtils
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
+  customPhaseQuery,
+  customDirectoryOwner,
+  isCustomPhaseId,
   normalizePhaseName,
   comparePhaseNum,
   extractPhaseToken,
@@ -45,7 +50,7 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 const { renderBracketMilestoneDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { getArchivedPhaseDirs, findPhaseInternal, listMilestonePhaseDirs } = phaseLocatorMod;
+const { phaseDirectoryOptions, getArchivedPhaseDirs, findPhaseInternal, listMilestonePhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone, stripShippedMilestones: _stripShippedMilestones, getMilestoneInfo, getRoadmapPhaseInternal } = roadmapParserMod;
@@ -970,6 +975,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
   // cmdEffortSyncCodex and cmdEffortSyncOpencode, so a fault mid-write can
   // never leave an agent file truncated or empty.
   let fileFailureCount = 0;
+  const rewrittenFiles: RewrittenFile[] = [];
 
   for (const file of files) {
     const agentName = file.replace(/\.md$/, '');
@@ -987,6 +993,9 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
       fileFailureCount++;
       continue;
     }
+
+    // #5683: hash BEFORE any rewrite — only a GSD-owned file gets re-recorded.
+    const preHash = tryFileHash(filePath);
 
     // Resolve using install-time logic: home defaults merged with project config.
     const universalEffort = resolveInstallTimeEffort(effortCfg, agentName);
@@ -1047,6 +1056,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
             if (originalModeInherit !== undefined) fs.chmodSync(tmpPathInherit, originalModeInherit);
           } catch { /* non-fatal: proceed with default tmp-file mode */ }
           retryRenameSync(tmpPathInherit, filePath);
+          rewrittenFiles.push({ path: filePath, preHash });
         } catch {
           try { fs.unlinkSync(tmpPathInherit); } catch { /* already gone or never created */ }
           skipped++;
@@ -1120,6 +1130,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
           if (originalModeSet !== undefined) fs.chmodSync(tmpPathSet, originalModeSet);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPathSet, filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch {
         try { fs.unlinkSync(tmpPathSet); } catch { /* already gone or never created */ }
         skipped++;
@@ -1131,6 +1142,9 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     changes.push({ agent: agentName, from: currentEffort, to: newEffortValue });
     synced++;
   }
+
+  // #5683: keep the install manifest in step with the agents just rewritten.
+  if (!dryRun) recordManifestFileHashes(path.dirname(agentsDir), rewrittenFiles);
 
   output(
     { synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir },
@@ -1198,6 +1212,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
   const refused: CodexEffortSyncRefusal[] = [];
   const writeFailures: EffortSyncFileFailure[] = [];
   const readFailures: EffortSyncFileFailure[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -1217,6 +1232,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
       continue;
     }
 
+    const preHash = tryFileHash(filePath); // #5683
     const parsed = parseCodexAgentToml(content);
     if (!parsed.ok) {
       // Never partially rewritten (40-design.md, ADR-2313 reader/writer
@@ -1286,6 +1302,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
           if (originalMode !== undefined) fs.chmodSync(tmpPath, originalMode);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPath, filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch (err) {
         // Reported, not thrown — the remaining agents still get processed.
         // Clean up the orphaned tmp file; filePath itself was never touched.
@@ -1299,6 +1316,8 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
     changes.push(...pendingChanges);
     synced++;
   }
+
+  if (!dryRun) recordManifestFileHashes(path.dirname(agentsDir), rewrittenFiles);
 
   output(
     { synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir, refused, write_failures: writeFailures, read_failures: readFailures },
@@ -1355,6 +1374,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
   const changes: EffortSyncChange[] = [];
   const writeFailures: EffortSyncFileFailure[] = [];
   const readFailures: EffortSyncFileFailure[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -1373,6 +1393,8 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
       readFailures.push({ agent: agentName, file: filePath, error: err instanceof Error ? err.message : String(err) });
       continue;
     }
+
+    const preHash = tryFileHash(filePath); // #5683
 
     // `target === null` covers both "no effort configured" (inherit) and "a
     // level OpenCode does not accept" — both must produce NO `variant:` key,
@@ -1466,6 +1488,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
           if (originalMode !== undefined) fs.chmodSync(tmpPath, originalMode);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPath, filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch (err) {
         try { fs.unlinkSync(tmpPath); } catch { /* already gone or never created */ }
         changes.pop();
@@ -1491,6 +1514,8 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
   // Making the exit code reflect failure would be a CLI-contract change
   // affecting all three cmdEffortSync* branches (claude, codex, opencode) and
   // is out of scope for this fix.
+  if (!dryRun) recordManifestFileHashes(path.dirname(agentsDir), rewrittenFiles);
+
   output(
     { synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir, write_failures: writeFailures, read_failures: readFailures },
     raw,
@@ -2046,7 +2071,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // phase — the phase arm must never branch-mutate for it (isSentinelPhaseId
       // is the invariant's single owner, src/phase-id.cts).
       if (phaseNum && !isSentinelPhaseId(phaseNum)) {
-        const phaseInfo = findPhaseInternal(cwd, phaseNum) as Record<string, unknown> | null;
+        const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd, config)) as Record<string, unknown> | null;
         if (phaseInfo) {
           // #4126: shared with init.cts's cmdInitExecutePhase branch_name field
           // via the one canonical renderer (src/phase-id.cts) so an undeliverable
@@ -3373,6 +3398,7 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
     : null;
   const milestoneVersion = milestoneDisplay ?? milestone?.version ?? null;
 
+  const directoryContext = phaseDirectoryOptions(cwd);
   const phases: PhaseProgress[] = [];
   let totalPlans = 0;
   let totalSummaries = 0;
@@ -3411,9 +3437,11 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
           phaseName = recoverBracketPhaseName(dir, phaseToken);
         }
       } else {
+        const custom = customPhaseQuery(dir, directoryContext);
+        const owner = custom && customDirectoryOwner(dir, custom);
         const dm = dir.match(/^(\d+(?:\.\d+)*)-?(.*)/);
-        phaseNum = dm ? dm[1] : dir;
-        phaseName = dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
+        phaseNum = owner ? owner.id : dm ? dm[1] : dir;
+        phaseName = owner ? owner.slug.replace(/-/g, ' ') : dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
       }
       // #3183/#5060: canonical plan/summary counts and lifecycle status
       // (root+nested, superseded-excluded, canonical pairing) from the
@@ -3545,7 +3573,7 @@ function cmdTodoMatchPhase(cwd: string, phase: string | undefined, raw: boolean)
   );
 
   // Find phase directory to get expected file paths
-  const phaseInfoDisk = findPhaseInternal(cwd, phase) as Record<string, unknown> | null;
+  const phaseInfoDisk = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd)) as Record<string, unknown> | null;
   const phasePlans: string[] = [];
   if (phaseInfoDisk && phaseInfoDisk['found']) {
     try {
@@ -3765,7 +3793,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
   const today = realClock.localToday();
 
   // Find phase directory
-  const phaseInfo = phase ? findPhaseInternal(cwd, phase) as Record<string, unknown> | null : null;
+  const phaseInfo = phase && type !== 'phase-dir' ? findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd)) as Record<string, unknown> | null : null;
   const phaseDir = phaseInfo ? path.join(cwd, phaseInfo['directory'] as string) : null;
 
   if (phase && !phaseDir && type !== 'phase-dir') {
@@ -3796,14 +3824,14 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       }
       const slug = generateSlugInternal(name);
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
-      const scaffoldConfig = loadConfig(cwd);
-      const scaffoldProjectCode = (scaffoldConfig['project_code'] as string) || '';
-      const scaffoldPrefix = scaffoldProjectCode ? `${scaffoldProjectCode}-` : '';
-      const dirName = `${scaffoldPrefix}${padded}-${slug}`;
-      const phasesParent = planningPaths(cwd).phases;
-      platformEnsureDir(phasesParent);
-      const dirPath = path.join(phasesParent, dirName);
-      platformEnsureDir(dirPath);
+      const scaffoldConfig = phaseDirectoryOptions(cwd, undefined, '');
+      const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+      const roadmap = scaffoldConfig.phaseNaming === 'custom' && fs.existsSync(roadmapPath)
+        ? fs.readFileSync(roadmapPath, 'utf8') : '';
+      const [{dirPath}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+        id: phase, slug: slug || '',
+        directoryId: scaffoldConfig.phaseNaming === 'custom' && isCustomPhaseId(phase) ? phase : padded,
+      }], {...scaffoldConfig, roadmap}, false);
       output({ created: true, directory: toPosixPath(path.relative(cwd, dirPath)), path: dirPath }, raw, dirPath);
       return;
     }
@@ -3904,7 +3932,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       phasesByNumber.set(key, {
         number: key,
         ...(displayId ? { display_id: displayId } : {}),
-        name: phaseName.replace(/\(INSERTED\)/i, '').trim(),
+        name: stripInsertedMarker(phaseName),
         plans: 0,
         summaries: 0,
         phaseStatus: PHASE_STATUS.NOT_STARTED,
@@ -4120,7 +4148,12 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
 function cmdCheckCommit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
 
-  const stagedResult = execGit(['diff', '--cached', '--name-only', '-z'], { cwd });
+  // #5548: execGit scrubs the repo-location vars, but inside the pre-commit hook git sets them
+  // (GIT_DIR/GIT_WORK_TREE of an explicit --git-dir commit, GIT_INDEX_FILE of a `-a` / `<path>`
+  // commit) to name the repo being committed: hand them back or the guard finds no repo and allows.
+  const hookEnv: Record<string, string> = {};
+  for (const k of GIT_LOCATION_ENV_VARS) if (process.env[k] !== undefined) hookEnv[k] = process.env[k]!;
+  const stagedResult = execGit(['diff', '--cached', '--name-only', '-z'], { cwd, env: hookEnv });
   if (stagedResult.exitCode === 0) {
     const files = stagedResult.stdout.split('\0').filter(Boolean);
     const planningFiles = files.filter(f => f.startsWith('.planning/'));
@@ -4129,7 +4162,7 @@ function cmdCheckCommit(cwd: string, raw: boolean): void {
       const policy = resolveCommitDocsPolicy(
         config,
         detectPhaseNumberFromFiles(planningFiles),
-        () => isGitIgnored(cwd, '.planning'),
+        () => isGitIgnored(cwd, '.planning', hookEnv),
       );
       if (!policy.resolved) {
         error(

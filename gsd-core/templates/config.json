@@ -30,7 +30,8 @@
     "sub_repos": []
   },
   "git": {
-    "create_tag": true
+    "create_tag": true,
+    "repo_tagging": "single"
   },
   "parallelization": {
     "enabled": true,

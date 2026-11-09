@@ -1728,7 +1728,7 @@ describe('cleanupWindsurfLegacyDevinSkills — removes pre-#1615 skill artifacts
 //   3. Negative: gsd-nyquist-auditor has NO disallowedTools key (legitimately writes+edits).
 //   4. Cross-runtime no-leak: Qwen-installed read-only agents do NOT contain disallowedTools.
 //   5. Source purity: source agents/*.md must not contain disallowedTools (inject-only).
-//   6. Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS.
+//   6. Parity: docs/reference/agents.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS.
 //      (DEFECT.GENERATIVE-FIX guard)
 
 // #767 — must mirror READONLY_AGENT_DISALLOWED_TOOLS in bin/install.js.
@@ -1748,7 +1748,7 @@ const GROUP_B_767 = ['gsd-verifier', 'gsd-doc-verifier', 'gsd-eval-auditor', 'gs
 
 const REPO_ROOT_767 = path.resolve(__dirname, '..');
 const SOURCE_AGENTS_DIR_767 = path.join(REPO_ROOT_767, 'agents');
-const AGENTS_DOC_PATH_767 = path.join(REPO_ROOT_767, 'docs', 'AGENTS.md');
+const AGENTS_DOC_PATH_767 = path.join(REPO_ROOT_767, 'docs', 'reference', 'agents.md');
 
 function readFrontmatterText(mdPath) {
   const content = fs.readFileSync(mdPath, 'utf8');
@@ -1926,14 +1926,14 @@ describe('#767 Source purity: source agents/*.md must not contain disallowedTool
   }
 });
 
-describe('#767 Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS', () => {
+describe('#767 Parity: docs/reference/agents.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS', () => {
   const agentsDoc = fs.readFileSync(AGENTS_DOC_PATH_767, 'utf8');
 
   for (const [agent, expectedTools] of Object.entries(READONLY_AGENT_DISALLOWED_TOOLS_767)) {
-    test(`docs/AGENTS.md has matching Disallowed Tools row for ${agent}`, () => {
+    test(`docs/reference/agents.md has matching Disallowed Tools row for ${agent}`, () => {
       const agentHeaderIdx = agentsDoc.indexOf(`### ${agent}`);
       assert.ok(agentHeaderIdx !== -1,
-        `docs/AGENTS.md must contain a ### ${agent} section`);
+        `docs/reference/agents.md must contain a ### ${agent} section`);
 
       const nextSectionIdx = agentsDoc.indexOf('\n### ', agentHeaderIdx + 1);
       const sectionEnd = nextSectionIdx === -1 ? agentsDoc.length : nextSectionIdx;
@@ -1942,11 +1942,11 @@ describe('#767 Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGE
       const table = findTableWithColumns(section, ['Property', 'Value']);
       const row = table && table.rows.find((r) => r.Property === '**Disallowed Tools**');
       assert.ok(row,
-        `docs/AGENTS.md section for ${agent} must have a "Disallowed Tools" table row`);
+        `docs/reference/agents.md section for ${agent} must have a "Disallowed Tools" table row`);
 
       const docTools = row.Value.trim();
       assert.equal(docTools, expectedTools,
-        `docs/AGENTS.md "Disallowed Tools" for ${agent} must be "${expectedTools}" but got "${docTools}"`);
+        `docs/reference/agents.md "Disallowed Tools" for ${agent} must be "${expectedTools}" but got "${docTools}"`);
     });
   }
 });
@@ -3174,22 +3174,29 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
 
   test('Antigravity portable install: .js hook command also stays shell-neutral on Windows (seam inert after gemini removal)', () => {
     const home = require('node:os').homedir().replace(/\\/g, '/');
+    // #5100: a win32 portable JS hook emits nothing unless the Git Bash
+    // policy finds bash. This case is about the PowerShell seam, so inject
+    // a discovered Git Bash instead of depending on the host PATH.
     const cmd = buildHookCommand(`${home}/.gemini/antigravity`, 'gsd-check-update.js', {
       portableHooks: true,
       platform: 'win32',
       runtime: 'antigravity',
+      env: { ProgramFiles: 'C:\\Program Files' },
+      existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
+    assert.equal(typeof cmd, 'string');
     assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
     assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
 
-  test('Claude global install: .js hook command stays shell-neutral on Windows Git Bash', () => {
+  test('Claude global install: .js hook command is the PowerShell runner on Windows even with Git Bash (#5850)', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
     });
-    assert.ok(!cmd.startsWith('& '), `Claude hook command must not use PowerShell call operator: ${cmd}`);
-    assert.equal(parseHookCommand(cmd).hookPath, 'C:/Users/me/.claude/hooks/gsd-check-update.js');
+    assert.ok(cmd.startsWith('& '), `Claude hook command must use the PowerShell call operator: ${cmd}`);
+    assert.ok(!cmd.includes('$(for'), `no POSIX runner chain on Windows: ${cmd}`);
+    assert.ok(cmd.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })"), cmd);
   });
 
   test('Windows .js hook with no runtime stays shell-neutral', () => {
@@ -3346,7 +3353,7 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     );
   });
 
-  test('Claude on Windows strips stale PowerShell prefix from managed hooks on reinstall (#3413)', () => {
+  test('Claude on Windows rewrites a stale bare PowerShell-prefixed managed hook to the PowerShell runner on reinstall (#3413, #5850)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
@@ -3355,12 +3362,14 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
       },
     };
     const runner = '"/usr/local/bin/node"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'claude' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, {
+      platform: 'win32',
+      runtime: 'claude',
+    });
     assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '"/usr/local/bin/node" "C:/Users/me/.claude/hooks/gsd-check-update.js"',
-    );
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    assert.ok(command.startsWith('& ((@('), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })"), command);
   });
 
   test('does NOT touch user-authored bare-node hooks (filename not in managed allowlist)', () => {
@@ -8486,7 +8495,9 @@ describe('#4377: --relative-includes emits project-relative @ includes for a loc
           .split(`${absRoot}/.claude/`).join('.claude/')
           .split(`${absRoot}/.claude`).join('.claude');
       }
-      if (normalized !== rel.get(name)) mismatched.push({ name, normalized, actual: rel.get(name) });
+      // #5637: each install stamps its own random heredoc terminator; fold it back to the canonical token.
+      const foldNonce = (text) => text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
+      if (foldNonce(normalized) !== foldNonce(rel.get(name))) mismatched.push({ name, normalized, actual: rel.get(name) });
     }
     // Report the FIRST divergence as text, not just a list of filenames. A
     // bare file list says a difference exists somewhere in 236 files and

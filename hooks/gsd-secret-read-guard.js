@@ -56,7 +56,9 @@
 //   EOF)"` — is never operand-checked, so prose mentioning `.env` is safe.
 //   pass 2 groups tokens by segment and evaluates each on its own:
 //   input redirect targets (`<`, `N<`) are always checked; the command word is
-//   located past `sudo`/`env VAR=x`/`nohup`-style prefixes; a closed set of
+//   located past wrapper prefixes AND their own options (`sudo -u U`,
+//   `env -i VAR=x`, `timeout -s KILL 5`, `nice -n 5`, `stdbuf -oL`, `exec`;
+//   see WRAPPERS, #5627); a closed set of
 //   NON-READING commands (test/[/ls/stat/rm/touch/echo/…) exempts that
 //   segment's operands — `[ -f .env ]` and `ls .env*` are existence checks
 //   GSD's own agents run — while `cp`/`mv`/`ln`/`git` are deliberately NOT
@@ -76,6 +78,19 @@
 //   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
+// Project exemptions (#4432): `hooks.secret_read_exempt` in the root project's
+// .planning/config.json lists repo-relative files that stay readable. An entry
+// takes effect only for a file that is a regular file on disk AND a regular
+// blob (100644/100755) in the commit HEAD names — read from `.git` directly,
+// no subprocess, no timer (hooks/lib/git-head-tree.js). Read and Grep honor an
+// absolute or cwd-relative path; Bash honors the absolute path only, and only
+// when EVERY command on the line is one of cat/head/tail/grep/egrep/fgrep/rg/
+// wc/diff/cmp/sort/uniq/cut/nl/od (after wrapper resolution) with no `$( )`/
+// backtick/`<( )` body, heredoc or file-writing redirect or option; any other
+// command (mv, ln, cp, git, sh, awk, sed, …) withdraws it for the whole line. A Grep
+// `glob` is never widened, and a colon-joined word (`HEAD:.env.production`)
+// never matches. An unreadable config or repository means no exemption.
+//
 // Grep globs are judged per brace alternative (never on the whole glob, so
 // `{.env.local,zzz.ts}` cannot hide behind a benign sibling): a pure-wildcard
 // alternative (`*`, `**`) is allowed — Grep already skips gitignored files,
@@ -90,7 +105,9 @@
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`. The promise is "no looser than the retired rules
+//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
+//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
+//   the option's value). The promise is "no looser than the retired rules
 //   on plain commands, without arming the compound-`cd` prompt". Writes to
 //   secret files are out of scope (Write/Edit were never gated). Commands
 //   over 1 MiB are denied outright (`command-too-large`) rather than
@@ -103,7 +120,16 @@
 //   destination exemption can move a link prepared under a non-secret name
 //   onto a secret name (`ln -s .env.example l && mv l .env`), so a later
 //   edit of `.env` lands in the link target — a write redirection, the
-//   out-of-scope write class, not a read.)
+//   out-of-scope write class, not a read. #4432 adds three stated limits to
+//   the project exemptions: (1) an agent with Bash can rewrite local git state
+//   (force-add + commit, `update-ref`) to make a file committed; the
+//   committed-file rule stops the one-step "edit the config, then read" path
+//   and is the same class as the interpreter one-liner gap above — a
+//   guardrail, not a sandbox. (2) The guard vouches for the path, not for
+//   working-tree bytes that differ from HEAD; a content-hash check would block
+//   re-reading the template after each edit, the flow the issue asks for.
+//   (3) A file inside a git submodule cannot be exempted: the submodule's
+//   `.git` is a file the reader does not follow.)
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -144,12 +170,125 @@ const MAX_NESTING_DEPTH = 3;
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
 const MAX_GLOB_ALTERNATIVES = 64;
 
+// #4432: project exemptions (`hooks.secret_read_exempt` in the ROOT project's
+// .planning/config.json). `root`/`allowRelative` are set once per invocation by
+// the stdin handler; `checker` is built lazily on the first secret-classified
+// token. Any failure while building or calling it means NOT exempt — never an
+// allow, and never a throw into the fail-open crash path.
+const exemption = { root: null, allowRelative: false, checker: null, configured: false, bashLine: null, bashReadOnly: null };
+
+// F3: a Bash exemption holds only when every command on the line is one of
+// these read-only readers; any other command anywhere on the line withdraws it
+// for every token (`mv a b && cat <exempt>` re-anchors or launders the name).
+const READ_ONLY_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'diff', 'cmp', 'sort', 'uniq', 'cut', 'nl', 'od',
+]);
+
+// Per-command options that write a file or run a program, so the command is
+// not read-only: `sort -o f`, `sort --compress-program`, `rg --pre`.
+function readOnlyOptionsOnly(base, operands) {
+  let positional = 0;
+  for (const w of operands) {
+    const t = w.text;
+    if (base === 'sort' && (/^-[A-Za-z]*o/.test(t) || /^--(output|compress-program|files0-from)/.test(t))) return false;
+    if (base === 'rg' && /^--(pre|pre-glob|hostname-bin)(=|$)/.test(t)) return false;
+    if (base === 'uniq' && !t.startsWith('-')) positional++;
+  }
+  return base !== 'uniq' || positional <= 1; // `uniq in out` writes `out`
+}
+
+// Fail closed: a substitution body, heredoc, process substitution, file
+// redirect out, unresolved or unlisted command word, or any exception is false.
+function lineIsReadOnly(command) {
+  try {
+    const { tokens, nested } = tokenize(command);
+    if (nested.length > 0) return false;
+    const bySeg = new Map();
+    for (const t of tokens) {
+      if (t.kind === 'heredoc') return false;
+      if (t.kind === 'sep') continue;
+      if (t.kind === 'word' && t.procsub !== undefined) return false;
+      if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+      bySeg.get(t.seg).push(t);
+    }
+    for (const segTokens of bySeg.values()) {
+      const words = [];
+      for (let k = 0; k < segTokens.length; k++) {
+        const t = segTokens[k];
+        if (t.kind === 'op') {
+          if (t.dup) continue;
+          const target = segTokens[k + 1];
+          if (!target || target.kind !== 'word') return false;
+          k++;
+          if (!t.read && target.text !== '/dev/null') return false; // output to a file
+          if (t.text.endsWith('<<<')) return false;
+          continue;
+        }
+        words.push(t);
+      }
+      if (words.length === 0) return false;
+      const cmd = resolveCommand(words);
+      if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
+      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isExemptSecret(tok) {
+  if (exemption.root === null) return false;
+  if (exemption.bashLine !== null) {
+    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
+    if (exemption.bashReadOnly !== true) return false;
+  }
+  try {
+    if (exemption.checker === null) {
+      const lib = require('./lib/secret-read-exemptions.js');
+      const entries = lib.readExemptEntries(exemption.root);
+      exemption.configured = entries.length > 0;
+      exemption.checker = entries.length === 0
+        ? () => false
+        : lib.createExemptionChecker({ root: exemption.root, entries, allowRelative: exemption.allowRelative });
+    }
+    return exemption.checker(tok) === true;
+  } catch {
+    exemption.checker = () => false;
+    return false;
+  }
+}
+
 // `.env.<suffix>` names that are templates, not secrets (case-insensitive).
 const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist']);
 
 // Command-prefix wrappers to look through when locating the command word at
-// the head of a segment (same set as hooks/gsd-windsurf-pre-command.js).
-const CMD_PREFIXES = new Set(['sudo', 'env', 'command', 'nice', 'nohup', 'time', 'doas']);
+// the head of a segment (#5627). Each wrapper runs the words that follow its
+// own options, so the table records what resolveCommand must step over:
+//   short    letters of short options that take a value (`-n 5`, `-n5`)
+//   long     long options that take a SEPARATE value word (`--adjustment 5`);
+//            `--opt=value` is one word and needs no entry
+//   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   operands positional words after the options (timeout's DURATION)
+// Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
+// stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
+// (the option's value becomes the command word), so keep it to the man pages.
+const WRAPPERS = new Map([
+  ['sudo', { short: 'aCcDghpRrTtUu', long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'],
+    // No-value long options, so an exact one never prefix-matches a longer
+    // valued one (`--login` vs `--login-class`).
+    flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'] }],
+  ['doas', { short: 'aCu' }],
+  ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
+  ['nice', { short: 'n', long: ['--adjustment'] }],
+  ['nohup', {}],
+  ['command', {}],
+  ['time', { short: 'fo', long: ['--format', '--output'] }],
+  ['timeout', { short: 'sk', long: ['--signal', '--kill-after'], operands: 1 }],
+  ['stdbuf', { short: 'ioe', long: ['--input', '--output', '--error'] }],
+  ['setsid', {}],
+  ['exec', { short: 'a' }],
+]);
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -284,12 +423,21 @@ function isSecretBasename(name) {
 // lower case once at the top so `.ENV` / `.Secrets` match on the
 // case-insensitive filesystems (macOS, Windows) where they ARE the secret file
 // — the same stance as the write guard's `/i` patterns.
-function namesSecret(tok) {
+function namesSecretByName(tok) {
   if (typeof tok !== 'string' || tok === '') return false;
   const lower = tok.toLowerCase();
   if (isSecretBasename(lastSegment(lower))) return true;
   const colon = lower.lastIndexOf(':');
   return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
+}
+
+// A secret-by-name token is still allowed when the project listed that exact
+// committed file under `hooks.secret_read_exempt` (#4432). The exemption is
+// consulted only on the secret-classified branch, so an ordinary token costs
+// no I/O.
+function namesSecret(tok) {
+  if (!namesSecretByName(tok)) return false;
+  return !isExemptSecret(tok);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +553,20 @@ function classifyGrepGlob(glob) {
 // Bash command scan — pass 1: tokenizer
 // ---------------------------------------------------------------------------
 
+// Which reading of a heredoc the scan is making (#5513). The guard scans a command that
+// opens a heredoc under every reading below and denies if any of them finds a secret read
+// (see findSecretReadUnderOtherReadings), so a change of reading can add a denial but
+// never remove one.
+//  - heredocBodiesSkippedInSpans: bash 5 skips the bodies of heredocs opened inside a
+//    `$( )` span when it looks for the closing `)`; bash 3.2.57 (still `/bin/bash` on
+//    macOS) does not, so a `)` on a body line closes the substitution and the rest of
+//    that line runs as the OUTER command.
+//  - heredocTagsAsWords: an unquoted tag is a bash word (a CR and a substitution belong
+//    to it). false is the earlier reading, where the tag stopped at any whitespace and at
+//    `(`: kept as a reading so nothing the guard denied before is allowed now.
+let heredocBodiesSkippedInSpans = true;
+let heredocTagsAsWords = true;
+
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
 // quoted string or a heredoc body never closes the span early.
@@ -439,7 +601,7 @@ function findParenClose(str, i) {
       i = j === -1 ? str.length : j + 1;
       continue;
     }
-    if (ch === '<' && str[i + 1] === '<' && str[i + 2] !== '<') {
+    if (heredocBodiesSkippedInSpans && ch === '<' && str[i + 1] === '<' && str[i + 2] !== '<') {
       const tag = readHeredocTag(str, i + 2);
       heredocTags.push(tag);
       i = tag.end;
@@ -475,7 +637,34 @@ function readHeredocTag(str, i) {
     i = j === -1 ? str.length : j + 1;
   } else {
     if (str[i] === '\\') { quoted = true; i++; }
-    while (i < str.length && !/[\s;&|<>()]/.test(str[i])) tag += str[i++];
+    // #5513: an unquoted tag is a bash WORD. It ends only at a metacharacter (space, tab,
+    // newline, `;&|<>()`): a carriage return is not one, so `EOF` + CR is the tag and the
+    // CRLF terminator line matches it; and a substitution inside the word belongs to it,
+    // taken literally (`E$(x)F` waits for the line `E$(x)F`).
+    while (i < str.length && !(heredocTagsAsWords ? /[ \t\n;&|<>()]/ : /[\s;&|<>()]/).test(str[i])) {
+      if (!heredocTagsAsWords) { tag += str[i++]; continue; }
+      if (str[i] === '$' && str[i + 1] === '(') {
+        const e = findParenClose(str, i + 2);
+        tag += str.slice(i, e + 1);
+        i = e + 1;
+        continue;
+      }
+      if (str[i] === '$' && str[i + 1] === '{') {
+        const j = str.indexOf('}', i);
+        const e = j === -1 ? str.length - 1 : j;
+        tag += str.slice(i, e + 1);
+        i = e + 1;
+        continue;
+      }
+      if (str[i] === '`') {
+        const j = str.indexOf('`', i + 1);
+        const e = j === -1 ? str.length - 1 : j;
+        tag += str.slice(i, e + 1);
+        i = e + 1;
+        continue;
+      }
+      tag += str[i++];
+    }
   }
   return { tag, quoted, stripTabs, end: i };
 }
@@ -621,6 +810,7 @@ function tokenize(str) {
       hasWord = true;
       const e = findParenClose(str, i + 2);
       nested.push(str.slice(i + 2, e));
+      if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
     }
@@ -639,6 +829,7 @@ function tokenize(str) {
       const j = str.indexOf('`', i + 1);
       const e = j === -1 ? str.length : j;
       nested.push(str.slice(i + 1, e));
+      if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
     }
@@ -670,6 +861,14 @@ function tokenize(str) {
         heredocs = [];
         i = r.end;
       }
+      continue;
+    }
+
+    // #5513: a CR is not a bash metacharacter, so inside a heredoc tag it is part of the word
+    // (a CRLF command's terminator line is `EOF` + CR).
+    if (ch === '\r' && expectTag && hasWord && heredocTagsAsWords) {
+      buf += ch;
+      i++;
       continue;
     }
 
@@ -769,17 +968,33 @@ function tokenize(str) {
 // Bash command scan — pass 2: per-segment evaluation
 // ---------------------------------------------------------------------------
 
-// `@file` (curl -d), `--flag=value`, `-Xvalue` → the operand that names the file.
-function normalizeOperand(text) {
+// Option characters of a bundled short cluster (`-2nif`).
+const CLUSTER_FLAG_CHAR_RE = /[A-Za-z0-9]/;
+
+// True when an operand word names a secret file. `@file` (curl -d) and
+// `--flag=value` are stripped to the value. In a single-dash word
+// (`/^-[^-]./`, so `-2if.env` counts too) the value of a bundled cluster
+// starts right after its run of option characters (#5046): `-if.env` holds
+// `.env`, `-nf=.env` holds `.env` after the `=`. That value is checked as
+// well as the historical two-character strip, so the verdict is never looser
+// than base and costs a fixed number of `namesSecret` calls (at most three,
+// whatever the word's length). The option run also swallows a value's leading
+// letters and digits, so `-fapp.env` is denied although `cat app.env` is not:
+// a fail-safe false positive, pinned in tests.
+function operandNamesSecret(text) {
   let v = text;
   if (v.startsWith('@')) v = v.slice(1);
   if (v.startsWith('--')) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
-  } else if (/^-[A-Za-z]./.test(v)) {
-    v = v.slice(2);
+    return namesSecret(v);
   }
-  return v;
+  if (!/^-[^-]./.test(v)) return namesSecret(v);
+  if (namesSecret(v.slice(2))) return true;
+  let end = 1;
+  while (end < v.length && CLUSTER_FLAG_CHAR_RE.test(v[end])) end++;
+  if (end > 2 && namesSecret(v.slice(end))) return true;
+  return v[end] === '=' && namesSecret(v.slice(end + 1));
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -789,18 +1004,57 @@ const DASH_C_RE = /^-[A-Za-z]*c$/;
 
 const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
 
+// How many words the option `word` occupies for wrapper `spec`: 2 when it
+// takes a separate value word, else 1.
+function wrapperOptionWidth(word, spec) {
+  if (word.startsWith('--')) {
+    if (word.includes('=')) return 1;
+    // getopt_long takes an exact match over any longer option it prefixes
+    // (`sudo --login` is not `--login-class`), else any unambiguous prefix (`--adj 5`).
+    if ((spec.flags || []).includes(word)) return 1;
+    return word.length > 2 && (spec.long || []).some((l) => l.startsWith(word)) ? 2 : 1;
+  }
+  const valued = spec.short || '';
+  for (let i = 1; i < word.length; i++) {
+    if (valued.includes(word[i])) return i === word.length - 1 ? 2 : 1; // `-n5` carries its value
+  }
+  return 1;
+}
+
+// Index of the first word after a wrapper's own options, assignments and
+// positional operands (`-n 5`, `-i A=1`, `-s KILL 5`, `--`).
+function skipWrapperArgs(words, start, spec) {
+  let idx = start;
+  let optionsEnded = false;
+  while (idx < words.length) {
+    const text = words[idx].text;
+    if (spec.assigns && ASSIGNMENT_RE.test(text)) {
+      idx++;
+    } else if (!optionsEnded && text === '--') {
+      optionsEnded = true;
+      idx++;
+    } else if (!optionsEnded && text.length > 1 && text.startsWith('-')) {
+      idx += wrapperOptionWidth(text, spec);
+    } else {
+      break;
+    }
+  }
+  if (!spec.operands) return idx;
+  idx = Math.min(idx + spec.operands, words.length);
+  // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
+  return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
+}
+
 // Command base + operands after leading `VAR=val` assignments and prefix
-// wrappers (`sudo`, `env VAR=x`, …), or null when nothing but prefixes remain.
+// wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
+// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
 function resolveCommand(words) {
   let idx = 0;
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
-    const base = lastSegment(words[idx].text).toLowerCase();
-    if (!CMD_PREFIXES.has(base)) break;
-    idx++;
-    if (base === 'env') {
-      while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
-    }
+    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+    if (!spec) break;
+    idx = skipWrapperArgs(words, idx + 1, spec);
   }
   if (idx >= words.length) return null;
   return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
@@ -962,6 +1216,26 @@ function precedingOp(s, bySeg, sepAfter) {
   return { op, prevSeg: p };
 }
 
+// #5513: the same scan under the other readings of a heredoc: bash 3.2.57's `$( )` span
+// (bodies not skipped) and the earlier tag reading (tag ends at any whitespace). Only a
+// command that opens a heredoc can read differently, so the extra passes are skipped for
+// every other command.
+function findSecretReadUnderOtherReadings(command) {
+  if (!command.includes('<<')) return null;
+  for (const [bodiesSkipped, tagsAsWords] of [[false, true], [true, false]]) {
+    heredocBodiesSkippedInSpans = bodiesSkipped;
+    heredocTagsAsWords = tagsAsWords;
+    try {
+      const hit = findSecretRead(command, 0);
+      if (hit) return hit;
+    } finally {
+      heredocBodiesSkippedInSpans = true;
+      heredocTagsAsWords = true;
+    }
+  }
+  return null;
+}
+
 // Returns the offending token text, or null.
 function findSecretRead(command, depth) {
   const { tokens, nested } = tokenize(command);
@@ -1040,7 +1314,7 @@ function findSecretRead(command, depth) {
             const hit = findSecretRead(src, depth + 1);
             if (hit) return hit;
           }
-        } else if (namesSecret(normalizeOperand(w.text))) return w.text;
+        } else if (operandNamesSecret(w.text)) return w.text;
       }
       continue;
     }
@@ -1070,7 +1344,7 @@ function findSecretRead(command, depth) {
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (namesSecret(normalizeOperand(operands[k].text))) return operands[k].text;
+      if (operandNamesSecret(operands[k].text)) return operands[k].text;
     }
   }
   return null;
@@ -1086,21 +1360,6 @@ const CLAUDE_BINARY_RE = /^claude(\.exe)?$/;
 // `gsd-debugger`, or a plugin-namespaced `<plugin>:gsd-debugger`.
 function isDebuggerAgent(value) {
   return value.slice(value.lastIndexOf(':') + 1) === DEBUGGER_AGENT_NAME;
-}
-
-// `timeout [flags] DURATION cmd …` is not in CMD_PREFIXES because its first
-// operand is a duration, not the command. Returns the command that follows it.
-function unwrapTimeout(cmd) {
-  let { base, operands } = cmd;
-  while (base === 'timeout') {
-    let k = 0;
-    while (k < operands.length && operands[k].text.startsWith('-')) k++;
-    k++; // the DURATION operand
-    const rest = resolveCommand(operands.slice(k));
-    if (!rest) return null;
-    ({ base, operands } = rest);
-  }
-  return { base, operands };
 }
 
 // Returns the `--agent` value text of a debugger launch, or null.
@@ -1134,8 +1393,7 @@ function findDebuggerCliSpawn(command, depth) {
     }
     if (!words.length) continue;
 
-    const first = resolveCommand(words);
-    const cmd = first && unwrapTimeout(first);
+    const cmd = resolveCommand(words);
     if (!cmd) continue;
     const { base, operands } = cmd;
 
@@ -1248,7 +1506,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth) {
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
   for (const w of prevCmd.operands) {
-    if (namesSecret(normalizeOperand(w.text))) return w.text;
+    if (operandNamesSecret(w.text)) return w.text;
   }
   return null;
 }
@@ -1277,7 +1535,10 @@ function reasonFor(code, tool, target) {
   return `Secret read guard: ${tool} would read '${target}', which matches a protected secret-file ` +
     `pattern (${PATTERN_TEXT}). Secret values must not be read into the conversation. ` +
     'If you need a specific value, ask the user for it; if you need the variable NAMES, ' +
-    'read the non-secret template (.env.example) instead.';
+    'read the non-secret template (.env.example) instead.' +
+    (tool === 'Bash' && exemption.configured
+      ? ' Files the project lists under hooks.secret_read_exempt are readable from Bash only by their absolute path.'
+      : '');
 }
 
 // stdout gets the typed JSON block; stderr gets the plain reason string
@@ -1399,6 +1660,12 @@ process.stdin.on('end', () => {
       allow(undefined);
     }
 
+    // #4432: exemptions resolve against the payload cwd (as the context
+    // monitor does), else the process cwd. Bash honors absolute paths only: a
+    // relative word there is re-anchored by cd/find/xargs/git -C.
+    exemption.root = typeof data.cwd === 'string' && data.cwd !== '' ? data.cwd : process.cwd();
+    exemption.allowRelative = tool === 'Read' || tool === 'Grep';
+
     // Every payload field is read TYPED in a single statement (#2547 class):
     // `[]`/`{}` are truthy and a non-string degrades to '' here.
     if (tool === 'Read') {
@@ -1423,7 +1690,8 @@ process.stdin.on('end', () => {
     const command = typeof data.tool_input.command === 'string' ? data.tool_input.command : '';
     if (command === '') allow(undefined);
     if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
-    const hit = findSecretRead(command, 0);
+    exemption.bashLine = command;
+    const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
     if (hit !== null) emitBlock('secret-read', tool, hit);
     const spawn = findDebuggerCliSpawn(command, 0);
     if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);

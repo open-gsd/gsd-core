@@ -9,7 +9,7 @@
  * from the prior hand-written .cjs; only types are added.
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { writeFileSync, existsSync, readdirSync, openSync, fstatSync, readSync, closeSync, constants } from 'node:fs';
 import { join } from 'node:path';
 
 // ⚠️ DO NOT add a sibling `.cjs` import to this module. `configuration.cjs` must load
@@ -322,6 +322,42 @@ function mergeDefaults(parsed: Record<string, unknown>): Record<string, unknown>
   return deepMergeConfig(defaults, parsed);
 }
 
+/**
+ * Largest config.json migrateOnDisk will read — the same 1 MiB bound as CONFIG_MAX_BYTES in
+ * config-file-read.cts (#5759). Inlined, not imported: this module may not import a sibling
+ * (the #3571 contract above). A test pins that the two bounds agree.
+ */
+const CONFIG_READ_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Read a config.json as a bounded regular file (#5759): non-blocking open, fstat on the
+ * descriptor, regular files up to CONFIG_READ_MAX_BYTES only. A FIFO/device would otherwise
+ * block open(2) forever. Throws on anything unreadable (ENOENT included); migrateOnDisk
+ * treats every throw as "nothing to migrate".
+ */
+function readConfigBounded(filePath: string): string {
+  const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOCTTY ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      throw Object.assign(new Error(`${filePath} is not a regular file`), { code: st.isDirectory() ? 'EISDIR' : 'ENXIO' });
+    }
+    if (st.size > CONFIG_READ_MAX_BYTES) {
+      throw Object.assign(new Error(`${filePath} exceeds ${CONFIG_READ_MAX_BYTES} bytes`), { code: 'EFBIG' });
+    }
+    const buf = Buffer.allocUnsafe(st.size);
+    let off = 0;
+    while (off < st.size) {
+      const n = readSync(fd, buf, off, st.size - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    return buf.toString('utf-8', 0, off);
+  } finally {
+    try { closeSync(fd); } catch { /* best-effort */ }
+  }
+}
+
 function migrateOnDisk(cwd: string, workstream?: string, configPathOverride?: string): MigrateOnDiskResult {
   // #3749: the caller (cmdMigrateConfig in config.cts) supplies the config
   // path resolved through planning-workspace's PROJECT-aware planningDir.
@@ -332,10 +368,10 @@ function migrateOnDisk(cwd: string, workstream?: string, configPathOverride?: st
   const configPath = configPathOverride ?? join(planningDir(cwd, workstream), 'config.json');
   let raw: string;
   try {
-    raw = readFileSync(configPath, 'utf-8');
+    raw = readConfigBounded(configPath);
   }
   catch {
-    // File missing — nothing to migrate
+    // File missing, unreadable, non-regular or oversized — nothing to migrate
     return { migrated: false, normalizations: [], wrote: null, skipped: [] };
   }
   const trimmed = raw.trim();
