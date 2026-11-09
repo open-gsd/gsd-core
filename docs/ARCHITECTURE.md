@@ -538,6 +538,8 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `intel-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-4, last first-party cutover); extracted from the `case 'intel':` arm in `gsd-tools.cjs`; `routeIntelCommand` → all 9 intel subcommands via lazy `require('./intel.cjs')`; preserves non-raw `timeAgo` transform on `status.files[*].updated_at`; discovered via `commandFamilies` in the capability registry |
 | `runtime-hooks-surface.cjs` | Hook-surface writer and configured-entrypoint validation module (ADR-857 phase 5f-1); owns Cline rules/agents-md/pre-tool-use hook generation, Cursor/Windsurf `hooks.json`, Kimi hook TOML, Copilot session-hook config, Codex hook-block management, and construction-time records for paths emitted into runtime configuration. Installer success requires those records to pass non-executing file-type and interpreter-resolution checks. |
 
+`gsd-tools.cjs` requires each of these modules on first use (#5865). A command loads the modules it runs, plus the ones every command goes through before dispatch: those `main()` uses first (`cli-exit`, `io`, `project-root`, `cli-skew-check`, `active-workstream-store`, and what they require) and the capability-dispatch stack (`capability-registry`, `capability-loader` and theirs). `runtime-identity` loads 29 `lib/` modules, where every command used to load about 220.
+
 
 ---
 
