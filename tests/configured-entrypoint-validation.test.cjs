@@ -870,6 +870,7 @@ const unresolvedBash = entries.filter(entry => (
 process.stdout.write('PROBE_JSON ' + JSON.stringify({
   total: entries.length,
   unresolvedBash: unresolvedBash.length,
+  tmpdir: require('node:os').tmpdir(),
 }) + '\\n');
 `;
 
@@ -912,6 +913,21 @@ test('#5850 claude portable install on a win32 host with no Git Bash registers P
   const probe = gsd5100RunWin32InstallProbe(t, 'claude');
   assert.ok(probe.total > 0, `the claude install must still track its hook entrypoints; got ${JSON.stringify(probe)}`);
   assert.equal(probe.unresolvedBash, 0, `claude portable hooks must not require bash; got ${JSON.stringify(probe)}`);
+});
+
+test('#5848 the win32 install probe resolves an absolute temp dir, never one relative to the repo root', (t) => {
+  // A spoofed win32 process with no TEMP/TMP/SystemRoot gets os.tmpdir() ===
+  // 'undefined\\temp' — relative, so the installer staged its skill dir inside the
+  // repo checkout (the probe runs with the repo root as cwd), where a parallel
+  // overlay walk could list it and then lose it.
+  const probe = gsd5100RunWin32InstallProbe(t, 'claude');
+  assert.ok(path.isAbsolute(probe.tmpdir), `probe os.tmpdir() must be absolute; got ${JSON.stringify(probe.tmpdir)}`);
+  const repoRoot = path.join(__dirname, '..');
+  assert.equal(
+    path.relative(repoRoot, probe.tmpdir).startsWith('..'),
+    true,
+    `probe os.tmpdir() must be outside the repo root; got ${JSON.stringify(probe.tmpdir)}`,
+  );
 });
 
 test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entries on a fresh install', (t) => {

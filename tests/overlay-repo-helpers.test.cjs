@@ -748,3 +748,65 @@ describe('buildOverlayRepo: non-regular files are skipped (#3900)', () => {
     }
   });
 });
+
+// ─── #5848: a directory retired between the parent listing and the recursion ──
+
+describe('buildOverlayRepo: a directory that vanishes mid-walk is skipped (#5848)', () => {
+  // The walker tolerated a retired path at its statSync but not at the
+  // recursive readdirSync, so a directory removed in the window between the two
+  // (a sibling test's temp dir inside the walked tree) threw ENOENT and failed
+  // every suite built on the overlay. Deterministic: the directory is retired
+  // by the stat itself, so no second process or timing is involved.
+  test('ENOENT at the recursive readdirSync is skipped, siblings still overlay', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5848-root-'));
+    const gone = path.join(root, 'gone');
+    fs.mkdirSync(path.join(gone, 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(gone, 'inner', 'f.txt'), 'x');
+    fs.writeFileSync(path.join(root, 'keep.txt'), 'y');
+    const realStat = fs.statSync;
+    let retired = false;
+    fs.statSync = function patchedStat(p, ...rest) {
+      const st = realStat.call(this, p, ...rest);
+      if (p === gone && !retired) {
+        retired = true;
+        fs.rmSync(gone, { recursive: true, force: true });
+      }
+      return st;
+    };
+    let overlay;
+    try {
+      assert.doesNotThrow(() => { overlay = buildOverlayRepo({}, { root }); });
+    } finally {
+      fs.statSync = realStat;
+    }
+    try {
+      assert.equal(retired, true, 'the fixture must actually retire the directory');
+      assert.equal(fs.existsSync(path.join(overlay, 'keep.txt')), true);
+      assert.equal(fs.existsSync(path.join(overlay, 'gone', 'inner', 'f.txt')), false);
+    } finally {
+      if (overlay) cleanup(overlay);
+      cleanup(root);
+    }
+  });
+
+  test('a non-ENOENT error at the recursive readdirSync still propagates', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5848-eacces-'));
+    const sub = path.join(root, 'sub');
+    fs.mkdirSync(sub);
+    const realReaddir = fs.readdirSync;
+    fs.readdirSync = function patchedReaddir(p, ...rest) {
+      if (p === sub) {
+        const err = new Error('EACCES: permission denied, scandir');
+        err.code = 'EACCES';
+        throw err;
+      }
+      return realReaddir.call(this, p, ...rest);
+    };
+    try {
+      assert.throws(() => buildOverlayRepo({}, { root }), { code: 'EACCES' });
+    } finally {
+      fs.readdirSync = realReaddir;
+      cleanup(root);
+    }
+  });
+});
