@@ -83,7 +83,7 @@ checker notes it in its return and continues.
 the checker's `sandbox_mode` from its `tools:` line, so a `read-only` sandbox refuses the
 `printf`; no checker receipt is written there. The wait ends on the completion result, as
 above, or as `stalled` at the threshold (#5182 ruling of 2026-11-05, acceptance criterion 5
-as amended; the gap is tracked in its sub-issue and ADR).
+as amended; the gap and its ADR are tracked in #6110).
 
 **Known limit, kimi-code:** it dispatches `-planner` to its `plan` built-in and
 `-checker` to `explore`, and neither can write files (`runtime-aware-dispatch.md`),
