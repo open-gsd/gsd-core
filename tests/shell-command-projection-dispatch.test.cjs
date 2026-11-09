@@ -1860,17 +1860,18 @@ describe('bug #2236: hookShell parameter routes PowerShell call operator', () =>
 });
 
 describe('bug #3413: installer hook surfaces consume runtime-aware projection', () => {
-  test('buildHookCommand emits shell-neutral Claude hook command on Windows', () => {
+  test('buildHookCommand emits the PowerShell runner for Claude on Windows (#5850)', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
       env: { ProgramFiles: 'C:\\Program Files' },
       existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
-    assert.equal(cmd.startsWith('& '), false, `Claude hook command must not use PowerShell prefix: ${cmd}`);
+    assert.equal(cmd.startsWith('& '), true, `Claude hook command must use the PowerShell call operator: ${cmd}`);
+    assert.ok(!cmd.includes('$(for'), cmd);
   });
 
-  test('rewriteLegacyManagedNodeHookCommands removes stale PowerShell prefix for Claude on Windows', () => {
+  test('rewriteLegacyManagedNodeHookCommands rewrites a stale PowerShell-prefixed hook to the PowerShell runner for Claude on Windows (#5850)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
@@ -1885,10 +1886,9 @@ describe('bug #3413: installer hook surfaces consume runtime-aware projection', 
       existsSync: (candidate) => candidate === 'C:\\Program Files\\Git\\bin\\bash.exe',
     });
     assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '"/usr/local/bin/node" "C:/Users/me/.claude/hooks/gsd-check-update.js"',
-    );
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    assert.ok(command.startsWith('& ((@('), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'"), command);
   });
 });
 
@@ -2077,7 +2077,7 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
   // ran during the user's 1.5.0 -> 1.6.0 local update. Managed node hooks get
   // the absolute runner + clean anchored path; a non-node-prefixed managed .sh
   // hook (already correct) is left untouched.
-  test('rewriteLegacyManagedNodeHookCommands produces clean anchored node commands on Windows', () => {
+  test('rewriteLegacyManagedNodeHookCommands produces PowerShell commands anchored on $env:CLAUDE_PROJECT_DIR on Windows (#5850)', () => {
     const settings = {
       hooks: {
         PostToolUse: [
@@ -2097,10 +2097,8 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
     });
     assert.equal(changed, true);
     const rewritten = settings.hooks.PostToolUse[0].hooks[0].command;
-    assert.equal(
-      rewritten,
-      '"C:/Program Files/nodejs/node.exe" "$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js',
-    );
+    assert.ok(rewritten.startsWith('& ((@('), rewritten);
+    assert.ok(rewritten.endsWith('"$env:CLAUDE_PROJECT_DIR/.claude/hooks/gsd-context-monitor.js"'), rewritten);
     assert.ok(!rewritten.includes('\\"'), 'rewritten command must not contain escaped double-quotes');
   });
 });

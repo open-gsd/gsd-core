@@ -101,9 +101,7 @@ function runOne(rt, spec, apply = applySettingsJsonHooks) {
       platform: spec.platform || 'linux',
       execPath: '/opt/node/bin/node',
       existsSync: () => true,
-      // #5850: Claude on win32 without a discoverable Git Bash gets the PowerShell
-      // runner; the golden pins the Git Bash (shell-neutral) shape.
-      env: rt.id === 'claude' ? { ProgramFiles: 'C:\\Program Files' } : {},
+      env: {},
     };
     const build = (f) => {
       if (spec.nullJs && f.endsWith('.js')) return null;
