@@ -86,6 +86,7 @@ function buildVerbEntry(verb, spec, aliases) {
     workstreamScoped: !!spec.workstreamScoped,
   };
   if (spec.freePositionals) entry.freePositionals = true;
+  if (spec.rejectShortFlags) entry.rejectShortFlags = true;
   if ((spec.eqFlags ?? []).length > 0) entry.eq = sorted(spec.eqFlags);
   if ((spec.nonEmptyFlags ?? []).length > 0) entry.nonEmpty = sorted(spec.nonEmptyFlags);
   if (spec.passthroughAfter) entry.passthroughAfter = spec.passthroughAfter;

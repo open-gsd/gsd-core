@@ -79,7 +79,14 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   },
   'config-set': { positionals: 3, booleanFlags: DRY_RUN },
   // The choices JSON is the one positional, wherever --dry-run sits; the handler refuses a second one.
-  'config-new-project': { positionals: 1, freePositionals: true, booleanFlags: DRY_RUN },
+  // A dash+letter token is a flag, not choices JSON (`-1` and `-` stay choices); the shipped wording is kept (#5268).
+  'config-new-project': {
+    positionals: 1,
+    freePositionals: true,
+    booleanFlags: DRY_RUN,
+    rejectShortFlags: true,
+    unknownFlagMessage: 'Unknown flag for config-new-project: {flag}',
+  },
   'config-path': { positionals: 1 },
   'migrate-config': { positionals: 1 },
 
@@ -154,10 +161,11 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   },
   'dispatch-capacity': { positionals: 1, booleanFlags: JSON_FLAG },
   // --force-isolation, --phase and --plan are read by the router only to refuse them with the
-  // "recording-only" message (RECORDING_ONLY_ARGS), so they are declared to reach that check.
+  // "recording-only" message, so they are declared to reach it; bareEmptyFlags makes a bare flag read as '' (present).
   'inspect-dispatch-isolation': {
     positionals: 1,
     valueFlags: ['cwd-target', 'force-isolation', 'phase', 'plan', 'prompt'],
+    bareEmptyFlags: ['force-isolation', 'phase', 'plan'],
     booleanFlags: JSON_FLAG,
   },
   // A missing or invalid --isolation prints the verb's usage line, so it is not a requiredFlag.
@@ -200,7 +208,14 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   'uat.complete-session': { positionals: 3, valueFlags: ['message'] },
   'uat.render-checkpoint': { positionals: 2, valueFlags: ['file'] },
   // The router refuses any dash-led token other than --dry-run itself (#4096); extra bare words were always ignored.
-  'todo.complete': { positionals: 3, freePositionals: true, booleanFlags: DRY_RUN },
+  // #4096: an accepted-but-ignored short flag (`-n`) would turn a preview into the mutation, so short flags are refused too.
+  'todo.complete': {
+    positionals: 3,
+    freePositionals: true,
+    booleanFlags: DRY_RUN,
+    rejectShortFlags: true,
+    unknownFlagMessage: 'Unknown flag for todo complete: {flag}',
+  },
   'todo.match-phase': { positionals: 3 },
   // `--phase` is value; `--name` swallows the words up to the next flag.
   scaffold: { positionals: 2, valueFlags: ['phase'], multiwordFlags: ['name'] },

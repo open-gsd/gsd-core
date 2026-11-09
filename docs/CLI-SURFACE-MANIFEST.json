@@ -128,7 +128,8 @@
       },
       "required": [],
       "workstreamScoped": false,
-      "freePositionals": true
+      "freePositionals": true,
+      "rejectShortFlags": true
     },
     {
       "verb": "config-path",
@@ -334,10 +335,10 @@
       "positionals": 1,
       "flags": {
         "cwd-target": "value",
-        "force-isolation": "value",
+        "force-isolation": "value-or-bare",
         "json": "boolean",
-        "phase": "value",
-        "plan": "value",
+        "phase": "value-or-bare",
+        "plan": "value-or-bare",
         "prompt": "value"
       },
       "required": [],
@@ -967,7 +968,8 @@
       },
       "required": [],
       "workstreamScoped": false,
-      "freePositionals": true
+      "freePositionals": true,
+      "rejectShortFlags": true
     },
     {
       "verb": "todo.match-phase",

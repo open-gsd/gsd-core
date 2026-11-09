@@ -40,7 +40,7 @@ These global flags are read once, before the command runs, and are never passed 
 
 Each command declares its flags in one place, `src/cli-surface.cts` ([ADR-4909](adr/4909-shipped-surface-contract-seam.md) D1). [`docs/CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json) is generated from those declarations. For each command it lists:
 - the command name and its aliases;
-- how many positional words it takes, and whether further words may appear among the flags (`freePositionals`);
+- how many positional words it takes, and whether further words may appear among the flags (`freePositionals`), and whether a short flag such as `-n` is refused instead of read as a word (`rejectShortFlags`);
 - each flag and its kind;
 - the flags it requires;
 - whether the command reads the active workstream.

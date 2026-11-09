@@ -129,6 +129,19 @@ export interface NamedArgSpec {
    * pr-subrepo.
    */
   freePositionals?: true;
+  /**
+   * A token matching `/^-[A-Za-z]/` past the positional boundary is a flag
+   * token; short flags are never declared, so it is an unknown flag. `-1` and
+   * `-` stay ordinary tokens. For verbs where an accepted-but-ignored short
+   * flag would turn a preview into a mutation (todo complete, config-new-project).
+   */
+  rejectShortFlags?: true;
+  /**
+   * Template for the unknown-flag InvalidArgs `reason`; `{flag}` is replaced by
+   * the raw token and the "accepted:" list is omitted. Keeps a verb's shipped
+   * wording (`Unknown flag for todo complete: {flag}`) inside the seam.
+   */
+  unknownFlagMessage?: string;
 }
 
 export type ParsedNamedArgs = Record<string, string | boolean | null | string[]>;
@@ -183,6 +196,19 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
     throw new TypeError(
       'parseNamedArgs: spec.freePositionals must be true and cannot be combined with positionals "rest" ' +
         `— received freePositionals ${JSON.stringify(spec.freePositionals)} with positionals ${JSON.stringify(positionals)}.`,
+    );
+  }
+  if (spec.rejectShortFlags !== undefined && spec.rejectShortFlags !== true) {
+    throw new TypeError(
+      `parseNamedArgs: spec.rejectShortFlags must be true — received ${JSON.stringify(spec.rejectShortFlags)}.`,
+    );
+  }
+  if (
+    spec.unknownFlagMessage !== undefined &&
+    (typeof spec.unknownFlagMessage !== 'string' || !spec.unknownFlagMessage.includes('{flag}'))
+  ) {
+    throw new TypeError(
+      `parseNamedArgs: spec.unknownFlagMessage must be a string containing the {flag} placeholder — received ${JSON.stringify(spec.unknownFlagMessage)}.`,
     );
   }
   for (const kind of VALUE_SUBSET_KINDS) assertSubsetOfValueFlags(spec, kind);
@@ -404,6 +430,9 @@ function buildFlagSets(spec: NamedArgSpec): FlagSets {
   };
 }
 
+// A short flag is a dash followed by a letter; `-1` (negative number) and `-` are not flags.
+const SHORT_FLAG_RE = /^-[A-Za-z]/;
+
 /** Tokens consumed by the flag at `args[i]`, or null when the flag is not declared. */
 function advanceOverFlag(args: string[], i: number, sets: FlagSets): number | null {
   const tok = args[i];
@@ -425,9 +454,12 @@ function advanceOverFlag(args: string[], i: number, sets: FlagSets): number | nu
   return null;
 }
 
-function unknownFlag(tok: string, sets: FlagSets): NamedArgsResult {
+function unknownFlag(tok: string, sets: FlagSets, spec: NamedArgSpec): NamedArgsResult {
+  const template = spec.unknownFlagMessage;
   const reason =
-    sets.accepted.length > 0
+    template !== undefined
+      ? template.split('{flag}').join(tok)
+      : sets.accepted.length > 0
       ? `unknown flag ${formatDiagnosticToken(tok)}; accepted: ${sets.accepted.join(', ')}`
       : `unknown flag ${formatDiagnosticToken(tok)}; this command accepts no flags`;
   return { ok: false, kind: 'InvalidArgs', arg: tok, reason, exitReason: ERROR_REASON.USAGE };
@@ -445,9 +477,10 @@ function walkTokens(args: string[], spec: NamedArgSpec): NamedArgsResult | null 
   let i = spec.positionals === 'rest' ? args.length : spec.positionals;
   while (i < args.length) {
     const tok = args[i];
+    if (spec.rejectShortFlags === true && SHORT_FLAG_RE.test(tok)) return unknownFlag(tok, sets, spec);
     if (isFlagToken(tok)) {
       const advance = advanceOverFlag(args, i, sets);
-      if (advance === null) return unknownFlag(tok, sets);
+      if (advance === null) return unknownFlag(tok, sets, spec);
       if (sets.list.has(tok.slice(2))) inListRun = true;
       i += advance;
       continue;
