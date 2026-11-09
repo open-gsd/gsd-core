@@ -17,7 +17,8 @@
 // with a non-success conclusion for the base branch's last push-triggered Tests
 // run, that is treated as authoritative and blocks — with one explicit, visible,
 // human-operated escape hatch (the `fix-next` label) for the PR that is itself
-// the fix-forward.
+// the fix-forward. On a pull request the label is read from the API (#6076), so
+// after it is added the fix-next-rerun workflow re-runs this check and sees it.
 //
 // Every non-success conclusion (`failure`, `cancelled`, `timed_out`,
 // `action_required`, ...) is treated as RED, not just `failure` — a cancelled or
@@ -205,11 +206,14 @@ async function evaluateQueueBypass({ headRef, baseRef, baseSha, headSha, repo, g
  * (or throwing) — injected so tests never touch the network.
  * `evaluateQueueBypass` (merge_group only) is an async function returning
  * `{authorized, reason, actor}`; it is how a queued fix-forward is recognised.
+ * `fetchPrLabels` (pull_request only, RED base only) is an async function
+ * returning the PR's current label names (or throwing, which keeps the gate
+ * RED with reason `label-read-failed`); when absent, `labels` decides (#6076).
  *
  * @returns {Promise<{verdict:string, payload:*, reason:string}>}
  */
 async function resolveNextHealth({
-  fetchLatestRun, eventName, baseRef, labels, evaluateQueueBypass: queueBypass,
+  fetchLatestRun, eventName, baseRef, labels, fetchPrLabels, evaluateQueueBypass: queueBypass,
 } = {}) {
   if (!APPLICABLE_EVENTS.has(eventName)) {
     return { verdict: VERDICT.SKIPPED_NOT_APPLICABLE, payload: null, reason: 'not-applicable-event' };
@@ -235,10 +239,25 @@ async function resolveNextHealth({
     return { verdict: assessed.verdict, payload: evidence, reason };
   }
 
-  // Escape hatch for the PR that is itself the fix-forward. pull_request runs
-  // read the label from the event (`labels`). merge_group events carry no
-  // labels, so the queue run asks the API instead (evaluateQueueBypass).
-  const labelList = Array.isArray(labels) ? labels : [];
+  // Escape hatch for the PR that is itself the fix-forward. A pull_request run
+  // with `fetchPrLabels` reads the PR's CURRENT labels from the API (#6076), so
+  // a re-run sees a label added or removed after the run started; a failed read
+  // keeps the gate RED. Without it, the event's `labels` decide (bootstrap).
+  // merge_group events carry no labels, so the queue run asks the API instead
+  // (evaluateQueueBypass).
+  let labelList = Array.isArray(labels) ? labels : [];
+  if (eventName === 'pull_request' && typeof fetchPrLabels === 'function') {
+    try {
+      const current = await fetchPrLabels();
+      labelList = Array.isArray(current) ? current : [];
+    } catch (err) {
+      return {
+        verdict: VERDICT.RED,
+        payload: evidence,
+        reason: `${assessed.reason === 'resolved' ? 'red' : assessed.reason}; label-read-failed: ${err.message}`,
+      };
+    }
+  }
   if (labelList.includes(BYPASS_LABEL)) {
     return { verdict: VERDICT.BYPASSED, payload: evidence, reason: 'bypass-label' };
   }
@@ -281,6 +300,9 @@ function usage() {
     'newest settled run decides. Every other case (wrong event, no',
     'resolvable base ref, an unreadable API read) fails open (exit 0).',
     '',
+    'On pull_request with PR_NUMBER set, the label is read from the API, so a',
+    're-run sees the PR\'s current labels (#6076); a failed read keeps the gate RED.',
+    '',
     'On merge_group the label is read back from the API: the queue ref must',
     'name a PR, the group must hold exactly one commit, the PR must carry the',
     'label, and whoever applied it must have write or admin permission.',
@@ -300,7 +322,15 @@ function usage() {
     '  PR_LABELS             comma-separated PR label names (pull_request events;',
     '                        the caller workflow must populate this from',
     '                        github.event.pull_request.labels.*.name); checked',
-    '                        for the literal "fix-next" bypass label',
+    '                        for the literal "fix-next" bypass label; the fallback',
+    '                        when PR_NUMBER is unset or malformed',
+    '  PR_NUMBER             PR number (pull_request events; from',
+    '                        github.event.pull_request.number); trimmed, then it',
+    '                        must match /^[1-9]\\d*$/. When valid, the label is',
+    '                        read from the API so a re-run sees the current',
+    '                        label; a failed read keeps the gate RED. A',
+    '                        malformed value (0, 07, -1, abc, empty) falls back',
+    '                        to PR_LABELS',
     '  MERGE_GROUP_HEAD_REF  merge-group queue branch',
     '                        (github.event.merge_group.head_ref; falls back to',
     '                        GITHUB_REF)',
@@ -437,8 +467,19 @@ async function main(argv = process.argv.slice(2)) {
     ghGet,
   });
 
+  // #6076: with a valid PR number, read the PR's current labels from the API.
+  const prNumber = (process.env.PR_NUMBER || '').trim();
+  const fetchPrLabels = /^[1-9]\d*$/.test(prNumber)
+    ? async () => {
+      const body = await ghGet(`/repos/${repo}/issues/${prNumber}/labels?per_page=100`);
+      return Array.isArray(body)
+        ? body.map((l) => l && l.name).filter((name) => typeof name === 'string')
+        : [];
+    }
+    : undefined;
+
   const result = await resolveNextHealth({
-    fetchLatestRun, eventName, baseRef, labels, evaluateQueueBypass: evaluateQueue,
+    fetchLatestRun, eventName, baseRef, labels, fetchPrLabels, evaluateQueueBypass: evaluateQueue,
   });
 
   writeOutput([`verdict=${result.verdict}`]);
@@ -450,7 +491,9 @@ async function main(argv = process.argv.slice(2)) {
       `::error::the base branch "${baseRef}"'s own last Tests run is red or still re-running after a failure: ${runUrl} (${result.reason}) — `
       + 'wait for a fix-forward merge, or if THIS pull request is the fix, ask a '
       + `maintainer with write access to apply the "${BYPASS_LABEL}" label and re-queue it `
-      + '(the queue run reads the label from the API; it must be the only PR in its merge group).\n',
+      + '(the queue run reads the label from the API; it must be the only PR in its merge group). '
+      + 'On a pull request the label is read from the API too, so after it is added the '
+      + 'fix-next-rerun workflow re-runs this check.\n',
     );
     return 1;
   }

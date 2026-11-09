@@ -32,14 +32,21 @@ const {
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
-const GIT_TIMEOUT_MS = 30_000;
+// Bounds the one `git(args, cwd)` helper in this file (7 argv shapes: init,
+// config, add, commit, rev-parse HEAD / HEAD~1, branch -M). It is its own
+// constant rather than a tests/helpers/timeouts.cjs class because it bounds only
+// this file's throwaway package-lock fixture repos.
+// Evidence: worst observed 44.06ms on darwin (p50 9.47ms, p99 28.47ms), margin 680.88x;
+// harness, 7 call sites x 50 runs (500 spawns) per platform on darwin (node v26.13.0)
+// and linux (node:24 in docker), 2026-11-08; win32 not measured.
+const AUDIT_BASELINE_GIT_TIMEOUT_MS = 30_000;
 
 function git(args, cwd) {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: GIT_TIMEOUT_MS,
+    timeout: AUDIT_BASELINE_GIT_TIMEOUT_MS,
   }).trim();
 }
 

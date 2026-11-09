@@ -18,9 +18,9 @@
 // Enabled for all Claude Code installs. This hook is always-on — it is a
 // no-op when .planning/config.json is absent (ENOENT → exit 0).
 
-const fs = require('fs');
 const path = require('path');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // This hook only injects an advisory config-reload summary; a crash mid-parse
 // must not block the session or the FileChanged event that triggered it — the
@@ -70,7 +70,7 @@ process.stdin.on('end', () => {
     // Read the updated config file
     let config;
     try {
-      const raw = fs.readFileSync(filePath, 'utf8');
+      const raw = readConfigFileBounded(filePath, { required: true });
       config = JSON.parse(raw);
     } catch (e) {
       if (e && e.code === 'ENOENT') allow(undefined);

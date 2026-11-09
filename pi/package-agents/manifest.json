@@ -3,8 +3,8 @@
     "gsd-advisor-researcher.md": "cfffd05033f678dd3c597daa711eab51595093f3d62b6199f79436113cae785f",
     "gsd-ai-researcher.md": "e3adb34c0b91fcabc4460444073be2a2f917c3ac872d3d69052ebc8838f8d6c7",
     "gsd-assumptions-analyzer.md": "7a11676082d5462d8fd6a46ffc729d0782710208b0b4e44f1622b16e5a80164d",
-    "gsd-code-fixer.md": "e7ee4b46687540c019f348b43c2d004b0aa2c8994a5ef781cfb82e3ccddd329b",
-    "gsd-code-reviewer.md": "58445fa98b3c5898f16d848c0c057ac85e555b64d10f398e4d979a91ff157b88",
+    "gsd-code-fixer.md": "29d4bec72c1084921104eaaa184775a411471028f0b72e75de7d7e871723e0bd",
+    "gsd-code-reviewer.md": "9b5e50aa0cba840bac2e431df20a0a3ec8002b7338ee1e3104a1f44fa64a0d02",
     "gsd-codebase-mapper.md": "e7db32280307df7924fd0cffee4082383bbbc2d0d8936381943c6aad1aa5ad9b",
     "gsd-debug-session-manager.md": "fa9af605a53615346c441f0d54223401abddaed11fef277ae99243ea598f1626",
     "gsd-debugger.md": "55443af6608194c5fac111a28ef1e33b9677c031ae0a2653585ca95d380c1422",
@@ -16,7 +16,7 @@
     "gsd-domain-researcher.md": "881f55a61526e428bd134b88b8cd402897f622bec88759a2335c01a5a6d28ade",
     "gsd-eval-auditor.md": "43c6879223ca54de9c278d3f79500da210eaca76a34c569bfac06ed3a01fa8e6",
     "gsd-eval-planner.md": "67fec56c78a4da17388dc1acbcb6c6773a7d166ff87ecfc706a23e3a0923c21e",
-    "gsd-executor.md": "54fd3e08a1ff8debf5e1b9127b1ea335cc4f50168dc671f527688001d97cf7cf",
+    "gsd-executor.md": "6dc0885c918899c3ba5e8aa5e409483f675bca606936e872d46a7b1a4ffb3fa1",
     "gsd-framework-selector.md": "5672405af4cf439c3d2907c4618a6f7c87989a841006291c8bbc5f5845e17875",
     "gsd-integration-checker.md": "635c01e5917cfc5b894975069e7e734bf1fba4b3b85ffcb4b8abe1ea90d12c42",
     "gsd-intel-updater.md": "e6ab4f623504bd39c2f64cbb60ef0d7aa19c4b8192250b366ae5a596764b1cae",
@@ -24,8 +24,8 @@
     "gsd-nyquist-auditor.md": "63f38b6cf64de92b8d6dd41093d6bd4addc8cc2d3abd5847314bbc61fdc3f0d0",
     "gsd-pattern-mapper.md": "c50d34a94f83f22ea983596d97d5bfb5aa0b8b8fdab189ec11bc72409d8da264",
     "gsd-phase-researcher.md": "0d43768c892e53c65621681c731ac9f10f948788c59d5f957cac03f1236563d4",
-    "gsd-plan-checker.md": "2bbedda99bf1eb618a2ce6f6ee258d3bb3d414a2ffea41d22904c787c9b3fea0",
-    "gsd-planner.md": "c613b9759d18e1e0ca8ba1808626c81668d530cd814096598691090bd6744264",
+    "gsd-plan-checker.md": "6c231ec9c568c51c517a8191ac91a0c7a59c267e90e0d1a29ff082ab786ae35c",
+    "gsd-planner.md": "bb7f9fded72c05aa220d9cf23bf570f964e831799114ce960e9d22ef4b600187",
     "gsd-project-researcher.md": "9568e675e3d20e54ce07be5778fa130251084e169bd945ca69af7cf47595cbdd",
     "gsd-research-synthesizer.md": "76df9e9d1092a99c7897b61dc3a8ed3043902bd05946726ee938ea35235b9b1e",
     "gsd-roadmapper.md": "5fe8fcdebf87c221374c6fb4fb5fb19d9d6074493b3bbb613f0dd4aafc8b82b1",
@@ -34,6 +34,6 @@
     "gsd-ui-checker.md": "2df9e804c15d688baa8425fcdc6e1023cbf7c13b69478f70bc442ee1e20ad04e",
     "gsd-ui-researcher.md": "a3746010c696f7974dbd91d65e3ea123560a8a5026fb3f3ffec5fdb51c5f4a4c",
     "gsd-user-profiler.md": "f8b43d8f3b627df8821b6f8d91612d8bdc1a1a4401d42dc827ccadd639842f04",
-    "gsd-verifier.md": "acc00411ca37d4a47aa4347588ba0c67e488f8e19bb393718ea3217d5aa58049"
+    "gsd-verifier.md": "381089606bb29234c60f7c80d6a3626c644acc19a1fae510df9185a0568c247a"
   }
 }

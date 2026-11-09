@@ -939,20 +939,69 @@ const REMEDIES = Object.freeze({
  *
  * File-derived strings (registry cells, marker tokens, workflow text) are
  * echoed into lint output that AI agents read as trusted instructions —
- * every interpolated field is control-char-stripped and length-capped
- * before it is written, so a malicious repo file cannot make the lint emit
- * instruction-shaped text. Implemented as a code-point filter rather than a
- * regex so no control-character regex literal exists to lint.
+ * every interpolated field has its hostile code points ESCAPED and is
+ * length-capped before it is written, so a malicious repo file cannot make
+ * the lint emit instruction-shaped text, and the reader can still trace the
+ * spelling as written (a dropped character would show text that does not
+ * occur in the file).
+ *
+ * Escape format: each hostile code point (see isEchoHostile) is rendered as
+ * `\u{X}` with UPPERCASE hex and no padding, e.g. U+0085 -> `\u{85}`,
+ * U+200B -> `\u{200B}`, tag characters (U+E0000-U+E007F) -> `\u{E0041}`. The
+ * escape introducer itself, a literal backslash U+005C, is escaped as `\u{5C}`
+ * so a spelled-out `\u{202E}` in the input can never print identically to a
+ * real U+202E: whenever nothing was dropped (guaranteed when the output is at
+ * most 190 code points, since the longest escape `\u{10FFFF}` is 10), the
+ * output decodes back to exactly the input, so distinct inputs have distinct
+ * output. Once the cap truncates, the tail is dropped and inputs differing
+ * only beyond it can share one output (e.g. 195 `a` with and without a
+ * trailing U+0085). The output is free of every hostile character.
+ *
+ * Cap: 200 code points of OUTPUT (an escape counts as its own length, never
+ * split), so the result is bounded however hostile the input; scanning stops
+ * as soon as the next unit would exceed the cap, costing O(200) matches on a
+ * huge input. A surrogate pair is never split.
+ *
+ * Implemented as a code-point filter rather than a regex so no
+ * control-character regex literal exists to lint.
  */
 function sanitizeEcho(text) {
+  const CAP = 200;
   let out = '';
+  let used = 0;
   for (const ch of String(text)) {
     const code = ch.codePointAt(0);
-    if (code <= 0x1f || code === 0x7f) continue;
-    out += ch;
+    const hostile = code === 0x5c || isEchoHostile(code);
+    const unit = hostile ? `\\u{${code.toString(16).toUpperCase()}}` : ch;
+    const len = hostile ? unit.length : 1; // escapes are ASCII: one code point per char
+    if (used + len > CAP) break;
+    out += unit;
+    used += len;
   }
-  return out.length > 200 ? out.slice(0, 200) : out;
+  return out;
 }
+
+/**
+ * Code points sanitizeEcho escapes: C0 + DEL, C1 (incl. 8-bit CSI U+009B),
+ * line/paragraph separators, zero-width + LRM/RLM, bidi embeddings/overrides
+ * and isolates, the Arabic letter mark, word joiner/invisible operators, the
+ * Mongolian vowel separator, the soft hyphen and the BOM; all able to forge
+ * or hide output a reader (human or agent) trusts. Escaping U+200D makes
+ * joined emoji sequences visible as `\u{200D}`, which is acceptable for echoed paths.
+ * @param {number} code
+ * @returns {boolean}
+ */
+function isEchoHostile(code) {
+  return ECHO_HOSTILE_RE.test(String.fromCodePoint(code));
+}
+
+// Category-based: Cc controls (C0, DEL, C1), Cf format chars (zero-width, bidi,
+// soft hyphen, BOM, tags U+E0000-E007F, interlinear annotation, musical
+// format), Zl/Zp separators, Cs surrogates, Co private use, Cn unassigned;
+// plus variation selectors and the invisible filler characters that are not Cf.
+// Each combining/variation/filler member is its own alternative so no
+// character class holds a combining sequence (no-misleading-character-class).
+const ECHO_HOSTILE_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Cn}]|[\u{FE00}-\u{FE0F}]|[\u{E0100}-\u{E01EF}]|\u{180B}|\u{180C}|\u{180D}|\u{180F}|\u{34F}|\u{115F}|\u{1160}|\u{3164}|\u{FFA0}|\u{17B4}|\u{17B5}|\u{2800}/u;
 
 module.exports = {
   CANONICAL_TOOLS,

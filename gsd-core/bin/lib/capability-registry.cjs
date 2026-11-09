@@ -10,7 +10,7 @@ const capabilities = {
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "AI design contract",
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
@@ -95,7 +95,7 @@ const capabilities = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — config/settings home nested under ~/.gemini/antigravity (probed across 1.x and 2.x layouts); global skills/agents install under ~/.gemini/config, the dir AGY scans for global discovery (#3738); Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -237,6 +237,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.antigravity",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.antigravity",
       "modelConfigKey": "review.models.agy",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -251,7 +253,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.antigravity": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+      },
+      "review.context_window_tokens.antigravity": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.antigravity": {
         "type": "number",
@@ -263,7 +270,7 @@ const capabilities = {
   "assumption-delta": {
     "id": "assumption-delta",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Assumption-delta architecture checkpoint",
     "description": "Rarely-firing advisory checkpoint that triggers when a phase makes something plural, optional, or chosen that used to be singular, required, or derived. Surfaces one identity-model question (promote the new general representation to primary, or add it alongside?) so a silent primary-key drift does not accumulate into a later user-facing bug. Non-blocking; fires only on a detected signal.",
     "tier": "full",
@@ -309,7 +316,7 @@ const capabilities = {
   "audit": {
     "id": "audit",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Audit",
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
@@ -346,7 +353,7 @@ const capabilities = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -464,7 +471,7 @@ const capabilities = {
   "broken-windows": {
     "id": "broken-windows",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Broken-windows ledger",
     "description": "Cross-phase defect register accumulating stubs, TODOs, skipped tests, unrun verifies, and unmet truths into .planning/WINDOWS.md. When enforcement is enabled, it blocks /gsd-ship while any window is open unless explicitly waived with a recorded reason. Operationalizes GSD's no-defer discipline as a tracked artifact (issue #1950).",
     "tier": "full",
@@ -510,7 +517,7 @@ const capabilities = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -626,6 +633,7 @@ const capabilities = {
         "hyphenNameAgentBody": true,
         "skipCompactAgents": true,
         "omitBashRunnerOnWindows": true,
+        "powershellHooksOnWindows": true,
         "specRootSkillPass": true,
         "restoreAtRefTildeInAgents": true,
         "restoreAtRefTildeInSpecTree": true,
@@ -667,6 +675,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.claude",
+      "contextWindowTokens": 200000,
+      "contextWindowConfigKey": "review.context_window_tokens.claude",
       "modelConfigKey": "review.models.claude",
       "effortConfigKey": "review.effort.claude",
       "defaultEffort": "high",
@@ -681,7 +691,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.claude": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.claude": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the claude reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 200000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.claude": {
         "type": "number",
@@ -698,9 +713,9 @@ const capabilities = {
   "claude-orchestration": {
     "id": "claude-orchestration",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Claude orchestration (Workflow backend)",
-    "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When the runtime exposes the Workflow tool and claude_orchestration.execution_backend resolves to 'workflow', execute-phase emits a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, resumeFromRunId wired to the phase run id, shared token budget) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
+    "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When every detection gate passes (Claude runtime, nesting-capable host, no Claude Code workflow kill switch set), the claude-orchestration commands emit a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, the phase run id carried in the summary for the Workflow tool's resumeFromRunId input, token budget recorded as intent only) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, aimed at restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. execute-phase does not dispatch through it yet: its loop contribution was removed in #4740 and no host-level dispatch path exists. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -742,12 +757,12 @@ const capabilities = {
           "inline"
         ],
         "default": "auto",
-        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability."
+        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) and 'workflow' both select the Workflow backend only when every detection gate passes: the runtime is Claude, the host can nest agents, and no Claude Code workflow kill switch is set (CLAUDE_CODE_DISABLE_WORKFLOWS, or disableWorkflows / enableWorkflows in managed, project or user settings); otherwise inline. 'inline' forces one-agent-per-message dispatch regardless."
       },
       "claude_orchestration.min_agent_sdk_version": {
         "type": "string",
         "default": "0.3.149",
-        "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
+        "description": "Deprecated (#4747) and ignored. The Workflow backend no longer gates on the installed Agent SDK version, which does not reflect whether a Claude Code session has dynamic workflows; detection reads Claude Code's documented kill switches instead. Kept so existing configs still load; remove it from your config."
       }
     },
     "steps": [],
@@ -772,7 +787,7 @@ const capabilities = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -866,7 +881,7 @@ const capabilities = {
   "code-review": {
     "id": "code-review",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Code review",
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
@@ -952,7 +967,7 @@ const capabilities = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1074,7 +1089,7 @@ const capabilities = {
   "coderabbit": {
     "id": "coderabbit",
     "role": "reviewer",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "CodeRabbit",
     "description": "CodeRabbit CLI — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). Reviews the working-tree diff (`coderabbit review --prompt-only`), not the source tree, and accepts neither a prompt nor a model flag; findings are down-weighted in consensus (evidenceClass: diff-only).",
     "tier": "full",
@@ -1110,6 +1125,8 @@ const capabilities = {
       "evidenceClass": "diff-only",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.coderabbit",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": null,
       "modelConfigKey": null,
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -1119,14 +1136,14 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.coderabbit": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
       }
     }
   },
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -1282,6 +1299,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.codex",
+      "contextWindowTokens": 272000,
+      "contextWindowConfigKey": "review.context_window_tokens.codex",
       "modelConfigKey": "review.models.codex",
       "effortConfigKey": "review.effort.codex",
       "defaultEffort": "high",
@@ -1296,7 +1315,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.codex": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.codex": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.codex": {
         "type": "number",
@@ -1313,7 +1337,7 @@ const capabilities = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -1415,7 +1439,7 @@ const capabilities = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Cursor",
     "description": "Cursor IDE — skills-only workflow surface; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -1564,6 +1588,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.cursor",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.cursor",
       "modelConfigKey": "review.models.cursor",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -1578,14 +1604,19 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.cursor": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.cursor": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the cursor reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
   "drift": {
     "id": "drift",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Drift detection gates",
     "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions outside the codebase map and modified or deleted files inside it). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
     "tier": "full",
@@ -1686,7 +1717,7 @@ const capabilities = {
   "external-job": {
     "id": "external-job",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Async external-job scheduler adapter",
     "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it. NOTE on contribution point: #1164 specifies classification at execute:wave:pre and recording at execute:wave:post. This capability still contributes executor guidance at wave:post; execute-phase now renders wave:pre entries and dispatches generic step hooks there independently. Moving external-job classification to wave:pre is a separate capability change, not part of #4148. The adapter (scripts/slurm-adapter.cjs) reads external_job.submit_timeout_ms / poll_timeout_ms / artifact_dir through the canonical capability-config seam (env override > config > registry default).",
     "tier": "full",
@@ -1769,7 +1800,7 @@ const capabilities = {
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Post-planning gap analysis",
     "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
     "tier": "standard",
@@ -1810,7 +1841,7 @@ const capabilities = {
   "graphify": {
     "id": "graphify",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Knowledge graph",
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
@@ -1851,7 +1882,7 @@ const capabilities = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1970,7 +2001,7 @@ const capabilities = {
   "intel": {
     "id": "intel",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Codebase intelligence",
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
@@ -2022,7 +2053,7 @@ const capabilities = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -2156,7 +2187,7 @@ const capabilities = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; native config.toml [[hooks]] bus at ~/.kimi/config.toml; background dispatch; tier-2 support.",
     "tier": "core",
@@ -2266,7 +2297,7 @@ const capabilities = {
   "kimi-code": {
     "id": "kimi-code",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Kimi Code CLI",
     "description": "Kimi Code CLI (Moonshot AI, Node) — Agent Skills auto-discovered at ~/.kimi-code/skills; global AGENTS.md at ~/.kimi-code/AGENTS.md; native config.toml + [[hooks]] bus; three built-in subagents (coder/explore/plan), NO custom named subagents; background dispatch; tier-2 support. Distinct from Python kimi-cli (the 'kimi' capability) per ADR-1239 EoS — Kimi Code cannot dispatch named subagents so the kimi-agents YAML layout does NOT apply; persona injection rides the existing ${AGENT_SKILLS_*} workflow fallback. Install-layout, agent-install-check, and install-time decision (kimi vs kimi-code) land in follow-up PRs; this descriptor is the EoS foundation.",
     "tier": "core",
@@ -2411,6 +2442,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.kimi-code",
+      "contextWindowTokens": 262144,
+      "contextWindowConfigKey": "review.context_window_tokens.kimi-code",
       "modelConfigKey": "review.models.kimi-code",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2425,7 +2458,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.kimi-code": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.kimi-code": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.kimi-code": {
         "type": "number",
@@ -2437,7 +2475,7 @@ const capabilities = {
   "live-dom-uat": {
     "id": "live-dom-uat",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Live-DOM UAT",
     "description": "Default-off live-DOM verification (#2856). Confines browser MCP reach to one purpose-built agent (gsd-dom-verifier) that carries the browser globs in its own tools: line, registered as an additive step hook at execute:wave:post. agents/gsd-executor.md is deliberately NOT widened: for a first-party agent the static tool list is the only control that exists, no capability can grant tools to one (ADR-1244 D2), no hook kind grants tool permissions (ADR-857 D4), and there is no per-dispatch tool override. Gated by activationKey workflow.live_dom_uat (default false), so with the key off the capability resolves inactive and the hook does not render at all. NOTE on the browser profile lock: chrome-devtools-mcp holds an exclusive lock on $HOME/.cache/chrome-devtools-mcp/chrome-profile, and --isolated is a flag on the user's own MCP-server registration that GSD cannot pass. Concurrent execution waves sharing one profile will therefore collide; the step tolerates and reports that (onError: skip, never blocking) rather than pretending to coordinate a resource it does not own.",
     "tier": "full",
@@ -2490,7 +2528,7 @@ const capabilities = {
   "llama-cpp": {
     "id": "llama-cpp",
     "role": "reviewer",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "llama.cpp",
     "description": "llama.cpp server — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.llama_cpp_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq. Capability id/folder are kebab (`llama-cpp`, required by KEBAB_RE); `reviewer.slug` stays snake (`llama_cpp`) to match the shipped roster and the `review.llama_cpp_host` config key (ADR-2782's three-namespace trap).",
     "tier": "full",
@@ -2525,6 +2563,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.llama_cpp",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.llama_cpp",
       "modelConfigKey": "review.models.llama_cpp",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2544,7 +2584,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.llama_cpp": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.llama_cpp": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the llama_cpp reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.llama_cpp": {
         "type": "number",
@@ -2556,7 +2601,7 @@ const capabilities = {
   "lm-studio": {
     "id": "lm-studio",
     "role": "reviewer",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "LM Studio",
     "description": "LM Studio local model server — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.lm_studio_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq. Capability id/folder are kebab (`lm-studio`, required by KEBAB_RE); `reviewer.slug` stays snake (`lm_studio`) to match the shipped roster and the `review.lm_studio_host` config key (ADR-2782's three-namespace trap).",
     "tier": "full",
@@ -2591,6 +2636,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.lm_studio",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.lm_studio",
       "modelConfigKey": "review.models.lm_studio",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2610,7 +2657,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.lm_studio": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.lm_studio": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the lm_studio reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.lm_studio": {
         "type": "number",
@@ -2622,7 +2674,7 @@ const capabilities = {
   "mempalace": {
     "id": "mempalace",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "MemPalace memory",
     "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
     "tier": "full",
@@ -2644,6 +2696,7 @@ const capabilities = {
       "gsd-mempalace-curator"
     ],
     "hooks": [],
+    "activationKey": "mempalace.enabled",
     "config": {
       "mempalace.enabled": {
         "type": "boolean",
@@ -2725,7 +2778,7 @@ const capabilities = {
         "consumes": [
           "CONTEXT.md"
         ],
-        "when": "mempalace.enabled",
+        "when": "mempalace.recall_on_plan",
         "onError": "skip"
       },
       {
@@ -2796,7 +2849,7 @@ const capabilities = {
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Nyquist validation",
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
@@ -2846,7 +2899,7 @@ const capabilities = {
   "ollama": {
     "id": "ollama",
     "role": "reviewer",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Ollama",
     "description": "Ollama local model server — cross-AI /gsd-review reviewer lane only; not a GSD install target (no runtime body, no artifacts). OpenAI-compatible HTTP transport against a user-configured `review.ollama_host` (POST /v1/chat/completions); model discovered via GET /v1/models piped through jq.",
     "tier": "full",
@@ -2881,6 +2934,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.ollama",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.ollama",
       "modelConfigKey": "review.models.ollama",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -2900,7 +2955,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.ollama": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.ollama": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the ollama reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.ollama": {
         "type": "number",
@@ -2912,7 +2972,7 @@ const capabilities = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat commands/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -3085,6 +3145,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.opencode",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.opencode",
       "modelConfigKey": "review.models.opencode",
       "effortConfigKey": "review.effort.opencode",
       "defaultEffort": "high",
@@ -3099,7 +3161,12 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.opencode": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.opencode": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the opencode reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.opencode": {
         "type": "number",
@@ -3116,7 +3183,7 @@ const capabilities = {
   "pattern-mapper": {
     "id": "pattern-mapper",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Pattern mapping",
     "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
     "tier": "full",
@@ -3170,7 +3237,7 @@ const capabilities = {
   "pi": {
     "id": "pi",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "pi",
     "description": "pi (pi.dev) — node-runtime programmatic-CLI (managed pi 1.3.0 install); TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
@@ -3281,7 +3348,7 @@ const capabilities = {
   "profile-pipeline": {
     "id": "profile-pipeline",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Developer profiling pipeline",
     "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
     "tier": "full",
@@ -3358,7 +3425,7 @@ const capabilities = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -3496,6 +3563,8 @@ const capabilities = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.qwen",
+      "contextWindowTokens": 131072,
+      "contextWindowConfigKey": "review.context_window_tokens.qwen",
       "modelConfigKey": null,
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -3505,14 +3574,19 @@ const capabilities = {
       "review.max_prompt_tokens_per_reviewer.qwen": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.qwen": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the qwen reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 131072 tokens; 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
   "refactor-trigger": {
     "id": "refactor-trigger",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Complexity-triggered refactor",
     "description": "Measures the complexity of the code a phase touched and, when a function crosses a configured threshold or jumps past its recorded anchor, surfaces a scoped refactor proposal at .planning/phases/<N>/<NN>-REFACTOR.md. Advisory by default — it never edits code and never blocks. Opt-in strict mode blocks /gsd-ship while a proposal is untriaged; a declined proposal is recorded in the broken-windows ledger when that capability is present. Operationalizes 'refactor early, refactor often' as continuous pressure instead of a thing you have to remember (issue #1953).",
     "tier": "full",
@@ -3579,7 +3653,7 @@ const capabilities = {
   "research": {
     "id": "research",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Phase research",
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
@@ -3631,7 +3705,7 @@ const capabilities = {
   "schema-gate": {
     "id": "schema-gate",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Schema push detection gate",
     "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
     "tier": "full",
@@ -3677,7 +3751,7 @@ const capabilities = {
   "security": {
     "id": "security",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Security enforcement",
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
@@ -3776,7 +3850,7 @@ const capabilities = {
   "tdd": {
     "id": "tdd",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Test-driven development",
     "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
     "tier": "full",
@@ -3829,7 +3903,7 @@ const capabilities = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -3928,7 +4002,7 @@ const capabilities = {
   "ui": {
     "id": "ui",
     "role": "feature",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
@@ -4028,7 +4102,7 @@ const capabilities = {
   "vscode": {
     "id": "vscode",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "VS Code",
     "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
     "tier": "core",
@@ -4086,7 +4160,7 @@ const capabilities = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; Cascade native hooks.json blocking hook bus (pre_write_code, pre_run_command); tier-2 support.",
     "tier": "core",
@@ -4179,7 +4253,7 @@ const capabilities = {
   "zcode": {
     "id": "zcode",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "ZCode",
     "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
     "tier": "core",
@@ -4403,7 +4477,7 @@ const byLoopPoint = {
         "consumes": [
           "CONTEXT.md"
         ],
-        "when": "mempalace.enabled",
+        "when": "mempalace.recall_on_plan",
         "onError": "skip"
       },
       {
@@ -4931,11 +5005,13 @@ const configKeys = {
   "workflow.api_coverage_gate": "ai-integration",
   "review.models.agy": "antigravity",
   "review.max_prompt_tokens_per_reviewer.antigravity": "antigravity",
+  "review.context_window_tokens.antigravity": "antigravity",
   "review.timeouts.antigravity": "antigravity",
   "workflow.assumption_delta": "assumption-delta",
   "workflow.windows_enforce": "broken-windows",
   "review.models.claude": "claude",
   "review.max_prompt_tokens_per_reviewer.claude": "claude",
+  "review.context_window_tokens.claude": "claude",
   "review.timeouts.claude": "claude",
   "review.effort.claude": "claude",
   "claude_orchestration.enabled": "claude-orchestration",
@@ -4947,10 +5023,12 @@ const configKeys = {
   "review.max_prompt_tokens_per_reviewer.coderabbit": "coderabbit",
   "review.models.codex": "codex",
   "review.max_prompt_tokens_per_reviewer.codex": "codex",
+  "review.context_window_tokens.codex": "codex",
   "review.timeouts.codex": "codex",
   "review.effort.codex": "codex",
   "review.models.cursor": "cursor",
   "review.max_prompt_tokens_per_reviewer.cursor": "cursor",
+  "review.context_window_tokens.cursor": "cursor",
   "workflow.drift_threshold": "drift",
   "workflow.drift_action": "drift",
   "workflow.schema_drift_gate": "drift",
@@ -4967,15 +5045,18 @@ const configKeys = {
   "intel.enabled": "intel",
   "review.models.kimi-code": "kimi-code",
   "review.max_prompt_tokens_per_reviewer.kimi-code": "kimi-code",
+  "review.context_window_tokens.kimi-code": "kimi-code",
   "review.timeouts.kimi-code": "kimi-code",
   "workflow.live_dom_uat": "live-dom-uat",
   "review.models.llama_cpp": "llama-cpp",
   "review.llama_cpp_host": "llama-cpp",
   "review.max_prompt_tokens_per_reviewer.llama_cpp": "llama-cpp",
+  "review.context_window_tokens.llama_cpp": "llama-cpp",
   "review.timeouts.llama_cpp": "llama-cpp",
   "review.models.lm_studio": "lm-studio",
   "review.lm_studio_host": "lm-studio",
   "review.max_prompt_tokens_per_reviewer.lm_studio": "lm-studio",
+  "review.context_window_tokens.lm_studio": "lm-studio",
   "review.timeouts.lm_studio": "lm-studio",
   "mempalace.enabled": "mempalace",
   "mempalace.memory_mode": "mempalace",
@@ -4991,14 +5072,17 @@ const configKeys = {
   "review.models.ollama": "ollama",
   "review.ollama_host": "ollama",
   "review.max_prompt_tokens_per_reviewer.ollama": "ollama",
+  "review.context_window_tokens.ollama": "ollama",
   "review.timeouts.ollama": "ollama",
   "review.models.opencode": "opencode",
   "review.max_prompt_tokens_per_reviewer.opencode": "opencode",
+  "review.context_window_tokens.opencode": "opencode",
   "review.timeouts.opencode": "opencode",
   "review.effort.opencode": "opencode",
   "workflow.pattern_mapper": "pattern-mapper",
   "profile-pipeline.enabled": "profile-pipeline",
   "review.max_prompt_tokens_per_reviewer.qwen": "qwen",
+  "review.context_window_tokens.qwen": "qwen",
   "refactor.trigger_enabled": "refactor-trigger",
   "refactor.complexity_threshold": "refactor-trigger",
   "refactor.complexity_jump_delta": "refactor-trigger",
@@ -5038,7 +5122,13 @@ const configSchema = {
     "owner": "antigravity",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+    "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+  },
+  "review.context_window_tokens.antigravity": {
+    "owner": "antigravity",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.antigravity": {
     "owner": "antigravity",
@@ -5068,7 +5158,13 @@ const configSchema = {
     "owner": "claude",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.claude": {
+    "owner": "claude",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the claude reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 200000 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.claude": {
     "owner": "claude",
@@ -5092,7 +5188,7 @@ const configSchema = {
     "owner": "claude-orchestration",
     "type": "enum",
     "default": "auto",
-    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability.",
+    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) and 'workflow' both select the Workflow backend only when every detection gate passes: the runtime is Claude, the host can nest agents, and no Claude Code workflow kill switch is set (CLAUDE_CODE_DISABLE_WORKFLOWS, or disableWorkflows / enableWorkflows in managed, project or user settings); otherwise inline. 'inline' forces one-agent-per-message dispatch regardless.",
     "values": [
       "auto",
       "workflow",
@@ -5103,7 +5199,7 @@ const configSchema = {
     "owner": "claude-orchestration",
     "type": "string",
     "default": "0.3.149",
-    "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
+    "description": "Deprecated (#4747) and ignored. The Workflow backend no longer gates on the installed Agent SDK version, which does not reflect whether a Claude Code session has dynamic workflows; detection reads Claude Code's documented kill switches instead. Kept so existing configs still load; remove it from your config."
   },
   "workflow.code_review": {
     "owner": "code-review",
@@ -5136,7 +5232,7 @@ const configSchema = {
     "owner": "coderabbit",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the CodeRabbit reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
   },
   "review.models.codex": {
     "owner": "codex",
@@ -5148,7 +5244,13 @@ const configSchema = {
     "owner": "codex",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.codex": {
+    "owner": "codex",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.codex": {
     "owner": "codex",
@@ -5172,7 +5274,13 @@ const configSchema = {
     "owner": "cursor",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.cursor": {
+    "owner": "cursor",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the cursor reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "workflow.drift_threshold": {
     "owner": "drift",
@@ -5279,7 +5387,13 @@ const configSchema = {
     "owner": "kimi-code",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.kimi-code": {
+    "owner": "kimi-code",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.kimi-code": {
     "owner": "kimi-code",
@@ -5309,7 +5423,13 @@ const configSchema = {
     "owner": "llama-cpp",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the llama.cpp reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.llama_cpp": {
+    "owner": "llama-cpp",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the llama_cpp reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.llama_cpp": {
     "owner": "llama-cpp",
@@ -5333,7 +5453,13 @@ const configSchema = {
     "owner": "lm-studio",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the LM Studio reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.lm_studio": {
+    "owner": "lm-studio",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the lm_studio reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.lm_studio": {
     "owner": "lm-studio",
@@ -5428,7 +5554,13 @@ const configSchema = {
     "owner": "ollama",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Ollama reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.ollama": {
+    "owner": "ollama",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the ollama reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.ollama": {
     "owner": "ollama",
@@ -5446,7 +5578,13 @@ const configSchema = {
     "owner": "opencode",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.opencode": {
+    "owner": "opencode",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the opencode reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
   },
   "review.timeouts.opencode": {
     "owner": "opencode",
@@ -5476,7 +5614,13 @@ const configSchema = {
     "owner": "qwen",
     "type": "number",
     "default": -1,
-    "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+    "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+  },
+  "review.context_window_tokens.qwen": {
+    "owner": "qwen",
+    "type": "number",
+    "default": -1,
+    "description": "Context window in tokens used to derive the default prompt cap for the qwen reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 131072 tokens; 0 disables the derived cap; a positive number overrides the window."
   },
   "refactor.trigger_enabled": {
     "owner": "refactor-trigger",
@@ -5575,7 +5719,7 @@ const runtimes = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — config/settings home nested under ~/.gemini/antigravity (probed across 1.x and 2.x layouts); global skills/agents install under ~/.gemini/config, the dir AGY scans for global discovery (#3738); Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -5717,6 +5861,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.antigravity",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.antigravity",
       "modelConfigKey": "review.models.agy",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -5731,7 +5877,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.antigravity": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+        "description": "Prompt-token budget for the Antigravity reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\". Keyed on the reviewer slug `antigravity`, not the `agy` binary alias used by review.models.agy."
+      },
+      "review.context_window_tokens.antigravity": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the antigravity reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.antigravity": {
         "type": "number",
@@ -5743,7 +5894,7 @@ const runtimes = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -5861,7 +6012,7 @@ const runtimes = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -5977,6 +6128,7 @@ const runtimes = {
         "hyphenNameAgentBody": true,
         "skipCompactAgents": true,
         "omitBashRunnerOnWindows": true,
+        "powershellHooksOnWindows": true,
         "specRootSkillPass": true,
         "restoreAtRefTildeInAgents": true,
         "restoreAtRefTildeInSpecTree": true,
@@ -6018,6 +6170,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.claude",
+      "contextWindowTokens": 200000,
+      "contextWindowConfigKey": "review.context_window_tokens.claude",
       "modelConfigKey": "review.models.claude",
       "effortConfigKey": "review.effort.claude",
       "defaultEffort": "high",
@@ -6032,7 +6186,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.claude": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Claude reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.claude": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the claude reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 200000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.claude": {
         "type": "number",
@@ -6049,7 +6208,7 @@ const runtimes = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -6143,7 +6302,7 @@ const runtimes = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -6265,7 +6424,7 @@ const runtimes = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -6421,6 +6580,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.codex",
+      "contextWindowTokens": 272000,
+      "contextWindowConfigKey": "review.context_window_tokens.codex",
       "modelConfigKey": "review.models.codex",
       "effortConfigKey": "review.effort.codex",
       "defaultEffort": "high",
@@ -6435,7 +6596,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.codex": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Codex reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.codex": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the codex reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 272000 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.codex": {
         "type": "number",
@@ -6452,7 +6618,7 @@ const runtimes = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -6554,7 +6720,7 @@ const runtimes = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Cursor",
     "description": "Cursor IDE — skills-only workflow surface; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -6703,6 +6869,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.cursor",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.cursor",
       "modelConfigKey": "review.models.cursor",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -6717,14 +6885,19 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.cursor": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Cursor reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.cursor": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the cursor reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -6843,7 +7016,7 @@ const runtimes = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -6977,7 +7150,7 @@ const runtimes = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; native config.toml [[hooks]] bus at ~/.kimi/config.toml; background dispatch; tier-2 support.",
     "tier": "core",
@@ -7087,7 +7260,7 @@ const runtimes = {
   "kimi-code": {
     "id": "kimi-code",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Kimi Code CLI",
     "description": "Kimi Code CLI (Moonshot AI, Node) — Agent Skills auto-discovered at ~/.kimi-code/skills; global AGENTS.md at ~/.kimi-code/AGENTS.md; native config.toml + [[hooks]] bus; three built-in subagents (coder/explore/plan), NO custom named subagents; background dispatch; tier-2 support. Distinct from Python kimi-cli (the 'kimi' capability) per ADR-1239 EoS — Kimi Code cannot dispatch named subagents so the kimi-agents YAML layout does NOT apply; persona injection rides the existing ${AGENT_SKILLS_*} workflow fallback. Install-layout, agent-install-check, and install-time decision (kimi vs kimi-code) land in follow-up PRs; this descriptor is the EoS foundation.",
     "tier": "core",
@@ -7232,6 +7405,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.kimi-code",
+      "contextWindowTokens": 262144,
+      "contextWindowConfigKey": "review.context_window_tokens.kimi-code",
       "modelConfigKey": "review.models.kimi-code",
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -7246,7 +7421,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.kimi-code": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Kimi Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.kimi-code": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the kimi-code reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 262144 tokens; 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.kimi-code": {
         "type": "number",
@@ -7258,7 +7438,7 @@ const runtimes = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat commands/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -7431,6 +7611,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.opencode",
+      "contextWindowTokens": null,
+      "contextWindowConfigKey": "review.context_window_tokens.opencode",
       "modelConfigKey": "review.models.opencode",
       "effortConfigKey": "review.effort.opencode",
       "defaultEffort": "high",
@@ -7445,7 +7627,12 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.opencode": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the OpenCode reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.opencode": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the opencode reviewer lane at 65% of the window. Unset is -1: use none (no declared window, so no derived cap); 0 disables the derived cap; a positive number overrides the window."
       },
       "review.timeouts.opencode": {
         "type": "number",
@@ -7462,7 +7649,7 @@ const runtimes = {
   "pi": {
     "id": "pi",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "pi",
     "description": "pi (pi.dev) — node-runtime programmatic-CLI (managed pi 1.3.0 install); TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
@@ -7573,7 +7760,7 @@ const runtimes = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -7711,6 +7898,8 @@ const runtimes = {
       "evidenceClass": "source-grounded",
       "requiresBinaries": [],
       "promptBudgetKey": "review.max_prompt_tokens_per_reviewer.qwen",
+      "contextWindowTokens": 131072,
+      "contextWindowConfigKey": "review.context_window_tokens.qwen",
       "modelConfigKey": null,
       "effortConfigKey": null,
       "defaultEffort": null,
@@ -7720,14 +7909,19 @@ const runtimes = {
       "review.max_prompt_tokens_per_reviewer.qwen": {
         "type": "number",
         "default": -1,
-        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel: 0 is a legitimate value meaning \"do not trim this lane\", so it cannot double as \"not configured\"."
+        "description": "Prompt-token budget for the Qwen Code reviewer lane. Unset is -1, a sentinel that inherits the global cap and then the lane's context-window default; 0 is a legitimate value meaning \"no prompt cap for this lane\", so it cannot double as \"not configured\"."
+      },
+      "review.context_window_tokens.qwen": {
+        "type": "number",
+        "default": -1,
+        "description": "Context window in tokens used to derive the default prompt cap for the qwen reviewer lane at 65% of the window. Unset is -1: use the lane's declared window of 131072 tokens; 0 disables the derived cap; a positive number overrides the window."
       }
     }
   },
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -7826,7 +8020,7 @@ const runtimes = {
   "vscode": {
     "id": "vscode",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "VS Code",
     "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
     "tier": "core",
@@ -7884,7 +8078,7 @@ const runtimes = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; Cascade native hooks.json blocking hook bus (pre_write_code, pre_run_command); tier-2 support.",
     "tier": "core",
@@ -7977,7 +8171,7 @@ const runtimes = {
   "zcode": {
     "id": "zcode",
     "role": "runtime",
-    "version": "1.19.0",
+    "version": "1.20.1",
     "title": "ZCode",
     "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
     "tier": "core",

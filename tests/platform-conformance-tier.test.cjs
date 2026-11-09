@@ -30,6 +30,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const {
   classifyContent,
+  classifyUnstrippedContent,
   classifyTree,
   NOISY_FOR_SOURCE_REACHABILITY,
   classifyMacosContent,
@@ -434,14 +435,29 @@ describe('classifyMacosContent — happy-path signals', () => {
   });
 
   test('flags case-sensitivity phrasing', () => {
+    // #6002: the phrasing must appear in CODE (identifier or string literal);
+    // the same words inside a comment are prose, not behavior, and are pinned
+    // as non-signals by the sibling test below.
     for (const fixture of [
-      '// verify the case-insensitive lookup',
-      '// verify the case-sensitive lookup',
-      '// verify case insensitivity',
+      'assert.ok(isCaseInsensitiveFs());',
+      "test('verify the case-sensitive lookup', () => {});",
+      'const caseInsensitivity = probeFs();',
     ]) {
       const { needsRealOs, signals } = classifyMacosContent(fixture);
       assert.equal(needsRealOs, true, fixture);
       assert.ok(signals.includes('case-sensitivity'), fixture);
+    }
+  });
+
+  test('does not flag case-sensitivity phrasing that appears only in a comment (#6002)', () => {
+    for (const fixture of [
+      '// verify the case-insensitive lookup',
+      '// verify the case-sensitive lookup',
+      '/* verify case insensitivity */',
+    ]) {
+      const { needsRealOs, signals } = classifyMacosContent(fixture);
+      assert.equal(needsRealOs, false, fixture);
+      assert.ok(!signals.includes('case-sensitivity'), fixture);
     }
   });
 
@@ -715,7 +731,7 @@ describe('conformance tier narrowing (#4641)', () => {
   test('macOS signal set is untouched by the Windows narrowing (#4641)', () => {
     assert.deepEqual(
       MACOS_CATEGORIES.map((c) => c.name),
-      ['darwin-literal', 'zsh-dispatch', 'case-sensitivity', 'chmod-mode-bit', 'symlink-keyword'],
+      ['darwin-literal', 'zsh-dispatch', 'case-sensitivity', 'chmod-mode-bit', 'symlink-keyword', 'realpath'],
     );
   });
 
@@ -1155,5 +1171,179 @@ describe('#5074 platform split — .platform sibling rule', () => {
     } finally {
       cleanup(tmpDir);
     }
+  });
+});
+
+// ─── #6002: detectors match platform behavior, not text ──────────────────────
+
+describe('#6002: detectors match platform behavior, not text', () => {
+  const fc = require('fast-check');
+
+  // Comments and node-only children carry no real-OS signal.
+  test('node-only child via process.execPath is not a real-OS signal (#6002)', () => {
+    const src =
+      "const {execFileSync}=require('child_process');execFileSync(process.execPath,['x'])";
+    assert.equal(classifyContent(src).needsRealOs, false);
+  });
+
+  test('node-only child via literal "node" is not a real-OS signal (#6002)', () => {
+    const src = "const {spawnSync}=require('child_process');spawnSync('node',['x'])";
+    assert.equal(classifyContent(src).needsRealOs, false);
+  });
+
+  test('a line comment naming a shell spawn is not a signal (#6002)', () => {
+    assert.equal(classifyContent("// require('child_process'); spawnSync('bash')").needsRealOs, false);
+  });
+
+  test('a block comment naming process.platform is not a signal (#6002)', () => {
+    assert.equal(classifyContent('/* process.platform */').needsRealOs, false);
+  });
+
+  // Real shell spawns, non-node children and string-literal platform checks stay flagged.
+  test('a real shell spawn stays flagged as raw-child-process (#6002)', () => {
+    const { needsRealOs, signals } = classifyContent(
+      "const { spawnSync, execFileSync } = require('child_process');\nspawnSync('bash',['-c',s])",
+    );
+    assert.equal(needsRealOs, true);
+    assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
+  });
+
+  test('a non-node child process stays flagged as raw-child-process (#6002)', () => {
+    const { needsRealOs, signals } = classifyContent(
+      "const { spawnSync, execFileSync } = require('child_process');\nexecFileSync('git',['status'])",
+    );
+    assert.equal(needsRealOs, true);
+    assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
+  });
+
+  test('a string-literal platform check stays flagged (#6002)', () => {
+    assert.equal(classifyContent("if (process.platform === 'win32') {}").needsRealOs, true);
+  });
+
+  // `//` inside a string is not a comment start.
+  test('a URL inside a string does not start a comment that swallows the spawn (#6002)', () => {
+    const { needsRealOs, signals } = classifyContent(
+      "const { spawnSync, execFileSync } = require('child_process');\nconst u = 'http://example.test'; spawnSync('bash', [])",
+    );
+    assert.equal(needsRealOs, true);
+    assert.ok(signals.includes('raw-child-process'), `signals: ${signals.join(',')}`);
+  });
+
+  // Regex literals must not corrupt string/comment tracking.
+  test('a regex literal containing // does not hide a later platform check (#6002)', () => {
+    const src = "const r=/https?:\\/\\//; if (process.platform==='win32'){}";
+    assert.ok(classifyContent(src).signals.includes('process-platform'));
+  });
+
+  test('a regex literal containing a quote does not hide a later spawn (#6002)', () => {
+    const src =
+      "const cp=require('child_process');\n/'/.test(x); const y='a // b'; execFileSync('git',[])";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  // Async spawn forms, fork, shell:true, aliased usage.
+  test("async spawn('git') is flagged (#6002)", () => {
+    assert.ok(classifyContent("require('child_process');spawn('git',[])").signals.includes('raw-child-process'));
+  });
+
+  test("exec of a cmd /c string is flagged (#6002)", () => {
+    assert.ok(classifyContent("require('child_process');const c='cmd /c x';exec(c)").signals.includes('raw-child-process'));
+  });
+
+  test("fork('./w.js') runs node and is node-only: not flagged (#6002)", () => {
+    assert.equal(classifyContent("require('child_process');fork('./w.js')").needsRealOs, false);
+  });
+
+  test('shell:true on a node child is flagged (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x'],{shell:true})";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('aliased child_process usage with unidentifiable call sites is flagged (#6002)', () => {
+    assert.ok(classifyContent("const cp=require('child_process');cp.run(x)").signals.includes('raw-child-process'));
+  });
+
+  test('a node-only child in a file exercising lock/rename/EBUSY is flagged fs-lock-or-install-child (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x']);fs.renameSync(a,b)";
+    const { signals } = classifyContent(src);
+    assert.ok(signals.includes('fs-lock-or-install-child'), signals.join(','));
+    assert.ok(!signals.includes('raw-child-process'));
+  });
+
+  test('a node-only child with the word lock only in prose is not fs-lock-or-install-child (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x']); const msg = 'unlock the lock screen';";
+    assert.ok(!classifyContent(src).signals.includes('fs-lock-or-install-child'));
+  });
+
+  test('classifyUnstrippedContent keeps pre-#6002 behavior (comments and bare require count) (#6002)', () => {
+    assert.ok(classifyUnstrippedContent("// process.platform").signals.includes('process-platform'));
+    assert.ok(classifyUnstrippedContent("require('child_process')").signals.includes('raw-child-process'));
+  });
+
+  test('member cp.spawn(non-node) is flagged even after a node-only spawnSync (#6002)', () => {
+    const src = "const cp=require('child_process');spawnSync(process.execPath,[]);cp.spawn('bash')";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('promisify(cp.execFile) is an unidentifiable counted call site (#6002)', () => {
+    const src =
+      "const cp=require('child_process');const ex = promisify(cp.execFile); ex('git'); spawnSync('node',[])";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('regex .exec( receivers are not spawn call sites (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,[]);const m = nameRe.exec(s); /x/g.exec(s);";
+    assert.ok(!classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('member cp.spawn(process.execPath) is node-only (#6002)', () => {
+    const src = "const cp=require('child_process');cp.spawn(process.execPath,['x'])";
+    assert.equal(classifyContent(src).needsRealOs, false);
+  });
+
+  test('shell : true with whitespace before the colon is flagged (#6002)', () => {
+    const src = "require('child_process');spawnSync(process.execPath,['x'],{shell : true})";
+    assert.ok(classifyContent(src).signals.includes('raw-child-process'));
+  });
+
+  test('a nested template containing // inside ${} does not start a comment (#6002)', () => {
+    const src = 'const a = `x ${ `http://y` } z`; if (process.platform === "win32") {}';
+    assert.ok(classifyContent(src).signals.includes('process-platform'));
+  });
+
+  test('realpath in code is a macOS signal; in a comment it is not (#6002)', () => {
+    assert.ok(classifyMacosContent('fs.realpathSync(os.tmpdir())').signals.includes('realpath'));
+    assert.equal(classifyMacosContent('// realpathSync on the tmpdir').needsRealOs, false);
+  });
+
+  // Property: comments never add or remove signals.
+  test('property: comment-only content has no signals (#6002)', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('process.platform', 'win32', 'chmod(', 'symlink', "spawnSync('bash'"),
+        fc.string(),
+        (token, s) => {
+          const line = '// ' + token + s.replace(/[\r\n]/g, '');
+          assert.deepEqual(classifyContent(line).signals, []);
+        },
+      ),
+    );
+  });
+
+  test('property: appending a comment never removes a real signal (#6002)', () => {
+    const prefix = "const { spawnSync, execFileSync } = require('child_process');\n";
+    const snippets = [
+      prefix + "spawnSync('bash',['-c',s])",
+      prefix + "execFileSync('git',['status'])",
+      "if (process.platform === 'win32') {}",
+    ];
+    fc.assert(
+      fc.property(fc.constantFrom(...snippets), fc.string(), (c, s) => {
+        const comment = s.replace(/[\r\n]/g, ' ');
+        const before = classifyContent(c).signals;
+        const after = classifyContent(c + '\n// ' + comment).signals;
+        for (const sig of before) assert.ok(after.includes(sig), `lost ${sig}`);
+      }),
+    );
   });
 });

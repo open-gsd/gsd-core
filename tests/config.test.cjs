@@ -1190,8 +1190,11 @@ describe('config-new-project — refuses what config-set refuses (#5268)', () =>
       else process.env.GSD_HOME = savedGsdHome;
     });
     // In-process, so the fault lands on the config write itself and on nothing before it.
+    // platformWriteSync publishes through an exclusively created temp file and writes its
+    // DESCRIPTOR (#5759), so the injected fault matches descriptor writes as well as path writes;
+    // a path-only matcher never fires and the creation succeeds.
     const configPath = path.join(dir, '.planning', 'config.json');
-    t.after(mockPartialWriteThenThrow(fs, (target) => String(target).startsWith(configPath), 0));
+    t.after(mockPartialWriteThenThrow(fs, (target) => typeof target === 'number' || String(target).startsWith(configPath), 0));
 
     const result = await runQuietly(() => configLib.cmdConfigNewProject(dir, JSON.stringify({ mode: 'yolo' }), false));
 
@@ -4046,5 +4049,84 @@ describe('config-new-project: choices are held to config-set leaf by leaf (#5268
       ),
       { numRuns: 100 },
     );
+  });
+});
+
+// ─── config-set hooks.secret_read_exempt (#4432) ────────────────────────────
+//
+// Matrix rows covered (50-test-matrix.md, suite C): 26 39 40.
+// The hook (hooks/lib/secret-read-exemptions.js) cannot require src/, so
+// config-set re-implements the entry rules; parity with the hook is asserted
+// in tests/secret-read-exemptions.test.cjs (suite P).
+
+describe('config-set hooks.secret_read_exempt (#4432)', () => {
+  const KEY = 'hooks.secret_read_exempt';
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    seedProjectConfig(tmpDir);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const setList = (value) => runGsdTools(['config-set', KEY, typeof value === 'string' ? value : JSON.stringify(value)], tmpDir);
+
+  // Row 39.
+  test('stores a valid list as an array', () => {
+    const result = setList(['.env.production']);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepEqual(readConfig(tmpDir).hooks.secret_read_exempt, ['.env.production']);
+  });
+
+  test('stores several entries in order', () => {
+    const result = setList(['.env.production', 'apps/api/.secrets']);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.deepEqual(readConfig(tmpDir).hooks.secret_read_exempt, ['.env.production', 'apps/api/.secrets']);
+  });
+
+  // Row 40.
+  const REFUSED_VALUES = [
+    ['a bare string', '.env.production'],
+    ['a JSON string', '".env.production"'],
+    ['a JSON object', '{"a":".env.production"}'],
+    ['a number', '7'],
+    ['a boolean', 'true'],
+    ['a list holding a number', '[1]'],
+    ['a list holding null', '[null]'],
+    ['a list holding an object', '[{}]'],
+    ['a valid entry followed by a bad one', '[".env.production","../x"]'],
+  ];
+  for (const [label, text] of REFUSED_VALUES) {
+    test(`refuses ${label} and leaves the config unchanged`, () => {
+      const snapshot = fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8');
+      const result = setList(text);
+      assert.strictEqual(result.success, false, `config-set must refuse ${text}`);
+      assert.notStrictEqual(result.exitCode, 0);
+      assert.strictEqual(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8'), snapshot);
+    });
+  }
+
+  // Row 26: every entry the hook drops is refused here.
+  const BAD_ENTRIES = [
+    '/etc/x/.env', '../.env', 'a/../.env', 'C:\\x\\.env', 'c:x', '\\\\h\\s\\.env', '//h', '', './', 'a/', '.', 'a\u0000b',
+  ];
+  for (const entry of BAD_ENTRIES) {
+    test(`refuses the entry ${JSON.stringify(entry)} and leaves the config unchanged`, () => {
+      const snapshot = fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8');
+      const result = setList([entry]);
+      assert.strictEqual(result.success, false, `config-set must refuse [${JSON.stringify(entry)}]`);
+      assert.notStrictEqual(result.exitCode, 0);
+      assert.strictEqual(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8'), snapshot);
+    });
+  }
+
+  test('accepts the entries the hook normalizes rather than drops', () => {
+    for (const entry of ['./.env.production', '.\\.env.production']) {
+      const result = setList([entry]);
+      assert.ok(result.success, `config-set must accept ${JSON.stringify(entry)}: ${result.error}`);
+    }
   });
 });

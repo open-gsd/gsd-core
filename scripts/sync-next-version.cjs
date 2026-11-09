@@ -30,6 +30,15 @@ function isReleaseVersion(v) {
   return typeof v === 'string' && RELEASE_VERSION.test(v);
 }
 
+// The branch syncViaPr opens. scripts/release-pipeline-pr.cjs exempts exactly
+// this shape from the issue-link and PR-title gates (#5890).
+const SYNC_BRANCH_PREFIX = 'chore/sync-next-version-';
+
+/** The head branch of the sync PR for `version`. */
+function syncBranchName(version) {
+  return `${SYNC_BRANCH_PREFIX}${version}`;
+}
+
 /** Read the `version` field out of a package.json text blob. Throws on a missing/non-string version. */
 function versionFromPackageJson(text) {
   const parsed = JSON.parse(text);
@@ -76,7 +85,7 @@ function syncViaPr(version, { run = defaultRun } = {}) {
     process.stdout.write(`next already at ${version} — nothing to sync\n`);
     return 'noop';
   }
-  const branch = `chore/sync-next-version-${version}`;
+  const branch = syncBranchName(version);
   run('git', ['checkout', '-B', branch, 'origin/next'], { timeout: 15000 });
   applyVersion(version, { run });
   run('git', ['add', '-u'], { timeout: 15000 });
@@ -162,4 +171,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main, defaultRun };
+module.exports = { isReleaseVersion, versionFromPackageJson, applyVersion, syncViaPr, main, defaultRun, SYNC_BRANCH_PREFIX, syncBranchName };

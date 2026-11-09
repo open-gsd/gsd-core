@@ -1488,6 +1488,57 @@ describe('phaseKeyFrom* — one key space for directories and prose', () => {
     assert.strictEqual(phaseId.phaseKeyFromProse(undefined), null);
   });
 
+  // #5675: under `milestone-prefixed` the phase id is the whole `M-NN`. Read without the
+  // convention, `3-01` and `3-02` both keyed as `03`, so every phase of a milestone collapsed
+  // onto one key while their directories keyed `03-01` / `03-02`.
+  test('#5675: under milestone-prefixed a prose M-NN key equals its directory key and is distinct per phase', () => {
+    const MP = 'milestone-prefixed';
+    const first = phaseId.phaseKeyFromProse('3-01. Create layer', undefined, MP);
+    const second = phaseId.phaseKeyFromProse('3-02. Validator', undefined, MP);
+    assert.strictEqual(first, phaseId.phaseKeyFromDir('3-01-create-layer', MP));
+    assert.strictEqual(second, phaseId.phaseKeyFromDir('3-02-validator', MP));
+    assert.strictEqual(first, '03-01');
+    assert.strictEqual(second, '03-02');
+    assert.notStrictEqual(first, second);
+    // The STATE.md writer shapes and decorated table cells read the same phase.
+    for (const prose of [
+      '3-02 — Validator (aside)',
+      '3-02 (Validator) — EXECUTING',
+      '**3-02. Validator**',
+      'Phase 3-02: Validator',
+      '03-02. Validator',
+    ]) {
+      assert.strictEqual(phaseId.phaseKeyFromProse(prose, undefined, MP), '03-02', prose);
+    }
+  });
+
+  test('#5675: the M-NN segment boundary (bare milestone, one segment, a sub-phase of it)', () => {
+    const MP = 'milestone-prefixed';
+    assert.strictEqual(phaseId.phaseKeyFromProse('3-01-02. X', undefined, MP), '03-01'); // one -NN only
+    const cases = [
+      ['3. Bare', '3-bare', '03'],
+      ['3-01. One', '3-01-one', '03-01'],
+      ['3-01.1 Sub', '3-01.1-sub', '03-01.1'],
+    ];
+    for (const w of ['3-1. W', '3-01. W', '3-001. W']) assert.strictEqual(phaseId.phaseKeyFromProse(w, undefined, MP), '03-01', w);
+    for (const [prose, dir, key] of cases) {
+      assert.strictEqual(phaseId.phaseKeyFromProse(prose, undefined, MP), key, prose);
+      assert.strictEqual(phaseId.phaseKeyFromDir(dir, MP), key, dir);
+    }
+    assert.strictEqual(phaseId.phaseKeyFromProse('Not a phase', undefined, MP), null);
+    assert.strictEqual(phaseId.phaseKeyFromProse(null, undefined, MP), null);
+    assert.strictEqual(phaseId.phaseKeyFromProse(undefined, undefined, MP), null);
+  });
+
+  test('#5675: every other convention keeps the leading-integer prose key', () => {
+    for (const convention of [undefined, null, '', 'bracket', 'legacy']) {
+      assert.strictEqual(phaseId.phaseKeyFromProse('3-01. Create layer', undefined, convention), '03', String(convention));
+      assert.strictEqual(phaseId.phaseKeyFromProse('3-02. Validator', undefined, convention), '03', String(convention));
+    }
+    // The two-argument caller shape is untouched.
+    assert.strictEqual(phaseId.phaseKeyFromProse('3-01. Create layer'), '03');
+  });
+
   test('parentPhaseKey resolves a sub-phase to its parent and a top-level to null', () => {
     assert.strictEqual(phaseId.parentPhaseKey('30.1'), '30');
     assert.strictEqual(phaseId.parentPhaseKey('05.12'), '05');
@@ -1741,5 +1792,111 @@ describe('bracket phase declarations agree across heading and bullet spellings (
   test('a ## milestone heading with a dash is a milestone, not a phase', () => {
     assert.deepStrictEqual(declared('## [CK.02] 2 - Foundation'), []);
     assert.deepStrictEqual(declared('## [CK.02] 2 — Foundation'), []);
+  });
+});
+
+describe('#5676: phaseScanTokenSource under milestone-prefixed', () => {
+  const ctx = phaseId.phaseDirectoryContext({});
+  const split = (source, name) => {
+    const m = new RegExp('^(' + source + ')-?(.*)', 'i').exec(name);
+    return m ? [m[1], m[2]] : null;
+  };
+
+  test('reads the M-NN token whole from a directory-style name', () => {
+    const source = phaseId.phaseScanTokenSource(ctx, 'milestone-prefixed');
+    assert.deepStrictEqual(split(source, '03-02-beta'), ['03-02', 'beta']);
+    assert.deepStrictEqual(split(source, '3-01-alpha'), ['3-01', 'alpha']);
+    assert.deepStrictEqual(split(source, '03-02.1-fix'), ['03-02.1', 'fix']);
+    assert.deepStrictEqual(split(source, '03-beta'), ['03', 'beta']);
+  });
+
+  for (const convention of [undefined, null, '', 'bracket', 'sequential']) {
+    test(`convention ${JSON.stringify(convention)} keeps the dotted-only token source`, () => {
+      const source = phaseId.phaseScanTokenSource(ctx, convention);
+      assert.strictEqual(source, phaseId.phaseScanTokenSource(ctx));
+      assert.deepStrictEqual(split(source, '03-02-beta'), ['03', '02-beta']);
+    });
+  }
+
+  test('token source capture agrees with parsePhaseFromProse', () => {
+    const source = phaseId.phaseScanTokenSource(ctx, 'milestone-prefixed');
+    for (const id of ['3-01', '03-02', '3-02A', '3-02.1', '12-10']) {
+      const m = new RegExp('^(' + source + ')\\b', 'i').exec(id);
+      assert.ok(m, `token source reads ${id}`);
+      assert.strictEqual(m[1], phaseId.parsePhaseFromProse(id, 'milestone-prefixed').phase, id);
+    }
+  });
+});
+
+describe('#5676: parsePhaseChecklistLine under milestone-prefixed', () => {
+  const ctx = phaseId.phaseDirectoryContext({});
+
+  test('reads a checked M-NN row, with and without a directory context', () => {
+    for (const context of [undefined, ctx]) {
+      const row = phaseId.parsePhaseChecklistLine('- [x] **Phase 3-01: Alpha**', 'milestone-prefixed', context);
+      assert.ok(row, `row parsed (context ${context ? 'given' : 'absent'})`);
+      assert.strictEqual(row.phaseToken, '3-01');
+      assert.strictEqual(row.checked, true);
+    }
+  });
+
+  test('reads an unchecked M-NN row', () => {
+    const row = phaseId.parsePhaseChecklistLine('- [ ] **Phase 3-02: Beta**', 'milestone-prefixed', ctx);
+    assert.ok(row);
+    assert.strictEqual(row.phaseToken, '3-02');
+    assert.strictEqual(row.checked, false);
+  });
+
+  for (const convention of [undefined, null, 'sequential']) {
+    test(`convention ${JSON.stringify(convention)} keeps reading a dotted row unchanged`, () => {
+      const row = phaseId.parsePhaseChecklistLine('- [x] **Phase 3: Alpha**', convention, ctx);
+      assert.deepStrictEqual(row, { checked: true, bracketId: undefined, phaseToken: '3' });
+    });
+  }
+});
+
+describe('#5676: buildPhaseHeadingScanRegex under milestone-prefixed', () => {
+  const ctx = phaseId.phaseDirectoryContext({});
+  const tokens = (text, convention, context) => {
+    const scan = phaseId.buildPhaseHeadingScanRegex(phaseId.PHASE_HEADING_BASELINE.ANY_BRACKET, convention, context);
+    return [...text.matchAll(scan.regex)].map((m) => [m[scan.phaseNumGroup], m[scan.phaseNameGroup].trim()]);
+  };
+
+  test('yields the M-NN headings in order, with and without a directory context', () => {
+    const text = '### Phase 3-01: Alpha\n### Phase 3-02: Beta';
+    for (const context of [undefined, ctx]) {
+      assert.deepStrictEqual(tokens(text, 'milestone-prefixed', context), [['3-01', 'Alpha'], ['3-02', 'Beta']]);
+    }
+  });
+
+  test('legacy convention reads dotted headings unchanged', () => {
+    assert.deepStrictEqual(tokens('### Phase 1: Alpha\n### Phase 2.1: Beta', undefined, ctx), [['1', 'Alpha'], ['2.1', 'Beta']]);
+  });
+});
+
+describe('#5676: declaration scans and dependency tokens under milestone-prefixed', () => {
+  const bulletNums = (text, convention) => {
+    const found = [];
+    for (const scan of phaseId.buildPhaseDeclarationScans(convention, true)) {
+      for (const m of text.matchAll(scan.regex)) found.push(m[scan.numGroup]);
+    }
+    return found;
+  };
+  const depTokens = (prose, convention) => phaseId.tokenizePhaseDependencyReferences(prose, convention).map((t) => t.token);
+
+  test('checklist bullets keep the M-NN id whole', () => {
+    const text = '- [ ] Phase 3-02: Beta\n- [ ] Phase 3-03: Gamma\n- [ ] Phase 3-03.1: Gamma fix';
+    assert.deepStrictEqual(bulletNums(text, 'milestone-prefixed'), ['3-02', '3-03', '3-03.1']);
+  });
+
+  test('legacy checklist bullet is unchanged', () => {
+    assert.deepStrictEqual(bulletNums('- [ ] Phase 2: X', undefined), ['2']);
+    assert.deepStrictEqual(bulletNums('- [ ] Phase 2: X', 'milestone-prefixed'), ['2']);
+  });
+
+  test('legacy dependency prose keeps range endpoints', () => {
+    assert.deepStrictEqual(depTokens('Phase 1-3', undefined), ['1', '3']);
+    assert.deepStrictEqual(depTokens('Phases 1 and 2', undefined), ['1', '2']);
+    assert.deepStrictEqual(depTokens('Phase 1-3', 'sequential'), ['1', '3']);
   });
 });

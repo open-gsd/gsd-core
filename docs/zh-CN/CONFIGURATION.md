@@ -684,15 +684,16 @@ GSD 里程碑版本指的是 `.planning/` 中的计划工作；它可以与任�
 | `review.models.lm_studio` | string | （服务器默认） | 调用 `--lm-studio` 审查器时传递给 LM Studio 的模型名称。未设置时使用服务器报告的第一个可用模型。 |
 | `review.models.llama_cpp` | string | （服务器默认） | 调用 `--llama-cpp` 审查器时传递给 llama.cpp 的模型名称。未设置时使用 `/v1/models` 报告的第一个模型。 |
 | `review.default_reviewers` | string[] \| null | （所有已检测审查器） | 无标志 `/gsd-review` 的默认审查器子集。示例：`["codex","claude"]`。显式标志和 `--all` 覆盖此设置。 |
-| `review.max_prompt_tokens` | number\|null | null | 组装审查提示词的默认最大预估 token 数。设置后，在发送给每个审查器之前对提示词进行确定性裁剪。按审查器覆盖通过 `review.max_prompt_tokens_per_reviewer` 优先。null = 不裁剪（当前行为）。 |
-| `review.max_prompt_tokens_per_reviewer` | object | {} | 按审查器的 token 预算覆盖。键为审查器 slug（ollama、llama_cpp、lm_studio、claude、codex、opencode、qwen、cursor）。值覆盖该审查器的 `review.max_prompt_tokens`。推荐用于本地模型服务器。 |
+| `review.max_prompt_tokens` | number\|null | null | 所有未设置自身 `review.max_prompt_tokens_per_reviewer.<slug>` 的审查器通道的提示词上限（预估 token）。提示词超过上限的通道会被拒绝运行，而不是被裁剪。`0` 表示关闭上限（包括由上下文窗口推导的默认上限）。null = 无全局上限，回退到通道的上下文窗口默认值。 |
+| `review.max_prompt_tokens_per_reviewer` | object | {} | 按通道的提示词上限。键为审查器 slug（`claude`、`codex`、`coderabbit`、`opencode`、`qwen`、`cursor`、`antigravity`、`kimi-code`、`ollama`、`lm_studio`、`llama_cpp`）。`-1`（默认）表示未设置并继承 `review.max_prompt_tokens`；`0` 关闭该通道的上限；其他数值即该通道的上限。 |
+| `review.context_window_tokens` | object | {} | 按通道的上下文窗口（token），在两个上限键都不适用时用于推导默认上限（窗口的 65%）。`-1`（默认）使用通道声明的窗口：`claude` 200000、`codex` 272000、`qwen` 131072、`kimi-code` 262144；其他通道未声明窗口，除非在此设置否则不设上限。`0` 关闭该通道的推导默认值。 |
 | `review.ollama_host` | string | `http://localhost:11434` | Ollama 服务器的基础 URL。在非默认端口或远程主机上运行 Ollama 时覆盖：`gsd config-set review.ollama_host http://192.168.1.10:11434` |
 | `review.lm_studio_host` | string | `http://localhost:1234` | LM Studio 本地服务器的基础 URL。使用非默认端口时覆盖。 |
 | `review.llama_cpp_host` | string | `http://localhost:8080` | llama.cpp 服务器（`llama-server`）的基础 URL。使用非默认端口时覆盖。 |
 
 ### 小上下文审查器的提示词预算
 
-本地模型服务器（Ollama、llama.cpp、LM Studio）通常接受的 token 数远少于云 API。设置 `review.max_prompt_tokens_per_reviewer`（或全局 `review.max_prompt_tokens` 回退）会在将提示词发送给该审查器之前触发确定性裁剪：首先删除 CONTEXT，然后是 RESEARCH，然后是 REQUIREMENTS；PROJECT.md 头部收缩至前 40 行；PLAN 按比例尾部截断——指令和路线图始终保留。当审查器被裁剪时，在提示词顶部注入一条披露说明，并将裁剪元数据（预算、省略节、截断百分比）记录在 REVIEWS.md 前言的 `trimmed_reviewers` 下。如果即使是最小审查集（指令 + 路线图 + 计划存根）也超出预算，则跳过该审查器并发出警告，而非发送会产生误导性反馈的截断提示词。
+每个接收提示词的审查器通道都有提示词上限，按以下顺序解析：`review.max_prompt_tokens_per_reviewer.<slug>`（`-1` 未设置，`0` 无上限）→ `review.max_prompt_tokens`（`0` 无上限）→ `review.context_window_tokens.<slug>` 或通道声明窗口的 65%（默认 `claude` 130000、`codex` 176800、`qwen` 85196、`kimi-code` 170393）→ 无上限。提示词超过上限时，**该通道不运行**：返回原因 `prompt_exceeds_context`，写入以 `<slug> review did not run: prompt exceeds this lane's context cap` 开头的存根，并在 REVIEWS.md 前言的 `refused_reviewers` 下列出。提示词从不被裁剪。详见英文版 [CONFIGURATION.md](../CONFIGURATION.md#prompt-budgets-for-reviewer-lanes)。
 
 ### 示例
 
