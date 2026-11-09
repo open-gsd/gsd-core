@@ -11,7 +11,6 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS, RUN_TESTS_HARNESS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
@@ -53,8 +52,8 @@ function runGuarded(dir, script, extraEnv = {}) {
     home: dir,
     override: { ...extraEnv, GSD_STATE_WRITE_LEDGER: ledger, NODE_OPTIONS: nodeOptionsWithRequire(undefined, GUARD_PATH) },
   });
-  const r = spawnSync(process.execPath, [script], { cwd: dir, env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-  assert.equal(r.status, 0, `child failed: ${r.stderr}`);
+  const r = runNode([script], { cwd: dir, env, timeoutMs: PROBE_TIMEOUT_MS });
+  assert.equal(r.exitCode, 0, `child failed: ${r.stderr}`);
   return readStateWriteLedger(ledger).entries;
 }
 
@@ -261,7 +260,7 @@ process.stdout.write(String(fs.writeFileSync === before && !fs.writeFileSync.nam
     // isolatedEnv strips GSD_STATE_WRITE_LEDGER; the parent's NODE_OPTIONS (the runner's
     // shim, when this file runs under run-tests) is cleared so only the explicit require loads.
     const env = isolatedEnv({ home: dir, override: { NODE_OPTIONS: '' } });
-    const r = spawnSync(process.execPath, [main], { cwd: dir, env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    const r = runNode([main], { cwd: dir, env, timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.stdout, 'true', r.stderr);
   });
 });
@@ -286,7 +285,7 @@ describe('nodeOptionsWithRequire', () => {
     const preload = writeModule(odd, 'p.cjs', `process.env.RSWG_LOADED = 'yes';`);
     const main = writeModule(dir, 'main.cjs', `process.stdout.write(String(process.env.RSWG_LOADED));`);
     const env = isolatedEnv({ home: dir, override: { NODE_OPTIONS: nodeOptionsWithRequire(undefined, preload) } });
-    const r = spawnSync(process.execPath, [main], { env, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    const r = runNode([main], { env, timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.stdout, 'yes', r.stderr);
   });
 });
