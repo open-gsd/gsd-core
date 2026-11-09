@@ -471,6 +471,22 @@ const CASES_B2 = [
   {"id":"fm get field flag and positional","argv":["frontmatter","get","f.md","--field","title","status"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"status\""}},
   {"id":"re short flag","argv":["resolve-execution","gsd-executor","-x"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"Unknown flag for resolve-execution: -x"}},
   {"id":"re unknown long flag","argv":["resolve-execution","gsd-executor","--bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"Unknown flag for resolve-execution: --bogus"}},
+  {"id":"loop cap space blank passes untrimmed","argv":["loop","render-hooks","plan:pre","--active-cap","  "],"expect":{"exit":0,"reason":null,"shape":"scalar:boolean"}},
+  {"id":"loop fp space padded stays padded","argv":["loop","render-hooks","plan:pre","--after-fingerprint"," x "],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable:  x  ("}},
+  {"id":"loop fp eq padded is trimmed","argv":["loop","render-hooks","plan:pre","--after-fingerprint=  x "],"expect":{"exit":1,"reason":"unknown","shape":"empty","message":"unreadable: x ("}},
+  {"id":"cp class space leading equals is a value","argv":["context-predicates","--class","=A"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates","json":{"matched":0}}},
+  {"id":"cp class eq double equals","argv":["context-predicates","--class==A"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"context-predicates: --class requires a non-empty value"}},
+  {"id":"cp prefix eq double equals","argv":["context-predicates","--prefix==A"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"context-predicates: --prefix requires a non-empty value"}},
+  {"id":"cp class eq empty wording","argv":["context-predicates","--class="],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"context-predicates: --class requires a non-empty value"}},
+  {"id":"cp class absent wording","argv":["context-predicates","--class"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"context-predicates: --class requires a non-empty value"}},
+  {"id":"cp class eq blank wording","argv":["context-predicates","--class= "],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"context-predicates: --class requires a non-empty value"}},
+  {"id":"cp class space blank wording","argv":["context-predicates","--class","  "],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"context-predicates: --class requires a non-empty value"}},
+  {"id":"pb nothing reports budget first","argv":["prompt-budget"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --budget"}},
+  {"id":"pb only plan reports budget first","argv":["prompt-budget","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"p1.md":"plan one\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --budget"}},
+  {"id":"pb budget only reports instructions next","argv":["prompt-budget","--budget","10"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --instructions-file"}},
+  {"id":"pb budget instructions reports roadmap next","argv":["prompt-budget","--budget","10","--instructions-file","instr.md"],"files":{"instr.md":"instructions\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --roadmap-file"}},
+  {"id":"pb budget instructions roadmap reports plan next","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"missing required flag --plan-file"}},
+  {"id":"re dup effort first wins high then low","argv":["resolve-execution","gsd-executor","--effort","high","--effort","low"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile","json":{"effort":"high"}}},
 ];
 
 function runCommand(argv, cwd) {

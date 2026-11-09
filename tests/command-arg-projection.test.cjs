@@ -1093,5 +1093,47 @@ describe('#6087 list runs and value flags agree', () => {
       assert.deepStrictEqual(parseNamedArgs(['--c', '', '--c', 'a'], spec), { ok: true, data: { c: ['a'], b: false } });
       assert.deepStrictEqual(parseNamedArgs(['--c', 'a'], spec), { ok: true, data: { c: ['a'], b: false } });
     });
+
+    test('T-N7: trimEqFlags trims the = form only; a space-form value is as typed; blank = form is missing', () => {
+      const spec = { ...base, trimEqFlags: ['n'] };
+      assert.deepStrictEqual(parseNamedArgs(['--n=  v '], spec), { ok: true, data: { n: 'v' } });
+      assert.deepStrictEqual(parseNamedArgs(['--n', '  v '], spec), { ok: true, data: { n: '  v ' } });
+      assert.deepStrictEqual(parseNamedArgs(['--n', '  '], spec), { ok: true, data: { n: '  ' } });
+      missing(parseNamedArgs(['--n=  '], spec), 'n');
+      assert.deepStrictEqual(parseNamedArgs(['--n=  v ', '--n', 'w'], spec), { ok: true, data: { n: 'v' } });
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['n'], trimEqFlags: ['n'], positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes('trimEqFlags') && err.message.includes('eqFlags'),
+      );
+    });
+
+    test('T-N8: eqRejectPrefix refuses an = form value starting with the prefix; the space form is a value', () => {
+      const spec = { ...base, eqRejectPrefix: { n: '=' } };
+      missing(parseNamedArgs(['--n==A'], spec), 'n');
+      missing(parseNamedArgs(['--n=='], spec), 'n');
+      assert.deepStrictEqual(parseNamedArgs(['--n=A='], spec), { ok: true, data: { n: 'A=' } });
+      assert.deepStrictEqual(parseNamedArgs(['--n', '=A'], spec), { ok: true, data: { n: '=A' } });
+      assert.throws(
+        () => parseNamedArgs([], { valueFlags: ['n'], eqFlags: ['n'], eqRejectPrefix: { n: '=' }, positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes('eqRejectPrefix') && err.message.includes('nonEmptyFlags'),
+      );
+      assert.throws(
+        () => parseNamedArgs([], { ...base, eqRejectPrefix: { n: '' } }),
+        (err) => err instanceof TypeError && err.message.includes('eqRejectPrefix'),
+      );
+    });
+
+    test('T-N9: missingValueMessage words every missing form the same way, {flag} naming --flag', () => {
+      const spec = { ...base, eqRejectPrefix: { n: '=' }, missingValueMessage: 'verb: {flag} requires a non-empty value' };
+      for (const argv of [['--n'], ['--n='], ['--n=  '], ['--n==A'], ['--n', '--b']]) {
+        const result = parseNamedArgs(argv, { ...spec, booleanFlags: ['b'] });
+        assert.strictEqual(result.ok, false, JSON.stringify(argv));
+        assert.strictEqual(result.reason, 'verb: --n requires a non-empty value', JSON.stringify(argv));
+      }
+      assert.throws(
+        () => parseNamedArgs([], { ...base, missingValueMessage: 'no placeholder' }),
+        (err) => err instanceof TypeError && err.message.includes('missingValueMessage'),
+      );
+    });
   });
 });
