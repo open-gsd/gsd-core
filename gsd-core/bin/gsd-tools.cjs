@@ -1397,6 +1397,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     runtimeIdentity.cmdRuntimeIdentity(raw);
   }
 
+  function routeCodexModelChoices({ args, raw, error }) {
+    parseNamedArgsOrExit(args, { positionals: 1 }, error);
+    const { getCodexModelChoices } = require('./lib/model-catalog.cjs');
+    output({ choices: getCodexModelChoices() }, raw);
+  }
+
   function routeSkillsRoot({ args, raw, error }) {
     // #3024: resolve the global skills base directory for a runtime.
     // The sync-skills workflow previously shelled out to install.js --skills-root,
@@ -4985,6 +4991,7 @@ const HOST_COMMAND_ROUTERS = {
     'generate-slug': routeGenerateSlug,
     'current-timestamp': routeCurrentTimestamp,
     'runtime-identity': routeRuntimeIdentity,
+    'codex-model-choices': routeCodexModelChoices,
     'project-instruction-file': routeProjectInstructionFile,
     'list-todos': routeListTodos,
     'list-seeds': routeListSeeds,
@@ -5300,7 +5307,7 @@ function runWithTimeout(argv) {
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
   'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, ' +
-  'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
+  'codex-model-choices, config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
   'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
@@ -5339,6 +5346,8 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // It is probed from whatever cwd a workflow happens to be in — including
   // outside any project — so it must never require a resolvable project root.
   'runtime-identity',
+  // Static catalog metadata; no project or installation-path inference needed.
+  'codex-model-choices',
   // #2844: verify-summary was previously skipped, leaving relative file-claim
   // paths resolved against the raw process.cwd() — invoking from a subdirectory
   // manufactured "missing files" on an otherwise-correct SUMMARY. It now goes

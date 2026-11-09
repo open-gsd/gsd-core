@@ -810,6 +810,12 @@ Need a per-agent exception? Add `model_overrides` alongside — it wins over `mo
 
 For the full mapping table and resolution-precedence rules, see [Per-Phase-Type Models](CONFIGURATION.md#per-phase-type-models-models--added-in-v140).
 
+On Codex, `/gsd-config --advanced` Section 7 presents catalog candidates and asks you
+to confirm availability in `/model`. The menu uses the [choices query](COMMANDS.md#codex-model-choices)
+to support PATH-based installs and retains manual model-ID entry if no choices can
+be loaded. A tier override changes resolution; use `model_overrides` to pin installed
+agents, as explained in [Choosing or pinning a Codex model](how-to/configure-model-profiles.md#choosing-or-pinning-a-codex-model).
+
 ### Cheap-by-default with `dynamic_routing` — added in v1.40
 
 ```json

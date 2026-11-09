@@ -47,6 +47,13 @@ export interface AgentMeta {
   routingTier: string;
 }
 
+/** Static selector metadata; presence does not establish account availability. */
+export interface CodexModelChoice {
+  id: string;
+  name: string;
+  description: string;
+}
+
 /** The shape of model-catalog.json. */
 export interface ModelCatalog {
   profiles: string[];
@@ -56,6 +63,7 @@ export interface ModelCatalog {
   providerPresets: Record<string, Record<string, Record<string, TierEntry | null>>>;
   agents: Record<string, AgentMeta>;
   codexModelEffort?: Record<string, string[]>;
+  codexModelChoices?: CodexModelChoice[];
 }
 
 let catalog: ModelCatalog | null = null;
@@ -82,6 +90,11 @@ if (!catalog) {
 const _catalog = catalog;
 
 export { _catalog as catalog };
+
+/** Keep catalog paths inside this module and return caller-owned display data. */
+export function getCodexModelChoices(): CodexModelChoice[] {
+  return (_catalog.codexModelChoices ?? []).map((choice) => ({ ...choice }));
+}
 
 export const VALID_PROFILES: string[] = [..._catalog.profiles];
 export const VALID_PHASE_TYPES: Set<string> = new Set(_catalog.phaseTypes);

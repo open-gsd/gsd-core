@@ -1193,6 +1193,14 @@ continues. Drift detection cannot fail verification.
 
 **Purpose:** Interactive configuration of workflow toggles and model profile.
 
+**Codex model candidates:** `/gsd-config --advanced` Section 7 reads provider-native
+names and descriptions through `gsd_run query codex-model-choices`, owned by the Model
+Catalog Module. This works through the PATH launcher as well as path-based installs.
+Availability is confirmed by the user in Codex's `/model` selector. Query failure or
+an empty list retains Keep current, Clear override, and Enter model ID in a numbered
+prompt. Tier overrides affect resolution; installed-agent pins still require
+`model_overrides`, per ADR-2313. See [command reference](COMMANDS.md#codex-model-choices).
+
 **Requirements:**
 - REQ-SETTINGS-01: System MUST present current settings with toggle options
 - REQ-SETTINGS-02: System MUST update `.planning/config.json`

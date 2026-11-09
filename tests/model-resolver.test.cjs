@@ -5631,6 +5631,37 @@ describe('issue #2517: install end-to-end — per-project config reaches Codex T
     assert.doesNotMatch(toml, /^model_reasoning_effort = "xhigh"$/m);
   });
 
+  test('Codex tier overrides do not pin installed agents; model_overrides does (#2313)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_profile: 'quality',
+      model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } },
+    });
+    let resolver = readGsdRuntimeProfileResolver(tmpDir);
+    let toml = generateCodexAgentToml(
+      'gsd-planner',
+      '---\nname: gsd-planner\n---\nBody.\n',
+      null,
+      resolver
+    );
+    assert.doesNotMatch(toml, /^model = "gpt-6\.1-sol"$/m);
+
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_profile: 'quality',
+      model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } },
+      model_overrides: { 'gsd-planner': 'gpt-6.1-sol' },
+    });
+    resolver = readGsdRuntimeProfileResolver(tmpDir);
+    toml = generateCodexAgentToml(
+      'gsd-planner',
+      '---\nname: gsd-planner\n---\nBody.\n',
+      { 'gsd-planner': 'gpt-6.1-sol' },
+      resolver
+    );
+    assert.match(toml, /^model = "gpt-6\.1-sol"$/m);
+  });
+
   test('generated TOML always includes model_reasoning_effort even when model_profile_overrides sets reasoning_effort to empty (#443 unified) (#3241: model now pinned via explicit model_overrides, not the resolver alone)', () => {
     // Under the unified effort design (#443), model_reasoning_effort in the Codex TOML
     // is driven by the unified effort resolver (resolveInstallTimeEffort / effortCfg),
@@ -6001,16 +6032,20 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
 
 // ─── #3007: Codex effort capability is per-model ─────────────────────────────
 //
-// Ground truth (Codex's models.json): gpt-5.6-sol advertises
-// low/medium/high/xhigh/max/ultra; gpt-5.6-luna and gpt-5.6-terra advertise
-// low/medium/high/xhigh/max (no ultra); no Codex model advertises 'minimal'.
-// An unknown/omitted model id falls back to the family baseline
-// (low/medium/high/xhigh/max).
+// Ground truth: Codex CLI model catalog at
+// https://github.com/openai/codex/blob/126a0ee92ed2c5e73cd8a8f7e37563e8527552d7/codex-rs/models-manager/models.json
+// advertises per-model reasoning levels.
+// GSD still rejects 'ultra' as orchestration policy, even for models that list it.
+// An unknown/omitted model id falls back to the family baseline.
 
 const CODEX_MODEL_EFFORT_SETS = {
   'gpt-5.6-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   'gpt-5.6-luna': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
   'gpt-5.6-terra': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+  'gpt-6.1-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  'gpt-6-astra': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  'gpt-6-sol': new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
+  'gpt-6-luna': new Set(['low', 'medium', 'high', 'xhigh', 'max']),
 };
 const CODEX_FAMILY_BASELINE = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 function advertisedCodexEfforts(model) {
@@ -6018,6 +6053,26 @@ function advertisedCodexEfforts(model) {
 }
 
 describe('#3007 — Codex effort capability is per-model, and every clamp is visible', () => {
+  test('#5591 GPT-6 models are registered without replacing the GPT-5.6 defaults', () => {
+    const { CODEX_MODEL_EFFORT, RUNTIME_PROFILE_MAP, renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
+    assert.deepStrictEqual(RUNTIME_PROFILE_MAP.codex, {
+      opus: { model: 'gpt-5.6-sol', reasoning_effort: 'xhigh' },
+      sonnet: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+      haiku: { model: 'gpt-5.6-luna', reasoning_effort: 'medium' },
+    });
+    for (const model of Object.keys(CODEX_MODEL_EFFORT_SETS).filter((id) => id.startsWith('gpt-6'))) {
+      assert.ok(Object.hasOwn(CODEX_MODEL_EFFORT, model), model);
+      assert.deepStrictEqual(CODEX_MODEL_EFFORT[model], CODEX_MODEL_EFFORT_SETS[model]);
+      for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+        assert.strictEqual(renderEffortForRuntime('codex', level, model).value, level);
+      }
+      assert.strictEqual(renderEffortForRuntime('codex', 'minimal', model).value, 'low');
+      for (const level of ['ultra']) {
+        assert.strictEqual(renderEffortForRuntime('codex', level, model).value, null);
+      }
+    }
+  });
+
   test('max survives for a model that advertises it', () => {
     const { renderEffortForRuntime } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const r = renderEffortForRuntime('codex', 'max', 'gpt-5.6-sol');
@@ -6879,6 +6934,21 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
       assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'MPO-CODEX-OPUS');
     });
 
+    test('GPT-6.1 Sol resolves through a Codex tier override and an agent pin still wins', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6.1-sol');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6.1-sol');
+      cleanup(dir);
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6.1-sol' } }, model_overrides: { 'gsd-executor': 'PINNED' } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'PINNED');
+    });
+
+    test('GPT-6 Astra resolves through the existing Codex override path', () => {
+      dir = project({ model_profile: 'quality', model_profile_overrides: { codex: { opus: 'gpt-6-astra' } } });
+      assert.strictEqual(resolveModel(dir, 'gsd-executor', 'codex'), 'gpt-6-astra');
+      assert.strictEqual(initQuick(dir, 'codex').executor_model, 'gpt-6-astra');
+    });
+
     test('model_overrides still wins over everything', () => {
       dir = project({ model_profile: 'quality', dynamic_routing: DR, model_overrides: { 'gsd-executor': 'PINNED' } });
       assert.strictEqual(resolveModel(dir, 'gsd-executor'), 'PINNED');
@@ -7032,3 +7102,101 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     }
   });
 }
+
+
+describe('#5591 Codex settings choices', () => {
+  const { test } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..');
+  const catalog = require('../gsd-core/bin/shared/model-catalog.json');
+  const { runGsdTools, createTempDir, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+  const { runHook } = require('./helpers/process-seam.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+
+  test('#5591 catalog contains the seven approved display choices and registered IDs', () => {
+    assert.deepEqual(catalog.codexModelChoices, [
+      { id: 'gpt-6.1-sol', name: 'GPT-6.1-Sol (current)', description: 'Latest workhorse model for coding and everyday work' },
+      { id: 'gpt-6-astra', name: 'GPT-6-Astra', description: 'Frontier model for the most demanding work' },
+      { id: 'gpt-6-sol', name: 'GPT-6-Sol', description: 'Previous generation workhorse model' },
+      { id: 'gpt-6-luna', name: 'GPT-6-Luna', description: 'Fast and affordable model for easier tasks' },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', description: 'Older generation workhorse model' },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', description: 'Older balanced model for straightforward work' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', description: 'Older fast and efficient model' },
+    ]);
+    const choiceIds = catalog.codexModelChoices.map(({ id }) => id).sort();
+    const effortIds = Object.keys(catalog.codexModelEffort).filter((id) => id !== '_baseline').sort();
+    assert.deepEqual(choiceIds, effortIds, 'the display choices and registered Codex effort IDs stay in sync');
+  });
+
+  test('#5591 choices query works outside a project without changing files', (t) => {
+    const dir = createTempDir('gsd-codex-choices-');
+    t.after(() => cleanup(dir));
+    const before = fs.readdirSync(dir);
+    for (const flags of [[], ['--raw'], ['--pick', 'choices[0].id']]) {
+      const r = runGsdTools(['query', 'codex-model-choices', ...flags], dir, { HOME: dir });
+      assert.equal(r.exitCode, 0, r.error);
+      if (flags.includes('--pick')) {
+        assert.equal(r.output, catalog.codexModelChoices[0].id);
+      } else {
+        assert.deepEqual(JSON.parse(r.output), { choices: catalog.codexModelChoices });
+      }
+    }
+    assert.deepEqual(fs.readdirSync(dir), before);
+  });
+
+  test('#5591 choices query rejects unexpected arguments without side effects', (t) => {
+    const dir = createTempDir('gsd-codex-choices-invalid-');
+    t.after(() => cleanup(dir));
+    const before = fs.readdirSync(dir);
+    const invalid = [
+      ['extra'], [''], ['   '], ['--unknown'], ['--unknown', '--unknown'],
+      ['--model='], ['--model==value'], ['--model', '--weird'],
+      ['x'.repeat(4096)], ['模型'], ['; touch marker'], ['$(touch marker)'],
+      ['`touch marker`'], ['&&'], ['"quoted"'],
+    ];
+    for (const args of invalid) {
+      const r = runGsdTools(['query', 'codex-model-choices', ...args, '--json-errors'], dir, { HOME: dir });
+      assert.equal(r.exitCode, 1);
+      assert.equal(r.output, '');
+      const diagnostic = JSON.parse(r.error);
+      assert.equal(diagnostic.ok, false);
+      assert.equal(diagnostic.reason, ERROR_REASON.USAGE);
+      assert.doesNotMatch(r.error, /\n\s+at\s/);
+    }
+    assert.deepEqual(fs.readdirSync(dir), before);
+  });
+
+  test('#5591 PATH-only launcher can query choices without a sibling catalog', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('POSIX launcher layout; direct query tests run on every platform');
+      return;
+    }
+    const dir = createTempDir('gsd-codex-choices-path-');
+    t.after(() => cleanup(dir));
+    const binDir = path.join(dir, 'bin');
+    fs.mkdirSync(binDir);
+    const shim = path.join(binDir, 'gsd_run');
+    fs.symlinkSync(path.join(root, 'gsd-core', 'bin', 'gsd_run'), shim);
+    const advanced = fs.readFileSync(path.join(root, 'gsd-core/workflows/settings-advanced.md'), 'utf8');
+    const launcher = advanced.split('\n').find((line) => line.startsWith('_GSD_SHIM_NAME='));
+    assert.ok(launcher, 'exercise the workflow launcher, including its PATH branch');
+    const harness = path.join(dir, 'harness.sh');
+    fs.writeFileSync(harness, [
+      launcher,
+      '[ "$GSD_TOOLS" = "$EXPECTED_SHIM" ] || exit 91',
+      'gsd_run query codex-model-choices',
+    ].join('\n'));
+    const r = runHook(harness, [], {
+      interpreter: '/bin/sh', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS,
+      env: { ...TEST_ENV_BASE, HOME: dir, RUNTIME_DIR: dir,
+        EXPECTED_SHIM: shim, PATH: `${binDir}${path.delimiter}${process.env.PATH}` },
+    });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), { choices: catalog.codexModelChoices });
+    assert.equal(fs.existsSync(path.join(binDir, 'shared')), false);
+    assert.equal(fs.existsSync(path.join(dir, '.planning')), false);
+  });
+});

@@ -2440,6 +2440,22 @@ node gsd-tools.cjs state complete-phase --phase 3
 
 ---
 
+### `codex-model-choices`
+
+Return the static Codex model candidates for advanced settings:
+
+```bash
+gsd_run query codex-model-choices
+```
+
+Returns `{ "choices": [{ "id": "...", "name": "...", "description": "..." }] }`
+from the Model Catalog Module. Takes no command-specific arguments or flags; global
+output flags such as `--pick choices[0].id` remain available. Works outside a project and
+through the PATH launcher. The handler reads static catalog data without changing model configuration.
+Candidates do not guarantee account access: confirm availability in Codex's `/model`
+selector. If the query fails or returns no choices, advanced settings retains the
+numbered Keep current / Clear override / Enter model ID prompt.
+
 ### `runtime-identity`
 
 Report the package coordinates of the `gsd-tools` that is executing. Used by the runtime

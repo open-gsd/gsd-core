@@ -493,46 +493,37 @@ If "Other (Group B or custom)" is selected, prompt the user to enter the runtime
 If the selected runtime differs from the stored `runtime` key, update `runtime` via
 `gsd_run query config-set runtime <value>` before proceeding to Step C.
 
+**Codex:** Run `gsd_run query codex-model-choices`; display JSON `choices` entries by
+`name`, `description`, and `id`. Ask once which candidates appear in the user's Codex `/model`
+selector; reuse that confirmed set for all three tiers. Never infer availability.
+For Codex only, replace Step C with numbered text prompts: Keep current, Clear override,
+confirmed choices, Enter model ID. Query failure or empty choices leaves only those three
+manual options. Map selections to `id`; Enter model ID asks for the exact ID; cancel keeps current.
+Tier overrides affect routing and `codex exec`, not installed agent pins; see
+[pinning](../../docs/how-to/configure-model-profiles.md#choosing-or-pinning-a-codex-model).
+
 **Step C — Configure tier overrides for the selected runtime:**
 
+For other runtimes, build one `AskUserQuestion` array with three entries, in order
+`opus`, `sonnet`, `haiku`, using this template for each tier. Headers are
+"Opus Override", "Sonnet Override", and "Haiku Override" respectively.
+
 ```text
-AskUserQuestion([
-  {
-    question: "Override for opus tier? Built-in: <opus default or '(no built-in)'>  Current: <override or '(none)'>",
-    header: "Opus Override",
-    multiSelect: false,
-    options: [
-      { label: "Keep current", description: "Leave unchanged (uses built-in default if no override)." },
-      { label: "Clear override", description: "Remove any existing override; fall back to built-in." },
-      { label: "Enter model ID", description: "Type the exact model ID string to use for opus-tier agents on this runtime." }
-    ]
-  },
-  {
-    question: "Override for sonnet tier? Built-in: <sonnet default or '(no built-in)'>  Current: <override or '(none)'>",
-    header: "Sonnet Override",
-    multiSelect: false,
-    options: [
-      { label: "Keep current", description: "Leave unchanged." },
-      { label: "Clear override", description: "Remove any existing override; fall back to built-in." },
-      { label: "Enter model ID", description: "Type the exact model ID string to use for sonnet-tier agents on this runtime." }
-    ]
-  },
-  {
-    question: "Override for haiku tier? Built-in: <haiku default or '(no built-in)'>  Current: <override or '(none)'>",
-    header: "Haiku Override",
-    multiSelect: false,
-    options: [
-      { label: "Keep current", description: "Leave unchanged." },
-      { label: "Clear override", description: "Remove any existing override; fall back to built-in." },
-      { label: "Enter model ID", description: "Type the exact model ID string to use for haiku-tier agents on this runtime." }
-    ]
-  }
-])
+{
+  question: "Override for <tier> tier? Built-in: <tier default or '(no built-in)'>  Current: <override or '(none)'>",
+  header: "<Tier> Override",
+  multiSelect: false,
+  options: [
+    { label: "Keep current", description: "Leave unchanged (uses built-in default if no override)." },
+    { label: "Clear override", description: "Remove any existing override; fall back to built-in." },
+    { label: "Enter model ID", description: "Type the exact model ID string for this tier on this runtime." }
+  ]
+}
 ```
 
 **Step D — Apply the changes:**
 
-For each tier where the user chose "Enter model ID":
+For each tier where the user chose a confirmed Codex model or "Enter model ID":
 ```bash
 gsd_run query config-set model_profile_overrides.<runtime>.<tier> "<model-id>"
 ```
