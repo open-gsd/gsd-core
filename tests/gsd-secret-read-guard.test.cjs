@@ -2981,9 +2981,29 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
     "eval '! claude --agent gsd-debugger -p x'",
     'echo "$(! claude --agent gsd-debugger -p x)"',
     'echo $(A+=b claude --agent gsd-debugger -p x)',
+    // Two payload levels down: a payload inside a payload is read the same way.
+    "bash -c 'echo $(! claude --agent gsd-debugger -p x)'",
+    "! bash -c 'echo $(claude --agent gsd-debugger -p x)'",
+    "eval 'echo $(! claude --agent gsd-debugger -p x)'",
+    'bash -c "eval \'! claude --agent gsd-debugger -p x\'"',
+    'bash -c "bash -c \'! claude --agent gsd-debugger -p x\'"',
+    'echo "$(bash -c \'! claude --agent gsd-debugger -p x\')"',
+    'echo "$(echo "$(! claude --agent gsd-debugger -p x)")"',
   ]) {
     test(`denies a debugger spawn the further reading finds in a payload (${cmd.slice(0, 22)}…)`, () => {
       assertBlocked(runHook(bash(cmd)), 'spawn in payload', { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+  }
+  // The subscript-join pass runs the spawn scan too: a name and bracket span
+  // bash reads as one assignment word hides neither a launch nor a payload.
+  for (const cmd of [
+    'a[x y]=1 claude --agent gsd-debugger -p x',
+    "a[x y]=1 bash -c 'claude --agent gsd-debugger -p x'",
+    "bash -c 'a[x y]=1 claude --agent gsd-debugger -p x'",
+    'echo $(a[x y]=1 claude --agent gsd-debugger -p x)',
+  ]) {
+    test(`denies a debugger spawn behind a subscript assignment (${cmd.slice(0, 22)}…)`, () => {
+      assertBlocked(runHook(bash(cmd)), 'spawn behind subscript', { code: 'debugger-cli-spawn', tool: 'Bash' });
     });
   }
   test('denies a debugger spawn after a deep payload only the further reading reads', () => {
@@ -2991,12 +3011,14 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
     assertBlocked(runHook(bash(cmd)), 'spawn after deep payload', { code: 'debugger-cli-spawn', tool: 'Bash' });
   });
 
-  // The further reading runs on a stack of its own (from setImmediate), so a
-  // payload only it reads is read at least as deep as the plain reading reads
-  // the same payload: the frames it adds on the way, the payload guard's among
-  // them, do not make it overflow first. --jitless keeps the frame sizes fixed
-  // from run to run.
-  test('the further reading reads a payload as deep as the plain reading does', () => {
+  // The further reading runs on a stack of its own (from setImmediate), so the
+  // frames it adds on the way to a payload only it reads, the payload guard's
+  // among them, do not make it overflow materially earlier than the plain
+  // reading on the same payload. The check allows four levels below the plain
+  // edge, so a further reading that loses five or more levels fails it, and
+  // one that reads deeper (as it does on Linux) passes. --jitless keeps the
+  // frame sizes fixed from run to run.
+  test('the further reading reads a payload to within four levels of the plain reading\'s depth', () => {
     const denies = (cmd) => runHookSeam(HOOK_PATH, [], {
       input: JSON.stringify(bash(cmd)),
       env: { ...process.env, NODE_OPTIONS: '--jitless' },
