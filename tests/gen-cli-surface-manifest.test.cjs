@@ -9,9 +9,8 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
-
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
 const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { CLI_SURFACE, UNDECLARED_VERBS, specFor } = require('../gsd-core/bin/lib/cli-surface.cjs');
 
@@ -20,21 +19,8 @@ const SCRIPT = path.join(ROOT, 'scripts', 'gen-cli-surface-manifest.cjs');
 const COMMITTED = path.join(ROOT, 'docs', 'CLI-SURFACE-MANIFEST.json');
 
 function runGen(args) {
-  try {
-    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
-    });
-    return { code: 0, stdout, stderr: '' };
-  } catch (err) {
-    return {
-      code: err.status ?? 1,
-      stdout: err.stdout ? err.stdout.toString() : '',
-      stderr: err.stderr ? err.stderr.toString() : '',
-    };
-  }
+  const r = runNode([SCRIPT, ...args], { cwd: ROOT, timeoutMs: GENERATOR_SCRIPT_TIMEOUT_MS });
+  return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
 function withTmp(t) {
