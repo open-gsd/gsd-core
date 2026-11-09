@@ -469,6 +469,8 @@ const CASES_B2 = [
   {"id":"fm get no field","argv":["frontmatter","get","f.md"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:status,title"}},
   {"id":"fm get two positional fields","argv":["frontmatter","get","f.md","title","status"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"status\""}},
   {"id":"fm get field flag and positional","argv":["frontmatter","get","f.md","--field","title","status"],"files":{"f.md":"---\ntitle: Hi\nstatus: complete\n---\nbody\n"},"expect":{"exit":1,"reason":"usage","shape":"empty","message":"unexpected positional argument \"status\""}},
+  {"id":"re short flag","argv":["resolve-execution","gsd-executor","-x"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"Unknown flag for resolve-execution: -x"}},
+  {"id":"re unknown long flag","argv":["resolve-execution","gsd-executor","--bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty","message":"Unknown flag for resolve-execution: --bogus"}},
 ];
 
 function runCommand(argv, cwd) {
