@@ -489,15 +489,23 @@ describe('#5867 phase unit across planning.sub_repos', () => {
       summarize(ws, [a, ...fake(ids - 1)]);
       const scope = phaseScope(ws, { execGit: noSuchCommit });
       assert.equal(scope.reason === 'sub-repo-too-many-lookups', refused, `${ids} ids`);
+      if (!refused) {
+        assert.equal(scope.status, 'resolved', `${ids} ids`);
+        assert.equal(scope.unreachable.length, ids - 1, `${ids} ids`);
+      }
     }
   });
 
-  test('[negative] no SUMMARY and no anchor is unresolvable, never an empty resolved scope', () => {
+  test('[negative] no SUMMARY and no anchor is a loud empty degraded scope, never a pass-shaped one', () => {
     const ws = makeWorkspace(['api']);
     commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
     const scope = phaseScope(ws);
-    assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.status, 'degraded');
+    assert.equal(scope.source, 'phase-range');
+    assert.equal(scope.reason, 'no-summary:no-phase-start-anchor');
     assert.deepEqual(scope.files, []);
+    const verdict = evaluateEvaluationScope({ projectDir: ws.root, args: ['--phase', '1'] });
+    assert.equal(verdict.outcome, 'advisory');
   });
 
   test('[negative] an unreadable sub-repo makes the phase unresolvable even when another holds the commits', () => {
@@ -529,14 +537,19 @@ describe('#5867 the check evaluation-scope verb and commitIsAncestor', () => {
     assert.equal(commitIsAncestor(ws.root, green, red), false);
   });
 
-  test('[negative] a timeout in one repo is never read as "no" because another repo answered false', () => {
-    const ws = makeWorkspace(['api', 'web']);
+  test('[negative] a timeout in one repo is never read as "no" because a clone listed after it answered false', () => {
+    const ws = makeWorkspace(['api', 'clone']);
     const red = commit(ws.repos.api, 'a.js', 'test(01-01): red', 1_700_000_000);
     const green = commit(ws.repos.api, 'b.js', 'feat(01-01): green', 1_700_000_100);
+    const cloneDir = path.join(ws.root, 'clone');
+    cleanup(cloneDir);
+    gitOrThrow(['clone', '-q', ws.repos.api.dir, cloneDir], { env: { ...process.env, ...IDENTITY } });
     const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     const timingOutInApi = (args, opts) => (opts && fs.realpathSync(opts.cwd) === fs.realpathSync(ws.repos.api.dir)
       ? { exitCode: 1, stdout: '', stderr: '', timedOut: true }
       : execGit(args, opts));
+    // The clone holds both commits and would say "no" (green is not an ancestor of red).
+    assert.equal(commitIsAncestor(ws.root, green, red), false);
     assert.equal(commitIsAncestor(ws.root, green, red, timingOutInApi), null);
   });
 

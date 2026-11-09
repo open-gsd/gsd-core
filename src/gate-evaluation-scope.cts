@@ -711,8 +711,13 @@ function resolvePhaseAcrossSources(
   const degraded = parts.find(({ part }) => part.status === 'degraded');
   const pick = taken.length > 0 ? taken : degraded ? [degraded] : [];
   if (pick.length === 0) {
-    const reason = parts[0]?.part.reason ?? 'no-task-commits';
-    throw new ScopeUnreadable(`${reason}:no-phase-start-anchor`);
+    // Every repo was read and none has task commits for the phase, and a sub-repo has no phase-start
+    // anchor to widen to: a loud, empty `degraded` scope, never a pass-shaped empty one and never
+    // `unresolvable` (nothing was unreadable).
+    merged.status = 'degraded';
+    merged.source = 'phase-range';
+    merged.reason = `${parts[0]?.part.reason ?? 'no-task-commits'}:no-phase-start-anchor`;
+    return merged;
   }
   merged.status = taken.length > 0 ? 'resolved' : 'degraded';
   merged.source = taken.length > 0 ? 'task-commits' : 'phase-range';
