@@ -137,6 +137,7 @@ module.exports = {
   "tests/installer-migrations.test.cjs",
   "tests/intel.test.cjs",
   "tests/inventory-nested-families.test.cjs",
+  "tests/isolated-env.test.cjs",
   "tests/isolation-sentinel-read.platform.test.cjs",
   "tests/isolation-sentinel.test.cjs",
   "tests/issue-version-gate.test.cjs",
