@@ -125,3 +125,26 @@ slow or killed spawn leaves a line in the uploaded `test-timings-<os>-job<n>` ar
 
 Tests that assert on a seam result can use `assertSeamExit(assert, result, 0)`, which names the
 outcome, signal and duration in its failure message, or put `result.summary` in their own message.
+
+## Reproduce the evidence numbers
+
+The CI figures in `tests/helpers/timeouts.cjs` `TIMEOUT_EVIDENCE` (observed max, p50, p99, samples, lanes, unseen sites) come from the `seam:spawn-stall` records above. `scripts/timeout-evidence-from-ci.cjs` recomputes them from the repository and the downloaded artifacts. Downloading is a separate step; the script never contacts the network.
+
+1. List the successful `test.yml` runs of the `push` and `merge_group` events created after the window start, then download each run's timing artifacts into `<dir>/<run id>/`:
+
+   ```sh
+   gh run list --workflow test.yml --event push --status success --limit 400 --json databaseId,createdAt
+   gh run download <run id> --pattern 'test-timings-*' --dir <dir>/<run id>
+   ```
+
+   Repeat the list with `--event merge_group`. `gh` writes one `<dir>/<run id>/<artifact name>/` folder per artifact, which is the layout the script reads. Expired artifacts cannot be downloaded and are skipped.
+
+2. Run the script from the repository root:
+
+   ```sh
+   node scripts/timeout-evidence-from-ci.cjs --artifacts <dir> --format md
+   ```
+
+   `--format json` prints the full figures, and `--repo <root>` points it at another checkout. `--raw-sites` prints the call sites that spawn outside the process seam, grouped by constant, as `- [ ] tests/x.test.cjs:LINE (CONSTANT)` lines.
+
+A record is credited to a constant by call site: the record's test file (or a helper it requires) has a seam call site of that constant, the record's `timeoutMs` equals the constant's value, and its command and argv match that site. A record that still matches two constants is credited to neither and counted as ambiguous. The script reports any call site it could not classify (`unresolvedSites`) and any manual resolution that matched nothing (`unusedResolutions`); resolve either in `MANUAL_RESOLUTIONS` in the script.
