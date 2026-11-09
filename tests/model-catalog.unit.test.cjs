@@ -54,7 +54,28 @@ const {
   clampEffortForHost,
   nextTier,
   mergeEffortTierDefaults,
+  getCodexModelChoices,
 } = catalog;
+
+describe('#5591 Model Catalog Module selector metadata', () => {
+  test('accessor returns independent selector metadata', () => {
+    const choices = getCodexModelChoices();
+    assert.deepEqual(choices, catalog.catalog.codexModelChoices);
+    choices[0].name = 'changed by caller';
+    choices.pop();
+    assert.deepEqual(getCodexModelChoices(), catalog.catalog.codexModelChoices);
+  });
+
+  test('missing optional choices permits the manual-ID fallback', () => {
+    const saved = catalog.catalog.codexModelChoices;
+    try {
+      delete catalog.catalog.codexModelChoices;
+      assert.deepEqual(getCodexModelChoices(), []);
+    } finally {
+      catalog.catalog.codexModelChoices = saved;
+    }
+  });
+});
 
 describe('model-catalog: exported enums/maps', () => {
   test('VALID_TIERS is opus/sonnet/haiku plus inherit', () => {
