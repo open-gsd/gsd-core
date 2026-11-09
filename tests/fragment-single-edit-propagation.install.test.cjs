@@ -207,7 +207,7 @@ const FRAGMENT_SENTINEL = 'GSD-2933-FRAGMENT-EDIT-SENTINEL-4c1a9f';
  * is a different operation class kept as its own local constant —
  * coincidence, not collision.
  */
-const GENERATOR_SCRIPT_TIMEOUT_MS = 120000;
+const OVERLAY_GENERATOR_TIMEOUT_MS = 120000;
 
 /**
  * Bounds `trackedFileSet`'s `git ls-files` over the FULL overlay tree.
@@ -313,7 +313,7 @@ function runOverlayCheck(overlayRoot, scriptRelPath, extraArgs = []) {
   const result = runNode([scriptPath, '--check', ...extraArgs], {
     cwd: overlayRoot,
     env: installerEnv(),
-    timeoutMs: GENERATOR_SCRIPT_TIMEOUT_MS,
+    timeoutMs: OVERLAY_GENERATOR_TIMEOUT_MS,
   });
   result.status = result.exitCode;
   return result;
@@ -331,7 +331,7 @@ function runOverlayGenerate(overlayRoot, scriptRelPath) {
   const result = runNode([scriptPath], {
     cwd: overlayRoot,
     env: installerEnv(),
-    timeoutMs: GENERATOR_SCRIPT_TIMEOUT_MS,
+    timeoutMs: OVERLAY_GENERATOR_TIMEOUT_MS,
   });
   result.status = result.exitCode;
   return result;
