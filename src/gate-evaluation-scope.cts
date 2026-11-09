@@ -136,6 +136,7 @@ const SHA_CHUNK = 400;
 const DEFAULT_MAX_COMMITS = 200;
 const MAX_PATHSPECS = 20;
 const MAX_SUB_REPOS = 64;
+const MAX_ID_LOOKUPS = 1024;
 
 // ─── SUMMARY `## Task Commits` extraction (port of the #4127 model) ───────────
 
@@ -322,9 +323,15 @@ function gitSubcommand(args: readonly string[]): string {
   return args[index] ?? '';
 }
 
-function makeGit(projectDir: string, runner: GitRunner): Git {
+/**
+ * git config a sub-repo's own `.git/config` must not override: a configured sub-repo is checkout
+ * content, so no hook-like setting of it (an fsmonitor command) may run while the scope is read.
+ */
+const SUB_REPO_GIT_HARDENING: readonly string[] = ['-c', 'core.fsmonitor=false'];
+
+function makeGit(projectDir: string, runner: GitRunner, leading: readonly string[] = []): Git {
   return (args, cwd = projectDir) => {
-    const result = runner(args, { cwd });
+    const result = runner([...leading, ...args], { cwd });
     if (result.timedOut) throw new ScopeUnreadable('git-timeout');
     if (result.exitCode === 127) throw new ScopeUnreadable('git-unavailable');
     if (result.exitCode !== 0) throw new ScopeUnreadable(`git-failed:${gitSubcommand(args)}`, result.exitCode);
@@ -389,18 +396,28 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
     // #5867: the commits of a `planning.sub_repos` workspace live in the sub-repos (and the
     // workspace root, when it is a repo itself). A repo that does not hold the commit cannot answer
     // (exit 128 -> unanswered); any repo that does answer is authoritative.
-    let answered = false;
-    for (const dir of [projectDir, ...names.map((name) => containedSubRepoDir(projectDir, name))]) {
+    // The first repo that holds both commits is authoritative (a clone's answer is the same).
+    let rootGit: Git | null = null;
+    try {
+      const rootTop = makeGit(projectDir, runner)(['rev-parse', '--show-toplevel']);
+      if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner);
+    } catch (error) {
+      if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
+    }
+    const gits: Git[] = [
+      ...(rootGit === null ? [] : [rootGit]),
+      ...names.map((name) => makeGit(containedSubRepoDir(projectDir, name), runner, SUB_REPO_GIT_HARDENING)),
+    ];
+    for (const git of gits) {
       try {
-        if (isAncestor(makeGit(dir, runner), sha, of)) return true;
-        answered = true;
+        return isAncestor(git, sha, of);
       } catch (error) {
         // Only "this repo does not hold the commit" (exit 128) is unanswered; a timeout or a missing
         // git is not an answer and must not let another repo's "no" stand for it.
         if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
       }
     }
-    return answered ? false : null;
+    return null;
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;
@@ -494,7 +511,7 @@ function openSources(projectDir: string, names: readonly string[], runner: GitRu
     const stat = statEvidence(dir);
     if (stat.kind === 'unreadable') throw new ScopeUnreadable(`sub-repo-unreadable:${name}:${stat.reason}`);
     if (stat.kind === 'none' || !stat.value.isDirectory()) throw new ScopeUnreadable(`sub-repo-unreadable:${name}:not-a-directory`);
-    const git = makeGit(dir, runner);
+    const git = makeGit(dir, runner, SUB_REPO_GIT_HARDENING);
     let top: string;
     try {
       top = git(['rev-parse', '--show-toplevel']);
@@ -650,6 +667,8 @@ function resolvePhaseAcrossSources(
   // A task commit id belongs to the repo that holds it: an id only another repo has is not
   // "unreachable" here. An id no repo holds goes to the primary source, which names it unreachable.
   const ids = [...new Set(gathered.refs)];
+  // One lookup per id per repo: bound the aggregate, not just the repo count.
+  if (ids.length * sources.length > MAX_ID_LOOKUPS) throw new ScopeUnreadable('sub-repo-too-many-lookups');
   const holders = ids.map((id) => sources.filter((source) => {
     try {
       return gitOrNo(source.git, ['rev-parse', '--verify', '--quiet', `${id}^{commit}`]) !== null;

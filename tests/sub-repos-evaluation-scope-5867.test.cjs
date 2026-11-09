@@ -189,25 +189,85 @@ describe('#5867 plan unit across planning.sub_repos', () => {
     assert.match(planScope(atLimit, { commitsOnly: true }).reason, /^sub-repo-unreadable:r0:/);
   });
 
+  test('[independence] a root repo with a stale missing sub_repos entry is unresolvable, naming it', () => {
+    const ws = makeWorkspace([], { rootIsRepo: true, subRepos: ['gone'] });
+    commit(ws.rootRepo, 'docs/x.md', 'docs(01-01): x', 1_700_000_000);
+    const scope = planScope(ws, { commitsOnly: true });
+    assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.reason, 'sub-repo-unreadable:gone:not-a-directory');
+  });
+
+  test('[happy] includeFiles prefixes every commit\'s own file list', () => {
+    const ws = makeWorkspace(['api']);
+    commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
+    const scope = planScope(ws, { includeFiles: true });
+    assert.deepEqual(scope.commits[0].files, ['api/src/a.js']);
+  });
+
+  test('[independence] two config names that resolve to one repo are read once', (t) => {
+    const ws = makeWorkspace(['api']);
+    try {
+      fs.symlinkSync(ws.repos.api.dir, path.join(ws.root, 'alias'), 'dir');
+    } catch {
+      t.skip('symlinks unavailable on this platform');
+      return;
+    }
+    write(ws.root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: ['api', 'alias'] } }));
+    const sha = commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
+    assert.deepEqual(planScope(ws, { commitsOnly: true }).commits.map((c) => c.sha), [sha]);
+  });
+
+  test('[hyrums] --pathspec, --committed-since and --milestone-bound apply inside every repo', () => {
+    const ws = makeWorkspace(['api', 'web']);
+    const tagged = commit(ws.repos.api, 'src/old.js', 'feat(01-01): old', 1_700_000_000);
+    ws.repos.api.git('tag', 'v1');
+    const fresh = commit(ws.repos.api, 'src/new.js', 'feat(01-01): new', 1_700_000_100);
+    const web = commit(ws.repos.web, 'ui/w.js', 'feat(01-01): w', 1_700_000_200);
+    assert.deepEqual(planScope(ws, { commitsOnly: true, pathspecs: ['src'] }).commits.map((c) => c.sha), [fresh, tagged]);
+    assert.deepEqual(planScope(ws, { commitsOnly: true, committedSince: '2023-01-01' }).commits.map((c) => c.sha), [web, fresh, tagged]);
+    assert.deepEqual(planScope(ws, { commitsOnly: true, committedSince: '2030-01-01' }).commits, []);
+    // api is bounded at its latest tag; web has no tag, so it is unbounded.
+    assert.deepEqual(planScope(ws, { commitsOnly: true, milestoneBound: true }).commits.map((c) => c.sha), [web, fresh]);
+  });
+
+  test('[property] spelling variants of a sub_repos name all report the canonical prefix', () => {
+    const ws = makeWorkspace(['app']);
+    const sha = commit(ws.repos.app, 'src/x.js', 'feat(01-01): x', 1_700_000_000);
+    fc.assert(fc.property(
+      fc.integer({ min: 0, max: 3 }), fc.integer({ min: 0, max: 3 }), fc.boolean(), fc.boolean(),
+      (dots, slashes, backslash, padded) => {
+        const sep = backslash ? '\\' : '/';
+        const spelled = (padded ? ' ' : '') + ('.' + sep).repeat(dots) + 'app' + sep.repeat(slashes) + (padded ? ' ' : '');
+        write(ws.root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: [spelled] } }));
+        const scope = planScope(ws);
+        assert.equal(scope.status, 'resolved', spelled);
+        assert.deepEqual(scope.commits.map((c) => c.sha), [sha]);
+        assert.deepEqual(scope.changedFiles, ['app/src/x.js']);
+      },
+    ), { numRuns: 12 });
+  });
+
   test('[property] the merged list is the newest-first slice of every repo\'s commits, whatever the times and limit', () => {
     fc.assert(fc.property(
-      fc.array(fc.tuple(fc.boolean(), fc.integer({ min: 0, max: 40 })), { minLength: 1, maxLength: 7 }),
+      fc.array(fc.tuple(fc.boolean(), fc.integer({ min: 1, max: 40 })), { minLength: 1, maxLength: 7 }),
       fc.integer({ min: 1, max: 9 }),
       (spec, max) => {
         const ws = makeWorkspace(['api', 'web']);
-        // Commit times never decrease along one repo's history (the shape git itself assumes).
-        const last = { api: 1_700_000_000, web: 1_700_000_000 };
+        // Times strictly increase along one repo's history; the two repos' clocks are offset so no two
+        // commits share a time, which makes the newest-first order total.
+        const last = { api: 1_700_000_000, web: 1_700_000_000 + 1000 };
+        const used = new Set();
         const made = spec.map(([inApi, delta], i) => {
           const name = inApi ? 'api' : 'web';
           last[name] += delta;
+          while (used.has(last[name])) last[name] += 1;
+          used.add(last[name]);
           return { time: last[name], order: i, sha: commit(ws.repos[name], `f${i}.js`, `feat(01-01): c${i}`, last[name]) };
         });
         const expected = [...made].sort((a, b) => b.time - a.time || b.order - a.order).slice(0, max);
         const got = planScope(ws, { commitsOnly: true, maxCommits: max }).commits.map((c) => c.sha);
         assert.equal(got.length, Math.min(max, made.length));
-        // Times never decrease down the list, and ties may fall either way: compare the time profile.
-        const timeOf = new Map(made.map((m) => [m.sha, m.time]));
-        assert.deepEqual(got.map((sha) => timeOf.get(sha)), expected.map((m) => m.time));
+        assert.deepEqual(got, expected.map((m) => m.sha));
         cleanup(ws.root);
       },
     ), { numRuns: 8 });
@@ -350,6 +410,62 @@ describe('#5867 phase unit across planning.sub_repos', () => {
     const scope = phaseScope(ws);
     assert.deepEqual(scope.files, ['api/src/a.js']);
     assert.deepEqual(scope.unreachable, [side]);
+  });
+
+  test('[boundary] since on a phase filters the holder by ancestry and the other repos by its commit time', () => {
+    const ws = makeWorkspace(['api', 'web']);
+    const earlyWeb = commit(ws.repos.web, 'ui/early.js', 'feat(01-01): web early', 1_699_999_000);
+    const first = commit(ws.repos.api, 'src/a1.js', 'feat(01-01): a1', 1_700_000_000);
+    const second = commit(ws.repos.api, 'src/a2.js', 'feat(01-01): a2', 1_700_000_100);
+    const lateWeb = commit(ws.repos.web, 'ui/late.js', 'feat(01-01): web late', 1_700_000_050);
+    summarize(ws, [earlyWeb, first, second, lateWeb]);
+    const scope = phaseScope(ws, { since: first });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.files, ['api/src/a2.js', 'web/ui/late.js']);
+  });
+
+  test('[negative] an ambiguous short id in one repo is named unreachable and the other repo still resolves', () => {
+    const ws = makeWorkspace(['api', 'web']);
+    const a = commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
+    const w = commit(ws.repos.web, 'ui/w.js', 'feat(01-01): w', 1_700_000_100);
+    summarize(ws, [a, w]);
+    const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const ambiguousInWeb = (args, opts) => (opts && fs.realpathSync(opts.cwd) === fs.realpathSync(ws.repos.web.dir) && args.includes(`${w}^{commit}`)
+      ? { exitCode: 128, stdout: '', stderr: 'ambiguous', timedOut: false }
+      : execGit(args, opts));
+    const scope = phaseScope(ws, { execGit: ambiguousInWeb });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.files, ['api/src/a.js']);
+    assert.deepEqual(scope.unreachable, [w]);
+  });
+
+  test('[independence] a root repo that tracks the phase never lets its degraded range override task commits', () => {
+    const ws = makeWorkspace(['api'], { rootIsRepo: true });
+    write(ws.root, '.gitignore', 'api/\n');
+    ws.rootRepo.git('add', '.');
+    ws.rootRepo.gitAt({}, 'commit', '-m', 'docs(01): scaffold');
+    const a = commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
+    summarize(ws, [a]);
+    const scope = phaseScope(ws);
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.source, 'task-commits');
+    assert.deepEqual(scope.files, ['api/src/a.js']);
+  });
+
+  test('[boundary] ids x repos over the lookup budget are refused (limit-1, limit, limit+1)', () => {
+    const ws = makeWorkspace(['api']);
+    const a = commit(ws.repos.api, 'src/a.js', 'feat(01-01): a', 1_700_000_000);
+    const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    // Unknown ids answer "no such commit" at once, so the budget is exercised without thousands of spawns.
+    const noSuchCommit = (args, opts) => (args.some((arg) => /^0{20,}[0-9a-f]*\^\{commit\}$/.test(arg))
+      ? { exitCode: 1, stdout: '', stderr: '', timedOut: false }
+      : execGit(args, opts));
+    const fake = (n) => Array.from({ length: n }, (_, i) => i.toString(16).padStart(40, '0'));
+    for (const [ids, refused] of [[1023, false], [1024, false], [1025, true]]) {
+      summarize(ws, [a, ...fake(ids - 1)]);
+      const scope = phaseScope(ws, { execGit: noSuchCommit });
+      assert.equal(scope.reason === 'sub-repo-too-many-lookups', refused, `${ids} ids`);
+    }
   });
 
   test('[negative] no SUMMARY and no anchor is unresolvable, never an empty resolved scope', () => {
