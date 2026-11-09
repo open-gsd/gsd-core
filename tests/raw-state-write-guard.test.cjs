@@ -267,8 +267,11 @@ process.stdout.write(String(fs.writeFileSync === before && !fs.writeFileSync.nam
 });
 
 describe('nodeOptionsWithRequire', () => {
-  test('appends a quoted --require and keeps existing options', () => {
-    assert.equal(nodeOptionsWithRequire('--max-old-space-size=4096', '/a/b.cjs'), '--max-old-space-size=4096 --require "/a/b.cjs"');
+  test('prepends a quoted --require and keeps existing options (the innermost run\'s shim loads first)', () => {
+    assert.equal(nodeOptionsWithRequire('--max-old-space-size=4096', '/a/b.cjs'), '--require "/a/b.cjs" --max-old-space-size=4096');
+    // A nested run prepends its own shim ahead of the outer run's, so its preload wins.
+    const outer = nodeOptionsWithRequire(undefined, '/outer/shim.cjs');
+    assert.equal(nodeOptionsWithRequire(outer, '/inner/shim.cjs'), '--require "/inner/shim.cjs" --require "/outer/shim.cjs"');
     assert.equal(nodeOptionsWithRequire(undefined, '/a/b.cjs'), '--require "/a/b.cjs"');
     assert.equal(nodeOptionsWithRequire('  ', '/a/b.cjs'), '--require "/a/b.cjs"');
   });

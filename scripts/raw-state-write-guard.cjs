@@ -105,13 +105,17 @@ function classifyStateWrite({ destination, source, callerFile, viaSeam }) {
 }
 
 /**
- * NODE_OPTIONS with `--require "<file>"` appended. Inside double quotes Node's NODE_OPTIONS parser
- * treats a backslash as an escape, so a Windows path is escaped, not passed raw.
+ * NODE_OPTIONS with `--require "<file>"` PREPENDED. Node runs --require preloads in order and the
+ * guard installs once per process on the ledger named when it first loads, so the innermost
+ * run-tests (a runner a test spawns, inside an outer run) must come first: its shim names its own
+ * ledger before the outer run's shim does, and the inner run's product writes stay in the inner
+ * ledger. Inside double quotes Node's NODE_OPTIONS parser treats a backslash as an escape, so a
+ * Windows path is escaped, not passed raw.
  */
 function nodeOptionsWithRequire(existing, file) {
   const quoted = `"${String(file).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const base = typeof existing === 'string' ? existing.trim() : '';
-  return base ? `${base} --require ${quoted}` : `--require ${quoted}`;
+  return base ? `--require ${quoted} ${base}` : `--require ${quoted}`;
 }
 
 /**

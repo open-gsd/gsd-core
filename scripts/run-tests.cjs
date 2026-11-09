@@ -2113,6 +2113,8 @@ async function main() {
   // never that nothing was written (#5170). The ledger path rides inside a per-run
   // preload shim rather than only in the environment: tests/helpers/isolated-env.cjs,
   // the mandated child-env helper, strips every GSD_* variable but keeps NODE_OPTIONS.
+  // The shim is prepended, so a run-tests a test spawns names its own ledger before
+  // the outer run's shim does and keeps its children's writes out of the outer ledger.
   const stateWriteLedgerPath = join(eventsDir, 'state-writes.ndjson');
   writeFileSync(stateWriteLedgerPath, '');
   const stateWritePreloadPath = join(eventsDir, 'raw-state-write-preload.cjs');
