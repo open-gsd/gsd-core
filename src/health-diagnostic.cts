@@ -70,8 +70,9 @@ type Rule = healthDiagnosticTypesMod.Rule;
 // (W028, W029, W030, W031). The count is asserted only by
 // `tests/health-diagnostic.test.cjs`'s frozen RULES test;
 // `scripts/lint-health-diagnostic-rule-table.cjs` checks that every code is
-// unique, every severity is valid and every code has a fixture test, but it
-// does not check the count.
+// unique, every severity is valid and every code has a fixture test (except
+// the codes it lists in `PERMANENTLY_INERT_CODES`, currently W024's inert
+// stub), but it does not check the count.
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import rootExistenceMod = require('./health-diagnostic-rules/root-existence.cjs');
