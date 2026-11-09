@@ -424,6 +424,48 @@ Reported paths are labelled `CREATED`, `MODIFIED`, `DELETED`, or `UNVERIFIED`.
 `UNVERIFIED` means a scan bound was hit and the path could not be attested
 either way — it is never the same as clean.
 
+## The raw STATE.md write check
+
+Every `run-tests.cjs` invocation also loads `scripts/raw-state-write-guard.cjs`
+into each chunk, and into every subprocess a test spawns, through
+`NODE_OPTIONS --require`. It records every write whose destination is a file
+named exactly `STATE.md` when the nearest caller frame is product code (a
+`.cjs` file under a `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`,
+`gsd-tools.cjs`, or an installed copy). A write the STATE.md write seam makes
+(`platformWriteSync` in `shell-command-projection.cjs` on the stack) is
+recorded as a seam write; any other is a violation, and **one violation fails
+the run**. There is no allowlist (ADR-4629 Decision 5): a new raw STATE.md
+writer is migrated onto the seam, never listed. Test code writing a STATE.md
+fixture is never recorded, and a rename or copy whose source is itself a
+`STATE.md` (a workstream migration, an archive) relocates a file rather than
+authoring one, so it is not recorded either.
+
+The check exists because the Axis-2 lint guard
+(`scripts/lint-state-write-path-drift.cjs`) matches variable names, not
+values: a path held in a `Map` key filled in another function is invisible to
+it (#5104 miss 3, #5120). A raw write skips the STATE.md lock, which is the
+#500/#905/#1230 lost-update family.
+
+After the last chunk the runner prints one line, on every run:
+
+```text
+run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: N, of which without the STATE.md lock: M)
+```
+
+The zero is never printed alone (ADR-3408 Decision 5): the seam-write count
+and the count of seam writes made without the STATE.md lock stand beside it.
+The unlocked count is reported, not enforced, by this check. A violation
+names the fs function, the destination, the product file and line, and the
+test file whose run produced it. A missing or unreadable ledger fails the run
+as unreadable evidence, never as a zero.
+
+Limits, stated plainly: it sees only code paths the suite executes; it wraps
+the `fs` write, append, rename and copy entry points (sync, callback and
+promise forms), not `fs.openSync` + `fs.writeSync`, file handles, write
+streams or native addons; a test that replaces `NODE_OPTIONS` runs its child
+unguarded; and a write made under a JS mock of an fs function is attributed to
+the mock's frame.
+
 ## The mergeability preflight
 
 Before any of the matrix below is provisioned, every `pull_request` compute lane

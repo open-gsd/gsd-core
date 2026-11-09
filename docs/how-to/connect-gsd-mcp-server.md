@@ -180,6 +180,17 @@ rather than a real marker.
 | `gsd_read_state` | `{path: string}` | the file contents as text |
 | `gsd_write_state` | `{path: string, content: string}` | `{ok: true, path}` as JSON text |
 
+A `gsd_write_state` whose `path` names a file called `STATE.md` holds the
+STATE.md lock for the write and writes through GSD's STATE.md write seam, so
+it cannot interleave with another STATE.md writer (#5120). The seam writes
+normalized markdown (LF line endings, one trailing newline, blank-line runs
+collapsed, a blank line after a heading, a list or a closing fence that text
+follows; the frontmatter block is kept exactly), so the bytes on disk are the
+seam's rather than the exact `content`. A STATE.md held by another live writer
+makes the write wait for the lock (up to 30 seconds); a lock that cannot be
+taken returns a tool error and writes nothing. Every other `path` is written
+exactly as given.
+
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.
 

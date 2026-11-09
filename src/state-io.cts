@@ -13,8 +13,16 @@
  *
  * `filesystem` is the default and reproduces today's IO byte-for-behavior
  * (planning-workspace.cts keeps routing its fs ops; this seam is the
- * abstraction a non-filesystem host swaps in). `configHome` write-confinement
- * (ADR-1239 Phase B / #1679) applies to the filesystem path.
+ * abstraction a non-filesystem host swaps in), with one exception (#5120,
+ * ADR-4629 guard roster "No raw STATE.md write outside the seam"): a write
+ * whose destination is named `STATE.md` holds the STATE.md lock and goes
+ * through the STATE.md write seam (`platformWriteSync`), the
+ * cmdStateMilestoneSwitch shape, so a host writing through MCP
+ * `gsd_write_state` cannot interleave with another STATE.md writer (the
+ * #500/#905/#1230 lost-update family). The seam normalizes the markdown it
+ * writes, so those bytes are the seam's, not the caller's; every other
+ * destination is still written exactly as given. `configHome`
+ * write-confinement (ADR-1239 Phase B / #1679) applies to the filesystem path.
  *
  * Minimal seam: the host-backend protocol is fixed when a real non-filesystem
  * host lands (Phase 5 / #1682).
@@ -22,6 +30,7 @@
 'use strict';
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 export type StateIOMode = 'filesystem' | 'sandboxed-storage' | 'session-log-append';
 
@@ -41,6 +50,23 @@ export interface CreateStateIOOptions {
   backend?: StateIOBackend;
 }
 
+/**
+ * #5120: a STATE.md destination is written under the STATE.md lock, through the
+ * write seam, like cmdStateMilestoneSwitch (src/state.cts). Loaded lazily: the
+ * lock lives in state.cts, which pulls in most of the engine, and this module
+ * is also the SDK's `createStateIO` surface (host-integration-sdk.cts), whose
+ * other callers never write STATE.md. The lock wait is acquireStateLock's: a
+ * STATE.md held by another live writer makes this write wait, and a lock that
+ * cannot be taken throws, so the write never lands.
+ */
+function writeStateMdThroughSeam(filePath: string, content: string): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { platformWriteSync } = require('./shell-command-projection.cjs') as { platformWriteSync: (filePath: string, content: string) => void };
+  withStateLock(filePath, () => platformWriteSync(filePath, content));
+}
+
 export function createStateIO(
   { io }: { io: StateIOMode },
   options: CreateStateIOOptions = {},
@@ -53,8 +79,14 @@ export function createStateIO(
     // this is the swap-point a non-filesystem host replaces.
     return Object.freeze({
       io: 'filesystem',
-      read(path: string) { return fs.readFileSync(path, 'utf-8'); },
-      write(path: string, content: string) { fs.writeFileSync(path, content, 'utf-8'); },
+      read(filePath: string) { return fs.readFileSync(filePath, 'utf-8'); },
+      write(filePath: string, content: string) {
+        if (path.basename(filePath) === 'STATE.md') {
+          writeStateMdThroughSeam(filePath, content);
+          return;
+        }
+        fs.writeFileSync(filePath, content, 'utf-8');
+      },
     });
   }
   // sandboxed-storage / session-log-append: host backend, fail-closed until bound.

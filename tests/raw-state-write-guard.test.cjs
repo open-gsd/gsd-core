@@ -159,6 +159,23 @@ fs.writeFileSync(${JSON.stringify(target)}, 'fixture written by a test');
     assert.deepEqual(entries.map((e) => [e.fn, e.seam]), [['renameSync', true], ['writeFileSync', true]], 'seam writes are recorded for the paired report');
   });
 
+  test('the real filesystem stateIO adapter writes STATE.md through the seam, under the STATE.md lock (#5120)', (t) => {
+    const dir = createTempDir('rswg-state-io-');
+    t.after(() => cleanup(dir));
+    const target = path.join(dir, '.planning', 'STATE.md');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    // The built adapter (gsd-core/bin/lib/state-io.cjs), the module MCP gsd_write_state reaches.
+    const stateIo = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'state-io.cjs');
+    const main = writeModule(dir, 'tests/main.cjs', `const { createStateIO } = require(${JSON.stringify(stateIo)});
+createStateIO({ io: 'filesystem' }).write(${JSON.stringify(target)}, '# State\\n');`);
+    const entries = runGuarded(dir, main);
+    assert.deepEqual(
+      entries.map((e) => ({ fn: e.fn, violation: e.violation, seam: e.seam, lockHeld: e.lockHeld })),
+      [{ fn: 'renameSync', violation: false, seam: true, lockHeld: true }],
+      JSON.stringify(entries),
+    );
+  });
+
   test('a rename onto STATE.md through the seam module\'s retryRenameSync is a violation (#5120 review)', (t) => {
     const dir = createTempDir('rswg-rename-');
     t.after(() => cleanup(dir));
