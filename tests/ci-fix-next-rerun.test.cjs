@@ -221,9 +221,14 @@ describe('main() env validation', () => {
   }
 
   test('PR_NUMBER " 7 " is trimmed and accepted', async () => {
-    const h = harness({ ...baseEnv, PR_NUMBER: ' 7 ' });
+    const h = harness({ ...baseEnv, PR_NUMBER: ' 7 ' }, {
+      'run list': completed(), api: SHA, 'run view': jobsBody, 'run rerun': '',
+    });
     assert.equal(await h.exec(h.gh), 0);
     assert.equal(h.err.join(''), '');
+    const apiCall = h.gh.calls.find((c) => c[0] === 'api');
+    assert.ok(apiCall, 'pulls read must happen');
+    assert.ok(apiCall.includes(`repos/${REPO}/pulls/7`), apiCall.join(' '));
   });
 
   for (const [len, ok] of [[39, false], [40, true], [41, false]]) {

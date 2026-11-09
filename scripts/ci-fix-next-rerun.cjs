@@ -142,6 +142,7 @@ module.exports = {
   BASE_HEALTH_JOB_NAME,
   TESTS_WORKFLOW_FILE,
   DEFAULT_DEADLINE_MS,
+  DEFAULT_POLL_MS,
   GH_TIMEOUT_MS,
   rerunBaseHealth,
   main,
