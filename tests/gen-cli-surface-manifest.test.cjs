@@ -157,4 +157,50 @@ describe('gen-cli-surface-manifest.cjs compiled-artifact freshness', () => {
       assert.deepEqual(list, [...new Set(list)].sort(), `${canonical}: aliases must be unique and sorted`);
     }
   });
+
+  describe('a compiled file older than its source is judged by content, not by mtime', () => {
+    const ts = require('typescript');
+    const emit = (text, fileName) =>
+      ts.transpileModule(text, {
+        compilerOptions: { module: ts.ModuleKind.NodeNext, target: ts.ScriptTarget.ES2022, strict: true },
+        fileName,
+      }).outputText;
+
+    function writePair(dir, { sourceText, compiledText }) {
+      const source = path.join(dir, 'thing.cts');
+      const compiled = path.join(dir, 'thing.cjs');
+      fs.writeFileSync(source, sourceText);
+      fs.writeFileSync(compiled, compiledText);
+      const now = Date.now() / 1000;
+      fs.utimesSync(compiled, now - 100, now - 100);
+      fs.utimesSync(source, now - 10, now - 10);
+      return { source, compiled };
+    }
+
+    test('T-M14: a source touched after the build but unchanged is not stale', (t) => {
+      const dir = withTmp(t);
+      const sourceText = 'export const answer: number = 42;\n';
+      const p = writePair(dir, { sourceText, compiledText: emit(sourceText, path.join(dir, 'thing.cts')) });
+      assert.equal(staleCompileProblem([p]), null);
+    });
+
+    test('T-M15: a source that changed after the build is stale and names npm run build:lib', (t) => {
+      const dir = withTmp(t);
+      const built = emit('export const answer: number = 42;\n', path.join(dir, 'thing.cts'));
+      const p = writePair(dir, { sourceText: 'export const answer: number = 43;\n', compiledText: built });
+      const message = staleCompileProblem([p]);
+      assert.ok(message && message.includes('npm run build:lib'), message);
+      assert.ok(message.includes('thing.cjs') && message.includes('thing.cts'), message);
+    });
+
+    test('T-M16: when typescript cannot be loaded the mtime comparison decides', (t) => {
+      const dir = withTmp(t);
+      const sourceText = 'export const answer: number = 42;\n';
+      const p = writePair(dir, { sourceText, compiledText: emit(sourceText, path.join(dir, 'thing.cts')) });
+      const message = staleCompileProblem([p], () => {
+        throw new Error('typescript is not installed');
+      });
+      assert.ok(message && message.includes('older than') && message.includes('npm run build:lib'), message);
+    });
+  });
 });
