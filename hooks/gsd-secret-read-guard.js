@@ -1264,54 +1264,52 @@ function subscriptClose(str, i) {
 // Index of the `}` closing a `${` opened just before `k`, or -1. Quotes, a
 // backslash and `$(…)` hide a `}`; a nested `${` takes its own.
 function braceClose(str, k) {
-  let depth = 1;
-  for (; k < str.length; k++) {
-    const c = str[k];
-    if (c === '\\') {
-      k++;
-    } else if (c === '$' && str[k + 1] === "'") {
-      k = ansiCQuoteClose(str, k + 2);
-      if (k === -1) return -1;
-    } else if (c === "'") {
-      k = str.indexOf(c, k + 1);
-      if (k === -1) return -1;
-    } else if (c === '`') {
-      k = backquoteClose(str, k + 1);
-      if (k === -1) return -1;
-    } else if (c === '"') {
-      k = doubleQuoteClose(str, k + 1);
-      if (k === -1) return -1;
-    } else if (c === '$' && str[k + 1] === '(') {
-      k = findParenClose(str, k + 2);
-      if (k >= str.length) return -1;
-    } else if (c === '$' && str[k + 1] === '{') {
-      depth++;
-      k++;
-    } else if (c === '}' && --depth === 0) {
-      return k;
-    }
-  }
-  return -1;
+  return quotedSpanClose(str, k, '}');
 }
 
 // Index of the `"` closing a double-quoted span that starts at `k`, or -1.
 // `$(…)`, `${…}` and backquotes hide a `"`.
 function doubleQuoteClose(str, k) {
+  return quotedSpanClose(str, k, '"');
+}
+
+// The one loop behind braceClose and doubleQuoteClose: `open` holds the spans
+// still open, innermost last, each as the character that closes it. Inside
+// `"…"` a `'` is literal; inside `${…}` it quotes, and a `"` opens a span of
+// its own. An explicit stack, so a long run of `"${` costs no call depth.
+function quotedSpanClose(str, k, first) {
+  const open = [first];
   while (k < str.length) {
     const c = str[k];
-    if (c === '"') return k;
-    if (c === '\\') {
+    const inBrace = open[open.length - 1] === '}';
+    if (c === open[open.length - 1]) {
+      open.pop();
+      if (open.length === 0) return k;
+      k++;
+    } else if (c === '\\') {
       k += 2;
     } else if (c === '$' && str[k + 1] === '(') {
-      k = findParenClose(str, k + 2) + 1;
+      k = findParenClose(str, k + 2);
+      if (k >= str.length) return -1;
+      k++;
     } else if (c === '$' && str[k + 1] === '{') {
-      const j = braceClose(str, k + 2);
-      if (j === -1) return -1;
-      k = j + 1;
+      open.push('}');
+      k += 2;
     } else if (c === '`') {
-      const j = backquoteClose(str, k + 1);
-      if (j === -1) return -1;
-      k = j + 1;
+      k = backquoteClose(str, k + 1);
+      if (k === -1) return -1;
+      k++;
+    } else if (inBrace && c === '$' && str[k + 1] === "'") {
+      k = ansiCQuoteClose(str, k + 2);
+      if (k === -1) return -1;
+      k++;
+    } else if (inBrace && c === "'") {
+      k = str.indexOf(c, k + 1);
+      if (k === -1) return -1;
+      k++;
+    } else if (inBrace && c === '"') {
+      open.push('"');
+      k++;
     } else {
       k++;
     }
