@@ -767,48 +767,9 @@ gsd_run query state.record-session \
   --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
 ```
 
-```bash
-# Locate assigned plan path for ready-ids check; fail closed if not found (#4944)
-PLAN_PATH="${PLAN_PATH:-}"
-P="$PLAN"; case "$P" in ""|*[!0-9]*) ;; *) P=$((10#$P)); [ "$P" -lt 10 ] && P=$(printf "%02d" "$P");; esac
-_match_plan() {
-  _fp=$(sed -n '/^---$/,/^---$/p' "$1" 2>/dev/null | sed -n 's/^plan:[[:space:]]*["'"'"']\{0,1\}\([^"'"'"'[:space:]]*\).*/\1/p' | head -n 1)
-  [ -n "$_fp" ] && { [ "$_fp" = "$PLAN" ] || [ "$_fp" = "$P" ] || { _v="$_fp"; case "$_v" in ""|*[!0-9]*) ;; *) _v=$((10#$_v)); [ "$_v" -lt 10 ] && _v=$(printf "%02d" "$_v");; esac; [ "$_v" = "$P" ]; }; }
-}
-[ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && { _match_plan "$PLAN_PATH" || PLAN_PATH=""; }
-if [ -z "$PLAN_PATH" ] || [ ! -f "$PLAN_PATH" ]; then
-  D="${PHASE_DIR:-$(printf '%s' "${INIT:-}" | jq -r '.phase_dir // empty' 2>/dev/null)}"
-  if [ -z "$D" ] || [ ! -d "$D" ]; then
-    PLAN_PATH=""; echo "WARN: Phase directory not found for plan resolution (${D:-unset})" >&2
-  else
-    _ng=0; [ -n "${ZSH_VERSION:-}" ] && { case "$options[nullglob]" in on) _ng=1;; esac; setopt NULL_GLOB; } || { shopt -q nullglob 2>/dev/null && _ng=1; shopt -s nullglob 2>/dev/null || true; }
-    PH="$PHASE"; case "$PH" in ""|*[!0-9]*) ;; *) PH=$((10#$PH)); [ "$PH" -lt 10 ] && PH=$(printf "%02d" "$PH");; esac
-    C=()
-    for pfx in "$PHASE" "$PH"; do for pl in "$P" "$PLAN"; do
-      for f in "$D/plans/PLAN-${pl}.md" "$D/plans/PLAN-${pl}-"*.md "$D/${pfx}-${pl}-PLAN.md" "$D/${pfx}-${pl}-"*-PLAN.md; do
-        [ -f "$f" ] && { case " ${C[*]} " in *" $f "*) ;; *) _match_plan "$f" && C+=("$f");; esac; }
-      done
-    done; done
-    [ -n "${ZSH_VERSION:-}" ] && { [ "$_ng" -eq 1 ] || unsetopt NULL_GLOB; } || { [ "$_ng" -eq 1 ] || shopt -u nullglob 2>/dev/null || true; }
-    if [ "${#C[@]}" -eq 1 ]; then for c in "${C[@]}"; do PLAN_PATH="$c"; done; else PLAN_PATH=""; echo "WARN: Could not resolve unambiguous PLAN_PATH in $D (matches: ${#C[@]})" >&2; fi
-  fi
-fi
+**Ready-ids gate (#4944, #2388):** resolve this plan, then mark only the IDs that are ready. Fail closed when the plan cannot be resolved.
 
-# Gate requirement completion on ready-ids; fail closed if unresolved (#2388, #4944, #4956)
-if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ -n "$(printf '%s' "${REQ_IDS:-}" | tr -d '[:space:]')" ]; then
-  _ws=0; [ -n "${ZSH_VERSION:-}" ] && { case "$options[shwordsplit]" in on) _ws=1;; esac; setopt SH_WORD_SPLIT; }
-  set -f
-  READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} 2>/dev/null || true)
-  READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
-  if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
-    gsd_run query requirements.mark-complete ${READY_IDS}
-  else
-    echo "WARN: No requirement IDs ready to mark complete for ${PLAN_PATH} (blocked or query failed)" >&2
-  fi
-  set +f
-  [ -n "${ZSH_VERSION:-}" ] && { [ "$_ws" -eq 1 ] || unsetopt SH_WORD_SPLIT; }
-fi
-```
+@~/.claude/gsd-core/references/executor-ready-ids-gate.md
 
 **Requirement IDs:** Extract from PLAN.md `requirements:` (e.g. `[AUTH-01]`). If absent, skip. Query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (#4956) before `requirements mark-complete`; skip if `PLAN_PATH` cannot be resolved. Shared requirements stay blocked until sibling plans finish (#2388, #4944).
 

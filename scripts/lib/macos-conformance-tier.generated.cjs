@@ -176,6 +176,7 @@ module.exports = {
   "tests/milestone-archive.test.cjs",
   "tests/milestone-release-tags.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
+  "tests/milestone.test.cjs",
   "tests/model-resolver.test.cjs",
   "tests/new-milestone-clear-phases.test.cjs",
   "tests/no-exact-case-env-access.rule.test.cjs",
