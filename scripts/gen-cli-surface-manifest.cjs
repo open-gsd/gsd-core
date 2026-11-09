@@ -48,8 +48,9 @@ function compiledMatchesSource(source, compiled, loadTypescript) {
     const ts = loadTypescript();
     const config = ts.readConfigFile(path.join(ROOT, 'tsconfig.build.json'), ts.sys.readFile);
     if (config.error !== undefined) return null;
-    const { options, errors } = ts.convertCompilerOptionsFromJson(config.config.compilerOptions, ROOT);
-    if (errors.length > 0) return null;
+    // parseJsonConfigFileContent resolves `extends`; 18003 (no input files) is about the include globs, not the options.
+    const { options, errors } = ts.parseJsonConfigFileContent(config.config, ts.sys, ROOT);
+    if (errors.some((e) => e.code !== 18003)) return null;
     const emitted = ts.transpileModule(fs.readFileSync(source, 'utf8'), { compilerOptions: options, fileName: source });
     return emitted.outputText === fs.readFileSync(compiled, 'utf8');
   } catch {

@@ -109,6 +109,12 @@ export interface NamedArgSpec {
    */
   eqRejectPrefix?: Record<string, string>;
   /**
+   * A whitespace-only value counts as missing in both forms (`--name '  '`,
+   * `--name '\t'`, `--name=  `), overriding `emptyValueFlags` / `emptyEqFlags`.
+   * Subset of `nonEmptyFlags`. Reader: context-predicates.
+   */
+  blankIsMissingFlags?: string[];
+  /**
    * Template for the missing-value InvalidArgs `reason` of a `nonEmptyFlags`
    * member; `{flag}` is replaced by `--name`. Default `Missing value for --name`.
    * Keeps a verb's shipped wording inside the seam.
@@ -257,6 +263,7 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
   assertSubsetOf(spec, 'emptyEqFlags', 'nonEmptyFlags');
   assertSubsetOf(spec, 'emptyEqFlags', 'eqFlags');
   assertSubsetOf(spec, 'trimEqFlags', 'eqFlags');
+  assertSubsetOf(spec, 'blankIsMissingFlags', 'nonEmptyFlags');
   assertEqRejectPrefix(spec);
   if (
     spec.missingValueMessage !== undefined &&
@@ -369,13 +376,15 @@ function missingRequired(spec: NamedArgSpec, data: ParsedNamedArgs): NamedArgsRe
  * whitespace-only `--f=` value count unless relaxed.
  */
 function lacksValue(args: string[], spec: NamedArgSpec, flag: string, occ: Occurrence): boolean {
+  const blankMissing = (spec.blankIsMissingFlags ?? []).includes(flag);
   if (occ.inline !== null) {
     const prefix = spec.eqRejectPrefix?.[flag];
     if (prefix !== undefined && occ.inline.startsWith(prefix)) return true;
-    return occ.inline.trim() === '' && !(spec.emptyEqFlags ?? []).includes(flag);
+    return occ.inline.trim() === '' && (blankMissing || !(spec.emptyEqFlags ?? []).includes(flag));
   }
   const next = args[occ.index + 1];
   if (next === undefined || isFlagToken(next)) return true;
+  if (blankMissing && next.trim() === '') return true;
   return next === '' && !(spec.emptyValueFlags ?? []).includes(flag);
 }
 

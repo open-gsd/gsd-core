@@ -4188,32 +4188,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       return;
     }
 
-    const requireNonEmpty = (flagName, rawValue) => {
-      // A whitespace-only space-form value is a value to the seam; this verb refuses it. The `--class==A`
-      // double-equals typo is the seam's (`eqRejectPrefix`), so the space form `--class =A` stays a literal.
-      if (rawValue.trim() === '') {
-        error(`context-predicates: ${flagName} requires a non-empty value`, ERROR_REASON.USAGE);
-        return null;
-      }
-      return rawValue;
-    };
-
     const opts = {};
-    if (hasClass) {
-      const v = requireNonEmpty('--class', parsed.class);
-      if (v === null) return;
-      opts.klass = v;
-    }
-    if (hasPrefix) {
-      const v = requireNonEmpty('--prefix', parsed.prefix);
-      if (v === null) return;
-      opts.prefix = v;
-    }
-    if (hasContains) {
-      const v = requireNonEmpty('--contains', parsed.contains);
-      if (v === null) return;
-      opts.contains = v;
-    }
+    if (hasClass) opts.klass = parsed.class;
+    if (hasPrefix) opts.prefix = parsed.prefix;
+    if (hasContains) opts.contains = parsed.contains;
 
     const contextMdPath = path.join(__dirname, '..', '..', 'CONTEXT.md');
     let markdown;

@@ -308,6 +308,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     valueFlags: ['class', 'contains', 'prefix'],
     eqFlags: ['class', 'contains', 'prefix'],
     nonEmptyFlags: ['class', 'contains', 'prefix'],
+    // A whitespace-only value (`--class '  '`) is as missing as `--class=`.
+    blankIsMissingFlags: ['class', 'contains', 'prefix'],
     // `--class==A` is a typo shape, never the literal `=A`; the space form `--class =A` is a value.
     eqRejectPrefix: { class: '=', contains: '=', prefix: '=' },
     missingValueMessage: 'context-predicates: {flag} requires a non-empty value',
