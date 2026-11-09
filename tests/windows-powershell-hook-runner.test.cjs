@@ -122,9 +122,34 @@ describe('#5850 unchanged surfaces', () => {
     assert.equal(hooksSurface.usesPowerShellHookShell(win({ hookShell: 'bash' })), false);
   });
 
-  test('portable hooks keep requiring bash (#5100): no command without it', () => {
-    const cmd = hooksSurface.buildHookCommand(CONFIG_DIR, GUARD, win({ portableHooks: true, env: {}, existsSync: () => false }));
-    assert.equal(cmd, null);
+  test('portable hooks on win32 claude are the PowerShell runner with a $HOME-relative script, with and without Git Bash', () => {
+    const os = require('node:os');
+    const home = os.homedir().replace(/\\/g, '/');
+    for (const [, bash] of GIT_BASH_VARIANTS) {
+      const cmd = hooksSurface.buildHookCommand(`${home}/.claude`, GUARD, win({ ...bash, portableHooks: true }));
+      assert.ok(typeof cmd === 'string' && cmd.startsWith('& '), cmd);
+      assert.doesNotMatch(cmd, POSIX_ONLY);
+      assert.ok(cmd.includes(`"$HOME/.claude/hooks/${GUARD}"`), cmd);
+      assert.ok(cmd.endsWith(EXIT), cmd);
+    }
+  });
+
+  test('portable PowerShell hooks register no bash resolver entrypoint', () => {
+    const os = require('node:os');
+    const entrypoints = [];
+    const cmd = hooksSurface.buildHookCommand(`${os.homedir().replace(/\\/g, '/')}/.claude`, GUARD, win({ portableHooks: true, env: {}, existsSync: () => false, configuredEntrypoints: entrypoints }));
+    assert.ok(cmd);
+    assert.equal(entrypoints.length, 1);
+    assert.ok(!entrypoints[0].scriptPath.endsWith('gsd-node-runner.sh'));
+  });
+
+  test('portable hooks keep the bash resolver off win32 and for non-claude runtimes', () => {
+    const os = require('node:os');
+    const home = os.homedir().replace(/\\/g, '/');
+    const linux = hooksSurface.buildHookCommand(`${home}/.claude`, GUARD, { platform: 'linux', runtime: 'claude', portableHooks: true, execPath: '/usr/bin/node' });
+    assert.match(linux, /gsd-node-runner\.sh/);
+    const other = hooksSurface.buildHookCommand(`${home}/.claude`, GUARD, win({ runtime: 'antigravity', portableHooks: true, env: { ProgramFiles: 'C:\\Program Files' }, existsSync: (p) => /bash\.exe$/i.test(String(p)) }));
+    assert.match(other, /gsd-node-runner\.sh/);
   });
 });
 
@@ -200,13 +225,13 @@ describe('#5850 rewriter and settings projection', () => {
     assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, 'node /home/me/my-custom-hook.js');
   });
 
-  test('the bash resolver shape converts when its script is a plain path and is kept for $HOME paths', () => {
+  test('the bash resolver shape converts for plain and $HOME-relative scripts', () => {
     const plain = `bash "C:/Users/u/.claude/hooks/gsd-node-runner.sh" "/usr/bin/node" "C:/Users/u/.claude/hooks/${GUARD}"`;
     const portable = `bash "$HOME/.claude/hooks/gsd-node-runner.sh" "/usr/bin/node" "$HOME/.claude/hooks/${GUARD}"`;
     const settings = settingsWith([plain, portable]);
     assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, hooksSurface.buildNodeRunnerChainToken(), win()), true);
     assert.ok(settings.hooks.PreToolUse[0].hooks[0].command.startsWith('& '));
-    assert.equal(settings.hooks.PreToolUse[1].hooks[0].command, portable);
+    assert.ok(settings.hooks.PreToolUse[1].hooks[0].command.endsWith(`"$HOME/.claude/hooks/${GUARD}"${EXIT}`), settings.hooks.PreToolUse[1].hooks[0].command);
   });
 
   test('a managed statusLine chain converts and the second run is a no-op', () => {
