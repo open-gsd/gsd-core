@@ -650,3 +650,321 @@ describe('#5113: a verbatim write publishes the content exactly as given', () =>
     });
   });
 }
+
+/**
+ * #5831: the shell-projection seam's no-fallback atomic write
+ * (`platformWriteSync(..., { atomic: true })`), byte-exact restore
+ * (`platformRestoreFileSync`) and byte read (`platformReadBytesSync`).
+ *
+ * The default `platformWriteSync` falls back to a direct write when the temp
+ * file cannot be written or atomically renamed; that direct write truncates
+ * the destination before it can fail. The atomic mode never touches the
+ * destination except by rename, and removes its temp file on every failure.
+ */
+describe('#5831: atomic write, restore and byte read in the shell-projection seam', () => {
+  const { beforeEach, afterEach, mock } = require('node:test');
+  const { createTempDir, mockPartialWriteThenThrow } = require('./helpers.cjs');
+  const scp = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+  const PREVIOUS = '# Archive\n\nEarlier entries that exist nowhere else.\n';
+  let dir;
+  let target;
+
+  beforeEach(() => {
+    dir = createTempDir('gsd-atomic-write-');
+    target = path.join(dir, 'ARCHIVE.md');
+  });
+
+  afterEach(() => {
+    mock.restoreAll();
+    cleanup(dir);
+  });
+
+  function siblings() {
+    return fs.readdirSync(dir).sort();
+  }
+
+  function errno(code) {
+    return Object.assign(new Error(`${code}: simulated`), { code });
+  }
+
+  // ── platformWriteSync { atomic: true } ─────────────────────────────────
+
+  test('an atomic write publishes the same normalized content as a default write', () => {
+    const other = path.join(dir, 'OTHER.md');
+    const content = '# Title\r\n\r\n\r\n\r\nbody';
+    scp.platformWriteSync(target, content, { atomic: true });
+    scp.platformWriteSync(other, content);
+    assert.deepStrictEqual(fs.readFileSync(target), fs.readFileSync(other));
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md', 'OTHER.md'], 'no temp file is left');
+  });
+
+  for (const destination of ['present', 'absent']) {
+    test(`an atomic write reports the dev/ino of the file it published via onCreated (destination ${destination})`, () => {
+      if (destination === 'present') fs.writeFileSync(target, PREVIOUS);
+      const seen = [];
+      scp.platformWriteSync(target, '# New\n', { atomic: true, onCreated: (id) => seen.push(id) });
+      const st = fs.statSync(target, { bigint: true });
+      assert.deepStrictEqual(seen, [{ dev: st.dev, ino: st.ino }]);
+    });
+
+    test(`a temp-file write that fails partway never falls back to a direct write (destination ${destination})`, () => {
+      if (destination === 'present') fs.writeFileSync(target, PREVIOUS);
+      const before = destination === 'present' ? fs.readFileSync(target) : null;
+      // The temp write lands some bytes, then fails; every write to the
+      // destination itself truncates it first and then fails — the
+      // direct-write fallback on a full disk.
+      const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3, { resolveDescriptors: true });
+      try {
+        assert.throws(() => scp.platformWriteSync(target, '# New\n', { atomic: true }), (err) => err.code === 'ENOSPC');
+      } finally {
+        restore();
+      }
+      if (before === null) assert.strictEqual(fs.existsSync(target), false, 'the destination stays absent');
+      else assert.deepStrictEqual(fs.readFileSync(target), before, 'the destination keeps its previous bytes');
+      assert.deepStrictEqual(siblings(), destination === 'present' ? ['ARCHIVE.md'] : [], 'the partial temp file is removed');
+    });
+  }
+
+  // The default write falls back to a direct write when the temp file cannot be written. That
+  // fallback truncates the destination, but it captures the old bytes first and puts them back
+  // when its own write fails, so the same failure ends with the previous bytes and no temp file.
+  test('the same failure under a default write puts the previous bytes back and leaves no temp file', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target), 3, { resolveDescriptors: true });
+    try {
+      assert.throws(() => scp.platformWriteSync(target, '# New\n'), (err) => err.code === 'ENOSPC');
+    } finally {
+      restore();
+    }
+    assert.deepStrictEqual(fs.readFileSync(target), Buffer.from(PREVIOUS), 'the direct-write fallback restored it');
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md'], 'no temp file is left');
+  });
+
+  test('a rename that cannot be atomic (EXDEV) throws and leaves the destination and no temp file', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    mock.method(fs, 'renameSync', () => { throw errno('EXDEV'); });
+    assert.throws(() => scp.platformWriteSync(target, '# New\n', { atomic: true }), (err) => err.code === 'EXDEV');
+    mock.restoreAll();
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md']);
+  });
+
+  // onCreated reports a published file only: a failed rename unlinks the temp and frees its inode.
+  test('onCreated is not called when the rename fails', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    const seen = [];
+    mock.method(fs, 'renameSync', () => { throw errno('EIO'); });
+    assert.throws(
+      () => scp.platformWriteSync(target, '# New\n', { atomic: true, onCreated: (id) => seen.push(id) }),
+      (err) => err.code === 'EIO',
+    );
+    mock.restoreAll();
+    assert.strictEqual(seen.length, 0);
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md']);
+  });
+
+  test('onCreated is not called when the parent-directory check refuses the publish', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    const seen = [];
+    const swappedAway = `${dir}.swapped`;
+    const createTemp = (basePath, _suffix, mode) => {
+      const tmpPath = `${basePath}.swap.${process.pid}.tmp`;
+      const fd = fs.openSync(tmpPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, mode);
+      if (process.platform === 'win32') {
+        // Windows refuses to rename a directory while a handle opened inside it is open (the rename
+        // threw here and the test never reached the check), so the swap is simulated: the
+        // directory's identity reads as a different one from now on.
+        const realStat = fs.statSync;
+        mock.method(fs, 'statSync', (p, ...rest) => {
+          const st = realStat.call(fs, p, ...rest);
+          if (p !== dir) return st;
+          return { dev: st.dev, ino: typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1 };
+        });
+        return { fd, tmpPath };
+      }
+      // Replace the parent directory with a different one after the walk recorded its identity.
+      fs.renameSync(dir, swappedAway);
+      fs.mkdirSync(dir);
+      return { fd, tmpPath };
+    };
+    try {
+      assert.throws(() => scp.platformWriteSync(target, '# New\n', {
+        atomic: true,
+        onCreated: (id) => seen.push(id),
+        writeSeams: { createTemp },
+      }), (err) => err.code === 'ENXIO');
+      assert.strictEqual(seen.length, 0);
+    } finally {
+      mock.restoreAll();
+      cleanup(dir);
+      if (fs.existsSync(swappedAway)) fs.renameSync(swappedAway, dir);
+    }
+  });
+
+  // ── platformRestoreFileSync ────────────────────────────────────────────
+
+  test('a restore puts back the exact bytes, unnormalized', () => {
+    const bytes = Buffer.concat([Buffer.from('# A\r\n\r\n\r\n\r\nno trailing newline'), Buffer.from([0xff, 0xfe])]);
+    fs.writeFileSync(target, 'something else\n');
+    scp.platformRestoreFileSync(target, bytes);
+    assert.deepStrictEqual(fs.readFileSync(target), bytes);
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md']);
+  });
+
+  test('restoring "absent" removes the file, and is a no-op when it is already gone', () => {
+    fs.writeFileSync(target, PREVIOUS);
+    scp.platformRestoreFileSync(target, null);
+    assert.strictEqual(fs.existsSync(target), false);
+    scp.platformRestoreFileSync(target, null);
+    assert.deepStrictEqual(siblings(), []);
+  });
+
+  test('a restore whose temp write creates the file and then fails leaves no temp file and the destination as it was', () => {
+    fs.writeFileSync(target, 'published block\n');
+    const before = fs.readFileSync(target);
+    const restore = mockPartialWriteThenThrow(fs, (p) => typeof p === 'string' && p.startsWith(target + '.restore.'), 2, { resolveDescriptors: true });
+    try {
+      assert.throws(() => scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS)), (err) => err.code === 'ENOSPC');
+    } finally {
+      restore();
+    }
+    assert.deepStrictEqual(fs.readFileSync(target), before);
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md'], 'the partial restore temp file is removed');
+  });
+
+  // ── platformReadBytesSync ──────────────────────────────────────────────
+
+  test('a byte read returns the exact bytes, null when absent, and throws on other errors', () => {
+    const bytes = Buffer.from([0x23, 0x0d, 0x0a, 0xff]);
+    fs.writeFileSync(target, bytes);
+    assert.deepStrictEqual(scp.platformReadBytesSync(target), bytes);
+    assert.strictEqual(scp.platformReadBytesSync(path.join(dir, 'missing.md')), null);
+    assert.throws(() => scp.platformReadBytesSync(dir), (err) => err.code === 'EISDIR');
+  });
+
+  // ── hostile names and special files ────────────────────────────────────
+
+  const posixOnly = { skip: process.platform === 'win32' ? 'POSIX symlinks and FIFOs' : false };
+
+  // The real temp name is `<target>.<label>.<pid>.<12 hex>`; a fixed first `randomBytes` result makes
+  // the first attempt land on a name the test has already planted, so the collision really happens.
+  function forceFirstTempSuffix(hexSuffix) {
+    const nodeCrypto = require('node:crypto');
+    const realRandomBytes = nodeCrypto.randomBytes;
+    const state = { calls: 0, opened: [] };
+    mock.method(nodeCrypto, 'randomBytes', (...args) => (state.calls++ === 0 ? Buffer.from(hexSuffix, 'hex') : realRandomBytes(...args)));
+    // Every path opened, so a test can prove the planted name was really attempted.
+    const realOpen = fs.openSync;
+    mock.method(fs, 'openSync', (p, ...rest) => {
+      if (typeof p === 'string') state.opened.push(p);
+      return realOpen.call(fs, p, ...rest);
+    });
+    return state;
+  }
+  const FIXED_HEX = '0a0b0c0d0e0f';
+
+  test('an atomic publish never writes through a symlink planted at the temp name its first attempt picks', posixOnly, () => {
+    const victim = path.join(dir, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+    const planted = `${target}.tmp.${process.pid}.${FIXED_HEX}`;
+    fs.symlinkSync(victim, planted);
+    const rng = forceFirstTempSuffix(FIXED_HEX);
+    scp.platformWriteSync(target, '# New\n', { atomic: true });
+    mock.restoreAll();
+    assert.ok(rng.opened.includes(planted), 'the planted name was attempted, so the collision really happened');
+    assert.ok(rng.calls >= 2, 'the first temp name collided with the planted link and a new one was drawn');
+    assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), '# New\n');
+  });
+
+  test('a restore never writes through a symlink planted at the temp name its first attempt picks', posixOnly, () => {
+    const victim = path.join(dir, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+    fs.writeFileSync(target, 'current\n');
+    const planted = `${target}.restore.${process.pid}.${FIXED_HEX}`;
+    fs.symlinkSync(victim, planted);
+    const rng = forceFirstTempSuffix(FIXED_HEX);
+    scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS));
+    mock.restoreAll();
+    assert.ok(rng.opened.includes(planted), 'the planted name was attempted, so the collision really happened');
+    assert.ok(rng.calls >= 2, 'the first temp name collided with the planted link and a new one was drawn');
+    assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the symlink target is untouched');
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+  });
+
+  test('a byte read with noFollow refuses a symlink (ELOOP); without it the link is read through', posixOnly, () => {
+    const real = path.join(dir, 'real.md');
+    fs.writeFileSync(real, 'LINKED BYTES');
+    const link = path.join(dir, 'link.md');
+    fs.symlinkSync(real, link);
+    assert.throws(() => scp.platformReadBytesSync(link, { noFollow: true }), (err) => err.code === 'ELOOP');
+    assert.deepStrictEqual(scp.platformReadBytesSync(link), Buffer.from('LINKED BYTES'));
+    assert.deepStrictEqual(scp.platformReadBytesSync(real, { noFollow: true }), Buffer.from('LINKED BYTES'), 'a regular file reads normally');
+  });
+
+  test('restoring an absent file with a mode creates it with that mode', () => {
+    scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS), { mode: 0o600 });
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, 0o600, 'the given mode is applied');
+  });
+
+  test('a restore refuses, with ENXIO, a directory that is not the one it had at entry', () => {
+    fs.writeFileSync(target, 'current\n');
+    const realStat = fs.statSync;
+    let parentStats = 0;
+    mock.method(fs, 'statSync', (p, ...rest) => {
+      const st = realStat.call(fs, p, ...rest);
+      // The directory is stat'ed as bigint; +1n is exact where a number id past 2^53 would not move.
+      if (p === dir && ++parentStats > 1) return { dev: st.dev, ino: typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1 };
+      return st;
+    });
+    assert.throws(() => scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS)), (err) => err.code === 'ENXIO');
+    mock.restoreAll();
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), 'current\n', 'the destination is untouched');
+    assert.deepStrictEqual(siblings(), ['ARCHIVE.md'], 'no temp file is left');
+  });
+
+  test('a byte read of a FIFO fails with ENXIO instead of blocking', posixOnly, () => {
+    const { spawnSync } = require('node:child_process');
+    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    assert.strictEqual(spawnSync('mkfifo', [target], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    const lib = require.resolve('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const script = `try { require(${JSON.stringify(lib)}).platformReadBytesSync(${JSON.stringify(target)}); console.log('READ'); }` +
+      ` catch (e) { console.log('THREW ' + e.code); }`;
+    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+    assert.strictEqual(child.error, undefined, `the read must not block (${child.error && child.error.code})`);
+    assert.strictEqual(child.stdout.trim(), 'THREW ENXIO');
+  });
+
+  test('restoring "absent" with an identity unlinks only the file that identity names', () => {
+    fs.writeFileSync(target, 'created by this run\n');
+    const { dev, ino } = fs.lstatSync(target, { bigint: true });
+    // A different inode takes the name: created while the first still exists.
+    const incoming = path.join(dir, 'incoming.md');
+    fs.writeFileSync(incoming, 'FOREIGN\n');
+    fs.renameSync(incoming, target);
+
+    assert.throws(() => scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev, ino } }), (err) => err.code === 'ESTALE');
+    assert.strictEqual(fs.readFileSync(target, 'utf-8'), 'FOREIGN\n', 'the foreign file stays');
+
+    const mine = fs.lstatSync(target, { bigint: true });
+    scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
+    assert.strictEqual(fs.existsSync(target), false, 'a matching identity is unlinked');
+    scp.platformRestoreFileSync(target, null, { unlinkOnlyIf: { dev: mine.dev, ino: mine.ino } });
+  });
+
+  // ── permission bits ────────────────────────────────────────────────────
+
+  for (const mode of [0o600, 0o640, 0o644]) {
+    test(`an atomic write and a restore keep the destination's permission bits (${mode.toString(8)})`, () => {
+      fs.writeFileSync(target, PREVIOUS);
+      fs.chmodSync(target, mode);
+      scp.platformWriteSync(target, '# New\n', { atomic: true });
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, mode, 'the atomic publish keeps the mode');
+      scp.platformRestoreFileSync(target, Buffer.from(PREVIOUS));
+      if (process.platform !== 'win32') assert.strictEqual(fs.statSync(target).mode & 0o777, mode, 'the restore keeps the mode');
+      assert.strictEqual(fs.readFileSync(target, 'utf-8'), PREVIOUS);
+    });
+  }
+});

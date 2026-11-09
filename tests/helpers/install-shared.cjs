@@ -702,6 +702,102 @@ function runMinimalInstall({ runtime, scope, extraArgs = [], installScript = INS
   }
 }
 
+/**
+ * Recursively freeze plain objects and arrays in place; returns `value`.
+ * @param {*} value
+ */
+function deepFreeze(value) {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.keys(value)) deepFreeze(value[key]);
+  }
+  return value;
+}
+
+/**
+ * Memoizing installer fixture (#4688). `get({ runtime, scope, extraArgs?, extraEnv? })`
+ * installs once per distinct key and returns the same deep-frozen result on repeat
+ * calls. `release()` removes every cached root (removal failures are swallowed) and
+ * empties the cache. A caller-supplied `root` is rejected: a shared fixture owns its root.
+ *
+ * @param {object} [deps]
+ * @param {(opts: object) => object} [deps.install]
+ * @param {(root: string) => void} [deps.remove]
+ */
+function createRuntimeFixtureCache({
+  install = runMinimalInstall,
+  remove = (root) => fs.rmSync(root, { recursive: true, force: true }),
+} = {}) {
+  const entries = new Map();
+  return {
+    get(opts) {
+      if (opts === undefined || opts === null || typeof opts !== 'object') {
+        throw new TypeError('installRuntimeFixture: options object is required');
+      }
+      const { runtime, scope } = opts;
+      if (typeof runtime !== 'string' || runtime === '') {
+        throw new TypeError('installRuntimeFixture: runtime must be a non-empty string');
+      }
+      if (typeof scope !== 'string' || scope === '') {
+        throw new TypeError('installRuntimeFixture: scope must be a non-empty string');
+      }
+      if ('root' in opts && opts.root !== undefined) {
+        throw new TypeError(
+          'installRuntimeFixture: a shared fixture owns its root; use runMinimalInstall for a caller-owned root',
+        );
+      }
+      const extraArgs = opts.extraArgs ?? [];
+      const extraEnv = opts.extraEnv ?? {};
+      const key = JSON.stringify([
+        runtime,
+        scope,
+        extraArgs,
+        Object.entries(extraEnv).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      ]);
+      if (!entries.has(key)) {
+        const result = install({ runtime, scope, extraArgs, extraEnv });
+        entries.set(key, deepFreeze(result));
+      }
+      return entries.get(key);
+    },
+    release() {
+      for (const entry of entries.values()) {
+        try {
+          remove(entry.root);
+        } catch { /* best-effort teardown */ }
+      }
+      entries.clear();
+    },
+    size() {
+      return entries.size;
+    },
+  };
+}
+
+const defaultRuntimeFixtureCache = createRuntimeFixtureCache();
+let exitHookRegistered = false;
+
+/**
+ * Install `{ runtime, scope }` once and share the result (#4688).
+ *
+ * One install per key per test FILE (`node --test` runs each file in its own
+ * process). The result is deep-frozen and SHARED, so only read-only consumers
+ * may use it: a test that writes into the tree, reinstalls, uninstalls or
+ * pre-seeds before install must keep `runMinimalInstall`. Do not register
+ * `t.after(cleanup(root))` on a shared fixture: the first test would delete the
+ * tree for the rest. The cached roots are removed at process exit.
+ *
+ * @param {{ runtime: string, scope: string, extraArgs?: string[], extraEnv?: object }} opts
+ */
+function installRuntimeFixture(opts) {
+  const result = defaultRuntimeFixtureCache.get(opts);
+  if (!exitHookRegistered) {
+    exitHookRegistered = true;
+    process.once('exit', () => defaultRuntimeFixtureCache.release());
+  }
+  return result;
+}
+
 function manifestSkillSet(manifest) {
   if (!manifest || !manifest.files) return new Set();
   const out = new Set();
@@ -816,6 +912,8 @@ module.exports = {
   simulateHookCopy,
   installerEnv,
   runMinimalInstall,
+  createRuntimeFixtureCache,
+  installRuntimeFixture,
   manifestSkillSet,
   manifestAgentCount,
   collectSkillBasenamesOnDisk,

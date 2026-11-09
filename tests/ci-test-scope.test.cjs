@@ -48,41 +48,32 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=false for root markdown, got: ${JSON.stringify(result)}`);
   });
 
-  test('pipeline workflow (test.yml) — product_changed true, full_matrix true, workflow contract tests', () => {
+  test('pipeline workflow (test.yml) alone — #6075: inert lane, workflow lints only, no matrix', () => {
     const result = scopeFor(['.github/workflows/test.yml']);
-    assert.strictEqual(result.code_changed, true);
-    assert.strictEqual(result.product_changed, true,
-      `expected product_changed=true for test.yml, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.full_matrix, true);
-    assert.ok(result.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'));
-    assert.ok(result.targeted_tests.includes('tests/release-tarball-smoke-workflow.test.cjs'));
-    // #4641: the `test` job's windows lane is deleted; full_matrix (already
-    // asserted true above) is the only Windows signal left, and classify()
-    // emits no windows_tests key at all.
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
+    assert.ok(result.targeted_tests.length > 0, JSON.stringify(result));
+    assert.ok(result.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'), JSON.stringify(result));
+    assert.ok(result.targeted_tests.includes('tests/pr-template-policy.test.cjs'), JSON.stringify(result));
+    // #4641: classify() emits no windows_tests key at all.
     assert.strictEqual(Object.hasOwn(result, 'windows_tests'), false,
       `expected no windows_tests property, got keys: ${JSON.stringify(Object.keys(result))}`);
   });
 
-  test('pipeline workflow (install-smoke.yml) — product_changed true, full_matrix true', () => {
+  test('pipeline workflow (install-smoke.yml) alone — #6075: no matrix', () => {
     const result = scopeFor(['.github/workflows/install-smoke.yml']);
-    assert.strictEqual(result.code_changed, true);
-    assert.strictEqual(result.product_changed, true,
-      `expected product_changed=true for install-smoke.yml, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.full_matrix, true);
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
   });
 
-  test('inert CI only (stale.yml) — code_changed true, product_changed false, full_matrix false', () => {
+  test('workflow (stale.yml) alone — code_changed true, product_changed false, shallow-checkout lint targeted', () => {
     const result = scopeFor(['.github/workflows/stale.yml']);
-    assert.strictEqual(result.code_changed, true,
-      `expected code_changed=true for inert CI, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.product_changed, false,
-      `expected product_changed=false for inert CI, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.full_matrix, false,
-      `expected full_matrix=false for inert CI, got: ${JSON.stringify(result)}`);
-    assert.ok(result.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'),
-      `expected workflow-shell-pinning in targeted_tests, got: ${JSON.stringify(result.targeted_tests)}`);
-    assert.ok(result.targeted_tests.includes('tests/policy-lint-shallow-checkout.test.cjs'),
-      `expected policy-lint-shallow-checkout in targeted_tests for inert CI, got: ${JSON.stringify(result.targeted_tests)}`);
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
+    assert.ok(result.targeted_tests.includes('tests/policy-lint-shallow-checkout.test.cjs'), JSON.stringify(result));
   });
 
   test('TS runtime sources (src/semver-compare.cts) — code_changed true, product_changed true, full_matrix false, semver tests targeted', () => {
@@ -110,13 +101,11 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=true for gsd-core/ change, got: ${JSON.stringify(result)}`);
   });
 
-  test('unknown/new workflow defaults to pipeline (fail-safe) — product_changed true', () => {
+  test('unknown/new workflow alone — #6075: CI YAML, no matrix', () => {
     const result = scopeFor(['.github/workflows/brand-new-thing.yml']);
-    assert.strictEqual(result.code_changed, true);
-    assert.strictEqual(result.product_changed, true,
-      `expected product_changed=true for unknown workflow (fail-safe), got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.full_matrix, true,
-      `expected full_matrix=true for unknown workflow (fail-safe), got: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
   });
 
   test('mixed docs + code — escalates to product_changed true', () => {
@@ -127,23 +116,18 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=true for docs+code, got: ${JSON.stringify(result)}`);
   });
 
-  test('inert CI (docs-required.yml) — includes shallow-checkout policy test, product_changed false', () => {
+  test('workflow (docs-required.yml) alone — #6075: code_changed true, product_changed false, no matrix', () => {
     const result = scopeFor(['.github/workflows/docs-required.yml']);
-    assert.strictEqual(result.code_changed, true,
-      `expected code_changed=true for docs-required.yml, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.product_changed, false,
-      `expected product_changed=false for docs-required.yml, got: ${JSON.stringify(result)}`);
-    assert.strictEqual(result.full_matrix, false,
-      `expected full_matrix=false for docs-required.yml, got: ${JSON.stringify(result)}`);
-    assert.ok(result.targeted_tests.includes('tests/policy-lint-shallow-checkout.test.cjs'),
-      `expected policy-lint-shallow-checkout in targeted_tests for docs-required.yml, got: ${JSON.stringify(result.targeted_tests)}`);
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false, JSON.stringify(result));
+    assert.ok(result.targeted_tests.length > 0, JSON.stringify(result));
   });
 
-  test('mixed docs + inert CI — code_changed true, product_changed false (inert lane)', () => {
+  test('mixed docs + CI YAML — #6075: inert lane (code true, product false, no matrix)', () => {
     const result = scopeFor(['docs/x.md', '.github/workflows/stale.yml']);
-    assert.strictEqual(result.code_changed, true);
-    assert.strictEqual(result.product_changed, false,
-      `expected product_changed=false for docs+inert, got: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
     assert.strictEqual(result.full_matrix, false);
   });
 
@@ -385,83 +369,125 @@ describe('ci-test-scope superset invariant (#494, rescinded by #4421)', () => {
   });
 });
 
-describe('INERT_WORKFLOWS allowlist integrity guard', () => {
-  // Load the INERT_WORKFLOWS set from the script by spawning it and using --files
-  // on a sentinel path, then separately verify the set contents via the filesystem.
+describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix', () => {
+  const { classify } = require('../scripts/ci-test-scope.cjs');
 
-  // Known pipeline workflows that MUST NOT appear in INERT_WORKFLOWS.
-  // Must stay in sync with PROTECTED_WORKFLOWS in scripts/ci-test-scope.cjs.
-  const KNOWN_PIPELINE = [
-    'test.yml',
-    'install-smoke.yml',
-    'mutation.yml',
-    'security-scan.yml',
-    'release.yml',
-  ];
+  function assertInert(files) {
+    const result = scopeFor(files);
+    assert.strictEqual(result.code_changed, true, `${files}: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.product_changed, false, `${files}: ${JSON.stringify(result)}`);
+    assert.strictEqual(result.full_matrix, false, `${files}: ${JSON.stringify(result)}`);
+    assert.ok(result.targeted_tests.length > 0, `${files}: ${JSON.stringify(result)}`);
+    assert.ok(!result.targeted_tests.includes('unit'), `${files}: ${JSON.stringify(result)}`);
+    return result;
+  }
 
-  // Canonical inert workflow list — reused by both tests below.
-  const knownInert = [
-    'stale.yml', 'branch-cleanup.yml', 'branch-naming.yml', 'auto-label-issues.yml',
-    'auto-branch.yml', 'auto-backmerge.yml', 'close-draft-prs.yml',
-    'dismiss-unauthorized-pr-approvals.yml', 'pr-target-validator.yml',
-    'pr-template-format.yml', 'require-issue-link.yml', 'changeset-required.yml',
-    'docs-required.yml', 'discord-changelog.yml',
-  ];
-
-  test('all entries in INERT_WORKFLOWS exist under .github/workflows/', () => {
-    // We derive the inert set implicitly: any .github/workflows/*.yml that produces
-    // full_matrix=false when passed alone is inert. We check the known inert names
-    // against the filesystem instead.
-    // The canonical list is in the script — we verify each named file exists.
-    for (const name of knownInert) {
-      const fullPath = path.join(WORKFLOWS_DIR, name);
-      assert.ok(
-        fs.existsSync(fullPath),
-        `INERT_WORKFLOWS entry '${name}' does not exist at ${fullPath}`,
-      );
+  function walkYaml(dir, out = []) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walkYaml(full, out);
+      else if (/\.ya?ml$/.test(entry.name)) out.push(path.relative(ROOT, full).split(path.sep).join('/'));
     }
+    return out;
+  }
+
+  test('workflows-only diff: workflow-lint set targeted, no matrix', () => {
+    const one = assertInert(['.github/workflows/test.yml']);
+    assert.ok(one.targeted_tests.includes('tests/workflow-shell-pinning.test.cjs'), JSON.stringify(one));
+    assert.ok(one.targeted_tests.includes('tests/pr-template-policy.test.cjs'), JSON.stringify(one));
+    assert.ok(one.targeted_tests.includes('tests/lint-pr-check-project-dir.test.cjs'), JSON.stringify(one));
+    assertInert(['.github/workflows/test.yml', '.github/workflows/release.yml']);
   });
 
-  test('known pipeline workflows are NOT treated as inert (product_changed true, full_matrix true)', () => {
-    for (const name of KNOWN_PIPELINE) {
-      const result = scopeFor([`.github/workflows/${name}`]);
-      assert.strictEqual(result.product_changed, true,
-        `${name} must be pipeline (product_changed=true), got: ${JSON.stringify(result)}`);
-      assert.strictEqual(result.full_matrix, true,
-        `${name} must be pipeline (full_matrix=true), got: ${JSON.stringify(result)}`);
-    }
-  });
-
-  // Explicit per-workflow guard: each of the five protected workflows must route to
-  // the full matrix. This documents intent and proves that PROTECTED_WORKFLOWS
-  // enforcement is covered end-to-end via the spawn helper.
-  test('all five PROTECTED_WORKFLOWS individually route to full matrix (tamper-evidence)', () => {
-    const protected_ = [
-      'test.yml',
-      'install-smoke.yml',
-      'mutation.yml',
-      'security-scan.yml',
-      'release.yml',
+  test('CI yaml edit still targets the workflow-contract tests, never full_matrix', () => {
+    const required = [
+      'tests/ci-pr-mergeability.test.cjs',
+      'tests/ci-test-scope.test.cjs',
+      'tests/release-tarball-smoke-workflow.test.cjs',
+      'tests/ci-conformance-pr-gating.test.cjs',
+      'tests/workflow-token-permissions.test.cjs',
     ];
-    for (const name of protected_) {
-      const result = scopeFor([`.github/workflows/${name}`]);
-      assert.strictEqual(result.product_changed, true,
-        `PROTECTED_WORKFLOW ${name}: expected product_changed=true, got: ${JSON.stringify(result)}`);
-      assert.strictEqual(result.full_matrix, true,
-        `PROTECTED_WORKFLOW ${name}: expected full_matrix=true, got: ${JSON.stringify(result)}`);
+    for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml', '.github/actions/x/action.yml']) {
+      const result = assertInert([file]);
+      for (const t of required) {
+        assert.ok(result.targeted_tests.includes(t), `${file}: ${t} missing from ${JSON.stringify(result.targeted_tests)}`);
+      }
     }
   });
 
-  test('every inert workflow produces code_changed=true, product_changed=false, and full_matrix=false', () => {
-    for (const name of knownInert) {
-      const result = scopeFor([`.github/workflows/${name}`]);
-      assert.strictEqual(result.code_changed, true,
-        `${name}: expected code_changed=true`);
-      assert.strictEqual(result.product_changed, false,
-        `${name}: expected product_changed=false`);
-      assert.strictEqual(result.full_matrix, false,
-        `${name}: expected full_matrix=false`);
+  test('composite-action-only diff (.yml and .yaml): inert', () => {
+    assertInert(['.github/actions/x/action.yml']);
+    assertInert(['.github/actions/x/action.yaml']);
+  });
+
+  test('root .github config yaml (dependabot.yml): inert', () => {
+    assertInert(['.github/dependabot.yml']);
+  });
+
+  test('issue-form yaml (.github/ISSUE_TEMPLATE/config.yml): inert', () => {
+    assertInert(['.github/ISSUE_TEMPLATE/config.yml']);
+  });
+
+  // Reads the REAL repo tree on purpose: it guards the actual .github yaml files
+  // (a new file shape that escaped the CI-YAML match would fail here).
+  test('every tracked .github yaml file in this repo (real tree) alone: no matrix, not product', () => {
+    const files = walkYaml(path.join(ROOT, '.github'));
+    assert.ok(files.length > 0, 'precondition: .github holds yaml files');
+    for (const file of files) assertInert([file]);
+  });
+
+  test('CI yaml + product code: product behavior, workflow lints added', () => {
+    const alone = scopeFor(['src/semver-compare.cts']);
+    const mixed = scopeFor(['.github/workflows/test.yml', 'src/semver-compare.cts']);
+    assert.strictEqual(mixed.code_changed, true, JSON.stringify(mixed));
+    assert.strictEqual(mixed.product_changed, true, JSON.stringify(mixed));
+    assert.strictEqual(mixed.full_matrix, alone.full_matrix);
+    for (const t of alone.targeted_tests) {
+      assert.ok(mixed.targeted_tests.includes(t), `${t} missing from ${JSON.stringify(mixed)}`);
     }
+  });
+
+  test('CI yaml + docs only: inert (docs add nothing)', () => {
+    assertInert(['.github/workflows/test.yml', 'docs/x.md']);
+  });
+
+  test('CI yaml + conformance-tier test file: full_matrix true', () => {
+    const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
+    const result = scopeFor(['.github/workflows/test.yml', CONFORMANCE_TIER_FILES[0]]);
+    assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
+  test('boundary: near-miss paths are NOT CI yaml', () => {
+    // The CI yaml match is anchored at the repo-root `.github/`: a nested
+    // `.github/` under a product prefix is still product code.
+    for (const file of ['gsd-core/.github/workflows/a.yml', 'src/.github/workflows/a.yml', 'tests/fixtures/.github/workflows/a.yml']) {
+      const result = classify([file]);
+      assert.strictEqual(result.product_changed, true, `${file}: ${JSON.stringify(result)}`);
+    }
+    for (const file of ['.github/workflows/test.yml.bak', '.github/workflows/test.yaml.txt', '.githubx/workflows/a.yml']) {
+      const result = classify([file]);
+      assert.strictEqual(result.code_changed, false, `${file}: ${JSON.stringify(result)}`);
+    }
+  });
+
+  test('rulesets (JSON branch protection) keep their classification: full matrix', () => {
+    const result = scopeFor(['.github/rulesets/main-protection.json']);
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
+  });
+
+  test('property: any list of .github yaml paths classifies as inert (code true, product false, full false)', () => {
+    const fc = require('fast-check');
+    const segment = fc.stringMatching(/^[a-z0-9][a-z0-9_-]{0,11}$/);
+    const ciYamlPath = fc.tuple(fc.array(segment, { minLength: 0, maxLength: 3 }), segment, fc.constantFrom('yml', 'yaml'))
+      .map(([dirs, name, ext]) => `.github/${[...dirs, `${name}.${ext}`].join('/')}`);
+    fc.assert(fc.property(fc.array(ciYamlPath, { minLength: 1, maxLength: 5 }), files => {
+      const result = classify(files);
+      return result.code_changed === true && result.product_changed === false &&
+        result.full_matrix === false && result.targeted_tests.length > 0;
+    }), { numRuns: 200, seed: 6075 });
   });
 });
 
@@ -865,8 +891,6 @@ describe('code_changed=false implies clean output invariant', () => {
     for (const files of [
       ['src/semver.cts'],
       ['bin/gsd'],
-      ['.github/workflows/test.yml'],
-      ['.github/workflows/stale.yml'],
     ]) {
       const result = scopeFor(files);
       assert.strictEqual(result.code_changed, true,
@@ -1033,15 +1057,14 @@ describe('#4592 reachability-based full_matrix classifier', () => {
     });
   });
 
-  // Row 13: pairing a conformance-tier test file with an inert-workflow-only
-  // file must not be overridden by the inert-CI normalization, since
-  // productOrPipelineChanged is already true for any tests/ path.
-  test('full_matrix stays true when a conformance-tier test file is paired with an inert workflow file', () => {
+  // Row 13: pairing a conformance-tier test file with a CI yaml file must
+  // still escalate (#6075: CI yaml is inert; the tier file decides).
+  test('full_matrix stays true when a conformance-tier test file is paired with a CI yaml file', () => {
     const { CONFORMANCE_TIER_FILES } = require('../scripts/lib/platform-conformance-tier.generated.cjs');
     const tierFile = CONFORMANCE_TIER_FILES[0];
     const result = scopeFor([tierFile, '.github/workflows/stale.yml']);
     assert.strictEqual(result.full_matrix, true,
-      `expected full_matrix=true even paired with an inert workflow file, got: ${JSON.stringify(result)}`);
+      `expected full_matrix=true even paired with a CI yaml file, got: ${JSON.stringify(result)}`);
   });
 });
 

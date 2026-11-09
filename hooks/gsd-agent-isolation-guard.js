@@ -74,6 +74,7 @@ const os = require('os');
 const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // Required at module top, alongside the other ./lib requires — NOT behind
 // ensureRuntimeBuild() below. Terminating on a parse/timeout failure must
@@ -208,7 +209,7 @@ function resolveRuntimeIdentity(cwd, configPath, resolveRuntimeNameFromCandidate
   // A throw here (corrupt JSON, EISDIR, permission error) propagates to the
   // caller's catch as a resolution failure — this function only decides
   // "confident vs not", never resolution failure.
-  const raw = fs.readFileSync(configPath, 'utf-8');
+  const raw = readConfigFileBounded(configPath, { required: true });
   const parsed = JSON.parse(raw);
   if (parsed && typeof parsed === 'object' && 'runtime' in parsed) {
     const configRuntime = resolveRuntimeNameFromCandidates(parsed.runtime);
@@ -331,7 +332,7 @@ function resolveRegistryIsolation(cwd, configPath) {
     }
     if (!ladderAnswered) {
       try {
-        const raw = fs.readFileSync(configPath, 'utf-8');
+        const raw = readConfigFileBounded(configPath, { required: true });
         const parsedCfg = JSON.parse(raw);
         if (parsedCfg && typeof parsedCfg === 'object' && parsedCfg.workflow &&
             typeof parsedCfg.workflow === 'object' && parsedCfg.workflow.use_worktrees === false) {
@@ -422,7 +423,7 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
     return { gsdProject: false, isolation: null, harnessFlag: null, error: null, sentinelDiscarded: null };
   }
 
-  const sentinel = readSentinel(cwd, { clock });
+  const sentinel = readSentinel(cwd, { clock, dispatchIds });
   // Hoisted so the "sentinel was present/fresh but did not apply" case below
   // (#4594 row 15 — Postel's-Law finding) can distinguish itself from
   // "absent"/"stale" without re-deriving applicability.

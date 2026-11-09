@@ -314,4 +314,9 @@ function mkInstallTempDir(prefix: string): string {
   return dir;
 }
 
-export = { installFs, withInstallFs, mkInstallTempDir };
+/** True when no fake adapter is active, i.e. installFs() is the real `node:fs` (#5759). */
+function isRealInstallFs(): boolean {
+  return current === REAL_ADAPTER;
+}
+
+export = { installFs, withInstallFs, mkInstallTempDir, isRealInstallFs };

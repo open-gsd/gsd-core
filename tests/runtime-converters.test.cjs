@@ -2882,3 +2882,190 @@ describe('converters read the frontmatter block the one fence owner finds', () =
     assert.strictEqual(rac.injectEffortFrontmatter(preambled, 'high'), preambled);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #5790: the Copilot and Codex agent converters read `tools:` through the
+// block-list-aware reader, in the module and in the bin/install.js mirror.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#5790: Copilot and Codex agent converters read block-list tools', () => {
+  const installJs = require('../bin/install.js');
+  const moduleJs = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const copies = [
+    ['module', moduleJs],
+    ['bin/install.js', installJs],
+  ];
+
+  const agent = (toolsLines) =>
+    `---\nname: gsd-x\ndescription: Does a thing\n${toolsLines}\ncolor: blue\n---\n\nBody\n`;
+  const BLOCK = agent('tools:\n  - Read\n  - Bash\n  - Grep');
+  const INLINE = agent('tools: Read, Bash, Grep');
+
+  const copilotToolsLine = (out) => out.split('\n').find((l) => l.startsWith('tools:'));
+  const codexToolsLine = (out) => out.split('\n').find((l) => l.startsWith('tools:') && !l.startsWith('tools: ['));
+
+  for (const [label, mod] of copies) {
+    describe(label, () => {
+      test('#5790 row 1: block-list tools convert to every declared Copilot tool', () => {
+        const block = mod.convertClaudeAgentToCopilotAgent(BLOCK);
+        const inline = mod.convertClaudeAgentToCopilotAgent(INLINE);
+        assert.strictEqual(block, inline);
+        assert.doesNotMatch(copilotToolsLine(block), /-/);
+        assert.strictEqual(JSON.parse(copilotToolsLine(block).slice(7).replace(/'/g, '"')).length, 3);
+      });
+
+      test('#5790 row 2: block-list tools convert to every declared Codex role-header tool', () => {
+        const block = mod.convertClaudeAgentToCodexAgent(BLOCK);
+        assert.strictEqual(codexToolsLine(block), 'tools: Read, Bash, Grep');
+        assert.strictEqual(block, mod.convertClaudeAgentToCodexAgent(INLINE));
+      });
+
+      test('#5790 row 3: inline tools keep their output', () => {
+        assert.strictEqual(codexToolsLine(mod.convertClaudeAgentToCodexAgent(INLINE)), 'tools: Read, Bash, Grep');
+        assert.match(copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(INLINE)), /^tools: \['read', 'execute', 'search'\]$/);
+      });
+
+      test('#5790 row 4: a comment after `tools:` is ignored and the block list is read', () => {
+        const commented = agent('tools: # note\n  - Read\n  - Bash\n  - Grep');
+        assert.strictEqual(mod.convertClaudeAgentToCopilotAgent(commented), mod.convertClaudeAgentToCopilotAgent(INLINE));
+        assert.strictEqual(mod.convertClaudeAgentToCodexAgent(commented), mod.convertClaudeAgentToCodexAgent(INLINE));
+      });
+
+      test('#5790 row 5: no tools key gives an empty tool set', () => {
+        const none = agent('').replace('\n\ncolor', '\ncolor');
+        assert.match(mod.convertClaudeAgentToCopilotAgent(none), /\ntools: \[\]\n/);
+        assert.match(mod.convertClaudeAgentToCodexAgent(none), /\ntools: \npurpose:/);
+      });
+
+      test('#5790 row 6: a one-item block list yields one tool', () => {
+        const one = agent('tools:\n  - Read');
+        assert.match(mod.convertClaudeAgentToCopilotAgent(one), /\ntools: \['read'\]\n/);
+        assert.match(mod.convertClaudeAgentToCodexAgent(one), /\ntools: Read\npurpose:/);
+      });
+
+      test('#5790 boundary: a two-item block list yields exactly those two tools in both converters', () => {
+        const two = agent('tools:\n  - Read\n  - Bash');
+        const copilot = copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(two));
+        assert.strictEqual(copilot, "tools: ['read', 'execute']");
+        assert.doesNotMatch(copilot, /-/);
+        const codex = codexToolsLine(mod.convertClaudeAgentToCodexAgent(two));
+        assert.strictEqual(codex, 'tools: Read, Bash');
+        assert.doesNotMatch(codex, /-/);
+      });
+
+      test('#5790 boundary: an empty block list (next key follows) yields no tools', () => {
+        const empty = agent('tools:');
+        assert.match(mod.convertClaudeAgentToCopilotAgent(empty), /\ntools: \[\]\n/);
+        assert.match(mod.convertClaudeAgentToCodexAgent(empty), /\ntools: \npurpose:/);
+      });
+
+      test('#5790 row 7/9: every shipped agent converts to the tool set of its parsed source', () => {
+        const dir = path.join(__dirname, '..', 'agents');
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+        assert.ok(files.length > 0);
+        for (const f of files) {
+          const src = fs.readFileSync(path.join(dir, f), 'utf8');
+          const lines = splitLines(src);
+          const names = [];
+          let inBlock = false;
+          for (const line of lines.slice(1)) {
+            if (line.trim() === '---') break;
+            if (inBlock && line.trim().startsWith('- ')) { names.push(line.trim().slice(2).trim()); continue; }
+            inBlock = false;
+            if (line.startsWith('tools:')) {
+              const inline = line.slice('tools:'.length).trim();
+              if (inline) names.push(...inline.split(',').map((s) => s.trim()).filter(Boolean));
+              else inBlock = true;
+            }
+          }
+          assert.ok(names.length > 0, `${f} declares tools`);
+          const synthetic = agent(`tools: ${names.join(', ')}`);
+          const codex = mod.convertClaudeAgentToCodexAgent(src);
+          const copilot = mod.convertClaudeAgentToCopilotAgent(src);
+          assert.strictEqual(codexToolsLine(codex), codexToolsLine(mod.convertClaudeAgentToCodexAgent(synthetic)), `${f} codex`);
+          assert.strictEqual(copilotToolsLine(copilot), copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(synthetic)), `${f} copilot`);
+          assert.doesNotMatch(copilotToolsLine(copilot), /'-/, `${f} copilot list marker`);
+          assert.doesNotMatch(codexToolsLine(codex), /^tools: -/, `${f} codex list marker`);
+        }
+      });
+
+      test('#5790 row 9: for every shipped agent only the tools line depends on the list spelling', () => {
+        const dir = path.join(__dirname, '..', 'agents');
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+        assert.ok(files.length > 0);
+        const withoutFirst = (out, isToolsLine) => {
+          const lines = out.split('\n');
+          const idx = lines.findIndex(isToolsLine);
+          assert.ok(idx >= 0, 'converted output has a tools line');
+          lines.splice(idx, 1);
+          return lines;
+        };
+        const toInline = (src) => {
+          const lines = src.split('\n');
+          const out = [];
+          let inFrontmatter = false;
+          for (let i = 0; i < lines.length; i++) {
+            const bare = lines[i].replace(/\r$/, '');
+            if (i === 0 && bare === '---') { inFrontmatter = true; out.push(lines[i]); continue; }
+            if (inFrontmatter && bare.trim() === '---') { inFrontmatter = false; out.push(lines[i]); continue; }
+            if (inFrontmatter && bare === 'tools:') {
+              const names = [];
+              while (i + 1 < lines.length && lines[i + 1].replace(/\r$/, '').trim().startsWith('- ')) {
+                names.push(lines[i + 1].replace(/\r$/, '').trim().slice(2).trim());
+                i++;
+              }
+              out.push(`tools: ${names.join(', ')}`);
+              continue;
+            }
+            out.push(lines[i]);
+          }
+          return out.join('\n');
+        };
+        for (const f of files) {
+          const src = fs.readFileSync(path.join(dir, f), 'utf8');
+          const inlined = toInline(src);
+          assert.deepStrictEqual(
+            withoutFirst(mod.convertClaudeAgentToCopilotAgent(src), (l) => l.startsWith('tools:')),
+            withoutFirst(mod.convertClaudeAgentToCopilotAgent(inlined), (l) => l.startsWith('tools:')),
+            `${f} copilot non-tools lines`,
+          );
+          assert.deepStrictEqual(
+            withoutFirst(mod.convertClaudeAgentToCodexAgent(src), (l) => l.startsWith('tools:') && !l.startsWith('tools: [')),
+            withoutFirst(mod.convertClaudeAgentToCodexAgent(inlined), (l) => l.startsWith('tools:') && !l.startsWith('tools: [')),
+            `${f} codex non-tools lines`,
+          );
+        }
+      });
+
+      test('#5790 allowed-tools parity: Copilot and Codex read tools through the same parser as Antigravity', () => {
+        for (const spelling of ['allowed-tools: Read, Bash, Grep', 'allowed-tools:\n  - Read\n  - Bash\n  - Grep']) {
+          const src = agent(spelling);
+          const declared = moduleJs.parseFrontmatterTools(src.split('---')[1]);
+          assert.deepStrictEqual(declared, ['Read', 'Bash', 'Grep'], 'fixture declares three tools');
+
+          const antigravity = mod.convertClaudeAgentToAntigravityAgent(src)
+            .split('\n')
+            .filter((l) => l.startsWith('- '))
+            .map((l) => l.slice(2));
+          assert.deepStrictEqual(antigravity, declared.map((t) => moduleJs.convertAntigravityToolName(t)).filter(Boolean));
+
+          const copilot = copilotToolsLine(mod.convertClaudeAgentToCopilotAgent(src));
+          assert.strictEqual(copilot, "tools: ['read', 'execute', 'search']");
+          assert.deepStrictEqual(
+            [...copilot.matchAll(/'([^']+)'/g)].map((m) => m[1]),
+            [...new Set(declared.map((t) => moduleJs.convertCopilotToolName(t)))],
+          );
+
+          assert.strictEqual(codexToolsLine(mod.convertClaudeAgentToCodexAgent(src)), `tools: ${declared.join(', ')}`);
+        }
+      });
+    });
+  }
+
+  test('#5790 row 8: bin/install.js and the module produce identical output', () => {
+    for (const src of [BLOCK, INLINE, agent('tools:\n  - Read'), agent('tools:')]) {
+      assert.strictEqual(installJs.convertClaudeAgentToCopilotAgent(src), moduleJs.convertClaudeAgentToCopilotAgent(src));
+      assert.strictEqual(installJs.convertClaudeAgentToCodexAgent(src), moduleJs.convertClaudeAgentToCodexAgent(src));
+    }
+  });
+});

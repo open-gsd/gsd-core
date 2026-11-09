@@ -47,6 +47,7 @@ const {
 } = require('./install-shared.cjs');
 const { ACK_TRAILER_HASH, ACK_TRAILER_GROWTH, parseAckTrailers } = require('./emitted-diff.cjs');
 const { runGit, OUTCOME } = require('./process-seam.cjs');
+const { releasePipelinePrKind, RELEASE_PIPELINE_PR_KIND } = require('../../scripts/release-pipeline-pr.cjs');
 const { escapeRegex } = require('../../gsd-core/bin/lib/pattern.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
@@ -230,8 +231,18 @@ function reconcileFamilies({
 
 /** Bounded git invocation. CLAUDE.md → KNOWN DEFECTS: every git subprocess needs a
  *  timeout (5-30s); an unbounded execFileSync is an indefinite hang, and it is how
- *  macOS CI silently stops reporting. */
-const GIT_TIMEOUT_MS = 30_000;
+ *  macOS CI silently stops reporting.
+ *
+ *  Bounds `git()` and the `ackTrailerGit` / `readAckTrailers` default (11 argv
+ *  shapes: diff, rev-parse, rev-parse --verify, merge-base, ls-tree, show,
+ *  log, interpret-trailers) against the REAL repository root, not a fixture. It
+ *  is its own constant rather than a tests/helpers/timeouts.cjs class because
+ *  it bounds whole-repository history reads whose cost scales with the repo.
+ *  Evidence: worst observed 184.05ms on darwin (p50 53.59ms, p99 97.93ms), margin 162.99x;
+ *  harness, 11 call sites x 50 runs (550 spawns) per platform on darwin (node v26.13.0)
+ *  and linux (node:24 in docker), 2026-11-08; win32 not measured.
+ *  Reproduction caveat: the harness base ref was HEAD~100 (origin/next absent). */
+const EMITTED_RUNTIME_GIT_TIMEOUT_MS = 30_000;
 
 /**
  * Prepend `-c safe.directory=<dir>` to a git argv.
@@ -262,7 +273,7 @@ function git(args, { cwd = REPO_ROOT } = {}) {
   return execFileSync('git', [...safeDirArgs(cwd), ...args], {
     cwd,
     encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
+    timeout: EMITTED_RUNTIME_GIT_TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -341,6 +352,52 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
+ * True iff the running pull request is a release-merge PR (`release/X.Y.0` or
+ * `hotfix/X.Y.Z` -> `main`, same repository), classified by `releasePipelinePrKind` from
+ * the Actions environment (#5902).
+ *
+ * `sameRepo` comes from the event payload's `pull_request.head.repo.full_name` compared
+ * case-insensitively with `GITHUB_REPOSITORY`; a missing, unreadable or malformed payload
+ * is `false`, so the PR is never classified as a release-merge PR on guesswork.
+ *
+ * @param {object} [env] Actions environment.
+ * @param {object} [options]
+ * @param {function} [options.readFile] `(path) => string` seam for the event payload.
+ * @returns {boolean}
+ */
+function isReleaseMergePr(env = process.env, { readFile = (p) => fs.readFileSync(p, 'utf8') } = {}) {
+  let sameRepo = false;
+  try {
+    if (env.GITHUB_EVENT_PATH && env.GITHUB_REPOSITORY) {
+      const payload = JSON.parse(readFile(env.GITHUB_EVENT_PATH));
+      const headRepo = payload && payload.pull_request && payload.pull_request.head
+        && payload.pull_request.head.repo && payload.pull_request.head.repo.full_name;
+      sameRepo = typeof headRepo === 'string'
+        && headRepo.toLowerCase() === String(env.GITHUB_REPOSITORY).toLowerCase();
+    }
+  } catch { sameRepo = false; }
+  return releasePipelinePrKind({
+    headRef: env.GITHUB_HEAD_REF,
+    baseRef: env.GITHUB_BASE_REF,
+    sameRepo,
+  }) === RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE;
+}
+
+/** Refs a release-merge PR tries, in order, to find `next`. */
+const RELEASE_MERGE_NEXT_CANDIDATES = Object.freeze(['origin/next', 'upstream/next', 'next']);
+
+/** First of RELEASE_MERGE_NEXT_CANDIDATES that resolves, or null. */
+function resolveNextRef({ cwd = REPO_ROOT } = {}) {
+  for (const candidate of RELEASE_MERGE_NEXT_CANDIDATES) {
+    try {
+      const sha = git(['rev-parse', '--verify', `${candidate}^{commit}`], { cwd }).trim();
+      if (/^[0-9a-f]{40}$/.test(sha)) return { ref: candidate, sha };
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
+/**
  * The commit the differential gate measures FROM: the merge-base of the resolved base
  * ref and HEAD, alongside the base tip it was derived from.
  *
@@ -352,8 +409,13 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
  * baseline built at the `next` TIP attributed that merge to the release branch.
  *
- * PR lanes merge the tree onto `pull_request.base.sha` first, so there the merge-base
- * IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * Ordinary PR lanes merge the tree onto `pull_request.base.sha` first, so there the
+ * merge-base IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * A release-merge PR (`release/X.Y.0` or `hotfix/X.Y.Z` -> `main`, #5902) is the exception:
+ * its base is the fork point on `next` (`origin/next`, `upstream/next`, `next`; first that
+ * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, and that sha is not
+ * `base.sha`, so the `emitted-baseline-<base.sha>` cache key misses and the baseline is
+ * built in-job.
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
@@ -364,14 +426,26 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * @param {object} [options] resolution and reporting options.
  * @param {string} [options.cwd] repository to resolve against.
  * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
+ * @param {function} [options.readFile] `(path) => string` seam for the Actions event payload
+ *   (`GITHUB_EVENT_PATH`) read when classifying a release-merge PR; defaults to `fs.readFileSync`.
  * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
  */
-function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic } = {}) {
-  const resolved = resolveBase(env, { cwd });
+function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic, readFile } = {}) {
+  // #5902: a release-merge PR targets `main`, whose base would span the whole release
+  // cycle already checked on `next`. Measure from the release's fork point on `next`.
+  const releaseMerge = isReleaseMergePr(env, { readFile });
+  const resolved = releaseMerge ? resolveNextRef({ cwd }) : resolveBase(env, { cwd });
+  if (releaseMerge && diagnostic) {
+    diagnostic(
+      `emitted-attribution base chosen from next (${resolved ? resolved.ref : 'none'}) because this is a ` +
+      'release-merge PR (release/X.Y.0 or hotfix/X.Y.Z -> main); GSD_EMITTED_BASE is ignored.',
+    );
+  }
   if (diagnostic) {
     diagnostic(
       `emitted-attribution resolved base: ${resolved ? `${resolved.ref}@${resolved.sha}` : 'none'}; ` +
-      'set GSD_EMITTED_BASE=<ref|sha> to override. Tried: ' + baseRefCandidates(env).join(', '),
+      (releaseMerge ? '' : 'set GSD_EMITTED_BASE=<ref|sha> to override. ') + 'Tried: ' +
+      (releaseMerge ? RELEASE_MERGE_NEXT_CANDIDATES : baseRefCandidates(env)).join(', '),
     );
   }
   if (!resolved) return null;
@@ -526,7 +600,19 @@ const BUILD_LIB_TIMEOUT_MS = 180_000;
 // the remote runner so the in-job build returns to being the rare fallback
 // ADR-2719 §5 describes; that is a gsd-test-runner change, not one this repo can
 // make.
-const BUILD_TIMEOUT_MS = 360_000;
+//
+// Bounds the one `scripts/gen-emitted-baseline.cjs` spawn in `buildBaselineAtRef`
+// (1 call site); the worktree add/remove and build:lib steps have their own
+// constants. It is its own constant rather than a tests/helpers/timeouts.cjs class
+// because its bound is derived from `CHUNK_TIMEOUT_CEILING_MS` (see above).
+// Evidence: worst observed 12749.57ms on darwin (p50 12282.91ms, p99 12749.57ms), margin 28.23x;
+// harness, 1 call site x 5 runs (5 spawns) per platform on darwin (node v26.13.0)
+// and linux (node:24 in docker), 2026-11-08; win32 not measured.
+// Reproduction caveat: the harness ran the generator with --dir at the repo root
+// (deps and lib built), not in a throwaway git worktree, so it excludes
+// worktree-checkout and cold-install cost; the CI history above is the loaded-machine
+// evidence.
+const EMITTED_RUNTIME_BUILD_TIMEOUT_MS = 360_000;
 // Mirrors `scripts/run-tests.cjs:973`'s default. Duplicated deliberately and
 // narrowly: the bounds here must be checkable against it, and the alternative is
 // reading that script's source, which `local/no-source-grep` bans. The lock test
@@ -560,7 +646,7 @@ function buildBaselineAtRef(ref, { cwd = REPO_ROOT } = {}) {
       ].filter(Boolean).join('\n  ');
       err.message =
         `${step} failed after ${elapsed}s (bounds: worktree ${WORKTREE_TIMEOUT_MS}ms, ` +
-        `build:lib ${BUILD_LIB_TIMEOUT_MS}ms, generator ${BUILD_TIMEOUT_MS}ms). ` +
+        `build:lib ${BUILD_LIB_TIMEOUT_MS}ms, generator ${EMITTED_RUNTIME_BUILD_TIMEOUT_MS}ms). ` +
         `Step timings: ${timings.join(' ')}. ${err.message}` +
         (partial ? `\n  ${partial}` : '');
       throw err;
@@ -589,7 +675,7 @@ function buildBaselineAtRef(ref, { cwd = REPO_ROOT } = {}) {
       execFileSync(
         process.execPath,
         [path.join(cwd, 'scripts', 'gen-emitted-baseline.cjs'), '--dir', worktreeDir, '--out', outFile],
-        { cwd, encoding: 'utf8', timeout: BUILD_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
+        { cwd, encoding: 'utf8', timeout: EMITTED_RUNTIME_BUILD_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
       ));
 
     return timed('read-artifact', () => JSON.parse(fs.readFileSync(outFile, 'utf8')));
@@ -773,11 +859,11 @@ function currentSizes({ repoRoot = REPO_ROOT } = {}) {
  * Bounded git invocation for the #3942 commit-trailer ack reader, built on the
  * never-throws process seam (`runGit`) rather than `git()` above: `readAckTrailers` must
  * honor a PER-CALL `timeoutMs` (row 24's hostile-timeout row), and `git()` pins
- * `GIT_TIMEOUT_MS` at import time with no per-call override. Throws on anything but a
+ * `EMITTED_RUNTIME_GIT_TIMEOUT_MS` at import time with no per-call override. Throws on anything but a
  * clean exit — same "a git failure is a hard error, never an empty result" law as
  * `resolveChangedPaths` above.
  */
-function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS, input } = {}) {
+function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS, input } = {}) {
   const spawnOpts = { cwd, timeoutMs };
   if (input !== undefined) spawnOpts.input = input;
   const result = runGit([...safeDirArgs(cwd), ...args], spawnOpts);
@@ -952,7 +1038,7 @@ const ACK_TRAILER_VALUE_SEP = '\x1d'; // between multiple values of the SAME tra
  * @param {{baseRef: string, headRef?: string, cwd?: string, timeoutMs?: number}} opts
  * @returns {{hash: Map<string, {reason: string}>, growth: Map<string, {reason: string}>, errors: string[]}}
  */
-function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS } = {}) {
   let mergeBaseOut;
   try {
     mergeBaseOut = ackTrailerGit(['merge-base', baseRef, headRef], { cwd, timeoutMs });
@@ -1093,13 +1179,15 @@ module.exports = {
   FAMILY_REASON,
   touchesRuntimeRegistry,
   reconcileFamilies,
-  GIT_TIMEOUT_MS,
+  EMITTED_RUNTIME_GIT_TIMEOUT_MS,
   safeDirArgs,
   git,
   resolveChangedPaths,
   resolveBaseSha,
   baseRefCandidates,
   resolveBase,
+  isReleaseMergePr,
+  RELEASE_MERGE_NEXT_CANDIDATES,
   resolveAttributionBase,
   resolveAttributionInputs,
   baselineFamilyNamesAtRef,
@@ -1112,6 +1200,6 @@ module.exports = {
   readAckTrailers,
   WORKTREE_TIMEOUT_MS,
   BUILD_LIB_TIMEOUT_MS,
-  BUILD_TIMEOUT_MS,
+  EMITTED_RUNTIME_BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 };

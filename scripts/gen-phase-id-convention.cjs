@@ -164,6 +164,7 @@ const TARGETS = Object.freeze([
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/chunked-planning-mode.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/closed-phase-gate.md', kind: 'workflow' }),
+  Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/plan-pre-dispatch.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/prd-express-path.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/research-only-early-exit.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/plan-phase/steps/research-only-modifiers.md', kind: 'workflow' }),

@@ -105,6 +105,30 @@ jobs:
               return;
             }
 
+            // #5890: the release pipeline's own back-merge PRs (release/X.Y.Z or
+            // hotfix/X.Y.Z -> main, chore/sync-next-version-* and
+            // chore/backmerge-main-to-next-* -> next) have no issue to link, so
+            // they are waived from `missing-issue-ref` ONLY — a bad type prefix
+            // still fails (see the waiver after evaluatePrTitle below). Same
+            // predicate require-issue-link-policy.cjs uses, loaded from the base
+            // checkout; it requires a same-repo head plus the exact base branch,
+            // so a fork cannot forge it by naming its branch (#1389). The repo
+            // comparison is case-insensitive, matching the `==` in
+            // require-issue-link.yml's SAME_REPO expression. Absent on the base
+            // branch (the introducing PR), nothing is waived.
+            let releaseKind = null;
+            const releasePipelinePath = `${process.env.GITHUB_WORKSPACE}/scripts/release-pipeline-pr.cjs`;
+            if (fs.existsSync(releasePipelinePath)) {
+              const { releasePipelinePrKind } = require(releasePipelinePath);
+              const headRepo = pr.head && pr.head.repo && pr.head.repo.full_name;
+              releaseKind = releasePipelinePrKind({
+                headRef: pr.head && pr.head.ref,
+                baseRef: pr.base && pr.base.ref,
+                sameRepo: typeof headRepo === 'string'
+                  && headRepo.toLowerCase() === `${context.repo.owner}/${context.repo.repo}`.toLowerCase(),
+              });
+            }
+
             const title = pr.title || '';
             const warnOnly = process.env.WARN_ONLY === 'true';
 
@@ -121,6 +145,11 @@ jobs:
 
             if (result.valid) {
               core.info(`PR title OK: ${title}`);
+              return;
+            }
+
+            if (releaseKind && result.reason === 'missing-issue-ref') {
+              core.info(`Release-pipeline PR (${releaseKind}) — issue-ref requirement waived: ${title}`);
               return;
             }
 

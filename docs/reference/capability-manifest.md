@@ -219,6 +219,7 @@ Install and hook code does not compare a runtime id to a literal; it reads one o
 | `skipRuntimeDefaultsStamp` | boolean | `claude` | Skip the non-Claude runtime-identity stamp. |
 | `skipCompactAgents` | boolean | `claude` | Do not stage `*.compact.md` agent variants. |
 | `omitBashRunnerOnWindows` | boolean | `claude` | Emit a shell hook as the bare script path on Windows. |
+| `powershellHooksOnWindows` | boolean | `claude` | On Windows, emit managed JS hooks as PowerShell commands with an explicit `shell: "powershell"`, whether or not Git Bash is installed. |
 | `specRootSkillPass` | boolean | `claude` | Run the global spec-root reference pass over staged skills. |
 | `restoreAtRefTildeInAgents` / `restoreAtRefTildeInSpecTree` | boolean | `claude` | Restore `@~/` include references in agent bodies / the spec tree. |
 | `legacyFlatSkillsCleanup`, `bareStemSkillsCleanup`, `categoryContainerCleanup` | boolean | `hermes` | The Hermes pre-nesting cleanups on install and uninstall. |
@@ -272,7 +273,9 @@ All 12 shipped lane declarations carry all 14 fields below.
 | `reviewsSection` | string | The `REVIEWS.md` heading this lane renders under. Must be unique across the merged roster. |
 | `evidenceClass` | closed enum | `source-grounded` \| `diff-only` (diff-only findings are down-weighted in consensus). |
 | `requiresBinaries` | string[] | Extra binaries the lane needs beyond `invoke.binary`. |
-| `promptBudgetKey` | string or `null` | Federated config key bounding prompt size. |
+| `promptBudgetKey` | string or `null` | Federated config key holding this lane's explicit prompt cap. A prompt over the resolved cap refuses the lane (`prompt_exceeds_context`); it is never trimmed. |
+| `contextWindowTokens` | positive number or `null` | Optional. The context window of the lane's default model, in tokens. When no explicit cap applies, the lane's cap is 65% of this. Omit it, or set `null`, when the model is chosen outside GSD and so cannot be known. Any value that is not a positive finite number is treated as `null`. |
+| `contextWindowConfigKey` | string or `null` | Optional. Federated config key, `review.context_window_tokens.<slug>`, that overrides `contextWindowTokens`: `-1` = use the declared window, `0` = no derived cap. `null` for a lane that is sent no prompt. |
 | `modelConfigKey` | string or `null` | Federated config key naming the model, e.g. `review.models.kimi-code`. |
 | `handler` | closed enum or `null` | `antigravity` \| `openai-compatible` \| `opencode` \| `null`. |
 

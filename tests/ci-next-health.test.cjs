@@ -288,11 +288,11 @@ describe('ci-next-health: resolveNextHealth', () => {
 
 const SENTINEL_TOKEN = 'ghs_sentinel_must_never_be_echoed_4422';
 
-/** Start a one-shot API stub. `handler(requestCount)` returns { status, body }. */
+/** Start an API stub. `handler(requestCount, url)` returns { status, body }; `url` is the request path so handlers can route. */
 async function startApiStub(handler) {
   let requestCount = 0;
   const server = http.createServer((req, res) => {
-    const { status, body } = handler(requestCount++);
+    const { status, body } = handler(requestCount++, req.url);
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(typeof body === 'string' ? body : JSON.stringify(body));
   });
@@ -314,6 +314,8 @@ function runCli(env, { outputPath } = {}) {
       GITHUB_REPOSITORY: 'open-gsd/gsd-core',
       GITHUB_TOKEN: SENTINEL_TOKEN,
       GITHUB_BASE_REF: 'next',
+      // #6076: an ambient PR_NUMBER would switch main() to the API label read.
+      PR_NUMBER: '',
       ...(outputPath ? { GITHUB_OUTPUT: outputPath } : {}),
       ...env,
     },
@@ -331,6 +333,8 @@ async function callMain(t, env, { outputPath } = {}) {
     GITHUB_REPOSITORY: 'open-gsd/gsd-core',
     GITHUB_TOKEN: SENTINEL_TOKEN,
     GITHUB_BASE_REF: 'next',
+    // #6076: an ambient PR_NUMBER would switch main() to the API label read.
+    PR_NUMBER: '',
     ...(outputPath ? { GITHUB_OUTPUT: outputPath } : {}),
     ...env,
   };
@@ -549,4 +553,241 @@ describe('ci-next-health: CLI', () => {
     assert.notEqual(result.exitCode, 0);
     assert.ok(`${result.stdout}${result.stderr}`.includes('--nope'));
   });
+});
+
+// ---------------------------------------------------------------------------
+// D. #6076 — pull_request reads the PR's current labels from the API.
+// ---------------------------------------------------------------------------
+
+describe('#6076 pull_request reads the PR\'s current labels from the API', () => {
+  const countingLabels = (result) => {
+    const fn = async () => {
+      fn.calls += 1;
+      if (result instanceof Error) throw result;
+      return result;
+    };
+    fn.calls = 0;
+    return fn;
+  };
+
+  test('1: RED, API labels include fix-next, event labels empty -> BYPASSED', async () => {
+    const result = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('failure')),
+      eventName: 'pull_request',
+      baseRef: 'next',
+      labels: [],
+      fetchPrLabels: countingLabels([BYPASS_LABEL]),
+    });
+    assert.equal(result.verdict, VERDICT.BYPASSED);
+  });
+
+  test('2: RED, API labels lack fix-next, event labels include it -> RED', async () => {
+    const result = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('failure')),
+      eventName: 'pull_request',
+      baseRef: 'next',
+      labels: [BYPASS_LABEL],
+      fetchPrLabels: countingLabels(['needs-triage']),
+    });
+    assert.equal(result.verdict, VERDICT.RED);
+  });
+
+  test('3: RED, fetchPrLabels throws -> RED with label-read-failed', async () => {
+    const result = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('failure')),
+      eventName: 'pull_request',
+      baseRef: 'next',
+      labels: [BYPASS_LABEL],
+      fetchPrLabels: countingLabels(new Error('boom')),
+    });
+    assert.equal(result.verdict, VERDICT.RED);
+    assert.match(result.reason, /label-read-failed/);
+  });
+
+  test('4: CLEAN never calls fetchPrLabels', async () => {
+    const fetchPrLabels = countingLabels([BYPASS_LABEL]);
+    const result = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('success')),
+      eventName: 'pull_request',
+      baseRef: 'next',
+      labels: [],
+      fetchPrLabels,
+    });
+    assert.equal(result.verdict, VERDICT.CLEAN);
+    assert.equal(fetchPrLabels.calls, 0);
+  });
+
+  test('5: merge_group RED never calls fetchPrLabels', async () => {
+    const fetchPrLabels = countingLabels([BYPASS_LABEL]);
+    const result = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('failure')),
+      eventName: 'merge_group',
+      baseRef: 'next',
+      labels: [],
+      fetchPrLabels,
+      evaluateQueueBypass: async () => ({ authorized: false, reason: 'no-label' }),
+    });
+    assert.equal(result.verdict, VERDICT.RED);
+    assert.equal(fetchPrLabels.calls, 0);
+  });
+
+  test('6: no fetchPrLabels -> event labels decide (back-compat)', async () => {
+    const withLabel = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('failure')),
+      eventName: 'pull_request',
+      baseRef: 'next',
+      labels: [BYPASS_LABEL],
+    });
+    assert.equal(withLabel.verdict, VERDICT.BYPASSED);
+    const without = await resolveNextHealth({
+      fetchLatestRun: scriptedFetch(runPayload('failure')),
+      eventName: 'pull_request',
+      baseRef: 'next',
+      labels: [],
+    });
+    assert.equal(without.verdict, VERDICT.RED);
+  });
+
+  test('7: property - BYPASSED iff the API label set has fix-next (RED base)', async () => {
+    const labelsArb = fc.array(
+      fc.constantFrom('fix-next', 'needs-triage', 'no-changelog', 'full-matrix', ''),
+      { maxLength: 6 },
+    );
+    await fc.assert(
+      fc.asyncProperty(labelsArb, labelsArb, async (apiLabels, eventLabels) => {
+        const result = await resolveNextHealth({
+          fetchLatestRun: scriptedFetch(runPayload('failure')),
+          eventName: 'pull_request',
+          baseRef: 'next',
+          labels: eventLabels,
+          fetchPrLabels: async () => apiLabels,
+        });
+        const expected = apiLabels.includes(BYPASS_LABEL) ? VERDICT.BYPASSED : VERDICT.RED;
+        assert.equal(result.verdict, expected);
+      }),
+      { seed: 6076, numRuns: 200 },
+    );
+  });
+
+  const routedStub = (labelsRoute, urls = []) => startApiStub((n, url) => {
+    urls.push(url);
+    if (url.includes('/actions/workflows/')) {
+      return {
+        status: 200,
+        body: { workflow_runs: [{ conclusion: 'failure', html_url: 'https://example.test/runs/6076' }] },
+      };
+    }
+    if (/\/repos\/open-gsd\/gsd-core\/issues\/\d+\/labels/.test(url)) return labelsRoute();
+    return { status: 404, body: { message: 'unexpected' } };
+  });
+
+  test('8: CLI PR_NUMBER=1, labels route has fix-next, PR_LABELS empty -> exit 0 BYPASSED', async (t) => {
+    const dir = createTempDir('next-health-6076-8-');
+    const urls = [];
+    const api = await routedStub(() => ({ status: 200, body: [{ name: BYPASS_LABEL }] }), urls);
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: '', PR_NUMBER: '1' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 0, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.BYPASSED);
+    assert.ok(urls.some((u) => u.includes('/issues/1/labels')), `requested: ${urls.join(', ')}`);
+  });
+
+  test('9: CLI PR_NUMBER=7, labels route empty, PR_LABELS has fix-next -> exit 1 RED', async (t) => {
+    const dir = createTempDir('next-health-6076-9-');
+    const api = await routedStub(() => ({ status: 200, body: [] }));
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: BYPASS_LABEL, PR_NUMBER: '7' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.RED);
+  });
+
+  test('10: CLI PR_NUMBER=7, labels route 500 -> exit 1 RED label-read-failed', async (t) => {
+    const dir = createTempDir('next-health-6076-10-');
+    const api = await routedStub(() => ({ status: 500, body: { message: 'boom' } }));
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: BYPASS_LABEL, PR_NUMBER: '7' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.RED);
+    assert.match(`${result.stdout}${result.stderr}`, /label-read-failed/);
+  });
+
+  test('12: CLI PR_NUMBER=" 7 " is trimmed -> labels requested for issue 7', async (t) => {
+    const dir = createTempDir('next-health-6076-12-');
+    const urls = [];
+    const api = await routedStub(() => ({ status: 200, body: [{ name: BYPASS_LABEL }] }), urls);
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: '', PR_NUMBER: ' 7 ' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 0, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.BYPASSED);
+    assert.ok(urls.some((u) => u.includes('/issues/7/labels')), `requested: ${urls.join(', ')}`);
+  });
+
+  test('13: CLI PR_NUMBER=7, labels route returns a non-array body, PR_LABELS has fix-next -> exit 1 RED', async (t) => {
+    const dir = createTempDir('next-health-6076-13-');
+    const api = await routedStub(() => ({ status: 200, body: { message: 'x' } }));
+    t.after(async () => { await api.close(); cleanup(dir); });
+    const outputPath = path.join(dir, 'gh-output');
+
+    const result = await callMain(
+      t,
+      { GITHUB_EVENT_NAME: 'pull_request', GITHUB_API_URL: api.url, PR_LABELS: BYPASS_LABEL, PR_NUMBER: '7' },
+      { outputPath },
+    );
+
+    assert.equal(result.code, 1, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    assert.equal(readOutputs(outputPath).verdict, VERDICT.RED);
+  });
+
+  for (const prNumber of ['0', 'abc', '', '-1', '07']) {
+    test(`11: CLI PR_NUMBER=${JSON.stringify(prNumber)} makes no labels request; PR_LABELS decides`, async (t) => {
+      const dir = createTempDir('next-health-6076-11-');
+      const urls = [];
+      const api = await routedStub(() => ({ status: 200, body: [] }), urls);
+      t.after(async () => { await api.close(); cleanup(dir); });
+      const outputPath = path.join(dir, 'gh-output');
+
+      const result = await callMain(
+        t,
+        {
+          GITHUB_EVENT_NAME: 'pull_request',
+          GITHUB_API_URL: api.url,
+          PR_LABELS: BYPASS_LABEL,
+          PR_NUMBER: prNumber,
+        },
+        { outputPath },
+      );
+
+      assert.equal(result.code, 0, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assert.equal(readOutputs(outputPath).verdict, VERDICT.BYPASSED);
+      assert.ok(!urls.some((u) => u.includes('/labels')), `requested: ${urls.join(', ')}`);
+    });
+  }
 });

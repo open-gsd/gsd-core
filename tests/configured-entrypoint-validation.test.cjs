@@ -404,9 +404,13 @@ test('runtime config writers expose the exact configured entrypoints they emit',
     configPath: path.join(root, 'settings.json'),
     configuredEntrypoints: portable,
   }));
+  // #5850: Claude on win32 is the PowerShell runner (no bash resolver), so the
+  // staged gsd-node-runner.sh entrypoint exists on POSIX hosts only.
   assert.deepEqual(
     portable.map(entry => path.basename(entry.scriptPath)),
-    ['gsd-node-runner.sh', 'gsd-context-monitor.js'],
+    process.platform === 'win32'
+      ? ['gsd-context-monitor.js']
+      : ['gsd-node-runner.sh', 'gsd-context-monitor.js'],
   );
 });
 
@@ -598,7 +602,7 @@ function gsd5100HookTree(t) {
   return configDir;
 }
 
-test('#5100 win32 portable JS and .sh hooks stay unresolved when only WSL bash is on PATH', (t) => {
+test('#5100 win32 portable .sh hooks and non-claude portable JS stay unresolved when only WSL bash is on PATH; claude portable JS is PowerShell (#5850)', (t) => {
   const configDir = gsd5100HookTree(t);
   const missing = { platform: 'win32', env: {}, existsSync: () => false };
   const jsEntries = [];
@@ -609,8 +613,11 @@ test('#5100 win32 portable JS and .sh hooks stay unresolved when only WSL bash i
     configuredEntrypoints: jsEntries,
     execPath: 'C:\\Program Files\\nodejs\\node.exe',
   });
-  assert.equal(jsCmd, null, 'portable JS must not fall back to a bare bash command');
-  assert.ok(jsEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
+  // #5850 (owner ruling): claude on win32 gets the PowerShell runner for portable
+  // installs too, so it needs no bash at all and never falls back to a bare one.
+  assert.ok(typeof jsCmd === 'string' && jsCmd.startsWith('& '), `claude portable JS must be the PowerShell runner: ${jsCmd}`);
+  assert.doesNotMatch(jsCmd, /bash/i);
+  assert.equal(jsEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')), false);
 
   const shEntries = [];
   const shCmd = hooksSurface.buildHookCommand(configDir, 'gsd-bar.sh', {
@@ -636,7 +643,9 @@ test('#5100 win32 portable JS and .sh hooks stay unresolved when only WSL bash i
   assert.ok(agyEntries.some(entry => (entry.interpreterCandidates || []).includes('bash')));
 
   const gateDeps = { env: {}, existsSync: () => false, resolveExecutableBinary: gsd5100WslStandIn };
-  for (const entries of [jsEntries, shEntries, agyEntries]) {
+  const jsGate = hooksSurface.validateConfiguredEntrypoints(jsEntries, gateDeps);
+  assert.equal(jsGate.ok, true, JSON.stringify(jsGate));
+  for (const entries of [shEntries, agyEntries]) {
     const gate = hooksSurface.validateConfiguredEntrypoints(entries, gateDeps);
     assert.equal(gate.ok, false);
     assert.ok(gate.invalid.some(item => item.reason === 'unresolved-interpreter' && String(item.path).includes('bash')));
@@ -668,7 +677,7 @@ test('#5100 a bare win32 bash candidate follows the Git Bash policy, not PATH', 
   assert.equal(found.ok, true);
 });
 
-test('#5100 Git Bash found by policy still emits a portable JS command and passes the gate', (t) => {
+test('#5100 Git Bash found by policy still passes the gate; claude portable JS is the PowerShell runner (#5850)', (t) => {
   const configDir = gsd5100HookTree(t);
   const entries = [];
   const cmd = hooksSurface.buildHookCommand(configDir, 'gsd-foo.js', {
@@ -681,7 +690,8 @@ test('#5100 Git Bash found by policy still emits a portable JS command and passe
     execPath: 'C:\\Program Files\\nodejs\\node.exe',
   });
   assert.equal(typeof cmd, 'string');
-  assert.match(cmd, /Git\/bin\/bash\.exe/);
+  assert.ok(cmd.startsWith('& '), `claude portable JS must be the PowerShell runner even with Git Bash: ${cmd}`);
+  assert.doesNotMatch(cmd, /bash/i);
   // Not `assert.equal(/^bash(\s|$)/.test(cmd), false)`: on win32 the resolved
   // runner is JSON.stringify'd, so the command opens with a quote and that
   // pattern is false for any value — it could not fail. Assert the two facts
@@ -764,7 +774,9 @@ test('#5100 installer surfaces command-less unresolved-bash entries on fresh and
     platform: 'win32',
     env: {},
     existsSync: () => false,
-    runtime: 'claude',
+    // #5850: claude's portable JS is the PowerShell runner and needs no bash, so
+    // a runtime that still needs the portable bash resolver carries this contract.
+    runtime: 'antigravity',
     portableHooks: true,
     configuredEntrypoints: produced,
     execPath: 'C:\\Program Files\\nodejs\\node.exe',
@@ -849,7 +861,7 @@ const realExistsSync = nodeFs.existsSync;
 nodeFs.existsSync = (p) => (/[\\\\/]bash\\.exe$/i.test(String(p)) ? false : realExistsSync(p));
 const path = require('node:path');
 const { install } = require(path.join(process.env.PROBE_REPO, 'bin', 'install.js'));
-const result = install(true, 'claude');
+const result = install(true, process.env.PROBE_RUNTIME);
 const entries = result.configuredEntrypoints || [];
 const unresolvedBash = entries.filter(entry => (
   entry.command === undefined
@@ -861,7 +873,7 @@ process.stdout.write('PROBE_JSON ' + JSON.stringify({
 }) + '\\n');
 `;
 
-function gsd5100RunWin32InstallProbe(t) {
+function gsd5100RunWin32InstallProbe(t, runtime) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-win32-'));
   t.after(() => helpers.cleanup(home));
   const result = runNode(['-e', GSD_5100_WIN32_INSTALL_PROBE], {
@@ -870,6 +882,7 @@ function gsd5100RunWin32InstallProbe(t) {
       HOME: home,
       USERPROFILE: home,
       PROBE_REPO: path.join(__dirname, '..'),
+      PROBE_RUNTIME: runtime,
       GSD_TEST_MODE: '1',
       // #5100: portable hooks are what route a JS hook through the Git Bash
       // policy at all; without them the win32 branch never runs.
@@ -895,8 +908,14 @@ function gsd5100RunWin32InstallProbe(t) {
   return JSON.parse(line.slice(marker.length));
 }
 
+test('#5850 claude portable install on a win32 host with no Git Bash registers PowerShell hooks and needs no bash', (t) => {
+  const probe = gsd5100RunWin32InstallProbe(t, 'claude');
+  assert.ok(probe.total > 0, `the claude install must still track its hook entrypoints; got ${JSON.stringify(probe)}`);
+  assert.equal(probe.unresolvedBash, 0, `claude portable hooks must not require bash; got ${JSON.stringify(probe)}`);
+});
+
 test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entries on a fresh install', (t) => {
-  const probe = gsd5100RunWin32InstallProbe(t);
+  const probe = gsd5100RunWin32InstallProbe(t, 'antigravity');
   // The pre-PR inline filter matched every entry by its registered command
   // segment; a command-less entry never registered one, so a fresh install
   // kept ZERO entries and the gate passed silently. The call site must now

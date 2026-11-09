@@ -396,3 +396,49 @@ allowing `raw-child-process` for one file exempts every future raw spawn in it. 
 on Windows (`--test-name-pattern`): a second selector, which this ADR removed.
 
 How to split a file: [docs/how-to/split-platform-sensitive-tests.md](../how-to/split-platform-sensitive-tests.md).
+
+## #6002 amendment (2026-11-08)
+
+Narrowed the detectors in `scripts/gen-platform-conformance-tier.cjs`:
+
+- `classifyContent` and `classifyMacosContent` strip `//` and block comments before matching (tracking `${…}` depth inside template literals), so
+  prose in a comment is no longer a platform signal. String literals (including a `//` inside a URL)
+  and regex literals (including ones containing `//` or a quote) are preserved.
+- `raw-child-process` no longer matches a bare `require('child_process')`. It matches a
+  `spawnSync`/`execSync`/`execFileSync`/`spawn`/`execFile`/`exec` call whose first argument is not
+  node itself (`process.execPath`, `'node'`, `"node"`), any `shell: true` in a file that uses
+  `child_process`, and a file that requires `child_process` whose call sites cannot be identified
+  (aliased usage). Member calls (`cp.spawn('bash')`) count when the first argument is not node,
+  except regex `.exec(` (receiver is a regex literal or an identifier ending in `re`/`Re`/`RE`/`regex`/
+  `Regex`/`REGEX`); `promisify(cp.execFile)` counts as an unidentifiable call site; `shell\s*:\s*true`
+  matches with whitespace around the colon. `fork(` always runs node and is node-only, so it is not a signal on its own.
+- New category `fs-lock-or-install-child`: a node-only child still counts when the same file matches
+  `lock|lockfile|rename(Sync)?|unlink(Sync)?|EBUSY|EPERM|install.js|--config-dir`, because the child is
+  then driving Windows-sensitive filesystem behavior. This is a decision, not a heuristic accident.
+- `src/` reachability in `scripts/ci-test-scope.cjs` is unchanged: it uses `classifyUnstrippedContent`,
+  the pre-#6002 classification (no comment stripping, legacy `raw-child-process`, no
+  `fs-lock-or-install-child`), so no `src/` file left full-matrix reachability.
+
+Why: the Windows tier sat at the 33% ceiling because of text matches, with 175 of 380 tier files
+carrying `raw-child-process`, many of which only re-spawn node, which behaves identically on every OS.
+
+Before and after (2026-11-08, live tree, 1174 eligible unit-suite files):
+
+| Tier | Before | After | Share of eligible |
+| :--- | ---: | ---: | ---: |
+| Windows | 380 | 319 | 27.2% |
+| macOS | 270 | 263 | 22.4% |
+
+The macOS shrink comes from the same comment stripping applied to `MACOS_CATEGORIES`, not from the
+child-process change. A new macOS category `realpath` (`/\brealpath(Sync)?\b/`, matched in code only)
+keeps files that normalize the macOS `/var` to `/private/var` tmpdir symlink. `WINDOWS_TIER_RATIO_CEILING` (0.33) is unchanged.
+
+Maintainer review of four files that mention a macOS behavior only in a comment. All four are released
+from the macOS tier (their code does not exercise the behavior), and a test pins that:
+
+- `tests/profile-output.test.cjs:164`: released. It asserts with `endsWith` (lines 42-45 of the cited span) specifically to avoid depending on `/var` normalization.
+- `tests/fallow-runner.test.cjs:31`: released. The case-folding concern is the win32 PATHEXT fixture (`process.platform === 'win32'`, line 35), already in the Windows tier.
+- `tests/ci-docs-guard-registry.test.cjs:387`: released. The code calls `fs.mkdirSync` for a directory named `*.test.cjs`; no symlink is created.
+- `tests/ensure-runtime-build.test.cjs:320-321`: released. The code passes the real tsc path explicitly to avoid creating a directory symlink.
+
+No `MACOS_ALWAYS_REAL_OS` map was added and no kept entries result. macOS tier size went from 270 to 263 (the shrink above), with no map entries added.

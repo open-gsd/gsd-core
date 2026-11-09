@@ -5949,6 +5949,60 @@ describe('git-cmd.js isGitSubcommand: should NOT match commit', () => {
   }
 });
 
+// ── #5821: --no-advice, --config-env, --attr-source before the subcommand ────
+// git accepts all three ahead of the subcommand; `--config-env` and
+// `--attr-source` take one argument, attached with `=` or as the next word.
+describe('git-cmd.js #5821 global options before the subcommand', () => {
+  const spellings = [
+    ['--no-advice'],
+    ['--config-env=k=V'],
+    ['--config-env', 'k=V'],
+    ['--attr-source=HEAD'],
+    ['--attr-source', 'HEAD'],
+  ];
+  for (const opt of spellings) {
+    test(`commit is recognised after ${opt.join(' ')}`, () => {
+      assert.equal(isGitSubcommand(['git', ...opt, 'commit', '-m', 'x'].join(' '), 'commit'), true);
+    });
+    test(`push is not commit after ${opt.join(' ')}`, () => {
+      assert.equal(isGitSubcommand(['git', ...opt, 'push'].join(' '), 'commit'), false);
+    });
+    test(`checkout -b yields the branch after ${opt.join(' ')}`, () => {
+      assert.equal(extractBranchArgument(['git', ...opt, 'checkout', '-b', 'feat'].join(' ')), 'feat');
+    });
+  }
+
+  test('the three options combine with each other and with existing options', () => {
+    assert.equal(
+      isGitSubcommand('git --no-pager --no-advice --config-env k=V --attr-source HEAD -C d commit -m x', 'commit'),
+      true,
+    );
+  });
+
+  test('an unknown global option still stops the walk (fail closed)', () => {
+    assert.equal(isGitSubcommand('git --no-such-option commit -m x', 'commit'), false);
+    assert.equal(isGitSubcommand('git --no-advice --no-such-option commit -m x', 'commit'), false);
+    assert.equal(extractBranchArgument('git --no-such-option checkout -b feat'), null);
+  });
+
+  test('an argument-taking option with no argument does not throw', () => {
+    assert.equal(isGitSubcommand('git --config-env', 'commit'), false);
+    assert.equal(isGitSubcommand('git --attr-source', 'commit'), false);
+    assert.equal(extractBranchArgument('git --attr-source'), null);
+  });
+
+  test('property: the options in any order, either spelling, still reach commit', () => {
+    const optionArb = fc.constantFrom(
+      ['--no-advice'], ['--no-pager'], ['--config-env=k=V'], ['--config-env', 'k=V'],
+      ['--attr-source=HEAD'], ['--attr-source', 'HEAD'], ['-C', 'd'],
+    );
+    fc.assert(fc.property(fc.array(optionArb, { maxLength: 6 }), (opts) => {
+      const cmd = ['git', ...opts.flat(), 'commit', '-m', 'x'].join(' ');
+      return isGitSubcommand(cmd, 'commit') === true;
+    }));
+  });
+});
+
 // ── gsd-validate-commit.sh source check ──────────────────────────────────────
 
 describe('gsd-validate-commit.sh delegates to git-cmd.js', () => {

@@ -232,7 +232,7 @@ Full emission rules, anti-patterns ("the system is ready" is not checkable; do n
 |---|---|---|
 | `reversible` | Undo is local and cheap. | None. This is the default when no rating is given. |
 | `costly` | Undo touches many call sites or needs a coordinated change. | Flagged in the plan so the reader sees the weight. Never blocks. |
-| `one-way` | Undo requires a migration, breaks a published contract, or is impossible. | The planner inserts a `checkpoint:decision` immediately **before** the dependent task, unless the human already settled that decision (CONTEXT.md, an ingested ADR, or an answered checkpoint). |
+| `one-way` | Undo requires a migration, breaks a published contract, or is impossible. | The planner inserts a `checkpoint:decision` immediately **before** the dependent task, unless the human already settled that decision (CONTEXT.md, an ingested ADR, or an answered checkpoint). Entries under CONTEXT.md's `### Decided autonomously` (written by `/gsd-autonomous` smart discuss without asking) do not count as settled. |
 
 **Optional and back-compat:** a plan that omits `<reversibility>` on every task behaves exactly as today — no flag, no checkpoint. Plans that include it pass `verify plan-structure` unchanged; the structural validator checks for the presence of required tags and does not reject unknown optional tags.
 
@@ -275,6 +275,77 @@ Full taxonomy, emission rules, and anti-patterns (chiefly: rating everything `on
 **Optional and back-compat for the structural validator:** a plan that omits `auto_select` on every `checkpoint:decision` task still passes `verify plan-structure` — the validator only rejects a *declared* `auto_select` that doesn't match any option id. What changes is auto-mode's *runtime* behavior (escalate instead of guessing), not plan-structure validity.
 
 Full behavioral reference: `gsd-core/references/checkpoints.md` → `checkpoint:decision`.
+
+---
+
+## Baseline notation
+
+A quantitative criterion (a count or a match) carries its measured baseline beside it (issue #4309, [ADR-4309](../adr/4309-criterion-baseline-notation.md)):
+
+```
+[HEAD=<value> EXPECT<op><value> [@<sha>] [GUARD MUTATION: <ref>] [UNPINNED]]
+```
+
+```xml
+<acceptance_criteria>
+  - `grep -c "## Quickstart" README.md` -ge 1 [HEAD=0 EXPECT>=1 @3f9c2a1]
+</acceptance_criteria>
+<verify><automated>grep -c "## Quickstart" README.md   # [HEAD=0 EXPECT>=1]</automated></verify>
+```
+
+| Part | Values | Meaning |
+|---|---|---|
+| `HEAD=<value>` | integer (optionally signed, at most 15 digits) · `absent` · `present` · `error:<1-255>` | What the command prints at HEAD, whichever counting flag produced it. `error:N` is the command's exit code: `grep -c` over a missing path is `error:2`, not `0`. |
+| `EXPECT<op><value>` | op `==` `!=` `>=` `>` `<=` `<` | What the command must print after the change. `>` `>=` `<` `<=` need an integer `EXPECT`; a non-integer `HEAD` never satisfies them. |
+| `@<sha>` | 7–40 lowercase hex characters | The commit the baseline was measured at. |
+| `GUARD MUTATION: <ref>` | free text, not empty | Declares a regression guard: a criterion meant to hold before and after the change. `<ref>` names the mutation that turns it red. |
+| `UNPINNED` | flag | No revision was recorded. Do not combine it with `@<sha>`. |
+
+Keywords are uppercase and the grammar is closed. The `GUARD MUTATION:` reference cannot contain `]`. A trailing `UNPINNED` at the end of the reference is always the flag, never part of the reference. `@<sha>` must precede `GUARD`; one written after the reference is removed from it, reported as `unrecognized_trailing`, and the criterion is judged with the remaining reference (an empty reference is not a guard). The notation is read from `<acceptance_criteria>`, `<automated>` (in a shell comment), and `<verify>`. Its command is never executed unless you pass `--replay` (see **Replay** below).
+
+**`verify plan-structure` rules:**
+
+| Id | Severity | Fires when | Fix |
+|---|---|---|---|
+| B1 | error | `HEAD` already satisfies `EXPECT`, and the notation lacks `GUARD MUTATION: <ref>` | Anchor the gate to what the task creates, or tighten `EXPECT` to the delta (`[HEAD=6 EXPECT>=7]`). For a deliberate regression guard, add `GUARD MUTATION: <ref>`. |
+| B2 | warning | a free-form `# baseline at HEAD:` comment sits in a criteria zone | Rewrite it as the notation. |
+
+A notation the checker cannot parse or evaluate is a **status**, not a finding. It is listed under `baseline_statuses` and does not change the exit code:
+
+| `code` | Meaning |
+|---|---|
+| `malformed` | Not `HEAD=<value> EXPECT<op><value>` (unknown or missing operator, missing `EXPECT`) |
+| `bad_value` | A value outside the value grammar (`HEAD=abc`, `error:0`, `error:256`, more than 15 digits) |
+| `ordering_needs_integer` | `>`, `>=`, `<` or `<=` with a non-integer `EXPECT` |
+| `bad_rev` | `@` is not a 7–40 hex sha (the criterion is still judged) |
+| `pin_conflict` | Both `@<sha>` and `UNPINNED` (the criterion is still judged) |
+| `unrecognized_trailing` | Text after the recognized parts, such as a misspelled `GUARD` (the criterion is still judged, unguarded) |
+| `unterminated` | `[HEAD=` with no `]` on the same line within 500 characters |
+| `outside_criteria_zone` | The notation sits outside the three criteria zones and is not judged |
+| `scanner_error` | The scanner failed; plan validation continues |
+| `truncated` | More than 50 statuses; the rest are summarized in one entry (at most 51 statuses are listed). Findings are never capped. |
+
+The legitimate exit is `<!-- plan-criteria-allow: B1 - <reason> -->` (or `B2`), with a non-empty reason, as for the R1–R6 rules.
+
+`baseline_notation_count` counts every notation found, including ones outside the criteria zones. The JSON verdict carries `baseline_notation_count`, `baseline_findings` (`{ rule, severity, line, text, message }`), and `baseline_statuses` (`{ code, line, text, detail }`).
+
+**Replay (opt-in, #4310).** `verify plan-structure <PLAN.md> --replay` runs the command beside each judged notation and compares what it prints with `HEAD` ([ADR-4310](../adr/4310-criterion-replay.md)). The command is read from the same line:
+
+- **Acceptance criterion:** the single backtick span before the notation.
+- **Automated command:** the text before the trailing `#`.
+
+The output becomes a value as follows:
+
+| Exit / output | Observed value |
+|---|---|
+| exit 0 or 1, prints one integer | that integer (`grep -c` with no match exits 1 and prints `0`) |
+| exit 0, anything else | `present` |
+| exit 1, anything else | `absent` |
+| exit 2–255 | `error:<code>` |
+
+A different value is a `mismatch`: it adds a warning and never changes validity. `rev_drift: true` marks a mismatch on a notation pinned (`@<sha>`) to a commit other than the current `HEAD`. Only `grep` and the read-only `git` subcommands `grep`, `ls-files`, `rev-parse` and `rev-list` run, as direct argv with no shell. A pipeline, a glob or any other program is a `disallowed` status and does not run. See [`gsd-tools verify plan-structure --replay`](../COMMANDS.md#gsd-tools-verify-plan-structure-planmd---replay).
+
+**Known limits:** `EXPECT` is not cross-checked against the shell command's own comparison. Without `--replay`, nothing checks that `HEAD` was actually measured. Replay measures the working tree, not a clean checkout of `HEAD`.
 
 ---
 

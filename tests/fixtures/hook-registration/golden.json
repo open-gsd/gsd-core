@@ -14685,7 +14685,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-workflow-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-workflow-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -14695,7 +14695,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-worktree-path-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-worktree-path-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -14705,7 +14705,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-agent-isolation-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-agent-isolation-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -14715,7 +14715,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-write-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-write-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -14725,7 +14725,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-secret-read-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-secret-read-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -14792,7 +14792,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-path-export.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-path-export.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 5
         }
        ]
@@ -15269,7 +15269,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-path-export.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-path-export.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 5
         }
        ]
@@ -15351,7 +15351,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-workflow-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-workflow-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -15361,7 +15361,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-worktree-path-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-worktree-path-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -15371,7 +15371,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-agent-isolation-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-agent-isolation-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -15381,7 +15381,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-write-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-write-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]
@@ -15391,7 +15391,7 @@
        "hooks": [
         {
          "type": "command",
-         "command": "\"$(for n in \"/opt/node/bin/node\" \"$(command -v node)\" /usr/local/bin/node /usr/bin/node; do [ -x \"$n\" ] && { [ \"${n#/}\" != \"$n\" ] || [ \"${n#?:}\" != \"$n\" ]; } && printf '%s' \"$n\" && break; done)\" \"<TARGET>/hooks/gsd-secret-read-guard.js\"",
+         "command": "& ((@('/opt/node/bin/node') + @(Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like '*.exe' } | ForEach-Object { $_.Source })) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1) '<TARGET>/hooks/gsd-secret-read-guard.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })",
          "timeout": 120
         }
        ]

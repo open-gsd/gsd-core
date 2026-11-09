@@ -26,7 +26,7 @@ Brownfield equivalent of new-project. Project exists, PROJECT.md has history. Ga
 - `.planning/ROADMAP.md` — phase structure (continues numbering)
 - `.planning/STATE.md` — reset for new milestone
 
-**After:** `/skill:gsd-plan-phase [N]` to start execution.
+**After:** Run `/skill:gsd-discuss-phase [N]` to clarify the approach (or `/skill:gsd-plan-phase [N]` to plan directly); then `/skill:gsd-execute-phase [N]` to execute.
 </objective>
 
 <execution_context>
