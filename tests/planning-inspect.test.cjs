@@ -999,8 +999,13 @@ describe('planning inspect — phase completion and plan liveness', () => {
           ['x-01-PLAN.md', ['wave: 1']], ['x-01-SUMMARY.md', ['status: halted']],
           ['plans/PLAN-01.md', ['wave: 1']], ['plans/SUMMARY-01.md', ['status: complete']],
           ['x-02-PLAN.md', ['depends_on: ["01"]']],
+          ['y-03-PLAN.md', ['wave: 1']], ['y-03-SUMMARY.md', ['status: halted']],
+          ['y-04-PLAN.md', ['depends_on: ["03"]']],
         ],
-        expected: [['plans/PLAN-01.md', false, []], ['x-01', true, []], ['x-02', false, []]],
+        expected: [
+          ['plans/PLAN-01.md', false, []], ['x-01', true, []], ['x-02', false, []],
+          ['y-03', true, []], ['y-04', false, ['y-03']],
+        ],
       },
       {
         files: [

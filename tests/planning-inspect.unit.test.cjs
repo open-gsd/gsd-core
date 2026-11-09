@@ -1425,10 +1425,16 @@ describe('planning-inspect — halted plans (#5823)', () => {
     writeHaltPlan(dir, 'plans/PLAN-01.md', ['wave: 1']);
     writeHaltSummary(dir, 'plans/SUMMARY-01.md', ['status: complete']);
     writeHaltPlan(dir, 'x-02-PLAN.md', ['depends_on: ["01"]']);
+    // Control for the short-form tier itself: "03" names only `y-03`, which
+    // halted, so `y-04` is blocked only if short forms resolve at all.
+    writeHaltPlan(dir, 'y-03-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'y-03-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'y-04-PLAN.md', ['depends_on: ["03"]']);
 
     const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
     assert.strictEqual(byId.get('x-01').halted, true);
     assert.deepStrictEqual(byId.get('x-02').blocked_by, []);
+    assert.deepStrictEqual(byId.get('y-04').blocked_by, ['y-03']);
   });
 
   test('a canonical-id collision resolves to the plan that sorts last, as in phase-plan-index', (t) => {
@@ -1444,6 +1450,22 @@ describe('planning-inspect — halted plans (#5823)', () => {
 
     const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
     assert.deepStrictEqual(byId.get('01-02').blocked_by, ['z-01-01']);
+  });
+
+  test('sorts plan files by UTF-16 code unit, as Array.prototype.sort does, not by locale', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // Canonical id 01-01 twice. Code-unit order puts `B-…` (0x42) before
+    // `a-…` (0x61), so `a-01-01` is written last and wins; a locale-aware
+    // order would put `a-…` first and resolve the token to `B-01-01`.
+    writeHaltPlan(dir, 'a-01-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'a-01-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'B-01-01-PLAN.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-02-PLAN.md', ['depends_on: [01-01]']);
+
+    const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
+    assert.deepStrictEqual(byId.get('01-02').blocked_by, ['a-01-01']);
   });
 
   test('a SUMMARY two plans halt-pair with, when unreadable, is named once', (t) => {
