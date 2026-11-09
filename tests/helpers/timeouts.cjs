@@ -104,9 +104,9 @@ const GIT_TIMEOUT_MS = DEFAULT_GIT_TIMEOUT_MS;
  * `GIT_FIXTURE_TIMEOUT_MS` for the full rationale (PR #3323); re-exported
  * here rather than restated so the two can never disagree.
  *
- * Evidence (TIMEOUT_EVIDENCE.GIT_FIXTURE_TIMEOUT_MS): worst observed 10114ms on win32 (p50 2561ms, p99 7180ms of recorded spawns),
+ * Evidence (TIMEOUT_EVIDENCE.GIT_FIXTURE_TIMEOUT_MS): worst observed 10114ms on win32 (p50 2558ms, p99 7180ms of recorded spawns),
  * margin 5.93x; CI seam spawn-stall records, 188 runs since 2026-10-25.
- * 77 records matching sites of this constant and another are credited to neither.
+ * No record matched sites of this constant and another, so none is left uncredited for that reason.
  * 10 call sites spawn outside the seam and are not covered; tracked in #6060.
  */
 
@@ -239,7 +239,7 @@ const STAGED_HOOK_SCRIPT_TIMEOUT_MS = 20000;
  *
  * Evidence (TIMEOUT_EVIDENCE.LOOP_HOOK_POINT_CLI_TIMEOUT_MS): worst observed 39655ms on win32 (p50 2555ms, p99 20684ms of recorded spawns),
  * margin 2.01x; CI seam spawn-stall records, 188 runs since 2026-10-25.
- * 77 records matching sites of this constant and another are credited to neither.
+ * No record matched sites of this constant and another, so none is left uncredited for that reason.
  * 14 call sites spawn outside the seam and are not covered; tracked in #6063.
  */
 const LOOP_HOOK_POINT_CLI_TIMEOUT_MS = 80000;
@@ -423,13 +423,13 @@ const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.
  * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
  */
 const TIMEOUT_EVIDENCE = Object.freeze({
-  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 12, darwin: 490, linux: 311 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 125, unseenSitesTrackedBy: '#6058 #6059', source: CI_SOURCE, window: CI_WINDOW },
+  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 9, darwin: 490, linux: 311 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 125, unseenSitesTrackedBy: '#6058 #6059', source: CI_SOURCE, window: CI_WINDOW },
   HOOK_FANOUT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 23514, worstPlatform: 'win32', p50Ms: 2326, p99Ms: 7563, samples: { win32: 266, darwin: 978, linux: 173 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 4669, worstPlatform: 'win32', p50Ms: 2344, p99Ms: 4669, samples: { win32: 12 }, lanes: { win32: 551, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 58, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
-  GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 10114, worstPlatform: 'win32', p50Ms: 2561, p99Ms: 7180, samples: { win32: 118, darwin: 4, linux: 148 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 10, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
+  GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 10114, worstPlatform: 'win32', p50Ms: 2558, p99Ms: 7180, samples: { win32: 116, darwin: 4, linux: 148 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 10, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
   INSTALL_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 49839, worstPlatform: 'win32', p50Ms: 2864, p99Ms: 7842, samples: { win32: 56561, darwin: 6476, linux: 734 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 16, unseenSitesTrackedBy: '#6062', source: CI_SOURCE, window: CI_WINDOW },
   STAGED_HOOK_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 5232, worstPlatform: 'darwin', p50Ms: 4889, p99Ms: 5217, samples: { win32: 3, darwin: 180 }, lanes: { win32: 562, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 4, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
-  LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 39655, worstPlatform: 'win32', p50Ms: 2555, p99Ms: 20684, samples: { win32: 2184, darwin: 1117, linux: 714 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 14, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
+  LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 39655, worstPlatform: 'win32', p50Ms: 2555, p99Ms: 20684, samples: { win32: 2176, darwin: 1117, linux: 714 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 14, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
   BUILD_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   QUICK_SPAWN_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 389, darwin: 188, linux: 286 }, unmeasuredPlatforms: [], unseenSites: 26, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
   GENERATOR_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { darwin: 188, linux: 171 }, unmeasuredPlatforms: ['win32'], unseenSites: 8, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },

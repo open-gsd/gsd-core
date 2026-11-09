@@ -7,8 +7,10 @@
  *
  * READS
  *   --artifacts <dir>  A directory of downloaded `test-timings-<os>-job<N>` artifacts laid out as
- *                      <dir>/<runId>/<artifactName>/*.jsonl (the lane's os is read from the
- *                      artifact name: ubuntu = linux, windows = win32, macos = darwin). Each
+ *                      <dir>/<runId>/<artifactName>/*.jsonl or <dir>/<runId>/*.jsonl (the lane's
+ *                      os is read from the artifact folder name, else the file name: ubuntu =
+ *                      linux, windows = win32, macos = darwin; an undeterminable os, or no lane
+ *                      file at all, exits 2). Each
  *                      jsonl line of type `seam:spawn-stall` is one record (file, command, argv,
  *                      durationMs, timeoutMs, startedAt); each `test:summary` line names a test
  *                      file the lane ran.
@@ -25,8 +27,11 @@
  *      relative requires; sites the resolver cannot resolve use MANUAL_RESOLUTIONS below.
  *   3. Attribution: each seam:spawn-stall record is credited to a constant when the record's
  *      test file (or a helper it requires, only if the file has no in-file candidate) has a seam
- *      site of a constant whose value equals the record's timeoutMs, narrowed by command and
- *      argv. A record still matching two constants is ambiguous and credited to neither.
+ *      site of a constant whose value equals the record's timeoutMs and whose callee is
+ *      compatible with the record's command. A site reached only through a helper must also show
+ *      one of its own string literals (3+ characters, not a flag) in the record's argv when it
+ *      has any; records failing either test are unmatched. Remaining ties are narrowed by argv
+ *      literals; a record still matching two constants is ambiguous and credited to neither.
  *   4. Summary per constant: p50 / p99 / max / samples per platform, worst platform, lanes that
  *      ran the constant's seam sites, seam and raw site counts, ambiguous record count.
  *
@@ -40,8 +45,9 @@
  * for example: list successful test.yml runs of the push and merge_group events created after the
  * window start (`gh run list --workflow test.yml --event push --status success --limit 400
  * --json databaseId,createdAt`), then per run id
- * `gh run download <id> --pattern 'test-timings-*' --dir <dir>/<id>`; gh creates one
- * `<dir>/<id>/<artifactName>/` folder per artifact, which is the layout read here. Expired
+ * `gh run download <id> --pattern 'test-timings-*' --dir <dir>/<id>`; with several matching artifacts gh creates one
+ * `<dir>/<id>/<artifactName>/` folder per artifact, with a single match it extracts straight into
+ * `<dir>/<id>/`; both layouts are read here. Expired
  * artifacts cannot be downloaded and are skipped.
  *
  * Exported functions are pure (filesystem access goes through a `view` object) so tests can feed
@@ -406,8 +412,9 @@ function createClassifier(view) {
       return { cls: 'UNKNOWN', ev: 'require() inline callee not located' };
     }
     if (c.includes('.')) {
-      const [o, p] = c.split('.');
-      return classifyMember(row.file, o, p, 0, new Set());
+      const parts = c.split('.');
+      const p = parts.pop();
+      return classifyMember(row.file, parts.join('.'), p, 0, new Set());
     }
     return classifyName(row.file, c, 0, new Set());
   }
@@ -451,14 +458,14 @@ function buildSites({ propRows, localRedefs }, classifier, resolutions = MANUAL_
 const baseName = (s) => String(s).split(/[\\/]/).pop();
 const osOfArtifact = (name) => (/ubuntu/.test(name) ? 'linux' : /windows/.test(name) ? 'win32' : /macos/.test(name) ? 'darwin' : 'other');
 
-/** Parses one lane jsonl text into its stall records and the test files it ran. */
+/** Parses one lane jsonl text into its stall records and the test files it ran; `skippedLines` counts lines that name a record type but are not valid JSON. */
 function parseLane(text, meta) {
-  const lane = { os: meta.os, runId: meta.runId, art: meta.art, stalls: [], files: new Set(), startedMin: null, startedMax: null };
+  const lane = { os: meta.os, runId: meta.runId, art: meta.art, stalls: [], files: new Set(), skippedLines: 0, startedMin: null, startedMax: null };
   for (const line of text.split('\n')) {
     if (!line) continue;
     let j;
     if (line.includes('seam:spawn-stall')) {
-      try { j = JSON.parse(line); } catch { continue; }
+      try { j = JSON.parse(line); } catch { lane.skippedLines++; continue; }
       if (j.type === 'seam:spawn-stall') {
         lane.stalls.push(j);
         if (j.startedAt) {
@@ -467,7 +474,7 @@ function parseLane(text, meta) {
         }
       }
     } else if (line.includes('test:summary')) {
-      try { j = JSON.parse(line); } catch { continue; }
+      try { j = JSON.parse(line); } catch { lane.skippedLines++; continue; }
       if (j.type === 'test:summary' && j.data && j.data.file) lane.files.add(baseName(j.data.file));
     }
   }
@@ -525,7 +532,7 @@ function createRepoIndex(view) {
     const lits = new Set();
     let name = s.callee;
     if (best) { name = calleeName(best.callee) || s.callee; for (const a of best.arguments) literalsOf(a, consts, 0, lits); }
-    const shape = { callee: name, lits: [...lits].filter((x) => x.length >= 2) };
+    const shape = { callee: name, lits: [...lits].filter(isDistinctiveLiteral) };
     shapeCache.set(key, shape);
     return shape;
   }
@@ -558,6 +565,11 @@ function createRepoIndex(view) {
   const testsByBase = {};
   for (const f of view.listFiles()) (testsByBase[baseName(f)] = testsByBase[baseName(f)] || []).push(f);
   return { fileAst, siteShape, helperClosure, testsByBase };
+}
+
+/** A site literal that can tell two sites apart in argv: at least 3 characters and not a flag. */
+function isDistinctiveLiteral(x) {
+  return x.length >= 3 && !x.startsWith('-');
 }
 
 function cmdCompatible(callee, command) {
@@ -611,21 +623,31 @@ function attributeRecords(lanes, { sites, values, index, historicalValues = {} }
         helper = cands.length > 0;
       }
       if (!cands.length) { unmatched.push(rec); continue; }
+      const argvStr = rec.argv.join(' ');
+      const constsOf = (list) => {
+        const out = new Set();
+        for (const s of list) for (const c of s.constants) if (has(c)) out.add(c);
+        return out;
+      };
+      const allConsts = constsOf(cands);
+      let comp = cands.filter((s) => cmdCompatible(index.siteShape(s).callee, rec.command));
+      if (helper) {
+        // A helper is shared by many tests: require the record's argv to show one of the site's own literals.
+        comp = comp.filter((s) => { const l = index.siteShape(s).lits; return !l.length || l.some((x) => argvStr.includes(x)); });
+      }
+      if (!comp.length) { unmatched.push(rec); continue; }
       if (helper) { viaHelper++; rec.viaHelper = true; }
-      const consts = new Set();
-      for (const s of cands) for (const c of s.constants) if (has(c)) consts.add(c);
+      const consts = constsOf(comp);
       let winner = null;
       if (consts.size === 1) winner = [...consts][0];
       else {
-        const argvStr = rec.argv.join(' ');
-        const comp = cands.filter((s) => cmdCompatible(index.siteShape(s).callee, rec.command));
         const scored = comp.map((s) => ({ s, score: index.siteShape(s).lits.filter((l) => argvStr.includes(l)).length }));
         const maxScore = scored.reduce((a, b) => Math.max(a, b.score), 0);
         const top = maxScore > 0 ? scored.filter((x) => x.score === maxScore) : scored;
-        const tc = new Set();
-        for (const x of top) for (const c of x.s.constants) if (has(c)) tc.add(c);
-        if (tc.size === 1) { winner = [...tc][0]; narrowed++; }
+        const tc = constsOf(top.map((x) => x.s));
+        if (tc.size === 1) winner = [...tc][0];
       }
+      if (winner && allConsts.size > 1) narrowed++;
       if (!winner) { rec.candidates = [...consts]; ambiguous.push(rec); continue; }
       rec.constant = winner;
       (credited[winner] = credited[winner] || []).push(rec);
@@ -683,6 +705,7 @@ function summarizeConstants({ names, values, sites, lanes, index, attribution })
       perPlatform: per,
       worst,
       recordsTotal: rs.length,
+      viaHelper: rs.filter((r) => r.viaHelper).length,
       margin: worst ? floor2(val / worst.ms) : null,
       ambiguousCandidateCount: ambiguous.filter((r) => r.candidates.includes(c)).length,
     };
@@ -713,7 +736,7 @@ function buildEvidence({ lanes, runDirectories, view, names, evidenceNames, valu
   const unmatchedByTimeout = {};
   for (const r of attribution.unmatched) unmatchedByTimeout[r.timeoutMs] = (unmatchedByTimeout[r.timeoutMs] || 0) + 1;
   return {
-    window: { runDirectories, runs: runIds.size, laneArtifacts: lanes.length, lanesByPlatform, firstSpawnStartedAt: dmin, lastSpawnStartedAt: dmax },
+    window: { runDirectories, runs: runIds.size, laneArtifacts: lanes.length, lanesByPlatform, firstSpawnStartedAt: dmin, lastSpawnStartedAt: dmax, skippedMalformedLines: lanes.reduce((a, l) => a + (l.skippedLines || 0), 0) },
     totalRecords: attribution.total,
     creditedRecords: Object.values(attribution.credited).reduce((a, b) => a + b.length, 0),
     ambiguousRecords: attribution.ambiguous.length,
@@ -753,11 +776,11 @@ function renderMarkdown(ev, evidenceNames) {
   const w = ev.window;
   L.push('# CI timeout evidence (per-call-site attribution)', '');
   L.push(`${w.runDirectories} run directories, ${w.runs} with spawn-stall data; ${w.laneArtifacts} lane artifacts (win32 ${w.lanesByPlatform.win32 || 0}, darwin ${w.lanesByPlatform.darwin || 0}, linux ${w.lanesByPlatform.linux || 0}); spawn startedAt ${w.firstSpawnStartedAt} .. ${w.lastSpawnStartedAt}. Smallest durationMs: ${ev.minDurationMs}.`, '');
-  L.push(`Records: ${ev.totalRecords}; credited ${ev.creditedRecords}; ambiguous ${ev.ambiguousRecords}; unmatched ${ev.unmatchedRecords}; narrowed by command/argv ${ev.narrowedByArgv}; credited via helper ${ev.viaHelper}.`, '');
-  L.push('| constant | value | seam sites | raw sites | records (win32/darwin/linux) | lanes (win32/darwin/linux) | worst platform | worst max ms | margin | ambiguous cand. |', '|---|---|---|---|---|---|---|---|---|---|');
+  L.push(`Records: ${ev.totalRecords}; credited ${ev.creditedRecords}; ambiguous ${ev.ambiguousRecords}; unmatched ${ev.unmatchedRecords}; narrowed by command/argv ${ev.narrowedByArgv}; credited via helper ${ev.viaHelper}; malformed lines skipped ${w.skippedMalformedLines}.`, '');
+  L.push('| constant | value | seam sites | raw sites | records (win32/darwin/linux) | lanes (win32/darwin/linux) | worst platform | worst max ms | margin | via helper | ambiguous cand. |', '|---|---|---|---|---|---|---|---|---|---|---|');
   for (const c of evidenceNames) {
     const r = ev.constants[c];
-    L.push(`| ${c} | ${r.value} | ${r.seamSites} | ${r.rawSites} | ${PLATFORMS.map((p) => r.perPlatform[p].records).join('/')} | ${PLATFORMS.map((p) => r.laneCoverage[p]).join('/')} | ${r.worst ? r.worst.platform : 'n/a'} | ${r.worst ? r.worst.ms : 'none'} | ${r.margin === null ? 'n/a' : r.margin} | ${r.ambiguousCandidateCount} |`);
+    L.push(`| ${c} | ${r.value} | ${r.seamSites} | ${r.rawSites} | ${PLATFORMS.map((p) => r.perPlatform[p].records).join('/')} | ${PLATFORMS.map((p) => r.laneCoverage[p]).join('/')} | ${r.worst ? r.worst.platform : 'n/a'} | ${r.worst ? r.worst.ms : 'none'} | ${r.margin === null ? 'n/a' : r.margin} | ${r.viaHelper} | ${r.ambiguousCandidateCount} |`);
   }
   L.push('', '## Per platform', '', '| constant | platform | records | p50 | p99 | max |', '|---|---|---|---|---|---|');
   for (const c of evidenceNames) {
@@ -796,28 +819,48 @@ function diskView(root) {
   return { read, listFiles };
 }
 
+/**
+ * Reads every `*.jsonl` under `artifactsDir`. Two layouts are accepted:
+ * `<dir>/<runId>/<artifact>/<file>.jsonl` and `<dir>/<runId>/<file>.jsonl` (what `gh run download
+ * --pattern X --dir <dir>/<runId>` writes when X matches a single artifact). The lane's os comes
+ * from the artifact folder name, else from the file name; a file whose os cannot be determined, or
+ * that sits outside `<runId>/`, throws, as does a directory holding no lane file. Directory entries
+ * are visited in sorted order.
+ */
 function loadLanes(artifactsDir) {
   const lanes = [];
   (function walk(d) {
-    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const entries = fs.readdirSync(d, { withFileTypes: true }).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+    for (const e of entries) {
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.jsonl')) {
         const parts = path.relative(artifactsDir, p).split(path.sep);
-        lanes.push(parseLane(fs.readFileSync(p, 'utf8'), { os: osOfArtifact(parts[1] || ''), runId: parts[0], art: parts[1] }));
+        if (parts.length < 2) throw new Error('lane file outside a <runId>/ directory: ' + p);
+        const art = parts.length >= 3 ? parts[1] : e.name.replace(/\.jsonl$/, '');
+        let os = osOfArtifact(art);
+        if (os === 'other') os = osOfArtifact(e.name);
+        if (os === 'other') throw new Error('cannot determine the os of lane file ' + p + ' (artifact name must contain ubuntu, windows or macos)');
+        lanes.push(parseLane(fs.readFileSync(p, 'utf8'), { os, runId: parts[0], art }));
       }
     }
   })(artifactsDir);
+  if (!lanes.length) throw new Error('no lane *.jsonl files found under ' + artifactsDir);
   return lanes;
 }
 
 function parseArgs(argv) {
   const opts = { artifacts: null, repo: path.resolve(__dirname, '..'), format: 'json', rawSites: false };
+  const valueOf = (flag, i) => {
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('--')) throw new Error(flag + ' requires a value');
+    return v;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--artifacts') opts.artifacts = argv[++i];
-    else if (a === '--repo') opts.repo = path.resolve(argv[++i]);
-    else if (a === '--format') opts.format = argv[++i];
+    if (a === '--artifacts') opts.artifacts = valueOf(a, i++);
+    else if (a === '--repo') opts.repo = path.resolve(valueOf(a, i++));
+    else if (a === '--format') opts.format = valueOf(a, i++);
     else if (a === '--raw-sites') opts.rawSites = true;
     else throw new Error('unknown argument: ' + a);
   }
@@ -868,5 +911,6 @@ module.exports = {
   renderMarkdown,
   diskView,
   loadLanes,
+  parseArgs,
   osOfArtifact,
 };

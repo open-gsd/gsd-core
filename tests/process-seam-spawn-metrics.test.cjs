@@ -174,11 +174,28 @@ describe('process-seam spawn metrics (#5473)', () => {
       assert.equal(rec.boundFraction, 0.501);
     });
 
-    test('boundFraction is rounded to three decimals', () => {
+    test('boundFraction is floored to three decimals', () => {
       recordSpawnIfNoteworthy('node', [], 3000, exited(2000));
       const [rec] = records();
-      assert.equal(rec.boundFraction, 0.667);
+      assert.equal(rec.boundFraction, 0.666);
     });
+
+    // At the 80000ms CLI-class bound, nearMiss must agree with boundFraction: the
+    // value that reads 0.5 is never reported as not a near-miss.
+    for (const [durationMs, fraction, near] of [
+      [39999, 0.499, false],
+      [40000, 0.5, true],
+      [40001, 0.5, true],
+    ]) {
+      test(`bound 80000 with duration ${durationMs} gives boundFraction ${fraction} and nearMiss ${near}`, () => {
+        process.env[SLOW_SPAWN_ENV] = '0';
+        recordSpawnIfNoteworthy('node', [], 80000, exited(durationMs));
+        const [rec] = records();
+        assert.equal(rec.boundFraction, fraction);
+        assert.equal(rec.nearMiss, near);
+        assert.equal(rec.nearMiss, rec.boundFraction >= NEAR_MISS_BOUND_FRACTION);
+      });
+    }
 
     test('a slow spawn under half its bound is recorded with nearMiss false', () => {
       process.env[SLOW_SPAWN_ENV] = '0';

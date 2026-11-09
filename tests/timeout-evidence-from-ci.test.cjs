@@ -5,12 +5,16 @@
  * CI figures in tests/helpers/timeouts.cjs TIMEOUT_EVIDENCE. Every input is synthetic: source
  * strings fed through an in-memory view, and records written as jsonl text. The CLASS_*_MS names
  * below are neutral test data standing in for timeouts.cjs exports. No wall-clock values are
- * asserted and no repository source is read.
+ * asserted. The one repository-level test (drift guard) feeds the real tests/ tree through the
+ * script's own census and compares counts with TIMEOUT_EVIDENCE; it matches no source text.
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const script = require('../scripts/timeout-evidence-from-ci.cjs');
 
@@ -277,6 +281,7 @@ describe('summary', () => {
       '',
     ].join('\n'), { os: 'win32', runId: '9', art: 'x' });
     assert.equal(l.stalls.length, 2);
+    assert.equal(l.skippedLines, 1);
     assert.deepEqual([...l.files].sort(), ['a.test.cjs', 'b.test.cjs']);
     assert.equal(l.startedMin, '2026-11-01T00:00:00.000Z');
     assert.equal(l.startedMax, '2026-11-02T00:00:00.000Z');
@@ -354,5 +359,201 @@ describe('raw site listing', () => {
       '## CLASS_E_MS', '',
       '- [ ] tests/a.test.cjs:12 (CLASS_E_MS)', '',
     ].join('\n'));
+  });
+});
+
+describe('attribution: command and helper compatibility', () => {
+  const VALUES = { CLASS_A_MS: BOUND_SMALL, CLASS_D_MS: BOUND_LARGE };
+  const FILE = 'tests/a.test.cjs';
+  const HELPER = 'tests/helpers/h.cjs';
+  const helperFiles = (call) => ({
+    'tests/b.test.cjs': "const h = require('./helpers/h.cjs');\n",
+    [HELPER]: SEAM_IMPORT + 'module.exports = () => ' + call + ';\n',
+  });
+
+  test('a single candidate whose callee is incompatible with the record command is unmatched, a compatible one is credited', () => {
+    const files = { [FILE]: SEAM_IMPORT + "runGit(['status'], { timeoutMs: CLASS_A_MS });\n" };
+    const sites = [seamSite(FILE, 2, ['CLASS_A_MS'], 'runGit')];
+    const bad = attribute(files, sites, VALUES, [lane('linux', [stall({ command: 'node' })])]);
+    assert.equal(bad.unmatched.length, 1);
+    assert.deepEqual(bad.credited, {});
+    const good = attribute(files, sites, VALUES, [lane('linux', [stall({ command: 'git' })])]);
+    assert.equal(good.credited.CLASS_A_MS.length, 1);
+    assert.equal(good.unmatched.length, 0);
+  });
+
+  test('a record reaching a helper site is credited only when its argv shows one of the site literals', () => {
+    const files = helperFiles("runNode(['alpha.js'], { timeoutMs: CLASS_A_MS })");
+    const sites = [seamSite(HELPER, 2, ['CLASS_A_MS'])];
+    const hit = attribute(files, sites, VALUES, [lane('linux', [stall({ file: 'b.test.cjs', argv: ['/tmp/alpha.js'] })])]);
+    assert.equal(hit.credited.CLASS_A_MS.length, 1);
+    assert.equal(hit.credited.CLASS_A_MS[0].viaHelper, true);
+    assert.equal(hit.viaHelper, 1);
+    const miss = attribute(files, sites, VALUES, [lane('linux', [stall({ file: 'b.test.cjs', argv: ['/tmp/other.js'] })])]);
+    assert.equal(miss.unmatched.length, 1);
+    assert.deepEqual(miss.credited, {});
+    assert.equal(miss.viaHelper, 0);
+  });
+
+  test('a helper site that holds no literal is credited without argv evidence', () => {
+    const files = helperFiles('runNode([], { timeoutMs: CLASS_A_MS })');
+    const r = attribute(files, [seamSite(HELPER, 2, ['CLASS_A_MS'])], VALUES, [lane('linux', [stall({ file: 'b.test.cjs', argv: ['whatever'] })])]);
+    assert.equal(r.credited.CLASS_A_MS.length, 1);
+  });
+
+  test('a helper site whose callee is incompatible with the record command is unmatched', () => {
+    const files = helperFiles("runGit(['status'], { timeoutMs: CLASS_A_MS })");
+    const r = attribute(files, [seamSite(HELPER, 2, ['CLASS_A_MS'], 'runGit')], VALUES, [lane('linux', [stall({ file: 'b.test.cjs', command: 'node', argv: ['status'] })])]);
+    assert.equal(r.unmatched.length, 1);
+  });
+
+  test('site literals shorter than 3 characters and flags are ignored: lengths 2, 3 and 4', () => {
+    const files = { [FILE]: SEAM_IMPORT + "runNode(['ab', 'abc', 'abcd', '-ee', '--flag', '-e'], { timeoutMs: CLASS_A_MS });\n" };
+    const index = script.createRepoIndex(viewOf(files));
+    assert.deepEqual(index.siteShape(seamSite(FILE, 2, ['CLASS_A_MS'])).lits.sort(), ['abc', 'abcd']);
+  });
+});
+
+describe('classification: dotted callees', () => {
+  const NAMES = ['CLASS_A_MS'];
+  const sitesOf = (files) => {
+    const view = viewOf(files);
+    return script.buildSites(script.censusRepo(view, NAMES), script.createClassifier(view), []);
+  };
+
+  test('a three-part callee uses its last segment as the method and the rest as the object', () => {
+    const { sites, unresolvedSites } = sitesOf({ 'tests/x.test.cjs': "const o = {};\no.cp.execFileSync('git', [], { timeout: CLASS_A_MS });\n" });
+    assert.equal(sites[0].cls, 'DIRECT');
+    assert.deepEqual(unresolvedSites, []);
+  });
+
+  test('a three-part callee whose method is not a spawn call stays unresolved', () => {
+    const { unresolvedSites } = sitesOf({ 'tests/x.test.cjs': "const o = {};\no.helper.go('git', [], { timeout: CLASS_A_MS });\n" });
+    assert.equal(unresolvedSites.length, 1);
+    assert.equal(unresolvedSites[0].cls, 'UNKNOWN');
+  });
+});
+
+describe('command line', () => {
+  const parse = (...args) => script.parseArgs(args);
+
+  test('a valid command line keeps its values and defaults', () => {
+    const o = parse('--artifacts', 'dir', '--format', 'md', '--raw-sites');
+    assert.equal(o.artifacts, 'dir');
+    assert.equal(o.format, 'md');
+    assert.equal(o.rawSites, true);
+    assert.equal(parse('--artifacts', 'dir').format, 'json');
+  });
+
+  test('an unknown flag, a missing --artifacts and a bad --format are usage errors', () => {
+    assert.throws(() => parse('--artifacts', 'd', '--nope'), /unknown argument: --nope/);
+    assert.throws(() => parse('--format', 'md'), /--artifacts <dir> is required/);
+    assert.throws(() => parse('--artifacts', 'd', '--format', 'xml'), /--format must be json or md/);
+  });
+
+  test('a flag with no value, or whose value starts with --, is a usage error', () => {
+    for (const flag of ['--artifacts', '--repo', '--format']) {
+      assert.throws(() => parse('--artifacts', 'd', flag), /requires a value/, flag + ' at the end');
+    }
+    assert.throws(() => parse('--artifacts', '--raw-sites'), /--artifacts requires a value/);
+    assert.throws(() => parse('--artifacts', 'd', '--repo', '--format', 'md'), /--repo requires a value/);
+  });
+});
+
+describe('loadLanes', () => {
+  function withTree(layout, fn) {
+    const root = createTempDir('tev-');
+    try {
+      for (const [rel, text] of Object.entries(layout)) {
+        const p = path.join(root, rel);
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, text);
+      }
+      return fn(root);
+    } finally {
+      cleanup(root);
+    }
+  }
+
+  test('both gh layouts are read, the os comes from the artifact or file name, and the order is sorted', () => {
+    const line = stall() + '\n';
+    const lanes = withTree({
+      '20/test-timings-windows-latest-job0/test-timings-windows-latest-job0.jsonl': line,
+      '10/test-timings-ubuntu-unit-job1.jsonl': line,
+      '10/test-timings-macos-latest-job3.jsonl': line + '{"type":"seam:spawn-stall", broken\n',
+    }, (root) => script.loadLanes(root));
+    assert.deepEqual(lanes.map((l) => [l.runId, l.os]), [['10', 'darwin'], ['10', 'linux'], ['20', 'win32']]);
+    assert.equal(lanes[0].skippedLines, 1);
+  });
+
+  test('a lane whose os cannot be determined, a file outside a run directory and an empty tree are errors', () => {
+    assert.throws(() => withTree({ '1/test-timings-plan.jsonl': stall() }, (root) => script.loadLanes(root)), /cannot determine the os/);
+    assert.throws(() => withTree({ 'test-timings-ubuntu-unit-job1.jsonl': stall() }, (root) => script.loadLanes(root)), /outside a <runId>\/ directory/);
+    assert.throws(() => withTree({ '1/notes.txt': 'x' }, (root) => script.loadLanes(root)), /no lane/);
+  });
+});
+
+describe('evidence report', () => {
+  const NAMES = ['CLASS_A_MS'];
+  const files = { 'tests/a.test.cjs': SEAM_IMPORT + "runNode(['x.js'], { timeoutMs: CLASS_A_MS });\n" };
+
+  function build() {
+    const view = viewOf(files);
+    const lanes = [
+      lane('win32', [stall({ durationMs: 3000 }), stall({ durationMs: 5000 })]),
+      lane('linux', [stall({ durationMs: 2500 }), stall({ file: 'other.test.cjs', durationMs: 2600 })]),
+      lane('darwin', ['{"type":"seam:spawn-stall", broken']),
+    ];
+    const ev = script.buildEvidence({
+      lanes, runDirectories: 1, view, names: NAMES, evidenceNames: NAMES, values: { CLASS_A_MS: BOUND_SMALL },
+      census: script.censusRepo(view, NAMES),
+    });
+    return ev;
+  }
+
+  test('buildEvidence reports record counts, per-platform figures, margin and skipped lines', () => {
+    const ev = build();
+    assert.equal(ev.totalRecords, 4);
+    assert.equal(ev.creditedRecords, 3);
+    assert.equal(ev.unmatchedRecords, 1);
+    assert.equal(ev.ambiguousRecords, 0);
+    assert.equal(ev.window.skippedMalformedLines, 1);
+    assert.deepEqual(ev.window.lanesByPlatform, { win32: 1, linux: 1, darwin: 1 });
+    const c = ev.constants.CLASS_A_MS;
+    assert.equal(c.seamSites, 1);
+    assert.equal(c.rawSites, 0);
+    assert.equal(c.viaHelper, 0);
+    assert.deepEqual([c.perPlatform.win32.records, c.perPlatform.darwin.records, c.perPlatform.linux.records], [2, 0, 1]);
+    assert.equal(c.perPlatform.win32.p50, 3000);
+    assert.equal(c.perPlatform.win32.max, 5000);
+    assert.equal(c.worst.platform, 'win32');
+    assert.equal(c.margin, 3);
+  });
+
+  test('renderMarkdown prints the totals line and one table row per constant', () => {
+    const lines = script.renderMarkdown(build(), NAMES).split('\n');
+    assert.ok(lines.some((l) => l.includes('Records: 4; credited 3; ambiguous 0; unmatched 1;') && l.includes('malformed lines skipped 1.')));
+    assert.ok(lines.includes('| CLASS_A_MS | 15000 | 1 | 0 | 2/0/1 | 0/0/0 | win32 | 5000 | 3 | 0 | 0 |'));
+    assert.ok(lines.includes('| CLASS_A_MS | linux | 1 | 2500 | 2500 | 2500 |'));
+  });
+});
+
+describe('repository drift guard', () => {
+  test('the real tests/ tree classifies with no unresolved site and no unused resolution, and each measured constant unseenSites equals its raw site count', () => {
+    const root = path.resolve(__dirname, '..');
+    const T = require('./helpers/timeouts.cjs');
+    const { censusNames, evidenceNames } = script.constantsFromTimeouts(T);
+    const view = script.diskView(root);
+    const census = script.censusRepo(view, censusNames);
+    assert.deepEqual(census.parseFailures, []);
+    const built = script.buildSites(census, script.createClassifier(view));
+    assert.deepEqual(built.unresolvedSites, []);
+    assert.deepEqual(built.unusedResolutions, []);
+    for (const name of evidenceNames) {
+      const entry = T.TIMEOUT_EVIDENCE[name];
+      if (entry.kind !== 'measured') continue;
+      const raw = built.sites.filter((s) => s.cls === 'DIRECT' && s.constants.includes(name)).length;
+      assert.equal(entry.unseenSites, raw, name + ' unseenSites');
+    }
   });
 });
