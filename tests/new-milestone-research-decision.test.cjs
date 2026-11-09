@@ -10,10 +10,13 @@
  *  5. researchers are briefed on the milestone's work and the existing
  *     codebase,
  *  6. Step 10 passes SUMMARY.md to the roadmapper only when research ran,
- *  7. this run's outputs are cleared first, so an earlier run's file cannot pass
- *     for them, and the synthesizer prompt reads only the files it is given,
+ *  7. this run's outputs are cleared first — SUMMARY.md and all four dimension
+ *     files, so an earlier run's file cannot pass for them, be read by the
+ *     synthesizer, or be staged by self-heal — and the synthesizer prompt
+ *     reads only the files it is given,
  *  8. per-dimension fields and the codebase-map instruction match that scope.
- * The scope is gsd-core/workflows/new-milestone.md only (the #5148 approval).
+ * The scope under test is gsd-core/workflows/new-milestone.md (the #5148
+ * approval) plus the two docs rows ruled in on 2026-11-05.
  */
 
 const { describe, test } = require('node:test');
@@ -133,7 +136,14 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.ok(disclose !== -1 && clear !== -1 && spawn !== -1, 'the disclosure, the removal, and the spawn must all exist');
     assert.ok(disclose < clear && clear < spawn, 'the replacement must be disclosed before the files are removed, and removal precedes the researcher spawn');
     assert.match(body, /earlier contents will be lost; only committed copies remain in git/);
-    assert.match(body, /`rm -f "\{research_dir\}\/\{FILE\}"` for each dimension in `\{dimensions kept\}`/);
+    assert.match(body, /`rm -f "\{research_dir\}\/STACK\.md"`, `rm -f "\{research_dir\}\/FEATURES\.md"`, `rm -f "\{research_dir\}\/ARCHITECTURE\.md"`, and `rm -f "\{research_dir\}\/PITFALLS\.md"`/,
+      'the removal must cover every dimension file, not only the kept ones');
+    for (const file of ['STACK.md', 'FEATURES.md', 'ARCHITECTURE.md', 'PITFALLS.md']) {
+      assert.ok(body.includes(`Replacing research files:`) && body.includes(`{research_dir}/${file}`),
+        `the replacement notice must name ${file}`);
+    }
+    assert.doesNotMatch(body.slice(body.indexOf('Replacing research files:'), body.indexOf('Spawn {N} parallel')),
+      /left in place and never read/, 'no stale file may be left behind for the synthesizer or self-heal');
   });
 });
 

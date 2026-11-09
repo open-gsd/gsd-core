@@ -570,16 +570,16 @@ Orchestrator (workflow .md)
 Conceptual spawn-pattern taxonomy for the primary agents. For the authoritative agent roster (including the advanced/specialized agents such as `gsd-pattern-mapper`, `gsd-code-reviewer`, `gsd-code-fixer`, `gsd-ai-researcher`, `gsd-domain-researcher`, `gsd-eval-planner`, `gsd-eval-auditor`, `gsd-framework-selector`, `gsd-debug-session-manager`, `gsd-intel-updater`), see [`docs/INVENTORY.md`](INVENTORY.md#agents).
 
 
-| Category         | Agents                                                                                  | Parallelism                                                                               |
-| ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Category         | Agents                                                                                  | Parallelism                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | **Researchers**  | gsd-project-researcher, gsd-phase-researcher, gsd-ui-researcher, gsd-advisor-researcher | Up to 4 parallel (stack, features, architecture, pitfalls); advisor spawns during discuss-phase |
-| **Synthesizers** | gsd-research-synthesizer                                                                | Sequential (after researchers complete)                                                   |
-| **Planners**     | gsd-planner, gsd-roadmapper                                                             | Sequential                                                                                |
-| **Checkers**     | gsd-plan-checker, gsd-integration-checker, gsd-ui-checker, gsd-nyquist-auditor          | Sequential (verification loop, max 3 iterations)                                          |
-| **Executors**    | gsd-executor                                                                            | Parallel within waves, sequential across waves                                            |
-| **Verifiers**    | gsd-verifier                                                                            | Sequential (after all executors complete)                                                 |
-| **Mappers**      | gsd-codebase-mapper                                                                     | 4 parallel (tech, arch, quality, concerns)                                                |
-| **Debuggers**    | gsd-debugger                                                                            | Sequential (interactive)                                                                  |
+| **Synthesizers** | gsd-research-synthesizer                                                                | Sequential (after researchers complete)                                                         |
+| **Planners**     | gsd-planner, gsd-roadmapper                                                             | Sequential                                                                                      |
+| **Checkers**     | gsd-plan-checker, gsd-integration-checker, gsd-ui-checker, gsd-nyquist-auditor          | Sequential (verification loop, max 3 iterations)                                                |
+| **Executors**    | gsd-executor                                                                            | Parallel within waves, sequential across waves                                                  |
+| **Verifiers**    | gsd-verifier                                                                            | Sequential (after all executors complete)                                                       |
+| **Mappers**      | gsd-codebase-mapper                                                                     | 4 parallel (tech, arch, quality, concerns)                                                      |
+| **Debuggers**    | gsd-debugger                                                                            | Sequential (interactive)                                                                        |
 | **Auditors**     | gsd-ui-auditor, gsd-security-auditor                                                    | Sequential                                                                                |
 | **Doc Writers**  | gsd-doc-writer, gsd-doc-verifier                                                        | Sequential (writer then verifier)                                                         |
 | **Profilers**    | gsd-user-profiler                                                                       | Sequential                                                                                |
