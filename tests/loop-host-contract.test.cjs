@@ -963,7 +963,7 @@ describe('--check full-content comparison (FIX 4)', () => {
 
 const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
 const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
-const { scanWiredPoints, scanWiredKinds } = require('../scripts/gen-loop-host-contract.cjs');
+const { scanWiredPoints, scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
 
 describe('declared loop points are dispatched (#5848)', () => {
   test('every point a host declares has a render-hooks call site in the host or its auxiliary hosts', () => {
@@ -982,11 +982,11 @@ describe('declared loop points are dispatched (#5848)', () => {
 
   test('execute:pre is rendered before the first wave and dispatches contribution, step and gate', () => {
     const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
-    const preIdx = text.indexOf('loop render-hooks execute:pre');
-    const wavePreIdx = text.indexOf('loop render-hooks execute:wave:pre');
+    const preIdx = text.indexOf('gsd_run loop render-hooks execute:pre');
+    const wavePreIdx = text.indexOf('gsd_run loop render-hooks execute:wave:pre');
     assert.ok(preIdx !== -1, 'execute:pre call site must exist');
     assert.ok(preIdx < wavePreIdx, 'execute:pre must be rendered before the first wave dispatch site');
-    const stateBeginIdx = text.indexOf('state.begin-phase');
+    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase');
     assert.ok(preIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
     const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
     assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
@@ -998,7 +998,10 @@ describe('declared loop points are dispatched (#5848)', () => {
     assert.ok(m, 'execute-phase.md must hand execute:pre gate evaluation to its step file');
     const stepPath = path.join(WORKFLOWS_ROOT, 'execute-phase', 'steps', m[1]);
     assert.ok(fs.existsSync(stepPath), 'referenced step file must exist');
-    assert.match(fs.readFileSync(stepPath, 'utf8'), /HALT/);
+    const stepText = fs.readFileSync(stepPath, 'utf8');
+    assert.match(stepText, /Blocking gate \(`hook\.blocking == true`\) AND `GATE_RESULT\.block == true`:\*\* HALT/);
+    assert.match(stepText, /do NOT run `state\.begin-phase`/);
+    assert.match(stepText, /leave STATE\.md unchanged/);
   });
 
   test('resolveLoopHooks delivers a blocking gate and a step registered at execute:pre', () => {
@@ -1048,6 +1051,42 @@ describe('declared loop points are dispatched (#5848)', () => {
     } finally {
       cleanup(tmpDir);
     }
+  });
+
+  test('findUndispatchedPoints boundary: 0, 1 and 2 declared points (limit-1, limit, limit+1)', () => {
+    const site = (p) => 'HOOKS_JSON=$(gsd_run loop render-hooks ' + p + ' --raw)\n';
+    assert.deepEqual(findUndispatchedPoints([], []), []);
+    assert.deepEqual(findUndispatchedPoints(['a:pre'], [site('a:pre')]), []);
+    assert.deepEqual(findUndispatchedPoints(['a:pre'], ['no call site here']), ['a:pre']);
+    assert.deepEqual(findUndispatchedPoints(['a:pre', 'a:post'], [site('a:post')]), ['a:pre']);
+    assert.deepEqual(findUndispatchedPoints(['a:pre', 'a:post'], []), ['a:pre', 'a:post']);
+  });
+
+  test('findUndispatchedPoints ignores a prose mention of a point', () => {
+    assert.deepEqual(
+      findUndispatchedPoints(['execute:pre'], ['The execute:pre point is declared but never rendered.']),
+      ['execute:pre'],
+    );
+  });
+
+  test('findUndispatchedPoints tolerates CRLF', () => {
+    const text = 'step one\r\nHOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)\r\nstep two\r\n';
+    assert.deepEqual(findUndispatchedPoints(['execute:pre', 'execute:post'], [text]), ['execute:post']);
+  });
+
+  test('property: findUndispatchedPoints == declared minus the union of wired points', () => {
+    const point = fc.constantFrom(...CANONICAL_POINTS);
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(point),
+        fc.array(fc.array(point), { maxLength: 4 }),
+        (declared, wiredPerText) => {
+          const texts = wiredPerText.map((ps) => ps.map((p) => 'gsd_run loop render-hooks ' + p + ' --raw\n').join(''));
+          const wired = new Set(wiredPerText.flat());
+          assert.deepEqual(findUndispatchedPoints(declared, texts), declared.filter((p) => !wired.has(p)));
+        },
+      ),
+    );
   });
 });
 

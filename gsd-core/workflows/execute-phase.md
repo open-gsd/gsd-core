@@ -427,6 +427,12 @@ Report:
 | 2 | 01-03 | ... |
 ```
 
+**Execute:pre capability dispatch (#5848) — same reach condition, before STATE.md records the phase start:**
+```bash
+EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)
+```
+Read `activeHooks` in-context (skip silently when empty). Inject every `kind == "contribution"` fragment per @gsd-core/references/loop-hook-dispatch.md. Dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md; a step never blocks. ⚠ Validate `ref.command` in-context before any shell use. For each `kind == "gate"` entry in array order, read and execute `gsd-core/workflows/execute-phase/steps/pre-execute-gate-hooks.md`: a blocking gate that blocks HALTS here, before any plan is dispatched.
+
 **Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** Every all-filtered arm above has already exited or jumped to `aggregate_results` / `update_roadmap`; reaching here means the post-filter list is non-empty. A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
 ```bash
 gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
