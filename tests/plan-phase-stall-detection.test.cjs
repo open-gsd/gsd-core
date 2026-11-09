@@ -2021,6 +2021,20 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(watch(NOW - 11 * 60, f.receipt, `${fwd(spaced)}/01-PLAN.md`, markers, { interval: 5 }), 'active');
   });
 
+  // Review 5692447413 Minor 3: the chunked sites pass a literal file ($OUTLINE_FILE, $PLAN_FILE).
+  // A literal name that holds glob metacharacters must be watched as that one file, never
+  // expanded as a pattern (under nullglob `outline[1].md` would match nothing while present).
+  test('a literal artifact path with glob metacharacters is watched as one file, not expanded (Minor 3)', (t) => {
+    const f = fixture(t);
+    const literal = path.join(f.dir, 'outline[1].md');
+    assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(literal), ['## OUTLINE COMPLETE'], { interval: 5 }), 'stalled', 'control: absent, past the threshold');
+    fs.writeFileSync(literal, '# outline\n');
+    assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(literal), ['## OUTLINE COMPLETE'], { interval: 5 }), 'active', 'a fresh literal file whose name holds [ ] is activity');
+    // A pattern still expands: the same directory's *-PLAN.md glob sees a fresh plan.
+    fs.writeFileSync(path.join(f.dir, '01-PLAN.md'), '# plan\n');
+    assert.equal(watch(NOW - 11 * 60, f.receipt, `${f.fwd}/*-PLAN.md`, ['## PLAN COMPLETE'], { interval: 5 }), 'active', 'control: a basename pattern still globs');
+  });
+
   // -- Review 5477738387 Minor 3: the cleanup is a command at each watch site, not
   // helper prose only. The clause lives in the site's ORCHESTRATOR RULE paragraph,
   // after its gsd_stall_watch call, and names stalled and Retry, so every route of

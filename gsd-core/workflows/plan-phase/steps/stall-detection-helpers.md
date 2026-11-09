@@ -330,19 +330,25 @@ gsd_stall_watch() {
   # macOS run. -mmin -N needs no epoch/date-string conversion at all and is
   # supported identically by GNU find (Linux, Git-for-Windows' bundled
   # findutils) and BSD find (macOS). $artifact_glob is one string, a literal
-  # directory plus a basename pattern (`<phase>/*-PLAN.md`) or a literal file.
-  # The directory part stays quoted (a space in PHASE_DIR must not split it) and
-  # only the basename is globbed, under nullglob (restored after) with IFS empty,
-  # so no match gives an empty list and artifact_fresh stays false.
+  # directory plus a basename pattern (`<phase>/*-PLAN.md`) or a literal file
+  # (the chunked sites' $OUTLINE_FILE / $PLAN_FILE). A path that exists is that one
+  # file, whatever characters its name holds (`outline[1].md` is never a pattern).
+  # Otherwise the directory part stays quoted (a space in PHASE_DIR must not split
+  # it) and only the basename is globbed, under nullglob (restored after) with IFS
+  # empty, so no match gives an empty list and artifact_fresh stays false.
   artifact_fresh="false"
   local IFS='' files _had_ng=0 _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
   files=()
-  [ "$_d" = "$artifact_glob" ] && _d=.
-  shopt -q nullglob && _had_ng=1
-  shopt -s nullglob
-  # shellcheck disable=SC2206 # the basename is the glob pattern; IFS is empty, so it never splits
-  [ -n "$artifact_glob" ] && files=("$_d"/$_p)
-  [ "$_had_ng" = 1 ] || shopt -u nullglob
+  if [ -n "$artifact_glob" ] && [ -e "$artifact_glob" ]; then
+    files=("$artifact_glob")
+  elif [ -n "$artifact_glob" ]; then
+    [ "$_d" = "$artifact_glob" ] && _d=.
+    shopt -q nullglob && _had_ng=1
+    shopt -s nullglob
+    # shellcheck disable=SC2206 # the basename is the glob pattern; IFS is empty, so it never splits
+    files=("$_d"/$_p)
+    [ "$_had_ng" = 1 ] || shopt -u nullglob
+  fi
   if [ "${#files[@]}" -gt 0 ] && [ -n "$(find "${files[@]}" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ]; then
     artifact_fresh="true"
   fi
