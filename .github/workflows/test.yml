@@ -30,7 +30,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  # Only a new commit supersedes a PR run. `gh pr create --label` fires `opened`
+  # and `labeled` in the same second for the same head; with an unconditional
+  # cancel, one cancels the other and its cancelled jobs stay on the head commit
+  # as a red check the merge gate refuses (#6092). A label event now queues
+  # behind the running run instead of killing it; pushes still cancel as before.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action == 'synchronize' }}
 
 permissions:
   contents: read

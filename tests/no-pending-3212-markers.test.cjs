@@ -11,7 +11,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runGit, assertSeamExit } = require('./helpers/process-seam.cjs');
 const { REAL_REPO_GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -36,12 +36,12 @@ const EXCLUDED_RELATIVE_PATHS = new Set([
  * @returns {string[]}
  */
 function listTrackedFiles() {
-  const stdout = execFileSync('git', ['-c', 'safe.directory=*', 'ls-files'], {
+  const r = runGit(['-c', 'safe.directory=*', 'ls-files'], {
     cwd: ROOT,
-    encoding: 'utf8',
-    timeout: REAL_REPO_GIT_TIMEOUT_MS,
+    timeoutMs: REAL_REPO_GIT_TIMEOUT_MS,
   });
-  return stdout
+  assertSeamExit(assert, r);
+  return r.stdout
     .split(/\r?\n/)
     .map((line) => line.replace(/\\/g, '/'))
     .filter((line) => line.length > 0);

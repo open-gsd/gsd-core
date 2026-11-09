@@ -77,7 +77,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { spawnSync } = require('node:child_process');
 
 const {
   createTempGitProject,
@@ -402,12 +401,11 @@ describe('gsd-prompt-guard: hostile .planning/ writes are advised, not blocked',
   });
 
   test('Malformed JSON input does not crash the hook', () => {
-    const r = spawnSync(process.execPath, [PROMPT_GUARD_HOOK], {
+    const r = runHookSeam(PROMPT_GUARD_HOOK, [], {
       input: 'this is not json at all',
-      encoding: 'utf-8',
-      timeout: MALFORMED_INPUT_HOOK_TIMEOUT_MS,
+      timeoutMs: MALFORMED_INPUT_HOOK_TIMEOUT_MS,
     });
-    assert.strictEqual(r.status, 0, 'hook must never propagate parser failure');
+    assert.strictEqual(r.exitCode, 0, `hook must never propagate parser failure\n${r.summary}`);
   });
 });
 
@@ -493,13 +491,12 @@ describe('gsd-read-injection-scanner: hostile reads are flagged with severity', 
   });
 
   test('hook tolerates malformed JSON input without crashing', () => {
-    const r = spawnSync(process.execPath, [READ_SCANNER_HOOK], {
+    const r = runHookSeam(READ_SCANNER_HOOK, [], {
       input: '{not json',
-      encoding: 'utf-8',
-      timeout: MALFORMED_INPUT_HOOK_TIMEOUT_MS,
+      timeoutMs: MALFORMED_INPUT_HOOK_TIMEOUT_MS,
     });
-    assert.strictEqual(r.status, 0,
-      'hook must silent-fail on parser error — never block downstream tool');
+    assert.strictEqual(r.exitCode, 0,
+      `hook must silent-fail on parser error — never block downstream tool\n${r.summary}`);
   });
 });
 

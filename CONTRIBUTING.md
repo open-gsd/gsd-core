@@ -511,8 +511,15 @@ local helper and delegate the spawn to the seam.
 of subprocess call takes (a CLI probe, git plumbing on a fixture repo, a hooks build, a full
 `bin/install.js` run), not a single suite's preference, so import them rather than re-declaring the
 same literal with the same comment in yet another file. Only write a local constant when a site
-genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...) — and give that
-local constant its own justifying comment explaining why it departs from the norm.
+genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...). Give that
+local constant its own name, never a `timeouts.cjs` export name, and its own justifying comment
+explaining why it departs from the norm.
+
+Every timeout constant states its evidence: the worst observed duration, the platform it came from,
+and a margin of at least 2x over it. A constant exported from `timeouts.cjs` also needs a matching
+`TIMEOUT_EVIDENCE` entry, which `tests/timeout-evidence.test.cjs` checks. See TESTING-STANDARDS.md,
+"Every new or changed timeout constant states its evidence", for the shape and the exempt kinds
+(fixture data, test backstop, mirror).
 
 #### When you want git to *throw*: `gitOrThrow`
 
