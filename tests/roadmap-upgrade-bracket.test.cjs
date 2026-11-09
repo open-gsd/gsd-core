@@ -137,7 +137,7 @@ function buildTemplateRoadmap() {
       const [id, name] = phases[detail++];
       return `### Phase ${id}: ${name}`;
     })
-    .replaceAll('{plan_display}', () => plans[plan++])
+    .replaceAll('{padded_phase}-{plan_padded}', () => plans[plan++])
     .replaceAll('{dependency_phase_display}', () => dependencies[dependency++])
     .replaceAll('| {phase_table_id}. [Name] |', () => {
       const [id, name] = main[progress++];

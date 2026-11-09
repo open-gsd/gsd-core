@@ -124,7 +124,7 @@ describe('#5027: convention regions fail closed and preserve surrounding bytes',
         used.add(name);
       }
     }
-    for (const name of ['phase_display', 'plan_display', 'next_phase_display', 'backlog_phase_display',
+    for (const name of ['phase_display', 'next_phase_display', 'backlog_phase_display',
       'dependency_phase_display', 'phase_table_id', 'plan_path', 'summary_path', 'phase_dir']) {
       assert.ok(defined.has(name), `required source definition ${name}`);
     }
