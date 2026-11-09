@@ -28,6 +28,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // This hook only injects an advisory context-usage warning; it never blocks
 // the tool call it rides in on. A crash here (e.g. a malformed bridge file)
@@ -334,7 +335,7 @@ const handleStdinEnd = () => {
     let thresholds = { warning: WARNING_THRESHOLD, critical: CRITICAL_THRESHOLD };
     try {
       const configPath = path.join(cwd, '.planning', 'config.json');
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const config = JSON.parse(readConfigFileBounded(configPath, { required: true }));
       if (config.hooks?.context_warnings === false) {
         allow(undefined);
       }

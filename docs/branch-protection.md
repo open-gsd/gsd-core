@@ -6,13 +6,14 @@ Four ruleset specs live under `.github/rulesets/`. All are committed with
 `enforcement: disabled` and activated in stages via the 4-PR rollout below.
 
 ### `main-protection`
-Targets `~DEFAULT_BRANCH` (main). Enforces:
+Targets `~DEFAULT_BRANCH`, which is `next` (the default branch since ADR-230), despite the name. Enforces:
 - No deletions or force pushes
 - Required linear history (no merge commits)
 - All changes via pull request (0 required approvals, stale-review dismissal, thread resolution required, squash/rebase only)
 - Required status checks: the aggregate `Required tests` gate plus PR policy
   checks for size, branch name, changeset, docs, target branch, issue link, and
   PR template format
+- One bypass actor, the repository Admin role, so the main → next back-merge can land as a merge commit despite the linear-history rule (#5894)
 
 ### `release-branches`
 Targets `refs/heads/release/**` and `refs/heads/hotfix/**`. Same rules as
@@ -30,15 +31,11 @@ required check never joins a group), the full matrix runs once on the group's
 merge commit, and each PR is **squash**-merged as its own commit
 (`merge_method: SQUASH`, matching the one-commit-per-PR convention). The queue
 waits up to 15 minutes to collect two PRs and up to 90 minutes for the checks
-to respond. It carries no other rules and **no bypass actors yet**.
+to respond. It carries no other rules and one bypass actor, the repository Admin role (#5894), used to land the main → next back-merge as a merge commit through `scripts/merge-commit-pr.cjs`.
 
 Two things must be settled before it is enforced:
-- **The auto back-merge.** `auto-backmerge.yml` merges `main` into `next` as a
-  merge commit so `main` stays an ancestor of `next`. A squash queue would
-  flatten it. Decide the bypass actor before enforcing. Do not count on the
-  `evaluate` log to show whether the back-merge is caught: as of 2026-10-21 it
-  returns nothing for this repo (see "Reading evaluate-mode logs"). Test the
-  back-merge directly with the first real one after the queue is enforced.
+- **The auto back-merge.** Settled by #5894: `auto-backmerge.yml` lands the back-merge with `node scripts/merge-commit-pr.cjs <PR>` (REST merge as an admin, pinned to the head sha, verified to keep `main` an ancestor of `next`). `check-branch` fails on back-merge PRs so the queue refuses to enqueue one (a merge_group run cannot eject it: #5600 keeps every merge_group job skipped), and `release.yml` refuses to cut or finalize while `main` is not an ancestor of `next` (`scripts/release-ancestry.cjs`).
+- **Rollout order (#5894).** The bypass actor only takes effect when the live `next-queue` ruleset is updated. Do not use `scripts/sync-rulesets.sh` for it (it forces one enforcement level onto every ruleset). After this change merges: `jq '{name,target,enforcement:"active",conditions,bypass_actors,rules}' .github/rulesets/next-queue.json | gh api -X PUT repos/open-gsd/gsd-core/rulesets/25600238 --input -` (the live `next-queue` id; confirm with `gh api repos/open-gsd/gsd-core/rulesets --jq '.[] | select(.name=="next-queue") | .id'`), then land the repair back-merge with `node scripts/merge-commit-pr.cjs <PR>`. Until then `release.yml` refuses to cut or finalize a release.
 - **The Windows/macOS lane.** Moving it off PR runs is a separate switch, the
   repo variable `GSD_PR_LINUX_ONLY` (#5604). Set it only once the queue is
   enforced; until then Windows and macOS would first run after merge.

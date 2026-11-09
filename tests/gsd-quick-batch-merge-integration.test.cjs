@@ -202,7 +202,7 @@ describe('quick-batch merge routing — real undeclared-deletion detection (row 
 
 /**
  * #3677 Phase 5 (epic #3344) — closes the three coverage gaps identified in
- * `.gsd/phase/feat-3677-quick-batch-hardening-acceptance/40-design.md` §2/§3:
+ * the #3677 design (PR #4240) §2/§3:
  * arbitrary-worktree ownership tampering (security AC), advisory scope drift
  * (scheduling AC), and a real-git submodule integration test (scheduling AC).
  * Same real-git-fixture discipline as the two describe blocks above — no new
@@ -312,8 +312,7 @@ describe('quick-batch merge routing — arbitrary-worktree ownership tampering (
   // passes WORKTREE_AGENT_BRANCH_RE's shape check and a base that is
   // legitimately in allowed_bases.
   //
-  // Investigation conclusion (see
-  // `.gsd/phase/feat-3677-quick-batch-hardening-acceptance/40-design.md`
+  // Investigation conclusion (see the #3677 design, PR #4240,
   // §1's companion note): this is NOT a reachable gap in
   // `executeWorktreeWaveCleanupPlan` itself. Git enforces branch-per-
   // worktree uniqueness — the SAME branch cannot be checked out in two

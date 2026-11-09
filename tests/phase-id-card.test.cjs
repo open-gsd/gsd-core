@@ -112,6 +112,7 @@ describe('#5027: convention regions fail closed and preserve surrounding bytes',
       'queued_milestone_name', 'phase_relevant_terms', 'phase_req_ids', 'planner_model',
       'DISK_PLANS', 'approach_from_plan', 'plan_requirements', 'PLANNING_TOTAL',
       'PLANNING_DELETIONS', 'preserved_plan_revision_conflict_entries', 'PHASE_COMPLETE_BLOCKERS',
+      'PLAN_PRE_PRODUCTS',
     ]);
     const used = new Set();
     for (const { file } of gen.TARGETS) {
