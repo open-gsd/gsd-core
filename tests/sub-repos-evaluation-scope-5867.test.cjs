@@ -230,7 +230,7 @@ describe('#5867 phase unit across planning.sub_repos', () => {
     assert.equal(scope.source, 'task-commits');
     assert.deepEqual(scope.files, ['api/src/a.js', 'web/ui/w.js']);
     assert.deepEqual(scope.commits.map((c) => c.sha).sort(), [a, w].sort());
-    assert.deepEqual(scope.commits.find((c) => c.sha === a).files, ['src/a.js']);
+    assert.deepEqual(scope.commits.find((c) => c.sha === a).files, ['api/src/a.js']);
     assert.deepEqual(scope.unreachable, []);
   });
 

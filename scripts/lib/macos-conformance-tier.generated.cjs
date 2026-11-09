@@ -246,6 +246,7 @@ module.exports = {
   "tests/state-transition.test.cjs",
   "tests/state.platform.test.cjs",
   "tests/state.test.cjs",
+  "tests/sub-repos-evaluation-scope-5867.test.cjs",
   "tests/todos-workstream-scope.test.cjs",
   "tests/traceability-row-existence-5844.test.cjs",
   "tests/tracer-bullet.test.cjs",
