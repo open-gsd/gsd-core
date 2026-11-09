@@ -177,7 +177,8 @@ export function projectPortableHookBaseDir({ configDir, homeDir }: { configDir?:
   const normalizedConfigDir = posixNormalize(String(configDir || ''));
   const normalizedHome = posixNormalize(String(homeDir || ''));
   if (!normalizedConfigDir || !normalizedHome) return normalizedConfigDir;
-  return normalizedConfigDir.startsWith(normalizedHome)
+  // Boundary-checked: `/home/ux` is not under `/home/u`.
+  return (normalizedConfigDir.startsWith(normalizedHome) && (normalizedConfigDir.length === normalizedHome.length || normalizedConfigDir[normalizedHome.length] === '/'))
     ? '$HOME' + normalizedConfigDir.slice(normalizedHome.length)
     : normalizedConfigDir;
 }
@@ -342,7 +343,14 @@ export function isManagedHookCommand(commandText: unknown, opts: { surface?: str
 
   if (typeof opts.configDir === 'string' && opts.configDir.length > 0) {
     const normalizedHooksDir = `${posixNormalize(path.join(opts.configDir, 'hooks'))}/`;
-    if (!normalizedCommand.includes(normalizedHooksDir)) return false;
+    // #5850: a PowerShell single-quoted literal doubles every quote delimiter in
+    // the path, so a configDir containing one only matches once the doubling is undone.
+    // Only inside single-quoted literals, where the doubling is the escaping.
+    const collapsedCommand = normalizedCommand.replace(
+      /'((?:[^']|'')*)'/g,
+      (_literal, body: string) => `'${body.replace(/(['\u2018\u2019\u201A\u201B])\1/g, '$1')}'`,
+    );
+    if (!normalizedCommand.includes(normalizedHooksDir) && !collapsedCommand.includes(normalizedHooksDir)) return false;
   }
 
   for (const basename of managedBasenames) {
