@@ -148,6 +148,12 @@ amend the constraint itself. Every option resolves the conflict. Accepting the p
 blocker still open is NOT offered here — the blocking `required_property` still fails, and that
 choice belongs to the max-iteration escalation below, which is unchanged.
 
+For a `research_resolution` conflict, adopting the alternative means the user rules here: ask each
+question the conflict names, and record each answer under `<decisions>` in `${quick_id}-CONTEXT.md`,
+outside Claude's Discretion, as the next unused `D-NN`, then re-spawn. Without that file (no
+`--discuss`), record nothing: the checker sees no CONTEXT.md, so the blocker stays for the
+max-iteration escalation below.
+
 A quick task has no REVIEWS.md and no phase, so `workflow.plan_review_convergence` has nothing to
 arbitrate over here; the user is the only route. `plan-phase` is where the convergence hand-off
 lives.
