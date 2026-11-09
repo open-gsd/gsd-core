@@ -285,6 +285,8 @@ const CASES_B2 = [
   {"id":"cp class missing","argv":["context-predicates","--class"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
   {"id":"cp ws","argv":["context-predicates","--class","   "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
   {"id":"cp dup","argv":["context-predicates","--class","META","--class","NOPE"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp dup eq first wins","argv":["context-predicates","--class=A","--class==B"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp dup eq first rejected","argv":["context-predicates","--class==B","--class=A"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
   {"id":"pif bare","argv":["project-instruction-file"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":"AGENTS.md"}},
   {"id":"pif pos","argv":["project-instruction-file","claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
   {"id":"pif sp","argv":["project-instruction-file","--runtime","claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
