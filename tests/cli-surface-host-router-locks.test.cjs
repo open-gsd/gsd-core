@@ -8,6 +8,9 @@
  * router reads (undeclared flags, stray positionals) becomes a rejection, and the parity test
  * (tests/cli-surface-parity.test.cjs) covers those.
  *
+ * Batch 2 (CASES_B2) pins the remaining routers the same way: list-flag runs, multi-word values,
+ * eq-forms, repeatable and last-wins flags, bare presence flags and the `--` passthrough.
+ *
  * Verbs that already have dedicated flag coverage are not repeated here (see the commit body).
  * Cases that would touch the user's global store (learnings, research-store hits) are limited to
  * the usage paths, and HOME / GSD_HOME point at a throwaway directory for the whole suite.
@@ -208,6 +211,260 @@ describe('gsd-tools host routers, batch 1: valid argv forms keep their behavior'
           c.expect,
           `${c.id}: stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`,
         );
+      } finally {
+        cleanup(project);
+      }
+    });
+  }
+});
+
+// Batch 2 cases carry optional fixtures beyond `files`: `git` (init + identity), `pre` (argv lists run
+// after the files are written), `remove` (files deleted after `pre`), plus extra expectations:
+// `stdout` (exact, trimmed), `post` (stdout of a follow-up command) and `exists` (paths present after).
+const CASES_B2 = [
+  {"id":"re bare","argv":["resolve-execution","gsd-executor"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re effort sp","argv":["resolve-execution","gsd-executor","--effort","high"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re effort eq","argv":["resolve-execution","gsd-executor","--effort=high"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re effort before","argv":["resolve-execution","--effort","high","gsd-executor"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re fast true","argv":["resolve-execution","gsd-executor","--fast-mode","true"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re fast eq false","argv":["resolve-execution","gsd-executor","--fast-mode=false"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re attempt sp","argv":["resolve-execution","gsd-executor","--attempt","1"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re attempt eq","argv":["resolve-execution","gsd-executor","--attempt=2"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re fc sp","argv":["resolve-execution","gsd-executor","--failure-class","quota-exceeded"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,escalation,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re fc eq","argv":["resolve-execution","gsd-executor","--failure-class=unknown-failure"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,escalation,fast_mode,fast_mode_supported,model,profile"}},
+  {"id":"re host","argv":["resolve-execution","gsd-executor","--host","claude"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_argv,effort_argv_string,effort_argv_value,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,effort_surface,fast_mode,fast_mode_supported,host,model,profile"}},
+  {"id":"re combo","argv":["resolve-execution","gsd-executor","--effort=low","--attempt","1","--host","codex"],"expect":{"exit":0,"reason":null,"shape":"keys:effort,effort_argv,effort_argv_string,effort_argv_value,effort_clamp_reason,effort_clamped,effort_effective,effort_effective_source,effort_param,effort_propagation,effort_rendered,effort_requested,effort_surface,fast_mode,fast_mode_supported,host,model,profile"}},
+  {"id":"re effort missing","argv":["resolve-execution","gsd-executor","--effort"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re effort flagval","argv":["resolve-execution","gsd-executor","--effort","--host","x"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re attempt bad","argv":["resolve-execution","gsd-executor","--attempt","x"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re attempt neg","argv":["resolve-execution","gsd-executor","--attempt=-1"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re fc bad","argv":["resolve-execution","gsd-executor","--failure-class","bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re none","argv":["resolve-execution"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"re two","argv":["resolve-execution","gsd-executor","gsd-planner"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop point","argv":["loop","render-hooks","plan:pre"],"expect":{"exit":0,"reason":null,"shape":"keys:activeHooks,point,rendered"}},
+  {"id":"loop cfg sp","argv":["loop","render-hooks","plan:pre","--config-dir","cfg"],"expect":{"exit":0,"reason":null,"shape":"keys:activeHooks,point,rendered"}},
+  {"id":"loop cfg eq","argv":["loop","render-hooks","plan:pre","--config-dir=cfg"],"expect":{"exit":0,"reason":null,"shape":"keys:activeHooks,point,rendered"}},
+  {"id":"loop cap sp","argv":["loop","render-hooks","plan:pre","--active-cap","tdd"],"expect":{"exit":0,"reason":null,"shape":"scalar:boolean"}},
+  {"id":"loop cap eq","argv":["loop","render-hooks","plan:pre","--active-cap=tdd"],"expect":{"exit":0,"reason":null,"shape":"scalar:boolean"}},
+  {"id":"loop rt sp","argv":["loop","render-hooks","plan:pre","--runtime","claude"],"expect":{"exit":0,"reason":null,"shape":"keys:activeHooks,point,rendered"}},
+  {"id":"loop rt eq","argv":["loop","render-hooks","plan:pre","--runtime=claude"],"expect":{"exit":0,"reason":null,"shape":"keys:activeHooks,point,rendered"}},
+  {"id":"loop fp sp","argv":["loop","render-hooks","plan:pre","--after-fingerprint","ph"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"loop fp eq","argv":["loop","render-hooks","plan:pre","--after-fingerprint=ph"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"loop cfg missing","argv":["loop","render-hooks","plan:pre","--config-dir"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop cfg eq empty","argv":["loop","render-hooks","plan:pre","--config-dir="],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop cap flagval","argv":["loop","render-hooks","plan:pre","--active-cap","--runtime","x"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop rt missing","argv":["loop","render-hooks","plan:pre","--runtime"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop fp missing","argv":["loop","render-hooks","plan:pre","--after-fingerprint"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"loop unknown sub","argv":["loop","bogus"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"effort sync","argv":["effort","sync"],"expect":{"exit":0,"reason":null,"shape":"keys:agents_dir,changes,dry_run,reason,skipped,synced"}},
+  {"id":"effort apply","argv":["effort","sync","--apply","--config-dir","cfg","--runtime","claude"],"expect":{"exit":0,"reason":null,"shape":"keys:agents_dir,changes,dry_run,reason,skipped,synced"}},
+  {"id":"effort dry","argv":["effort","sync","--dry-run"],"expect":{"exit":0,"reason":null,"shape":"keys:agents_dir,changes,dry_run,reason,skipped,synced"}},
+  {"id":"effort cfg eq","argv":["effort","sync","--config-dir=cfg","--runtime=claude"],"expect":{"exit":0,"reason":null,"shape":"keys:agents_dir,changes,dry_run,reason,skipped,synced"}},
+  {"id":"effort cfg missing","argv":["effort","sync","--config-dir"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"effort rt missing","argv":["effort","sync","--runtime","--apply"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"effort positional","argv":["effort","sync","x"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"effort unknown","argv":["effort","bogus"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"uc bare","argv":["update-context"],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc json","argv":["update-context","--json"],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc cfg sp","argv":["update-context","--config-dir","cfg","--runtime","claude"],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc cfg eq","argv":["update-context","--config-dir=cfg","--runtime=claude"],"expect":{"exit":0,"reason":null,"shape":"keys:gsdDir,installedVersion,runtime,scope"}},
+  {"id":"uc cfg missing","argv":["update-context","--config-dir"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"uc rt missing","argv":["update-context","--runtime","--json"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cp class","argv":["context-predicates","--class","META"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp class eq","argv":["context-predicates","--class=META"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp prefix","argv":["context-predicates","--prefix","RULESET.TESTS"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp prefix eq","argv":["context-predicates","--prefix=RULESET.TESTS"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp contains eq","argv":["context-predicates","--contains=--since"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp contains","argv":["context-predicates","--contains","since"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp anded","argv":["context-predicates","--class","META","--prefix","RULESET"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"cp none","argv":["context-predicates"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cp class missing","argv":["context-predicates","--class"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cp ws","argv":["context-predicates","--class","   "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cp dup","argv":["context-predicates","--class","META","--class","NOPE"],"expect":{"exit":0,"reason":null,"shape":"keys:matched,predicates"}},
+  {"id":"pif bare","argv":["project-instruction-file"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":"AGENTS.md"}},
+  {"id":"pif pos","argv":["project-instruction-file","claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
+  {"id":"pif sp","argv":["project-instruction-file","--runtime","claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
+  {"id":"pif eq","argv":["project-instruction-file","--runtime=claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
+  {"id":"pif flag wins","argv":["project-instruction-file","codex","--runtime","claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
+  {"id":"pif bare flag","argv":["project-instruction-file","--runtime"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":"AGENTS.md"}},
+  {"id":"pif bare flag pos","argv":["project-instruction-file","claude","--runtime"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
+  {"id":"pif eq empty pos","argv":["project-instruction-file","--runtime=","claude"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":".claude/CLAUDE.md"}},
+  {"id":"pif retired","argv":["project-instruction-file","--runtime","windsurf"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":"AGENTS.md"}},
+  {"id":"rdi none","argv":["record-dispatch-isolation","--isolation","none"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded"}},
+  {"id":"rdi hf eq","argv":["record-dispatch-isolation","--isolation","harness-worktree","--harness-flag=--worktree"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded"}},
+  {"id":"rdi hf sp","argv":["record-dispatch-isolation","--isolation","orchestrator-worktree","--harness-flag","x","--phase","1","--plan","01"],"expect":{"exit":0,"reason":null,"shape":"keys:path,recorded"}},
+  {"id":"rdi missing","argv":["record-dispatch-isolation"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rdi bad","argv":["record-dispatch-isolation","--isolation","bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rdi flagval","argv":["record-dispatch-isolation","--isolation","--phase","1"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"commit msg files","argv":["commit","msg one","--files","a.txt","b.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"msg one\n\nA\ta.txt\nA\tb.txt"}},
+  {"id":"commit multiword msg","argv":["commit","multi","word","msg","--files","a.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"multi word msg\n\nA\ta.txt"}},
+  {"id":"commit list amend run","argv":["commit","first","--files","a.txt","--no-verify","b.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"first\n\nA\ta.txt\nA\tb.txt"}},
+  {"id":"commit repeated files","argv":["commit","rep","--files","a.txt","--files","b.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"rep\n\nA\ta.txt\nA\tb.txt"}},
+  {"id":"commit flag mid","argv":["commit","x","--no-verify","y","--files","a.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"x y\n\nA\ta.txt"}},
+  {"id":"commit no msg","argv":["commit","--files","a.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"commit bare","argv":["commit"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"cts files","argv":["commit-to-subrepo","msg","--files","a.txt","b.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"cts no files","argv":["commit-to-subrepo","msg"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"cts bare","argv":["commit-to-subrepo"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"prs full","argv":["pr-subrepo","msg","--repo","r","--branch","b"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"prs no msg","argv":["pr-subrepo","--repo","r"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"prs bare","argv":["pr-subrepo"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"prs flags first","argv":["pr-subrepo","--branch","b","--repo","r"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"ms complete dry","argv":["milestone","complete","v1.0","--dry-run"],"expect":{"exit":0,"reason":null,"shape":"keys:accomplishments,dry_run,name,stats,version,would_archive,would_update"}},
+  {"id":"ms complete name","argv":["milestone","complete","v1.0","--name","My","Big","Release","--dry-run"],"expect":{"exit":0,"reason":null,"shape":"keys:accomplishments,dry_run,name,stats,version,would_archive,would_update"}},
+  {"id":"ms complete name last","argv":["milestone","complete","v1.0","--dry-run","--name","My","Big","Release"],"expect":{"exit":0,"reason":null,"shape":"keys:accomplishments,dry_run,name,stats,version,would_archive,would_update"}},
+  {"id":"ms complete noarch","argv":["milestone","complete","v1.0","--dry-run","--no-archive-phases","--force","--archive-quick"],"expect":{"exit":0,"reason":null,"shape":"keys:accomplishments,dry_run,name,stats,version,would_archive,would_update"}},
+  {"id":"ms complete relmap","argv":["milestone","complete","v1.0","--dry-run","--release-map","rm.json"],"files":{"rm.json":"[]"},"expect":{"exit":0,"reason":null,"shape":"keys:accomplishments,dry_run,name,stats,version,would_archive,would_update"}},
+  {"id":"ms complete relmap missing","argv":["milestone","complete","v1.0","--release-map"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"ms complete relmap flagval","argv":["milestone","complete","v1.0","--release-map","--dry-run"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"ms complete noconfirm","argv":["milestone","complete","v1.0"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"ms complete none","argv":["milestone","complete"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"ms release-tags","argv":["milestone","release-tags"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"ms none","argv":["milestone"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"scaffold phase-dir","argv":["scaffold","phase-dir","--phase","2","--name","Multi","Word","Name"],"exists":[".planning/phases/02-multi-word-name"],"expect":{"exit":0,"reason":null,"shape":"keys:created,directory,path","exists":[".planning/phases/02-multi-word-name"]}},
+  {"id":"scaffold name first","argv":["scaffold","phase-dir","--name","Multi","Word","--phase","3"],"exists":[".planning/phases/03-multi-word"],"expect":{"exit":0,"reason":null,"shape":"keys:created,directory,path","exists":[".planning/phases/03-multi-word"]}},
+  {"id":"scaffold bare","argv":["scaffold"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"scaffold unknown type","argv":["scaffold","bogus"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"rl sections","argv":["review-lane","sections","--selected","codex,gemini"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":"codex Codex"}},
+  {"id":"rl sections default","argv":["review-lane","sections"],"expect":{"exit":0,"reason":null,"shape":"text"}},
+  {"id":"rl flags","argv":["review-lane","flags"],"expect":{"exit":0,"reason":null,"shape":"text"}},
+  {"id":"rl plan","argv":["review-lane","plan","--selected","codex","--run-dir","rd","--repo-root","."],"expect":{"exit":0,"reason":null,"shape":"array"}},
+  {"id":"rl avail","argv":["review-lane","availability","--selected","codex"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"rl efa","argv":["review-lane","explicit-from-argv","--","--codex","--agy"],"expect":{"exit":0,"reason":null,"shape":"text","stdout":"antigravity,codex"}},
+  {"id":"rl efa none","argv":["review-lane","explicit-from-argv"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"rl efa flags before","argv":["review-lane","explicit-from-argv","--selected","codex","--","--gemini"],"expect":{"exit":0,"reason":null,"shape":"empty","stdout":""}},
+  {"id":"rl efa dashed value","argv":["review-lane","explicit-from-argv","--","--bogus","--run-dir","x"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"rl dispatch","argv":["review-lane","dispatch-step","--explicit","codex","--depth","standard","--base-sha","abc","--cap-id","c","--point","p"],"expect":{"exit":0,"reason":null,"shape":"keys:dispatched,ok,reason,results"}},
+  {"id":"rl dispatch bare","argv":["review-lane","dispatch-step"],"expect":{"exit":0,"reason":null,"shape":"keys:dispatched,ok,reason,results"}},
+  {"id":"rl invoke noslug","argv":["review-lane","invoke"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"rl invoke unknown slug","argv":["review-lane","invoke","--slug","nope"],"expect":{"exit":0,"reason":null,"shape":"keys:detail,ok,reason,slug"}},
+  {"id":"rl invoke explicit","argv":["review-lane","invoke","--slug","nope","--explicit","--as","x","--model","m","--agent","a","--prompt-file","p.md"],"expect":{"exit":0,"reason":null,"shape":"keys:detail,ok,reason,slug"}},
+  {"id":"rl bogus","argv":["review-lane","bogus"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"rl none","argv":["review-lane"],"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"as bare","argv":["agent-skills","gsd-executor"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"as json after","argv":["agent-skills","gsd-executor","--json"],"expect":{"exit":0,"reason":null,"shape":"keys:agent_payload_variant,agent_type,block,configured,degraded,reason,skills_count,source,value,warnings"}},
+  {"id":"as json before","argv":["agent-skills","--json","gsd-executor"],"expect":{"exit":0,"reason":null,"shape":"keys:agent_payload_variant,agent_type,block,configured,degraded,reason,skills_count,source,value,warnings"}},
+  {"id":"as so","argv":["agent-skills","gsd-executor","--skills-only"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"as so before","argv":["agent-skills","--skills-only","gsd-executor"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"as both","argv":["agent-skills","--json","--skills-only","gsd-executor"],"expect":{"exit":0,"reason":null,"shape":"keys:agent_payload_variant,agent_type,block,configured,degraded,reason,skills_count,source,value,warnings"}},
+  {"id":"as both after","argv":["agent-skills","gsd-executor","--skills-only","--json"],"expect":{"exit":0,"reason":null,"shape":"keys:agent_payload_variant,agent_type,block,configured,degraded,reason,skills_count,source,value,warnings"}},
+  {"id":"as none","argv":["agent-skills"],"expect":{"exit":0,"reason":null,"shape":"scalar:string"}},
+  {"id":"as none json","argv":["agent-skills","--json"],"expect":{"exit":0,"reason":null,"shape":"scalar:string"}},
+  {"id":"as extra pos","argv":["agent-skills","gsd-executor","extra"],"expect":{"exit":0,"reason":null,"shape":"empty"}},
+  {"id":"qta task","argv":["quick-tasks-append","--task","do the thing"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant"}},
+  {"id":"qta pos","argv":["quick-tasks-append","do the thing"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant"}},
+  {"id":"qta all","argv":["quick-tasks-append","--task","x","--quick-id","260101-abc","--slug","sl","--status","Verified"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant"}},
+  {"id":"qta dir","argv":["quick-tasks-append","--task","x","--directory","dd"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant"}},
+  {"id":"qta none","argv":["quick-tasks-append"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"qta no state","argv":["quick-tasks-append","--task","x"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"qta two pos","argv":["quick-tasks-append","a","b"],"files":{".planning/STATE.md":"# Project State\n\n## Quick Tasks Completed\n\n| # | Description | Date | Commit | Directory |\n|---|-------------|------|--------|-----------|\n"},"expect":{"exit":0,"reason":null,"shape":"keys:ok,row,variant"}},
+  {"id":"pb ok","argv":["prompt-budget","--budget","100000","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"exists":["out.md","out.json"],"expect":{"exit":0,"reason":null,"shape":"empty","exists":["out.md","out.json"]}},
+  {"id":"pb two plans","argv":["prompt-budget","--budget","100000","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json","--plan-file","p2.md"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"exists":["out.md","out.json"],"expect":{"exit":0,"reason":null,"shape":"empty","exists":["out.md","out.json"]}},
+  {"id":"pb optional","argv":["prompt-budget","--budget","100000","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json","--safety-margin-pct","5","--project-md-head-lines","2","--project-file","proj.md","--context-file","proj.md","--research-file","proj.md","--requirements-file","proj.md"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"exists":["out.md","out.json"],"expect":{"exit":0,"reason":null,"shape":"empty","exists":["out.md","out.json"]}},
+  {"id":"pb no budget","argv":["prompt-budget","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb bad budget","argv":["prompt-budget","--budget","zero","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb no plan","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb no instr","argv":["prompt-budget","--budget","10","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb no out","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","p1.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb missing file","argv":["prompt-budget","--budget","10","--instructions-file","nope.md","--roadmap-file","road.md","--plan-file","p1.md","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"pb plan flagval","argv":["prompt-budget","--budget","10","--instructions-file","instr.md","--roadmap-file","road.md","--plan-file","--output-prompt","out.md","--output-metadata","out.json"],"files":{"instr.md":"instructions\n","road.md":"# Roadmap\n","p1.md":"plan one\n","p2.md":"plan two\n","proj.md":"a\nb\nc\n"},"expect":{"exit":1,"reason":null,"shape":"empty"}},
+  {"id":"dcf nomanifest","argv":["detect-custom-files","--config-dir","cfg"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:custom_count,custom_files,manifest_found"}},
+  {"id":"dcf missing","argv":["detect-custom-files"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"dcf nodir","argv":["detect-custom-files","--config-dir","nope"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"dcf flagval","argv":["detect-custom-files","--config-dir","--bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rcf nomanifest","argv":["restore-custom-files","--config-dir","cfg"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:applied,backup_dir,backup_found,eligible_count,entries,manifest_found,restored_count,skipped_count,warning_count"}},
+  {"id":"rcf apply","argv":["restore-custom-files","--config-dir","cfg","--apply"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:applied,backup_dir,backup_found,eligible_count,entries,manifest_found,restored_count,skipped_count,warning_count"}},
+  {"id":"rcf apply first","argv":["restore-custom-files","--apply","--config-dir","cfg"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:applied,backup_dir,backup_found,eligible_count,entries,manifest_found,restored_count,skipped_count,warning_count"}},
+  {"id":"rcf last wins ok","argv":["restore-custom-files","--config-dir","nope","--config-dir","cfg"],"files":{"cfg/x.txt":"x"},"expect":{"exit":0,"reason":null,"shape":"keys:applied,backup_dir,backup_found,eligible_count,entries,manifest_found,restored_count,skipped_count,warning_count"}},
+  {"id":"rcf last wins bad","argv":["restore-custom-files","--config-dir","cfg","--config-dir","nope"],"files":{"cfg/x.txt":"x"},"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rcf missing","argv":["restore-custom-files"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"rcf blank","argv":["restore-custom-files","--config-dir"," "],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cc provider","argv":["classify-confidence","--provider","official"],"expect":{"exit":0,"reason":null,"shape":"keys:confidence,ecosystem,legitimacyVerdict,package,provider,verified"}},
+  {"id":"cc verified","argv":["classify-confidence","--provider","official","--verified"],"expect":{"exit":0,"reason":null,"shape":"keys:confidence,ecosystem,legitimacyVerdict,package,provider,verified"}},
+  {"id":"cc flags order","argv":["classify-confidence","--verified","--provider","official"],"expect":{"exit":0,"reason":null,"shape":"keys:confidence,ecosystem,legitimacyVerdict,package,provider,verified"}},
+  {"id":"cc none","argv":["classify-confidence"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cc provider flagval","argv":["classify-confidence","--provider","--verified"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cc pkg noeco","argv":["classify-confidence","--provider","x","--package","left-pad"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cc pkg badeco","argv":["classify-confidence","--provider","x","--package","left-pad","--ecosystem","bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"cc eco only","argv":["classify-confidence","--provider","x","--ecosystem","npm"],"expect":{"exit":0,"reason":null,"shape":"keys:confidence,ecosystem,legitimacyVerdict,package,provider,verified"}},
+  {"id":"pl none","argv":["package-legitimacy"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"pl unknown sub","argv":["package-legitimacy","bogus"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"pl noeco","argv":["package-legitimacy","check","left-pad"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"pl badeco","argv":["package-legitimacy","check","--ecosystem","bogus","x"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"pl nopkg","argv":["package-legitimacy","check","--ecosystem","npm"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"pl unknown flag","argv":["package-legitimacy","check","--ecosystem","npm","--bogus","pkg"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"pl eco flagval","argv":["package-legitimacy","check","--ecosystem","--bogus"],"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"srv no scope","argv":["select-revert-commits","--range","HEAD~1..HEAD"],"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"srv no range","argv":["select-revert-commits","--phase","1"],"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"srv both","argv":["select-revert-commits","--phase","1","--plan","1-1","--range","HEAD"],"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"fm get","argv":["frontmatter","get","f.md","--field","a"],"files":{"f.md":"---\na: 1\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:a"}},
+  {"id":"fm set","argv":["frontmatter","set","f.md","--field","a","--value","2"],"files":{"f.md":"---\na: 1\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:field,updated,value"}},
+  {"id":"fm merge","argv":["frontmatter","merge","f.md","--data","{\"b\":2}"],"files":{"f.md":"---\na: 1\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:fields,merged"}},
+  {"id":"fm validate","argv":["frontmatter","validate","f.md","--schema","plan"],"files":{"f.md":"---\na: 1\n---\nbody\n"},"expect":{"exit":0,"reason":null,"shape":"keys:invalidValue,missing,present,schema,valid"}},
+  {"id":"uat render","argv":["uat","render-checkpoint","--file","u.md"],"files":{"u.md":"---\nstatus: testing\n---\n# UAT\n"},"expect":{"exit":1,"reason":"unknown","shape":"empty"}},
+  {"id":"uat complete","argv":["uat","complete-session","u.md","--message","m"],"files":{"u.md":"---\nstatus: testing\n---\n# UAT\n"},"expect":{"exit":0,"reason":null,"shape":"keys:changed,committed,reason,status"}},
+  {"id":"uat classify","argv":["uat","classify-coverage","--summary","s.md"],"files":{"s.md":"---\nphase: 01\n---\n# S\n"},"expect":{"exit":0,"reason":null,"shape":"keys:all_auto_covered,auto_passed,errors,mode,present,summary_file,total"}},
+  {"id":"uat bogus","argv":["uat","bogus"],"expect":{"exit":1,"reason":"sdk_unknown_command","shape":"empty"}},
+  {"id":"commit files removed","argv":["commit","rm","--files","a.txt","--files-removed","c.txt","d.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"pre":[["git","add","c.txt","d.txt"],["git","commit","-q","-m","seed"]],"remove":["c.txt","d.txt"],"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"rm\n\nA\ta.txt\nD\tc.txt\nD\td.txt"}},
+  {"id":"commit removed first","argv":["commit","rm","--files-removed","c.txt","--files","a.txt","b.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"pre":[["git","add","c.txt","d.txt"],["git","commit","-q","-m","seed"]],"remove":["c.txt"],"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"rm\n\nA\ta.txt\nA\tb.txt\nD\tc.txt"}},
+  {"id":"commit amend seeded","argv":["commit","am","--amend","--files","a.txt"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"pre":[["git","add","c.txt","d.txt"],["git","commit","-q","-m","seed"]],"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"seed\n\nA\ta.txt\nA\tc.txt\nA\td.txt"}},
+  {"id":"commit amend after list","argv":["commit","am2","--files","a.txt","--amend"],"files":{"a.txt":"a\n","b.txt":"b\n","c.txt":"c\n","d.txt":"d\n"},"git":true,"pre":[["git","add","c.txt","d.txt"],["git","commit","-q","-m","seed"]],"post":["git","log","--format=%s","--name-status","-1"],"expect":{"exit":0,"reason":null,"shape":"keys:committed,hash,reason","post":"seed\n\nA\ta.txt\nA\tc.txt\nA\td.txt"}},
+  {"id":"scm all","argv":["stamp-codebase-map"],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"pre":[["git","add","."],["git","commit","-q","-m","seed"]],"expect":{"exit":0,"reason":null,"shape":"keys:commit,failed,reason,skipped,stamped,stamped_at"}},
+  {"id":"scm files","argv":["stamp-codebase-map","--files","STACK.md,ARCHITECTURE.md"],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"pre":[["git","add","."],["git","commit","-q","-m","seed"]],"expect":{"exit":0,"reason":null,"shape":"keys:commit,failed,reason,skipped,stamped,stamped_at"}},
+  {"id":"scm files spaced","argv":["stamp-codebase-map","--files"," STACK.md , TESTING.md "],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"pre":[["git","add","."],["git","commit","-q","-m","seed"]],"expect":{"exit":0,"reason":null,"shape":"keys:commit,failed,reason,skipped,stamped,stamped_at"}},
+  {"id":"scm bare files","argv":["stamp-codebase-map","--files"],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"pre":[["git","add","."],["git","commit","-q","-m","seed"]],"expect":{"exit":0,"reason":null,"shape":"keys:commit,reason,skipped,stamped,stamped_at"}},
+  {"id":"scm empty files","argv":["stamp-codebase-map","--files",""],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"pre":[["git","add","."],["git","commit","-q","-m","seed"]],"expect":{"exit":0,"reason":null,"shape":"keys:commit,reason,skipped,stamped,stamped_at"}},
+  {"id":"scm files then flag","argv":["stamp-codebase-map","--files","--bogus"],"files":{".planning/codebase/STACK.md":"# Stack\n",".planning/codebase/ARCHITECTURE.md":"# Arch\n",".planning/codebase/TESTING.md":"# Testing\n"},"git":true,"expect":{"exit":1,"reason":"usage","shape":"empty"}},
+  {"id":"scaffold ctx","argv":["scaffold","context","--phase","1"],"files":{".planning/phases/01-x/.keep":""},"exists":[".planning/phases/01-x/01-CONTEXT.md"],"expect":{"exit":0,"reason":null,"shape":"keys:created,path","exists":[".planning/phases/01-x/01-CONTEXT.md"]}},
+  {"id":"scaffold ctx name","argv":["scaffold","context","--phase","1","--name","Two","Words"],"files":{".planning/phases/01-x/.keep":""},"exists":[".planning/phases/01-x/01-CONTEXT.md"],"expect":{"exit":0,"reason":null,"shape":"keys:created,path","exists":[".planning/phases/01-x/01-CONTEXT.md"]}},
+];
+
+function runCommand(argv, cwd) {
+  return execFileSync(argv[0], argv.slice(1), { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+describe('gsd-tools host routers, batch 2: valid argv forms keep their behavior', () => {
+  const saved = {};
+  let scratchHome;
+  before(() => {
+    scratchHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6087-locks-b2-home-'));
+    for (const key of ['HOME', 'USERPROFILE', 'GSD_HOME', 'BRAVE_API_KEY']) saved[key] = process.env[key];
+    process.env.HOME = scratchHome;
+    process.env.USERPROFILE = scratchHome;
+    process.env.GSD_HOME = scratchHome;
+    process.env.BRAVE_API_KEY = '';
+  });
+  after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    cleanup(scratchHome);
+  });
+
+  for (const c of CASES_B2) {
+    test(c.id, () => {
+      const project = createTempProject();
+      try {
+        for (const [file, content] of Object.entries(c.files ?? {})) {
+          fs.mkdirSync(path.dirname(path.join(project, file)), { recursive: true });
+          fs.writeFileSync(path.join(project, file), content);
+        }
+        if (c.git) {
+          runCommand(['git', 'init', '-q'], project);
+          runCommand(['git', 'config', 'user.email', 'locks@example.invalid'], project);
+          runCommand(['git', 'config', 'user.name', 'locks'], project);
+        }
+        for (const step of c.pre ?? []) runCommand(step, project);
+        for (const file of c.remove ?? []) fs.rmSync(path.join(project, file), { force: true });
+        const r = runTools(['--json-errors', ...c.argv], project);
+        const body = lastJsonLine(r.stderr);
+        const reason = body && body.ok === false ? body.reason : null;
+        const actual = { exit: r.exitCode, reason, shape: shapeOf(r.stdout) };
+        if (c.expect.stdout !== undefined) actual.stdout = r.stdout.trim().replace(/\s+/g, ' ');
+        if (c.post) actual.post = runCommand(c.post, project).trim();
+        if (c.exists) actual.exists = c.exists.filter((f) => fs.existsSync(path.join(project, f)));
+        assert.deepEqual(actual, c.expect, `${c.id}: stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`);
       } finally {
         cleanup(project);
       }
