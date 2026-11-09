@@ -21,7 +21,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runGit, runNode } = require('./helpers/process-seam.cjs');
 
 const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -202,7 +202,7 @@ describe('gsd-tools host routers, batch 1: valid argv forms keep their behavior'
           fs.mkdirSync(path.dirname(path.join(project, file)), { recursive: true });
           fs.writeFileSync(path.join(project, file), content);
         }
-        if (c.git) execFileSync('git', ['init', '-q'], { cwd: project, timeout: GIT_TIMEOUT_MS });
+        if (c.git) runCommand(['git', 'init', '-q'], project);
         const r = runTools(['--json-errors', ...c.argv], project);
         const body = lastJsonLine(r.stderr);
         const reason = body && body.ok === false ? body.reason : null;
@@ -492,7 +492,12 @@ const CASES_B2 = [
 ];
 
 function runCommand(argv, cwd) {
-  return execFileSync(argv[0], argv.slice(1), { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] });
+  let r;
+  if (argv[0] === 'git') r = runGit(argv.slice(1), { cwd, timeoutMs: GIT_TIMEOUT_MS });
+  else if (argv[0] === 'node') r = runNode(argv.slice(1), { cwd, timeoutMs: GIT_TIMEOUT_MS });
+  else throw new Error(`runCommand: unsupported command ${argv[0]}`);
+  if (r.exitCode !== 0) throw new Error(`${argv.join(' ')}: ${r.summary}`);
+  return r.stdout;
 }
 
 describe('gsd-tools host routers, batch 2: valid argv forms keep their behavior', () => {
