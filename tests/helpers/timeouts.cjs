@@ -106,7 +106,7 @@ const GIT_TIMEOUT_MS = DEFAULT_GIT_TIMEOUT_MS;
  *
  * Evidence (TIMEOUT_EVIDENCE.GIT_FIXTURE_TIMEOUT_MS): worst observed 10114ms on win32 (p50 2561ms, p99 7180ms of recorded spawns),
  * margin 5.93x; CI seam spawn-stall records, 188 runs since 2026-10-25.
- * 96 records matching sites of this constant and another are credited to neither.
+ * 77 records matching sites of this constant and another are credited to neither.
  * 10 call sites spawn outside the seam and are not covered; tracked in #6060.
  */
 
@@ -210,7 +210,9 @@ const STAGED_HOOK_SCRIPT_TIMEOUT_MS = 20000;
 
 /**
  * A single `gsd-tools.cjs` CLI subcommand invocation, spawned directly (never
- * via an intermediate shell script), used by a loop/hook-point e2e test. The
+ * via an intermediate shell script): the loop/hook-point e2e tests, and
+ * `runGsdTools` in tests/helpers.cjs, the shared helper behind every other
+ * single direct gsd-tools.cjs subcommand spawn without fan-out. The
  * command does real in-process work -- capability/config resolution, project
  * scaffolding, or (for the `check` verbs that inspect git-tracked state) real
  * git plumbing calls -- but as ONE process with no confirmed nested-subprocess
@@ -224,23 +226,23 @@ const STAGED_HOOK_SCRIPT_TIMEOUT_MS = 20000;
  *
  * Distinct from `HOOK_FANOUT_TIMEOUT_MS` (a bash-hosted script that itself
  * shells out to further subprocesses) despite the coincidentally-matching
- * value: this norm's sites spawn `gsd-tools.cjs` and nothing beneath it.
+ * value: this norm's sites spawn `gsd-tools.cjs` and nothing beneath it,
+ * `runGsdTools` included.
+ * Distinct from `SEAM_DEFAULT_TIMEOUT_MS` (the seam's own fallback for an
+ * omitted `timeoutMs`): `runGsdTools` always passes this class bound
+ * explicitly and no longer relies on that fallback.
  * Distinct from `PROBE_TIMEOUT_MS`: the same underlying `loop render-hooks`
  * command is ALSO called at `PROBE_TIMEOUT_MS` (15000ms) elsewhere in the
  * suite against lighter temp-project fixtures -- the two bounds are kept
  * separate rather than equalized, since this migration never raises or
  * lowers a value without a fresh bench citation.
  *
- * Shared across 7 files in batch #4518 of the ad hoc timeout literal
- * migration, epic #4445 -- every site independently arrived at this exact
- * value -- that is why it lives here rather than as a file-local constant.
- *
- * Evidence (TIMEOUT_EVIDENCE.LOOP_HOOK_POINT_CLI_TIMEOUT_MS): worst observed 16895ms on win32 (p50 2359ms, p99 16895ms of recorded spawns),
- * margin 3.55x; CI seam spawn-stall records, 188 runs since 2026-10-25.
- * 19 records matching sites of this constant and another are credited to neither.
+ * Evidence (TIMEOUT_EVIDENCE.LOOP_HOOK_POINT_CLI_TIMEOUT_MS): worst observed 39655ms on win32 (p50 2555ms, p99 20684ms of recorded spawns),
+ * margin 2.01x; CI seam spawn-stall records, 188 runs since 2026-10-25.
+ * 77 records matching sites of this constant and another are credited to neither.
  * 14 call sites spawn outside the seam and are not covered; tracked in #6063.
  */
-const LOOP_HOOK_POINT_CLI_TIMEOUT_MS = 60000;
+const LOOP_HOOK_POINT_CLI_TIMEOUT_MS = 80000;
 
 /**
  * A security-scan shell script (secret-scan.sh, secret-scan-lint.sh,
@@ -355,8 +357,8 @@ const PATHOLOGICAL_INPUT_TEST_TIMEOUT_MS = 60000;
  * (execFileSync/spawnSync, or the process seam's runNode wrapping the same
  * shape -- never via an intermediate shell script), with no confirmed
  * nested-subprocess fan-out. A distinct, heavier tier than
- * `PROBE_TIMEOUT_MS` (15000ms, the lighter CLI-query/probe class) but half
- * of `LOOP_HOOK_POINT_CLI_TIMEOUT_MS` (60000ms) -- not equalized to either
+ * `PROBE_TIMEOUT_MS` (15000ms, the lighter CLI-query/probe class) but well
+ * under `LOOP_HOOK_POINT_CLI_TIMEOUT_MS` (80000ms) -- not equalized to either
  * without bench data. Coincides numerically with `BUILD_TIMEOUT_MS`,
  * `GENERATOR_SCRIPT_TIMEOUT_MS`, and `REAL_REPO_GIT_TIMEOUT_MS`, none of
  * which describe this call shape (a `build-hooks.js` bundle, a
@@ -424,7 +426,7 @@ const TIMEOUT_EVIDENCE = Object.freeze({
   GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 10114, worstPlatform: 'win32', p50Ms: 2561, p99Ms: 7180, samples: { win32: 118, darwin: 4, linux: 148 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 10, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
   INSTALL_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 49839, worstPlatform: 'win32', p50Ms: 2864, p99Ms: 7842, samples: { win32: 56561, darwin: 6476, linux: 734 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 16, unseenSitesTrackedBy: '#6062', source: CI_SOURCE, window: CI_WINDOW },
   STAGED_HOOK_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 5232, worstPlatform: 'darwin', p50Ms: 4889, p99Ms: 5217, samples: { win32: 3, darwin: 180 }, lanes: { win32: 562, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 4, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
-  LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 16895, worstPlatform: 'win32', p50Ms: 2359, p99Ms: 16895, samples: { win32: 18, darwin: 4 }, lanes: { win32: 371, darwin: 188, linux: 306 }, unmeasuredPlatforms: [], unseenSites: 14, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
+  LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 39655, worstPlatform: 'win32', p50Ms: 2555, p99Ms: 20684, samples: { win32: 2184, darwin: 1117, linux: 714 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 14, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
   BUILD_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   QUICK_SPAWN_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 389, darwin: 188, linux: 286 }, unmeasuredPlatforms: [], unseenSites: 26, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
   GENERATOR_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { darwin: 188, linux: 171 }, unmeasuredPlatforms: ['win32'], unseenSites: 8, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },

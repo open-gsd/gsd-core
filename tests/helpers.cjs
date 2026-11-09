@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 const { createFixture } = require('./fixtures/index.cjs');
 const processSeam = require('./helpers/process-seam.cjs');
-const { SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -227,7 +227,7 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
     return processSeam.runNode([TOOLS_PATH, ...argv], {
       cwd,
       env: childEnv,
-      timeoutMs: SEAM_DEFAULT_TIMEOUT_MS,
+      timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
     });
   }
 
