@@ -110,7 +110,7 @@ Read the halt from the fields beside the count rather than calling
 ```javascript
 const { completed_plans: done, halted_plans: halted } = snapshot.progress;
 if (done.scope === 'complete') {
-  render(`${done.completed - halted.completed} finished, ${halted.completed} halted, of ${done.total}`);
+  render(`${done.completed - halted.completed} completed, ${halted.completed} halted, of ${done.total}`);
 }
 
 for (const phase of snapshot.phases) {
@@ -122,9 +122,11 @@ for (const phase of snapshot.phases) {
 ```
 
 `halted: false` is a real answer only when no `summary_unreadable` diagnostic
-names that plan's SUMMARY. See
+names that plan's SUMMARY, and three SUMMARY shapes read as not halted even
+then. See
 [Halted plans](../CLI-TOOLS.md#halted-plans-counted-as-completed-flagged-beside-the-count-5823)
-for the full rules.
+for the full rules, including where `planning inspect` and `phase-plan-index`
+differ.
 
 ## 5. Read the three kinds of phase evidence separately
 

@@ -813,35 +813,38 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
   const unsummarizedPlanFiles = new Set(findUnsummarizedPlans(scan.allPlanFiles, countableSummaryFiles));
   const summaryFileByPlanId = buildSummaryFileIndex(scan.summaryFiles, extractCanonicalPlanId);
 
+  // #5823: what each SUMMARY read established, keyed by SUMMARY file: true
+  // when `readDocument` accepted it (a regular file contained in the planning
+  // root). The row reads below fill it first, so a file they already reported
+  // `summary_unreadable` is never reported again by the halt read.
+  const summaryReadable = new Map<string, boolean>();
+
   /**
-   * #5823: `isSummaryFileHalted` on the plan's paired SUMMARY, called only
-   * after `readDocument` has accepted it (a regular file contained in the
-   * planning root), so a SUMMARY symlinked out of the root is never read for
-   * its halt. (The `status: blocked` filter above, like `scanPhasePlans`'s own
-   * identical pass over the same files, does not check containment; it yields
-   * only that filter's boolean, as it did before #5823.)
-   * `rowSummaryFile` / `rowSummaryReadable` are what the row's own read
-   * already established: when the halt read pairs the same file, it is not
-   * read for containment twice, and an unreadable one is not reported twice.
-   * Any other paired SUMMARY that cannot be read gets its own
-   * `summary_unreadable`, so `halted: false` is never silently a non-answer.
+   * #5823: `isSummaryFileHalted` on the plan's halt-paired SUMMARY, called
+   * only once `readDocument` has accepted that file. A halt-paired SUMMARY no
+   * row read has seen yet is read here, and if it cannot be read it gets ONE
+   * `summary_unreadable` however many plans pair with it, so `halted: false`
+   * is never silently a non-answer for an unreadable file.
    */
-  function readHalted(planFile: string, rowSummaryFile: string | null, rowSummaryReadable: boolean): boolean {
+  function readHalted(planFile: string): boolean {
     if (unsummarizedPlanFiles.has(planFile)) return false;
     const summaryFile =
       summaryFileByPlanId.get(planIdFromFile(planFile)) ?? summaryFileByPlanId.get(extractCanonicalPlanId(planFile));
     if (summaryFile === undefined) return false;
     const summaryPath = path.join(phaseDir, summaryFile);
-    if (summaryFile === rowSummaryFile) return rowSummaryReadable && isSummaryFileHalted(summaryPath);
-    if (readDocument(summaryPath, planningRoot).text === null) {
-      diagnostics.push({
-        code: INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE,
-        subject: toPosix(summaryFile),
-        detail: 'Summary file could not be read; whether this plan halted is unknown.',
-      });
-      return false;
+    let readable = summaryReadable.get(summaryFile);
+    if (readable === undefined) {
+      readable = readDocument(summaryPath, planningRoot).text !== null;
+      summaryReadable.set(summaryFile, readable);
+      if (!readable) {
+        diagnostics.push({
+          code: INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE,
+          subject: toPosix(summaryFile),
+          detail: 'Summary file could not be read; whether this plan halted is unknown.',
+        });
+      }
     }
-    return isSummaryFileHalted(summaryPath);
+    return readable && isSummaryFileHalted(summaryPath);
   }
 
   const rows: PlanRow[] = scan.allPlanFiles.map((planFile: string) => {
@@ -864,9 +867,9 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
         plannedFiles: [],
         changedFiles: null,
         hasSummary: false,
-        // The plan body is unknown, but its SUMMARY's halt is still this
-        // plan's own fact, and its dependents' `blocked_by` needs it.
-        halted: readHalted(planFile, null, false),
+        // Filled in after every row is built (see below): the plan body is
+        // unknown, but its SUMMARY's halt is still this plan's own fact.
+        halted: false,
         blocked_by: [],
         tasks: [],
         scope: SCOPE.UNREADABLE,
@@ -876,9 +879,9 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
     const parsed = parsePlanDocument(doc.text);
     const summaryFile = summaryForPlan(planFile, scan.summaryFiles);
     let provenance: SummaryProvenance | null = null;
-    let summaryReadable = false;
     if (summaryFile !== null) {
       const summaryDoc = readDocument(path.join(phaseDir, summaryFile), planningRoot);
+      summaryReadable.set(summaryFile, summaryDoc.text !== null);
       if (summaryDoc.text === null) {
         diagnostics.push({
           code: INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE,
@@ -886,7 +889,6 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
           detail: 'Summary file could not be read; file provenance for this plan is unknown.',
         });
       } else {
-        summaryReadable = true;
         provenance = parseSummaryProvenance(summaryDoc.text);
       }
     }
@@ -903,20 +905,29 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
       plannedFiles: parsed.filesModified,
       changedFiles: provenance === null ? null : provenance.planFiles,
       hasSummary: summaryFile !== null,
-      halted: readHalted(planFile, summaryFile, summaryReadable),
+      halted: false,
       blocked_by: [],
       tasks: buildTaskRows(planFile, parsed, provenance, diagnostics),
       scope: SCOPE.COMPLETE,
     };
   });
 
-  assignHaltPropagation(rows.filter((row, i) => !row.superseded && planScan.isCanonicalPlanFile(scan.allPlanFiles[i])));
+  // #5823: the halt read runs after every row's own SUMMARY read, so the
+  // cache above already holds what those reads established.
+  rows.forEach((row, i) => {
+    row.halted = readHalted(scan.allPlanFiles[i]);
+  });
+  assignHaltPropagation(
+    rows
+      .map((row, i) => ({ row, planFile: scan.allPlanFiles[i] }))
+      .filter(({ row, planFile }) => !row.superseded && planScan.isCanonicalPlanFile(planFile)),
+  );
   return { rows, scope: scan.scope };
 }
 
 /**
- * #5823: fill `blocked_by` on `live` (the phase's live, canonically named plan
- * rows — `phase-plan-index`'s node set) the way `cmdPhasePlanIndex`
+ * #5823: fill `blocked_by` on the phase's live, canonically named plan rows
+ * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex`
  * (`src/phase.cts`) does: the same three-tier depends_on resolution
  * (`resolveDependencyId`) and the same `computeHaltPropagation` pass. A token
  * that resolves to no plan in the set is dropped, as there. One difference is
@@ -925,7 +936,14 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
  * propagation's fail-closed answer stands — every non-halted plan it cannot
  * order carries a non-empty `blocked_by`.
  */
-function assignHaltPropagation(live: PlanRow[]): void {
+function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
+  // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both
+  // the canonical-id map (last write wins) and the short-form map (first write
+  // wins) depend on that order when two plans collide, so sort the same way.
+  const live = entries
+    .slice()
+    .sort((a, b) => (a.planFile < b.planFile ? -1 : a.planFile > b.planFile ? 1 : 0))
+    .map(({ row }) => row);
   const planMap = new Map(live.map((row) => [normalizeDependencyToken(row.id), row]));
   const canonicalToId = new Map(
     live.map((row) => [normalizeDependencyToken(extractCanonicalPlanId(row.id)), row.id]),
