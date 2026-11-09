@@ -911,7 +911,7 @@ function gsd5100RunWin32InstallProbe(t, runtime) {
     `the win32 install probe must report its summary on stdout; got outcome=${result.outcome} `
       + `exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`,
   );
-  return JSON.parse(line.slice(marker.length));
+  return { ...JSON.parse(line.slice(marker.length)), expectedTmpdir: home };
 }
 
 test('#5850 claude portable install on a win32 host with no Git Bash registers PowerShell hooks and needs no bash', (t) => {
@@ -927,12 +927,10 @@ test('#5848 the win32 install probe resolves an absolute temp dir, never one rel
   // overlay walk could list it and then lose it.
   const probe = gsd5100RunWin32InstallProbe(t, 'claude');
   assert.ok(path.isAbsolute(probe.tmpdir), `probe os.tmpdir() must be absolute; got ${JSON.stringify(probe.tmpdir)}`);
-  const repoRoot = path.join(__dirname, '..');
-  assert.equal(
-    path.relative(repoRoot, probe.tmpdir).startsWith('..'),
-    true,
-    `probe os.tmpdir() must be outside the repo root; got ${JSON.stringify(probe.tmpdir)}`,
-  );
+  // Exactly the directory the probe's TEMP/TMP name (an os.tmpdir()-based dir created by this test),
+  // so the check holds on any host: no assumption about where TMPDIR sits relative to the repo root,
+  // and no cross-drive path.relative() on Windows.
+  assert.equal(probe.tmpdir, probe.expectedTmpdir, 'probe os.tmpdir() must be the TEMP/TMP the probe was given');
 });
 
 test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entries on a fresh install', (t) => {
