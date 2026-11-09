@@ -2967,15 +2967,22 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       assertBlocked(runHook(bash(cmd)), 'deep payloads', { tool: 'Bash', path: '-d@.env' });
     });
   }
-  // The spawn scan reads a payload only the further reading reads through the
-  // same guard, with its own scan: a debugger launch inside one is denied.
+  // The spawn scan reads payloads in the further reading as the secret scan
+  // does: one only the further reading reaches (behind `!`, `A+=b`, `a[0]=x`),
+  // and inside any payload, by `-c`, `eval` or `$(…)`, a launch only the
+  // further reading finds (behind `!` or `A+=b`).
   for (const cmd of [
     "! bash -c 'claude --agent gsd-debugger -p x'",
     "A+=b bash -c 'claude --agent gsd-debugger -p x'",
     "a[0]=x bash -c 'claude --agent gsd-debugger -p x'",
     "! eval 'claude --agent gsd-debugger -p x'",
+    "bash -c '! claude --agent gsd-debugger -p x'",
+    "bash -c 'A+=b claude --agent gsd-debugger -p x'",
+    "eval '! claude --agent gsd-debugger -p x'",
+    'echo "$(! claude --agent gsd-debugger -p x)"',
+    'echo $(A+=b claude --agent gsd-debugger -p x)',
   ]) {
-    test(`denies a debugger spawn inside a further-only payload (${cmd.slice(0, 14)}…)`, () => {
+    test(`denies a debugger spawn the further reading finds in a payload (${cmd.slice(0, 22)}…)`, () => {
       assertBlocked(runHook(bash(cmd)), 'spawn in payload', { code: 'debugger-cli-spawn', tool: 'Bash' });
     });
   }
@@ -3005,8 +3012,10 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       const mid = (lo + hi) >> 1;
       if (denies(`bash -c '${nest(mid)}'`)) lo = mid; else hi = mid;
     }
+    // Four levels of slack: where the edge moves from run to run (measured
+    // within ±3 levels on one platform), the check must not ride on it.
     for (const prefix of ['!', 'A+=b', 'a[0]=x']) {
-      assert.ok(denies(`${prefix} bash -c '${nest(lo)}'`), `${prefix} at the plain reading's depth ${lo}`);
+      assert.ok(denies(`${prefix} bash -c '${nest(lo - 4)}'`), `${prefix} at the plain reading's depth ${lo} - 4`);
     }
   });
 
