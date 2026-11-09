@@ -2971,7 +2971,7 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
   // does: one only the further reading reaches (behind `!`, `A+=b`, `a[0]=x`),
   // and a launch only the further reading finds (behind `!` or `A+=b`) one or
   // two payloads down, by `-c`, `eval` or `$(…)`. The generated rows below
-  // cover every carrier chain to the scans' depth.
+  // cover the space these sample.
   for (const cmd of [
     "! bash -c 'claude --agent gsd-debugger -p x'",
     "A+=b bash -c 'claude --agent gsd-debugger -p x'",
@@ -3007,13 +3007,13 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       assertBlocked(runHook(bash(cmd)), 'spawn behind subscript', { code: 'debugger-cli-spawn', tool: 'Bash' });
     });
   }
-  // The rows above are examples; this pins the whole space up to the scans'
-  // payload depth (MAX_NESTING_DEPTH, 3). Every chain of `bash -c`, `eval` and
-  // `$(…)` carriers one to three deep, with each further-only prefix (`!`,
-  // `A+=b`, a subscript assignment `a[x y]=1`) either on the launch or in front
-  // of the outermost carrier. bash runs every one of these as a launch. Left
-  // out: a prefix in front of an outermost `$(…)`, which next's plain reading
-  // already denies. 195 commands.
+  // The rows above are examples; this pins the space they sample, up to the
+  // scans' payload depth (MAX_NESTING_DEPTH, 3): every chain of `bash -c`,
+  // `eval` and `$(…)` carriers one to three deep, with one further-only prefix
+  // (`!`, `A+=b`, or a subscript assignment `a[0]=x` / `a[x y]=1`) on the launch
+  // or in front of any one carrier. bash runs every one of these as a launch.
+  // Left out: a prefix in front of a `$(…)` carrier, which next's plain reading
+  // already denies. 428 commands.
   const SPAWN = 'claude --agent gsd-debugger -p x';
   const singleQuote = (s) => `'${s.replace(/'/g, "'\\''")}'`;
   const CARRIERS = {
@@ -3027,12 +3027,15 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       const allowed = [];
       let count = 0;
       for (const chain of carrierChains(depth)) {
-        for (const prefix of ['!', 'A+=b', 'a[x y]=1']) {
-          for (const onLaunch of [true, false]) {
-            if (!onLaunch && chain[0] === 'n') continue;
-            let cmd = onLaunch ? `${prefix} ${SPAWN}` : SPAWN;
-            for (const k of [...chain].reverse()) cmd = CARRIERS[k](cmd);
-            if (!onLaunch) cmd = `${prefix} ${cmd}`;
+        for (const prefix of ['!', 'A+=b', 'a[0]=x', 'a[x y]=1']) {
+          // at === depth: on the launch; else in front of carrier `at` (0 = outermost)
+          for (let at = 0; at <= depth; at++) {
+            if (at < depth && chain[at] === 'n') continue;
+            let cmd = at === depth ? `${prefix} ${SPAWN}` : SPAWN;
+            for (let i = depth - 1; i >= 0; i--) {
+              cmd = CARRIERS[chain[i]](cmd);
+              if (i === at) cmd = `${prefix} ${cmd}`;
+            }
             count++;
             const r = runHook(bash(cmd));
             const code = r.status === 2 ? JSON.parse(r.stdout).code : `exit ${r.status}`;
@@ -3040,7 +3043,7 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
           }
         }
       }
-      assert.equal(count, { 1: 15, 2: 45, 3: 135 }[depth], 'carrier chain count');
+      assert.equal(count, { 1: 20, 2: 84, 3: 324 }[depth], 'carrier chain count');
       assert.deepEqual(allowed, [], 'every chain denied as a debugger spawn');
     });
   }
