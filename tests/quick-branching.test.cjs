@@ -30,7 +30,7 @@ const QUICK_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md
  * fixture repos, plus the Step 2.5 bash-script run below — both orders of
  * magnitude under this. #3144.
  */
-const GIT_TIMEOUT_MS = 20000;
+const QUICK_BRANCHING_GIT_TIMEOUT_MS = 20000;
 
 const GIT_ENV = Object.freeze({
   ...process.env,
@@ -41,7 +41,7 @@ const GIT_ENV = Object.freeze({
 });
 
 function git(cwd, ...args) {
-  return gitOrThrow(args, { cwd, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS }).trim();
+  return gitOrThrow(args, { cwd, env: GIT_ENV, timeoutMs: QUICK_BRANCHING_GIT_TIMEOUT_MS }).trim();
 }
 
 /**
@@ -149,7 +149,7 @@ function runStep(bash, cwd, branchName) {
   try {
     // Step 2.5's script is a bash FAN-OUT (multiple git commands in sequence
     // under one `bash` interpreter), not a single git plumbing call — the
-    // wrong class for GIT_TIMEOUT_MS. CI hit exactly this at 15000ms on PR
+    // wrong class for QUICK_BRANCHING_GIT_TIMEOUT_MS. CI hit exactly this at 15000ms on PR
     // #3787 run 32668773524 (`full test (windows-latest, 24, shard 3/3)`,
     // `new quick-task branch branches off origin/main (#2916)`): SIGTERM,
     // outcome=timed_out exitCode=null. See HOOK_FANOUT_TIMEOUT_MS in

@@ -32,7 +32,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 // 180000: a build — this driver invokes ensureRuntimeBuild against a REAL
 // tsc compile (not a query), at the tsc-compile end of the
 // 120000-180000 build-class norm.
-const BUILD_TIMEOUT_MS = 180000;
+const TSC_COMPILE_TIMEOUT_MS = 180000;
 
 /** Fresh isolated package dir (auto-cleaned) with a libDir and optional tsconfig. */
 function makeEnv(t, { withTsconfig = true, prebuilt = false } = {}) {
@@ -338,7 +338,7 @@ test('integration: real tsc heals a missing lib end-to-end (subprocess)', (t) =>
   );
 
   assert.ok(!isBuilt(path.join(dir, 'gsd-core', 'bin', 'lib')), 'lib starts empty');
-  const driverResult = runNode([driver], { cwd: dir, timeoutMs: BUILD_TIMEOUT_MS });
+  const driverResult = runNode([driver], { cwd: dir, timeoutMs: TSC_COMPILE_TIMEOUT_MS });
   throwIfFailed(driverResult, `node ${driver}`);
   const parsed = JSON.parse(driverResult.stdout);
   assert.equal(parsed.healed, true, 'self-healed the missing build');

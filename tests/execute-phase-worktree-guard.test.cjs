@@ -22,7 +22,7 @@ const GUARD_MARKER = 'gsd:guard=orchestrator-cwd-drift';
 // 30s: git plumbing (init/config/add/commit/checkout/rev-parse) against a
 // small mkdtemp fixture repo — already the file's calibrated bound
 // pre-migration (see runGuard below), reused here for consistency.
-const GIT_TIMEOUT_MS = 30_000;
+const WORKTREE_GUARD_FIXTURE_GIT_TIMEOUT_MS = 30_000;
 
 /**
  * Pull the guard's bash block out of the workflow. Anchored on a stable marker
@@ -41,7 +41,7 @@ function guardScript() {
   );
 }
 
-const git = (cwd, ...args) => gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
+const git = (cwd, ...args) => gitOrThrow(args, { cwd, timeoutMs: WORKTREE_GUARD_FIXTURE_GIT_TIMEOUT_MS });
 
 /** A real repo with a base branch and one commit. */
 function makeRepo() {

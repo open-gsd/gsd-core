@@ -64,7 +64,7 @@ const {
   measuredPackageVersion,
   WORKTREE_TIMEOUT_MS,
   BUILD_LIB_TIMEOUT_MS,
-  BUILD_TIMEOUT_MS,
+  EMITTED_RUNTIME_BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 } = require('./helpers/emitted-runtime.cjs');
 const { runNode, runGit, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
@@ -134,7 +134,7 @@ const FRESH_FIXTURE_GIT_TIMEOUT_MS = 30_000;
 const HEAVY_REAL_TREE_TEST_TIMEOUT_MS = 480_000;
 
 /**
- * Runs the exact same script as the shared BUILD_TIMEOUT_MS constant
+ * Runs the exact same script as the shared EMITTED_RUNTIME_BUILD_TIMEOUT_MS constant
  * (scripts/build-hooks.js) but at 4x that constant's bound. This site
  * sits inside "differential attribution over the real tree", the single
  * heaviest test in the suite, where elevated system load plausibly
@@ -2813,8 +2813,8 @@ describe('#3271: emitted-runtime-bounds', () => {
 
   test('the step bound fires before the per-test timeout', () => {
     assert.ok(
-      BUILD_TIMEOUT_MS < PER_TEST_TIMEOUT_MS,
-      `step bound ${BUILD_TIMEOUT_MS}ms must be under the per-test timeout ${PER_TEST_TIMEOUT_MS}ms, ` +
+      EMITTED_RUNTIME_BUILD_TIMEOUT_MS < PER_TEST_TIMEOUT_MS,
+      `step bound ${EMITTED_RUNTIME_BUILD_TIMEOUT_MS}ms must be under the per-test timeout ${PER_TEST_TIMEOUT_MS}ms, ` +
       'or node:test kills the test before buildBaselineAtRef can say which step stalled',
     );
   });
@@ -2835,7 +2835,7 @@ describe('#3271: emitted-runtime-bounds', () => {
     // chunk allows and lock in an impossible ladder.
     const realisticPreamble = 60_000;
     assert.ok(
-      BUILD_TIMEOUT_MS + realisticPreamble < PER_TEST_TIMEOUT_MS,
+      EMITTED_RUNTIME_BUILD_TIMEOUT_MS + realisticPreamble < PER_TEST_TIMEOUT_MS,
       'the generator bound plus a realistic worktree+build preamble must fit inside the per-test timeout',
     );
   });
@@ -2847,7 +2847,7 @@ describe('#3271: emitted-runtime-bounds', () => {
     // exported values rather than by scanning source text.
     assert.equal(WORKTREE_TIMEOUT_MS, 60_000);
     assert.equal(BUILD_LIB_TIMEOUT_MS, 180_000);
-    assert.equal(BUILD_TIMEOUT_MS, 360_000);
+    assert.equal(EMITTED_RUNTIME_BUILD_TIMEOUT_MS, 360_000);
     assert.equal(CHUNK_TIMEOUT_CEILING_MS, 600_000);
   });
 

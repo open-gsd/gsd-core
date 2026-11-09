@@ -32,14 +32,14 @@ const {
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
-const GIT_TIMEOUT_MS = 30_000;
+const AUDIT_BASELINE_GIT_TIMEOUT_MS = 30_000;
 
 function git(args, cwd) {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: GIT_TIMEOUT_MS,
+    timeout: AUDIT_BASELINE_GIT_TIMEOUT_MS,
   }).trim();
 }
 

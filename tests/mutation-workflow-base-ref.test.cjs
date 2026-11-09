@@ -53,7 +53,7 @@ const THREE_DOT_WORKFLOWS = [
 ];
 
 // Bounded: git subprocesses in tests must never hang a CI lane.
-const GIT_TIMEOUT_MS = 30_000;
+const MUTATION_BASE_REF_GIT_TIMEOUT_MS = 30_000;
 
 /**
  * Environment for every git call below, with EVERY `GIT_*` variable stripped.
@@ -90,7 +90,7 @@ function git(cwd, args) {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
+    timeout: MUTATION_BASE_REF_GIT_TIMEOUT_MS,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: gitEnv(),
   });
