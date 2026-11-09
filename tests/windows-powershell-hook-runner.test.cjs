@@ -330,6 +330,10 @@ describe('#5850 statusLine spelling', () => {
     const cmd = hooksSurface.buildHookCommand(`${home}/.claude`, 'gsd-statusline.js', win({ portableHooks: true, statusLine: true }));
     assert.ok(typeof cmd === 'string' && cmd.startsWith('powershell -NoProfile -Command "'), cmd);
     assert.ok(cmd.includes(`'${home}/.claude/hooks/gsd-statusline.js'`), cmd);
+    const entrypoints = [];
+    hooksSurface.buildHookCommand(`${home}/.claude`, 'gsd-statusline.js', win({ portableHooks: true, statusLine: true, configuredEntrypoints: entrypoints }));
+    assert.equal(entrypoints.length, 1);
+    assert.equal(entrypoints[0].scriptPath, path.join(`${home}/.claude`, 'hooks', 'gsd-statusline.js'));
     assert.doesNotMatch(cmd, /[`$\\]/);
   });
 
@@ -383,6 +387,26 @@ describe('#5850 a PowerShell entry reaching a POSIX host converges back', () => 
       assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), false, dir);
       assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, ps);
     }
+  });
+
+  test('refusals cover the portable $HOME, $env:CLAUDE_PROJECT_DIR and statusLine spellings', () => {
+    const home = os.homedir().replace(/\\/g, '/');
+    const runner = hooksSurface.buildNodeRunnerChainToken({ execPath: '/usr/bin/node' });
+    const entries = [
+      hooksSurface.buildHookCommand(`${home}/my$dir/.claude`, GUARD, win({ portableHooks: true })),
+      hooksSurface.buildHookCommand(`${home}/my"dir/.claude`, GUARD, win({ portableHooks: true })),
+      hooksSurface.buildPowerShellLocalHookCommand({ localPrefix: '"$CLAUDE_PROJECT_DIR"/.cl$aude', hookFile: GUARD, execPath: EXEC_PATH }),
+    ];
+    for (const ps of entries) {
+      assert.ok(ps.startsWith('& '), ps);
+      const settings = settingsWith([ps]);
+      assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), false, ps);
+      assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, ps);
+    }
+    const status = `powershell -NoProfile -Command "if (Test-Path -LiteralPath 'D:/n.exe') { & 'D:/n.exe' 'C:/a$b/hooks/gsd-statusline.js' } else { & node 'C:/a$b/hooks/gsd-statusline.js' }"`;
+    const settings = { hooks: {}, statusLine: { type: 'command', command: status } };
+    assert.equal(hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, runner, linux), false);
+    assert.equal(settings.statusLine.command, status);
   });
 
   test('a PowerShell entry is left alone on win32 for a runtime that never writes it', () => {

@@ -795,17 +795,18 @@ function unquotePowerShell(value: string): string {
  * command is not one of GSD's PowerShell shapes.
  */
 function parsePowerShellScript(command: string): { scriptPath: string; scriptToken: string } | null {
+  // A path bash would expand or re-quote (`$`, backtick, `"`) has no faithful POSIX
+  // spelling here: refuse, and the entry stays as written. (A portable install under
+  // a directory named with one of them therefore stays PowerShell on a POSIX host.)
+  const posixUnsafe = /["`$]/;
   const status = command.match(POWERSHELL_STATUSLINE_COMMAND);
   if (status) {
     const scriptPath = unquotePowerShell(status[2]);
-    return { scriptPath, scriptToken: JSON.stringify(scriptPath) };
+    return posixUnsafe.test(scriptPath) ? null : { scriptPath, scriptToken: JSON.stringify(scriptPath) };
   }
   const runner = command.replace(/^&\s+/, '').trim().match(/^\(\(@\('(?:[^']|'')*'\) \+ @\(Get-Command node [\s\S]*?Select-Object -First 1\)\s+(.+?); exit \$\(if [\s\S]*\)$/);
   if (!runner) return null;
   const arg = runner[1];
-  // A path bash would expand or re-quote (`$`, backtick, `"`) has no faithful POSIX
-  // spelling here: refuse, and the entry stays as written.
-  const posixUnsafe = /["`$]/;
   let m = arg.match(/^'((?:[^']|'')*)'$/);
   if (m) {
     const scriptPath = unquotePowerShell(m[1]);
