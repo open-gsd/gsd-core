@@ -1387,7 +1387,8 @@ function callRe(point) {
 }
 
 // The resolver tags each way it drops a phase context with a typed reason code
-// (ADR-4030); tests assert the code, never the warning text.
+// (ADR-4030); tests assert the code, never the warning text, except where the
+// warning is the only carrier of the value under test (the ambiguous-candidate cap).
 function dropOf(dir, opts) {
   return resolveActiveHooksForPoint(dir, 'plan:pre', opts).phaseDrop;
 }
