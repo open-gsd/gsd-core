@@ -206,6 +206,13 @@ const FRAGMENT_SENTINEL = 'GSD-2933-FRAGMENT-EDIT-SENTINEL-4c1a9f';
  * The digits coincide with `INSTALL_TIMEOUT_MS` (also 120000ms), but this
  * is a different operation class kept as its own local constant —
  * coincidence, not collision.
+ *
+ * Evidence: worst observed 398.77ms on darwin (p50 87.65ms, p99 398.77ms), margin 300.92x;
+ * harness, 10 call sites x 5 runs (50 spawns) per platform on darwin (node v26.13.0)
+ * and linux (node:24 in docker), 2026-11-08; win32 not measured.
+ * Reproduction caveat: the harness ran the generators in --check modes against the
+ * repo root as the overlay (read-only), not a hard-linked overlay with installerEnv().
+ * The runOverlayGenerate (no-flag gen-section-manifest) write path was not measured.
  */
 const OVERLAY_GENERATOR_TIMEOUT_MS = 120000;
 

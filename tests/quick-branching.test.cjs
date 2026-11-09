@@ -27,9 +27,15 @@ const QUICK_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md
 
 /**
  * Bound for every git plumbing subprocess in this file (small mkdtemp fixture
- * repos), which runs orders of magnitude under this. The Step 2.5 bash-script
- * run in runStep() is not bounded by this constant; HOOK_FANOUT_TIMEOUT_MS
- * (./helpers/timeouts.cjs, 60000ms) bounds it. #3144.
+ * repos, including a bare clone and a working clone): 13 argv shapes through the
+ * one `git(cwd, ...args)` helper. It is its own constant rather than a
+ * tests/helpers/timeouts.cjs class because it bounds only this file's fixture
+ * git plumbing. The Step 2.5 bash-script run in runStep() is not bounded by this
+ * constant; HOOK_FANOUT_TIMEOUT_MS (./helpers/timeouts.cjs, 60000ms) bounds it. #3144.
+ *
+ * Evidence: worst observed 89.28ms on darwin (p50 9.72ms, p99 33.05ms), margin 224.01x;
+ * harness, 13 call sites x 50 runs (1950 spawns) per platform on darwin (node v26.13.0)
+ * and linux (node:24 in docker), 2026-11-08; win32 not measured.
  */
 const QUICK_BRANCHING_GIT_TIMEOUT_MS = 20000;
 

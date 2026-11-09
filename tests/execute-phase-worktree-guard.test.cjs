@@ -19,9 +19,14 @@ const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
 const GUARD_MARKER = 'gsd:guard=orchestrator-cwd-drift';
 
-// 30s: git plumbing (init/config/add/commit/checkout/rev-parse) against a
-// small mkdtemp fixture repo — already the file's calibrated bound
-// pre-migration (see runGuard below), reused here for consistency.
+// 30s: git plumbing (init/config/add/commit/checkout/rev-parse/worktree add)
+// against a small mkdtemp fixture repo, through the one `git(cwd, ...args)`
+// helper (8 argv shapes). It is its own constant rather than a
+// tests/helpers/timeouts.cjs class because it bounds only this file's fixture
+// git plumbing; the runGuard bash fan-out is bounded by HOOK_FANOUT_TIMEOUT_MS.
+// Evidence: worst observed 69.7ms on darwin (p50 11.68ms, p99 31.36ms), margin 430.41x;
+// harness, 8 call sites x 50 runs (1000 spawns) per platform on darwin (node v26.13.0)
+// and linux (node:24 in docker), 2026-11-08; win32 not measured.
 const WORKTREE_GUARD_FIXTURE_GIT_TIMEOUT_MS = 30_000;
 
 /**

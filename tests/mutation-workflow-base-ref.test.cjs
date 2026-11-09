@@ -53,6 +53,15 @@ const THREE_DOT_WORKFLOWS = [
 ];
 
 // Bounded: git subprocesses in tests must never hang a CI lane.
+// Bounds the one `git(cwd, args)` helper in this file (10 argv shapes: fixture
+// init/config/add/commit/checkout/60x empty commits, and the runner clones'
+// remote add/fetch/diff). It is its own constant rather than a
+// tests/helpers/timeouts.cjs class because it bounds only this file's mkdtemp
+// fixture git plumbing, including shallow and full fetches.
+// Evidence: worst observed 159.93ms on darwin (p50 17.54ms, p99 76.94ms), margin 187.58x;
+// harness, 10 call sites x 50 runs (5300 spawns) per platform on darwin (node v26.13.0)
+// and linux (node:24 in docker), 2026-11-08; win32 not measured.
+// Reproduction caveat: the harness ran with base ref HEAD~100, not the test's own base.
 const MUTATION_BASE_REF_GIT_TIMEOUT_MS = 30_000;
 
 /**
