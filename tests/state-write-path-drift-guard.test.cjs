@@ -1490,6 +1490,26 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       expected: [2],
       currentBuggyOutput: [],
     },
+    // Missed: a mention inside a destructuring pattern reads as a rebinding,
+    // even when the pattern only reads the name.
+    {
+      shape: 'the target read as a default in a later object pattern',
+      text: W("  const p = path.join(dir, 'STATE.md');", '  const { fallback = p } = options;', '  fs.writeFileSync(p, c);'),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'the target read as a default in a later array pattern',
+      text: W("  const p = path.join(dir, 'STATE.md');", '  const [a = p] = options;', '  fs.writeFileSync(p, c);'),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'the target read as a computed key in a later object pattern',
+      text: W("  const p = path.join(dir, 'STATE.md');", '  const { [p]: value } = options;', '  fs.writeFileSync(p, c);'),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
   ];
   gapLoop(KNOWN_SCOPE_GAPS, 'line-based scope');
 

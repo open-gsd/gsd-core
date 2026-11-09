@@ -1180,6 +1180,9 @@ function boundaryAfterLine(write, index) {
  *     name holding `'STATE.md'` there): only the `=` line is read.
  *   - A default parameter (`function w(p = path.join(dir, 'STATE.md'))`):
  *     the named-function header ends the scan before its line is read.
+ *   - A name only read in a later destructuring pattern, as a default or a
+ *     computed key (`const { d = p } = o`, `const [a = p] = o`,
+ *     `const { [p]: v } = o`): any mention there reads as a rebinding.
  *   - A STATE.md name not spelled as one literal: split across literals
  *     (`'STATE' + '.md'`, inline or through a variable) or built in a
  *     template (`` `STATE${'.md'}` ``): `targetsStatePath` matches the text,
