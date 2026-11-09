@@ -40,15 +40,37 @@ const COMPILED_PAIRS = [
 ];
 
 /**
+ * Whether the compiled file is exactly what the build would emit for the source: true or false,
+ * or null when typescript or the build options cannot be loaded (the caller falls back to mtime).
+ */
+function compiledMatchesSource(source, compiled, loadTypescript) {
+  try {
+    const ts = loadTypescript();
+    const config = ts.readConfigFile(path.join(ROOT, 'tsconfig.build.json'), ts.sys.readFile);
+    if (config.error !== undefined) return null;
+    const { options, errors } = ts.convertCompilerOptionsFromJson(config.config.compilerOptions, ROOT);
+    if (errors.length > 0) return null;
+    const emitted = ts.transpileModule(fs.readFileSync(source, 'utf8'), { compilerOptions: options, fileName: source });
+    return emitted.outputText === fs.readFileSync(compiled, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Why the compiled registry cannot be trusted, or null when it is fresh: a compiled file that
  * is missing, or older than the source beside it, means `npm run build:lib` has not run since
  * the source changed. A source that is not on disk (an installed package) is not checked.
- * Pairs are compared one to one: tsc leaves an unchanged module's output alone.
+ * Pairs are compared one to one: tsc leaves an unchanged module's output alone, so a source that
+ * is newer by mtime only (a checkout, a touch) is judged by content: the source is transpiled
+ * with the repo's own typescript and the build options of tsconfig.build.json, and equal to the
+ * compiled text means fresh. When typescript cannot be loaded the mtime comparison decides.
  *
  * @param {Array<{source: string, compiled: string}>} [pairs]
+ * @param {() => object} [loadTypescript]
  * @returns {string | null}
  */
-function staleCompileProblem(pairs = COMPILED_PAIRS) {
+function staleCompileProblem(pairs = COMPILED_PAIRS, loadTypescript = () => require('typescript')) {
   for (const { source, compiled } of pairs) {
     const rel = (p) => path.relative(ROOT, p) || p;
     if (!fs.existsSync(compiled)) {
@@ -56,6 +78,7 @@ function staleCompileProblem(pairs = COMPILED_PAIRS) {
     }
     if (!fs.existsSync(source)) continue;
     if (fs.statSync(source).mtimeMs > fs.statSync(compiled).mtimeMs) {
+      if (compiledMatchesSource(source, compiled, loadTypescript) === true) continue;
       return (
         `${rel(compiled)} is older than ${rel(source)}. Run \`npm run build:lib\` first ` +
         '(if it emits nothing, delete tsconfig.build.tsbuildinfo and run it again).'
