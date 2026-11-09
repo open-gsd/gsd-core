@@ -457,3 +457,134 @@ test('#3431: commands/gsd/debug.md frontmatter parses as YAML and preserves argu
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #6087 — NamedArgSpec.requiredFlags
+// ────────────────────────────────────────────────────────────────────────
+describe('#6087 requiredFlags', () => {
+  const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
+
+  test('T-R1: absent requiredFlags is identical to a spec without the key', () => {
+    const shapes = [
+      { argv: ['--x', 'a'], spec: { valueFlags: ['x'], positionals: 0 } },
+      { argv: [], spec: { valueFlags: ['x', 'y'], booleanFlags: ['b'], positionals: 0 } },
+      { argv: ['--x', '--b'], spec: { valueFlags: ['x'], booleanFlags: ['b'], positionals: 0 } },
+      { argv: ['--x', 'a', '--typo'], spec: { valueFlags: ['x'], positionals: 0 } },
+      { argv: ['free', 'text'], spec: { valueFlags: ['x'], positionals: 'rest' } },
+    ];
+    for (const { argv, spec } of shapes) {
+      assert.deepStrictEqual(
+        parseNamedArgs(argv, { ...spec, requiredFlags: undefined }),
+        parseNamedArgs(argv, spec),
+      );
+      assert.deepStrictEqual(
+        parseNamedArgs(argv, { ...spec, requiredFlags: [] }),
+        parseNamedArgs(argv, spec),
+      );
+    }
+  });
+
+  test('T-R2: a required flag present with a value parses ok', () => {
+    const result = parseNamedArgs(['--x', 'val'], {
+      valueFlags: ['x'], requiredFlags: ['x'], positionals: 0,
+    });
+    assert.deepStrictEqual(result, { ok: true, data: { x: 'val' } });
+  });
+
+  test('T-R3: a required flag absent is InvalidArgs with USAGE exitReason', () => {
+    const result = parseNamedArgs([], {
+      valueFlags: ['x'], requiredFlags: ['x'], positionals: 0,
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--x');
+    assert.strictEqual(result.exitReason, ERROR_REASON.USAGE);
+    assert.ok(result.reason.startsWith('missing required flag --x'), result.reason);
+  });
+
+  test('T-R4: a required flag with an empty-string value is InvalidArgs', () => {
+    const result = parseNamedArgs(['--x', ''], {
+      valueFlags: ['x'], requiredFlags: ['x'], positionals: 0,
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--x');
+    assert.ok(result.reason.startsWith('missing required flag --x'), result.reason);
+  });
+
+  test('T-R5: a required flag followed by another flag is InvalidArgs', () => {
+    const result = parseNamedArgs(['--x', '--y'], {
+      valueFlags: ['x'], booleanFlags: ['y'], requiredFlags: ['x'], positionals: 0,
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--x');
+    assert.ok(result.reason.startsWith('missing required flag --x'), result.reason);
+  });
+
+  test('T-R6: every valueFlag required and present parses ok', () => {
+    const result = parseNamedArgs(['--a', '1', '--b', '2'], {
+      valueFlags: ['a', 'b'], requiredFlags: ['a', 'b'], positionals: 0,
+    });
+    assert.deepStrictEqual(result, { ok: true, data: { a: '1', b: '2' } });
+  });
+
+  test('T-R7: requiredFlags not a subset of valueFlags throws TypeError naming the stray flag', () => {
+    assert.throws(
+      () => parseNamedArgs(['--a', '1'], {
+        valueFlags: ['a'], requiredFlags: ['a', 'stray'], positionals: 0,
+      }),
+      (err) => err instanceof TypeError && err.message.includes('stray'),
+    );
+  });
+
+  test('T-R8: required check still runs under positionals "rest"', () => {
+    const result = parseNamedArgs(['free', 'text'], {
+      valueFlags: ['x'], requiredFlags: ['x'], positionals: 'rest',
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--x');
+  });
+
+  test('T-R9: the unknown-token walk precedes the required check', () => {
+    const result = parseNamedArgs(['--typo'], {
+      valueFlags: ['x'], requiredFlags: ['x'], positionals: 0,
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.kind, 'InvalidArgs');
+    assert.strictEqual(result.arg, '--typo');
+  });
+
+  // argv is a sequence of [declaredFlag, value] pairs, so the unknown-token
+  // walk always passes and the oracle concerns only the required rule: the
+  // first occurrence of each required flag must carry a non-empty value.
+  test('T-P1 fc: ok iff every required flag first-occurrence has a non-empty value', () => {
+    const names = ['a', 'b', 'c', 'd'];
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(fc.constantFrom(...names), { minLength: 1, maxLength: 4 }).chain((valueFlags) => fc.tuple(
+          fc.constant(valueFlags),
+          fc.subarray(valueFlags),
+          fc.array(
+            fc.tuple(fc.constantFrom(...valueFlags), fc.constantFrom('', 'v', 'w1', '-x')),
+            { maxLength: 8 },
+          ),
+        )),
+        ([valueFlags, requiredFlags, pairs]) => {
+          const argv = pairs.flatMap(([flag, value]) => [`--${flag}`, value]);
+          const result = parseNamedArgs(argv, { valueFlags, requiredFlags, positionals: 0 });
+          const firstValue = (flag) => {
+            const hit = pairs.find(([f]) => f === flag);
+            return hit ? hit[1] : null;
+          };
+          const expectedOk = requiredFlags.every((f) => {
+            const v = firstValue(f);
+            return typeof v === 'string' && v !== '' && !v.startsWith('--');
+          });
+          assert.strictEqual(result.ok, expectedOk);
+        },
+      ),
+    );
+  });
+});
