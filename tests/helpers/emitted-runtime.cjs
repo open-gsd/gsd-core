@@ -522,7 +522,8 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     throw new Error(`emitted-attribution: merge-base of "${resolved.ref}" and HEAD is not a 40-hex sha: ${JSON.stringify(sha)}`);
   }
-  const merged = advanceToMergedBase(sha, env, { cwd, diagnostic });
+  // #5902: a release-merge PR's GITHUB_BASE_REF is `main`, which this base deliberately ignores.
+  const merged = releaseMerge ? sha : advanceToMergedBase(sha, env, { cwd, diagnostic });
   if (merged !== sha) {
     if (diagnostic) {
       diagnostic(

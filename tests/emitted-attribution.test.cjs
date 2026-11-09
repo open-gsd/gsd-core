@@ -3199,3 +3199,26 @@ test('#5902: CI shape — main merged into the release branch does not move the 
     cleanup(root);
   }
 });
+
+test('#5902 over #5797: a release-merge base stays on the fork point when origin/main descends from it', () => {
+  const { root, forkSha } = makeReleaseMergeRepo();
+  try {
+    // `main` contains the fork point, so the merge-ref advance would accept `main`'s tip.
+    gitFixture(root, ['checkout', '-q', 'main']);
+    gitFixture(root, ['merge', '-q', '--no-ff', '-m', 'Merge the fork point into main', forkSha]);
+    const mainTip = gitFixture(root, ['rev-parse', 'HEAD']);
+    gitFixture(root, ['update-ref', 'refs/remotes/origin/main', mainTip]);
+    gitFixture(root, ['checkout', '-q', 'release/1.2.0']);
+    gitFixture(root, ['merge', '-q', '--no-ff', '-m', 'Merge main into release/1.2.0', 'main']);
+
+    const messages = [];
+    const base = resolveAttributionBase(prEnv('release/1.2.0', 'main', { GSD_EMITTED_BASE: mainTip }), {
+      cwd: root, readFile: payloadReader(SAME_REPO), diagnostic: (m) => messages.push(m),
+    });
+    assert.equal(base.sha, forkSha, 'GITHUB_BASE_REF=main must not advance the release-merge base');
+    assert.equal(messages.filter((m) => m.includes('origin/main')).length, 0,
+      'a release-merge run must not report on the merge-ref advance at all');
+  } finally {
+    cleanup(root);
+  }
+});
