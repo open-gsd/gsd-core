@@ -1164,7 +1164,7 @@ function boundaryAfterLine(write, index) {
  * This axis's zero is not proof that no raw writer exists (ADR-3408
  * Decision 5). Verified misses, each with a test row (a known gap beside its
  * correct verdict, or the hop-bound row); the syntax-tree follow-up is #5279:
- *   - A file name built in another function (a `Map` key, a return value)
+ *   - A file name built in another function (a `Map` value, a return value)
  *     or held in a module-level constant: resolution stops at the
  *     named-function boundary.
  *   - A one-line function that assigns and writes: a named-function header
@@ -1200,11 +1200,11 @@ function boundaryAfterLine(write, index) {
  * `function (p)` expression resolved to a sibling function expression's
  * STATE.md variable or to an outer one it shadows (only a named `function`
  * header ends the scan), an arrow's parameter resolved to a sibling arrow
- * body's variable of the same name, a
- * block-scoped binding or `for` header's `let` earlier on the write's line
- * (`if (a) { const p = statePath; } else { fs.writeFileSync(p, c); }`), a target
- * computed from the state file, a longer name such as `STATE.md.bak`, a
- * word in a template literal's text that names a statePath variable (the
+ * body's variable of the same name, a block-scoped binding or `for`
+ * header's `let` earlier on the write's line
+ * (`if (a) { const p = statePath; } else { fs.writeFileSync(p, c); }`), a
+ * target computed from the state file, a longer name such as `STATE.md.bak`,
+ * a word in a template literal's text that names a statePath variable (the
  * template is read whole), a right-hand side that runs past its own `;` into
  * a later statement on that line, and a string that spells the call.
  *
