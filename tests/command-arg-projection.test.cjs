@@ -760,3 +760,53 @@ describe('#6087 seam kinds', () => {
     );
   });
 });
+
+describe('#6087 freePositionals', () => {
+  test('a free word after a flag is accepted', () => {
+    const result = parseNamedArgs(['cmd', '--a', '1', 'word'], {
+      valueFlags: ['a'],
+      positionals: 1,
+      freePositionals: true,
+    });
+    assert.deepStrictEqual(result, { ok: true, data: { a: '1' } });
+  });
+
+  test('an undeclared flag is still rejected', () => {
+    const result = parseNamedArgs(['cmd', 'word', '--zz'], {
+      valueFlags: ['a'],
+      positionals: 1,
+      freePositionals: true,
+    });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.arg, '--zz');
+  });
+
+  test('without freePositionals the same word is a stray positional', () => {
+    const result = parseNamedArgs(['cmd', '--a', '1', 'word'], { valueFlags: ['a'], positionals: 1 });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.arg, 'word');
+  });
+
+  test('freePositionals combined with positionals "rest" throws TypeError', () => {
+    assert.throws(
+      () => parseNamedArgs([], { positionals: 'rest', freePositionals: true }),
+      (err) => err instanceof TypeError && err.message.includes('freePositionals'),
+    );
+  });
+
+  test('freePositionals must be true when present', () => {
+    assert.throws(
+      () => parseNamedArgs([], { positionals: 1, freePositionals: false }),
+      (err) => err instanceof TypeError && err.message.includes('freePositionals'),
+    );
+  });
+
+  test('a word consumed as a flag value is not double-counted and data is unchanged', () => {
+    const result = parseNamedArgs(['cmd', '--a', 'one', 'two', 'three'], {
+      valueFlags: ['a'],
+      positionals: 1,
+      freePositionals: true,
+    });
+    assert.deepStrictEqual(result, { ok: true, data: { a: 'one' } });
+  });
+});
