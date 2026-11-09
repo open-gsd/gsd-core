@@ -10,7 +10,7 @@
  * Failing-first: RED until the seam, the commit refusal and the verb exist.
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -20,8 +20,14 @@ const { execFileSync } = require('node:child_process');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
+const GIT_CFG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6043-gitcfg-'));
+const EMPTY_GITCONFIG = path.join(GIT_CFG_DIR, 'gitconfig');
+fs.writeFileSync(EMPTY_GITCONFIG, '');
+after(() => cleanup(GIT_CFG_DIR));
+
 const GIT_ENV = {
-  GIT_CONFIG_GLOBAL: os.devNull,
+  // os.devNull is \\.\nul on win32, which git cannot open as a config file.
+  GIT_CONFIG_GLOBAL: EMPTY_GITCONFIG,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_AUTHOR_NAME: 'gsd-test',
   GIT_AUTHOR_EMAIL: 'gsd-test@example.invalid',

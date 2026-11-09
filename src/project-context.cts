@@ -407,7 +407,7 @@ function sameCheckout(a: string, b: string, realpath: (p: string) => string): bo
 
 export function resolveProjectContext(startDir: string, opts: ResolveProjectContextOptions = {}): ProjectContext {
   const execGit = opts.deps?.execGit ?? execGitSeam;
-  const realpath = opts.deps?.fs?.realpathSync ?? fs.realpathSync;
+  const realpath = opts.deps?.fs?.realpathSync ?? fs.realpathSync.native;
   const explicit = opts.explicit ? path.resolve(opts.explicit) : null;
   const start = explicit ?? path.resolve(startDir);
 

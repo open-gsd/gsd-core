@@ -2028,19 +2028,20 @@ function commitRefusal(
   if (ctx.provenance.degraded) return null;
   const realOrSelf = (p: string): string => {
     try {
-      return fs.realpathSync(p);
+      return fs.realpathSync.native(p);
     } catch {
       return p;
     }
   };
   // Nearest existing ancestor directory of an absolute path, realpath'd, with
-  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var).
+  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var,
+  // Windows 8.3 short names like RUNNER~1).
   const canonicalAbsolute = (abs: string): string => {
     const rest: string[] = [path.basename(abs)];
     let ancestor = path.dirname(abs);
     for (;;) {
       try {
-        return path.join(fs.realpathSync(ancestor), ...rest);
+        return path.join(fs.realpathSync.native(ancestor), ...rest);
       } catch {
         const parent = path.dirname(ancestor);
         if (parent === ancestor) return abs;
