@@ -133,7 +133,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     positionals: 3,
     valueFlags: ['fields', 'name', 'phase', 'plan', 'type', 'wave'],
   },
-  'frontmatter.get': { positionals: 3, valueFlags: ['field'] },
+  // The field is `--field <k>` or one free word after the file (`frontmatter.get <file> <field>` is the shipped form).
+  'frontmatter.get': { positionals: 3, freePositionals: true, valueFlags: ['field'] },
   'frontmatter.set': { positionals: 3, valueFlags: ['field', 'value'] },
   'frontmatter.merge': { positionals: 3, valueFlags: ['data'] },
   'frontmatter.validate': { positionals: 3, valueFlags: ['schema'] },

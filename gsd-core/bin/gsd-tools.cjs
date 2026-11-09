@@ -857,7 +857,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     if (subcommand === 'get') {
       const key = args[2];
       if (!key || key.startsWith('--')) {
-        error('Usage: gsd-tools research-store get <key>', ERROR_REASON.USAGE);
+        error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
       }
       if (!researchStore.isValidResearchKey(key)) {
         error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
@@ -1269,7 +1269,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           }
           // CJS fallback (SDK unavailable or unknown subcommand)
           if (subcommand === 'get') {
-            frontmatter.cmdFrontmatterGet(cwd, file, parseNamedArgsOrExit(args, specFor('frontmatter.get'), error).field, raw);
+            // The field is `--field <k>` or one positional word after the file (shipped callers pass
+            // `frontmatter.get <file> <field>`); a second word, or a word beside --field, is a stray.
+            const fmGetSpec = specFor('frontmatter.get');
+            const fmGetParsed = parseNamedArgsOrExit(args, fmGetSpec, error);
+            const fmGetWords = positionalWords(args, fmGetSpec, 3);
+            const fmGetAllowed = fmGetParsed.field === null ? 1 : 0;
+            if (fmGetWords.length > fmGetAllowed) {
+              error(`unexpected positional argument ${formatDiagnosticToken(fmGetWords[fmGetAllowed])}`, ERROR_REASON.USAGE);
+            }
+            frontmatter.cmdFrontmatterGet(cwd, file, fmGetParsed.field ?? fmGetWords[0], raw);
           } else if (subcommand === 'set') {
             const { field, value } = parseNamedArgsOrExit(args, specFor('frontmatter.set'), error);
             frontmatter.cmdFrontmatterSet(cwd, file, field, value !== null ? value : undefined, raw);
@@ -1478,7 +1487,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // back to its own `'—'` default — unchanged for every existing
           // caller (fast.md, quick.md's non-VALIDATE_MODE branch).
           const qtaParsed = parseNamedArgsOrExit(args, specFor('quick-tasks-append'), error);
-          const qtaTask = qtaParsed.task || args[1];
+          // The positional description is the first free word, never a flag (`--status ok desc` reads `desc`).
+          const qtaTask = qtaParsed.task || positionalWords(args, specFor('quick-tasks-append'))[0];
           if (!qtaTask) {
             error('quick-tasks-append requires --task <description> (or a positional description)', ERROR_REASON.USAGE);
           }

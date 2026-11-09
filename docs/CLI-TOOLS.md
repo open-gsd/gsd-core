@@ -53,11 +53,11 @@ Regenerate the manifest with `npm run gen:cli-surface-manifest`. `npm run lint:g
 | `value-or-bare` | As `value`, but a bare `--name` means "present and empty". |
 | `boolean` | `--name` |
 | `optional-value` | `--name` with or without a value |
-| `repeatable` | `--name <value>` any number of times; every value is kept, in order |
+| `repeatable` | `--name <value>` any number of times; every non-empty value is kept, in order. An empty value counts as none. |
 | `list` | `--name a b c`. The values run until the command's next list flag, and repeated runs merge. |
 | `multiword` | `--name some words`. The words run until the next `--` token and are joined with spaces. |
 
-A command whose manifest entry lists `eq` also accepts those flags as `--name=<value>`. A command with `passthroughAfter: "--"` does not check anything after a literal `--`.
+A command whose manifest entry lists `eq` also accepts those flags as `--name=<value>`. The flags listed under `nonEmpty` must have a value whenever they are passed; `emptyValue` and `emptyEq` name the ones for which a literal empty value (`--name ''`, `--name=`) still counts as a value. When a flag is repeated, the first occurrence wins. A command with `passthroughAfter: "--"` does not check anything after a literal `--`.
 
 A declared command rejects bad arguments before it does any work. Each rejection exits non-zero with reason `usage`, which `--json-errors` reports as `reason: "usage"`:
 

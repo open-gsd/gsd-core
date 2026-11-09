@@ -290,7 +290,8 @@
         "field": "value"
       },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true
     },
     {
       "verb": "frontmatter.merge",

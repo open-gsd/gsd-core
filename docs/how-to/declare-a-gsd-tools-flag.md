@@ -11,7 +11,7 @@ Open `src/cli-surface.cts` and find the command's entry in `CLI_SURFACE`. The ke
 | takes one value | `valueFlags` |
 | is a switch | `booleanFlags` |
 | must be given | `requiredFlags`, as well as `valueFlags` |
-| must have a value whenever it is passed | `nonEmptyFlags`, as well as `valueFlags` |
+| must have a value whenever it is passed | `nonEmptyFlags`, as well as `valueFlags` (`emptyValueFlags` / `emptyEqFlags` let a literal empty `''` / `--name=` through) |
 | may also be written `--name=value` | `eqFlags`, as well as `valueFlags` |
 | may be passed several times | `repeatableFlags`, as well as `valueFlags` |
 | takes several words up to the next flag | `listFlags` or `multiwordFlags` (see [the flag kinds](../CLI-TOOLS.md#command-flags-and-the-cli-surface-manifest)) |
@@ -20,7 +20,7 @@ List a flag in `requiredFlags` only when the command cannot run without it. A re
 
 ## 2. Read it in the router
 
-The router's first statement parses the arguments:
+The router parses the arguments before any filesystem, git or subprocess work (after reading the subcommand):
 
 ```js
 const flags = parseNamedArgsOrExit(args, specFor('milestone.complete'), error);
