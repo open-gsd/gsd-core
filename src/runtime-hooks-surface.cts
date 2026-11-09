@@ -683,24 +683,23 @@ function resolveBashRunner(opts?: BashRunnerOpts): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// #5850 — PowerShell hook runner (Claude Code on Windows without Git Bash)
+// #5850 — PowerShell hook runner (Claude Code on Windows)
 // ---------------------------------------------------------------------------
 
 /**
- * #5850: Claude Code runs shell-form hook commands in PowerShell when Git Bash
- * is not installed, and the POSIX `$(for ... done)` runner chain does not parse
- * there. A blocking PreToolUse guard that cannot start blocks every tool call.
- * Claude on win32 with no discoverable Git Bash therefore gets a PowerShell
- * command (and an explicit `shell: "powershell"`, see projectPowerShellHookShell)
- * instead. Git Bash discovery is the same single policy resolveBashExecutable
- * applies to `.sh` hooks, so a Git Bash install keeps the unchanged chain.
+ * #5850 (owner ruling: always PowerShell on win32): every managed JS hook command
+ * Claude gets on Windows is a PowerShell command carrying an explicit
+ * `shell: "powershell"` (see projectPowerShellHookShell), whether or not Git Bash
+ * is discoverable. The POSIX `$(for ... done)` runner chain does not parse when
+ * Claude Code hosts the hook in PowerShell, and a blocking PreToolUse guard that
+ * cannot start blocks every tool call. An explicit `hookShell: 'bash'` still
+ * selects the chain (a test/projection seam, never set by the installer).
  */
-function usesPowerShellHookShell(opts?: BashRunnerOpts & { runtime?: string; hookShell?: string }): boolean {
+function usesPowerShellHookShell(opts?: { platform?: string; runtime?: string; hookShell?: string }): boolean {
   if (opts && opts.hookShell === 'bash') return false;
   const platform = (opts && opts.platform) || process.platform;
   const runtime = (opts && opts.runtime) || 'generic';
-  if (platform !== 'win32' || hostBehaviorsFor(runtime).powershellHooksWithoutGitBash !== true) return false;
-  return resolveBashExecutable(opts) === null;
+  return platform === 'win32' && hostBehaviorsFor(runtime).powershellHooksOnWindows === true;
 }
 
 /**
@@ -824,7 +823,7 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, runnerToken: s
   if (!settings || !settings.hooks || !runnerToken) return false;
   if (!opts) opts = {};
   const platform = opts.platform || process.platform;
-  const usePowerShell = usesPowerShellHookShell({ platform, runtime: opts.runtime, env: opts.env, existsSync: opts.existsSync });
+  const usePowerShell = usesPowerShellHookShell({ platform, runtime: opts.runtime });
   let changed = false;
   // #5850: the managed statusLine is a command like a hook; on the PowerShell
   // path it is converted too (a POSIX chain there fails the same way).
@@ -1786,9 +1785,8 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     }));
   }
 
-  // #5850: no Git Bash on win32 means Claude Code hosts the hook in PowerShell,
-  // where the POSIX chain below cannot parse.
-  if (usesPowerShellHookShell({ platform, runtime, hookShell, env: opts.env, existsSync: opts.existsSync })) {
+  // #5850: Claude on win32 always gets the PowerShell runner (owner ruling).
+  if (usesPowerShellHookShell({ platform, runtime, hookShell })) {
     return track(buildPowerShellHookCommand(
       powerShellScriptArg(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName),
       opts,

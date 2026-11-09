@@ -13948,8 +13948,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // skip managed-hook registration. Returning null from buildHookCommand on
   // global installs has the same effect. Better to skip than to emit a bare
   // `node` command that recreates the #2979 failure.
-  // #5850: Claude on Windows without Git Bash hosts hooks in PowerShell, where the
-  // POSIX chain does not parse — use the PowerShell runner there instead.
+  // #5850: Claude on Windows always gets the PowerShell runner (owner ruling).
   const localUsesPowerShell = hooksSurface.usesPowerShellHookShell({ platform: process.platform, runtime });
   const localCmd = (hookFile) => localNodeRunner === null
     ? null
