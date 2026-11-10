@@ -8,9 +8,8 @@
 // Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
 // are never relative.
 // Anchors use scripts/gen-features.cjs `slugify` on the raw heading text. A heading it
-// cannot reproduce (a non-ASCII letter or digit, a link, `_` emphasis) gets no anchor,
-// and blockquote headings and `<a id>` anchors are not collected, so a link to any of
-// them fails.
+// cannot reproduce (a non-ASCII letter or digit, a link, `_` emphasis) gets no anchor, so
+// a link to it fails. Blockquote headings and `<a id>`/`<a name>` anchors count.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -176,15 +175,22 @@ const unslugable = (text) => {
   return /(?!\p{ASCII})[\p{L}\p{N}]/u.test(text) || /\]\(|\]\[/.test(bare)
     || /(?:^|\W)_|_(?:\W|$)/.test(bare);
 };
+// Blockquote content keeps its line number, so a quoted heading sorts and counts in place.
+const unquote = (md) => md.split(/\r?\n/)
+  .map((l) => (/^ {0,3}>/.test(l) ? l.replace(/^(?: {0,3}> ?)+/, '') : '')).join('\n');
+const A_ID = /<a\s[^>]*?\b(?:id|name)\s*=\s*["']([^"'\s>]+)["']/gi;
 const headingSet = (md) => {
   const seen = new Map();
-  const headings = [...tokenizeHeadings(md), ...setextHeadings(md)].sort((a, b) => a.line - b.line);
-  return new Set(headings.filter(({ text }) => !unslugable(text)).map(({ text }) => {
+  const quoted = unquote(md);
+  const headings = [md, quoted].flatMap((t) => [...tokenizeHeadings(t), ...setextHeadings(t)])
+    .sort((a, b) => a.line - b.line);
+  const slugs = headings.filter(({ text }) => !unslugable(text)).map(({ text }) => {
     const s = slugify(text);
     const n = seen.get(s) ?? 0;
     seen.set(s, n + 1);
     return n ? `${s}-${n}` : s;
-  }));
+  });
+  return new Set([...slugs, ...[...maskCode(md).matchAll(A_ID)].map((m) => m[1])]);
 };
 const headingsOfFile = (rel) => headingSet(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
 

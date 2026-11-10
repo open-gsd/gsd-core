@@ -36,12 +36,17 @@ describe('heading anchors (#5427)', () => {
     assert.deepEqual([...headingSet('## A — B')], ['a--b']);
   });
   test('a heading slugify cannot reproduce gets no anchor, so a link to it fails', () => {
-    const md = '## Café\n## Ü1\n## See [x](y)\n## A [b][c]\n## _emph_ x\n> ## Quoted\n'
-      + '<a id="manual"></a>\n## Keep `snake_case` and snake_case';
+    const md = '## Café\n## Ü1\n## See [x](y)\n## A [b][c]\n## _emph_ x\n'
+      + '## Keep `snake_case` and snake_case';
     assert.deepEqual([...headingSet(md)], ['keep-snake_case-and-snake_case']);
-    for (const a of ['caf', 'caf-1', 'see-xy', 'a-bc', '_emph_-x', 'quoted', 'manual']) {
+    for (const a of ['caf', 'caf-1', 'see-xy', 'a-bc', '_emph_-x']) {
       assert.equal(headingSet(md).has(a), false, a);
     }
+  });
+  test('blockquote headings and <a id>/<a name> anchors count; code hides them', () => {
+    const md = '## Quoted\n> ## Quoted\n> > Deep\n> ---\n<a id="manual"></a> <a name=\'old\'>\n'
+      + '`<a id="code">`\n## After';
+    assert.deepEqual([...headingSet(md)], ['quoted', 'quoted-1', 'deep', 'after', 'manual', 'old']);
   });
   test('four leading spaces is a code block, not a heading', () => {
     assert.equal(headingSet('    ## Code').size, 0);
