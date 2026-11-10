@@ -536,6 +536,10 @@ const NEW_MILESTONE = fs.readFileSync(
 const EXECUTE_PHASE = fs.readFileSync(
   path.join(ROOT, 'gsd-core/workflows/execute-phase.md'), 'utf-8'
 );
+// close_phase_todos' bash lives in this step file; execute-phase.md points at it.
+const CLOSE_PHASE_TODOS = fs.readFileSync(
+  path.join(ROOT, 'gsd-core/workflows/execute-phase/steps/close-phase-todos.md'), 'utf-8'
+);
 
 test('new-milestone.md: step 10.5 links pending todos to roadmap phases', () => {
   assert.ok(NEW_MILESTONE.includes('10.5'), 'step 10.5 should exist');
@@ -573,9 +577,9 @@ test('execute-phase.md: close_phase_todos step exists', () => {
 });
 
 test('execute-phase.md: auto-close moves todos to completed directory', () => {
-  assert.ok(EXECUTE_PHASE.includes('.planning/todos/completed'), 'should move to completed dir');
-  assert.ok(EXECUTE_PHASE.includes('.planning/todos/pending'), 'should scan pending dir');
-  assert.ok(EXECUTE_PHASE.includes('mv "$TODO_FILE" "$COMPLETED_DIR/"'), 'should use mv to move files');
+  assert.ok(CLOSE_PHASE_TODOS.includes('.planning/todos/completed'), 'should move to completed dir');
+  assert.ok(CLOSE_PHASE_TODOS.includes('.planning/todos/pending'), 'should scan pending dir');
+  assert.ok(CLOSE_PHASE_TODOS.includes('mv "$TODO_FILE" "$COMPLETED_DIR/"'), 'should use mv to move files');
 });
 
 test('execute-phase.md: close_phase_todos runs after update_roadmap', () => {
@@ -596,8 +600,8 @@ test('execute-phase.md: auto-close never blocks phase completion', () => {
 });
 
 test('execute-phase.md: awk extracts resolves_phase from YAML frontmatter', () => {
-  assert.ok(EXECUTE_PHASE.includes('awk'), 'should use awk for frontmatter extraction');
-  assert.ok(EXECUTE_PHASE.includes('resolves_phase:'), 'awk pattern should match resolves_phase key');
+  assert.ok(CLOSE_PHASE_TODOS.includes('awk'), 'should use awk for frontmatter extraction');
+  assert.ok(CLOSE_PHASE_TODOS.includes('resolves_phase:'), 'awk pattern should match resolves_phase key');
 });
   });
 }

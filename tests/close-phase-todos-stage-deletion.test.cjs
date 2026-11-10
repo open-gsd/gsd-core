@@ -11,18 +11,22 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const EXECUTE_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 const CLEANUP = path.join(__dirname, '..', 'gsd-core', 'workflows', 'cleanup.md');
+// The step body moved to a lazily-read step file to keep execute-phase.md under its ADR-857 ceiling;
+// execute-phase.md keeps the close_phase_todos step and points at it.
+const CLOSE_TODOS_STEP = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'close-phase-todos.md');
 
 describe('#2415: close_phase_todos must stage the pending/ deletion alongside completed/', () => {
   test('close_phase_todos stages the completed/ destination and the pending/ deletion (via --files-removed since #4208)', () => {
     const content = fs.readFileSync(EXECUTE_PHASE, 'utf8');
 
-    // Isolate the close_phase_todos step body so we don't match unrelated --files lists
-    // elsewhere in the workflow (other steps commit different paths for different reasons).
+    // The host keeps the close_phase_todos step and points it at the step file that holds its bash.
     const stepStart = content.indexOf('<step name="close_phase_todos">');
     assert.ok(stepStart > -1, 'close_phase_todos step must exist in execute-phase.md');
     const stepEnd = content.indexOf('</step>', stepStart);
     assert.ok(stepEnd > stepStart, 'close_phase_todos step must be properly closed');
-    const stepBody = content.slice(stepStart, stepEnd);
+    assert.match(content.slice(stepStart, stepEnd), /read and execute `execute-phase\/steps\/close-phase-todos\.md`/,
+      'close_phase_todos must read the step file that carries its commit');
+    const stepBody = fs.readFileSync(CLOSE_TODOS_STEP, 'utf8');
 
     // The commit must reach BOTH the destination (completed/) AND the source-side
     // deletion (pending/). Without the source side, only the new completed/ copy gets
@@ -51,10 +55,7 @@ describe('#2415: close_phase_todos must stage the pending/ deletion alongside co
   });
 
   test('close_phase_todos uses plain mv (not git mv) so untracked todos and non-git .planning dirs still work', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE, 'utf8');
-    const stepStart = content.indexOf('<step name="close_phase_todos">');
-    const stepEnd = content.indexOf('</step>', stepStart);
-    const stepBody = content.slice(stepStart, stepEnd);
+    const stepBody = fs.readFileSync(CLOSE_TODOS_STEP, 'utf8');
 
     // Strip bash comments so a doc comment mentioning "git mv" (rationale) doesn't
     // trip the assertion. We care about the actual command, not the prose.
