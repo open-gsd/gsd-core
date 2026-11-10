@@ -71,8 +71,7 @@ export function persistLaneEvidence(reviewPath: string, suffix: string, mode: st
     fs.writeFileSync(tmp, `${suffix}\n${mode}\n${block}`, { mode: 0o600, flag: 'wx' });
     retryRenameSync(tmp, file);
   } catch {
-    // The initial reviewer still cites the lane dir, so keep it. No state names it, so no clear
-    // finds it: it stays in the temp dir until the OS temp sweep (a crashed run on `next` leaves it too).
+    // The initial reviewer still cites the lane dir, so keep it.
     process.stderr.write(`Warning: could not persist lane evidence to ${file}; keeping the lane dir.\n`);
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
   }

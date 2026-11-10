@@ -2491,7 +2491,7 @@ reviewer agent fails; `code-review-fix` reads before each re-review and clears a
 is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
 
 Limits of the contract: the key is the review path as the caller passes it, so the workflows make `REVIEW_PATH`
-absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it; no state names it then, so it stays until the OS temp sweep.
+absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it.
 `lane-evidence-clear` removes a malformed state but cannot find its lane directory, which stays (this follows only hand corruption).
 The state is bound to the review path, not to one REVIEW.md, so an `auto` state under 6 hours old can reach a later standalone
 `/gsd-code-review-fix --auto` for the same phase; the block is framed UNVERIFIED. The workflow fences read `${TMPDIR:-/tmp}`
