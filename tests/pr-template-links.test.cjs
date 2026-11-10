@@ -201,6 +201,7 @@ describe('escaped brackets, empty destinations, reference labels (#5427)', () =>
     assert.deepEqual(extractLinks('[a](<>)'), []);
     assert.deepEqual(missingNext([''], 'x.md'), []);
     assert.deepEqual(missingNext([`${NEXT}CONTRIBUTING.md%2F`], 'x.md'), ['CONTRIBUTING.md/']);
+    assert.deepEqual(missingNext([`${NEXT}.%2FCONTRIBUTING.md`], 'x.md'), ['./CONTRIBUTING.md']);
     assert.deepEqual(unresolvedAnchors([''], 'x.md'), []);
   });
   test('reference labels honour escaped brackets', () => {

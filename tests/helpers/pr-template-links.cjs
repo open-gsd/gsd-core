@@ -15,7 +15,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../../scripts/gen-features.cjs');
-const { maskCode, scanInlineLinks, existsCaseExact, realRootOrFallback } = require('../../scripts/gen-adr-index.cjs');
+const {
+  maskCode, scanInlineLinks, existsCaseExact, realRootOrFallback,
+} = require('../../scripts/gen-adr-index.cjs');
 const { tokenizeHeadings } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -68,7 +70,7 @@ const URL_ATTRS = new Set(['href', 'src', 'srcset']);
 const firstCandidate = (c) => c.trim().split(/\s+/)[0];
 // A tag-shaped span right after `](` is a destination (`<x y>`), not a tag.
 const PROSE_TAG = new RegExp(`(?<!\\]\\(\\s*)${TAG.source}`, 'g');
-const attrsIn =(t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
+const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
   .filter(([, name]) => URL_ATTRS.has(name.toLowerCase()))
   .flatMap(([, name, ...v]) => {
     const val = v.find((g) => g !== undefined);
@@ -89,6 +91,11 @@ const hrefsIn = (text) => {
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.
 const REPO_URL = /^https:\/\/github\.com\/open-gsd\/gsd-core(?:\/([^?#]*))?([?#].*)?$/i;
 const DOT_SEG = /^(?:\.|%2e){1,2}$/i;
+// The one rule for path segments, on the raw link (isBadLink) and on the decoded path
+// (missingNext): a dot segment, or an empty one (`gsd-core//blob/main/x`, `x/`, `x.md%2F`)
+// in a path of more than one segment.
+const badSegs = (segs) =>
+  segs.some((s) => DOT_SEG.test(s)) || (segs.length > 1 && segs.includes(''));
 // The views whose path the existence check reads.
 const REF_PAGE = new Set(['blob', 'tree', 'raw', 'blame']);
 const NO_REF = new Set([
@@ -105,8 +112,7 @@ const repoLink = (h) => {
 const isBadLink = (h) => {
   if (h.startsWith('?template=') || h === '#') return false;
   const link = repoLink(h);
-  if (!link || link.segs.some((s) => DOT_SEG.test(s))) return true;
-  if (link.segs.length > 1 && link.segs.includes('')) return true; // `gsd-core//blob/main/x`, `x/`
+  if (!link || badSegs(link.segs)) return true;
   const [view, ref] = link.segs;
   return !(NO_REF.has(view) || (REF_PAGE.has(view) && ref === 'next'));
 };
@@ -133,13 +139,9 @@ const REAL_ROOT = realRootOrFallback();
 const DIR_CACHE = new Map();
 const existsExact = (rel) => existsCaseExact(path.join(ROOT, rel), DIR_CACHE, REAL_ROOT).exists;
 // An empty segment after decoding (`x.md%2F`) is as bad as a raw one (isBadLink).
-const badPath = (rel) => {
-  const segs = rel.split('/');
-  return segs.includes('..') || (rel !== '' && segs.includes(''));
-};
 const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
   .map((h) => repoPathOf(h, where))
-  .filter((rel) => badPath(rel) || !existsExact(rel));
+  .filter((rel) => badSegs(rel.split('/')) || !existsExact(rel));
 
 // A paragraph followed by === or --- is a setext heading; maskCode supplies fences and code
 // spans, the raw lines the text.
