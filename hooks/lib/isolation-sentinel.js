@@ -138,10 +138,10 @@ function sentinelPath(cwd) {
 /**
  * Resolve the project root a sentinel should be read from/written to, using
  * the SAME derivation gsd-tools.cjs's dispatcher applies to every `--cwd`
- * before invoking a route handler: `findProjectRoot(resolveMainWorktreeCwd(cwd))`
- * (gsd-core/bin/gsd-tools.cjs main(), :3506/:3603 — `record-dispatch-isolation`
- * and `dispatch-isolation` are not in SKIP_ROOT_RESOLUTION, so every write
- * goes through both steps).
+ * before invoking a route handler: `resolveProjectContext(cwd).projectRoot`
+ * (gsd-core/bin/gsd-tools.cjs main() — `record-dispatch-isolation` and
+ * `dispatch-isolation` are not in SKIP_ROOT_RESOLUTION, so every write goes
+ * through it).
  *
  * #3045 MINOR fix: the guard hooks previously read the sentinel from the raw
  * `data.cwd` / `workspace_roots[i]` the harness reports, with NO equivalent
@@ -154,7 +154,7 @@ function sentinelPath(cwd) {
  * written where it looked. Deriving both sides through this one function
  * closes that divergence.
  *
- * `findProjectRoot`/`resolveWorktreeRoot` are read from the sibling
+ * `resolveProjectContext` is read from the sibling
  * `gsd-core/bin/lib/*.cjs` modules staged alongside these hooks at install
  * time (same pattern the guard hooks already use for
  * capability-registry.cjs/runtime-name-policy.cjs) — two directories up from
@@ -180,10 +180,10 @@ function resolveSentinelRoot(cwd) {
     // cold-tree encounter.
     const { ensureRuntimeBuild } = require('../../gsd-core/bin/ensure-runtime-build.cjs');
     ensureRuntimeBuild();
-    const { resolveWorktreeRoot } = require('../../gsd-core/bin/lib/worktree-safety.cjs');
-    const { root } = resolveWorktreeRoot(cwd);
-    const { findProjectRoot } = require('../../gsd-core/bin/lib/project-root.cjs');
-    return findProjectRoot(root);
+    // #6043 (ADR-4908): the dispatcher resolves non-skip commands through the
+    // same seam, so the reader looks where the writer wrote.
+    const { resolveProjectContext } = require('../../gsd-core/bin/lib/project-context.cjs');
+    return resolveProjectContext(cwd).projectRoot;
   } catch {
     return cwd;
   }
@@ -257,7 +257,8 @@ function latestWritten(candidates) {
  */
 function lstatRealDirectory(dir) {
   try {
-    const st = fs.lstatSync(dir);
+    // bigint: an NTFS file id is 64 bits and a JS number keeps 53, so ids are compared exactly.
+    const st = fs.lstatSync(dir, { bigint: true });
     return st.isDirectory() && !st.isSymbolicLink() ? st : null;
   } catch {
     return null;
@@ -266,7 +267,7 @@ function lstatRealDirectory(dir) {
 
 /** Same filesystem object: equal dev and ino. A zero ino (some Windows volumes) cannot be compared. */
 function sameObject(a, b) {
-  return a.ino === 0 || b.ino === 0 || (a.dev === b.dev && a.ino === b.ino);
+  return a.ino === 0n || b.ino === 0n || (a.dev === b.dev && a.ino === b.ino);
 }
 
 /**
@@ -293,22 +294,23 @@ function readSentinelText(file, parentDirs) {
   }
   let fd;
   try {
-    const before = fs.lstatSync(file);
-    if (!before.isFile() || before.size > SENTINEL_MAX_BYTES) return null;
+    const before = fs.lstatSync(file, { bigint: true });
+    if (!before.isFile() || before.size > BigInt(SENTINEL_MAX_BYTES)) return null;
     // O_NONBLOCK makes an open of a FIFO swapped in after the lstat return at once; O_NOFOLLOW
     // refuses a link swapped in. Windows lacks both flags (`|| 0`); lstat/fstat still guard.
     fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
-    const st = fs.fstatSync(fd);
-    if (!st.isFile() || st.nlink !== 1 || st.size > SENTINEL_MAX_BYTES) return null;
+    const st = fs.fstatSync(fd, { bigint: true });
+    if (!st.isFile() || st.nlink !== 1n || st.size > BigInt(SENTINEL_MAX_BYTES)) return null;
     if (!sameObject(before, st)) return null;
+    const size = Number(st.size);
     for (const p of parents) {
       const after = lstatRealDirectory(p.dir);
       if (!after || !sameObject(p.st, after)) return null;
     }
-    const buf = Buffer.alloc(st.size);
+    const buf = Buffer.alloc(size);
     let offset = 0;
-    while (offset < st.size) {
-      const n = fs.readSync(fd, buf, offset, st.size - offset, offset);
+    while (offset < size) {
+      const n = fs.readSync(fd, buf, offset, size - offset, offset);
       if (n === 0) return null;
       offset += n;
     }

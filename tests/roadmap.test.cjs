@@ -8086,3 +8086,101 @@ describe('roadmap update-plan-progress active-region scoping (#5553)', () => {
     assert.ok(fs.readFileSync(roadmapPath).equals(before), 'ROADMAP.md byte-identical');
   });
 });
+
+describe('inserted phase name readers agree on the bare name (#5824)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Base work
+
+### Phase 2: Name (Beta)
+**Goal:** Beta work
+`,
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# State\n\n## Current Position\n\nPhase: 1 of 2 (Foundation)\nPlan: 0 of 0\nStatus: Ready\n',
+    );
+    const inserted = runGsdTools('phase insert 1 "Hotfix rows"', tmpDir);
+    assert.ok(inserted.success, `phase insert failed: ${inserted.error}`);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const analyzedName = (number) => {
+    const analyzed = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(analyzed.success, `roadmap analyze failed: ${analyzed.error}`);
+    return JSON.parse(analyzed.output).phases.find((p) => p.number === number).name;
+  };
+
+  test('phase insert still writes the (INSERTED) marker into the heading (#5824)', () => {
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /### Phase 01\.1: Hotfix rows \(INSERTED\)/);
+  });
+
+  test('roadmap get-phase returns the bare name for an inserted phase (#5824)', () => {
+    const result = runGsdTools('roadmap get-phase 1.1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).phase_name, 'Hotfix rows');
+  });
+
+  for (const verb of ['phase-op', 'execute-phase', 'plan-phase', 'verify-work']) {
+    test(`init ${verb} phase_name is the bare name for an inserted phase (#5824)`, () => {
+      const result = runGsdTools(`init ${verb} 1.1`, tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).phase_name, 'Hotfix rows');
+    });
+  }
+
+  test('roadmap analyze reports the bare name (#5824)', () => {
+    assert.strictEqual(analyzedName('01.1'), 'Hotfix rows');
+  });
+
+  test('get-phase, init and analyze agree on one name for the same phase (#5824)', () => {
+    const getPhase = JSON.parse(runGsdTools('roadmap get-phase 1.1', tmpDir).output).phase_name;
+    const init = JSON.parse(runGsdTools('init phase-op 1.1', tmpDir).output).phase_name;
+    assert.deepStrictEqual([getPhase, init], [analyzedName('01.1'), analyzedName('01.1')]);
+  });
+
+  test('state begin-phase with init phase_name writes the bare name to STATE.md (#5824)', () => {
+    const init = JSON.parse(runGsdTools('init execute-phase 1.1', tmpDir).output);
+    const begun = runGsdTools(['state', 'begin-phase', '--phase', '1.1', '--name', init.phase_name], tmpDir);
+    assert.ok(begun.success, `begin-phase failed: ${begun.error}`);
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.match(state, /^current_phase_name: Hotfix rows$/m);
+    assert.match(state, /^Phase: 1\.1 \(Hotfix rows\) — EXECUTING$/m);
+    assert.ok(!/INSERTED/i.test(state), 'STATE.md carries no marker');
+  });
+
+  test('getRoadmapPhaseInternal returns the bare name for an inserted phase (#5824)', () => {
+    const { getRoadmapPhaseInternal } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    assert.strictEqual(getRoadmapPhaseInternal(tmpDir, '1.1').phase_name, 'Hotfix rows');
+  });
+
+  test('a user description containing (INSERTED) keeps it; only the trailing tool marker is stripped (#5824)', () => {
+    const inserted = runGsdTools('phase insert 1 "Fix (INSERTED) parsing"', tmpDir);
+    assert.ok(inserted.success, `phase insert failed: ${inserted.error}`);
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    const heading = roadmap.match(/### Phase (\d+\.\d+): Fix \(INSERTED\) parsing \(INSERTED\)/);
+    assert.ok(heading, 'heading carries the user text plus the trailing tool marker');
+    const getPhase = JSON.parse(runGsdTools(`roadmap get-phase ${heading[1]}`, tmpDir).output);
+    assert.strictEqual(getPhase.phase_name, 'Fix (INSERTED) parsing');
+    const init = JSON.parse(runGsdTools(`init phase-op ${heading[1]}`, tmpDir).output);
+    assert.strictEqual(init.phase_name, 'Fix (INSERTED) parsing');
+  });
+
+  test('a non-inserted phase keeps its parenthetical name in get-phase and init (#5824)', () => {
+    const getPhase = JSON.parse(runGsdTools('roadmap get-phase 2', tmpDir).output);
+    assert.strictEqual(getPhase.phase_name, 'Name (Beta)');
+    const init = JSON.parse(runGsdTools('init phase-op 2', tmpDir).output);
+    assert.strictEqual(init.phase_name, 'Name (Beta)');
+  });
+});

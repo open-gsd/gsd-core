@@ -169,7 +169,7 @@
  *     --schema plan|summary|verification
  *
  * Verification Suite:
- *   verify plan-structure <file>       Check PLAN.md structure + tasks
+ *   verify plan-structure <file> [--replay]  Check PLAN.md structure + tasks
  *   verify phase-completeness <phase>  Check all plans have summaries
  *   verify references <file>           Check @-refs + paths resolve
  *   verify commits <h1> [h2] ...      Batch verify commit hashes
@@ -296,6 +296,7 @@ const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.c
 const io = require('./lib/io.cjs');
 const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites, resolveAtFileOutput } = io;
 const projectRoot = require('./lib/project-root.cjs');
+const { resolveProjectContext, legacyDispatchCwd } = require('./lib/project-context.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
 // load. It is sourced from project-root.cjs; a call-time lookup is robust
 // against any require/load-ordering edge where the export isn't bound yet
@@ -1034,7 +1035,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    */
   function routeSelectRevertCommits({ args, cwd, raw, error, invokingCwd }) {
     // #4906/#4465 review fix: `cwd` here has already been remapped to the
-    // MAIN worktree root by `resolveMainWorktreeCwd` (main(), applied
+    // MAIN worktree root by the retired `resolveMainWorktreeCwd` (now legacyDispatchCwd, applied
     // BLANKET to every command before dispatch — correct for a router that
     // reads `.planning/`, e.g. `find-phase`, but wrong for this one). This
     // command reads NO `.planning/` content — it only runs `git log` — and
@@ -1212,7 +1213,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     output(result, raw, rawLines);
   }
 
-  function routeCommit({ args, cwd, raw, error }) {
+  // #6043 (ADR-4908 §3): the one sanctioned source of roots for workflow shell.
+  // Prints the ProjectContext the dispatcher resolved once for this process;
+  // `--raw` prints the worktree root.
+  function routeProjectContext({ raw, ctx }) {
+    output(ctx, raw, ctx.worktreeRoot);
+  }
+
+  function routeCommit({ args, cwd, raw, error, ctx }) {
     const amend = args.includes('--amend');
           const noVerify = args.includes('--no-verify');
           // #4208: `--files` and `--files-removed` are two path lists, each
@@ -1235,7 +1243,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const message = messageArgs.join(' ') || undefined;
           const files = collectListFlagValues(args, '--files');
           const filesRemoved = collectListFlagValues(args, '--files-removed');
-          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved);
+          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved, ctx);
   }
 
   function routeCheckCommit({ args, cwd, raw, error }) {
@@ -4644,8 +4652,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           try {
             const { planningDir } = require('./lib/planning-workspace.cjs');
             const cfgPath = require('path').join(planningDir(cwd), 'config.json');
-            if (require('fs').existsSync(cfgPath)) {
-              const rawCfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf-8'));
+            // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
+            // catch below (defaults apply) instead of blocking; null is an absent file.
+            const rawCfgText = require('./lib/config-file-read.cjs').readConfigFileBounded(cfgPath);
+            if (rawCfgText !== null) {
+              const rawCfg = JSON.parse(rawCfgText);
               if (rawCfg && rawCfg.plan_review && rawCfg.plan_review.source_grounding_authority) {
                 configuredAuthority = String(rawCfg.plan_review.source_grounding_authority);
               }
@@ -4971,6 +4982,7 @@ const HOST_COMMAND_ROUTERS = {
     'commit': routeCommit,
     'check-commit': routeCheckCommit,
     'commit-docs-guard': routeCommitDocsGuard,
+    'project-context': routeProjectContext,
     'commit-to-subrepo': routeCommitToSubrepo,
     'pr-subrepo': routePrSubrepo,
     'verify-summary': routeVerifySummary,
@@ -5046,7 +5058,7 @@ const HOST_COMMAND_ROUTERS = {
 // through. Prototype-pollution-safe: own-property lookup rejects
 // `__proto__`/`constructor`/`prototype` command keys (same guard as
 // dispatchCapabilityCommand).
-async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd }) {
+async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }) {
   if (
     command === '__proto__' ||
     command === 'constructor' ||
@@ -5067,7 +5079,9 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   // every other router legitimately wants via `cwd`. Optional — callers/tests
   // that omit it (every existing one) leave routers that don't read it
   // byte-unaffected.
-  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd });
+  // `ctx` (#6043): the ProjectContext main() resolved once; routers that take a
+  // named root (commit, project-context) read it, the rest ignore it.
+  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx });
   return true; // consumed — don't emit "Unknown command"
 }
 
@@ -5296,7 +5310,7 @@ function runWithTimeout(argv) {
 // independently hand-maintained sites and nothing previously caught them
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
-  'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, ' +
+  'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, project-context, ' +
   'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
@@ -5345,6 +5359,9 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // explicitly via --config-dir; it never reads .planning/.
   'restore-custom-files',
   'worktree', 'prompt-budget',
+  // #6043: project-context prints the resolved ProjectContext itself, so it
+  // needs no remapped cwd; the dispatcher hands every router `ctx`.
+  'project-context',
   // context-predicates is a pure repo-root CONTEXT.md read (like
   // prompt-budget); it never touches .planning/, so it needs no project
   // root resolution and must work from any cwd (including one with no
@@ -5374,34 +5391,22 @@ function skipsRootResolution(command) {
 }
 
 /**
- * Resolve the worktree root for a given cwd, warning to stderr when git
- * could not determine it (reason 'git_timed_out') rather than silently
- * trusting a best-effort fallback (#3050). Extracted from main() so it can
- * be driven directly in tests via injected deps.
+ * Warn to stderr when git could not determine the worktree root (provenance
+ * reason 'git_timed_out') rather than silently trusting a best-effort
+ * fallback (#3050). Keyed on the resolved ProjectContext (#6043).
  *
- * @param {string} cwd
- * @param {{ existsSync?: (p: string) => boolean, resolveWorktreeRoot?: (cwd: string) => { root: string, reason: string }, writeWarning?: (msg: string) => void }} [deps]
- * @returns {string} resolved cwd
+ * @param {{ worktreeRoot: string, provenance: { reason: string } }} ctx
+ * @param {(msg: string) => void} [writeWarning]
  */
-function resolveMainWorktreeCwd(cwd, deps = {}) {
-  const existsSync = deps.existsSync || fs.existsSync;
-  const resolveWorktreeRoot = deps.resolveWorktreeRoot || require('./lib/worktree-safety.cjs').resolveWorktreeRoot;
-  const writeWarning = deps.writeWarning || ((msg) => process.stderr.write(msg));
-
-  if (existsSync(path.join(cwd, '.planning'))) {
-    return cwd;
-  }
-  const { root: worktreeRoot, reason: worktreeRootReason } = resolveWorktreeRoot(cwd);
-  if (worktreeRootReason === 'git_timed_out') {
-    writeWarning(
-      'WARNING: could not determine the git worktree root (git timed out). ' +
-      'Planning artifacts (STATE.md, ROADMAP.md, etc.) may be written to the ' +
-      `wrong tree — proceeding with "${worktreeRoot}" as a best-effort fallback. ` +
-      'Retry the command; if this persists, check for a stalled filesystem mount ' +
-      'or a stale git index lock (.git/index.lock) in this worktree.\n'
-    );
-  }
-  return worktreeRoot;
+function warnIfGitTimedOut(ctx, writeWarning = (msg) => process.stderr.write(msg)) {
+  if (ctx.provenance.reason !== 'git_timed_out') return;
+  writeWarning(
+    'WARNING: could not determine the git worktree root (git timed out). ' +
+    'Planning artifacts (STATE.md, ROADMAP.md, etc.) may be written to the ' +
+    `wrong tree — proceeding with "${ctx.worktreeRoot}" as a best-effort fallback. ` +
+    'Retry the command; if this persists, check for a stalled filesystem mount ' +
+    'or a stale git index lock (.git/index.lock) in this worktree.\n'
+  );
 }
 
 // ─── #5118: an out-of-set verification status thrown past a command ─────────
@@ -5548,26 +5553,25 @@ async function main() {
     cwd = resolvedProjectDir;
     projectDirExplicit = true;
   }
+  // #6043 (ADR-4908): the project context is resolved ONCE, here, and every
+  // root a command needs comes from it. `--project-dir` replaces the start
+  // directory for every rule (explicit validated above).
+  //
+  // #4906/#4465: `invokingCwd` stays the raw pre-resolution cwd — a command
+  // whose own git operation must run against the INVOKING worktree's HEAD
+  // (routeSelectRevertCommits) needs a path inside that worktree, never a
+  // remapped root (tests/undo-commit-selection-4465.test.cjs).
+  const preWorktreeRemapCwd = cwd;
+  const ctx = resolveProjectContext(cwd, { explicit: projectDirExplicit ? cwd : null });
+  warnIfGitTimedOut(ctx);
   // #4894: verification derives its root from a phase directory, not `cwd`, so
   // hand it the validated explicit root. Always (re)set — `null` when the flag is
   // absent — so a prior in-process main() call can never leak an override.
-  projectRoot.setExplicitProjectRoot(projectDirExplicit ? cwd : null);
-
-  // Resolve worktree root: in a linked worktree, .planning/ lives in the main worktree.
-  // However, in monorepo worktrees where the subdirectory itself owns .planning/,
-  // skip worktree resolution — the CWD is already the correct project root.
-  //
-  // #4906/#4465: this remap is a BLANKET rewrite applied to every command, before
-  // `command` is even known — most commands need it (they read `.planning/`, which
-  // in a linked worktree lives only in the main one). A command whose own git
-  // operation must run against the INVOKING worktree's OWN HEAD/branch (never the
-  // main worktree's) needs the PRE-remap value instead — preserved here so it can be
-  // threaded through dispatchHostCommand as `invokingCwd` (see routeSelectRevertCommits,
-  // the first consumer: its `git log` must see the caller's own reachable history, not
-  // main's, or a linked-worktree revert range silently resolves against the wrong repo
-  // state — reproduced in tests/undo-commit-selection-4465.test.cjs's linked-worktree case).
-  const preWorktreeRemapCwd = cwd;
-  cwd = resolveMainWorktreeCwd(cwd);
+  // Deleted in Phase 2 (#6044) when verification takes the context itself.
+  projectRoot.setExplicitProjectRoot(projectDirExplicit ? ctx.projectRoot : null);
+  // SKIP_ROOT_RESOLUTION commands and workstream resolution keep the value the
+  // retired resolveMainWorktreeCwd produced (Phase 2 migrates them to named fields).
+  cwd = legacyDispatchCwd(ctx, cwd);
 
   // Optional workstream override for parallel milestone work.
   // Priority: --ws flag > GSD_WORKSTREAM env var > session/shared pointer > null.
@@ -5677,10 +5681,9 @@ async function main() {
   }
 
   // #3881: an explicit --project-dir already IS the resolved project root
-  // (validated above) — findProjectRoot's ancestor walk-up must not run
-  // over it, per docs/CONFIGURATION.md's documented idempotence.
-  if (!projectDirExplicit && !SKIP_ROOT_RESOLUTION.has(command)) {
-    cwd = findProjectRoot(cwd);
+  // (validated above); the resolver reports it as `explicit` without a walk.
+  if (!SKIP_ROOT_RESOLUTION.has(command)) {
+    cwd = ctx.projectRoot;
   }
 
   // When --pick is active, capture stdout and extract the requested field.
@@ -5692,7 +5695,7 @@ async function main() {
   // false "output was not JSON" (negative space N8).
   if (pickField) {
     const captured = await captureTranslatingVerificationStatus(async () => {
-      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd);
+      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
     });
     const resolved = resolveAtFileOutput(captured);
     let obj;
@@ -5724,7 +5727,7 @@ async function main() {
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
   const captured = await captureTranslatingVerificationStatus(async () => {
-    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd);
+    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
   });
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
@@ -5797,7 +5800,7 @@ function extractField(obj, fieldPath) {
   return { found: true, value: current };
 }
 
-async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd) {
+async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd, ctx) {
   switch (command) {
 
     default: {
@@ -5818,7 +5821,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // commands (state, …) routed via their `route*Command` router instead of
       // a hardcoded `case` arm. Tried after capability/overlay dispatch and
       // before the unknown-command error.
-      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd })) break;
+      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx })) break;
 
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
@@ -5859,7 +5862,7 @@ module.exports = {
   HOST_COMMAND_ROUTERS,
   TOP_LEVEL_USAGE,
   skipsRootResolution,
-  resolveMainWorktreeCwd,
+  warnIfGitTimedOut,
   // #3275: exported for tests — the shared PATH+PATHEXT resolver behind
   // review-lane invoke's `deps.spawn` / `deps.hasBinary` seams.
   resolveSpawnBinary,

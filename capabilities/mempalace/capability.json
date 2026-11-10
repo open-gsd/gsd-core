@@ -23,6 +23,7 @@
     "gsd-mempalace-curator"
   ],
   "hooks": [],
+  "activationKey": "mempalace.enabled",
   "config": {
     "mempalace.enabled": {
       "type": "boolean",
@@ -104,7 +105,7 @@
       "consumes": [
         "CONTEXT.md"
       ],
-      "when": "mempalace.enabled",
+      "when": "mempalace.recall_on_plan",
       "onError": "skip"
     },
     {

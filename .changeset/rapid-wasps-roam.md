@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5932
+---
+**A config file that is a named pipe or device no longer hangs gsd-tools** — a FIFO at .planning/config.json or a workstream config.json blocked every command, hook, plugin and installer step that reads configuration; each read is now bounded, the command continues without that file (a workstream falls back to the root config), a config.json over 1 MiB is refused, and temporary files are created exclusively without following links. A write that cannot be published atomically now refuses a device, named-pipe, symlinked, multiply-hard-linked or write-only (0200) target instead of writing to it (the atomic publish replaces a link or extra hard link entry and never writes through it, and it refuses to publish if the parent directory was swapped meanwhile) (a user-chosen `--output` device or pipe such as /dev/stdout is still written, through the descriptor it names rather than by reopening the path, waiting without a time limit for a slow reader), and an existing file keeps its permission bits after a write. (#5759)

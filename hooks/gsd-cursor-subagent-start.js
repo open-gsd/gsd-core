@@ -65,6 +65,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { allow } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // Workspace resolution is shared across the Cursor hooks (#2587) — see
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
@@ -133,12 +134,12 @@ function realpathOrNull(p, realpathFn) {
  * i.e. `~/.cursor/worktrees` by default — `getGlobalConfigDir('cursor')`
  * honors the `CURSOR_CONFIG_DIR` env override and `~` expansion for free).
  * That is made NECESSARY AND SUFFICIENT below. Do NOT reinstate
- * `resolveWorktreeLinkage`'s `linked_worktree_root` mode as an alternative
+ * a linked-worktree result of `resolveProjectContext` as an alternative
  * OR'd proof of isolation — that is precisely the bypass finding 3 closed;
  * a future "simplification" that merges it back in re-opens unconsented
  * writes to the human's active checkout.
  *
- * `resolveWorktreeLinkage` is still called, but ONLY as a diagnostic: it
+ * `resolveProjectContext` is still called, but ONLY as a diagnostic: its provenance
  * distinguishes "confidently not isolated" from "git could not answer
  * (timeout) — cannot determine" so the eventual deny reason stays
  * actionable. Its result never flips `isolated`.
@@ -195,8 +196,10 @@ function resolveIsolationEvidence(root, { realpath = fs.realpathSync } = {}) {
   let linkageReason = null;
   try {
     // Sibling data/policy module, staged alongside this hook at install time.
-    const { resolveWorktreeLinkage } = require('../gsd-core/bin/lib/worktree-safety.cjs');
-    linkageReason = resolveWorktreeLinkage(root).reason;
+    const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
+    const gitProvenance = resolveProjectContext(root).provenance;
+    // A degraded context (git timed out or could not run) is "cannot determine".
+    linkageReason = gitProvenance.degraded ? 'git_timed_out' : gitProvenance.reason;
   } catch {
     linkageReason = null;
   }
@@ -421,7 +424,7 @@ function resolveFallbackIsolation(root, configPath) {
   const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
   let runtimeId = resolveRuntimeNameFromCandidates(process.env.GSD_RUNTIME);
-  const rawConfig = fs.readFileSync(configPath, 'utf-8');
+  const rawConfig = readConfigFileBounded(configPath, { required: true });
   const parsedConfig = JSON.parse(rawConfig);
   if (!runtimeId && parsedConfig && typeof parsedConfig === 'object' && 'runtime' in parsedConfig) {
     runtimeId = resolveRuntimeNameFromCandidates(parsedConfig.runtime) || null;
