@@ -100,7 +100,8 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * Are these two paths the same directory on disk?
  *
  * Compared by FILESYSTEM IDENTITY — `st_dev` + `st_ino` — not by pathname
- * (the exceptions are the equality shortcut and the ino-0 realpath route below).
+ * (the exceptions are the equality shortcut and the ino-0 realpath route below;
+ * on ino 0 a bind mount does not compare equal).
  * `path.resolve()` normalizes separators and `..` but resolves neither symlinks
  * nor case, and `realpathSync` returns a canonical *pathname*, which two routes to
  * one directory can still disagree on (a Linux bind mount is the standard case).
@@ -128,8 +129,9 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * caller, and it turned an unreadable-stat environment into an unconditional
  * bypass for anyone who set the marker to any value at all. Reported in review of
  * #3725. Only three things now answer yes: the same resolved pathname, two
- * readable identities that match, or — where the filesystem reports ino 0 for
- * every entry — two readable identities whose native realpaths are equal.
+ * readable identities with a non-zero inode that match, or — where the
+ * filesystem reports ino 0 for every entry — two readable identities whose
+ * native realpaths are equal.
  */
 function sameDirectory(a: string, b: string): boolean {
   if (path.resolve(a) === path.resolve(b)) return true;

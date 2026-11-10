@@ -43,11 +43,12 @@ site — confirmed with a hostile-token test (`tests/loop-render-hooks.test.cjs`
 but strictly as a **cross-check on the token's resolution** — never as an
 independent path. The comparison is filesystem identity: `fs.statSync` on both
 the supplied value and the locator's directory, equal `dev`+`ino` (where the
-filesystem reports `ino` 0, as some Windows volumes do, `realpath` equality
-stands in). Any spelling
-of the same directory matches — relative, absolute, `./`-prefixed, `..`
-segments, a symlinked spelling, or a different case on a case-insensitive
-volume — and no per-platform case folding is guessed. Sibling commands accept
+filesystem reports `ino` 0, as FAT32, exFAT and some SMB shares do, `realpath`
+equality stands in). Any spelling of the same directory matches — relative,
+absolute, `./`-prefixed, `..` segments, a symlinked spelling, or a different
+case on a case-insensitive volume — except on an ino-0 filesystem, where only
+the realpath route matches and case variants can differ. No per-platform case
+folding is guessed. Sibling commands accept
 absolute paths (`resolveContainedPath`, `src/gate-phase-context.cts`), so a caller
 following that convention must not silently lose its context. The value emitted
 is always the locator's, so this is a comparison convenience, not a second

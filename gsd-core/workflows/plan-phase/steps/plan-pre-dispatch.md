@@ -38,14 +38,14 @@ For each remaining active entry where `kind == "step"` (exactly one of `ref.skil
 
 - **`ref.skill`** → `Skill(skill="gsd-${ref.skill}", args="${PHASE} ${GSD_WS}")`, appending `--auto` to `args` only when `AUTO_CHAIN` is `true`. Prepend `gsd-` to `ref.skill`.
 - **`ref.agent`** → print `◆ Spawning ${ref.agent}... (runs in a subagent — no output until it returns; expected, not a freeze)`, then `Agent(prompt=filled_hook_fragment, subagent_type=ref.agent, model="{researcher_model}")` with the hook's `fragment.inline` as the prompt body, phase fields taken from the envelope by the table. Omit `model=` when `researcher_model` is `"inherit"` or empty (#2517).
-- **`ref.command`** → validate it IN-CONTEXT before any shell use: the value must match `^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$`. Check it yourself — never by pasting it into a shell command to be tested there. A value that fails is a malformed manifest: record a warning naming the `capId`, skip it, continue. Only a value that passed is run:
+- **`ref.command`** → validate it IN-CONTEXT before any shell use: the value must match `^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$`. Check it yourself — never by pasting it into a shell command to be tested there. A value that fails is a malformed manifest: record a warning naming the `capId`, skip it, continue. Only a value that passed is run, and `context.phase` is checked against the token pattern of the table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md` BEFORE it goes into the command:
 
   ```bash
   # shellcheck disable=SC2086 # the validated command is a family and subcommand: splitting it into two words is intended
   gsd_run ${ref.command} --phase "${context.phase}" --raw
   ```
 
-  Phase argument: the table under `ref.command` in `gsd-core/references/loop-hook-dispatch.md` decides. Check `context.phase` against its token pattern before it goes into the command. With no `context`, take the table row for the envelope's `phaseDrop`: that row gives `--phase "${PHASE_NUMBER}"` or no `--phase` at all.
+  Phase argument: that table decides. With no `context`, take the table row for the envelope's `phaseDrop`: that row gives `--phase "${PHASE_NUMBER}"` or no `--phase` at all.
 
 Wait for each result before the next hook. A step is advisory: on error record a warning naming the `capId` and continue, unless `onError == "halt"` — then surface the error and stop the plan-phase workflow.
 
