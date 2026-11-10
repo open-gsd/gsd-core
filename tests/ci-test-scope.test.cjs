@@ -51,9 +51,10 @@ describe('ci-test-scope.cjs', () => {
     }
   });
 
-  test('template doc + product path escalates via a tier-member observer (#5427)', () => {
+  test('template doc + product path: the product files alone decide full_matrix (#5427)', () => {
     const r = scopeFor(['agents/x.md', 'CONTRIBUTING.md']);
-    assert.deepStrictEqual([r.product_changed, r.full_matrix], [true, true]);
+    assert.strictEqual(scopeFor(['agents/x.md']).full_matrix, false);
+    assert.deepStrictEqual([r.product_changed, r.full_matrix], [true, false]);
     assert.ok(r.targeted_tests.includes('tests/pr-template-links.test.cjs'));
   });
 

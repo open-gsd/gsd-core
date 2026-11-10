@@ -12,9 +12,9 @@ const { classifyUnstrippedContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./
 // dependabot/labeler/issue-form config) is "inert" CI. A PR that changes only CI
 // YAML never runs the matrix: it reports code_changed=true, product_changed=false,
 // full_matrix=false and targets the workflow-lint, policy-lint and workflow-contract
-// tests (the `test-inert` lane). A PR template or a doc a template links (isTemplateLinkDoc) is lightweight
-// too and targets TEMPLATE_LINK_OBSERVERS. Mixed with product code, the product files
-// decide the scope.
+// tests (the `test-inert` lane). A PR template or a doc a template links
+// (isTemplateLinkDoc) is lightweight too and targets TEMPLATE_LINK_OBSERVERS. Mixed
+// with product code, the product files decide the scope.
 // Anchored at the repo root: a nested `.github/` under a product prefix is not CI YAML.
 const CI_YAML_RE = /^\.github\/.+\.ya?ml$/;
 function isCiYaml(filePath) {
@@ -675,9 +675,9 @@ function classify(files, reachabilityDeps = {}) {
         // (the 'inert CI' rule) is excluded from this escalation entirely.
         // Distinct, greppable reason so the conformance-lane coverage for it
         // is traceable per rule.
-        // #6075: CI YAML never escalates (it is lint-only scope, also when mixed
-        // with product code, so the product files alone decide full_matrix).
-        if (!isCiYaml(file) && rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
+        // #6075: a lightweight file (CI YAML, a template-link doc) never escalates,
+        // also when mixed with product code, so the product files alone decide full_matrix.
+        if (!isLightweight(file) && rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
           fullMatrix = true;
           reasons.push(`${file}: ${rule.name} (windows-hint rule test, #4641)`);
         }
