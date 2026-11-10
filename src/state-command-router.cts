@@ -69,10 +69,10 @@ interface RouteStateCommandOptions {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-// `--plans` is one flag with one plain count: no value (also `--plans --raw`), `--plans=3` and a repeated flag are refused,
+// `--plans` is one flag with one plain count: no value (also `--plans --raw`) and a repeated flag are refused (`--plans=3` is an unknown flag to parseNamedArgs),
 // because parseNamedArgs reports an absent flag and a valueless one alike.
 function parsePlans(args: string[], plans: string | null | undefined, error: (message: string, reason?: string) => void): number | null {
-  const given = args.filter((x) => x === '--plans' || x.startsWith('--plans=')).length;
+  const given = args.filter((x) => x === '--plans').length;
   const parsedPlans = plans == null ? null : parsePlanCount(plans);
   if (given > 1 || (given === 1 && parsedPlans === null)) {
     error(`Invalid --plans value. Expected a non-negative integer no larger than ${Number.MAX_SAFE_INTEGER}.`, ERROR_REASON.USAGE);
