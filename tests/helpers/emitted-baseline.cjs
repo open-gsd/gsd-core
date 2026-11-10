@@ -8,8 +8,9 @@
  * exists to delete, and would double the rate `next` advances.
  *
  * ── The load-bearing part ────────────────────────────────────────────────────
- * ADR-2719 §5 keys the cache on the `next` sha the PR's tree is based on, and says: "That
- * key discipline is load-bearing — a stale baseline mis-attributes silently."
+ * ADR-2719 §5, as amended for #5797, keys the cache on the `next` sha the PR's tree is
+ * based on, and says: "That key discipline is load-bearing — a stale baseline
+ * mis-attributes silently."
  *
  * Note the asymmetry that makes staleness worse than absence: a MISSING baseline fails
  * loudly and gets fixed. A STALE one produces a confident wrong answer — it attributes
