@@ -945,7 +945,7 @@ function ledgerPath(cwd: string): string {
 
 // ─── #3780: cross-process ledger mutation lock ─────────────────────────────
 
-interface LedgerLockHandle { path: string; token: string; dev: number | null; ino: number | null }
+interface LedgerLockHandle { path: string; token: string; dev: bigint | null; ino: bigint | null }
 
 interface LockModule {
   acquireLock: (

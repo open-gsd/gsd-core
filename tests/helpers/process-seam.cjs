@@ -84,6 +84,16 @@ const DEFAULT_TIMEOUT_MS = 60000;
 const SPAWN_LOG_ENV = 'GSD_SEAM_SPAWN_LOG_FILE';
 const SLOW_SPAWN_ENV = 'GSD_SEAM_SLOW_SPAWN_MS';
 const DEFAULT_SLOW_SPAWN_MS = 2000;
+// #4689: every record states how much of its own timeout bound the spawn used
+// (`boundFraction`), and a spawn that used at least this fraction is flagged
+// `nearMiss`. A spawn is still only WRITTEN when it is slow (>= the slow
+// threshold), killed, or a near-miss. Every shared bound is >= 5000ms, so with the
+// default 2000ms slow threshold a near-miss adds no new records: it adds the two
+// fields to records already written. It adds records only for a bound under 4000ms
+// (or a raised GSD_SEAM_SLOW_SPAWN_MS). The value is that a class creeping toward
+// its bound shows as a rising `boundFraction`. A fraction of the bound, not a timeout.
+const NEAR_MISS_BOUND_FRACTION = 0.5;
+const BOUND_FRACTION_DECIMALS = 1000;
 const SPAWN_RECORD_TYPE = 'seam:spawn-stall';
 const MAX_ARGV_RECORDED = 3;
 const MAX_ARG_CHARS = 80;
@@ -158,14 +168,16 @@ function currentTestFile() {
 }
 
 /**
- * Append a stall record for a slow or killed spawn. Best-effort and silent on
+ * Append a stall record for a slow, killed or near-miss (see
+ * NEAR_MISS_BOUND_FRACTION) spawn. Best-effort and silent on
  * any failure: this observes the test run, it must never change its outcome.
  * Also echoes a one-line stderr note so the evidence shows beside a failing
  * test. Both are skipped when no log file is configured (local runs).
  */
 function recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult) {
+  const nearMiss = seamResult.durationMs >= timeoutMs * NEAR_MISS_BOUND_FRACTION;
   const noteworthy =
-    seamResult.timedOut || seamResult.killed || seamResult.durationMs >= slowThresholdMs();
+    seamResult.timedOut || seamResult.killed || seamResult.durationMs >= slowThresholdMs() || nearMiss;
   if (!noteworthy) return;
   const record = {
     type: SPAWN_RECORD_TYPE,
@@ -174,6 +186,9 @@ function recordSpawnIfNoteworthy(command, args, timeoutMs, seamResult) {
     argv: args.slice(0, MAX_ARGV_RECORDED).map((a) => String(a).slice(0, MAX_ARG_CHARS)),
     durationMs: seamResult.durationMs,
     timeoutMs,
+    // floor, not round, so nearMiss === (boundFraction >= NEAR_MISS_BOUND_FRACTION) always holds.
+    boundFraction: Math.floor((seamResult.durationMs / timeoutMs) * BOUND_FRACTION_DECIMALS) / BOUND_FRACTION_DECIMALS,
+    nearMiss,
     outcome: seamResult.outcome,
     timedOut: seamResult.timedOut,
     signal: seamResult.signal,
@@ -299,6 +314,10 @@ function spawnSeam(command, args, options = {}) {
   if (options.input !== undefined) spawnOptions.input = options.input;
   if (options.killSignal !== undefined) spawnOptions.killSignal = options.killSignal;
 
+  // stdin: with no `input`, spawnSync's default 'pipe' stdin is closed at once, so a
+  // child that reads stdin gets EOF immediately and never blocks on it. Observed on
+  // darwin (#4689): a `process.stdin.on('end')` child returned 'eof', status 0, in 78ms
+  // under the 60000ms default. The seam therefore leaves stdio at its default.
   const startedAtMs = Date.now();
   const t0 = process.hrtime.bigint();
   const result = spawnSync(command, args, spawnOptions);
@@ -423,4 +442,7 @@ module.exports = {
   SPAWN_LOG_ENV,
   SLOW_SPAWN_ENV,
   SPAWN_RECORD_TYPE,
+  DEFAULT_TIMEOUT_MS,
+  NEAR_MISS_BOUND_FRACTION,
+  recordSpawnIfNoteworthy,
 };
