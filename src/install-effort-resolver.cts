@@ -32,10 +32,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveGsdHome } from './runtime-homes.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { unboundedConfigFileReason, printablePath, readConfigFileBounded } = configFileReadMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- install-fs-adapter.cjs is an export= CommonJS module
 import installFsAdapter = require('./install-fs-adapter.cjs');
-const { installFs } = installFsAdapter;
+const { installFs, isRealInstallFs } = installFsAdapter;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver.cjs is an export= CommonJS module
 import modelResolver = require('./model-resolver.cjs');
@@ -59,17 +62,32 @@ interface EffortConfig {
  */
 function _readGsdConfigFile(absPath: string, label: string): Record<string, unknown> | null {
   if (!installFs().existsSync(absPath)) return null;
+  // #5759: refuse a FIFO/device/socket or an oversized file BEFORE the adapter's blocking read
+  // (shared guard; a path that is not on the real fs is left to the adapter).
   let raw: string;
   try {
-    raw = installFs().readFileSync(absPath, 'utf-8');
+    if (isRealInstallFs()) {
+      // The real fs: the descriptor-bound reader (non-blocking open, fstat, cap).
+      const text = readConfigFileBounded(absPath);
+      if (text === null) return null;
+      raw = text;
+    } else {
+      // An injected adapter cannot give a descriptor: stat the real path first (best effort).
+      const unbounded = unboundedConfigFileReason(absPath);
+      if (unbounded !== null) {
+        process.stderr.write(`gsd: warning — could not read ${label} (${printablePath(absPath)}): ${unbounded}\n`);
+        return null;
+      }
+      raw = installFs().readFileSync(absPath, 'utf-8');
+    }
   } catch (err) {
-    process.stderr.write(`gsd: warning — could not read ${label} (${absPath}): ${(err as Error).message}\n`);
+    process.stderr.write(`gsd: warning — could not read ${label} (${printablePath(absPath)}): ${printablePath((err as Error).message)}\n`);
     return null;
   }
   try {
     return JSON.parse(raw) as Record<string, unknown>;
   } catch (err) {
-    process.stderr.write(`gsd: warning — invalid JSON in ${label} (${absPath}): ${(err as Error).message}\n`);
+    process.stderr.write(`gsd: warning — invalid JSON in ${label} (${printablePath(absPath)}): ${printablePath((err as Error).message)}\n`);
     return null;
   }
 }

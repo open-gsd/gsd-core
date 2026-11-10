@@ -37,7 +37,7 @@ const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')
  * Bounds a single gsd-tools.cjs CLI subcommand invocation — the same call
  * shape as the shared LOOP_HOOK_POINT_CLI_TIMEOUT_MS constant in
  * tests/helpers/timeouts.cjs. This file's pre-existing bound (30000ms) is
- * half that shared norm's value (60000ms) — kept as its own file-local
+ * under that shared norm's value (80000ms) — kept as its own file-local
  * constant rather than folded into the shared one, since no fresh bench
  * data justifies raising this file's bound to match.
  */

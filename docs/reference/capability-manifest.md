@@ -219,6 +219,7 @@ Install and hook code does not compare a runtime id to a literal; it reads one o
 | `skipRuntimeDefaultsStamp` | boolean | `claude` | Skip the non-Claude runtime-identity stamp. |
 | `skipCompactAgents` | boolean | `claude` | Do not stage `*.compact.md` agent variants. |
 | `omitBashRunnerOnWindows` | boolean | `claude` | Emit a shell hook as the bare script path on Windows. |
+| `powershellHooksOnWindows` | boolean | `claude` | On Windows, emit managed JS hooks as PowerShell commands with an explicit `shell: "powershell"`, whether or not Git Bash is installed. |
 | `specRootSkillPass` | boolean | `claude` | Run the global spec-root reference pass over staged skills. |
 | `restoreAtRefTildeInAgents` / `restoreAtRefTildeInSpecTree` | boolean | `claude` | Restore `@~/` include references in agent bodies / the spec tree. |
 | `legacyFlatSkillsCleanup`, `bareStemSkillsCleanup`, `categoryContainerCleanup` | boolean | `hermes` | The Hermes pre-nesting cleanups on install and uninstall. |

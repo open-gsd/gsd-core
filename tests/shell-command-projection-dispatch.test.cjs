@@ -1860,15 +1860,16 @@ describe('bug #2236: hookShell parameter routes PowerShell call operator', () =>
 });
 
 describe('bug #3413: installer hook surfaces consume runtime-aware projection', () => {
-  test('buildHookCommand emits shell-neutral Claude hook command on Windows', () => {
+  test('buildHookCommand emits the PowerShell runner for Claude on Windows (#5850)', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
     });
-    assert.equal(cmd.startsWith('& '), false, `Claude hook command must not use PowerShell prefix: ${cmd}`);
+    assert.equal(cmd.startsWith('& '), true, `Claude hook command must use the PowerShell call operator: ${cmd}`);
+    assert.ok(!cmd.includes('$(for'), cmd);
   });
 
-  test('rewriteLegacyManagedNodeHookCommands removes stale PowerShell prefix for Claude on Windows', () => {
+  test('rewriteLegacyManagedNodeHookCommands rewrites a stale PowerShell-prefixed hook to the PowerShell runner for Claude on Windows (#5850)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
@@ -1881,10 +1882,9 @@ describe('bug #3413: installer hook surfaces consume runtime-aware projection', 
       runtime: 'claude',
     });
     assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '"/usr/local/bin/node" "C:/Users/me/.claude/hooks/gsd-check-update.js"',
-    );
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    assert.ok(command.startsWith('& ((@('), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })"), command);
   });
 });
 
@@ -2073,7 +2073,7 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
   // ran during the user's 1.5.0 -> 1.6.0 local update. Managed node hooks get
   // the absolute runner + clean anchored path; a non-node-prefixed managed .sh
   // hook (already correct) is left untouched.
-  test('rewriteLegacyManagedNodeHookCommands produces clean anchored node commands on Windows', () => {
+  test('rewriteLegacyManagedNodeHookCommands produces PowerShell commands anchored on $env:CLAUDE_PROJECT_DIR on Windows (#5850)', () => {
     const settings = {
       hooks: {
         PostToolUse: [
@@ -2091,10 +2091,8 @@ describe('#1693 regression: Windows legacy-node rewrite must not double-quote a 
     });
     assert.equal(changed, true);
     const rewritten = settings.hooks.PostToolUse[0].hooks[0].command;
-    assert.equal(
-      rewritten,
-      '"C:/Program Files/nodejs/node.exe" "$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js',
-    );
+    assert.ok(rewritten.startsWith('& ((@('), rewritten);
+    assert.ok(rewritten.endsWith('"$env:CLAUDE_PROJECT_DIR/.claude/hooks/gsd-context-monitor.js"; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })'), rewritten);
     assert.ok(!rewritten.includes('\\"'), 'rewritten command must not contain escaped double-quotes');
   });
 });
@@ -2391,8 +2389,9 @@ describe('bug #580: local .sh hooks on Claude/Windows must NOT wrap with bash.ex
  * the CJS layer routes through. Its contract:
  *
  *   1. mkdirSync(dirname, { recursive: true }) — ensure parent exists.
- *   2. writeFileSync(<tmpPath>, content) — write to a sibling tmpfile
- *      named `<filePath>.tmp.<pid>`.
+ *   2. openSync(<tmpPath>, O_CREAT|O_EXCL) then writeFileSync(<fd>, content) —
+ *      write to a sibling tmpfile named `<filePath>.tmp.<pid>.<12 hex>`, created
+ *      exclusively so a planted link or FIFO is never followed (#5759).
  *   3. renameSync(<tmpPath>, filePath) — atomic publish.
  *   4. On any error in steps 2-3: unlinkSync(<tmpPath>) (best-effort)
  *      then writeFileSync(filePath, content) directly as a fallback.
@@ -2435,13 +2434,14 @@ const mkScratch = (name) => createTempDir(`fs-fault-${name}-`);
 
 /**
  * Enumerate orphan tmp files left behind by platformWriteSync. The
- * tmp shape is `<filename>.tmp.<pid>`; we match that pattern strictly
+ * tmp shape is `<filename>.tmp.<pid>.<12 hex>`; we match that pattern strictly
  * so a test that happens to write a real `*.tmp.123` doesn't get a
  * false positive.
  */
+const TMP_NAME_RE = /\.tmp\.\d+\.[0-9a-f]{12}$/;
 function orphanTmpFiles(dir) {
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((n) => /\.tmp\.\d+$/.test(n));
+  return fs.readdirSync(dir).filter((n) => TMP_NAME_RE.test(n));
 }
 
 // ─── Happy path baseline ────────────────────────────────────────────────────
@@ -2554,21 +2554,21 @@ test('platformWriteSync falls back when initial tmp writeFileSync fails (ENOSPC)
   t.after(() => cleanup(dir));
   const file = path.join(dir, 'config.json');
 
-  // Make the FIRST writeFileSync (to .tmp.<pid>) fail with ENOSPC. The
-  // SECOND writeFileSync (the fallback, direct to filePath) succeeds.
+  // Make the FIRST writeFileSync (through the exclusive tmp's descriptor) fail with ENOSPC.
+  // The SECOND writeFileSync (the fallback, through the target's descriptor) succeeds.
   let writeCalls = 0;
   const realWrite = fs.writeFileSync;
   const writeMock = mock.method(fs, 'writeFileSync', function (target, data, opts) {
     writeCalls++;
+    // Both writes go through an open descriptor (#5759), never a path.
+    assert.equal(typeof target, 'number', 'platformWriteSync writes through a descriptor');
     if (writeCalls === 1) {
-      // First call is to the tmp path.
-      assert.match(String(target), /\.tmp\.\d+$/, 'first write must be to the tmp path');
+      // First call is to the tmp file's descriptor.
       const err = new Error('ENOSPC: no space left on device');
       err.code = 'ENOSPC';
       throw err;
     }
-    // Second call is the fallback to the real target.
-    assert.equal(target, file, 'fallback write must target the original file path');
+    // Second call is the fallback to the real target; the file content below proves it.
     return realWrite.call(fs, target, data, opts);
   });
   t.after(() => writeMock.mock.restore());
@@ -2711,7 +2711,7 @@ test('platformWriteSync never leaks a tmp file after a successful happy-path wri
   }
   // 25 real files, 0 tmp orphans.
   const entries = fs.readdirSync(dir);
-  const tmpCount = entries.filter((n) => /\.tmp\.\d+$/.test(n)).length;
+  const tmpCount = entries.filter((n) => TMP_NAME_RE.test(n)).length;
   const realCount = entries.length - tmpCount;
   assert.equal(realCount, 25);
   assert.equal(tmpCount, 0);

@@ -11,8 +11,11 @@ import path from 'node:path';
 import { normalizeEol } from './text-lines.cjs';
 import { execGit, GIT_LOCATION_ENV_VARS, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { stripInsertedMarker } from './phase-entry-grammar.cjs';
+import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
-import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
+import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, ERROR_REASON } = ioMod;
@@ -973,6 +976,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
   // cmdEffortSyncCodex and cmdEffortSyncOpencode, so a fault mid-write can
   // never leave an agent file truncated or empty.
   let fileFailureCount = 0;
+  const rewrittenFiles: RewrittenFile[] = [];
 
   for (const file of files) {
     const agentName = file.replace(/\.md$/, '');
@@ -990,6 +994,9 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
       fileFailureCount++;
       continue;
     }
+
+    // #5683: hash BEFORE any rewrite — only a GSD-owned file gets re-recorded.
+    const preHash = tryFileHash(filePath);
 
     // Resolve using install-time logic: home defaults merged with project config.
     const universalEffort = resolveInstallTimeEffort(effortCfg, agentName);
@@ -1050,6 +1057,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
             if (originalModeInherit !== undefined) fs.chmodSync(tmpPathInherit, originalModeInherit);
           } catch { /* non-fatal: proceed with default tmp-file mode */ }
           retryRenameSync(tmpPathInherit, filePath);
+          rewrittenFiles.push({ path: filePath, preHash });
         } catch {
           try { fs.unlinkSync(tmpPathInherit); } catch { /* already gone or never created */ }
           skipped++;
@@ -1123,6 +1131,7 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
           if (originalModeSet !== undefined) fs.chmodSync(tmpPathSet, originalModeSet);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPathSet, filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch {
         try { fs.unlinkSync(tmpPathSet); } catch { /* already gone or never created */ }
         skipped++;
@@ -1134,6 +1143,9 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
     changes.push({ agent: agentName, from: currentEffort, to: newEffortValue });
     synced++;
   }
+
+  // #5683: keep the install manifest in step with the agents just rewritten.
+  if (!dryRun) recordManifestFileHashes(path.dirname(agentsDir), rewrittenFiles);
 
   output(
     { synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir },
@@ -1201,6 +1213,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
   const refused: CodexEffortSyncRefusal[] = [];
   const writeFailures: EffortSyncFileFailure[] = [];
   const readFailures: EffortSyncFileFailure[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -1220,6 +1233,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
       continue;
     }
 
+    const preHash = tryFileHash(filePath); // #5683
     const parsed = parseCodexAgentToml(content);
     if (!parsed.ok) {
       // Never partially rewritten (40-design.md, ADR-2313 reader/writer
@@ -1289,6 +1303,7 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
           if (originalMode !== undefined) fs.chmodSync(tmpPath, originalMode);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPath, filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch (err) {
         // Reported, not thrown — the remaining agents still get processed.
         // Clean up the orphaned tmp file; filePath itself was never touched.
@@ -1302,6 +1317,8 @@ function cmdEffortSyncCodex(raw: boolean, dryRun: boolean, configDir?: string): 
     changes.push(...pendingChanges);
     synced++;
   }
+
+  if (!dryRun) recordManifestFileHashes(path.dirname(agentsDir), rewrittenFiles);
 
   output(
     { synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir, refused, write_failures: writeFailures, read_failures: readFailures },
@@ -1358,6 +1375,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
   const changes: EffortSyncChange[] = [];
   const writeFailures: EffortSyncFileFailure[] = [];
   const readFailures: EffortSyncFileFailure[] = [];
+  const rewrittenFiles: RewrittenFile[] = [];
   let synced = 0;
   let skipped = 0;
 
@@ -1376,6 +1394,8 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
       readFailures.push({ agent: agentName, file: filePath, error: err instanceof Error ? err.message : String(err) });
       continue;
     }
+
+    const preHash = tryFileHash(filePath); // #5683
 
     // `target === null` covers both "no effort configured" (inherit) and "a
     // level OpenCode does not accept" — both must produce NO `variant:` key,
@@ -1469,6 +1489,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
           if (originalMode !== undefined) fs.chmodSync(tmpPath, originalMode);
         } catch { /* non-fatal: proceed with default tmp-file mode */ }
         retryRenameSync(tmpPath, filePath);
+        rewrittenFiles.push({ path: filePath, preHash });
       } catch (err) {
         try { fs.unlinkSync(tmpPath); } catch { /* already gone or never created */ }
         changes.pop();
@@ -1494,6 +1515,8 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
   // Making the exit code reflect failure would be a CLI-contract change
   // affecting all three cmdEffortSync* branches (claude, codex, opencode) and
   // is out of scope for this fix.
+  if (!dryRun) recordManifestFileHashes(path.dirname(agentsDir), rewrittenFiles);
+
   output(
     { synced, skipped, changes, dry_run: dryRun, agents_dir: agentsDir, write_failures: writeFailures, read_failures: readFailures },
     raw,
@@ -1982,7 +2005,76 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
   return { removedEntries, removedPathspec, failures };
 }
 
-function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[]): void {
+/**
+ * #6043 (ADR-4908 §3): a committing verb commits in the checkout the process
+ * runs in. Returns the typed refusal when it cannot: not a git repository, or
+ * `cwd` / a path to commit resolves outside `ctx.worktreeRoot`.
+ * `cwd` and the worktree root are compared by realpath; a relative path is
+ * resolved lexically against the canonical `cwd`, so a `.planning` symlink
+ * inside the worktree stays inside; an absolute path is canonicalized through
+ * its nearest existing ancestor directory.
+ * A degraded context (git timed out or could not run) makes no claim about the
+ * worktree, so it never refuses.
+ */
+function commitRefusal(
+  ctx: ProjectContext,
+  cwd: string,
+  files: string[] | undefined,
+  filesRemoved: string[] | undefined,
+): { reason: 'not_git_repo' | 'outside_worktree'; message: string; skipped?: false } | null {
+  if (ctx.provenance.reason === 'not_git_repo') {
+    return { reason: 'not_git_repo', message: `commit refused: ${cwd} is not inside a git repository` };
+  }
+  if (ctx.provenance.degraded) return null;
+  const realOrSelf = (p: string): string => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return p;
+    }
+  };
+  // Nearest existing ancestor directory of an absolute path, realpath'd, with
+  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var,
+  // Windows 8.3 short names like RUNNER~1).
+  const canonicalAbsolute = (abs: string): string => {
+    const rest: string[] = [path.basename(abs)];
+    let ancestor = path.dirname(abs);
+    for (;;) {
+      try {
+        return path.join(fs.realpathSync.native(ancestor), ...rest);
+      } catch {
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) return abs;
+        rest.unshift(path.basename(ancestor));
+        ancestor = parent;
+      }
+    }
+  };
+  const norm = (p: string): string => {
+    const slashed = p.replace(/\\/g, '/');
+    return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
+  };
+  const inside = (target: string, root: string): boolean => isContainedIn(norm(target), norm(root), { sep: '/' });
+  const worktreeRoot = realOrSelf(path.resolve(ctx.worktreeRoot));
+  const realCwd = realOrSelf(path.resolve(cwd));
+  const declared = [...(files ?? []), ...(filesRemoved ?? [])];
+  const targets = declared.length > 0 ? declared : ['.planning/'];
+  // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
+  const resolveTarget = (t: string): string =>
+    path.isAbsolute(t) ? canonicalAbsolute(path.resolve(t)) : path.resolve(realCwd, t);
+  const escaping = !inside(realCwd, worktreeRoot)
+    ? realCwd
+    : targets.map(resolveTarget).find((abs) => !inside(abs, worktreeRoot));
+  if (escaping === undefined) return null;
+  return {
+    reason: 'outside_worktree',
+    skipped: false,
+    message: `commit refused: ${escaping} is outside the worktree ${worktreeRoot}; ` +
+      'pass the checkout that owns the path with --project-dir to commit there',
+  };
+}
+
+function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[], ctx?: ProjectContext): void {
   if (!message && !amend) {
     error('commit message required');
   }
@@ -2018,6 +2110,17 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     };
     output(result, raw, 'skipped');
     return;
+  }
+
+  // #6043: refuse before branching or staging, and only AFTER the commit_docs
+  // skip above, so a benign skip is never turned into an error.
+  const refusal = ctx ? commitRefusal(ctx, cwd, files, filesRemoved) : null;
+  if (refusal) {
+    error(refusal.message, refusal.reason === 'not_git_repo' ? ERROR_REASON.COMMIT_NOT_GIT_REPO : ERROR_REASON.COMMIT_OUTSIDE_WORKTREE, {
+      committed: false,
+      ...(refusal.skipped === false ? { skipped: false } : {}),
+      hash: null,
+    });
   }
 
   // Ensure branching strategy branch exists before first commit (#1278).
@@ -3910,7 +4013,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       phasesByNumber.set(key, {
         number: key,
         ...(displayId ? { display_id: displayId } : {}),
-        name: phaseName.replace(/\(INSERTED\)/i, '').trim(),
+        name: stripInsertedMarker(phaseName),
         plans: 0,
         summaries: 0,
         phaseStatus: PHASE_STATUS.NOT_STARTED,

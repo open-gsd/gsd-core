@@ -182,7 +182,7 @@ function readSmallRegularFile(filePath: string, maxBytes: number): string | null
  */
 function readSmallRegularFileBuffer(filePath: string, maxBytes: number): Buffer | null {
   // O_RDONLY | O_NONBLOCK: never block on opening a FIFO/device — return the fd so fstat can reject it.
-  const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOCTTY || 0);
   let fd: number;
   try {
     fd = fs.openSync(filePath, openFlags);

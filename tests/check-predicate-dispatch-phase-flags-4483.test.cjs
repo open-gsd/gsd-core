@@ -25,6 +25,7 @@ const REQ = ['--phase-req-ids', '${PHASE_REQ_IDS}'];
 const DISPATCHES = [
   ['execute:post (verify-phase-goal)', ['execute-phase', 'steps', 'verify-phase-goal.md'], [DIR, NUM]],
   ['plan-phase gate dispatch', ['plan-phase.md'], [DIR, NUM, REQ]],
+  ['plan:pre (plan-pre-dispatch, #5982)', ['plan-phase', 'steps', 'plan-pre-dispatch.md'], [DIR, NUM, REQ]],
   ['ship gate dispatch', ['ship.md'], [DIR, NUM]],
   ['verify-work verify:pre dispatch', ['verify-work.md'], [DIR, NUM]],
   ['execute:wave:post (wave-post-gate-hooks)', ['execute-phase', 'steps', 'wave-post-gate-hooks.md'], [DIR, NUM]],

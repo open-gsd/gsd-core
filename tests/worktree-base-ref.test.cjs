@@ -2311,9 +2311,14 @@ describe('#4588 A2: a clean prior harness worktree at the orchestrator HEAD conf
     // The command emits its JSON via fs.writeSync(1, …) — capture through the
     // approved mock mechanism and assert on the EMITTED payload too (the
     // workflow-facing contract), not just the return value.
+    // Only fd 1 is the command's JSON channel. fs.writeSync is also the
+    // descriptor write under the probe's own cache file and the tool-owned
+    // .gsd/.gitignore (#5757), so every other fd passes through to the real
+    // write and is never mistaken for emitted payload.
     const emitted = [];
+    const realWriteSync = fs.writeSync;
     const writeSyncMock = t.mock.method(fs, 'writeSync', (fd, buf, ...rest) => {
-      void fd; void rest;
+      if (fd !== 1) return realWriteSync.call(fs, fd, buf, ...rest);
       emitted.push(typeof buf === 'string' ? buf : Buffer.from(buf).toString('utf8'));
       return (typeof buf === 'string' ? buf : Buffer.from(buf)).length;
     });

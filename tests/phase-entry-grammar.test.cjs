@@ -5,7 +5,9 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const fc = require('fast-check');
 const {
+  stripInsertedMarker,
   phaseEntryPrefixSrc,
   phaseEntryRegExp,
   phaseEntrySplitRegExp,
@@ -142,5 +144,61 @@ describe('phase-entry grammar (#5763)', () => {
     const line = `- [ ]${' '.repeat(5000)}x`;
     // Behavioral: a quadratic prefix would make this call hang the runner.
     assert.ok(!entry().test(line));
+  });
+});
+
+describe('stripInsertedMarker (#5824)', () => {
+  // Only the TRAILING tool marker `phase insert` appends is stripped; user text
+  // keeps every parenthetical, including a literal `(INSERTED)` mid-name.
+  const cases = [
+    ['Fix (INSERTED) parsing (INSERTED)', 'Fix (INSERTED) parsing'],
+    ['Fix (INSERTED) parsing', 'Fix (INSERTED) parsing'],
+    ['X (inserted)', 'X'],
+    ['X   (INSERTED)   ', 'X'],
+    ['Hotfix rows (INSERTED)', 'Hotfix rows'],
+    ['Hotfix rows  (INSERTED) ', 'Hotfix rows'],
+    ['Hotfix rows', 'Hotfix rows'],
+    ['  Hotfix rows  ', 'Hotfix rows'],
+    ['Hotfix rows (inserted)', 'Hotfix rows'],
+    ['Name (Beta)', 'Name (Beta)'],
+    ['Name (Beta) (INSERTED)', 'Name (Beta)'],
+    ['Name (INSERTED) (Beta)', 'Name (INSERTED) (Beta)'],
+    // A name that is only the marker is kept, never reduced to an empty name.
+    ['(INSERTED)', '(INSERTED)'],
+    ['', ''],
+  ];
+
+  for (const [input, expected] of cases) {
+    test(`${JSON.stringify(input)} -> ${JSON.stringify(expected)} (#5824)`, () => {
+      assert.equal(stripInsertedMarker(input), expected);
+    });
+  }
+
+  const endsWithMarker = (s) => /\(inserted\)\s*$/i.test(s);
+
+  test('property: appending the marker is stripped back to the name; a name not ending in the marker is unchanged (#5824)', () => {
+    const name = fc
+      .string()
+      .map((s) => s.trim())
+      .filter((s) => s !== '' && !endsWithMarker(s));
+    fc.assert(
+      fc.property(name, (s) => {
+        assert.equal(stripInsertedMarker(`${s} (INSERTED)`), s);
+        assert.equal(stripInsertedMarker(s), s);
+      }),
+    );
+  });
+
+  test('property: a mid-string marker followed by other text is never removed (#5824)', () => {
+    const part = fc
+      .string()
+      .map((s) => s.trim())
+      .filter((s) => s !== '' && !endsWithMarker(s));
+    fc.assert(
+      fc.property(part, part, (a, b) => {
+        const s = `${a} (INSERTED) ${b}`;
+        assert.equal(stripInsertedMarker(s), s);
+      }),
+    );
   });
 });

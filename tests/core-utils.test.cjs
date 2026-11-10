@@ -1550,7 +1550,8 @@ describe('#5542 planRowPattern / summaryPairsWithAnyPlan', () => {
     });
 
     test('groups 1 and 2 reassemble the row around the ticked box', () => {
-      const m = coreUtils.planRowPattern('47-1').exec('- [ ] **47-1**');
+      const row = '- [ ] **47-1**';
+      const m = coreUtils.planRowPattern('47-1').exec(row);
       assert.strictEqual(m[1], '- [');
       assert.strictEqual(m[2], '] **47-1**');
     });

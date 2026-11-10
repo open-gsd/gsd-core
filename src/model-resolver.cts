@@ -10,7 +10,7 @@
  * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
  * Dependencies (leaf modules only):
- *   - node:fs / node:path (read the per-install .gsd-runtime marker + project config for the #2297 omit gate)
+ *   - node:path (project config path for the #2297 omit gate; read via config-loader's bounded reader, #5759)
  *   - ./runtime-name-policy.cjs (resolveRuntimeNameFromCandidates — canonicalize the active runtime)
  *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path)
  *   - ./config-loader.cjs    (loadConfig)
@@ -22,7 +22,7 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { loadConfig } = configLoaderModule;
+const { loadConfig, readConfigFileBounded } = configLoaderModule;
 
 // ─── Configuration Module (for CANONICAL_CONFIG_DEFAULTS used by effort/fast_mode resolvers) ─
 import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cjs';
@@ -33,7 +33,6 @@ const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TI
 
 import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults } from './model-catalog.cjs';
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalizeRuntimeName, hostBehaviorsFor } from './runtime-name-policy.cjs';
 import {
@@ -96,7 +95,11 @@ function projectExplicitlySetsOmit(cwd: string): boolean {
   const layers = wsDir === rootDir ? [rootDir] : [wsDir, rootDir]; // workstream > root
   for (const dir of layers) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')) as Record<string, unknown>;
+      // Same bounded regular-file reader as the loader (#5759): a FIFO/device/oversized
+      // layer throws instead of blocking, and an absent layer returns null.
+      const raw = readConfigFileBounded(path.join(dir, 'config.json'));
+      if (raw === null) continue;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
       const value = parsed?.['resolve_model_ids'];
       // First layer that sets the key wins (matches loadConfig's deep-merge
       // precedence). A layer that omits the key falls through to the next.

@@ -1972,6 +1972,7 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'ownsClaudePaths',
   'permissionsSchema',
   'pluginOnlyInstall',
+  'powershellHooksOnWindows',
   'projectInstructionFile',
   'reapplyCommand',
   'reclaimsKimiLegacyHooksRoot',

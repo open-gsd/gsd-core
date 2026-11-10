@@ -302,6 +302,7 @@ describe('Require Issue Link back-merge automation carve-out', () => {
     const backmergeArgs = {
       prBody: 'Automated backmerge.',
       headRef: 'chore/backmerge-main-to-next-20260101',
+      baseRef: 'next',
       changedFiles: ['src/a.cts'],
       changedFilesTotal: 1,
     };

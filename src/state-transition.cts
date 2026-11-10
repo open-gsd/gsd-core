@@ -25,7 +25,7 @@ import { milestoneVersionOf } from './roadmap-progress.cjs';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { comparePhaseNum } = phaseIdMod;
+const { comparePhaseNum, parsePhaseFromProse } = phaseIdMod;
 // #4129: the completion-ratio kernel for the resync-arm ratchet's percent
 // (planning-scope's SCOPE — state-document's own dependency, no cycle here:
 // state-document never imports this module).
@@ -1758,7 +1758,7 @@ export function parsePlanCount(raw: string): number | null {
   return /^\d+$/.test(raw) ? planNumberFrom(raw) : null;
 }
 
-/** A recorded `Plan` / `Current Plan` value, read once by `readPlanPosition`. */
+/** A recorded `Plan` / `Current Plan` value, read once by `readPlanValue`. */
 type PlanPosition = {
   /** Leading plan number; `null` past the safe-integer range. */
   n: number | null;
@@ -1781,7 +1781,7 @@ type PlanPosition = {
  * (`1 of ?`) is swapped for the count, and a bare `N` gains ` of M` and drops
  * the template's unfilled `TBD` (`0 TBD in current phase`).
  */
-function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
+function readPlanValue(raw: string | null | undefined): PlanPosition | null {
   if (!raw) return null;
   const ofM = PLAN_SHAPE_N_OF_M.exec(raw);
   if (ofM) {
@@ -1806,16 +1806,57 @@ function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
 function readPlanLines(content: string) {
   const currentPlan = stateExtractField(content, 'Current Plan');
   const plan = stateExtractField(content, 'Plan');
-  const legacy = readPlanPosition(currentPlan);
-  const planPos = readPlanPosition(plan);
+  const legacy = readPlanValue(currentPlan);
+  const planPos = readPlanValue(plan);
   return {
     currentPlan,
     plan,
     legacy,
-    totalPos: readPlanPosition(stateExtractField(content, 'Total Plans in Phase')),
+    totalPos: readPlanValue(stateExtractField(content, 'Total Plans in Phase')),
     planPos,
     ambiguous: legacy !== null && planPos !== null && legacy.n !== null && planPos.n !== null && legacy.n !== planPos.n,
   };
+}
+
+/**
+ * The one plan-position parse: legacy pair first, then the hybrid, then compound. `advancePlanCore`
+ * and `readPlanPosition` both consume it, so the precedence is decided in exactly one place (#5786).
+ *
+ * These branches decide ONE thing: which numbers the position is read from. They deliberately do not
+ * record which FIELD supplied them, because the advance write path writes every spelling back from its
+ * own raw text (#3791 review round 6, B1/M1).
+ */
+function planNumbers({ legacy, totalPos, planPos }: ReturnType<typeof readPlanLines>): { current: number | null; total: number | null } {
+  // Legacy pair wins whenever both fields are readable, even if the Current Plan value also carries an
+  // "of M": the explicit sibling field is the stated intent, so it supplies the total.
+  if (legacy && totalPos) return { current: legacy.n, total: totalPos.n };
+  // Hybrid: legacy field name, compound value, no readable Total Plans sibling (#3784).
+  if (legacy?.ofM) return { current: legacy.n, total: legacy.m };
+  if (planPos?.ofM) return { current: planPos.n, total: planPos.m };
+  // No branch for a bare `Plan: N` beside a `Total Plans in Phase: M` and no `Current Plan` (#3791
+  // review round 6, M2): `Plan` is body-only, so the shape has no schema row or forcing test; it is refused.
+  return { current: null, total: null };
+}
+
+/**
+ * Read the recorded plan position out of a STATE.md document through the one plan-position grammar,
+ * or `null` when no readable position is recorded (`Plan: 1 of ?`, `Total Plans in Phase: TBD`, no
+ * field at all). #5786.
+ */
+export function readPlanPosition(content: string): { current: number; total: number } | null {
+  const { current, total } = planNumbers(readPlanLines(content));
+  return current === null || total === null ? null : { current, total };
+}
+
+/**
+ * The plan total a STATE.md document records, for the `init --validate` plan-count check: a readable
+ * `Total Plans in Phase` first, else the of-M total of `Current Plan`, then of `Plan`; an unconvertible
+ * `Current Plan` M falls through to `Plan`'s M, unlike `planNumbers`, which commits to the first
+ * matching field. `null` when neither yields a convertible M. #5786.
+ */
+export function readRecordedPlanTotal(content: string): number | null {
+  const { legacy, totalPos, planPos } = readPlanLines(content);
+  return totalPos?.n ?? legacy?.m ?? planPos?.m ?? null;
 }
 
 /**
@@ -2109,40 +2150,12 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // `planSourceField`/`planRawValue` pair here and then wrote the OTHER
   // spelling from this one's numbers, which is precisely how a field ended up
   // holding a value nothing had derived for it.
-  // Every branch below reads its numbers through `readPlanLines`, whose ANCHORED
-  // plan-position reader calls no parseInt on a raw field value, so a value the
-  // grammar does not fully describe cannot half-parse into a plausible number.
-  const { currentPlan: legacyPlan, plan: planField, legacy, totalPos: legacyTotalPos, planPos, ambiguous } = readPlanLines(content);
-
-  let parsedCurrent: number | null = null;
-  let parsedTotal: number | null = null;
-
-  if (legacy && legacyTotalPos) {
-    // Legacy pair wins whenever both fields are present and both are readable,
-    // even if the Current Plan value also carries an "of M" — the explicit
-    // sibling field is the stated intent, so it supplies the total.
-    parsedCurrent = legacy.n;
-    parsedTotal = legacyTotalPos.n;
-  } else if (legacy?.ofM) {
-    // Hybrid: legacy field name, compound value, no readable Total Plans
-    // sibling. Written by hand (and by agents) often enough to be worth
-    // reading — #3784.
-    parsedCurrent = legacy.n;
-    parsedTotal = legacy.m;
-  } else if (planPos?.ofM) {
-    parsedCurrent = planPos.n;
-    parsedTotal = planPos.m;
-  }
-  // No branch for a bare `Plan: N` paired with a `Total Plans in Phase: M`
-  // sibling and no `Current Plan` at all (#3791 review round 6, M2). A revision
-  // of this PR accepted it; base did not (its `else if (planField)` arm had no
-  // `of M` match and errored via NaN), and it is out of #3784's scope, which is
-  // the hybrid `Current Plan: N of M`. It cannot be given the schema-row +
-  // forcing-test coupling the other shapes have, either: `Plan` is body-only,
-  // `buildStateFrontmatter` never reads it into frontmatter, so there is no
-  // `current_*` key to hang a row on. An accepted shape with no schema row and
-  // no forcing test is exactly the drift this diff is otherwise built to
-  // prevent, so the shape is refused and named in the error instead.
+  // Every branch reads its numbers through `readPlanLines`, whose ANCHORED plan-position reader calls no
+  // parseInt on a raw field value, so a value the grammar does not fully describe cannot half-parse into
+  // a plausible number.
+  const lines = readPlanLines(content);
+  const { currentPlan: legacyPlan, plan: planField, legacy, totalPos: legacyTotalPos, planPos, ambiguous } = lines;
+  const { current: parsedCurrent, total: parsedTotal } = planNumbers(lines);
 
   if (parsedCurrent === null || parsedTotal === null) {
     return { content: reassemble(body), updated: [], data: { error: true } };
@@ -2357,8 +2370,12 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
  * position; the caller combines this with "the phase is already complete in
  * ROADMAP.md" so a first-time out-of-order completion (#2028) still
  * transitions. An unparseable or absent current phase is "not past".
+ * #5676: under `milestone-prefixed` the id is the whole `M-NN` (`3-02`, not `3`); that read goes
+ * through `parsePhaseFromProse` (the #5626 grammar owner), so the two cannot drift.
  */
-export function isStatePastPhase(content: string, phaseNum: string | number, sourcePath?: string): boolean {
+export function isStatePastPhase(
+  content: string, phaseNum: string | number, sourcePath?: string, convention?: string | null,
+): boolean {
   const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
   const fromFm = fm['current_phase'];
   let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
@@ -2367,9 +2384,14 @@ export function isStatePastPhase(content: string, phaseNum: string | number, sou
     raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
   }
   // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
-  const m = raw === null ? null : /^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw);
-  if (!m) return false;
-  return comparePhaseNum(m[1], String(phaseNum)) > 0;
+  let id: string | null = null;
+  if (raw !== null) {
+    id = convention === 'milestone-prefixed'
+      ? parsePhaseFromProse(raw, 'milestone-prefixed').phase
+      : (/^\s*(?:phase\s+)?(\d+(?:\.\d+)*)/i.exec(raw)?.[1] ?? null);
+  }
+  if (id === null) return false;
+  return comparePhaseNum(id, String(phaseNum)) > 0;
 }
 
 /**
