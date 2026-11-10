@@ -270,6 +270,10 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   const envOf = (sb) => `export TMPDIR="${sb.tmp}"; PHASE_DIR="${sb.dir}"; PADDED_PHASE=01`;
   const REVIEW_PATH_EXPR = 'REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"';
   const CALL = 'gsd_run lane-evidence-clear "$REVIEW_PATH" || true';
+  // the two removals that only an --fix / --fix --auto run makes (other runs keep their old cleanup)
+  const CALL_FLAG = '[ "$FIX_FLAG" = "true" ] && { gsd_run lane-evidence-clear "$REVIEW_PATH" || true; }';
+  const CALL_AUTO = '[ "${FIX_AUTO:-}" = "true" ] && { gsd_run lane-evidence-clear "$REVIEW_PATH" || true; }';
+  const FIX_ENV = '; FIX_FLAG=true; FIX_AUTO=true';
   // dispatch_reviewer_lanes run for real; only `review-lane dispatch-step` (it would spawn a CLI) is stubbed
   // to return `results`. It is the one fence that holds EXTERNAL_EVIDENCE_BLOCK and LANE_RUN_DIR, so it owns persisting them.
   const dispatch = (sb, results, auto = false) => bash([
@@ -285,14 +289,14 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   const readSnippet = () => lines(stepRegion(FIX, 'auto_iteration_loop'), '# #5019: re-surface', READ_END);
   const REMOVALS = {
     'cleanup_iteration_backups': () => lines(stepRegion(FIX, 'cleanup_iteration_backups'), CALL, CALL),
-    'check_empty_scope': () => lines(stepRegion(REVIEW, 'check_empty_scope'), CALL, CALL),
+    'check_empty_scope': () => lines(stepRegion(REVIEW, 'check_empty_scope'), CALL_FLAG, CALL_FLAG),
     // every early exit calls the one shared verb; each site's call is executed, not grepped
     'check_config_gate': () => lines(stepRegion(FIX, 'check_config_gate'), CALL, CALL),
     'check_review_exists': () => lines(stepRegion(FIX, 'check_review_exists'), CALL, CALL),
     'check_review_status': () => lines(stepRegion(FIX, 'check_review_status'), CALL, CALL),
     'spawn_fixer': () => lines(stepRegion(FIX, 'spawn_fixer'), CALL, CALL),
     // the reviewer-failure exit reuses the REVIEW_PATH spawn_reviewer's step already derived
-    'spawn_reviewer': () => lines(stepRegion(REVIEW, 'spawn_reviewer'), '# #5019: the reviewer agent failed', CALL),
+    'spawn_reviewer': () => lines(stepRegion(REVIEW, 'spawn_reviewer'), '# #5019: the reviewer agent failed', CALL_AUTO),
   };
 
   for (const [name, snippet] of Object.entries(REMOVALS)) {
@@ -300,7 +304,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       const run = (sb, content, mk) => {
         mk && mk(sb);
         fs.writeFileSync(sb.state, content);
-        bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${snippet()}`);
+        bash(`${envOf(sb)}${FIX_ENV}; ${REVIEW_PATH_EXPR}\n${snippet()}`);
         return { state: fs.existsSync(sb.state), victim: fs.existsSync(path.join(sb.victim, 'keep')) };
       };
       sandbox(t, (sb) => {
@@ -324,7 +328,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
         for (const d of real) assert.strictEqual(fs.existsSync(d), true, 'wrong-length suffix names a real dir: kept');
       });
       sandbox(t, (sb) => { // no state: a no-op that does not fail
-        bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${snippet()}`);
+        bash(`${envOf(sb)}${FIX_ENV}; ${REVIEW_PATH_EXPR}\n${snippet()}`);
         assert.strictEqual(fs.existsSync(sb.victim), true);
       });
     });
@@ -433,13 +437,29 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     });
   });
 
+  test('a run without --fix --auto persists nothing and keeps its single removal in commit_review', { skip: !HAS_BASH }, (t) => {
+    sandbox(t, (sb) => {
+      const cited = path.join(sb.dir, 'gsd-review-x.md'); fs.writeFileSync(cited, 'lane-only finding');
+      dispatch(sb, [{ ok: true, slug: 'codex', reviewPath: cited }], false);
+      assert.deepStrictEqual([laneDirs(sb).length, states(sb).length], [1, 0], 'no state, and the dir stays for the reviewer');
+      const [lanes] = laneDirs(sb);
+      bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false; LANE_RUN_DIR="${path.join(sb.tmp, lanes)}"\n${stepFence(REVIEW, 'commit_review')}`);
+      assert.deepStrictEqual(laneDirs(sb), [], 'commit_review removes it, as before #5019');
+      // the other removal points leave a state they do not own alone when the run is not --fix / --fix --auto
+      persistLaneEvidence(sb.review, 'abc123', 'auto', 'block', sb.tmp);
+      bash(`${envOf(sb)}; FIX_FLAG=false; ${REVIEW_PATH_EXPR}\n${REMOVALS.check_empty_scope()}`);
+      bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${REMOVALS.spawn_reviewer()}`);
+      assert.strictEqual(fs.existsSync(sb.state), true);
+    });
+  });
+
   test('the reviewer-failure fence clears the REVIEW_PATH it is given', { skip: !HAS_BASH }, (t) => {
     sandbox(t, (sb) => {
       const sentinel = path.join(sb.dir, 'other-REVIEW.md');
       const lanes = sb.lane('abc123');
       persistLaneEvidence(sentinel, 'abc123', 'once', 'block', sb.tmp);
       const state = laneStatePath(sentinel, sb.tmp);
-      bash(`${envOf(sb)}; REVIEW_PATH="${sentinel}"\n${REMOVALS.spawn_reviewer()}`);
+      bash(`${envOf(sb)}${FIX_ENV}; REVIEW_PATH="${sentinel}"\n${REMOVALS.spawn_reviewer()}`);
       assert.deepStrictEqual([fs.existsSync(state), fs.existsSync(lanes)], [false, false]);
     });
   });
