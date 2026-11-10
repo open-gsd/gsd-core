@@ -5894,7 +5894,7 @@ describe('state planned-phase command', () => {
     }
   });
 
-  test('#5320: --plans a valueless, repeated, `=`-joined or shell-shaped --plans fails without a stack trace and before any write', () => {
+  test('#5320: a valueless, repeated, `=`-joined or shell-shaped --plans fails without a stack trace and before any write', () => {
     writeTbdPlanFixture(TBD_BODY);
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     const before = fs.readFileSync(statePath);

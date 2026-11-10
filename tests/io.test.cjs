@@ -40,6 +40,15 @@ describe('ERROR_REASON', () => {
     assert.ok(Object.isFrozen(io.ERROR_REASON));
   });
 
+  test('errorReasonOf narrows every member by its wire value and nothing else', () => {
+    for (const [key, wire] of Object.entries(io.ERROR_REASON)) {
+      assert.strictEqual(io.errorReasonOf(wire), io.ERROR_REASON[key], key);
+    }
+    for (const notAReason of ['', 'PLANS_NO_LINE', ' usage', 'plans_no_line ', undefined, null, 0, {}]) {
+      assert.strictEqual(io.errorReasonOf(notAReason), undefined, String(notAReason));
+    }
+  });
+
   test('contains expected wire values', () => {
     assert.strictEqual(io.ERROR_REASON.CONFIG_KEY_NOT_FOUND, 'config_key_not_found');
     assert.strictEqual(io.ERROR_REASON.CONFIG_NO_FILE, 'config_no_file');
