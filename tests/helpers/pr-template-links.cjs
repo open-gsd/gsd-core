@@ -3,6 +3,8 @@
 // open tags, outside code and HTML comments. A repo link must name no ref, or
 // blob|tree|raw|blame on `next` to a path (and a heading or line anchor) that exists.
 // `?template=` links stay (maintainer ruling on #5427).
+// Every link to another host is bad too (an allowlist, not only relative links): a template
+// links this repo and nothing else, so a lookalike host cannot pass.
 // A trailing slash on a path is accepted, and `.md` is matched case-sensitively (anchorKind).
 // Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
 // are never relative.
