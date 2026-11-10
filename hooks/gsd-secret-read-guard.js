@@ -199,7 +199,13 @@ function readOnlyOptionsOnly(base, operands) {
 
 // Fail closed: a substitution body, heredoc, process substitution, file
 // redirect out, unresolved or unlisted command word, or any exception is false.
+// False while scanByGrammar reads by grammar (closeByCount off): the answer is
+// kept for the whole command (exemption.bashReadOnly), and that reading takes a
+// heredoc tag as one word, so it would pass
+// `cat <<$(case x in x) ;; esac) <listed>`, a line the counting scans refuse
+// for its `$(`.
 function lineIsReadOnly(command) {
+  if (!closeByCount) return false;
   try {
     const { tokens, nested } = tokenize(command);
     if (nested.length > 0) return false;
