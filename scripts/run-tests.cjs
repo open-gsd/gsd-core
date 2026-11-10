@@ -52,6 +52,7 @@ const {
 const {
   LEDGER_ENV: STATE_WRITE_LEDGER_ENV,
   TEST_FILE_ENV: STATE_WRITE_TEST_FILE_ENV,
+  preloadShimSource,
   nodeOptionsWithRequire,
   readStateWriteLedger,
   formatStateWriteReport,
@@ -2118,11 +2119,10 @@ async function main() {
   const stateWriteLedgerPath = join(eventsDir, 'state-writes.ndjson');
   writeFileSync(stateWriteLedgerPath, '');
   const stateWritePreloadPath = join(eventsDir, 'raw-state-write-preload.cjs');
-  writeFileSync(
-    stateWritePreloadPath,
-    `process.env[${JSON.stringify(STATE_WRITE_LEDGER_ENV)}] = ${JSON.stringify(stateWriteLedgerPath)};\n` +
-      `require(${JSON.stringify(join(__dirname, 'raw-state-write-guard.cjs'))});\n`,
-  );
+  // The shim's source is the guard's own (preloadShimSource): it sets the preload marker
+  // the install sentinel records, so only a process that came through this shim counts
+  // against the chunk count below (a direct require of the guard does not).
+  writeFileSync(stateWritePreloadPath, preloadShimSource(stateWriteLedgerPath));
   const stateWriteNodeOptions = nodeOptionsWithRequire(process.env.NODE_OPTIONS, stateWritePreloadPath);
 
   // #5071: when set, each chunk's per-file `test:summary` durations are

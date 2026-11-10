@@ -26,6 +26,7 @@ const {
   nodeOptionsWithRequire,
   readStateWriteLedger,
   formatStateWriteReport,
+  preloadShimSource,
 } = require(GUARD_PATH);
 
 /**
@@ -254,6 +255,33 @@ process.exitCode = r.status;`);
     // One install sentinel per process that loaded the preload: the parent and its child
     // (#5120 audit: a guard that never loaded must not read as zero violations).
     assert.equal(read.installs, 2, JSON.stringify(read));
+    // Loaded by --require of the guard file itself, not through the runner's shim: not a preload.
+    assert.equal(read.preloadInstalls, 0, JSON.stringify(read));
+  });
+
+  test('only a sentinel written through the runner shim vouches for a chunk; a direct require of the guard installs but cannot mask a chunk whose preload never loaded (#5120 re-review NEW-1)', (t) => {
+    const dir = createTempDir('rswg-preload-');
+    t.after(() => cleanup(dir));
+    const main = writeModule(dir, 'tests/main.cjs', `process.stdout.write('ok');`);
+    // The real path: the shim the runner writes, in NODE_OPTIONS, nothing else in the env.
+    const viaShim = path.join(dir, 'via-shim.ndjson');
+    const shim = writeModule(dir, 'ev/raw-state-write-preload.cjs', preloadShimSource(viaShim));
+    let r = runNode([main], { cwd: dir, env: isolatedEnv({ home: dir, override: { NODE_OPTIONS: nodeOptionsWithRequire(undefined, shim) } }), timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.stdout, 'ok', r.stderr);
+    const preloaded = readStateWriteLedger(viaShim);
+    assert.deepEqual([preloaded.installs, preloaded.preloadInstalls], [1, 1], JSON.stringify(preloaded));
+    assert.equal(formatStateWriteReport(preloaded, { chunksRun: 1 }).failed, false);
+    // The masking case: the chunk's NODE_OPTIONS is empty (its preload never loaded) and a
+    // test file requires the guard directly with the ledger variable the runner also passes.
+    const direct = path.join(dir, 'direct.ndjson');
+    const requirer = writeModule(dir, 'tests/requirer.cjs', `require(${JSON.stringify(GUARD_PATH)}); process.stdout.write('ok');`);
+    r = runNode([requirer], { cwd: dir, env: isolatedEnv({ home: dir, override: { NODE_OPTIONS: '', GSD_STATE_WRITE_LEDGER: direct } }), timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.stdout, 'ok', r.stderr);
+    const masked = readStateWriteLedger(direct);
+    assert.deepEqual([masked.installs, masked.preloadInstalls], [1, 0], JSON.stringify(masked));
+    const report = formatStateWriteReport(masked, { chunksRun: 1 });
+    assert.equal(report.failed, true, 'a direct-require sentinel must not vouch for the chunk');
+    assert.match(report.lines[1], /only 0 processes recorded the preload \(1 more installed it by a direct require, which does not vouch for a chunk\)/);
   });
 
   test('without a ledger the preload is inert: no wrapper is installed', (t) => {
@@ -316,7 +344,7 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
 
   test('an unreadable ledger is unreadable evidence: it fails the run, never reads as zero (#5170)', () => {
     const read = readStateWriteLedger(path.join(__dirname, 'no-such-ledger.ndjson'));
-    assert.deepEqual(read, { entries: null, installs: 0, tornLines: 0 });
+    assert.deepEqual(read, { entries: null, installs: 0, preloadInstalls: 0, tornLines: 0 });
     const r = formatStateWriteReport(read);
     assert.equal(r.failed, true);
     assert.equal(r.lines[0], 'run-tests: raw STATE.md write check: ledger unreadable, so the check did not run');
@@ -328,7 +356,7 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
     const file = path.join(dir, 'l.ndjson');
     fs.writeFileSync(file, '{"seam":true,"lockHeld":true}\n{"violati');
     const read = readStateWriteLedger(file);
-    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], installs: 0, tornLines: 1 });
+    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], installs: 0, preloadInstalls: 0, tornLines: 1 });
     const r = formatStateWriteReport(read);
     assert.equal(r.failed, false, 'a torn line is not a violation');
     assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 1, of which without the STATE.md lock: 0, unreadable ledger lines: 1); the check loaded in 0 processes');
@@ -338,31 +366,36 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
     const dir = createTempDir('rswg-sentinel-');
     t.after(() => cleanup(dir));
     const file = path.join(dir, 'l.ndjson');
-    fs.writeFileSync(file, '{"installed":true,"pid":1}\n{"seam":true,"lockHeld":true}\n{"installed":true,"pid":2}\n');
-    assert.deepEqual(readStateWriteLedger(file), { entries: [{ seam: true, lockHeld: true }], installs: 2, tornLines: 0 });
+    fs.writeFileSync(file, '{"installed":true,"preload":true,"pid":1}\n{"seam":true,"lockHeld":true}\n{"installed":true,"preload":false,"pid":2}\n');
+    assert.deepEqual(readStateWriteLedger(file), { entries: [{ seam: true, lockHeld: true }], installs: 2, preloadInstalls: 1, tornLines: 0 });
   });
 
   test('a run with fewer install sentinels than spawned chunks fails and names the shim and NODE_OPTIONS: a chunk whose preload never loaded cannot read as zero violations (#5120 audit, review)', () => {
     const where = { chunksRun: 2, shimPath: '/tmp/ev/raw-state-write-preload.cjs', nodeOptions: '--require "/tmp/ev/raw-state-write-preload.cjs" --max-old-space-size=4096' };
-    const never = formatStateWriteReport({ entries: [], installs: 0, tornLines: 0 }, where);
+    const never = formatStateWriteReport({ entries: [], installs: 0, preloadInstalls: 0, tornLines: 0 }, where);
     assert.equal(never.failed, true);
     assert.equal(never.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0); the check loaded in 0 processes');
     assert.equal(never.lines[1], 'run-tests: raw STATE.md write check: 2 chunks were spawned but only 0 processes recorded the preload, so the zero above is not evidence; the shim was /tmp/ev/raw-state-write-preload.cjs and each chunk received NODE_OPTIONS --require "/tmp/ev/raw-state-write-preload.cjs" --max-old-space-size=4096');
     // Every spawned chunk is itself a node process that loads the shim, so one chunk's
     // sentinel cannot vouch for another: 1 of 2 fails too.
-    const one = formatStateWriteReport({ entries: [], installs: 1, tornLines: 0 }, where);
+    const one = formatStateWriteReport({ entries: [], installs: 1, preloadInstalls: 1, tornLines: 0 }, where);
     assert.equal(one.failed, true);
     assert.match(one.lines[1], /^run-tests: raw STATE\.md write check: 2 chunks were spawned but only 1 process recorded the preload/);
     // The NODE_OPTIONS evidence is bounded so a long value cannot flood the line.
-    const long = formatStateWriteReport({ entries: [], installs: 0, tornLines: 0 }, { ...where, nodeOptions: 'x'.repeat(500) });
+    const long = formatStateWriteReport({ entries: [], installs: 0, preloadInstalls: 0, tornLines: 0 }, { ...where, nodeOptions: 'x'.repeat(500) });
     assert.match(long.lines[1], /NODE_OPTIONS x{120}\.\.\. \(500 chars\)$/);
     // Sentinels at or above the chunk count (test-file children add theirs) pass.
-    const loaded = formatStateWriteReport({ entries: [], installs: 2, tornLines: 0 }, where);
+    const loaded = formatStateWriteReport({ entries: [], installs: 2, preloadInstalls: 2, tornLines: 0 }, where);
     assert.equal(loaded.failed, false);
     assert.equal(loaded.lines.length, 1);
-    assert.equal(formatStateWriteReport({ entries: [], installs: 5, tornLines: 0 }, where).failed, false);
+    assert.equal(formatStateWriteReport({ entries: [], installs: 5, preloadInstalls: 5, tornLines: 0 }, where).failed, false);
     // No chunk ran (nothing to load into): no sentinel is owed.
-    assert.equal(formatStateWriteReport({ entries: [], installs: 0, tornLines: 0 }, { chunksRun: 0 }).failed, false);
+    assert.equal(formatStateWriteReport({ entries: [], installs: 0, preloadInstalls: 0, tornLines: 0 }, { chunksRun: 0 }).failed, false);
+    // A sentinel from a direct require of the guard (NEW-1) is counted and shown, never compared.
+    const direct = formatStateWriteReport({ entries: [], installs: 2, preloadInstalls: 1, tornLines: 0 }, where);
+    assert.equal(direct.failed, true);
+    assert.equal(direct.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0); the check loaded in 1 processes (and in 1 more by a direct require)');
+    assert.match(direct.lines[1], /only 1 process recorded the preload \(1 more installed it by a direct require, which does not vouch for a chunk\)/);
   });
 
   test('a ledger line that parses to null is an unreadable line, not an entry (#5120 review)', (t) => {
@@ -371,7 +404,7 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
     const file = path.join(dir, 'l.ndjson');
     fs.writeFileSync(file, 'null\n{"seam":true,"lockHeld":true}\n"x"\n');
     const read = readStateWriteLedger(file);
-    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], installs: 0, tornLines: 2 });
+    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], installs: 0, preloadInstalls: 0, tornLines: 2 });
     assert.equal(formatStateWriteReport(read, { chunksRun: 0 }).failed, false);
   });
 });

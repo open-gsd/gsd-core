@@ -467,7 +467,11 @@ them; every chunk the runner spawns is itself a node process that loads the
 shim, so a run with fewer sentinels than spawned chunks fails too, naming the
 shim path and the `NODE_OPTIONS` the chunks received: a chunk whose preload
 never loaded leaves no sentinel, and an empty ledger alone would otherwise
-read as zero violations.
+read as zero violations. Only a sentinel written through the runner's shim
+counts (the shim sets a marker the sentinel records); a test file that
+requires the guard directly installs the check too, and its sentinel is
+shown beside `P` but never compared, so it cannot vouch for a chunk whose
+preload did not load.
 
 Limits, stated plainly: it sees only code paths the suite executes; it wraps
 the `fs` write, append, rename, copy and cp entry points in their sync and

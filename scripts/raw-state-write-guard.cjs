@@ -36,10 +36,13 @@
 // chunk the runner reads the ledger and fails the run on any violation. Seam writes are recorded
 // as well, with whether this process held the STATE.md lock, so the report never states the zero
 // alone (ADR-3408 Decision 5). Each process that installs the wrappers also appends one install
-// sentinel line; every chunk the runner spawns is itself a node process that loads the shim, so
-// the runner fails a run whose ledger holds fewer sentinels than chunks spawned: a chunk whose
-// preload never loaded leaves no sentinel, and an empty ledger alone would otherwise read as
-// zero violations.
+// sentinel line, marked as a preload only when the runner's shim (preloadShimSource) set its
+// marker before requiring this file; every chunk the runner spawns is itself a node process that
+// loads the shim, so the runner fails a run whose ledger holds fewer preload sentinels than
+// chunks spawned: a chunk whose preload never loaded leaves no preload sentinel, and an empty
+// ledger alone would otherwise read as zero violations. A test file that requires this file
+// directly (the guard's own tests) installs too, on the ledger the runner also passes in the
+// env, but its sentinel is not a preload and cannot vouch for its chunk.
 //
 // Limits, stated plainly. It sees only code paths the suite executes. It wraps the fs entry points
 // listed in WRAPPED and WRAPPED_PROMISES (fs.promises.cp is seen through the fs.promises.copyFile
@@ -112,6 +115,24 @@ function classifyStateWrite({ destination, source, callerFile, viaSeam }) {
   return { recorded: true, violation: !seam, seam };
 }
 
+// Set by the runner's shim before it requires this file; the install sentinel records it.
+const PRELOADED = Symbol.for('gsd.rawStateWriteGuard.preloaded');
+
+/**
+ * Source of the per-run preload shim run-tests.cjs writes into its events directory: names
+ * the ledger (the path rides here, not only in the env, because isolated-env.cjs strips
+ * GSD_*), sets the preload marker, and requires this file. The marker is what makes the
+ * process's install sentinel count as a preload: only a chunk, or a child that inherited the
+ * chunk's NODE_OPTIONS, reaches this file through the shim.
+ */
+function preloadShimSource(ledgerPath) {
+  return (
+    `process.env[${JSON.stringify(LEDGER_ENV)}] = ${JSON.stringify(String(ledgerPath))};\n` +
+    `globalThis[Symbol.for(${JSON.stringify(PRELOADED.description)})] = true;\n` +
+    `require(${JSON.stringify(__filename)});\n`
+  );
+}
+
 /**
  * NODE_OPTIONS with `--require "<file>"` PREPENDED. Node runs --require preloads in order and the
  * guard installs once per process on the ledger named when it first loads, so the innermost
@@ -127,20 +148,22 @@ function nodeOptionsWithRequire(existing, file) {
 }
 
 /**
- * `{ entries, installs, tornLines }`: the ledger's write entries, the count of install sentinel
- * lines (one per process that installed the wrappers), and the count of lines that did not parse
- * to an object (a line a killed process left torn), or `{ entries: null, installs: 0, tornLines: 0 }`
- * when the ledger cannot be read (unreadable evidence, #5170).
+ * `{ entries, installs, preloadInstalls, tornLines }`: the ledger's write entries, the count of
+ * install sentinel lines (one per process that installed the wrappers), how many of those came
+ * through the runner's preload shim, and the count of lines that did not parse to an object (a
+ * line a killed process left torn), or `{ entries: null, installs: 0, preloadInstalls: 0,
+ * tornLines: 0 }` when the ledger cannot be read (unreadable evidence, #5170).
  */
 function readStateWriteLedger(file) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch {
-    return { entries: null, installs: 0, tornLines: 0 };
+    return { entries: null, installs: 0, preloadInstalls: 0, tornLines: 0 };
   }
   const entries = [];
   let installs = 0;
+  let preloadInstalls = 0;
   let tornLines = 0;
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -155,21 +178,27 @@ function readStateWriteLedger(file) {
       tornLines++;
       continue;
     }
-    if (parsed.installed === true) installs++;
-    else entries.push(parsed);
+    if (parsed.installed === true) {
+      installs++;
+      if (parsed.preload === true) preloadInstalls++;
+    } else {
+      entries.push(parsed);
+    }
   }
-  return { entries, installs, tornLines };
+  return { entries, installs, preloadInstalls, tornLines };
 }
 
 /**
  * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result.
  * `chunksRun` is how many test chunks the runner spawned; each is a node process that loads the
- * shim, so fewer install sentinels than chunks means a chunk whose preload never loaded, whose
+ * shim, so fewer PRELOAD sentinels than chunks means a chunk whose preload never loaded, whose
  * empty ledger is not evidence of zero violations: the run fails, and the line names the shim
  * (`shimPath`) and the NODE_OPTIONS the chunks received (`nodeOptions`, bounded), because the
- * runner deletes its events directory, shim and ledger included, right after printing.
+ * runner deletes its events directory, shim and ledger included, right after printing. A
+ * sentinel from a direct require of this file is counted and shown, never compared: it cannot
+ * vouch for a chunk (#5120 re-review NEW-1).
  */
-function formatStateWriteReport({ entries, installs = 0, tornLines }, { chunksRun, shimPath, nodeOptions } = {}) {
+function formatStateWriteReport({ entries, installs = 0, preloadInstalls = 0, tornLines }, { chunksRun, shimPath, nodeOptions } = {}) {
   if (entries === null) {
     return { failed: true, lines: ['run-tests: raw STATE.md write check: ledger unreadable, so the check did not run'] };
   }
@@ -180,15 +209,19 @@ function formatStateWriteReport({ entries, installs = 0, tornLines }, { chunksRu
   const lines = [
     `run-tests: raw STATE.md writes in product code: ${violations.length} ` +
       `(seam writes onto STATE.md: ${seamWrites.length}, of which without the STATE.md lock: ${unlocked}${torn}); ` +
-      `the check loaded in ${installs} processes`,
+      `the check loaded in ${preloadInstalls} processes` +
+      (installs > preloadInstalls ? ` (and in ${installs - preloadInstalls} more by a direct require)` : ''),
   ];
-  const neverLoaded = Number.isInteger(chunksRun) && installs < chunksRun;
+  const neverLoaded = Number.isInteger(chunksRun) && preloadInstalls < chunksRun;
   if (neverLoaded) {
     const options = String(nodeOptions == null ? '' : nodeOptions);
     const shown = options.length > 120 ? `${options.slice(0, 120)}... (${options.length} chars)` : options;
+    const direct = installs > preloadInstalls
+      ? ` (${installs - preloadInstalls} more installed it by a direct require, which does not vouch for a chunk)`
+      : '';
     lines.push(
       `run-tests: raw STATE.md write check: ${chunksRun} chunk${chunksRun === 1 ? ' was' : 's were'} spawned but only ` +
-        `${installs} process${installs === 1 ? '' : 'es'} recorded the preload, so the zero above is not evidence; ` +
+        `${preloadInstalls} process${preloadInstalls === 1 ? '' : 'es'} recorded the preload${direct}, so the zero above is not evidence; ` +
         `the shim was ${shimPath == null ? 'unknown' : shimPath} and each chunk received NODE_OPTIONS ${shown}`,
     );
   }
@@ -309,8 +342,12 @@ function install(ledger) {
   // sentinel, and its empty ledger is not evidence of zero violations. Never thrown into the
   // process being loaded; a lost sentinel shares the one once-flag with a lost record (same
   // ledger, same cause), so the run hears about the first loss only.
+  // `preload` is true only when the runner's shim (preloadShimSource) set its marker before
+  // requiring this file: a test file that requires the guard directly also installs, but its
+  // sentinel must not vouch for a chunk whose preload never loaded (#5120 re-review NEW-1).
+  const preload = globalThis[PRELOADED] === true;
   try {
-    originalAppend.call(fs, ledger, `${JSON.stringify({ installed: true, pid: process.pid, testFile: testFile || null })}\n`);
+    originalAppend.call(fs, ledger, `${JSON.stringify({ installed: true, preload, pid: process.pid, testFile: testFile || null })}\n`);
   } catch (err) {
     if (!ledgerWarned) {
       ledgerWarned = true;
@@ -332,6 +369,7 @@ module.exports = {
   TEST_FILE_ENV,
   SEAM_FUNCTIONS,
   classifyStateWrite,
+  preloadShimSource,
   nodeOptionsWithRequire,
   readStateWriteLedger,
   formatStateWriteReport,
