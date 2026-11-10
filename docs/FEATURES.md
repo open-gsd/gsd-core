@@ -673,7 +673,7 @@ not migrated or flagged.
 
 **Behavior:**
 
-- **Two signals count as progress.** A completion marker in the agent's output, or a `*-PLAN.md` file modified within the last check interval. Either one keeps plan-phase waiting. Only when neither appears for `planner.stall_threshold_minutes` (default `10`) does plan-phase treat the agent as stalled.
+- **Two signals count as progress.** A completion marker on the agent's return receipt (a GSD-owned file the agent writes as it finishes), or a `*-PLAN.md` file modified within the last check interval. Either one keeps plan-phase waiting. Only when neither appears for `planner.stall_threshold_minutes` (default `10`) does plan-phase treat the agent as stalled.
 - **It checks on a fixed cadence.** Plan-phase looks every `planner.stall_detect_interval_minutes` (default `5`). Each check is one bounded wait, so a finished agent is noticed at most one interval late. That is the cost of never hanging.
 - **The threshold is the knob for slow models.** A model that is still working but takes longer than the threshold to write anything is flagged as stalled. Raising the threshold removes those false alarms. Lowering the interval notices a finished planner sooner, at the price of more checks.
 - **Both values are whole minutes, `1` or more.** A stored `0`, a negative, a non-number or a value of more than nine digits falls back to the default. An interval of `0` would make every check a zero-length wait, and a threshold of `0` would flag a healthy agent on the first check.
