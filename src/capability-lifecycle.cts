@@ -78,8 +78,8 @@ const projectRootMod = require('./project-root.cjs') as {
 };
 // #1459 finding 4: the SHARED hardened lock primitive (single source of truth for lifecycle + consent).
 const lockMod = require('./capability-lock.cjs') as {
-  acquireLock: (lockPath: string) => { path: string; token: string; dev: number | null; ino: number | null } | null;
-  releaseLock: (handle: { path: string; token: string; dev: number | null; ino: number | null } | null) => void;
+  acquireLock: (lockPath: string) => { path: string; token: string; dev: bigint | null; ino: bigint | null } | null;
+  releaseLock: (handle: { path: string; token: string; dev: bigint | null; ino: bigint | null } | null) => void;
   getProcessStartTime: (pid: number) => string | null;
   _setLockProbes: (probes: Partial<{ isPidAlive: (pid: number) => boolean; getProcessStartTime: (pid: number) => string | null }>) => void;
   _resetLockProbes: () => void;
@@ -306,7 +306,7 @@ const LEDGER_TMP_ORPHAN_MS = 300_000;
 /** Valid capability id (kebab-case). Used to reject tampered ledger keys before acting on them. */
 const KEBAB_ID_RE = /^[a-z][a-z0-9-]*$/;
 
-type LockHandle = { path: string; token: string; dev: number | null; ino: number | null };
+type LockHandle = { path: string; token: string; dev: bigint | null; ino: bigint | null };
 
 /**
  * Acquire the capability-mutation lock (the single `.gsd/capabilities/.lock` under runtimeDir),

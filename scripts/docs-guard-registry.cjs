@@ -180,6 +180,7 @@ const DOCS_GUARD_TESTS = {
   // against the milestone-release-map module's exported enums.
   'tests/milestone-release-map.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  'tests/smart-discuss-classification.test.cjs': ['docs/COMMANDS.md'],
   'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
   'tests/autonomous-converge.test.cjs': [
     'docs/COMMANDS.md',
@@ -192,6 +193,7 @@ const DOCS_GUARD_TESTS = {
     'docs/reference/capability-manifest.md',
   ],
   'tests/claude-md.test.cjs': ['docs/COMMANDS.md'],
+  'tests/claude-orchestration-4747.test.cjs': ['docs/how-to/enable-claude-orchestration-workflow-backend.md'],
   'tests/claude-orchestration.test.cjs': ['docs/explanation/claude-orchestration-capability.md'],
   'tests/command-contract.test.cjs': [
     'docs/INVENTORY.md',
