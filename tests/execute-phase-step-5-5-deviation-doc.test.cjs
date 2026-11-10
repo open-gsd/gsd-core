@@ -7,7 +7,7 @@
  * Regression tests for #3264: cross-wave-dependency deviation cleanup documentation
  *
  * Guards that step 5.5 of execute-phase.md documents both skip conditions and
- * contains a self-contained cleanup-tail snippet for the deviation path.
+ * points to the cleanup-tail fragment for the deviation path.
  */
 
 const { describe, test } = require('node:test');
@@ -35,7 +35,10 @@ function extractStep55Block(content) {
   const end = content.indexOf('\n5.6.', start + 1);
   assert.ok(end !== -1, 'execute-phase.md must contain a step 5.6 block after 5.5');
 
-  return content.slice(start, end);
+  const block = content.slice(start, end);
+  const fragment = 'execute-phase/steps/worktree-cleanup-tail.md';
+  assert.ok(block.includes(fragment), 'step 5.5 must reference the cleanup-tail fragment');
+  return block + fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', fragment), 'utf-8');
 }
 
 describe('execute-phase step 5.5: cross-wave-deviation cleanup documentation (#3264)', () => {
@@ -56,6 +59,11 @@ describe('execute-phase step 5.5: cross-wave-deviation cleanup documentation (#3
     const content = readWorkflow();
     const block = extractStep55Block(content);
     assert.ok(block.length > 0, 'step 5.5 block must be non-empty');
+  });
+
+  test('step 5.5 requires the cleanup-tail fragment reference', () => {
+    const withoutReference = readWorkflow().replace('execute-phase/steps/worktree-cleanup-tail.md', '');
+    assert.throws(() => extractStep55Block(withoutReference), /must reference the cleanup-tail fragment/);
   });
 
   test('step 5.5 documents the standard wave contract', () => {
