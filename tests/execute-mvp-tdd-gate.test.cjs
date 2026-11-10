@@ -203,17 +203,25 @@ describe('#5106: test-file conventions are one definition', () => {
       const doc = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
       const start = doc.indexOf(marker);
       assert.ok(start >= 0, `${rel} has no "${marker}" list`);
-      const end = doc.indexOf('\n\n', start + marker.length);
-      const para = doc.slice(start, end > start ? end : undefined);
+      const end = doc.slice(start).search(/\r?\n\r?\n/);
+      assert.ok(end > 0, `${rel} list has no end`);
+      const para = doc.slice(start, start + end);
       const names = new Set([...para.matchAll(/`([^`]{1,80})`/g)].map(m => m[1]));
       for (const glob of TEST_FILE_GLOBS) {
         const documented = glob.endsWith('/**') ? glob.slice(0, -2) : glob;
         assert.ok(names.has(documented), `${rel} list must name ${documented}`);
       }
     }
-    // And the router recognizes a literal root and nested sample of every convention.
+    // Every glob has a root and a nested sample; the property and real-git rows read them.
     const { SAMPLES_BY_GLOB: samples } = require('./helpers/tdd-test-paths.cjs');
     assert.deepEqual(Object.keys(samples).sort(), [...TEST_FILE_GLOBS].sort(),
-      'a root and a nested sample per TEST_FILE_GLOBS entry, keyed by glob');
+      'one sample entry per TEST_FILE_GLOBS entry, keyed by glob');
+    for (const [glob, paths] of Object.entries(samples)) {
+      // `tests/x.js` is the root form of a directory glob
+      const rootSlashes = glob.endsWith('/**') ? 1 : 0;
+      const slashes = paths.map(p => p.split('/').length - 1);
+      assert.ok(slashes.includes(rootSlashes), `${glob} needs a root sample`);
+      assert.ok(slashes.some(n => n > rootSlashes), `${glob} needs a nested sample`);
+    }
   });
 });

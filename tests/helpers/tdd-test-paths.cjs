@@ -1,9 +1,10 @@
 'use strict';
 
 // One owner for every path list the #5181 test-file rows share.
-// The parity rows (execute-mvp-tdd-gate) and the real-git rows (safe-resume-gate-anchoring)
-// read the shared test and non-test lists, so a path added to either is checked in both directions.
-// The property rows (tdd-test-files.property) read SAMPLES_BY_GLOB only.
+// The real-git rows (safe-resume-gate-anchoring) read the shared test and non-test lists, so a
+// path added to either is checked in both directions.
+// The parity row (execute-mvp-tdd-gate) and the property rows (tdd-test-files.property) read
+// SAMPLES_BY_GLOB only.
 // No two shared paths may spell one directory with different case: macOS and Windows disks
 // fold them into one directory, and the real-git seed writes every path into one repo.
 
