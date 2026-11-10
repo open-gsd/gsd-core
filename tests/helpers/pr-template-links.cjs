@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../../scripts/gen-features.cjs');
-const { maskCode, scanInlineLinks } = require('../../scripts/gen-adr-index.cjs');
+const { maskCode, scanInlineLinks, existsCaseExact } = require('../../scripts/gen-adr-index.cjs');
 const { tokenizeHeadings } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -123,19 +123,10 @@ const decode = (s, h, where) => {
 // drop ?plain=1 / #anchor
 const repoPathOf = (h, where) => decode(nextRel(h).split(/[?#]/)[0], h, where);
 
-// Case-exact so a case-folding filesystem (macOS, Windows) cannot pass a link GitHub 404s.
-const existsExact = (rel) => {
-  let dir = ROOT;
-  try {
-    for (const seg of rel.split('/').filter(Boolean)) {
-      if (!fs.readdirSync(dir).includes(seg)) return false;
-      dir = path.join(dir, seg);
-    }
-  } catch {
-    return false;
-  }
-  return true;
-};
+// The ADR gate owns the case-exact walk (a case-folding filesystem cannot pass a link GitHub
+// 404s) and the symlink-escape refusal.
+const existsExact = (rel) =>
+  existsCaseExact(path.join(ROOT, rel), new Map(), fs.realpathSync(ROOT)).exists;
 const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
   .map((h) => repoPathOf(h, where))
   .filter((rel) => rel.split('/').includes('..') || !existsExact(rel));

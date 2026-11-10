@@ -767,6 +767,7 @@ module.exports = {
   missingRuleTestFiles,
   PROTECTED_WORKFLOWS,
   isPrTemplate,
+  isTemplateLinkDoc,
   TEMPLATE_LINK_OBSERVERS,
   missingProtectedWorkflows,
   classify,

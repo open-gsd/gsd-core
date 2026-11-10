@@ -9,9 +9,9 @@ const { slugify } = require('../scripts/gen-features.cjs');
 const { extractLinks, maskCode } = require('../scripts/gen-adr-index.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
-  REPO, NEXT, hrefsIn, isBadLink, missingNext, repoPathOf, unresolvedAnchors, headingSet,
+  REPO, NEXT, hrefsIn, isBadLink, nextRel, missingNext, repoPathOf, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
-const { isPrTemplate } = require('../scripts/ci-test-scope.cjs');
+const { isPrTemplate, isTemplateLinkDoc } = require('../scripts/ci-test-scope.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const DOCS_ANCHOR = 'CONTRIBUTING.md#documentation-updates--update-the-relevant-docs';
@@ -299,6 +299,10 @@ describe('PR template links (#5427)', () => {
   test('no link is bad', () => eachTemplate((f, hs) => hs.filter(isBadLink)));
   test('blob/next links point at existing repo paths',
     () => eachTemplate((f, hs) => missingNext(hs, f)));
+  test('every repo file a template links on next selects the guard (isTemplateLinkDoc)', () => {
+    eachTemplate((f, hs) => hs.filter((h) => nextRel(h) !== undefined)
+      .filter((h) => !isTemplateLinkDoc(repoPathOf(h, f))));
+  });
   test('anchors on next resolve', () => eachTemplate((f, hs) => unresolvedAnchors(hs, f)));
   test('"Using the wrong template?" links keep ?template= and name an existing template', () => {
     const names = ['fix', 'feature', 'enhancement', 'registry-entry'];
