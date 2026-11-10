@@ -1710,7 +1710,8 @@ function mutateCurrentPositionResume(
  * `4 — blocked on review of 2 PRs` what follows `4` is ` — blocked`, so there
  * is nothing for the total to be read from.
  *
- * BOTH grammars carry the same trailing tolerance, deliberately. An earlier
+ * Both grammars tolerate trailing text (`N` after whitespace, `N of M` after a
+ * word boundary, so `5.` and `5)` read but `5.5` does not), deliberately. An earlier
  * revision anchored `N` hard (`/^(\d+)\s*$/`) while leaving `N of M` open,
  * which hard-errored on values base parsed happily via `parseInt`:
  * `Total Plans in Phase: 5 phases` and `Current Plan: 3 (blocked)`. #3784's own
@@ -1733,7 +1734,8 @@ function mutateCurrentPositionResume(
 type PlanFieldName = 'Plan' | 'Current Plan';
 
 const PLAN_SHAPE_N = /^(\d+)((?:\s.*)?)$/;
-const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)\b((?:\W.*)?)$/;
+// The total ends at a word boundary, so `2 of 5.` and `2 of 5)` read; a separator that continues the number (`5.5`, `5/7`) does not.
+const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)\b(?![^\s\w]\d)((?:\W.*)?)$/;
 
 /**
  * Parse a decimal group into a plan number, or `null` if it is not a value we
@@ -1775,7 +1777,7 @@ type PlanPosition = {
 /**
  * The plan-position rule (#5320): reads a `Current Plan` / `Plan` /
  * `Total Plans in Phase` value for `advancePlanCore` and `plannedPhaseCore`,
- * its only two consumers. `null` when the value is absent or neither `N` nor `N of M` leads it.
+ * the reader behind `readPlanLines` (so `advancePlanCore`, `planLinesForPlanned`, `readPlanPosition` and `readRecordedPlanTotal`). `null` when the value is absent or neither `N` nor `N of M` leads it.
  * The slot is where a new total goes: an `N of M` value swaps only M (keeping
  * trailing text and, when M has a leading zero, its width), an unfilled total
  * (`1 of ?`) is swapped for the count, and a bare `N` gains ` of M` and drops
@@ -2154,7 +2156,7 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // parseInt on a raw field value, so a value the grammar does not fully describe cannot half-parse into
   // a plausible number.
   const lines = readPlanLines(content);
-  const { currentPlan: legacyPlan, plan: planField, legacy, totalPos: legacyTotalPos, planPos, ambiguous } = lines;
+  const { currentPlan: legacyPlan, plan: planField, legacy, planPos, ambiguous } = lines;
   const { current: parsedCurrent, total: parsedTotal } = planNumbers(lines);
 
   if (parsedCurrent === null || parsedTotal === null) {

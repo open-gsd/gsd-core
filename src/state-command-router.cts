@@ -72,7 +72,7 @@ interface RouteStateCommandOptions {
 function parsePlans(plans: string | null | undefined, error: (message: string, reason?: string) => void): number | null {
   const parsedPlans = plans == null ? null : parsePlanCount(plans);
   if (plans != null && parsedPlans === null) {
-    error('Invalid --plans value. Expected a non-negative integer.', ERROR_REASON.USAGE);
+    error('Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.', ERROR_REASON.USAGE);
     return null;
   }
   return parsedPlans;
