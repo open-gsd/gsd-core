@@ -210,7 +210,8 @@ describe('#5106: test-file conventions are one definition', () => {
       const end = doc.slice(start).search(/\r?\n\r?\n/);
       assert.ok(end > 0, `${rel} list has no end`);
       const para = doc.slice(start, start + end);
-      const names = namedIn(para.split(/\r?\n/));
+      // The list is the first sentence of a prose paragraph; later sentences may mention globs too.
+      const names = namedIn(para.slice(marker.length).split(/\.\s/)[0].split(/\r?\n/));
       for (const glob of TEST_FILE_GLOBS) {
         const documented = documentedName(glob);
         assert.ok(names.has(documented), `${rel} list must name ${documented}`);
