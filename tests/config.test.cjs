@@ -4625,15 +4625,19 @@ describe('#5681: mergeIntoGlobalDefaults properties', () => {
 describe('#5681: config-save-defaults reads the store under the #5759 config cap', () => {
   const { CONFIG_MAX_BYTES } = require('../gsd-core/bin/lib/config-file-read.cjs');
 
-  /** A JSON object store of exactly `bytes` bytes: a mode plus a padding string. */
-  function storeOfSize(bytes) {
-    const shell = JSON.stringify({ mode: 'interactive', pad: '' });
-    const text = JSON.stringify({ mode: 'interactive', pad: 'x'.repeat(bytes - shell.length) });
+  /**
+   * A store of exactly `bytes` bytes holding `mode` plus a padding string, in the
+   * form a save writes it (2-space JSON and a trailing newline), so the store's
+   * size after a save differs from `bytes` only by the change in `mode`'s length.
+   */
+  function storeOfSize(bytes, mode = 'interactive') {
+    const render = (pad) => JSON.stringify({ mode, pad }, null, 2) + '\n';
+    const text = render('x'.repeat(bytes - render('').length));
     assert.strictEqual(Buffer.byteLength(text), bytes);
     return text;
   }
 
-  function seed(t, text) {
+  function seed(t, text, patch = { mode: 'yolo' }) {
     const gsdHome = createTempDir('gsd-5681-cap-');
     const savedGsdHome = process.env.GSD_HOME;
     process.env.GSD_HOME = gsdHome;
@@ -4645,7 +4649,7 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
     const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
     fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
     fs.writeFileSync(defaultsPath, text);
-    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify(patch), false));
     return { defaultsPath, save };
   }
 
@@ -4673,6 +4677,32 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
     assert.strictEqual(result.error.reason, 'config_defaults_invalid');
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
     assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  // The cap holds for what a save writes, not only for what it reads: a save that
+  // would grow the store past CONFIG_MAX_BYTES would leave a store that the loader
+  // and the next save both refuse, so nothing is written.
+  test('a save that would grow the store past the cap is refused and writes nothing', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES, 'yolo');
+    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  test('a save that ends exactly at the cap is written', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES - 'interactive'.length + 'yolo'.length, 'yolo');
+    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, true, result.err);
+    assert.strictEqual(fs.statSync(defaultsPath).size, CONFIG_MAX_BYTES);
+    assert.strictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')).mode, 'interactive');
   });
 });
 

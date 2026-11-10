@@ -961,6 +961,7 @@ function saveDefaultsStore(
   // A store kept as a symlink (into a dotfiles repo) is read and written at its
   // target: the atomic write renames over its path, which would replace the link.
   let storePath = defaultsPath;
+  let storeMode = 0o666; // openExclusiveTempSync's creation default, narrowed by the umask
   if (!created) {
     const invalid = ERROR_REASON.CONFIG_DEFAULTS_INVALID;
     try {
@@ -990,6 +991,22 @@ function saveDefaultsStore(
       return { message: `Refusing to overwrite ${defaultsPath}: it does not hold a JSON object. Fix or remove it, then save again.`, reason: invalid };
     }
     existing = parsed;
+    // The rename gives the store the replacement's mode, so a private store
+    // (0600) is replaced by a file created with its mode, never a wider one.
+    try {
+      storeMode = fs.statSync(storePath).mode & 0o777;
+    } catch {
+      // the creation default below
+    }
+  }
+
+  const data = JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n';
+  // The cap holds for what is written as well as for what is read: a store over
+  // CONFIG_MAX_BYTES is one the loader and the next save both refuse, so a save
+  // that would grow the store past it writes nothing.
+  const size = Buffer.byteLength(data, 'utf8');
+  if (size > configLoader.CONFIG_MAX_BYTES) {
+    return { message: `Refusing to save ${defaultsPath}: the saved store would be ${size} bytes, over the ${configLoader.CONFIG_MAX_BYTES}-byte limit a config file is read under. Nothing was written.`, reason: ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED };
   }
 
   // Written to a temp file and renamed over the store, never written in place:
@@ -997,12 +1014,11 @@ function saveDefaultsStore(
   // the target in place, which leaves the store half-written until its restore
   // runs, and lost if the restore fails too. Same pattern as
   // installer-migrations' atomicWriteInstallState. The temp file is
-  // created exclusively under a random name (#5759), so an entry planted beside
-  // the store, a link or a FIFO, is never opened, written through or blocked on.
-  const data = JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n';
+  // created exclusively under a random name (#5759), so an entry already at a
+  // temp-file name, a link or a FIFO, is never opened, written through or blocked on.
   let tmpPath: string | null = null;
   try {
-    const temp = openExclusiveTempSync(storePath);
+    const temp = openExclusiveTempSync(storePath, undefined, storeMode);
     tmpPath = temp.tmpPath;
     try {
       fs.writeFileSync(temp.fd, data, 'utf8');

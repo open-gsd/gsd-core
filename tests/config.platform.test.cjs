@@ -64,6 +64,8 @@
  *   `mkfifo` and a real file symlink; there is no FIFO on Windows and the temp-file
  *   hardening they pin (#5759) is POSIX link semantics (process-platform,
  *   raw-child-process, symlink-keyword). Skipped on win32.
+ * - #5681 "a save keeps the store file mode" — asserts POSIX mode bits (0600) on the
+ *   replaced store; Windows has no such bits (process-platform). Skipped on win32.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -686,6 +688,21 @@ describe('#5681: the defaults store is read bounded and replaced through an excl
     assert.strictEqual(r.exitCode, 0, r.summary);
     assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the link target is never written');
     assert.ok(fs.lstatSync(defaultsPath).isFile(), 'the store is a regular file, not the planted link');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
+  });
+
+  // The store is replaced by rename, so the replacement's creation mode is what the
+  // store ends with: a private store must not come back group- and world-readable.
+  test('a save keeps the store file mode', (t) => {
+    const { gsdHome, defaultsPath } = seedStore(t, JSON.stringify({ runtime: 'codex' }));
+    fs.chmodSync(defaultsPath, 0o600);
+
+    const result = runGsdTools(['config-save-defaults', PATCH], gsdHome, { GSD_HOME: gsdHome });
+
+    assert.ok(result.success, result.error);
+    if (process.platform !== 'win32') {
+      assert.strictEqual(fs.statSync(defaultsPath).mode & 0o777, 0o600);
+    }
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
   });
 
