@@ -572,6 +572,7 @@ An empty `REVIEW_FILES` (#3661) means nothing new to re-review — NOT a phase w
 
 ```bash
 REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
+case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac # #5019: the lane-evidence key must not depend on the cwd of a later verb call
 # #5019: a previous run's persisted lane evidence (and its kept lane dir) is stale on every route,
 # including the `--fix` recovery below that skips commit_review.
 gsd_run lane-evidence-clear "$REVIEW_PATH" || true
@@ -690,6 +691,7 @@ elif [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ]; then
   # spawn_reviewer derive it; the other inputs (FIX_AUTO, REVIEW_FILES, DIFF_BASE, REVIEW_DEPTH,
   # PHASE_DIR) come from the orchestrator shell.
   REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
+  case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac # #5019: the lane-evidence key must not depend on the cwd of a later verb call
   DISPATCH_JSON=$(printf '%s\n' "${REVIEW_FILES[@]}" | gsd_run review-lane dispatch-step \
     --repo-root "$REPO_ROOT" --depth "$REVIEW_DEPTH" --base-sha "$DIFF_BASE" \
     --run-dir "$LANE_RUN_DIR" --explicit "$EXPLICIT_JOINED" \
@@ -752,6 +754,7 @@ string. Both are success; there is no other outcome.
 Compute the review output path:
 ```bash
 REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
+case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac # #5019: the lane-evidence key must not depend on the cwd of a later verb call
 ```
 
 `DIFF_BASE` for agent context (in case the agent needs it) is already set by `compute_file_scope`

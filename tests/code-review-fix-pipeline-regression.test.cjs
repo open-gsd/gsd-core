@@ -459,6 +459,19 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     });
   });
 
+  test('every REVIEW_PATH assignment makes a relative PHASE_DIR absolute, so the state key never depends on the verb caller\'s cwd', { skip: !HAS_BASH }, (t) => {
+    sandbox(t, (sb) => {
+      const sites = [FIX, REVIEW].flatMap((src) => src.replace(/\r\n/g, '\n').split('\n')
+        .flatMap((l, i, all) => (l.trim() === REVIEW_PATH_EXPR ? [[l, all[i + 1]]] : [])));
+      assert.strictEqual(sites.length, 4, 'one assignment in code-review-fix.md, three in code-review.md');
+      for (const [assign, next] of sites) {
+        assert.match(next.trim(), /^case "\$REVIEW_PATH" in \/\*\)/, `the line after "${assign.trim()}" makes the path absolute`);
+        const out = bash(`cd "${sb.dir}"; PHASE_DIR=ph; PADDED_PHASE=01\n${assign}\n${next}\nprintf '%s' "$REVIEW_PATH"`);
+        assert.strictEqual(out.stdout, `${sb.dir}/ph/01-REVIEW.md`);
+      }
+    });
+  });
+
   test('lane-evidence-clear: no argument is a usage error; an absent file is a quiet no-op', (t) => {
     const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
     const noArg = runNode([GSD_TOOLS, 'lane-evidence-clear'], {});
