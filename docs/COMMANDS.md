@@ -2494,7 +2494,7 @@ Limits of the contract: the key is the review path as the caller passes it, so t
 absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it.
 `lane-evidence-clear` removes a malformed state but cannot find its lane directory, which stays (this follows only hand corruption).
 The state is bound to the review path, not to one REVIEW.md, so an `auto` state under 6 hours old can reach a later standalone
-`/gsd-code-review-fix --auto` for the same phase; the block is framed UNVERIFIED. The workflow fences read `${TMPDIR:-/tmp}`
+`code-review-fix --auto` run for the same phase; the block is framed UNVERIFIED. The workflow fences read `${TMPDIR:-/tmp}`
 while the verbs use `os.tmpdir()` on Windows when `TMPDIR` is unset: under Git Bash set `TMPDIR` so both name one directory.
 
 **Prerequisites:** none — they read no project state and need no resolvable project root
