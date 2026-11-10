@@ -571,8 +571,10 @@ This `if`/`else`/`fi` is the entire guard: unless `DEPTH_OK` is the literal stri
 An empty `REVIEW_FILES` (#3661) means nothing new to re-review — NOT a phase with no standing findings. #4665: with `--fix` + an existing REVIEW.md, route to `dispatch-fix` (the flag covers "if REVIEW.md already exists"):
 
 ```bash
+# #5019: the lane-evidence key hashes the path, so every REVIEW_PATH is made absolute (same line
+# at each assignment): a verb called from another cwd must find the same state.
 REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
-case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac # #5019: the lane-evidence key must not depend on the cwd of a later verb call
+case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac
 # #5019: a previous run's persisted lane evidence (and its kept lane dir) is stale on every route,
 # including the `--fix` recovery below that skips commit_review.
 gsd_run lane-evidence-clear "$REVIEW_PATH" || true
@@ -691,7 +693,7 @@ elif [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ]; then
   # spawn_reviewer derive it; the other inputs (FIX_AUTO, REVIEW_FILES, DIFF_BASE, REVIEW_DEPTH,
   # PHASE_DIR) come from the orchestrator shell.
   REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
-  case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac # #5019: the lane-evidence key must not depend on the cwd of a later verb call
+  case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac
   DISPATCH_JSON=$(printf '%s\n' "${REVIEW_FILES[@]}" | gsd_run review-lane dispatch-step \
     --repo-root "$REPO_ROOT" --depth "$REVIEW_DEPTH" --base-sha "$DIFF_BASE" \
     --run-dir "$LANE_RUN_DIR" --explicit "$EXPLICIT_JOINED" \
@@ -754,7 +756,7 @@ string. Both are success; there is no other outcome.
 Compute the review output path:
 ```bash
 REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
-case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac # #5019: the lane-evidence key must not depend on the cwd of a later verb call
+case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac
 ```
 
 `DIFF_BASE` for agent context (in case the agent needs it) is already set by `compute_file_scope`

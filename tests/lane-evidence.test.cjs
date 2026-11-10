@@ -36,10 +36,11 @@ describe('#5019 lane-evidence verbs', () => {
     const sb = sandbox(t);
     sb.lane('abc123');
     persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
-    const mtime = fs.statSync(sb.state).mtimeMs;
+    const whole = Math.floor(Date.now() / 1000); // a whole second survives the stat round trip exactly
     for (const [min, ok] of [[359, true], [360, false], [361, false]]) {
+      fs.utimesSync(sb.state, whole, whole); // an accepted read refreshes the mtime, so reset it per row
+      const mtime = fs.statSync(sb.state).mtimeMs;
       assert.strictEqual(readLaneEvidence(sb.review, sb.tmp, () => mtime + min * 60000), ok ? BLOCK : '', `${min} min old`);
-      fs.utimesSync(sb.state, mtime / 1000, mtime / 1000); // an accepted read refreshes the mtime
     }
   });
 

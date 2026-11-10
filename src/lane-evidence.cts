@@ -6,7 +6,8 @@
  * State lives in `${TMPDIR}/gsd-review-lane-evidence-<key>`, keyed to the review file, never in the
  * project or its git metadata. Content: `<suffix>\n<auto|once>\n<block>`, where `<suffix>` is the 6-char
  * mktemp suffix of the lane scratch dir `${TMPDIR}/gsd-review-lanes-<suffix>` and `auto` keeps both for the
- * `--fix --auto` loop. STATE_RE is the only parser of the file; persist checks each argument against the same two patterns, anchored.
+ * `--fix --auto` loop. STATE_RE is the only parser of the file; persist checks each argument
+ * against the same two patterns, anchored.
  *
  * The suffix is data read back from disk, never a path: only a 6-char alphanumeric value names a
  * directory, and a symlinked or foreign-owned entry is skipped, so no value reaches outside TMPDIR.
@@ -70,7 +71,8 @@ export function persistLaneEvidence(reviewPath: string, suffix: string, mode: st
     fs.writeFileSync(tmp, `${suffix}\n${mode}\n${block}`, { mode: 0o600, flag: 'wx' });
     retryRenameSync(tmp, file);
   } catch {
-    // the initial reviewer still cites the lane dir: keep it (at worst it leaks until the run's own clear)
+    // The initial reviewer still cites the lane dir, so keep it. No state names it, so no clear
+    // finds it: it stays in the temp dir until the OS temp sweep (a crashed run on `next` leaves it too).
     process.stderr.write(`Warning: could not persist lane evidence to ${file}; keeping the lane dir.\n`);
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
   }

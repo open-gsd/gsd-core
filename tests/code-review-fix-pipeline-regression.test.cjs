@@ -472,6 +472,19 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     });
   });
 
+  test('a state persisted under a relative PHASE_DIR is read and cleared from another cwd', { skip: !HAS_BASH }, (t) => {
+    sandbox(t, (sb) => {
+      const [assign, next] = [REVIEW_PATH_EXPR, FIX.replace(/\r\n/g, '\n').split('\n').find((l) => l.startsWith('case "$REVIEW_PATH" in /*)'))];
+      const lanes = sb.lane('abc123');
+      const other = fs.mkdtempSync(path.join(sb.dir, 'cwd-'));
+      const out = bash([`export TMPDIR="${sb.tmp}"; cd "${sb.dir}"; PHASE_DIR=ph; PADDED_PHASE=01`, assign, next,
+        `printf '%s' blk | gsd_run lane-evidence-persist "$REVIEW_PATH" abc123 auto`,
+        `cd "${other}"`, 'gsd_run lane-evidence-read "$REVIEW_PATH"', 'gsd_run lane-evidence-clear "$REVIEW_PATH"'].join('\n'));
+      assert.strictEqual(out.stdout, 'blk', 'the read from the other cwd finds the state');
+      assert.deepStrictEqual([fs.existsSync(lanes), fs.existsSync(laneStatePath(path.join(sb.dir, 'ph', '01-REVIEW.md'), sb.tmp))], [false, false], 'the clear from the other cwd removes both');
+    });
+  });
+
   test('lane-evidence-clear: no argument is a usage error; an absent file is a quiet no-op', (t) => {
     const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
     const noArg = runNode([GSD_TOOLS, 'lane-evidence-clear'], {});

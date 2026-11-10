@@ -1,6 +1,7 @@
 'use strict';
-// Slices SHIPPED bash out of the workflow .md files with its own small slicer (lines / stepRegion /
-// stepFence; it shares nothing with the product tests) and prints a bash script on stdout. Nothing here is hand-written workflow logic except the
+// Slices SHIPPED bash out of the workflow .md files with its own small slicer (lines /
+// stepRegion / stepFence; it shares nothing with the product tests) and prints a bash
+// script on stdout. Nothing here is hand-written workflow logic except the
 // stub of `review-lane dispatch-step` (the one call that would spawn a metered CLI).
 // usage: shipped.cjs dispatch|commit|prompt <worktree> <project> [head|base]
 const fs = require('node:fs');
