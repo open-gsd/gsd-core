@@ -243,7 +243,9 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.ok(recordAt < cleanupAt, 'the ledger reads the backups BEFORE they are removed');
   });
 
-  test('T6b — the cleanup fence, EXECUTED: removes on clean, retains on anything else', { skip: BASH_SKIP }, () => {
+  test(
+    'T6b — the cleanup fence, EXECUTED: removes on clean, retains on anything else',
+    { skip: BASH_SKIP }, () => {
     // The behavioural half of T6, and the one that survives a branch inversion. Drives the shipped
     // fence in both directions against real files, so an inverted condition fails here rather than
     // passing a token grep — which is exactly what the round's review demonstrated of the first cut.
@@ -458,7 +460,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   });
 
   test(
-    'T6e — #5506: only .iter<digits>.md files are backups (.iter2x.md and .iter2-notes.md are not)',
+    'T6e — #5506: only .iter<digits>.md files are backups (.iter2x.md, .iter2-notes.md are not)',
     { skip: BASH_SKIP }, (t) => {
     const notes = ['01-REVIEW.iter2x.md', '01-REVIEW.iter2-notes.md'];
     const degraded = seedBackupRepo(t, 'gsd-5506-glob-d-', 'issues_found', false);
@@ -678,7 +680,9 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
   const report = (value, eol = '\n') =>
     ['---', 'status: all_fixed', `findings_in_scope: ${value}`, 'fixed: 0', 'skipped: 0', '---', '', 'body'].join(eol);
 
-  test('boundary: 0 proves zero scope, 1 and -1 do not, 00 is zero, CRLF is honored', { skip: BASH_SKIP }, () => {
+  test(
+    'boundary: 0 proves zero scope, 1 and -1 do not, 00 is zero, CRLF is honored',
+    { skip: BASH_SKIP }, () => {
     assert.strictEqual(probe(report('0')).verdict, 'yes', 'limit: 0 in scope');
     assert.strictEqual(probe(report('1')).verdict, 'no', 'limit+1: 1 in scope');
     assert.strictEqual(probe(report('-1')).verdict, 'no', 'limit-1: a negative count is malformed, not zero');
@@ -716,7 +720,9 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
       'the degradation warning must not fire on a zero-scope stop');
   });
 
-  test('the fix summary does not claim resolution when nothing was in scope', { skip: BASH_SKIP }, () => {
+  test(
+    'the fix summary does not claim resolution when nothing was in scope',
+    { skip: BASH_SKIP }, () => {
     const region = stepRegion(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'present_results').replace(/\r\n/g, '\n');
     const lines = region.split('\n');
     const marker = lines.findIndex((l) => l.includes('All issues resolved.'));
