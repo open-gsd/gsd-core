@@ -5325,7 +5325,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
   });
 
   test('planned-phase and advance-plan read and write the same position for generated values (limit-1/limit/limit+1)', () => {
-    const rests = ['', ' in current phase', ' - wave 2 done'];
+    const rests = ['', ' in current phase', ' - wave 2 done', '.', ',', ')', ';'];
     const spec = fc.record({
       kind: fc.constantFrom('N', 'NofM', 'NofQ', 'TBD'),
       n: fc.integer({ min: 0, max: 9 }),
@@ -5334,8 +5334,10 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     });
     const render = (s) => {
       if (s.kind === 'TBD') return 'TBD';
-      if (s.kind === 'N') return `${s.n}${s.rest}`;
-      return `${s.n} of ${s.kind === 'NofM' ? s.m : '?'}${s.rest}`;
+      // punctuation tails (`5.`, `5)`) follow only a numeric total: a bare N needs whitespace after it
+      const rest = s.kind === 'NofM' || /^\s|^$/.test(s.rest) ? s.rest : '';
+      if (s.kind === 'N') return `${s.n}${rest}`;
+      return `${s.n} of ${s.kind === 'NofM' ? s.m : '?'}${rest}`;
     };
     const readable = (s) => s !== null && s.kind !== 'TBD';
     const adv0 = (content) => transitionCore(content, { kind: 'advancePlan' }, deps).data;
@@ -5414,6 +5416,14 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(lineOf(planned('Plan: 2 of A/B testing', 6).content), 'Plan: 2 of 6 of A/B testing');
     assert.strictEqual(lineOf(planned('Plan: 2 of I/O work', 6).content), 'Plan: 2 of 6 of I/O work');
     assert.strictEqual(lineOf(planned('Plan: 2 of ? - wave 1 done', 6).content), 'Plan: 2 of 6 - wave 1 done');
+    // the placeholder ends at a boundary: `?x` is author text, not an unfilled total
+    assert.strictEqual(lineOf(planned('Plan: 2 of ?x', 6).content), 'Plan: 2 of 6 of ?x');
+  });
+
+  test('plannedPhase unit: a total followed by punctuation keeps its punctuation and gains no second " of"', () => {
+    for (const tail of ['.', ',', ')', ';', ' - wave 1']) {
+      assert.strictEqual(lineOf(planned(`Plan: 2 of 5${tail}`, 6).content), `Plan: 2 of 6${tail}`, tail);
+    }
   });
 
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {

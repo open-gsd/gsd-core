@@ -1733,7 +1733,7 @@ function mutateCurrentPositionResume(
 type PlanFieldName = 'Plan' | 'Current Plan';
 
 const PLAN_SHAPE_N = /^(\d+)((?:\s.*)?)$/;
-const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)((?:\s.*)?)$/;
+const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)\b((?:\W.*)?)$/;
 
 /**
  * Parse a decimal group into a plan number, or `null` if it is not a value we
@@ -1793,7 +1793,7 @@ function readPlanPosition(raw: string | null | undefined): PlanPosition | null {
   if (!bare) return null;
   const n = planNumberFrom(bare[1]);
   // `N of ?` (begin-phase without --plans) holds an unfilled total: a `?` or a lone capital letter (`N of M`, not `A/B`) is the slot, so no second " of" is written.
-  const unfilled = /^(\s+of\s+)(?:\?|[A-Z](?=\s|$))/.exec(bare[2]);
+  const unfilled = /^(\s+of\s+)(?:\?|[A-Z])(?=\s|$)/.exec(bare[2]);
   if (unfilled) return { n, ofM: false, legacy: false, m: null, slot: [`${bare[1]}${unfilled[1]}`, 1, bare[2].slice(unfilled[0].length)] };
   return { n, ofM: false, legacy: !/^\s+TBD\b/.test(bare[2]), m: null, slot: [`${bare[1]} of `, 1, bare[2].replace(/^\s+TBD\b/, '') || ' in current phase'] };
 }
