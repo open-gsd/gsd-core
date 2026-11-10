@@ -5,12 +5,12 @@
 // `?template=` links stay (maintainer ruling on #5427).
 // Every link to another host is bad too (an allowlist, not only relative links): a template
 // links this repo and nothing else, so a lookalike host cannot pass.
-// `.md` is matched case-sensitively (anchorKind).
 // Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
 // are never relative.
-// Anchors use scripts/gen-features.cjs `slugify`: ASCII only, raw heading text, so a
-// heading with non-ASCII text, a link or emphasis, a blockquote heading or an explicit
-// `<a id>` is not modelled; no template links to one.
+// Anchors use scripts/gen-features.cjs `slugify` on the raw heading text. A heading it
+// cannot reproduce (a non-ASCII letter or digit, a link, `_` emphasis) gets no anchor,
+// and blockquote headings and `<a id>` anchors are not collected, so a link to any of
+// them fails.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -169,10 +169,17 @@ const setextHeadings = (md) => {
 
 // GitHub anchors: headings inside fences do not exist (the sectionizer seam skips them), a
 // repeated slug gets -1, -2, ...
+// GitHub keeps non-ASCII letters and slugs the rendered text; slugify keeps neither, so
+// such a heading gets no anchor and a link to it fails.
+const unslugable = (text) => {
+  const bare = text.replace(/`[^`\n]*`/g, '');
+  return /(?!\p{ASCII})[\p{L}\p{N}]/u.test(text) || /\]\(|\]\[/.test(bare)
+    || /(?:^|\W)_|_(?:\W|$)/.test(bare);
+};
 const headingSet = (md) => {
   const seen = new Map();
   const headings = [...tokenizeHeadings(md), ...setextHeadings(md)].sort((a, b) => a.line - b.line);
-  return new Set(headings.map(({ text }) => {
+  return new Set(headings.filter(({ text }) => !unslugable(text)).map(({ text }) => {
     const s = slugify(text);
     const n = seen.get(s) ?? 0;
     seen.set(s, n + 1);
@@ -186,7 +193,7 @@ const LINE_ANCHOR = /^L(\d+)(?:C\d+)?(?:-L(\d+)(?:C\d+)?)?$/;
 // line: blame, ?plain=1 and non-markdown blob. none: raw.
 const anchorKind = ({ segs, tail }, rel) => {
   const plain = new URLSearchParams(tail.split('#')[0]).get('plain') === '1';
-  const md = rel.endsWith('.md');
+  const md = /\.md$/i.test(rel); // GitHub renders `.MD` as markdown too
   if (segs[0] === 'blame' || (segs[0] === 'blob' && (plain || !md))) return 'line';
   return REF_PAGE.has(segs[0]) && segs[0] !== 'raw' && md ? 'heading' : 'none';
 };
@@ -220,5 +227,5 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
 
 module.exports = {
   REPO, NEXT, hrefsIn, isBadLink, nextRel, repoPathOf, missingNext,
-  unresolvedAnchors, headingSet,
+  unresolvedAnchors, headingSet, anchorKind,
 };

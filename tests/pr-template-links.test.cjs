@@ -10,7 +10,8 @@ const { extractLinks, maskCode } = require('../scripts/gen-adr-index.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, nextRel, missingNext, repoPathOf, unresolvedAnchors, headingSet,
-} = require('./helpers/pr-template-links.cjs');
+  anchorKind,
+} =require('./helpers/pr-template-links.cjs');
 const { isPrTemplate, isTemplateLinkDoc } = require('../scripts/ci-test-scope.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -33,6 +34,14 @@ describe('heading anchors (#5427)', () => {
   test('an em dash slugs like the features generator', () => {
     assert.deepEqual([...headingSet('## A — B')], [slugify('A — B')]);
     assert.deepEqual([...headingSet('## A — B')], ['a--b']);
+  });
+  test('a heading slugify cannot reproduce gets no anchor, so a link to it fails', () => {
+    const md = '## Café\n## Ü1\n## See [x](y)\n## A [b][c]\n## _emph_ x\n> ## Quoted\n'
+      + '<a id="manual"></a>\n## Keep `snake_case` and snake_case';
+    assert.deepEqual([...headingSet(md)], ['keep-snake_case-and-snake_case']);
+    for (const a of ['caf', 'caf-1', 'see-xy', 'a-bc', '_emph_-x', 'quoted', 'manual']) {
+      assert.equal(headingSet(md).has(a), false, a);
+    }
   });
   test('four leading spaces is a code block, not a heading', () => {
     assert.equal(headingSet('    ## Code').size, 0);
@@ -157,6 +166,9 @@ describe('next-ref existence and anchors (#5427)', () => {
       ['CONTRIBUTING.md#L5-L2']);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#L5`], 'tpl.md'),
       ['CONTRIBUTING.md#L5']);
+    for (const rel of ['X.md', 'X.MD', 'X.Md']) {
+      assert.equal(anchorKind({ segs: ['blob', 'next', rel], tail: '' }, rel), 'heading', rel);
+    }
     const heading = DOCS_ANCHOR.split('#')[1];
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#${heading}`], 'tpl.md'),
       [`CONTRIBUTING.md#${heading}`]);
