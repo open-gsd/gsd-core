@@ -1179,7 +1179,7 @@ const goodBaseline = (sha) => ({
 });
 
 test('a stale baseline cache key is detected, not used', () => {
-  // ADR-2719 §5: the one thing that has to be exactly right.
+  // ADR-2719 §5: "That key discipline is load-bearing — a stale baseline mis-attributes silently."
   const r = resolveBaseline({
     expectedSha: SHA_A,
     env: {},
