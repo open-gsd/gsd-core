@@ -202,8 +202,8 @@ RED commits go unseen:
 
 **Cost of the broad pathspec (#4379).** `*.spec.*` also matches a non-test file that carries the
 word, such as `api.spec.json` or `openapi.spec.yaml`, so a commit touching only that file satisfies
-the RED gate. The earlier `**/*.spec.*` entry already matched at any nested path. The suffix globs
-match file names only, because `*` never crosses `/` under `:(glob,icase)`.
+the RED gate. The file globs match base names only, because `*` never crosses `/` under
+`:(glob,icase)`.
 
 **Known gap — Rust inline unit tests (#4379).** Rust integration tests under `tests/` (including
 `crates/*/tests/`) match. An inline `#[test]` conventionally lives inside the implementation file, so

@@ -186,11 +186,15 @@ describe('#5106: test-file conventions are one definition', () => {
     assert.ok(listStart >= 0 && listEnd > listStart,
       'references/tdd.md has no "Create first test file" list');
     const list = ref.slice(listStart, listEnd);
-    // Only the leading part of a bullet (before ` — `) names globs; a mention in a note does not count.
-    const named = new Set(list.split(/\r?\n/).filter(l => l.startsWith('- `'))
-      .flatMap(l => [...l.split(' — ')[0].matchAll(/`([^`]+)`/g)].map(m => m[1])));
+    // A list names a glob only before a note: ` — ` (English) or `（…）` (zh-CN).
+    const namedIn = (lines) => new Set(lines.flatMap((l) => {
+      const head = l.split(' — ')[0].replace(/（[^）]*）/g, '');
+      return [...head.matchAll(/`([^`]{1,80})`/g)].map(m => m[1]);
+    }));
+    const documentedName = (glob) => (glob.endsWith('/**') ? glob.slice(0, -2) : glob);
+    const named = namedIn(list.split(/\r?\n/).filter(l => l.startsWith('- `')));
     for (const glob of TEST_FILE_GLOBS) {
-      const documented = glob.endsWith('/**') ? glob.slice(0, -2) : glob;
+      const documented = documentedName(glob);
       assert.ok(named.has(documented), `references/tdd.md list bullets must name ${documented}`);
     }
     // The other docs that restate the list name every glob too: read each list paragraph alone.
@@ -206,9 +210,9 @@ describe('#5106: test-file conventions are one definition', () => {
       const end = doc.slice(start).search(/\r?\n\r?\n/);
       assert.ok(end > 0, `${rel} list has no end`);
       const para = doc.slice(start, start + end);
-      const names = new Set([...para.matchAll(/`([^`]{1,80})`/g)].map(m => m[1]));
+      const names = namedIn(para.split(/\r?\n/));
       for (const glob of TEST_FILE_GLOBS) {
-        const documented = glob.endsWith('/**') ? glob.slice(0, -2) : glob;
+        const documented = documentedName(glob);
         assert.ok(names.has(documented), `${rel} list must name ${documented}`);
       }
     }
