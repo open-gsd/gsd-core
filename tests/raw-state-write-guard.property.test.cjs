@@ -34,8 +34,20 @@ const { classifyStateWrite } = require('../scripts/raw-state-write-guard.cjs');
 
 const NOT_RECORDED = Object.freeze({ recorded: false, violation: false, seam: false });
 
-// One path segment: non-empty, no separator of either family.
-const segment = fc.string({ minLength: 1, maxLength: 12 }).filter((s) => !/[\\/]/.test(s));
+// One path segment: non-empty, no separator of either family. Random strings almost never
+// land on the rule's own tokens, so the near misses the rule must tell apart (case, a
+// suffix, padding, the two product directory names and look-alikes) are mixed in by name:
+// the filtered arbitraries below then reject and accept real candidates instead of passing
+// on arbitrary strings.
+const NEAR_MISSES = [
+  'STATE.md', 'state.md', 'STATE.MD', 'State.md', 'STATE.md.tmp', 'STATE.md.bak', 'STATE.md.lock', 'XSTATE.md',
+  ' STATE.md', 'STATE.md ', 'STATE', 'PROJECT.md',
+  'gsd-core', 'bin', 'lib', 'Bin', 'gsd-core-x', 'gsdcore', 'gsd_core', 'x.cjs', 'x.js',
+];
+const segment = fc.oneof(
+  fc.string({ minLength: 1, maxLength: 12 }).filter((s) => !/[\\/]/.test(s)),
+  fc.constantFrom(...NEAR_MISSES),
+);
 const separator = fc.constantFrom('/', '\\');
 
 /** Join segments with a generated separator between each pair (mixed within one path). */
@@ -75,7 +87,11 @@ const productCaller = pathOf(
 const hasProductPair = (segs) => segs.some((s, i) => s === 'gsd-core' && segs[i + 1] === 'bin');
 
 // A caller that is not product code, in three families: a `.cjs` file with no
-// gsd-core/bin pair; a file under gsd-core/bin that is not `.cjs`; no caller.
+// gsd-core/bin pair (the directory names are in the segment pool, so the filter
+// rejects real `.../gsd-core/bin/...` candidates and keeps `gsd-core/lib/x.cjs`,
+// `gsd-core-x/bin/x.cjs` and `bin/gsd-core/x.cjs`); a file under gsd-core/bin that
+// does not end in `.cjs` (the name itself may not end in `.cjs` when the extension is
+// empty, or the family would emit a real product path); no caller at all.
 const nonProductCaller = fc.oneof(
   pathOf(
     fc
@@ -87,7 +103,7 @@ const nonProductCaller = fc.oneof(
     fc
       .tuple(
         fc.array(segment, { minLength: 0, maxLength: 3 }),
-        segment,
+        segment.filter((name) => !name.endsWith('.cjs')),
         fc.constantFrom('.js', '.cts', '.mjs', '.cjs.bak', '.CJS', ''),
       )
       .map(([before, name, ext]) => [...before, 'gsd-core', 'bin', 'lib', `${name}${ext}`]),
