@@ -531,7 +531,7 @@ Output: [Working, tested feature]
 
 **RED:** Create test file → write test describing expected behavior → run test (MUST fail) → commit: `test({phase}-{plan}): add failing test for [feature]`
 
-**GREEN:** Write minimal code to pass → run test (MUST pass) → commit: `feat({phase}-{plan}): implement [feature]`
+**GREEN:** Write minimal code to pass → run test (MUST pass) → commit: `feat({phase}-{plan}): implement [feature]` (new behavior) or `fix({phase}-{plan}): correct [defect]` (plan corrects a defect)
 
 **REFACTOR (if needed):** Clean up → run tests (MUST pass) → commit: `refactor({phase}-{plan}): clean up [feature]`
 

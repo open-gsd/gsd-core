@@ -74,6 +74,27 @@ describe('#4867 TDD review pairs RED and GREEN across depends_on', () => {
     assert.match(payload.table, /01-20 GREEN is supplied by dependent plan 01-21/);
   });
 
+  test('a dependent plan\'s fix commit supplies the GREEN too (#5274)', () => {
+    const payload = review((dir) => {
+      plan(dir, '01-x', '01-20', { type: 'tdd' });
+      plan(dir, '01-x', '01-21', { type: 'execute', dependsOn: ['01-20'] });
+      commit(dir, 'test(01-20): RED probe');
+      commit(dir, 'fix(01-21): GREEN fix');
+    });
+    assert.equal(rowOf(payload, '01-20').status, 'Pass');
+    assert.deepEqual(rowOf(payload, '01-20').greenFrom, ['01-21']);
+  });
+
+  test('a dependent plan with only a non-GREEN commit leaves the probe plan FAIL (#5274 control)', () => {
+    const payload = review((dir) => {
+      plan(dir, '01-x', '01-20', { type: 'tdd' });
+      plan(dir, '01-x', '01-21', { type: 'execute', dependsOn: ['01-20'] });
+      commit(dir, 'test(01-20): RED probe');
+      commit(dir, 'refactor(01-21): not a GREEN');
+    });
+    assert.equal(rowOf(payload, '01-20').status, 'FAIL');
+  });
+
   test('works for a decimal phase such as 01.1 (the reported shape)', () => {
     const payload = review((dir) => {
       plan(dir, '01.1-x', '01.1-20', { type: 'tdd' });
@@ -111,7 +132,7 @@ describe('#4867 TDD review pairs RED and GREEN across depends_on', () => {
     assert.equal(payload.block, true);
   });
 
-  test('a dependent plan with no feat commit gives no credit', () => {
+  test('a dependent plan with no feat/fix commit gives no credit', () => {
     const payload = review((dir) => {
       plan(dir, '01-x', '01-20', { type: 'tdd' });
       plan(dir, '01-x', '01-21', { type: 'execute', dependsOn: ['01-20'] });

@@ -102,7 +102,7 @@ Output: [可工作的、已测试的功能]
 1. 编写使测试通过的最小代码
 2. 不耍小聪明，不优化 - 只让它工作
 3. 运行测试 - 必须**通过**
-4. 提交：`feat({phase}-{plan}): implement [feature]`
+4. 提交：`feat({phase}-{plan}): implement [feature]`（修复缺陷时用 `fix(...)`，同样计为 GREEN）
 
 **REFACTOR（如需要）：**
 1. 如果存在明显的改进，清理实现

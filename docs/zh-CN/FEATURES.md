@@ -2503,7 +2503,7 @@ capture_thought({
 **需求：**
 - REQ-TDD-01：`workflow.tdd_mode` 配置键（布尔值，默认 `false`）
 - REQ-TDD-02：启用后，规划器对所有符合条件的任务（业务逻辑、API、验证、算法、状态机）应用 `references/tdd.md` 中的 TDD 启发式方法
-- REQ-TDD-03：执行器对 `type: tdd` 计划强制执行门控序列 — RED 提交（`test(...)`）必须在 GREEN 提交（`feat(...)`）之前
+- REQ-TDD-03：执行器对 `type: tdd` 计划强制执行门控序列 — RED 提交（`test(...)`）必须在 GREEN 提交（`feat(...)` 或 `fix(...)`）之前
 - REQ-TDD-04：在 RED 阶段测试意外通过时执行器快速失败（功能已存在或测试有误）
 - REQ-TDD-05：阶段末协作审查检查点验证所有 TDD 计划的门控合规性（建议性，非阻塞）
 - REQ-TDD-06：门控违规在 SUMMARY.md 的 `## TDD Gate Compliance` 节区中呈现
