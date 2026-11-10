@@ -70,19 +70,19 @@ export function persistLaneEvidence(reviewPath: string, suffix: string, mode: st
     fs.writeFileSync(tmp, `${suffix}\n${mode}\n${block}`, { mode: 0o600, flag: 'wx' });
     retryRenameSync(tmp, file);
   } catch {
-    process.stderr.write(`Warning: could not persist lane evidence to ${file}; removing the lane dir.\n`);
+    // the initial reviewer still cites the lane dir: keep it (at worst it leaks until the run's own clear)
+    process.stderr.write(`Warning: could not persist lane evidence to ${file}; keeping the lane dir.\n`);
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
-    removeLaneDir(tmpDir, suffix);
   }
 }
 
 /** The stored block, or '' when there is no usable state. */
-export function readLaneEvidence(reviewPath: string, tmpDir: string = defaultTmp()): string {
+export function readLaneEvidence(reviewPath: string, tmpDir: string = defaultTmp(), now: () => number = Date.now): string {
   const file = laneStatePath(reviewPath, tmpDir);
   const s = loadState(file);
   if (s === null) return '';
-  if (s !== 'rejected' && s.mode === 'auto' && Date.now() - s.mtimeMs < MAX_AGE_MS && ownedLaneDir(tmpDir, s.suffix)) {
-    try { const now = new Date(); fs.utimesSync(file, now, now); } catch { /* freshness refresh is best effort */ }
+  if (s !== 'rejected' && s.mode === 'auto' && now() - s.mtimeMs < MAX_AGE_MS && ownedLaneDir(tmpDir, s.suffix)) {
+    try { const t = new Date(now()); fs.utimesSync(file, t, t); } catch { /* freshness refresh is best effort */ }
     return s.block;
   }
   process.stderr.write(`Warning: lane evidence ${file} rejected (idle for 6h, not an --auto state, not a regular file we own, malformed, or lane dir missing, a symlink or foreign); re-reviewing without it.\n`);

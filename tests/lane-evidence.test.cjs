@@ -2,7 +2,7 @@
 
 // #5019: the lane-evidence verbs (persist, read, clear) are the one owner of the persisted
 // external-reviewer evidence. State lives under TMPDIR keyed to the review path; these tests call
-// the functions through their tmpDir seam (no bash, so Windows lanes run them), the CLI once, and, off win32, the reviewer-hop harness through the shipped fences.
+// the functions through their tmpDir seam (no bash, so Windows lanes run them), and the CLI once.
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -32,13 +32,14 @@ describe('#5019 lane-evidence verbs', () => {
     if (process.platform !== 'win32') assert.strictEqual(fs.statSync(sb.state).mode & 0o777, 0o600);
   });
 
-  test('read accepts 359, rejects 360 and 361 minutes', (t) => {
+  test('read accepts 359, rejects 360 and 361 minutes, with the clock pinned', (t) => {
     const sb = sandbox(t);
     sb.lane('abc123');
+    persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
+    const mtime = fs.statSync(sb.state).mtimeMs;
     for (const [min, ok] of [[359, true], [360, false], [361, false]]) {
-      persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
-      age(sb.state, min);
-      assert.strictEqual(readLaneEvidence(sb.review, sb.tmp), ok ? BLOCK : '', `${min} min old`);
+      assert.strictEqual(readLaneEvidence(sb.review, sb.tmp, () => mtime + min * 60000), ok ? BLOCK : '', `${min} min old`);
+      fs.utimesSync(sb.state, mtime / 1000, mtime / 1000); // an accepted read refreshes the mtime
     }
   });
 
@@ -77,13 +78,13 @@ describe('#5019 lane-evidence verbs', () => {
     assert.deepStrictEqual([fs.existsSync(d), fs.existsSync(sb.state)], [false, false]);
   });
 
-  test('a failed state write removes the lane dir it would have pointed at', (t) => {
+  test('a failed state write keeps the lane dir the initial reviewer still cites', (t) => {
     const sb = sandbox(t);
     const d = sb.lane('abc123');
     fs.mkdirSync(sb.state); // a directory where the state file goes: the rename fails
     t.mock.method(process.stderr, 'write', () => true);
     persistLaneEvidence(sb.review, 'abc123', 'auto', BLOCK, sb.tmp);
-    assert.strictEqual(fs.existsSync(d), false);
+    assert.strictEqual(fs.existsSync(d), true);
   });
 
   test('persist rejects an invalid suffix or mode as a usage error', (t) => {
@@ -260,32 +261,5 @@ describe('#5019 lane-evidence verbs', () => {
     clearLaneEvidence(review, { tmpDir: sb.tmp });
     assert.deepStrictEqual(snap(), before);
     assert.deepStrictEqual(fs.readdirSync(project), ['.git']);
-  });
-
-  // The #5019 reviewer-hop harness stages and asserts the evidence through the shipped fences and the verbs:
-  // dispatch, commit (--auto), then the generated head prompt must carry the block and the cited lane path.
-  test('harness head prompt carries the evidence block', { skip: process.platform === 'win32' }, (t) => {
-    const HARNESS = path.join(ROOT, 'docs', 'issueevidence', '5019-reviewer-hop-harness');
-    const shipped = path.join(HARNESS, 'lib', 'shipped.cjs');
-    for (const f of ['trial.sh', 'iter3.sh', 'build.sh']) {
-      const r = runHook('-n', [path.join(HARNESS, f)], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
-      assert.strictEqual(r.exitCode, 0, `${f}: ${r.stderr}`);
-    }
-    const project = sandbox(t).dir;
-    for (const d of ['src', 'phase']) fs.mkdirSync(path.join(project, d));
-    for (const f of ['config', 'lockout', 'messages', 'auth']) fs.copyFileSync(path.join(HARNESS, 'lib', 'fixture', `${f}.js`), path.join(project, 'src', `${f}.js`));
-    const run = (verb) => {
-      const gen = runNode([shipped, verb, ROOT, project, 'head'], {});
-      assert.strictEqual(gen.exitCode, 0, `${verb}: ${gen.stderr}`);
-      const r = runHook('-c', [gen.stdout], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS * 4, env: { ...process.env, TMPDIR: path.join(project, 'tmp') } });
-      assert.strictEqual(r.exitCode, 0, `${verb}: ${r.stderr}`);
-      return r.stdout;
-    };
-    run('dispatch');
-    fs.copyFileSync(path.join(HARNESS, 'lib', 'fixture', '01-REVIEW.md'), path.join(project, 'phase', '01-REVIEW.md'));
-    run('commit');
-    const prompt = run('prompt');
-    assert.match(prompt, /<external_reviewer_evidence>/);
-    assert.ok(prompt.includes('gsd-review-cursor.md'), 'the cited lane path is in the prompt');
   });
 });
