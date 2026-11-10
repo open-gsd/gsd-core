@@ -35,7 +35,10 @@
 // survives it. Each recorded write appends one JSON line; after the last
 // chunk the runner reads the ledger and fails the run on any violation. Seam writes are recorded
 // as well, with whether this process held the STATE.md lock, so the report never states the zero
-// alone (ADR-3408 Decision 5).
+// alone (ADR-3408 Decision 5). Each process that installs the wrappers also appends one install
+// sentinel line, and the runner fails a run that executed at least one chunk whose ledger holds
+// no sentinel: a preload that never loaded leaves an empty ledger, and an empty ledger alone
+// would otherwise read as zero violations.
 //
 // Limits, stated plainly. It sees only code paths the suite executes. It wraps the fs entry points
 // listed in WRAPPED and WRAPPED_PROMISES (fs.promises.cp is seen through the fs.promises.copyFile
@@ -50,7 +53,10 @@
 // a test that mocks an fs function with a JS wrapper (mock.method) puts its own frame nearest, so a
 // product write made under that mock is not recorded. The basename match is case-sensitive. Without
 // a ledger path the module installs nothing. A ledger line a killed process left torn is counted
-// and printed beside the zero, never silently dropped.
+// and printed beside the zero, never silently dropped. The install sentinel proves the preload
+// loaded in at least one process of the run, not in every chunk or every child: the runner fails
+// only on zero sentinels, it does not compare the count with the chunk count, and a child whose
+// env replaced NODE_OPTIONS leaves no sentinel and no records, so it stays unguarded and unseen.
 
 const fs = require('fs');
 const path = require('path');
@@ -128,23 +134,33 @@ function readStateWriteLedger(file) {
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch {
-    return { entries: null, tornLines: 0 };
+    return { entries: null, installs: 0, tornLines: 0 };
   }
   const entries = [];
+  let installs = 0;
   let tornLines = 0;
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
+    let parsed;
     try {
-      entries.push(JSON.parse(line));
+      parsed = JSON.parse(line);
     } catch {
       tornLines++;
+      continue;
     }
+    if (parsed && parsed.installed === true) installs++;
+    else entries.push(parsed);
   }
-  return { entries, tornLines };
+  return { entries, installs, tornLines };
 }
 
-/** `{ failed, lines }` for the runner to print, from readStateWriteLedger's result. */
-function formatStateWriteReport({ entries, tornLines }) {
+/**
+ * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result.
+ * `chunksRun` is how many test chunks the runner executed: when at least one ran and no
+ * process recorded the install sentinel, the preload never loaded, and an empty ledger is
+ * not evidence of zero violations, so the run fails.
+ */
+function formatStateWriteReport({ entries, installs = 0, tornLines }, { chunksRun } = {}) {
   if (entries === null) {
     return { failed: true, lines: ['run-tests: raw STATE.md write check: ledger unreadable, so the check did not run'] };
   }
@@ -154,12 +170,20 @@ function formatStateWriteReport({ entries, tornLines }) {
   const torn = tornLines > 0 ? `, unreadable ledger lines: ${tornLines}` : '';
   const lines = [
     `run-tests: raw STATE.md writes in product code: ${violations.length} ` +
-      `(seam writes onto STATE.md: ${seamWrites.length}, of which without the STATE.md lock: ${unlocked}${torn})`,
+      `(seam writes onto STATE.md: ${seamWrites.length}, of which without the STATE.md lock: ${unlocked}${torn}); ` +
+      `the check loaded in ${installs} processes`,
   ];
+  const neverLoaded = Number.isInteger(chunksRun) && chunksRun > 0 && installs === 0;
+  if (neverLoaded) {
+    lines.push(
+      `run-tests: raw STATE.md write check: the preload loaded in no process of this run ` +
+        `(${chunksRun} chunk${chunksRun === 1 ? '' : 's'} ran), so the zero above is not evidence`,
+    );
+  }
   for (const v of violations) {
     lines.push(`  ${v.fn} ${v.destination} from ${v.callerFile}:${v.callerLine} (test: ${v.testFile || 'unknown'})`);
   }
-  return { failed: violations.length > 0, lines };
+  return { failed: violations.length > 0 || neverLoaded, lines };
 }
 
 /**
@@ -266,6 +290,19 @@ function install(ledger) {
       if (depth === 0) observe(`promises.${name}`, args[index], args[0]);
       return original.apply(this, args);
     };
+  }
+
+  // One install sentinel per process, written after the wrappers are in place. The runner
+  // counts these: a run that executed a chunk and holds none never loaded this file, and its
+  // empty ledger is not evidence of zero violations. Never thrown into the process being
+  // loaded; a lost sentinel is said once, like a lost record.
+  try {
+    originalAppend.call(fs, ledger, `${JSON.stringify({ installed: true, pid: process.pid, testFile: testFile || null })}\n`);
+  } catch (err) {
+    if (!ledgerWarned) {
+      ledgerWarned = true;
+      try { process.stderr.write(`raw-state-write-guard: could not record the preload install (${err && err.message}); the run's check is incomplete\n`); } catch { /* nothing left to do */ }
+    }
   }
 }
 

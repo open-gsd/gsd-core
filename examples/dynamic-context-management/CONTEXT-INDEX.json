@@ -948,7 +948,7 @@
     {
       "id": "RAW-STATE-WRITE.GUARD.SEAM.report",
       "klass": "RAW-STATE-WRITE",
-      "value": "one stderr line on every run pairing the violation count with the seam-write count and the unlocked seam-write count (ADR-3408 Decision 5: the zero is never printed alone); a missing or unreadable ledger FAILS the run as unreadable evidence (#5170), torn ledger lines are counted beside the zero; the unlocked seam-write count is reported, not enforced",
+      "value": "one stderr line on every run pairing the violation count with the seam-write count and the unlocked seam-write count (ADR-3408 Decision 5: the zero is never printed alone); a missing or unreadable ledger FAILS the run as unreadable evidence (#5170), torn ledger lines are counted beside the zero; the unlocked seam-write count is reported, not enforced; every process that installs the wrappers appends one install sentinel line ({installed:true,pid}) and the line prints the sentinel count, and a run that executed >= 1 chunk with ZERO sentinels FAILS (the preload never loaded, so an empty ledger is not evidence of zero violations); residual: zero-vs-some, not sentinel-count-vs-chunk-count",
       "line": 893
     },
     {

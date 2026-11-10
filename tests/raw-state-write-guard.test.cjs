@@ -46,7 +46,7 @@ function writeModule(dir, rel, body) {
  * strips every GSD_* variable, so the ledger path is opted back in through `override`,
  * the same opt-in the runner's preload shim makes for the suite.
  */
-function runGuarded(dir, script, extraEnv = {}) {
+function runGuardedLedger(dir, script, extraEnv = {}) {
   const ledger = path.join(dir, 'ledger.ndjson');
   const env = isolatedEnv({
     home: dir,
@@ -54,8 +54,9 @@ function runGuarded(dir, script, extraEnv = {}) {
   });
   const r = runNode([script], { cwd: dir, env, timeoutMs: PROBE_TIMEOUT_MS });
   assert.equal(r.exitCode, 0, `child failed: ${r.stderr}`);
-  return readStateWriteLedger(ledger).entries;
+  return readStateWriteLedger(ledger);
 }
+const runGuarded = (dir, script, extraEnv) => runGuardedLedger(dir, script, extraEnv).entries;
 
 describe('classifyStateWrite: the approved rule (#5120)', () => {
   const lib = (name) => path.join('/x', 'gsd-core', 'bin', 'lib', name);
@@ -245,10 +246,14 @@ w(${JSON.stringify(target)}, process.pid); w(${JSON.stringify(target)}, process.
     const main = writeModule(dir, 'tests/parent.test.cjs', `'use strict';
 const r = require('node:child_process').spawnSync(process.execPath, [${JSON.stringify(writer)}], { stdio: 'inherit', timeout: 30000 });
 process.exitCode = r.status;`);
-    const entries = runGuarded(dir, main, { NODE_TEST_CONTEXT: 'child-v8' });
+    const read = runGuardedLedger(dir, main, { NODE_TEST_CONTEXT: 'child-v8' });
+    const entries = read.entries;
     assert.equal(entries.length, 1);
     assert.equal(entries[0].violation, true);
     assert.equal(entries[0].testFile, main, 'the violation names the test file whose subprocess wrote');
+    // One install sentinel per process that loaded the preload: the parent and its child
+    // (#5120 audit: a guard that never loaded must not read as zero violations).
+    assert.equal(read.installs, 2, JSON.stringify(read));
   });
 
   test('without a ledger the preload is inert: no wrapper is installed', (t) => {
@@ -298,20 +303,20 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
     ];
     const r = formatStateWriteReport({ entries, tornLines: 0 });
     assert.equal(r.failed, false);
-    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 2, of which without the STATE.md lock: 1)');
+    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 2, of which without the STATE.md lock: 1); the check loaded in 0 processes');
   });
 
   test('a violation fails the run and names the caller, destination and test file', () => {
     const entries = [{ violation: true, seam: false, lockHeld: false, fn: 'writeFileSync', destination: '/p/STATE.md', callerFile: '/r/gsd-core/bin/lib/x.cjs', callerLine: 7, testFile: '/r/tests/y.test.cjs' }];
     const r = formatStateWriteReport({ entries, tornLines: 0 });
     assert.equal(r.failed, true);
-    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 1 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0)');
+    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 1 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0); the check loaded in 0 processes');
     assert.equal(r.lines[1], '  writeFileSync /p/STATE.md from /r/gsd-core/bin/lib/x.cjs:7 (test: /r/tests/y.test.cjs)');
   });
 
   test('an unreadable ledger is unreadable evidence: it fails the run, never reads as zero (#5170)', () => {
     const read = readStateWriteLedger(path.join(__dirname, 'no-such-ledger.ndjson'));
-    assert.deepEqual(read, { entries: null, tornLines: 0 });
+    assert.deepEqual(read, { entries: null, installs: 0, tornLines: 0 });
     const r = formatStateWriteReport(read);
     assert.equal(r.failed, true);
     assert.equal(r.lines[0], 'run-tests: raw STATE.md write check: ledger unreadable, so the check did not run');
@@ -323,10 +328,31 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
     const file = path.join(dir, 'l.ndjson');
     fs.writeFileSync(file, '{"seam":true,"lockHeld":true}\n{"violati');
     const read = readStateWriteLedger(file);
-    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], tornLines: 1 });
+    assert.deepEqual(read, { entries: [{ seam: true, lockHeld: true }], installs: 0, tornLines: 1 });
     const r = formatStateWriteReport(read);
     assert.equal(r.failed, false, 'a torn line is not a violation');
-    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 1, of which without the STATE.md lock: 0, unreadable ledger lines: 1)');
+    assert.equal(r.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 1, of which without the STATE.md lock: 0, unreadable ledger lines: 1); the check loaded in 0 processes');
+  });
+
+  test('an install sentinel is counted beside the writes, never as one of them (#5120 audit)', (t) => {
+    const dir = createTempDir('rswg-sentinel-');
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'l.ndjson');
+    fs.writeFileSync(file, '{"installed":true,"pid":1}\n{"seam":true,"lockHeld":true}\n{"installed":true,"pid":2}\n');
+    assert.deepEqual(readStateWriteLedger(file), { entries: [{ seam: true, lockHeld: true }], installs: 2, tornLines: 0 });
+  });
+
+  test('a run that executed a chunk but holds no install sentinel fails: a guard that never loaded cannot read as zero violations (#5120 audit)', () => {
+    const never = formatStateWriteReport({ entries: [], installs: 0, tornLines: 0 }, { chunksRun: 1 });
+    assert.equal(never.failed, true);
+    assert.equal(never.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0); the check loaded in 0 processes');
+    assert.equal(never.lines[1], 'run-tests: raw STATE.md write check: the preload loaded in no process of this run (1 chunk ran), so the zero above is not evidence');
+    // The same empty ledger is a clean pass once one process recorded the preload.
+    const loaded = formatStateWriteReport({ entries: [], installs: 1, tornLines: 0 }, { chunksRun: 1 });
+    assert.equal(loaded.failed, false);
+    assert.equal(loaded.lines.length, 1);
+    // No chunk ran (nothing to load into): no sentinel is owed.
+    assert.equal(formatStateWriteReport({ entries: [], installs: 0, tornLines: 0 }, { chunksRun: 0 }).failed, false);
   });
 });
 
@@ -397,5 +423,8 @@ test('passes', () => { fs.writeFileSync(path.join(${JSON.stringify(dir)}, 'STATE
     const r = runRunner(dir);
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(r.stderr, /run-tests: raw STATE\.md writes in product code: 0 \(/);
+    // The install sentinel survived the runner end to end: the preload loaded in the chunk
+    // process at least (#5120 audit: an empty ledger alone is not evidence the check ran).
+    assert.match(r.stderr, /lock: 0\); the check loaded in [1-9]\d* processes/);
   });
 });

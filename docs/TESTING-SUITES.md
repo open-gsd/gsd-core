@@ -451,7 +451,7 @@ it (#5104 miss 3, #5120). A raw write skips the STATE.md lock, which is the
 After the last chunk the runner prints one line, on every run:
 
 ```text
-run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: N, of which without the STATE.md lock: M)
+run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: N, of which without the STATE.md lock: M); the check loaded in P processes
 ```
 
 The zero is never printed alone (ADR-3408 Decision 5): the seam-write count
@@ -461,7 +461,11 @@ there are any. The unlocked count is reported, not enforced, by this check. A
 violation names the fs function, the destination, the product file and line,
 and the test file whose run produced it (`unknown` for a child built with
 `isolated-env.cjs`, which strips the attribution variable). A missing or
-unreadable ledger fails the run as unreadable evidence, never as a zero.
+unreadable ledger fails the run as unreadable evidence, never as a zero. Each process that
+installs the check appends one install sentinel to the ledger, and `P` counts
+them; a run that executed at least one chunk and holds no sentinel fails too,
+because a preload that never loaded leaves an empty ledger, and an empty ledger
+alone would otherwise read as zero violations.
 
 Limits, stated plainly: it sees only code paths the suite executes; it wraps
 the `fs` write, append, rename, copy and cp entry points in their sync and
@@ -469,8 +473,11 @@ callback forms and the promise forms of write, append, rename and copyFile
 (`fs.promises.cp` is seen through the `fs.promises.copyFile` it calls), not
 `fs.openSync` + `fs.writeSync`, file handles, write streams or native addons (the seam's own direct fallback writes through a
 descriptor, so it is not counted among the seam writes); a test that replaces
-`NODE_OPTIONS` runs its child unguarded; and a write made under a JS mock of
-an fs function is attributed to the mock's frame.
+`NODE_OPTIONS` runs its child unguarded, and leaves no sentinel and no record,
+so it is unseen; a write made under a JS mock of an fs function is attributed
+to the mock's frame; and the install sentinel proves the check loaded in at
+least one process of the run, not in every chunk or child (the runner fails on
+zero sentinels and does not compare the count with the chunk count).
 
 ## The mergeability preflight
 
