@@ -5415,11 +5415,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
 
   test('plannedPhase unit: only the `?` placeholder after `of` is an unfilled total; an author word there survives', () => {
     assert.strictEqual(lineOf(planned('Plan: 2 of the way done', 6).content), 'Plan: 2 of 6 of the way done');
-    assert.strictEqual(lineOf(planned('Plan: 2 of A/B testing', 6).content), 'Plan: 2 of 6 of A/B testing');
-    assert.strictEqual(lineOf(planned('Plan: 2 of I/O work', 6).content), 'Plan: 2 of 6 of I/O work');
     assert.strictEqual(lineOf(planned('Plan: 2 of ? - wave 1 done', 6).content), 'Plan: 2 of 6 - wave 1 done');
-    // the placeholder ends at a boundary: `?x` is author text, not an unfilled total
-    assert.strictEqual(lineOf(planned('Plan: 2 of ?x', 6).content), 'Plan: 2 of 6 of ?x');
   });
 
   test('#5320 adversarial planning-state fixtures: each is read and written as the README of the fixture directory states', () => {
@@ -5453,6 +5449,21 @@ describe('#5320 plan-count / plan-position owner parity', () => {
         const out = lineOf(planned(`Plan: 2 of 5${t}`, 6).content);
         return continues(t) ? out === `Plan: 2 of 6 of 5${t}` : out === `Plan: 2 of 6${t}`;
       }),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
+  test('plannedPhase property: only `?` or one capital followed by a boundary is an unfilled total, for any generated word and tail', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('?', 'A', 'B', 'I', 'Z'),
+        fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()),
+        (mark, t) => {
+          const out = lineOf(planned(`Plan: 2 of ${mark}${t}`, 6).content);
+          // independent oracle: the mark is a slot only when whitespace or the end of the line follows it
+          return t === '' || /^\s/.test(t) ? out === `Plan: 2 of 6${t}` : out === `Plan: 2 of 6 of ${mark}${t}`;
+        },
+      ),
       { seed: 5320, numRuns: 400 },
     );
   });
