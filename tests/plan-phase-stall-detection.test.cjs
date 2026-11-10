@@ -1224,6 +1224,9 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const chunked = falseBranches(readChunkedPlanningMode());
     assert.equal(chunked.length, 2, 'the chunked outline and per-plan sites each have a false branch');
     for (const b of [...spine, ...chunked]) assert.match(b, /rm -f "\{receipt\}"/, `false branch must rm the receipt: ${b.trim().slice(0, 90)}`);
+    // With no receipt bound (gsd_receipt_path printed nothing) `{receipt}` is `""` and the
+    // rm is a no-op; each branch says so itself instead of leaning on the helpers' rule.
+    for (const b of [...spine, ...chunked]) assert.match(b, /rm -f "\{receipt\}"`[^()]{0,24}\(no-op if unbound\)/, `false branch must name the unbound case: ${b.trim().slice(0, 90)}`);
   });
 
   // Review 5692447413 Minor 1: the revision watch names where a finished revision goes.
@@ -1233,12 +1236,17 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(para, /marker_received[^;]*## REVISION COMPLETE[^;]*step 10/, 'REVISION COMPLETE must route to the checker re-spawn (step 10)');
   });
 
-  // The revision stalled menu lists Accept before Retry (byte ceiling); like 11a's inline
-  // summary it must say the receipt case is Retry first, the REVISION_CONFLICT rule's order.
-  test('the revision stalled menu notes the receipt case is Retry first (#5182)', () => {
-    const para = sectionOf(readPlanPhase(), REVISION_SECTION).split('\n').find((l) => l.includes('(`revision`)'));
+  // The revision stalled menu and 11a's inline summary list Accept before Retry (byte
+  // ceiling); each must say the receipt case is Retry first, the REVISION_CONFLICT rule's
+  // order, and the note must qualify the menu as a whole, never its last option "Stop".
+  test('the revision stalled menu and 11a note the receipt case is Retry first, ahead of the options (#5182)', () => {
+    const plan = readPlanPhase();
+    const para = sectionOf(plan, REVISION_SECTION).split('\n').find((l) => l.includes('(`revision`)'));
     assert.ok(para, 'the revision ORCHESTRATOR RULE paragraph exists');
-    assert.match(para, /`stalled` -> 1\) Accept as revised[^;]*3\) Stop \(receipt case: Retry first\)/, 'the revision stalled menu must carry the receipt-case note');
+    assert.match(para, /`stalled` -> \(receipt case: Retry first\) 1\) Accept as revised[^;]*3\) Stop;/, 'the revision stalled menu must open with the receipt-case note');
+    const s11a = sectionOf(plan, ['## 11a.', '## 12.']);
+    assert.match(s11a, /offer \(receipt case: Retry first\): 1\) Accept verification[^\n]*3\) Stop\./, '11a\'s inline menu must open with the receipt-case note');
+    assert.doesNotMatch(plan, /3\) Stop \(receipt case/, 'the note must not read as a qualifier of "Stop"');
   });
 
   test('AC3: a finished revision yields marker_received within one poll interval', (t) => {

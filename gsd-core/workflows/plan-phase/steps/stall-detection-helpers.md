@@ -45,7 +45,8 @@ snapshot, and both quote the markers, so a match there proves nothing. Other hos
 return no such file at all. The receipt is the same on every runtime, and
 `gsd_return_marker` counts a marker only at the START of a receipt line, so quoted or
 JSON-encoded marker text can never match. Each watch site's rule runs `rm -f "{receipt}"`
-after routing any result, stalled and Retry included. With the toggle `false`, the
+after routing any result, stalled and Retry included; with no receipt bound, `{receipt}`
+is `""` and the rm is a no-op. With the toggle `false`, the
 prompt still carries the receipt line and the agent still writes it; the orchestrator
 consumes the real returned result and removes the receipt the same way.
 
