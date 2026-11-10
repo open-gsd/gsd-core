@@ -86,15 +86,13 @@ FIX_REPORT_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW-FIX.md"
 </step>
 
 <step name="check_config_gate">
-Check if code review is active via the capability registry:
+Check if code review is active via `workflow.code_review` (the capability's on/off toggle — independent of `workflow.code_review_point`, the loop-point selector; a manual invocation must work regardless of which automatic point is currently configured):
 
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review --raw 2>/dev/null || echo "true")
 ```
 
-Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
-
-If no active code-review step hook exists:
+If `CODE_REVIEW_ENABLED` is not `"true"`:
 ```
 Code review fix skipped (code-review capability inactive)
 ```
@@ -103,7 +101,7 @@ Remove the spent lane evidence (#5019), then exit workflow:
 gsd_run lane-evidence-clear "$REVIEW_PATH" || true
 ```
 
-Default is active through the Capability Registry schema — only skip when the registry resolves no active code-review step hook. This check runs AFTER phase validation so invalid phase errors are shown first.
+Default is active (`workflow.code_review` schema default is `true`) — only skip when explicitly disabled. This check runs AFTER phase validation so invalid phase errors are shown first.
 
 Note: This reuses the code-review capability activation rather than introducing a separate code-review-fix capability. Rationale: fixes are meaningless without review, so a single activation boundary makes sense. If independent control is needed later, a separate key can be added in v2.
 </step>
@@ -691,7 +689,7 @@ echo "════════════════════════�
 
 <success_criteria>
 - [ ] Phase validated before config gate check
-- [ ] Capability gate checked (execute:post code-review hook)
+- [ ] Capability gate checked (`workflow.code_review` config key)
 - [ ] REVIEW.md existence verified (error if missing)
 - [ ] REVIEW.md status checked (skip if clean/skipped)
 - [ ] Agent spawned with correct config (review_path, fix_scope, fix_report_path)

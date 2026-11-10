@@ -487,6 +487,30 @@ describe('CR-WORKFLOW: code review workflow structure', () => {
         'check_config_gate must no longer gate on render-hooks execute:post — manual invocation must work regardless of workflow.code_review_point');
     });
 
+    // #5753: the fix workflow's gate follows the same toggle as the review workflow.
+    test('G2b (#5753): code-review-fix check_config_gate reads workflow.code_review, not execute:post hooks', () => {
+      const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review-fix.md'), 'utf-8');
+      const stepContent = extractStepBody(content, 'check_config_gate');
+      assert.ok(stepContent, 'code-review-fix.md missing check_config_gate step');
+
+      assert.ok(/gsd_run query config-get workflow\.code_review\b/.test(stepContent),
+        'check_config_gate must read workflow.code_review via gsd_run query config-get');
+      assert.ok(/\|\| echo "true"/.test(stepContent),
+        'check_config_gate must default to active when workflow.code_review is absent');
+      assert.ok(!stepContent.includes('render-hooks execute:post'),
+        'check_config_gate must not gate on render-hooks execute:post — it must work for any workflow.code_review_point');
+      assert.ok(stepContent.includes('Code review fix skipped (code-review capability inactive)'),
+        'skip message must be unchanged');
+    });
+
+    test('G2c (#5753): code-review-fix closing checklist describes the toggle check', () => {
+      const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review-fix.md'), 'utf-8');
+      const gateLine = (content.match(/^- \[ \] Capability gate checked.*$/m) || [])[0];
+      assert.ok(gateLine, 'code-review-fix.md missing "Capability gate checked" checklist item');
+      assert.ok(gateLine.includes('workflow.code_review'), 'checklist must name the workflow.code_review toggle');
+      assert.ok(!gateLine.includes('execute:post'), 'checklist must not name the execute:post hook');
+    });
+
     test('G3: computeFileScopeDerivesLastReviewCommit', () => {
       const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review.md'), 'utf-8');
       const stepContent = extractStepBody(content, 'compute_file_scope');

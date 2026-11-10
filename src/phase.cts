@@ -54,6 +54,7 @@ const {
   customPhaseDirectoryParts,
   customDirectoryOwner,
   phaseScanTokenSource,
+  phaseNumberTokenSource,
   CUSTOM_PHASE_ID_FILE,
   isCustomPhaseId,
   isSentinelPhaseId,
@@ -79,8 +80,9 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
-import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { traceabilityRowExists } from './markdown-table.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -97,11 +99,18 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 const {
   stripShippedMilestones,
   extractCurrentMilestone,
+  extractCurrentMilestoneScoped,
   currentMilestoneRawRanges,
   withPhaseSection,
   editCurrentMilestone,
   findMilestoneScopeHeadingLines,
   getMilestoneInfo,
+  // #5679: the STATE.md milestone read getMilestoneInfo itself uses, and the
+  // archive-aware owner of a ROADMAP offset.
+  readStateMilestoneScalar,
+  classifyMilestoneScalar,
+  milestoneVersionAtOffset,
+  blankCodeAndComments,
   scanMilestonePhaseIds,
   // #4304: every recognized milestone heading in the document,
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
@@ -603,6 +612,9 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   const directoryContext = phaseDirectoryOptions(cwd);
   const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
   const { normalized, convention } = lookup;
+  // #5676: `lookup.convention` is only ever 'bracket'; the directory token grammar
+  // (`03-02-beta` -> `03-02` + `beta`) needs the repo's own convention.
+  const tokenConvention = resolvePhaseIdConvention(cwd);
   const notFound = {
     found: false,
     directory: null,
@@ -680,8 +692,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       const dirMatch = isBracketDirectory
         ? null
         : match.match(
-          new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
-        ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${phaseNumberTokenSource(tokenConvention)})-?(.*)`, 'i')
+        ) || match.match(new RegExp(`^(${phaseNumberTokenSource(tokenConvention)})-?(.*)`, 'i'));
       const customParts = custom ? customPhaseDirectoryParts(match, custom) : null;
       const phaseNumber = isBracketDirectory
         ? phaseNumberForMatch(match, usedBareFallback, convention)
@@ -1892,6 +1904,64 @@ function assertBracketGeneratedIdentity(
   }
 }
 
+const STATE_MILESTONE_ECHO_LIMIT = 80;
+
+/**
+ * #5726: STATE.md's `milestone:` value is untrusted text. Cap it at
+ * `STATE_MILESTONE_ECHO_LIMIT` characters (ellipsis past the cap), then quote it
+ * with `JSON.stringify` (the `phase.cts` precedent for echoed user text), which
+ * escapes ESC/BEL/newlines; the characters JSON leaves raw but a terminal acts on
+ * are escaped too: DEL and C1 controls, zero-width and direction marks
+ * (U+200B-U+200F), line/paragraph separators and bidi embeddings/overrides
+ * (U+2028-U+202E), the invisible-format block (U+2060-U+206F, incl. bidi
+ * isolates), soft hyphen (U+00AD), Arabic letter mark (U+061C), Mongolian
+ * vowel separator (U+180E), interlinear annotations (U+FFF9-U+FFFB) and the
+ * BOM (U+FEFF).
+ */
+function echoStateMilestone(value: string): string {
+  const chars = Array.from(value);
+  const capped = chars.length > STATE_MILESTONE_ECHO_LIMIT
+    ? `${chars.slice(0, STATE_MILESTONE_ECHO_LIMIT).join('')}…`
+    : value;
+  return JSON.stringify(capped).replace(
+    /[\u007f-\u009f\u{ad}\u{61c}\u{180e}\u{200b}-\u{200f}\u{2028}-\u{202e}\u{2060}-\u{206f}\u{feff}\u{fff9}-\u{fffb}]/gu,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
+/**
+ * #5726: the current-milestone window for a verb that WRITES to the ROADMAP.
+ * When STATE.md names a milestone that has no heading in a ROADMAP carrying
+ * versioned milestones, the window owner falls back to the whole unshipped
+ * roadmap (scope UNSCOPED, `unresolvedMilestone` set), and number allocation,
+ * the `Depends on` line and the insert target would run over every milestone.
+ * ADR-3180: that is a non-answer, refused where it is destructive. Refuses
+ * before any write, naming the milestone; every other scope (a real heading,
+ * a free-form legacy ROADMAP, no milestone field) returns the window unchanged.
+ * Read-only readers keep calling `extractCurrentMilestone` and keep degrading.
+ */
+function currentMilestoneWindowOrRefuse(rawContent: string, cwd: string, command: string): string {
+  const { value, unresolvedMilestone, shippedMilestone } = extractCurrentMilestoneScoped(rawContent, cwd);
+  if (shippedMilestone) {
+    error(
+      `${command}: STATE.md names milestone ${echoStateMilestone(shippedMilestone)}, which ROADMAP.md marks as already shipped, `
+        + 'so the current milestone window is a closed one. Refusing to number the phase or link its dependencies '
+        + 'against a shipped milestone. Start the next milestone (or correct the milestone field in STATE.md), then retry. '
+        + 'If the heading is not shipped and its title merely contains a status word (such as "Failed Payment Recovery"), '
+        + 'rename the milestone, or add an active marker to the heading, for example \u{1f6a7} or "(in progress)".',
+    );
+  }
+  if (unresolvedMilestone) {
+    error(
+      `${command}: STATE.md names milestone ${echoStateMilestone(unresolvedMilestone)}, but ROADMAP.md has no milestone heading for it, `
+        + 'so the current milestone window cannot be resolved. Refusing to use the whole roadmap, which would number '
+        + 'the phase and link its dependencies against other milestones. Add the milestone heading to ROADMAP.md '
+        + 'or correct the milestone field in STATE.md, then retry.',
+    );
+  }
+  return value;
+}
+
 /**
  * #4304: refuse a bracket `phase add` / `add-batch` whose located milestone
  * window is a decoy. A non-milestone heading carrying the active version
@@ -1974,8 +2044,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
   const { newPhaseId, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase add');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
-    const content = extractCurrentMilestone(rawContent, cwd);
 
     let _newPhaseId: number | string;
 
@@ -2092,8 +2162,8 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase add-batch');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add-batch');
-    const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
     if (bracketContext) {
       const used = collectBracketPhaseNumbers(
@@ -2495,6 +2565,31 @@ function isPhaseTokenWithin(token: string, ancestor: string): boolean {
   return a.every((segment, i) => canon(segment) === canon(t[i]));
 }
 
+/**
+ * #5679: the `phase insert` error for a phase that exists in the ROADMAP but
+ * outside the current milestone. Names the milestone that holds it (archive
+ * aware, never the current one) and the current milestone, saying "STATE.md's"
+ * only when STATE.md's `milestone:` is where that version came from.
+ */
+function otherMilestonePhaseMessage(rawContent: string, foundAt: number, cwd: string, afterPhase: string): string {
+  let stateVersion: string | null = null;
+  try {
+    const stateRaw = platformReadSync(path.join(planningDir(cwd), 'STATE.md'));
+    const scalar = stateRaw === null ? null : readStateMilestoneScalar(stateRaw);
+    if (scalar !== null) stateVersion = classifyMilestoneScalar(scalar).version;
+  } catch { /* unreadable STATE.md: getMilestoneInfo's own fallback below decides */ }
+  const derivedVersion = (getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? null;
+  const current = stateVersion ?? derivedVersion;
+  const owner = milestoneVersionAtOffset(rawContent, foundAt);
+  const ownerClause = owner && owner.toLowerCase() !== current?.toLowerCase()
+    ? `is in milestone ${owner}`
+    : 'is outside the current milestone';
+  let currentClause = 'the current milestone does not include it';
+  if (stateVersion) currentClause = `STATE.md's current milestone is ${stateVersion}`;
+  else if (derivedVersion) currentClause = `the current milestone is ${derivedVersion}`;
+  return `Phase ${afterPhase} ${ownerClause}, but ${currentClause}. phase insert only targets phases in the current milestone.`;
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -2519,7 +2614,7 @@ function cmdPhaseInsert(
 
   const { decimalPhase, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const content = extractCurrentMilestone(rawContent, cwd);
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase insert');
 
     // #4304: canonicalize a bracket argument
     // through the SAME adapter `phase remove` uses
@@ -2586,7 +2681,8 @@ function cmdPhaseInsert(
     );
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
     // #4304: bracket identities live in headings only, so a bracket ROADMAP never takes the legacy bullet-insertion branch — a bullet-only bracket ROADMAP falls through to the checklist-refusal path below instead.
-    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+    const liveCurrent = blankCodeAndComments(content);
+    const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(liveCurrent) && !roadmapHasHeadingPhases;
 
     if (bracketContext && !bracketHeading) {
       const searchedRanges = bracketSectionRanges?.details
@@ -2602,10 +2698,20 @@ function cmdPhaseInsert(
         `${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
-      if (checklistPattern.test(content)) {
+      if (checklistPattern.test(liveCurrent)) {
         error(
           `Phase ${afterPhase} exists in roadmap summary but is missing a detail section (### Phase ${afterPhase}: ...).`,
         );
+      }
+      // #5679: this whole-file probe only chooses the error message; insert
+      // stays current-milestone-only and never writes to another milestone.
+      // Fenced blocks and HTML comments are masked (same length, offsets stay aligned) so example text never counts as a phase.
+      const liveContent = blankCodeAndComments(rawContent);
+      const headingOffset = tokenizeHeadings(liveContent).find((h) => targetPattern.test(h.text))?.offset;
+      const checklistOffset = checklistPattern.exec(liveContent)?.index;
+      const foundOffsets = [headingOffset, checklistOffset].filter((o): o is number => o !== undefined);
+      if (foundOffsets.length > 0) {
+        error(otherMilestonePhaseMessage(rawContent, Math.min(...foundOffsets), cwd, afterPhase));
       }
       error(`Phase ${afterPhase} not found in ROADMAP.md`);
     }
@@ -2679,7 +2785,7 @@ function cmdPhaseInsert(
         'i',
         { bold: 'required' },
       );
-      const useBold = boldBulletPattern.test(content);
+      const useBold = boldBulletPattern.test(liveCurrent);
       const phaseLabel = useBold
         ? `**Phase ${_decimalPhase}: ${description}**`
         : `Phase ${_decimalPhase}: ${description}`;
@@ -2706,13 +2812,13 @@ function cmdPhaseInsert(
         `Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\r\\n]*`,
         'i',
       );
-      const bulletMatchResult = rawContent.match(targetBulletPattern);
+      // Match against the masked text (same length, offsets aligned) so a fenced or commented example bullet is never the splice anchor; splice into the original text at the masked match index.
+      const bulletMatchResult = blankCodeAndComments(rawContent).match(targetBulletPattern);
       if (!bulletMatchResult) {
         error(`Could not find Phase ${afterPhase} bullet line`);
       }
 
-      const bulletLineEnd =
-        rawContent.indexOf(bulletMatchResult![0]) + bulletMatchResult![0].length;
+      const bulletLineEnd = bulletMatchResult!.index! + bulletMatchResult![0].length;
       const afterBullet = rawContent.slice(bulletLineEnd);
       // #5599: land after the last bullet inside the allocation family's
       // subtree, not before the first following bullet of any number (which is
@@ -5662,7 +5768,7 @@ function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: st
   if (!matchedHeading) return null;
   const heading = matchedHeading.text.match(headingPattern);
   if (!heading) return null;
-  const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
+  const name = stripInsertedMarker(heading[1]);
   return name || null;
 }
 
@@ -7418,9 +7524,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // which section (deferred or not) it lives under.
           const reqIsRegisteredAnywhere = (id: string): boolean => {
             const reqEscaped = escapeRegex(id);
-            // Surface 1 — checkbox, EITHER state (`[ ]` or `[x]`), case-
-            // insensitive: existence check, not the write's space-only match.
-            if (new RegExp(`-\\s*\\[[ xX]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
+            // Surface 1 — checkbox, ANY single mark (`[ ]`, `[x]`, `[~]`, …; #5844),
+            // case-insensitive: existence check, not the write's space-only match.
+            if (new RegExp(`-\\s*\\[[^\\]\\r\\n]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
               return true;
             }
             // Surface 2 — Traceability row exists at all (any Status value),
@@ -7429,7 +7535,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // insensitive first-cell match, regardless of current Status.
             const rowProbeMatch = (row: Record<string, string>): boolean =>
               (Object.values(row)[0] ?? '').trim().toLowerCase() === id.toLowerCase();
-            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok;
+            // #5844: a table with no Status column fails the probe above with
+            // `unknown column`, so row existence is also read directly.
+            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok
+              || traceabilityRowExists(reqContent, id);
           };
           const ghostReqIds = citedReqIds.filter(
             (id) => !isPlaceholderReqId(id) && !reqIsRegisteredAnywhere(id),
@@ -7448,9 +7557,18 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const traceabilityWriteFailures = traceabilityWriteMisses.filter(
             (id) => !ghostReqIds.includes(id),
           );
-          if (traceabilityWriteFailures.length > 0) {
+          // #5844: a row that EXISTS but has no Status cell to write is not a
+          // missing row — name the real cause instead of blaming the row.
+          const noStatusCellIds = traceabilityWriteFailures.filter((id) => traceabilityRowExists(reqContent, id));
+          const noRowIds = traceabilityWriteFailures.filter((id) => !noStatusCellIds.includes(id));
+          if (noRowIds.length > 0) {
             warnings.push(
-              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${traceabilityWriteFailures.join(', ')}`,
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${noRowIds.join(', ')}`,
+            );
+          }
+          if (noStatusCellIds.length > 0) {
+            warnings.push(
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (row found but the table has no Status column to write): ${noStatusCellIds.join(', ')}`,
             );
           }
 
@@ -7495,6 +7613,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       //      where the roadmap would give `2` and a slugified title. Promoting the
       //      roadmap without this would silently change the reported value on
       //      every aligned project, which is the majority case.
+      // #5676: the numeric phase-token grammar follows the convention, so a
+      // milestone-prefixed `03-02-beta` is phase `3-02`, not phase `3`.
+      const phaseConvention = resolvePhaseIdConvention(cwd);
       let diskNextNum: string | null = null;
       let diskNextName: string | null = null;
       let roadmapNextNum: string | null = null;
@@ -7515,7 +7636,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
           const completePattern = phaseEntryRegExp(
-            `Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
+            `Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})`,
             'gi',
           );
           let cm: RegExpExecArray | null;
@@ -7547,7 +7668,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         for (const dir of dirs) {
           const custom = phaseIdMod.customPhaseQuery(dir, directoryContext);
           const owner = custom && customDirectoryOwner(dir, custom);
-          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${phaseNumberTokenSource(phaseConvention)})-?(.*)`, 'i'));
           if (dm) {
             // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
             if (isSentinelPhaseId(dm[1])) continue;
@@ -7609,8 +7730,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // accepts. The two branches keep separate capture groups, normalized
           // just below the loop.
           const phasePattern = new RegExp(
-            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
+            `|${phaseEntryPrefixSrc()}Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
             'gim'
           );
           let pm: RegExpExecArray | null;
@@ -7644,9 +7765,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             if (comparePhaseNum(pmNum, phaseNum, directoryContext) > 0
               && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum, directoryContext) < 0)) {
               roadmapNextNum = pmNum;
-              roadmapNextName = pmName
-                .replace(/\(INSERTED\)/i, '')
-                .trim()
+              roadmapNextName = stripInsertedMarker(pmName)
                 .toLowerCase()
                 .replace(/\s+/g, '-');
             }
@@ -7712,7 +7831,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
           const cbPattern = phaseEntryRegExp(
-            `Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            `Phase\\s+(${phaseScanTokenSource(directoryContext, phaseConvention)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
             'gi',
             { state: 'captured' },
           );
@@ -7731,7 +7850,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num, directoryContext) < 0) {
                 lowestOutstanding = {
                   num: cbm[2],
-                  name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
+                  name: stripInsertedMarker(cbm[3]).toLowerCase().replace(/\s+/g, '-'),
                 };
               }
             }
@@ -7764,7 +7883,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // pin would all rewind it. A first-time completion (box unchecked, or
         // STATE not past N, #2028 out-of-order) still transitions.
         const stateAlreadyPast = phaseWasAlreadyComplete
-          && isStatePastPhase(originalStateContent, phaseNum, statePath);
+          && isStatePastPhase(originalStateContent, phaseNum, statePath, phaseConvention);
         let stateContent = originalStateContent;
 
         // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
@@ -7795,7 +7914,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, directoryContext) as unknown as { found?: boolean; directory?: string } | null;
             if (nextInfo && nextInfo.found && nextInfo.directory) {
               const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
-                convention: resolvePhaseIdConvention(cwd),
+                convention: phaseConvention,
               });
               nextPhaseDisk = { status: value.status, planCount: value.planCount, summaryCount: value.summaryCount };
             }
@@ -7991,21 +8110,37 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   }
 
   let autoPruned = false;
+  // #5831: a failed auto-prune stays non-fatal (exit code and completion are
+  // unchanged), but is reported instead of swallowed — prune now fails loudly
+  // when it cannot write the archive, and that must reach the user.
+  let autoPruneError: string | null = null;
   try {
     const configPath = path.join(planningDir(cwd), 'config.json');
-    if (fs.existsSync(configPath)) {
-      const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
+    // best-effort catch below.
+    const rawConfigText = configLoaderMod.readConfigFileBounded(configPath);
+    if (rawConfigText !== null) {
+      const rawConfig = JSON.parse(rawConfigText) as Record<string, unknown>;
       const workflow = rawConfig['workflow'] as Record<string, unknown> | undefined;
       const autoPruneEnabled = workflow && workflow['auto_prune_state'] === true;
       if (autoPruneEnabled && fs.existsSync(statePath)) {
         // Non-hoisted: load-order matters (stateMod must be fully resolved first).
         const { cmdStatePrune } = stateMod;
-        cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
-        autoPruned = true;
+        try {
+          const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
+          // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
+          autoPruned = pruneResult.pruned === true;
+        } catch (err) {
+          // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
+          // the failed prune left them (it never loses entries).
+          autoPruneError = err instanceof Error ? err.message : String(err);
+          warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
+        }
       }
     }
   } catch {
-    /* intentionally empty — auto-prune is best-effort */
+    // Best-effort: an unreadable or invalid config.json means auto-prune is not
+    // enabled; completion proceeds silently.
   }
 
   const result = {
@@ -8020,6 +8155,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     state_updated: stateUpdated,
     requirements_updated: requirementsUpdated,
     auto_pruned: autoPruned,
+    // #5831: ADDITIVE — present only when auto-prune threw.
+    ...(autoPruneError !== null ? { auto_prune_error: autoPruneError } : {}),
     warnings,
     has_warnings: warnings.length > 0,
     // ADDITIVE, never a change to `warnings[]`'s element shape — that array is

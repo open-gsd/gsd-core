@@ -120,6 +120,8 @@ export default tseslint.config(
       // #2874 (epic #2866 Phase 5): tsc-generated runtime artifact — lint the
       // src/install-fs-adapter.cts source, not this.
       'gsd-core/bin/lib/install-fs-adapter.cjs',
+      // #5683: tsc-generated runtime artifact — lint src/install-manifest-record.cts, not this.
+      'gsd-core/bin/lib/install-manifest-record.cjs',
       // #2875 (epic #2866 Phase 6): tsc-generated runtime artifact — lint the
       // src/user-artifact-staging.cts source, not this.
       'gsd-core/bin/lib/user-artifact-staging.cjs',
@@ -127,6 +129,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
       'gsd-core/bin/lib/capability-ledger.cjs',
+      // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
+      'gsd-core/bin/lib/config-file-read.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
@@ -182,6 +186,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/pr-branch-patterns.cjs',
       // #4984: tsc-generated — lint the src/undo-commit-selection.cts source.
       'gsd-core/bin/lib/undo-commit-selection.cjs',
+      'gsd-core/bin/lib/criterion-baseline.cjs', // #4309: tsc-generated — lint the src/criterion-baseline.cts source.
+      'gsd-core/bin/lib/criterion-replay.cjs', // #4310: tsc-generated — lint the src/criterion-replay.cts source.
       // #5705: tsc-generated — lint the src/milestone-release-tags.cts source.
       'gsd-core/bin/lib/milestone-release-tags.cjs',
       // #4145: tsc-generated runtime artifact — lint the src/pristine-baseline.cts source.
@@ -236,6 +242,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/plan-scan.cjs',
       'gsd-core/bin/lib/fallow-runner.cjs',
       'gsd-core/bin/lib/project-root.cjs',
+      'gsd-core/bin/lib/project-context.cjs',
       'gsd-core/bin/lib/installer-migration-authoring.cjs',
       'gsd-core/bin/lib/update-context.cjs',
       'gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs',
@@ -313,6 +320,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/installer-migrations.cjs',
       'gsd-core/bin/lib/worktree-safety.cjs',
       'gsd-core/bin/lib/worktree-base-ref.cjs',
+      'gsd-core/bin/lib/gsd-tool-dir.cjs',
       'gsd-core/bin/lib/planning-workspace.cjs',
       'gsd-core/bin/lib/planning-scope.cjs',
       'gsd-core/bin/lib/command-roster.cjs',

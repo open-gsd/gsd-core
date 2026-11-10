@@ -169,7 +169,7 @@
  *     --schema plan|summary|verification
  *
  * Verification Suite:
- *   verify plan-structure <file>       Check PLAN.md structure + tasks
+ *   verify plan-structure <file> [--replay]  Check PLAN.md structure + tasks
  *   verify phase-completeness <phase>  Check all plans have summaries
  *   verify references <file>           Check @-refs + paths resolve
  *   verify commits <h1> [h2] ...      Batch verify commit hashes
@@ -296,6 +296,7 @@ const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.c
 const io = require('./lib/io.cjs');
 const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites, resolveAtFileOutput } = io;
 const projectRoot = require('./lib/project-root.cjs');
+const { resolveProjectContext, legacyDispatchCwd } = require('./lib/project-context.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
 // load. It is sourced from project-root.cjs; a call-time lookup is robust
 // against any require/load-ordering edge where the export isn't bound yet
@@ -1035,7 +1036,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    */
   function routeSelectRevertCommits({ args, cwd, raw, error, invokingCwd }) {
     // #4906/#4465 review fix: `cwd` here has already been remapped to the
-    // MAIN worktree root by `resolveMainWorktreeCwd` (main(), applied
+    // MAIN worktree root by the retired `resolveMainWorktreeCwd` (now legacyDispatchCwd, applied
     // BLANKET to every command before dispatch — correct for a router that
     // reads `.planning/`, e.g. `find-phase`, but wrong for this one). This
     // command reads NO `.planning/` content — it only runs `git log` — and
@@ -1213,7 +1214,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     output(result, raw, rawLines);
   }
 
-  function routeCommit({ args, cwd, raw, error }) {
+  // #6043 (ADR-4908 §3): the one sanctioned source of roots for workflow shell.
+  // Prints the ProjectContext the dispatcher resolved once for this process;
+  // `--raw` prints the worktree root.
+  function routeProjectContext({ raw, ctx }) {
+    output(ctx, raw, ctx.worktreeRoot);
+  }
+
+  function routeCommit({ args, cwd, raw, error, ctx }) {
     const amend = args.includes('--amend');
           const noVerify = args.includes('--no-verify');
           // #4208: `--files` and `--files-removed` are two path lists, each
@@ -1236,7 +1244,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const message = messageArgs.join(' ') || undefined;
           const files = collectListFlagValues(args, '--files');
           const filesRemoved = collectListFlagValues(args, '--files-removed');
-          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved);
+          commands.cmdCommit(cwd, message, files, raw, amend, noVerify, filesRemoved, ctx);
   }
 
   function routeCheckCommit({ args, cwd, raw, error }) {
@@ -2923,6 +2931,54 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   /**
+   * #5682: ALSO record a plan-scoped decision at `.gsd/dispatch-isolation/<phase>--<plan>.json`, so a
+   * second orchestrator's write to the single legacy slot cannot erase it. Same payload, same atomic
+   * tmp+rename, same symlink/containment checks as the legacy directory. Best-effort: any failure is
+   * swallowed so the legacy result is unchanged. The key rule lives in hooks/lib/isolation-sentinel.js
+   * (the reader); if that module is unreachable from this install layout, only the legacy file is written.
+   */
+  function writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock) {
+    const nodePath = require('path');
+    const nodeFs = require('fs');
+    try {
+      const {
+        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS,
+      } = require('../../hooks/lib/isolation-sentinel.js');
+      // A plan-scoped decision lands at <phase>--<plan>.json; a plan-less one (the phase-level
+      // degrade) at <phase>.json, so concurrent phase-level orchestrators keep separate records.
+      const keyedFile = payload.plan
+        ? keyedSentinelPath(cwd, payload.phase, payload.plan)
+        : phaseSentinelPath(cwd, payload.phase);
+      if (!keyedFile) return;
+      const keyedDir = nodePath.join(cwd, KEYED_SENTINEL_DIR);
+      nodeFs.mkdirSync(keyedDir, { recursive: true });
+      if (nodeFs.lstatSync(keyedDir).isSymbolicLink() ||
+          nodePath.relative(nodeFs.realpathSync(sentinelDir), nodeFs.realpathSync(keyedDir)) !== 'dispatch-isolation') {
+        return;
+      }
+      const tmpPath = `${keyedFile}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      try {
+        nodeFs.writeFileSync(tmpPath, JSON.stringify(payload), { flag: 'wx' });
+        nodeFs.renameSync(tmpPath, keyedFile);
+      } catch (writeError) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+        throw writeError;
+      }
+      // Prune records and orphaned temp files older than the longest any record can still govern
+      // (AGED_NONE_MAX_MS, #5479), measured on the injected clock.
+      const cutoff = clock.now() - AGED_NONE_MAX_MS;
+      const written = nodePath.basename(keyedFile);
+      for (const name of nodeFs.readdirSync(keyedDir)) {
+        if (name === written || !(name.endsWith('.json') || name.includes('.json.tmp-'))) continue;
+        try {
+          const file = nodePath.join(keyedDir, name);
+          if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
+        } catch (_) { /* best-effort prune */ }
+      }
+    } catch (_) { /* keyed record is best-effort; the legacy record already landed */ }
+  }
+
+  /**
    * Atomically persist the resolved dispatch-isolation decision to the
    * run-scoped sentinel both isolation guard hooks read
    * (hooks/gsd-agent-isolation-guard.js, hooks/gsd-cursor-subagent-start.js;
@@ -2932,7 +2988,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2942,77 +2998,61 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
-      written_at: Date.now(),
+      written_at: clock.now(),
     };
+    let tmpPath = null;
     try {
-      nodeFs.mkdirSync(sentinelDir, { recursive: true });
-      // Never write through a project-supplied .gsd symlink. Resolve the
-      // directory as well so an ancestor redirect cannot escape this project.
-      if (nodeFs.lstatSync(sentinelDir).isSymbolicLink() ||
-          nodePath.relative(nodeFs.realpathSync(cwd), nodeFs.realpathSync(sentinelDir)) !== '.gsd') {
-        throw new Error('sentinel directory is a symlink or resolves outside the project');
-      }
-      // User projects do not inherit gsd-core's root .gitignore. Ignore this
-      // tool-owned directory locally before writing the first sentinel. An
-      // ordinary ignore-file IO failure must not prevent recording isolation.
-      const ignorePath = nodePath.join(sentinelDir, '.gitignore');
+      // #5757: the shared tool-owned .gsd owner refuses a project-supplied
+      // symlink (or ancestor redirect) and seeds/extends .gsd/.gitignore, so
+      // this writer and the fork-probe cache apply one policy. An ordinary
+      // ignore-file IO failure must not prevent recording isolation.
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
       try {
-        nodeFs.writeFileSync(ignorePath, '*\n', { flag: 'wx' });
-      } catch (ignoreError) {
-        if (ignoreError.code === 'EEXIST') {
-          // Keep a pre-existing ignore file. A bare '*' already ignores the
-          // whole directory, including this file and the sentinel temp file.
-          // Read through an fd opened without following links where supported;
-          // replace by rename rather than append through the path, so a link
-          // swapped in after the check cannot redirect a write elsewhere.
-          let fd;
-          let ignoreTmpPath;
-          try {
-            if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            fd = nodeFs.openSync(ignorePath, nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW || 0));
-            if (!nodeFs.fstatSync(fd).isFile()) throw new Error('sentinel ignore file is not a regular file');
-            const current = nodeFs.readFileSync(fd, 'utf8');
-            nodeFs.closeSync(fd);
-            fd = undefined;
-            if (!current.includes('# gsd-core dispatch sentinel') && !/^\*\r?$/m.test(current)) {
-              const additionalRules = `${current.endsWith('\n') ? '' : '\n'}# gsd-core dispatch sentinel\n` +
-                '/dispatch-isolation-sentinel.json\n' +
-                '/dispatch-isolation-sentinel.json.tmp-*\n' +
-                '/.gitignore\n';
-              ignoreTmpPath = `${ignorePath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
-              nodeFs.writeFileSync(ignoreTmpPath, current + additionalRules, { flag: 'wx' });
-              if (nodeFs.lstatSync(ignorePath).isSymbolicLink()) {
-                throw new Error('sentinel ignore file is a symlink');
-              }
-              nodeFs.renameSync(ignoreTmpPath, ignorePath);
-              ignoreTmpPath = null;
-            }
-          } catch (existingIgnoreError) {
-            if (existingIgnoreError.code === 'ELOOP' || existingIgnoreError.message === 'sentinel ignore file is a symlink') {
-              throw new Error('sentinel ignore file is a symlink');
-            }
-            // Ignore seeding is best-effort; the sentinel is still useful if
-            // this path cannot be read or updated.
-          } finally {
-            if (fd !== undefined) nodeFs.closeSync(fd);
-            if (ignoreTmpPath) {
-              try { nodeFs.unlinkSync(ignoreTmpPath); } catch (_) { /* best-effort cleanup */ }
-            }
-          }
+        toolDir.ensureToolOwnedGsdDir(cwd, {
+          marker: '# gsd-core dispatch sentinel',
+          rules: [
+            '/dispatch-isolation-sentinel.json',
+            '/dispatch-isolation-sentinel.json.tmp-*',
+            '/dispatch-isolation/',
+            '/.gitignore',
+          ],
+        });
+      } catch (ownerError) {
+        // The recorded `error` text is observable JSON (hyrums-law): keep the
+        // sentinel's historical wording, translating by the owner's stable code.
+        if (ownerError && ownerError.code === toolDir.GSD_DIR_UNSAFE) {
+          throw new Error('sentinel directory is a symlink or resolves outside the project');
         }
+        if (ownerError && ownerError.code === toolDir.GSD_IGNORE_SYMLINK) {
+          throw new Error('sentinel ignore file is a symlink');
+        }
+        throw ownerError;
       }
-      // Atomic write: unique temp file + rename, so a concurrent reader (a
-      // guard hook firing mid-write) never observes a partially-written
-      // sentinel. Unique per-process+time so concurrent orchestrator-worktree
-      // invocations sharing the same sentinelDir never collide on the temp name.
-      const tmpPath = `${sentinelPath}.tmp-${process.pid}-${Date.now()}`;
-      nodeFs.writeFileSync(tmpPath, JSON.stringify(payload));
-      nodeFs.renameSync(tmpPath, sentinelPath);
+      // Atomic write: exclusive random temp file + rename, so a concurrent
+      // reader (a guard hook firing mid-write) never observes a
+      // partially-written sentinel, concurrent invocations sharing the same
+      // sentinelDir never collide on the temp name, and a planted link at a
+      // guessed temp name is never written through.
+      // `tmpPath` is assigned only once the exclusive create succeeded, so an
+      // EEXIST never unlinks an entry this process did not create.
+      const candidateTmp = `${sentinelPath}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
+      tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(payload));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
+      tmpPath = null;
+      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
       return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
     }
   }
 
@@ -4626,8 +4666,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           try {
             const { planningDir } = require('./lib/planning-workspace.cjs');
             const cfgPath = require('path').join(planningDir(cwd), 'config.json');
-            if (require('fs').existsSync(cfgPath)) {
-              const rawCfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf-8'));
+            // #5759: bounded regular-file read — a FIFO/device/oversized config throws to the
+            // catch below (defaults apply) instead of blocking; null is an absent file.
+            const rawCfgText = require('./lib/config-file-read.cjs').readConfigFileBounded(cfgPath);
+            if (rawCfgText !== null) {
+              const rawCfg = JSON.parse(rawCfgText);
               if (rawCfg && rawCfg.plan_review && rawCfg.plan_review.source_grounding_authority) {
                 configuredAuthority = String(rawCfg.plan_review.source_grounding_authority);
               }
@@ -4666,7 +4709,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
           if (subcommand === 'phase-status') {
             // #1956: deterministic STATE.md-vs-ROADMAP.md phase-status drift.
-            const { planningDir } = require('./lib/planning-workspace.cjs');
+            const { planningDir, resolvePhaseIdConvention } = require('./lib/planning-workspace.cjs');
             const { stateExtractField, stateCurrentPositionSlice } = require('./lib/state-document.cjs');
             const { locateRoadmapProgress } = require('./lib/roadmap-progress.cjs');
             const { phaseKeyFromProse } = require('./lib/phase-id.cjs');
@@ -4684,6 +4727,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               : undefined;
 
             const dir = planningDir(cwd);
+            const phaseConvention = resolvePhaseIdConvention(cwd);
+            const proseKey = (value) => phaseKeyFromProse(value, undefined, phaseConvention);
             const statePath = path.join(dir, 'STATE.md');
             const roadmapPath = path.join(dir, 'ROADMAP.md');
 
@@ -4694,7 +4739,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               // missing_state below
             }
             if (stateContent === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? proseKey(phaseArg) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'missing_state',
@@ -4734,7 +4779,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // document.
             const currentPositionBody = stateCurrentPositionSlice(stateBody);
             if (currentPositionBody === null) {
-              const phase = phaseArg !== undefined ? phaseKeyFromProse(phaseArg) : null;
+              const phase = phaseArg !== undefined ? proseKey(phaseArg) : null;
               output({
                 verdict: 'uncheckable',
                 reason: 'no_current_position',
@@ -4749,8 +4794,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Resolve the target phase: --phase if given, else whatever
             // STATE.md's Current Position reports as current.
             const phase = phaseArg !== undefined
-              ? phaseKeyFromProse(phaseArg)
-              : phaseKeyFromProse(stateExtractField(currentPositionBody, 'Phase'));
+              ? proseKey(phaseArg)
+              : proseKey(stateExtractField(currentPositionBody, 'Phase'));
 
             if (roadmapContent === null) {
               output({
@@ -4770,7 +4815,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // Progress owner's rule (roadmap-progress.cts), shared with every reader and writer (#5762).
             const { table } = locateRoadmapProgress(roadmapContent);
             const matchedRow = table
-              ? table.rows.find((row) => phaseKeyFromProse(row.Phase) === phase && phase !== null)
+              ? table.rows.find((row) => proseKey(row.Phase) === phase && phase !== null)
               : undefined;
 
             if (!matchedRow) {
@@ -4951,6 +4996,7 @@ const HOST_COMMAND_ROUTERS = {
     'commit': routeCommit,
     'check-commit': routeCheckCommit,
     'commit-docs-guard': routeCommitDocsGuard,
+    'project-context': routeProjectContext,
     'commit-to-subrepo': routeCommitToSubrepo,
     'pr-subrepo': routePrSubrepo,
     'verify-summary': routeVerifySummary,
@@ -5029,7 +5075,7 @@ const HOST_COMMAND_ROUTERS = {
 // through. Prototype-pollution-safe: own-property lookup rejects
 // `__proto__`/`constructor`/`prototype` command keys (same guard as
 // dispatchCapabilityCommand).
-async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd }) {
+async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }) {
   if (
     command === '__proto__' ||
     command === 'constructor' ||
@@ -5050,7 +5096,9 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   // every other router legitimately wants via `cwd`. Optional — callers/tests
   // that omit it (every existing one) leave routers that don't read it
   // byte-unaffected.
-  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd });
+  // `ctx` (#6043): the ProjectContext main() resolved once; routers that take a
+  // named root (commit, project-context) read it, the rest ignore it.
+  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx });
   return true; // consumed — don't emit "Unknown command"
 }
 
@@ -5279,7 +5327,7 @@ function runWithTimeout(argv) {
 // independently hand-maintained sites and nothing previously caught them
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
-  'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, ' +
+  'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, project-context, ' +
   'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
@@ -5330,6 +5378,9 @@ const SKIP_ROOT_RESOLUTION = new Set([
   // explicitly via --config-dir; it never reads .planning/.
   'restore-custom-files',
   'worktree', 'prompt-budget',
+  // #6043: project-context prints the resolved ProjectContext itself, so it
+  // needs no remapped cwd; the dispatcher hands every router `ctx`.
+  'project-context',
   // context-predicates is a pure repo-root CONTEXT.md read (like
   // prompt-budget); it never touches .planning/, so it needs no project
   // root resolution and must work from any cwd (including one with no
@@ -5359,34 +5410,22 @@ function skipsRootResolution(command) {
 }
 
 /**
- * Resolve the worktree root for a given cwd, warning to stderr when git
- * could not determine it (reason 'git_timed_out') rather than silently
- * trusting a best-effort fallback (#3050). Extracted from main() so it can
- * be driven directly in tests via injected deps.
+ * Warn to stderr when git could not determine the worktree root (provenance
+ * reason 'git_timed_out') rather than silently trusting a best-effort
+ * fallback (#3050). Keyed on the resolved ProjectContext (#6043).
  *
- * @param {string} cwd
- * @param {{ existsSync?: (p: string) => boolean, resolveWorktreeRoot?: (cwd: string) => { root: string, reason: string }, writeWarning?: (msg: string) => void }} [deps]
- * @returns {string} resolved cwd
+ * @param {{ worktreeRoot: string, provenance: { reason: string } }} ctx
+ * @param {(msg: string) => void} [writeWarning]
  */
-function resolveMainWorktreeCwd(cwd, deps = {}) {
-  const existsSync = deps.existsSync || fs.existsSync;
-  const resolveWorktreeRoot = deps.resolveWorktreeRoot || require('./lib/worktree-safety.cjs').resolveWorktreeRoot;
-  const writeWarning = deps.writeWarning || ((msg) => process.stderr.write(msg));
-
-  if (existsSync(path.join(cwd, '.planning'))) {
-    return cwd;
-  }
-  const { root: worktreeRoot, reason: worktreeRootReason } = resolveWorktreeRoot(cwd);
-  if (worktreeRootReason === 'git_timed_out') {
-    writeWarning(
-      'WARNING: could not determine the git worktree root (git timed out). ' +
-      'Planning artifacts (STATE.md, ROADMAP.md, etc.) may be written to the ' +
-      `wrong tree — proceeding with "${worktreeRoot}" as a best-effort fallback. ` +
-      'Retry the command; if this persists, check for a stalled filesystem mount ' +
-      'or a stale git index lock (.git/index.lock) in this worktree.\n'
-    );
-  }
-  return worktreeRoot;
+function warnIfGitTimedOut(ctx, writeWarning = (msg) => process.stderr.write(msg)) {
+  if (ctx.provenance.reason !== 'git_timed_out') return;
+  writeWarning(
+    'WARNING: could not determine the git worktree root (git timed out). ' +
+    'Planning artifacts (STATE.md, ROADMAP.md, etc.) may be written to the ' +
+    `wrong tree — proceeding with "${ctx.worktreeRoot}" as a best-effort fallback. ` +
+    'Retry the command; if this persists, check for a stalled filesystem mount ' +
+    'or a stale git index lock (.git/index.lock) in this worktree.\n'
+  );
 }
 
 // ─── #5118: an out-of-set verification status thrown past a command ─────────
@@ -5533,26 +5572,25 @@ async function main() {
     cwd = resolvedProjectDir;
     projectDirExplicit = true;
   }
+  // #6043 (ADR-4908): the project context is resolved ONCE, here, and every
+  // root a command needs comes from it. `--project-dir` replaces the start
+  // directory for every rule (explicit validated above).
+  //
+  // #4906/#4465: `invokingCwd` stays the raw pre-resolution cwd — a command
+  // whose own git operation must run against the INVOKING worktree's HEAD
+  // (routeSelectRevertCommits) needs a path inside that worktree, never a
+  // remapped root (tests/undo-commit-selection-4465.test.cjs).
+  const preWorktreeRemapCwd = cwd;
+  const ctx = resolveProjectContext(cwd, { explicit: projectDirExplicit ? cwd : null });
+  warnIfGitTimedOut(ctx);
   // #4894: verification derives its root from a phase directory, not `cwd`, so
   // hand it the validated explicit root. Always (re)set — `null` when the flag is
   // absent — so a prior in-process main() call can never leak an override.
-  projectRoot.setExplicitProjectRoot(projectDirExplicit ? cwd : null);
-
-  // Resolve worktree root: in a linked worktree, .planning/ lives in the main worktree.
-  // However, in monorepo worktrees where the subdirectory itself owns .planning/,
-  // skip worktree resolution — the CWD is already the correct project root.
-  //
-  // #4906/#4465: this remap is a BLANKET rewrite applied to every command, before
-  // `command` is even known — most commands need it (they read `.planning/`, which
-  // in a linked worktree lives only in the main one). A command whose own git
-  // operation must run against the INVOKING worktree's OWN HEAD/branch (never the
-  // main worktree's) needs the PRE-remap value instead — preserved here so it can be
-  // threaded through dispatchHostCommand as `invokingCwd` (see routeSelectRevertCommits,
-  // the first consumer: its `git log` must see the caller's own reachable history, not
-  // main's, or a linked-worktree revert range silently resolves against the wrong repo
-  // state — reproduced in tests/undo-commit-selection-4465.test.cjs's linked-worktree case).
-  const preWorktreeRemapCwd = cwd;
-  cwd = resolveMainWorktreeCwd(cwd);
+  // Deleted in Phase 2 (#6044) when verification takes the context itself.
+  projectRoot.setExplicitProjectRoot(projectDirExplicit ? ctx.projectRoot : null);
+  // SKIP_ROOT_RESOLUTION commands and workstream resolution keep the value the
+  // retired resolveMainWorktreeCwd produced (Phase 2 migrates them to named fields).
+  cwd = legacyDispatchCwd(ctx, cwd);
 
   // Optional workstream override for parallel milestone work.
   // Priority: --ws flag > GSD_WORKSTREAM env var > session/shared pointer > null.
@@ -5662,10 +5700,9 @@ async function main() {
   }
 
   // #3881: an explicit --project-dir already IS the resolved project root
-  // (validated above) — findProjectRoot's ancestor walk-up must not run
-  // over it, per docs/CONFIGURATION.md's documented idempotence.
-  if (!projectDirExplicit && !SKIP_ROOT_RESOLUTION.has(command)) {
-    cwd = findProjectRoot(cwd);
+  // (validated above); the resolver reports it as `explicit` without a walk.
+  if (!SKIP_ROOT_RESOLUTION.has(command)) {
+    cwd = ctx.projectRoot;
   }
 
   // When --pick is active, capture stdout and extract the requested field.
@@ -5677,7 +5714,7 @@ async function main() {
   // false "output was not JSON" (negative space N8).
   if (pickField) {
     const captured = await captureTranslatingVerificationStatus(async () => {
-      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd);
+      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
     });
     const resolved = resolveAtFileOutput(captured);
     let obj;
@@ -5709,7 +5746,7 @@ async function main() {
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
   const captured = await captureTranslatingVerificationStatus(async () => {
-    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd);
+    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
   });
   fs.writeSync(1, resolveAtFileOutput(captured));
 }
@@ -5782,7 +5819,7 @@ function extractField(obj, fieldPath) {
   return { found: true, value: current };
 }
 
-async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd) {
+async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd, ctx) {
   switch (command) {
 
     default: {
@@ -5803,7 +5840,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // commands (state, …) routed via their `route*Command` router instead of
       // a hardcoded `case` arm. Tried after capability/overlay dispatch and
       // before the unknown-command error.
-      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd })) break;
+      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx })) break;
 
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
@@ -5844,7 +5881,7 @@ module.exports = {
   HOST_COMMAND_ROUTERS,
   TOP_LEVEL_USAGE,
   skipsRootResolution,
-  resolveMainWorktreeCwd,
+  warnIfGitTimedOut,
   // #3275: exported for tests — the shared PATH+PATHEXT resolver behind
   // review-lane invoke's `deps.spawn` / `deps.hasBinary` seams.
   resolveSpawnBinary,
