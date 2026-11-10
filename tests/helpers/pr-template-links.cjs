@@ -5,7 +5,7 @@
 // `?template=` links stay (maintainer ruling on #5427).
 // Every link to another host is bad too (an allowlist, not only relative links): a template
 // links this repo and nothing else, so a lookalike host cannot pass.
-// A trailing slash on a path is accepted, and `.md` is matched case-sensitively (anchorKind).
+// `.md` is matched case-sensitively (anchorKind).
 // Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
 // are never relative.
 // Anchors use scripts/gen-features.cjs `slugify`: ASCII only, raw heading text, so a
@@ -80,7 +80,8 @@ const hrefsIn = (text) => {
   const refs = [...t.matchAll(REFDEF)].map((m) => m.slice(1).find((g) => g !== undefined));
   // Attribute text of an HTML open tag is not prose: blanked for the link scan only
   // (the `<A>` of `[a](<A>)` has no attributes and stays).
-  const prose = t.replace(TAG, (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
+  // a span right after `](` is a destination (`<x y>`), not a tag
+  const prose = t.replace(new RegExp(`(?<!\\]\\()${TAG.source}`, 'g'), (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
   return [...scanInlineLinks(prose).map(({ dest }) => dest), ...attrsIn(t), ...refs];
 };
 
@@ -99,12 +100,12 @@ const repoLink = (h) => {
   return m && { segs: (m[1] ?? '').split('/'), tail: m[2] ?? '' };
 };
 // Ok: `?template=`, `#`, a repo link naming no ref, or a checkable view on `next`.
-// Never ok: a dot segment or an empty segment before the last.
+// Never ok: a dot segment, or an empty segment (a doubled or trailing slash) in a path.
 const isBadLink = (h) => {
   if (h.startsWith('?template=') || h === '#') return false;
   const link = repoLink(h);
   if (!link || link.segs.some((s) => DOT_SEG.test(s))) return true;
-  if (link.segs.slice(0, -1).includes('')) return true; // `gsd-core//blob/main/x`, `next//x`
+  if (link.segs.length > 1 && link.segs.includes('')) return true; // `gsd-core//blob/main/x`, `x/`
   const [view, ref] = link.segs;
   return !(NO_REF.has(view) || (REF_PAGE.has(view) && ref === 'next'));
 };

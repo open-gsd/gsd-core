@@ -173,7 +173,7 @@ describe('link classification (#5427)', () => {
       `${REPO}Blob/next/x`, `${REPO}bob/next/x`, `${REPO}blob/next/../x`,
       `${REPO}blob/next/%2e%2e/x`,
       `${REPO}issues/../blob/main/x`, `${REPO}/blob/main/x`, `${REPO}blob/next//x`,
-      `${REPO}blob//next/x`, `${REPO}/`];
+      `${REPO}blob//next/x`, `${REPO}/`, `${NEXT}CONTRIBUTING.md/`, `${REPO}tree/next/docs/`];
     assert.deepEqual(bad.filter(isBadLink), bad);
     const ok = [`${NEXT}a.md`, `${REPO}tree/next/docs`, `${REPO}raw/next/a.md`,
       `${REPO}blame/next/a.md`, `${REPO}discussions/1`, `${REPO}issues/1`, `${REPO}pull/1`,
@@ -214,6 +214,7 @@ describe('angle-enclosed destinations (#5427)', () => {
   const ABS = `${NEXT}guide/my%20guide.md`;
   test('inline: relative with spaces is extracted and rejected', () => {
     const hs = hrefsIn('[guide](<guide/my guide.md>)');
+    assert.deepEqual(hrefsIn('[a](<x y>)'), ['x y']);
     assert.deepEqual(hs, ['guide/my guide.md']);
     assert.deepEqual(hs.filter(isBadLink), hs);
   });
