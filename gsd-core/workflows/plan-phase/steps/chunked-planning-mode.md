@@ -77,7 +77,7 @@ Agent(
 
 **ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" outline "${PROJECT_ROOT}"`, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$OUTLINE_FILE" "## OUTLINE COMPLETE")` while waiting/active; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
 
-- **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and consume the real returned result. Skip `gsd_stall_watch` entirely and treat a recognized `## OUTLINE COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep the existing Retry/Stop path.
+- **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and consume the real returned result. Skip `gsd_stall_watch` entirely, then `rm -f "{receipt}"`; treat a recognized `## OUTLINE COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep the existing Retry/Stop path.
 
 Handle return:
 - **`marker_received`:** Read `PLAN-OUTLINE.md`, extract plan list. Continue to 8.5.2.
@@ -184,8 +184,9 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
 
    - **`false`:** when `PLANNER_STALL_DETECTION_ENABLED` is `false`, omit `run_in_background`
      from every call, skip `gsd_stall_watch`, and await each real returned result through the
-     ordinary runtime-native completion mechanism. A concurrent batch still issues the runnable
-     calls together and awaits all of their ordinary results before step 6. Treat each recognized
+     ordinary runtime-native completion mechanism, then `rm -f "{receipt}"` for that entry. A
+     concurrent batch still issues the runnable calls together and awaits all of their ordinary
+     results before step 6. Treat each recognized
      `## PLAN COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep
      step 8's existing Retry/Stop path. This is never fire-and-forget.
 

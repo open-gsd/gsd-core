@@ -1212,12 +1212,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   });
 
   // Review 5692447413 Minor 5: with the toggle off the prompt still carries <return_receipt>,
-  // so a receipt can still be written; each `false` branch must remove it.
-  test('every plan-phase.md `false` toggle branch removes the receipt (#5182)', () => {
-    const plan = readPlanPhase();
-    const branches = plan.split('\n').filter((l) => l.startsWith('- **`false`:** issue the same Agent() call but omit `run_in_background`'));
-    assert.equal(branches.length, 3, 'planner, checker and revision each have a false branch');
-    for (const b of branches) assert.match(b, /rm -f "\{receipt\}"/, `false branch must rm the receipt: ${b.slice(0, 90)}`);
+  // so a receipt can still be written; each `false` branch must remove it. All five
+  // watch sites: plan-phase.md's planner, checker and revision branches are one-line
+  // bullets; chunked-planning-mode.md's outline (8.5.1) and per-plan (8.5.2) branches
+  // are paragraphs (the per-plan one is an indented, wrapped bullet), so both files are
+  // split on blank lines and a branch is the paragraph that opens with the `false` bullet.
+  test('every `false` toggle branch at all five watch sites removes the receipt (#5182)', () => {
+    const falseBranches = (doc) => doc.split(/\n\s*\n/).filter((p) => p.trimStart().startsWith('- **`false`:**'));
+    const spine = falseBranches(readPlanPhase());
+    assert.equal(spine.length, 3, 'planner, checker and revision each have a false branch');
+    const chunked = falseBranches(readChunkedPlanningMode());
+    assert.equal(chunked.length, 2, 'the chunked outline and per-plan sites each have a false branch');
+    for (const b of [...spine, ...chunked]) assert.match(b, /rm -f "\{receipt\}"/, `false branch must rm the receipt: ${b.trim().slice(0, 90)}`);
   });
 
   // Review 5692447413 Minor 1: the revision watch names where a finished revision goes.
