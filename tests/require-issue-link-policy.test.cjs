@@ -172,14 +172,14 @@ describe('evaluateIssueLink', () => {
   // BOTH the branch prefix AND sameRepo === true.
   test('backmerge branch + sameRepo true is exempt with no reference at all', () => {
     const result = evaluateIssueLink(forkPr({
-      prBody: '', headRef: 'chore/backmerge-main-to-next-20260101', sameRepo: true,
+      prBody: '', headRef: 'chore/backmerge-main-to-next-20260101', baseRef: 'next', sameRepo: true,
     }));
     assert.strictEqual(result.reason, ISSUE_LINK_REASON.OK_BACKMERGE_EXEMPT);
   });
 
   test('#1389 anti-forgery: backmerge branch name from a FORK (sameRepo false) is NOT exempt', () => {
     const result = evaluateIssueLink(forkPr({
-      prBody: '', headRef: 'chore/backmerge-main-to-next-20260101', sameRepo: false,
+      prBody: '', headRef: 'chore/backmerge-main-to-next-20260101', baseRef: 'next', sameRepo: false,
     }));
     assert.strictEqual(result.reason, ISSUE_LINK_REASON.FAIL_NO_ISSUE_REFERENCE);
   });

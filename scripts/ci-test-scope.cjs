@@ -6,60 +6,17 @@ const { execFileSync } = require('child_process');
 const { existsSync, readdirSync, appendFileSync, readFileSync } = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
-const { classifyContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./gen-platform-conformance-tier.cjs');
+const { classifyUnstrippedContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./gen-platform-conformance-tier.cjs');
 
-// Workflow files that are purely administrative / policy bots. Changes to these
-// files do NOT require the cross-platform test matrix — only a lightweight
-// ubuntu lane running workflow-lint tests is needed.
-// FAIL-SAFE: any .github/workflows/*.yml NOT listed here is treated as a
-// pipeline workflow and gets the full matrix. New workflow files default to full.
-const INERT_WORKFLOWS = new Set([
-  'stale.yml',
-  'branch-cleanup.yml',
-  'branch-naming.yml',
-  'auto-label-issues.yml',
-  'auto-branch.yml',
-  'auto-backmerge.yml',
-  'close-draft-prs.yml',
-  'dismiss-unauthorized-pr-approvals.yml',
-  'pr-target-validator.yml',
-  'pr-template-format.yml',
-  'require-issue-link.yml',
-  'changeset-required.yml',
-  'docs-required.yml',
-  'discord-changelog.yml',
-]);
-
-// Workflows that gate merges, ship the product, or run security/cross-platform
-// suites — these must ALWAYS get the full pipeline treatment and can never be
-// added to INERT_WORKFLOWS. A module-load assertion enforces this so a mistaken
-// or malicious addition fails CI loudly in the `changes` job on every PR.
-const PROTECTED_WORKFLOWS = new Set([
-  'test.yml',
-  'install-smoke.yml',
-  'mutation.yml',
-  'security-scan.yml',
-  'release.yml',
-  // #3833: the reusable gate every `pull_request` compute lane depends on —
-  // marking it inert would let a change to the gate itself ship without ever
-  // running the full matrix it is responsible for enforcing.
-  'pr-mergeable-preflight.yml',
-]);
-for (const wf of PROTECTED_WORKFLOWS) {
-  if (INERT_WORKFLOWS.has(wf)) {
-    throw new Error(`ci-test-scope: protected workflow "${wf}" must not be in INERT_WORKFLOWS (it requires the full test matrix).`);
-  }
-}
-
-/**
- * Returns true if the path is an inert (non-pipeline) workflow file.
- * Only `.github/workflows/<name>` where <name> is in INERT_WORKFLOWS qualifies.
- */
-function isInertCi(filePath) {
-  if (!filePath.startsWith('.github/workflows/')) return false;
-  const name = filePath.slice('.github/workflows/'.length);
-  // Must be a direct child (no further slashes) and in the allowlist.
-  return !name.includes('/') && INERT_WORKFLOWS.has(name);
+// #6075: CI YAML (any `.github/**/*.yml|*.yaml`: workflows, composite actions,
+// dependabot/labeler/issue-form config) is "inert" CI. A PR that changes only CI
+// YAML never runs the matrix: it reports code_changed=true, product_changed=false,
+// full_matrix=false and targets only the workflow-lint tests (the `test-inert`
+// lane). Mixed with product code, the product files decide the scope.
+// Anchored at the repo root: a nested `.github/` under a product prefix is not CI YAML.
+const CI_YAML_RE = /^\.github\/.+\.ya?ml$/;
+function isCiYaml(filePath) {
+  return CI_YAML_RE.test(filePath);
 }
 
 // Tests shared by both the 'workflow automation' and 'inert CI' rules.
@@ -78,7 +35,7 @@ const isPrTemplate = filePath =>
   /^(?:(?:\.github|docs)\/)?pull_request_template(?:\.md|\/.+)$/i.test(filePath);
 const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
   filePath === 'docs/registries/README.md' || isPrTemplate(filePath);
-const isLightweight = filePath => isInertCi(filePath) || isTemplateLinkDoc(filePath);
+const isLightweight = filePath => isCiYaml(filePath) || isTemplateLinkDoc(filePath);
 const TEMPLATE_LINK_OBSERVERS = [
   'tests/pr-template-links.test.cjs',
   'tests/pr-template-links.property.test.cjs',
@@ -91,13 +48,64 @@ const TEMPLATE_LINK_OBSERVERS = [
   'tests/commit-files-pathspec.test.cjs',
 ];
 
+// #6075: tests that read `.github/**` YAML content (workflow contracts). A CI
+// YAML edit re-runs them in the targeted lane (never full_matrix). Several are
+// conformance-tier members; that does not flip full_matrix for a CI-YAML-only
+// change because classify() exempts isCiYaml(file) from the windows-hint
+// escalation and forces full_matrix=false when only CI YAML changed.
+const WORKFLOW_CONTRACT_TESTS = [
+  'tests/adr-218-release-version-validation.test.cjs',
+  'tests/adr-230-pr-target-policy.test.cjs',
+  'tests/ci-conformance-pr-gating.test.cjs',
+  'tests/ci-docs-guard-registry.test.cjs',
+  'tests/ci-full-lane-sharding.test.cjs',
+  'tests/ci-merge-group-wiring.test.cjs',
+  'tests/ci-pr-mergeability.test.cjs',
+  'tests/ci-test-job-timeout-budget.test.cjs',
+  'tests/ci-test-scope.test.cjs',
+  'tests/merge-commit-pr.test.cjs',
+  'tests/mutation-tap-runner-wiring.test.cjs',
+  'tests/mutation-workflow-base-ref.test.cjs',
+  'tests/policy-release-no-npm-self-upgrade.test.cjs',
+  'tests/policy-shell-pinning.test.cjs',
+  'tests/release-backmerge-invariants.test.cjs',
+  'tests/release-coverage-scope.test.cjs',
+  'tests/release-finalize-notes-5922.test.cjs',
+  'tests/release-finalize-syncs-next-version.test.cjs',
+  'tests/release-hotfix-empty-cherry-pick.test.cjs',
+  'tests/release-notes-real-os-5922.test.cjs',
+  'tests/release-shard-lane-sharding.test.cjs',
+  'tests/release-tarball-smoke-workflow.test.cjs',
+  'tests/require-issue-link-policy.test.cjs',
+  'tests/reviewed-or-maintainer-workflow.test.cjs',
+  'tests/security-scan.security.test.cjs',
+  'tests/self-test-report-workflow.test.cjs',
+  'tests/workflow-token-permissions.test.cjs',
+];
+
+// Workflows that gate merges, ship the product, or run security/cross-platform
+// suites. Kept as a registry of gating workflows. Enforced by the test
+// 'every protected workflow name refers to a real file' in
+// tests/ci-pr-mergeability.test.cjs (existence parity) and, at module load, by
+// missingProtectedWorkflows() below. Since #6075 a change to any of them is CI
+// YAML and, alone, runs only the workflow-lint and workflow-contract tests.
+const PROTECTED_WORKFLOWS = new Set([
+  'test.yml',
+  'install-smoke.yml',
+  'mutation.yml',
+  'security-scan.yml',
+  'release.yml',
+  // #3833: the reusable gate every `pull_request` compute lane depends on —
+  // the gate it defines is exercised by tests/ci-pr-mergeability.test.cjs.
+  'pr-mergeable-preflight.yml',
+]);
+
 const RULES = [
   {
     name: 'workflow automation',
-    // Only NON-inert .github/workflows/* and all .github/rulesets/* trigger full matrix.
-    // FAIL-SAFE: any .github/workflows/*.yml not in INERT_WORKFLOWS is treated as pipeline.
-    match: filePath => (filePath.startsWith('.github/workflows/') && !isInertCi(filePath)) ||
-      filePath.startsWith('.github/rulesets/'),
+    // .github/rulesets/* (JSON branch protection) trigger the full matrix.
+    // CI YAML (.github/**/*.y{a,}ml) is the 'inert CI' rule below (#6075).
+    match: filePath => filePath.startsWith('.github/rulesets/'),
     fullMatrix: true,
     tests: [
       ...WORKFLOW_LINT_TESTS,
@@ -106,11 +114,12 @@ const RULES = [
   },
   {
     name: 'inert CI',
-    match: filePath => isInertCi(filePath),
+    match: filePath => isCiYaml(filePath),
     fullMatrix: false,
     tests: [
       ...WORKFLOW_LINT_TESTS,
       'tests/policy-lint-shallow-checkout.test.cjs',
+      ...WORKFLOW_CONTRACT_TESTS,
     ],
   },
   {
@@ -557,7 +566,7 @@ function reachesConformanceTierOrSeam(file, deps = {}) {
 
     if (file.startsWith('src/')) {
       const content = readFileSync(file, 'utf8');
-      const { signals } = classifyContent(content);
+      const { signals } = classifyUnstrippedContent(content);
       const narrowSignals = signals.filter(signal => !NOISY_FOR_SOURCE_REACHABILITY.has(signal));
       return narrowSignals.length > 0;
     }
@@ -576,7 +585,7 @@ function classify(files, reachabilityDeps = {}) {
   const targeted = new Set();
   const reasons = [];
   let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
-  let lightweightChanged = false;       // inert workflow files / template-link docs
+  let lightweightChanged = false;       // CI YAML (#6075) / template-link docs
   let fullMatrix = false;
 
   for (const file of files) {
@@ -598,12 +607,8 @@ function classify(files, reachabilityDeps = {}) {
       productOrPipelineChanged = true;
     }
 
-    // Non-inert .github/workflows/* are pipeline code → full matrix.
-    if (file.startsWith('.github/workflows/') && !isInertCi(file)) {
-      productOrPipelineChanged = true;
-    }
-
-    // Inert workflow files and template-link docs (isTemplateLinkDoc) set a lightweight signal.
+    // CI YAML and template-link docs (isTemplateLinkDoc) set a lightweight signal; neither
+    // is product/pipeline code.
     if (isLightweight(file)) {
       lightweightChanged = true;
     }
@@ -664,11 +669,13 @@ function classify(files, reachabilityDeps = {}) {
         // 14 of 16 rules, newly escalating most ordinary product-code PRs
         // (src/, agents/, commands/, hooks/, skills/, config paths). Only one
         // rule's escalation is live today: 'portability lint rules (ADR-1703)'.
-        // Four others already had fullMatrix: true (no-op here), and 'inert
-        // CI''s escalation is overridden downstream by the inert-CI reset.
+        // Four others already had fullMatrix: true (no-op here), and CI YAML
+        // (the 'inert CI' rule) is excluded from this escalation entirely.
         // Distinct, greppable reason so the conformance-lane coverage for it
         // is traceable per rule.
-        if (rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
+        // #6075: CI YAML never escalates (it is lint-only scope, also when mixed
+        // with product code, so the product files alone decide full_matrix).
+        if (!isCiYaml(file) && rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
           fullMatrix = true;
           reasons.push(`${file}: ${rule.name} (windows-hint rule test, #4641)`);
         }
@@ -687,7 +694,7 @@ function classify(files, reachabilityDeps = {}) {
   ]);
   for (const f of SCOPED_LANE_EXCLUDE) { targeted.delete(f); }
 
-  // code_changed: true when product/pipeline OR lightweight (inert CI, template-link doc) changed.
+  // code_changed: true when product/pipeline code, CI YAML or a template-link doc changed.
   // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.
   const codeChanged = productOrPipelineChanged || lightweightChanged;
 
@@ -699,7 +706,7 @@ function classify(files, reachabilityDeps = {}) {
     targetedTests.push('unit');
   }
 
-  // Inert-CI / template-link-doc-only: full_matrix must be false (override any RULES that fired).
+  // CI-YAML / template-link-doc-only: full_matrix must be false (override any RULES that fired).
   if (lightweightChanged && !productOrPipelineChanged) {
     fullMatrix = false;
   }
@@ -759,7 +766,6 @@ module.exports = {
   RULES,
   missingRuleTestFiles,
   PROTECTED_WORKFLOWS,
-  INERT_WORKFLOWS,
   isPrTemplate,
   TEMPLATE_LINK_OBSERVERS,
   missingProtectedWorkflows,
