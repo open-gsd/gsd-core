@@ -1427,7 +1427,7 @@ PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -er .plan_count) ||
 gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity. Exits non-zero, writing nothing, when `--plans` cannot be recorded (the PLAN files are already written): surface the error; re-run only after adding a missing line it names, and stop on an invalid or below-position `--plans`.
+This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity. Exits non-zero and writes nothing when `--plans` cannot be recorded: surface the error; retry only after adding the line it names.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 
