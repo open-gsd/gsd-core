@@ -2492,10 +2492,8 @@ is computed (its phase-validation exits precede that, and a nonexistent phase ha
 
 The key is the review path as the caller passes it, so the workflows make `REVIEW_PATH`
 absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it.
-`lane-evidence-clear` removes a malformed state and leaves any lane directory, because no valid suffix names it.
-The state is bound to the review path, not to one REVIEW.md: a later standalone `code-review-fix --auto` run for the same phase
-reads an `auto` state under 6 hours old, and frames the block UNVERIFIED. The workflow fences read `${TMPDIR:-/tmp}`
-while the verbs use `os.tmpdir()` on Windows when `TMPDIR` is unset: under Git Bash set `TMPDIR` so both name one directory.
+`lane-evidence-clear` removes a malformed state.
+The state is bound to the review path, not to one REVIEW.md; `code-review-fix` frames the block it reads UNVERIFIED.
 
 **Prerequisites:** none — they read no project state and need no resolvable project root
 **Produces:** `lane-evidence-read` prints the block exactly as stored, or nothing; the others print nothing. All exit 0 whether or not there was anything to do; non-zero only for a usage error (an empty `<review-path>`, an invalid `<suffix>` or mode) and, for `lane-evidence-persist`, an unreadable stdin block (the lane directory is kept under a `once` state that `commit_review` then clears)
