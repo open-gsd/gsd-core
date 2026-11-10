@@ -5281,7 +5281,8 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
 
 // #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanLines and
 // planLinesForPlanned in state-transition). Parity: every site that reads or writes a plan count
-// agrees with it on generated inputs, at limit-1 / limit / limit+1. parsePlanCount, the exported
+// agrees with it on generated inputs, at limit-1 / limit / limit+1 (the `parseInt` readers of the recorded total in
+// state.cts are outside this PR). parsePlanCount, the exported
 // grammar owner, is called directly; every other owner is reached through routeStateCommand and transitionCore.
 describe('#5320 plan-count / plan-position owner parity', () => {
   const MAX = Number.MAX_SAFE_INTEGER;
@@ -5377,7 +5378,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           if (want !== null) return r.content === content && r.updated.length === 0;
           // advance-plan reads a plan line only when one reads, or when planned-phase wrote an unreadable one (no Total line)
           if (!(plan || cur)) return true;
-          // no readable line and a Total line: planned-phase leaves the lines as written (as before) and advance-plan refuses them as before
+          // no readable line and a Total line: planned-phase leaves the lines as written and advance-plan refuses them
           if (reads.length === 0 && total) return adv0(r.content).error === true;
           const adv = adv0(r.content);
           const position = newPhase ? 0 : recorded;
@@ -5625,6 +5626,11 @@ describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase'
 
   test('#5786 explicit Total (5) beats `Plan: 1 of 2` with no Current Plan line', () => {
     assert.equal(recorded('Plan: 1 of 2', 'Total Plans in Phase: 5'), 5);
+  });
+
+  test('#5320 a total followed by punctuation reads; a separator that continues the number does not', () => {
+    for (const tail of ['.', ',', ')', ';']) assert.equal(recorded(`Plan: 2 of 5${tail}`), 5, tail);
+    for (const bad of ['5.5', '5/7', '5,6']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
   });
 
   test('#5786 explicit Total beats `Current Plan: N of M`', () => {

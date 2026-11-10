@@ -5776,7 +5776,7 @@ describe('state planned-phase command', () => {
     assert.match(after, /^Current Plan: Not started$/m, `STATE.md was:\n${after}`);
     assert.match(after, /^Total Plans in Phase: 6$/m);
     assert.ok(!JSON.parse(r.output).updated.includes('Current Plan'));
-    // as before this change: advance-plan has no readable position on this shape and refuses it
+    // advance-plan has no readable position on this shape and refuses it
     assert.strictEqual(JSON.parse(runGsdTools(['state', 'advance-plan'], tmpDir).output).reason, 'plan_position_unreadable');
   });
 
@@ -5877,7 +5877,7 @@ describe('state planned-phase command', () => {
       } else {
         assert.ok(r.success, `${line} with --plans ${plans}: ${r.error}`);
         const after = fs.readFileSync(statePath, 'utf8');
-        assert.match(after, new RegExp(`^${want}$`, 'm'), `STATE.md was:\n${after}`);
+        assert.match(after, new RegExp(`^${escapeRegex(want)}$`, 'm'), `STATE.md was:\n${after}`);
         const [, n, m] = /^Plan: (\d+) of (\d+)/m.exec(after);
         assert.ok(Number(n) <= Number(m), `persisted position ${n} of ${m} must not exceed its total`);
       }
@@ -5893,7 +5893,7 @@ describe('state planned-phase command', () => {
       assert.strictEqual(r.success, false, `--plans ${bad} must fail`);
       const failure = JSON.parse(r.error);
       assert.strictEqual(failure.reason, ERROR_REASON.USAGE, `--plans ${bad}`);
-      assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer.', `--plans ${bad}`);
+      assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.', `--plans ${bad}`);
       assert.ok(fs.readFileSync(statePath).equals(before), `--plans ${bad} must not write`);
     }
   });
@@ -5911,6 +5911,7 @@ describe('state planned-phase command', () => {
       ['Plan: 2 of 5,', 'Plan: 2 of 8,'],
       ['Plan: 2 of 5)', 'Plan: 2 of 8)'],
       ['Plan: 2 of 5; wave 2', 'Plan: 2 of 8; wave 2'],
+      ['Plan: 2 of 5.5', 'Plan: 2 of 8 of 5.5'],
       ['Plan: 1 of B in current phase', 'Plan: 1 of 8 in current phase'],
       ['Current Plan: 3 (blocked)', 'Current Plan: 3 of 8 (blocked)'],
       ['Plan: 0 TBD in current phase', 'Plan: 0 of 8 in current phase'],
@@ -5997,7 +5998,7 @@ describe('state planned-phase command', () => {
     assert.strictEqual(bad.success, false);
     const failure = JSON.parse(bad.error);
     assert.strictEqual(failure.reason, ERROR_REASON.USAGE);
-    assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer.');
+    assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.');
     assert.ok(fs.readFileSync(statePath).equals(before));
   });
 
@@ -6010,7 +6011,7 @@ describe('state planned-phase command', () => {
       assert.strictEqual(r.success, false, `--plans ${bad}`);
       const failure = JSON.parse(r.error);
       assert.strictEqual(failure.reason, ERROR_REASON.USAGE, `--plans ${bad}`);
-      assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer.', `--plans ${bad}`);
+      assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.', `--plans ${bad}`);
       assert.ok(fs.readFileSync(statePath).equals(before), `--plans ${bad} must not write`);
     }
   });
@@ -6098,7 +6099,8 @@ describe('#3052: planned-phase preserves same-date last_activity_desc', () => {
     // Each test below pinned `planned-phase --plans` succeeding as a no-op on a STATE.md with no plan line,
     // and stopped pinning it when #5320 made that a refusal: #3052 same-date desc, E8a `updated: []`,
     // the two #3872 rows (5 plans, Current Position moved), the #3872 current_phase row, and the
-    // state-contract no-op (`plannedPhaseNoOpDoesNotPublish`). Their landing line keeps each protecting its own behaviour.
+    // state-contract no-op (`plannedPhaseNoOpDoesNotPublish`, which dropped `--plans` instead; its refusal is
+    // pinned by `plannedPhaseUnrecordablePlansDoesNotPublish`). The other tests keep a landing line so each still protects its own behaviour.
     // [original text of the fixture, its planned-phase command]
     for (const [lines, cmd] of [
       [
