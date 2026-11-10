@@ -302,9 +302,9 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += '\n\n⚠ Gate violations are advisory — review before advancing.';
     for (const r of rows.filter(row => row.status === 'FAIL')) {
       table += r.reason === TDD_ROW_REASON.GREEN_BEFORE_RED
-        ? `\n  Plan ${r.planId} GREEN precedes RED: no feat(...) or fix(...) commit descends from a test(...) commit.`
+        ? `\n  Plan ${r.planId} GREEN precedes RED: no ${GREEN_KINDS.map((k) => `${k}(...)`).join(' or ')} commit descends from a test(...) commit.`
         : `\n  Plan ${r.planId} missing: ${r.missing.join(', ')} gate commit(s).`;
-      table += `\n  Expected commit pattern: test(${r.planId}): ... → feat(${r.planId}): ... or fix(${r.planId}): ...`;
+      table += `\n  Expected commit pattern: test(${r.planId}): ... → ${GREEN_KINDS.map((k) => `${k}(${r.planId}): ...`).join(' or ')}`;
     }
   }
 

@@ -93,6 +93,10 @@ describe('#5275 RED must precede GREEN by ancestry', () => {
         out.table.includes('Plan 01-01 GREEN precedes RED: no feat(...) or fix(...) commit descends from a test(...) commit.'),
         out.table,
       );
+      assert.ok(
+        out.table.includes('Expected commit pattern: test(01-01): ... → feat(01-01): ... or fix(01-01): ...'),
+        out.table,
+      );
     });
   });
 
