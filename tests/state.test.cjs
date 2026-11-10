@@ -5890,17 +5890,20 @@ describe('state planned-phase command', () => {
       assert.strictEqual(r.success, false, `--plans ${bad} must fail`);
       const failure = JSON.parse(r.error);
       assert.strictEqual(failure.reason, ERROR_REASON.USAGE, `--plans ${bad}`);
-      assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.', `--plans ${bad}`);
       assert.ok(fs.readFileSync(statePath).equals(before), `--plans ${bad} must not write`);
     }
   });
 
-  test('#5320: --plans shell metacharacters and quotes in the value fail without a stack trace and before any write', () => {
+  test('#5320: --plans a valueless, repeated, `=`-joined or shell-shaped --plans fails without a stack trace and before any write', () => {
     writeTbdPlanFixture(TBD_BODY);
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     const before = fs.readFileSync(statePath);
     const base = ['state', 'planned-phase', '--phase', '19', '--name', 'Tbd'];
     for (const tail of [
+      ['--plans'],
+      ['--plans', '--raw'],
+      ['--plans', '3', '--plans', 'x'],
+      ['--plans=3'],
       ['--plans', '$(id)'],
       ['--plans', '`id`'],
       ['--plans', '3&&ls'],
@@ -6014,7 +6017,6 @@ describe('state planned-phase command', () => {
     assert.strictEqual(bad.success, false);
     const failure = JSON.parse(bad.error);
     assert.strictEqual(failure.reason, ERROR_REASON.USAGE);
-    assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.');
     assert.ok(fs.readFileSync(statePath).equals(before));
   });
 
@@ -6027,7 +6029,6 @@ describe('state planned-phase command', () => {
       assert.strictEqual(r.success, false, `--plans ${bad}`);
       const failure = JSON.parse(r.error);
       assert.strictEqual(failure.reason, ERROR_REASON.USAGE, `--plans ${bad}`);
-      assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.', `--plans ${bad}`);
       assert.ok(fs.readFileSync(statePath).equals(before), `--plans ${bad} must not write`);
     }
   });

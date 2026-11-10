@@ -5375,8 +5375,6 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
           if (r.data?.reason !== (want ?? undefined)) return false;
           if (want !== null) return r.content === content && r.updated.length === 0;
-          // advance-plan reads a plan line only when one reads, or when planned-phase wrote an unreadable one (no Total line)
-          if (!(plan || cur)) return true;
           // no readable line and a Total line: planned-phase leaves the lines as written and advance-plan refuses them
           if (reads.length === 0 && total) return adv0(r.content).error === true;
           if (readRecordedPlanTotal(r.content) !== count) return false;
