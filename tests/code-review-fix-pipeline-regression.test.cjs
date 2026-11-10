@@ -24,8 +24,8 @@ const { runGsdTools } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // The fence is POSIX bash: bash on PATH and not win32 (same gate as the property test).
-const { hasPosixBash } = require('./helpers/posix-bash-gate.cjs');
-const HAS_BASH = hasPosixBash();
+const { posixBashSkip } = require('./helpers/posix-bash-gate.cjs');
+const BASH_SKIP = posixBashSkip();
 
 // Extract the bash fence out of a named <step>, so a test can RUN it rather than grep it.
 // Line-scanned rather than matched with a multiline regex: an ad-hoc fence regex trips
@@ -243,7 +243,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.ok(recordAt < cleanupAt, 'the ledger reads the backups BEFORE they are removed');
   });
 
-  test('T6b — the cleanup fence, EXECUTED: removes on clean, retains on anything else', { skip: !HAS_BASH }, () => {
+  test('T6b — the cleanup fence, EXECUTED: removes on clean, retains on anything else', { skip: BASH_SKIP }, () => {
     // The behavioural half of T6, and the one that survives a branch inversion. Drives the shipped
     // fence in both directions against real files, so an inverted condition fails here rather than
     // passing a token grep — which is exactly what the round's review demonstrated of the first cut.
@@ -357,7 +357,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   };
 
   test('T6c — #5506: retained backups are COMMITTED when COMMIT_DOCS=true, left alone when false',
-    { skip: !HAS_BASH }, (t) => {
+    { skip: BASH_SKIP }, (t) => {
     // A non-clean --auto run retains <NN>-REVIEW(-FIX).iterN.md. Untracked, they leave a dirty tree
     // that /gsd-ship's clean-tree preflight refuses. Execute the shipped fence against a real repo.
     // The default mode runs the real-CLI stub (REAL_COMMIT_BODY, add + scoped commit, prints the
@@ -440,7 +440,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
 
   test(
     'T6d — #5506: a converged run removes every backup and commits nothing, any COMMIT_DOCS',
-    { skip: !HAS_BASH }, (t) => {
+    { skip: BASH_SKIP }, (t) => {
     for (const commitDocs of ['true', 'false']) {
       for (const committed of [true, false]) {
         const label = 'COMMIT_DOCS=' + commitDocs + (committed ? ', tracked' : ', untracked');
@@ -458,9 +458,9 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   });
 
   test(
-    'T6e — #5506: only .iter<digits>.md files are backups (01-REVIEW.iterations-notes.md is not)',
-    { skip: !HAS_BASH }, (t) => {
-    const notes = ['01-REVIEW.iterations-notes.md', '01-REVIEW.iter2-notes.md'];
+    'T6e — #5506: only .iter<digits>.md files are backups (.iter2x.md and .iter2-notes.md are not)',
+    { skip: BASH_SKIP }, (t) => {
+    const notes = ['01-REVIEW.iter2x.md', '01-REVIEW.iter2-notes.md'];
     const degraded = seedBackupRepo(t, 'gsd-5506-glob-d-', 'issues_found', false);
     for (const n of notes) fs.writeFileSync(path.join(degraded, n), 'mine');
     runFence(degraded);
@@ -477,7 +477,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     );
   });
 
-  test('T6f — #5506: nullglob is restored to the caller state', { skip: !HAS_BASH }, (t) => {
+  test('T6f — #5506: nullglob is restored to the caller state', { skip: BASH_SKIP }, (t) => {
     const post = 'shopt -q nullglob && echo NG=on || echo NG=off';
     const dir = seedBackupRepo(t, 'gsd-5506-shopt-', 'clean', true);
     assert.match(runFence(dir, { pre: 'shopt -s nullglob', post }).stdout, /NG=on/);
@@ -485,7 +485,8 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.match(runFence(dir2, { pre: 'shopt -u nullglob', post }).stdout, /NG=off/);
   });
 
-  // The fence is run by whatever shell the agent host has; the maintainer's zsh reproduction is a
+  // Skips where zsh is absent: the lane that provides it is the macOS runner. The fence is run by
+  // whatever shell the agent host has; the maintainer's zsh reproduction is a
   // bare `shopt` (rc 127 under set -e) and, with no backup, `no matches found`.
   test('T6g — #5506: the cleanup fence runs under zsh',
     { skip: !have('zsh') && 'zsh is not on PATH' }, (t) => {
@@ -516,7 +517,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   // The three readers of "what is a backup": the cleanup fence, the disposition step's bash loop,
   // and the disposition step's node `iterOf`. They must classify every name alike.
   test('T6h — #5506: the three backup readers agree on which names are backups',
-    { skip: !HAS_BASH }, (t) => {
+    { skip: BASH_SKIP }, (t) => {
     const FIX = 'gsd-core/workflows/code-review-fix.md';
     const DISP = 'gsd-core/workflows/execute-phase/steps/code-review-disposition.md';
     // `iter3` is what auto_iteration_loop writes (`.iter${ITERATION}.md`) at ITERATION=3.
@@ -563,7 +564,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   // The stub is only worth its place if cmdCommit does what it does: run both over the same
   // scenarios and compare the printed token, the files in HEAD and the working-tree status.
   test('T6i — #5506: the commit stub behaves like the real `query commit` CLI',
-    { skip: !HAS_BASH }, (t) => {
+    { skip: BASH_SKIP }, (t) => {
     const A = '01-REVIEW.iter2.md';
     const B = '01-REVIEW-FIX.iter2.md';
     const P = '.planning/phases/01-x/' + A;
@@ -677,7 +678,7 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
   const report = (value, eol = '\n') =>
     ['---', 'status: all_fixed', `findings_in_scope: ${value}`, 'fixed: 0', 'skipped: 0', '---', '', 'body'].join(eol);
 
-  test('boundary: 0 proves zero scope, 1 and -1 do not, 00 is zero, CRLF is honored', { skip: !HAS_BASH }, () => {
+  test('boundary: 0 proves zero scope, 1 and -1 do not, 00 is zero, CRLF is honored', { skip: BASH_SKIP }, () => {
     assert.strictEqual(probe(report('0')).verdict, 'yes', 'limit: 0 in scope');
     assert.strictEqual(probe(report('1')).verdict, 'no', 'limit+1: 1 in scope');
     assert.strictEqual(probe(report('-1')).verdict, 'no', 'limit-1: a negative count is malformed, not zero');
@@ -685,7 +686,7 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
     assert.strictEqual(probe(report('0', '\r\n')).verdict, 'yes', 'a CRLF report is read the same');
   });
 
-  test('never proves zero from unusable input', { skip: !HAS_BASH }, () => {
+  test('never proves zero from unusable input', { skip: BASH_SKIP }, () => {
     assert.strictEqual(probe(report('')).verdict, 'no', 'blank value');
     assert.strictEqual(probe(report('none')).verdict, 'no', 'non-numeric value');
     assert.strictEqual(probe(['---', 'status: all_fixed', '---'].join('\n')).verdict, 'no', 'absent key');
@@ -698,7 +699,7 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
     assert.strictEqual(hostile.pwned, false, 'and is never executed');
   });
 
-  test('property: zero scope iff findings_in_scope is zero', { skip: !HAS_BASH }, () => {
+  test('property: zero scope iff findings_in_scope is zero', { skip: BASH_SKIP }, () => {
     fc.assert(
       fc.property(fc.nat({ max: 5000 }), (n) => probe(report(String(n))).verdict === (n === 0 ? 'yes' : 'no')),
       { numRuns: 25 },
@@ -715,7 +716,7 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
       'the degradation warning must not fire on a zero-scope stop');
   });
 
-  test('the fix summary does not claim resolution when nothing was in scope', { skip: !HAS_BASH }, () => {
+  test('the fix summary does not claim resolution when nothing was in scope', { skip: BASH_SKIP }, () => {
     const region = stepRegion(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'present_results').replace(/\r\n/g, '\n');
     const lines = region.split('\n');
     const marker = lines.findIndex((l) => l.includes('All issues resolved.'));

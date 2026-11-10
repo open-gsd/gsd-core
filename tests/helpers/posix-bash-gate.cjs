@@ -1,13 +1,16 @@
 'use strict';
 
-const { have } = require('./bash-probe.cjs');
+const { skipUnless } = require('./bash-probe.cjs');
 
 /**
- * True when a shipped bash fence can run here: bash on PATH and not win32. The fences are POSIX
- * bash (paths, globs, `shopt`), so a Windows bash on PATH is not enough (#5506).
+ * A `skip` value for `node:test`: false when a shipped bash fence can run here, else the reason.
+ * The fences are POSIX bash (paths, globs, `shopt`), so a Windows bash on PATH is not enough
+ * (#5506). Off win32, `skipUnless` keeps the CI contract: a missing bash under CI throws, never
+ * skips (#5170).
  */
-function hasPosixBash() {
-  return have('bash') && process.platform !== 'win32';
+function posixBashSkip() {
+  if (process.platform === 'win32') return 'the fence is POSIX bash, not win32';
+  return skipUnless('bash');
 }
 
-module.exports = { hasPosixBash };
+module.exports = { posixBashSkip };
