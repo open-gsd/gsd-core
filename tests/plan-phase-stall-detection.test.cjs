@@ -1012,7 +1012,13 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
     const result = runBashScript('printf \'%s|%s|%s\' "$HOME" "$USERPROFILE" "$GSD_STALL_DETECTION_TEST_OVERRIDE"\n', [],
       { home, env: { GSD_STALL_DETECTION_TEST_OVERRIDE: 'set' } });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, `${home}|${home}|set`, 'home must set HOME and USERPROFILE; env entries must override the isolated base');
+    // MSYS bash on windows-latest rewrites HOME to POSIX form (`C:\...` -> `/c/...`) at
+    // startup and leaves USERPROFILE alone, so the two are compared by their last
+    // segment (the mkdtemp name), which survives the conversion, never byte-for-byte.
+    const [childHome, childProfile, override] = result.stdout.split('|');
+    assert.equal(path.basename(childHome), path.basename(home), 'home must set the child HOME');
+    assert.equal(path.basename(childProfile), path.basename(home), 'home must set the child USERPROFILE');
+    assert.equal(override, 'set', 'env entries must override the isolated base');
   });
 
   test('an exceeded bound reports TIMED_OUT, not a bare null status', () => {
