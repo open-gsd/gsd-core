@@ -1988,4 +1988,39 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
       },
     ), PROPERTY_RUNS);
   });
+
+  describe('with a project exemption (#4432)', () => {
+    const fs = require('node:fs');
+    const { gitOrThrow: fixtureGit } = require('./helpers/git-fixture.cjs');
+    const { createTempGitProject, cleanup } = require('./helpers.cjs');
+    const EXEMPT = '.env';
+    let repo;
+    const absq = () => `'${path.join(repo, EXEMPT)}'`;
+    const run = (command) => runHook({ ...bash(command), cwd: repo });
+
+    before(() => {
+      repo = fs.realpathSync(createTempGitProject('gsd-5523-exempt-'));
+      fs.writeFileSync(path.join(repo, EXEMPT), 'KEY=CHANGE_ME\n');
+      fixtureGit(['-c', 'commit.gpgsign=false', 'add', '-f', EXEMPT], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      fixtureGit(['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'fixture'],
+        { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      fs.mkdirSync(path.join(repo, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.planning', 'config.json'), JSON.stringify({ hooks: { secret_read_exempt: [EXEMPT] } }));
+    });
+
+    after(() => {
+      cleanup(repo);
+    });
+
+    test('a plain read of the exempt file stays allowed', () => {
+      assertAllowed(run(`cat ${absq()}`), 'cat <exempt>');
+    });
+
+    // The zsh reading meets the exempt file first and sees a read-only line; the spans reading sees the
+    // `mv` that `$$` hides from it. Each reading judges the line itself, so the read is denied.
+    test('denies an exempt read when a later reading sees a command an earlier one hid (bash, dash)', () => {
+      const cmd = '{cat ' + absq() + '};cat $' + '${x; mv /tmp/a /tmp/b; cat ' + absq() + ' }';
+      assertBlocked(run(cmd), '{cat <exempt>};cat $${x; mv a b; cat <exempt> }', { tool: 'Bash' });
+    });
+  });
 });

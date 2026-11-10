@@ -1485,6 +1485,11 @@ const SHELL_READINGS = [
 function findSecretReadUnderShellReadings(command) {
   for (const reading of SHELL_READINGS) {
     if (!reading.applies(command)) continue;
+    // #4432's exemption holds only on a read-only line, and `isExemptSecret` caches that verdict from
+    // the first reading to meet a secret. A reading can see a command an earlier one did not (the `mv`
+    // in `{cat P};cat $${x; mv a b; cat P }` is hidden from the zsh reading, not from the spans one), so
+    // each reading judges the line again under its own flags.
+    exemption.bashReadOnly = null;
     reading.set(true);
     try {
       const hit = findSecretRead(command, 0);
