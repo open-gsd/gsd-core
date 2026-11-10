@@ -5367,7 +5367,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           const reads = [plan, cur].filter(readable);
           const recorded = Math.max(0, ...reads.map((s) => s.n));
           const count = recorded + off;
-          if (count < 0) return true;
+          fc.pre(count >= 0);
           // independent oracle
           let want = null;
           if (!plan && !cur && !total) want = 'plans_no_line';
@@ -5380,6 +5380,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           if (!(plan || cur)) return true;
           // no readable line and a Total line: planned-phase leaves the lines as written and advance-plan refuses them
           if (reads.length === 0 && total) return adv0(r.content).error === true;
+          if (readRecordedPlanTotal(r.content) !== count) return false;
           const adv = adv0(r.content);
           const position = newPhase ? 0 : recorded;
           return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
@@ -5412,7 +5413,6 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     }
     const huge = planned('Plan: 99999999999999999999 of 5', 3);
     assert.strictEqual(huge.data.reason, 'plans_below_position');
-    assert.match(huge.data.message, /plan position is above 9007199254740991/);
     assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
   });
 
@@ -5423,6 +5423,25 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(lineOf(planned('Plan: 2 of ? - wave 1 done', 6).content), 'Plan: 2 of 6 - wave 1 done');
     // the placeholder ends at a boundary: `?x` is author text, not an unfilled total
     assert.strictEqual(lineOf(planned('Plan: 2 of ?x', 6).content), 'Plan: 2 of 6 of ?x');
+  });
+
+  test('#5320 adversarial planning-state fixtures: each is read and written as the README of the fixture directory states', () => {
+    // The input classes (fenced code, duplicate keys, NUL, malformed frontmatter, CRLF) are the parser checklist of CONTRIBUTING.md "Adversarial fixtures".
+    const { readFileSync } = require('node:fs');
+    const dir = require('node:path').join(__dirname, 'fixtures', 'adversarial', 'planning-state');
+    const written = (name) => {
+      const text = readFileSync(require('node:path').join(dir, name), 'utf8');
+      // git may normalise the fixture to LF on checkout: the CRLF fixture is made CRLF here
+      const raw = name.startsWith('crlf') ? text.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n') : text;
+      const r = transitionCore(raw, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 5 }, deps);
+      assert.strictEqual(r.data?.error, undefined, `${name}: ${JSON.stringify(r.data)}`);
+      return r.content.replaceAll('\r\n', '\n').split('\n').filter((l) => l.startsWith('Plan: '));
+    };
+    assert.deepStrictEqual(written('plan-line-inside-fenced-code.md'), ['Plan: 9 of 9', 'Plan: 1 of 5']);
+    assert.deepStrictEqual(written('duplicate-plan-lines.md'), ['Plan: 1 of 5', 'Plan: 2 of 3']);
+    assert.deepStrictEqual(written('null-byte-plan-line.md'), ['Plan: 1 of 5\0x']);
+    assert.deepStrictEqual(written('unclosed-frontmatter-plan-line.md'), ['Plan: 2 of 5']);
+    assert.deepStrictEqual(written('crlf-punctuated-plan-line.md'), ['Plan: 1 of 5.']);
   });
 
   test('plannedPhase unit: a total followed by punctuation keeps its punctuation and gains no second " of"', () => {

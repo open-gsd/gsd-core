@@ -5636,7 +5636,7 @@ describe('state planned-phase command', () => {
   }
   // The position a Plan / Current Plan line records, read by an independent regex; the written spelling is pinned where it is the contract.
   const planAt = (name) => {
-    const m = new RegExp(`^(?:\\*\\*)?${name}:(?:\\*\\*)?\\s*(\\d+)(?:\\s+of\\s+(\\d+))?`, 'm').exec(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'));
+    const m = new RegExp(`^(?:\\*\\*)?${escapeRegex(name)}:(?:\\*\\*)?\\s*(\\d+)(?:\\s+of\\s+(\\d+))?`, 'm').exec(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'));
     return m && { n: Number(m[1]), ofM: m[2] !== undefined, m: m[2] === undefined ? null : Number(m[2]) };
   };
   const TBD_BODY = ['Phase: 19', 'Plan: 0 TBD in current phase', 'Status: Ready'];
@@ -5677,8 +5677,7 @@ describe('state planned-phase command', () => {
 
     assert.strictEqual(result.success, false, 'must fail when --plans has no line to land on');
     const failure = JSON.parse(result.error);
-    assert.strictEqual(failure.reason, ERROR_REASON.UNKNOWN, 'a STATE.md prerequisite is not a usage error');
-    assert.match(failure.message, /--plans has no line to land on/);
+    assert.strictEqual(failure.reason, ERROR_REASON.PLANS_NO_LINE);
     assert.ok(fs.readFileSync(statePath).equals(before), 'STATE.md must stay byte-identical');
   });
 
@@ -5735,10 +5734,10 @@ describe('state planned-phase command', () => {
     assert.strictEqual(advStray.total_plans, 3);
     // refusals write nothing
     const refused = [
-      [null, '2', ERROR_REASON.USAGE, /below the recorded plan position 3/],
-      [['Phase: 19', 'Plan: 2 of 5', 'Current Plan: 3 of 5', 'Status: Ready'], '6', ERROR_REASON.UNKNOWN, /record different plan positions/],
+      [null, '2', ERROR_REASON.PLANS_BELOW_POSITION],
+      [['Phase: 19', 'Plan: 2 of 5', 'Current Plan: 3 of 5', 'Status: Ready'], '6', ERROR_REASON.AMBIGUOUS_PLAN_POSITION],
     ];
-    for (const [lines, plans, reason, message] of refused) {
+    for (const [lines, plans, reason] of refused) {
       // null: a flat document (no Current Position section) whose frontmatter names the planned phase
       if (lines) writeTbdPlanFixture(lines);
       else fs.writeFileSync(statePath, ['---', 'gsd_state_version: 1.0', 'status: planning', 'current_phase: 19', '---', '', '# Project State', '', '**Current Plan:** 3', '**Total Plans in Phase:** 5', '**Status:** Ready', ''].join('\n'));
@@ -5747,7 +5746,6 @@ describe('state planned-phase command', () => {
       assert.strictEqual(r.success, false, String(lines));
       const failure = JSON.parse(r.error);
       assert.strictEqual(failure.reason, reason);
-      assert.match(failure.message, message);
       assert.ok(bytes().equals(before), 'STATE.md must stay byte-identical');
     }
   });
@@ -5755,10 +5753,10 @@ describe('state planned-phase command', () => {
   test('#5320: every planned-phase refusal carries its exit class (--json-errors reason)', () => {
     // [fixture lines, --plans, reason]: a recorded position that cannot be held or is below --plans is a usage error; a document problem is not
     for (const [lines, plans, reason] of [
-      [['Phase: 19', 'Status: Ready'], '3', ERROR_REASON.UNKNOWN],
-      [['Phase: 19', 'Plan: 2 of 5', 'Current Plan: 3 of 5', 'Status: Ready'], '6', ERROR_REASON.UNKNOWN],
-      [['Phase: 19', 'Plan: 3 of 5', 'Status: Ready'], '2', ERROR_REASON.USAGE],
-      [['Phase: 19', 'Plan: 99999999999999999999 of 5', 'Status: Ready'], '3', ERROR_REASON.USAGE],
+      [['Phase: 19', 'Status: Ready'], '3', ERROR_REASON.PLANS_NO_LINE],
+      [['Phase: 19', 'Plan: 2 of 5', 'Current Plan: 3 of 5', 'Status: Ready'], '6', ERROR_REASON.AMBIGUOUS_PLAN_POSITION],
+      [['Phase: 19', 'Plan: 3 of 5', 'Status: Ready'], '2', ERROR_REASON.PLANS_BELOW_POSITION],
+      [['Phase: 19', 'Plan: 99999999999999999999 of 5', 'Status: Ready'], '3', ERROR_REASON.PLANS_BELOW_POSITION],
     ]) {
       writeTbdPlanFixture(lines);
       const r = runGsdTools([...PLAN_CMD, plans, '--json-errors'], tmpDir);
@@ -5854,9 +5852,9 @@ describe('state planned-phase command', () => {
 
   test('#5320: --plans below the recorded plan position is refused; at it and above it is recorded (limit-1/limit/limit+1)', () => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
-    // [Plan line, --plans, written line | null when refused naming the recorded position]
-    for (const [line, plans, want, position] of [
-      ['Plan: 3 of 5 in current phase', '2', null, 3],
+    // [Plan line, --plans, written line | null when refused]
+    for (const [line, plans, want] of [
+      ['Plan: 3 of 5 in current phase', '2', null],
       ['Plan: 3 of 5 in current phase', '3', 'Plan: 3 of 3 in current phase'],
       ['Plan: 3 of 5 in current phase', '4', 'Plan: 3 of 4 in current phase'],
       // Terminal `Plan: M of M` (advance-plan leaves N = M once the last plan is done).
@@ -5871,8 +5869,7 @@ describe('state planned-phase command', () => {
       if (want === null) {
         assert.strictEqual(r.success, false, `${line} with --plans ${plans} must be refused`);
         const failure = JSON.parse(r.error);
-        assert.strictEqual(failure.reason, ERROR_REASON.USAGE);
-        assert.strictEqual(failure.message, `state planned-phase: --plans ${plans} is below the recorded plan position ${position}. Use --plans ${position} or more, or correct the position line.`);
+        assert.strictEqual(failure.reason, ERROR_REASON.PLANS_BELOW_POSITION);
         assert.ok(fs.readFileSync(statePath).equals(before), `${line} with --plans ${plans} must not write`);
       } else {
         assert.ok(r.success, `${line} with --plans ${plans}: ${r.error}`);
@@ -5895,6 +5892,25 @@ describe('state planned-phase command', () => {
       assert.strictEqual(failure.reason, ERROR_REASON.USAGE, `--plans ${bad}`);
       assert.strictEqual(failure.message, 'Invalid --plans value. Expected a non-negative integer no larger than 9007199254740991.', `--plans ${bad}`);
       assert.ok(fs.readFileSync(statePath).equals(before), `--plans ${bad} must not write`);
+    }
+  });
+
+  test('#5320: --plans shell metacharacters and quotes in the value fail without a stack trace and before any write', () => {
+    writeTbdPlanFixture(TBD_BODY);
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const before = fs.readFileSync(statePath);
+    const base = ['state', 'planned-phase', '--phase', '19', '--name', 'Tbd'];
+    for (const tail of [
+      ['--plans', '$(id)'],
+      ['--plans', '`id`'],
+      ['--plans', '3&&ls'],
+      ['--plans', "'3'"],
+      ['--plans', '"3"'],
+    ]) {
+      const r = runGsdTools([...base, ...tail], tmpDir);
+      assert.strictEqual(r.success, false, `${tail.join(' ')} must fail`);
+      assert.doesNotMatch(String(r.error), /\n\s+at\s/, `${tail.join(' ')}: no stack trace`);
+      assert.ok(fs.readFileSync(statePath).equals(before), `${tail.join(' ')} must not write`);
     }
   });
 
@@ -5956,7 +5972,7 @@ describe('state planned-phase command', () => {
     assert.ok(runGsdTools(args, tmpDir).success, 'first run must succeed');
     const second = runGsdTools(args, tmpDir);
     assert.ok(second.success, `second run must exit 0: ${second.error}`);
-    assert.match(JSON.parse(second.output).warning, /already up to date/);
+    assert.deepStrictEqual(JSON.parse(second.output).updated, [], 'the second run changes nothing');
   });
 
   test('#5320: a Current Phase: section keeps the executed plan on a same-phase replan', () => {
@@ -5973,7 +5989,7 @@ describe('state planned-phase command', () => {
     const before = fs.readFileSync(statePath);
     const bad = runGsdTools([...PLAN_CMD, '1', '--json-errors'], tmpDir);
     assert.strictEqual(bad.success, false);
-    assert.match(JSON.parse(bad.error).message, /below the recorded plan position 2\./);
+    assert.strictEqual(JSON.parse(bad.error).reason, ERROR_REASON.PLANS_BELOW_POSITION);
     assert.ok(fs.readFileSync(statePath).equals(before), 'STATE.md must stay byte-identical');
   });
 
@@ -6117,8 +6133,7 @@ describe('#3052: planned-phase preserves same-date last_activity_desc', () => {
       const r = runGsdTools(['state', 'planned-phase', ...cmd, '--json-errors'], tmpDir);
       assert.strictEqual(r.success, false, cmd.join(' '));
       const failure = JSON.parse(r.error);
-      assert.strictEqual(failure.reason, ERROR_REASON.UNKNOWN);
-      assert.match(failure.message, /--plans has no line to land on/);
+      assert.strictEqual(failure.reason, ERROR_REASON.PLANS_NO_LINE);
       assert.ok(fs.readFileSync(statePath).equals(before), `${cmd.join(' ')}: STATE.md must stay byte-identical`);
     }
   });

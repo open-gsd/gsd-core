@@ -1868,13 +1868,12 @@ export function readRecordedPlanTotal(content: string): number | null {
  * unreadable line is rewritten only when no other plan line reads and no `Total Plans in Phase:` line records the count.
  */
 function planLinesForPlanned(content: string, count: number, samePhase: boolean, totalRecorded: boolean):
-  { error: { reason: string; reason_class: 'usage' | 'unknown'; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
+  { error: { reason: string; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
   const lines = readPlanLines(content);
   const { legacy, planPos } = lines;
   if (lines.plan === null && lines.currentPlan === null && !totalRecorded) {
     return { error: {
       reason: 'plans_no_line',
-      reason_class: 'unknown',
       message: 'state planned-phase: --plans has no line to land on. ' +
         'Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.',
     } };
@@ -1884,7 +1883,6 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if ((legacy && legacy.n === null) || (planPos && planPos.n === null)) {
       return { error: {
         reason: 'plans_below_position',
-        reason_class: 'usage',
         message: `state planned-phase: the recorded plan position is above ${Number.MAX_SAFE_INTEGER}, ` +
           'so no --plans count can hold it. Correct the position line.',
       } };
@@ -1892,7 +1890,6 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if (lines.ambiguous) {
       return { error: {
         reason: 'ambiguous_plan_position',
-        reason_class: 'unknown',
         message: `state planned-phase: Plan and Current Plan record different plan positions (${lines.currentPlan} vs ${lines.plan}). ` +
           'Correct one of them and retry.',
       } };
@@ -1901,7 +1898,6 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if (position > count) {
       return { error: {
         reason: 'plans_below_position',
-        reason_class: 'usage',
         message: `state planned-phase: --plans ${count} is below the recorded plan position ${position}. ` +
           `Use --plans ${position} or more, or correct the position line.`,
       } };
