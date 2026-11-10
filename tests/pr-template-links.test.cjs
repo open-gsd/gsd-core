@@ -200,6 +200,7 @@ describe('escaped brackets, empty destinations, reference labels (#5427)', () =>
     assert.deepEqual(extractLinks('[a]()'), []);
     assert.deepEqual(extractLinks('[a](<>)'), []);
     assert.deepEqual(missingNext([''], 'x.md'), []);
+    assert.deepEqual(missingNext([`${NEXT}CONTRIBUTING.md%2F`], 'x.md'), ['CONTRIBUTING.md/']);
     assert.deepEqual(unresolvedAnchors([''], 'x.md'), []);
   });
   test('reference labels honour escaped brackets', () => {
@@ -215,6 +216,7 @@ describe('angle-enclosed destinations (#5427)', () => {
   test('inline: relative with spaces is extracted and rejected', () => {
     const hs = hrefsIn('[guide](<guide/my guide.md>)');
     assert.deepEqual(hrefsIn('[a](<x y>)'), ['x y']);
+    assert.deepEqual(hrefsIn('[a]( <x y>)'), ['x y']);
     assert.deepEqual(hs, ['guide/my guide.md']);
     assert.deepEqual(hs.filter(isBadLink), hs);
   });

@@ -66,7 +66,9 @@ const TAG = new RegExp(`<[A-Za-z][A-Za-z0-9-]*((?:${NAME.source}${VALUE.source})
 const ATTR = /\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?/g;
 const URL_ATTRS = new Set(['href', 'src', 'srcset']);
 const firstCandidate = (c) => c.trim().split(/\s+/)[0];
-const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
+// A tag-shaped span right after `](` is a destination (`<x y>`), not a tag.
+const PROSE_TAG = new RegExp(`(?<!\\]\\(\\s*)${TAG.source}`, 'g');
+const attrsIn =(t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
   .filter(([, name]) => URL_ATTRS.has(name.toLowerCase()))
   .flatMap(([, name, ...v]) => {
     const val = v.find((g) => g !== undefined);
@@ -80,8 +82,7 @@ const hrefsIn = (text) => {
   const refs = [...t.matchAll(REFDEF)].map((m) => m.slice(1).find((g) => g !== undefined));
   // Attribute text of an HTML open tag is not prose: blanked for the link scan only
   // (the `<A>` of `[a](<A>)` has no attributes and stays).
-  // a span right after `](` is a destination (`<x y>`), not a tag
-  const prose = t.replace(new RegExp(`(?<!\\]\\()${TAG.source}`, 'g'), (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
+  const prose = t.replace(PROSE_TAG, (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
   return [...scanInlineLinks(prose).map(({ dest }) => dest), ...attrsIn(t), ...refs];
 };
 
@@ -128,11 +129,17 @@ const repoPathOf = (h, where) => decode(nextRel(h).split(/[?#]/)[0], h, where);
 
 // The ADR gate owns the case-exact walk (a case-folding filesystem cannot pass a link GitHub
 // 404s) and the symlink-escape refusal.
-const existsExact = (rel) =>
-  existsCaseExact(path.join(ROOT, rel), new Map(), fs.realpathSync(ROOT)).exists;
+const REAL_ROOT = fs.realpathSync(ROOT);
+const DIR_CACHE = new Map();
+const existsExact = (rel) => existsCaseExact(path.join(ROOT, rel), DIR_CACHE, REAL_ROOT).exists;
+// An empty segment after decoding (`x.md%2F`) is as bad as a raw one (isBadLink).
+const badPath = (rel) => {
+  const segs = rel.split('/');
+  return segs.includes('..') || (rel !== '' && segs.includes(''));
+};
 const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
   .map((h) => repoPathOf(h, where))
-  .filter((rel) => rel.split('/').includes('..') || !existsExact(rel));
+  .filter((rel) => badPath(rel) || !existsExact(rel));
 
 // A paragraph followed by === or --- is a setext heading; maskCode supplies fences and code
 // spans, the raw lines the text.
@@ -210,6 +217,6 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
 };
 
 module.exports = {
-  REPO, NEXT, hrefsIn, repoLink, isBadLink, nextRel, repoPathOf, missingNext,
+  REPO, NEXT, hrefsIn, isBadLink, nextRel, repoPathOf, missingNext,
   unresolvedAnchors, headingSet,
 };

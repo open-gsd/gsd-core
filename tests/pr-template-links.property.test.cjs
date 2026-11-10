@@ -39,6 +39,9 @@ describe('repo link grammar (#5427)', () => {
     bad(rel.map((p) => `http://github.com/open-gsd/gsd-core/blob/next/${p}`)),
     bad(rel.map((p) => `https://github.com.evil/open-gsd/gsd-core/blob/next/${p}`)),
     bad(rel.map((p) => `../${p}`)),
+    // a doubled or trailing slash in the path
+    bad(fc.tuple(fc.constantFrom(...checked), rel).map(([v, p]) => `${REPO}${v}/next//${p}`)),
+    bad(fc.tuple(fc.constantFrom(...checked), rel).map(([v, p]) => `${REPO}${v}/next/${p}/`)),
     bad(fc.tuple(fc.constantFrom(...checked), fc.constantFrom('next', 'main'), rel)
       .map(([v, r, p]) => `${REPO}/${v}/${r}/${p}`)),
   );
