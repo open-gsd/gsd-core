@@ -39,6 +39,8 @@ describe('repo link grammar (#5427)', () => {
     bad(rel.map((p) => `http://github.com/open-gsd/gsd-core/blob/next/${p}`)),
     bad(rel.map((p) => `https://github.com.evil/open-gsd/gsd-core/blob/next/${p}`)),
     bad(rel.map((p) => `../${p}`)),
+    bad(fc.tuple(fc.constantFrom(...checked), fc.constantFrom('next', 'main'), rel)
+      .map(([v, r, p]) => `${REPO}/${v}/${r}/${p}`)),
   );
   test('property: each link class is decided by construction', () => {
     fc.assert(fc.property(classes, ([h, isBad]) => assert.equal(isBadLink(h), isBad, h)));
@@ -63,7 +65,7 @@ describe('line anchors (#5427)', () => {
   });
 });
 
-describe('link extractor (#5427)', () => {
+describe('link extractor properties (#5427)', () => {
   const dest = fc.stringMatching(/^[A-Za-z0-9._/-]{1,20}$/);
   const forms = (d, t) => [`[a](${d}${t})`, `[a](<${d}>${t})`, `<a href="${d}">`, `<a href='${d}'>`,
     `<a href=${d}>`, `<img src="${d}">`, `[a]: ${d}${t}`, `[a]: <${d}>${t}`, `> [a]: ${d}${t}`,

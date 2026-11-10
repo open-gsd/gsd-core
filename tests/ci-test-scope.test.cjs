@@ -31,7 +31,13 @@ describe('ci-test-scope.cjs', () => {
     const rule = RULES.find((r) => r.name === 'PR template links (#5427)');
     assert.strictEqual(rule.tests, OBSERVERS);
     // commit-files-pathspec reads CONTRIBUTING.md
-    assert.ok(OBSERVERS.includes('tests/commit-files-pathspec.test.cjs'));
+    assert.deepStrictEqual(OBSERVERS, [
+      'tests/pr-template-links.test.cjs', 'tests/pr-template-links.property.test.cjs',
+      'tests/self-test-report-workflow.test.cjs', 'tests/gemini-runtime-removed.test.cjs',
+      'tests/adr-index-gate.test.cjs', 'tests/contributor-standards.test.cjs',
+      'tests/context-predicates.test.cjs', 'tests/features-index-gate.test.cjs',
+      'tests/commit-files-pathspec.test.cjs',
+    ]);
     for (const f of [
       '.github/pull_request_template.md', '.github/PULL_REQUEST_TEMPLATE/feature.md',
       'CONTRIBUTING.md', 'docs/registries/README.md', 'pull_request_template.md',

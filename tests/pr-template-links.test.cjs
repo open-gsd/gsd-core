@@ -1,7 +1,6 @@
 // Regression for #5427: the guard lives in tests/helpers/pr-template-links.cjs (its header
 // states what is checked). This file holds the example and parity tests and the template loop.
 const { describe, test } = require('node:test');
-const fc = require('./helpers/fast-check-setup.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -63,7 +62,6 @@ describe('heading anchors, fence edges (#5427)', () => {
 });
 
 describe('link extractor (#5427)', () => {
-  const dest = fc.stringMatching(/^[A-Za-z0-9._/-]{1,20}$/);
   test('an unbalanced parenthesis is not a link', () => {
     for (const text of ['[a](x_(b)', '[a](x_(b "t")', '[a](x_((b))', '[a](']) {
       assert.deepEqual(hrefsIn(text), [], text);
@@ -74,12 +72,6 @@ describe('link extractor (#5427)', () => {
   });
   test('autolinks and bare URLs are out of scope: always absolute', () => {
     assert.deepEqual(hrefsIn('<https://x/a> and https://x/b'), []);
-  });
-  test('parity: agrees with the ADR gate extractLinks on shared inline links', () => {
-    fc.assert(fc.property(dest, fc.constantFrom('', ' "t"', " 't'"), (d, t) => {
-      const text = `[a](${d}${t})`;
-      assert.deepEqual(extractLinks(text).map(({ target }) => target.split(' ')[0]), hrefsIn(text));
-    }));
   });
 });
 
@@ -161,6 +153,8 @@ describe('next-ref existence and anchors (#5427)', () => {
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#L274`,
       `${REPO}blame/next/CONTRIBUTING.md#L10`,
       `${NEXT}scripts/ci-test-scope.cjs#L10`], 'tpl.md'), []);
+    assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#L5-L2`], 'tpl.md'),
+      ['CONTRIBUTING.md#L5-L2']);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#L5`], 'tpl.md'),
       ['CONTRIBUTING.md#L5']);
     const heading = DOCS_ANCHOR.split('#')[1];
@@ -178,7 +172,8 @@ describe('link classification (#5427)', () => {
       `${REPO}archive/main.zip`, `${REPO}commits/next/docs`, `${REPO}edit/next/x`,
       `${REPO}Blob/next/x`, `${REPO}bob/next/x`, `${REPO}blob/next/../x`,
       `${REPO}blob/next/%2e%2e/x`,
-      `${REPO}issues/../blob/main/x`];
+      `${REPO}issues/../blob/main/x`, `${REPO}/blob/main/x`, `${REPO}blob/next//x`,
+      `${REPO}blob//next/x`, `${REPO}/`];
     assert.deepEqual(bad.filter(isBadLink), bad);
     const ok = [`${NEXT}a.md`, `${REPO}tree/next/docs`, `${REPO}raw/next/a.md`,
       `${REPO}blame/next/a.md`, `${REPO}discussions/1`, `${REPO}issues/1`, `${REPO}pull/1`,

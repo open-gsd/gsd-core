@@ -3,6 +3,7 @@
 // open tags, outside code and HTML comments. A repo link must name no ref, or
 // blob|tree|raw|blame on `next` to a path (and a heading or line anchor) that exists.
 // `?template=` links stay (maintainer ruling on #5427).
+// A trailing slash on a path is accepted, and `.md` is matched case-sensitively (anchorKind).
 // Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
 // are never relative.
 // Anchors use scripts/gen-features.cjs `slugify`: ASCII only, raw heading text, so a
@@ -96,11 +97,12 @@ const repoLink = (h) => {
   return m && { segs: (m[1] ?? '').split('/'), tail: m[2] ?? '' };
 };
 // Ok: `?template=`, `#`, a repo link naming no ref, or a checkable view on `next`.
-// Never ok: a dot segment.
+// Never ok: a dot segment or an empty segment before the last.
 const isBadLink = (h) => {
   if (h.startsWith('?template=') || h === '#') return false;
   const link = repoLink(h);
   if (!link || link.segs.some((s) => DOT_SEG.test(s))) return true;
+  if (link.segs.slice(0, -1).includes('')) return true; // `gsd-core//blob/main/x`, `next//x`
   const [view, ref] = link.segs;
   return !(NO_REF.has(view) || (REF_PAGE.has(view) && ref === 'next'));
 };
@@ -195,7 +197,8 @@ const lineCountOf = (rel) => {
 };
 const lineAnchorOk = (anchor, count) => {
   const m = LINE_ANCHOR.exec(anchor);
-  return m !== null && [m[1], m[2] ?? m[1]].every((n) => Number(n) >= 1 && Number(n) <= count);
+  return m !== null && [m[1], m[2] ?? m[1]].every((n) => Number(n) >= 1 && Number(n) <= count)
+    && Number(m[2] ?? m[1]) >= Number(m[1]);
 };
 // Every #fragment on a file on next must exist in the kind of view the link opens.
 // A missing file is missingNext's.
