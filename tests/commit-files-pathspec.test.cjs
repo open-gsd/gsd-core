@@ -1341,15 +1341,12 @@ describe('workflow call sites declare --files (#2269)', () => {
   // author can see and declare — it can never hide an invocation.
 
   // The scan's verdict must agree with the RUNTIME, and the runtime never sees
-  // the line — it sees argv, after the shell has already tokenized it
-  // (routeCommit, gsd-core/bin/gsd-tools.cjs):
+  // the line — it sees argv, after the shell has already tokenized it.
+  // `commit` accepts non-empty --files or --files-removed lists using the
+  // runtime's shared parser; `commit-to-subrepo` only accepts --files.
   //
-  //   const filesIndex = args.indexOf('--files');
-  //   const files = filesIndex !== -1
-  //     ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--'))
-  //     : [];
-  //
-  // files.length === 0 lands on the unscoped default branch that IS #2269.
+  // With neither list populated, commit takes the unscoped default branch
+  // that is #2269; commit-to-subrepo instead requires a non-empty files list.
   //
   // Every predicate that approximates that over raw line text has a reachable
   // disagreement, and each one found so far was fixed by widening the
@@ -1361,7 +1358,7 @@ describe('workflow call sites declare --files (#2269)', () => {
   // filters on '--', not '-').
   const GSD_BINARY_RE = /^(?:.*\/)?gsd(?:_run|-tools(?:\.cjs)?)$/;
   const COMMIT_TOKENS = new Set(['commit', 'commit-to-subrepo']);
-  const FILE_SCOPE_FLAGS = new Set(['--files', '--files-removed']);
+  const { collectListFlagValues } = require('../gsd-core/bin/gsd-tools.cjs');
 
   // A SUBSHELL OPENER GLUES TO THE BINARY. `(` is not a tokenizer
   // metacharacter here — subshell grouping changes no argv, so it was never
@@ -1399,7 +1396,29 @@ describe('workflow call sites declare --files (#2269)', () => {
   // first cut of this rule keyed on an assignment prefix, because 437 of the
   const isGsdBinary = (t) => GSD_BINARY_RE.test(bareCommandName(t));
 
-  // routeCommit's predicate, verbatim, over one invocation's tokens. Stops at
+  // Locate the actual subcommand after the binary, skipping the optional query
+  // prefix and flags with values using the same rules as invocation detection.
+  const commitTokenIndex = (tokens) => {
+    const bi = tokens.findIndex((t) => !t.redir && isGsdBinary(t));
+    if (bi === -1) return -1;
+    let i = bi + 1;
+    while (i < tokens.length) {
+      const t = tokens[i];
+      if (t.op || t.redir) return -1;
+      if (COMMIT_TOKENS.has(t.value)) return i;
+      if (t.value === 'query') { i += 1; continue; }
+      if (t.value.startsWith('-')) {
+        i += 1;
+        const v = tokens[i];
+        if (v && !v.op && !v.redir && !v.value.startsWith('-') && !COMMIT_TOKENS.has(v.value)) i += 1;
+        continue;
+      }
+      return -1;
+    }
+    return -1;
+  };
+
+  // Apply the appropriate runtime predicate to one invocation's tokens. Stops at
   // the first control operator so that a later command's --files can never
   // vouch for this one even when the caller passes an unsegmented line, and
   // drops redirection tokens — they are consumed by the shell, so a `--files`
@@ -1407,14 +1426,17 @@ describe('workflow call sites declare --files (#2269)', () => {
   const hasScopedFiles = (line) => {
     const all = tokenize(line);
     const cut = all.findIndex((t) => t.op);
-    const tokens = (cut === -1 ? all : all.slice(0, cut)).filter((t) => !t.redir).map((t) => t.value);
-    const listIndices = tokens
-      .map((token, index) => FILE_SCOPE_FLAGS.has(token) ? index : -1)
-      .filter((index) => index !== -1);
-    return listIndices.some((filesIndex, listNumber) => {
-      const nextListIndex = listIndices[listNumber + 1] ?? tokens.length;
-      return tokens.slice(filesIndex + 1, nextListIndex).some((t) => !t.startsWith('--'));
-    });
+    const segment = cut === -1 ? all : all.slice(0, cut);
+    const commandIndex = commitTokenIndex(segment);
+    if (commandIndex === -1) return false;
+    const command = segment[commandIndex].value;
+    const args = segment.slice(commandIndex + 1).filter((t) => !t.redir).map((t) => t.value);
+    if (command === 'commit-to-subrepo') {
+      const filesIndex = args.indexOf('--files');
+      return filesIndex !== -1 && args.slice(filesIndex + 1).some((t) => !t.startsWith('--'));
+    }
+    return collectListFlagValues(args, '--files').length > 0
+      || collectListFlagValues(args, '--files-removed').length > 0;
   };
 
   // Usage-synopsis notation is documentation OF the CLI, never a call TO it:
@@ -1445,26 +1467,8 @@ describe('workflow call sites declare --files (#2269)', () => {
     // (`FOO=1 gsd_run …`), a `then`/`else` keyword, a shell prompt (`$ `), or
     // an interpreter (`node gsd-tools.cjs …`, live in docs/CLI-TOOLS.md) all
     // precede it, and all are still the command being run.
-    const bi = tokens.findIndex((t) => !t.redir && isGsdBinary(t));
-    if (bi === -1) return false;
-    // Between the binary and the command, only the optional `query` meta-prefix
-    // and flags-with-values may intervene. `gsd_run --cwd "$ROOT" query commit`
-    // is live in onboard.md; a bare word here means this is a sentence.
-    let i = bi + 1;
-    while (i < tokens.length) {
-      const t = tokens[i];
-      if (t.op || t.redir) return false;
-      if (COMMIT_TOKENS.has(t.value)) break;
-      if (t.value === 'query') { i += 1; continue; }
-      if (t.value.startsWith('-')) {
-        i += 1;
-        const v = tokens[i];
-        if (v && !v.op && !v.redir && !v.value.startsWith('-') && !COMMIT_TOKENS.has(v.value)) i += 1;
-        continue;
-      }
-      return false;
-    }
-    if (i >= tokens.length) return false;
+    const i = commitTokenIndex(tokens);
+    if (i === -1) return false;
     // NOTATION IS DECIDED BY THE FIRST ARGUMENT, and this is the position where
     // that question is answerable — `i` is the command token, so the next token
     // is where a call puts its MESSAGE and a synopsis puts its metavariable.
@@ -1702,6 +1706,7 @@ describe('workflow call sites declare --files (#2269)', () => {
       // Both path-list flags with no values are still unscoped.
       'gsd_run query commit "docs: delete" --files-removed',
       'gsd_run query commit "docs: delete" --files-removed --files',
+      'gsd_run query commit-to-subrepo "docs: delete" --files-removed .planning/OLD.md',
       // --files followed by ANOTHER FLAG is the same unscoped default, because
       // routeCommit filters `--`-prefixed tokens out of the scope list:
       // args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) === [].
@@ -1749,6 +1754,8 @@ describe('workflow call sites declare --files (#2269)', () => {
       // Deletions are an explicit scope too; each list runs to the next
       // path-list flag, matching routeCommit.
       'gsd_run query commit "docs: delete" --files-removed .planning/OLD.md',
+      'gsd_run query commit "docs: delete" --files-removed .planning/OLD.md --files',
+      'gsd_run query commit "docs: delete" --files --files-removed .planning/OLD.md',
       // A quoted --files mention BEFORE the real flag must not blind the
       // scanner to the genuine scope that follows (quote parity is even
       // again after the closing quote).
