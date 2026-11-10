@@ -5281,8 +5281,7 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
 
 // #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanLines and
 // planLinesForPlanned in state-transition). Parity: every site that reads or writes a plan count
-// agrees with it on generated inputs, at limit-1 / limit / limit+1 (the `parseInt` readers of the recorded total in
-// state.cts are outside this PR). parsePlanCount, the exported
+// agrees with it on generated inputs, at limit-1 / limit / limit+1. parsePlanCount, the exported
 // grammar owner, is called directly; every other owner is reached through routeStateCommand and transitionCore.
 describe('#5320 plan-count / plan-position owner parity', () => {
   const MAX = Number.MAX_SAFE_INTEGER;
@@ -5426,22 +5425,25 @@ describe('#5320 plan-count / plan-position owner parity', () => {
   });
 
   test('#5320 adversarial planning-state fixtures: each is read and written as the README of the fixture directory states', () => {
-    // The input classes (fenced code, duplicate keys, NUL, malformed frontmatter, CRLF) are the parser checklist of CONTRIBUTING.md "Adversarial fixtures".
-    const { readFileSync } = require('node:fs');
-    const dir = require('node:path').join(__dirname, 'fixtures', 'adversarial', 'planning-state');
-    const written = (name) => {
-      const text = readFileSync(require('node:path').join(dir, name), 'utf8');
-      // git may normalise the fixture to LF on checkout: the CRLF fixture is made CRLF here
-      const raw = name.startsWith('crlf') ? text.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n') : text;
+    // The input classes (fenced code, duplicate keys, NUL, malformed frontmatter, CRLF and mixed endings) are the parser checklist of CONTRIBUTING.md "Adversarial fixtures".
+    // the fs and path declared near line 3646 are not in scope here (ReferenceError), so they are required locally
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const dir = path.join(__dirname, 'fixtures', 'adversarial', 'planning-state');
+    const plannedLines = (raw, label) => {
       const r = transitionCore(raw, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 5 }, deps);
-      assert.strictEqual(r.data?.error, undefined, `${name}: ${JSON.stringify(r.data)}`);
+      assert.strictEqual(r.data?.error, undefined, `${label}: ${JSON.stringify(r.data)}`);
       return r.content.replaceAll('\r\n', '\n').split('\n').filter((l) => l.startsWith('Plan: '));
     };
+    const written = (name) => plannedLines(fs.readFileSync(path.join(dir, name), 'utf8'), name);
     assert.deepStrictEqual(written('plan-line-inside-fenced-code.md'), ['Plan: 9 of 9', 'Plan: 1 of 5']);
     assert.deepStrictEqual(written('duplicate-plan-lines.md'), ['Plan: 1 of 5', 'Plan: 2 of 3']);
     assert.deepStrictEqual(written('null-byte-plan-line.md'), ['Plan: 1 of 5\0x']);
     assert.deepStrictEqual(written('unclosed-frontmatter-plan-line.md'), ['Plan: 2 of 5']);
-    assert.deepStrictEqual(written('crlf-punctuated-plan-line.md'), ['Plan: 1 of 5.']);
+    // CRLF and mixed LF/CRLF documents are built here: .gitattributes (`eol=lf`) would normalise a stored fixture
+    const lf = doc('Plan: 1 of 3.');
+    assert.deepStrictEqual(plannedLines(lf.replaceAll('\n', '\r\n'), 'crlf'), ['Plan: 1 of 5.']);
+    assert.deepStrictEqual(plannedLines(lf.replace('\n', '\r\n'), 'mixed'), ['Plan: 1 of 5.']);
   });
 
   test('plannedPhase unit: a total followed by punctuation keeps its punctuation and gains no second " of"', () => {
@@ -5649,6 +5651,7 @@ describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase'
 
   test('#5320 a total followed by punctuation reads; a separator that continues the number does not', () => {
     for (const tail of ['.', ',', ')', ';']) assert.equal(recorded(`Plan: 2 of 5${tail}`), 5, tail);
+    for (const bad of ['5\u00e9', '5\u0663']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
     for (const bad of ['5.5', '5/7', '5,6']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
   });
 

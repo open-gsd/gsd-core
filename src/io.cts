@@ -515,7 +515,7 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.PHASE_ID_COLLISION]: 'USAGE',
   [ERROR_REASON.AMBIGUOUS_PHASE_OWNER]: 'USAGE',
   [ERROR_REASON.PHASE_NAMING_NOT_CUSTOM]: 'USAGE',
-  // The --plans count is below the position the document records: the caller's argument is at fault.
+  // The --plans count is below the recorded position, or that position is past the safe-integer range: the count or the position line is at fault.
   [ERROR_REASON.PLANS_BELOW_POSITION]: 'USAGE',
 
   // A specific, named thing does not exist / nothing was there to find —

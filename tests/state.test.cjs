@@ -5750,7 +5750,7 @@ describe('state planned-phase command', () => {
     }
   });
 
-  test('#5320: every planned-phase refusal carries its exit class (--json-errors reason)', () => {
+  test('#5320: every planned-phase refusal carries its typed reason (--json-errors)', () => {
     // [fixture lines, --plans, reason]: a recorded position that cannot be held or is below --plans is a usage error; a document problem is not
     for (const [lines, plans, reason] of [
       [['Phase: 19', 'Status: Ready'], '3', ERROR_REASON.PLANS_NO_LINE],
