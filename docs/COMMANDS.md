@@ -2485,7 +2485,7 @@ node gsd-tools.cjs state complete-phase --phase 3
 Persist, re-read and remove the external-reviewer lane evidence that `/gsd-code-review` carries into
 `code-review-fix --auto` re-reviews (#5019). The state is a file under `$TMPDIR` (`/tmp` when unset, `os.tmpdir()` on Windows) keyed to the
 review file, `<suffix>\n<auto|once>\n<block>`; nothing is written into the project or its git metadata.
-An `--fix --auto` `code-review` run persists at dispatch (an empty block persists nothing and removes the lane directory), and clears at
+A `--fix --auto` `code-review` run persists at dispatch (an empty block persists nothing and removes the lane directory), and clears at
 `check_empty_scope` (any `--fix` run), in `commit_review` (`--keep-auto` keeps an `--auto` state for the fixer loop only when REVIEW.md is valid; otherwise `commit_review` clears it) and when the
 reviewer agent fails. A run without `--fix --auto` persists nothing and keeps the single lane-directory removal in `commit_review` it had before; `code-review-fix` reads before each re-review and clears at every exit after `REVIEW_PATH`
 is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
