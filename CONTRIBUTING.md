@@ -511,8 +511,15 @@ local helper and delegate the spawn to the seam.
 of subprocess call takes (a CLI probe, git plumbing on a fixture repo, a hooks build, a full
 `bin/install.js` run), not a single suite's preference, so import them rather than re-declaring the
 same literal with the same comment in yet another file. Only write a local constant when a site
-genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...) — and give that
-local constant its own justifying comment explaining why it departs from the norm.
+genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...). Give that
+local constant its own name, never a `timeouts.cjs` export name, and its own justifying comment
+explaining why it departs from the norm.
+
+Every timeout constant states its evidence: the worst observed duration, the platform it came from,
+and a margin of at least 2x over it. A constant exported from `timeouts.cjs` also needs a matching
+`TIMEOUT_EVIDENCE` entry, which `tests/timeout-evidence.test.cjs` checks. See TESTING-STANDARDS.md,
+"Every new or changed timeout constant states its evidence", for the shape and the exempt kinds
+(fixture data, test backstop, mirror).
 
 #### When you want git to *throw*: `gitOrThrow`
 
@@ -1359,6 +1366,12 @@ whoever applied the label has write or admin permission. A PR author cannot
 self-apply it to bypass the gate. If other entries are queued ahead of the
 fix, the group is larger than one commit and the bypass is refused; dequeue
 the others first. Remove the label once the fix has merged.
+
+Adding or removing `fix-next` re-runs only `Base branch health` (and the
+dependent `Required tests`) through the `fix-next re-run` workflow, which reads
+the label from the API; no other label change starts a Tests run. If the PR's
+latest Tests run was cancelled or its head has moved, the workflow skips and the
+newer run reads the label itself.
 
 A push run that is still in flight, including a re-run of a failed run, never
 counts as healthy: a re-run whose previous attempt failed is red, otherwise the

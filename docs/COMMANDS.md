@@ -1749,6 +1749,46 @@ Trigger semantics match ESLint's `complexity: {max: N}` — strictly greater, so
 
 ---
 
+### `gsd-tools query project-context`
+
+Print the project context GSD resolved for the current directory: which checkout it runs in, which directory owns `.planning/`, and how that was decided. Read-only; use it to diagnose which checkout a command will act in (see [Resolve the project root in a worktree](how-to/resolve-the-project-root-in-a-worktree.md)).
+
+```bash
+gsd-tools query project-context                       # Full context as JSON
+gsd-tools query project-context --raw                 # Print the worktree top level only
+gsd-tools query project-context --project-dir <dir>   # Resolve as if started from <dir>
+```
+
+| Field | Meaning |
+|-------|---------|
+| `projectRoot` | Directory holding the `.planning` entry |
+| `planningRoot` | Canonical (realpath) location of `.planning` |
+| `worktreeRoot` | Top level of the checkout the process runs in |
+| `repoRoot` | Top level of the main checkout (first non-bare `git worktree list` entry) |
+| `gitCommonDir` | Absolute `git rev-parse --git-common-dir`; `null` outside a git repository |
+| `isLinkedWorktree` | `true` when `worktreeRoot` differs from `repoRoot` |
+| `provenance` | `{ source, reason, degraded, warnings }` — how the answer was reached |
+
+`provenance.source` names the rule that found `projectRoot`: `explicit` (`--project-dir`), `ancestor` (a `.planning` in the start directory or one of its parents), `workspace` (the enclosing `planning.sub_repos` workspace), `main-checkout` (a linked worktree with no `.planning` of its own falls back to the main checkout's), or `none` (no `.planning` found; `projectRoot` is the start directory).
+
+`provenance.reason` names the git facts behind the context: `ok`, `bare_main_worktree` (the main repository is bare, so the checkout is its own repo root), `not_git_repo` (not inside a git repository), or one of the degraded reasons `git_timed_out`, `git_unavailable`, `git_error`, `worktree_list_failed`. A degraded context sets `degraded: true` and adds a message to `warnings`; roots fall back to what git had answered or the start directory, and a degraded context never refuses a commit.
+
+```json
+{
+  "projectRoot": "/work/app-wt",
+  "planningRoot": "/work/app-wt/.planning",
+  "worktreeRoot": "/work/app-wt",
+  "repoRoot": "/work/app",
+  "gitCommonDir": "/work/app/.git",
+  "isLinkedWorktree": true,
+  "provenance": { "source": "ancestor", "reason": "ok", "degraded": false, "warnings": [] }
+}
+```
+
+`gsd-tools commit` uses the same context: it commits in the checkout it runs in and refuses with `reason: "outside_worktree"` when the working directory or a declared path lies outside that checkout, and with `reason: "not_git_repo"` outside a git repository. Both refusals exit non-zero with `committed: false`.
+
+---
+
 ## AI Integration Commands
 
 ### `/gsd-ai-integration-phase`
