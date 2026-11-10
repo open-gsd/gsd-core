@@ -5413,9 +5413,15 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
   });
 
-  test('plannedPhase unit: only the `?` placeholder after `of` is an unfilled total; an author word there survives', () => {
-    assert.strictEqual(lineOf(planned('Plan: 2 of the way done', 6).content), 'Plan: 2 of 6 of the way done');
-    assert.strictEqual(lineOf(planned('Plan: 2 of ? - wave 1 done', 6).content), 'Plan: 2 of 6 - wave 1 done');
+  test('plannedPhase property: a lower-case word after `of` is author text and survives behind the new total', () => {
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[a-z]{1,8}$/),
+        fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()),
+        (word, t) => lineOf(planned(`Plan: 2 of ${word}${t}`, 6).content) === `Plan: 2 of 6 of ${word}${t}`,
+      ),
+      { seed: 5320, numRuns: 400 },
+    );
   });
 
   test('#5320 adversarial planning-state fixtures: each is read and written as the README of the fixture directory states', () => {
