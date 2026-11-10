@@ -4462,7 +4462,9 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     fs.writeFileSync(defaultsPath, before);
     // Matched by name: the store is written at its resolved path, which spells a
     // temp dir differently when it sits behind a link (/var is /private/var on macOS).
-    t.after(mockPartialWriteThenThrow(fs, (target) => path.basename(String(target)).startsWith('defaults.json'), 5));
+    // The temp file is written through an exclusively-created descriptor (#5759),
+    // so the write is matched by the path that descriptor was opened under.
+    t.after(mockPartialWriteThenThrow(fs, (target) => path.basename(String(target)).startsWith('defaults.json'), 5, { resolveDescriptors: true }));
 
     const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
 
@@ -4616,7 +4618,65 @@ describe('#5681: mergeIntoGlobalDefaults properties', () => {
   });
 });
 
-// ─── config-set hooks.secret_read_exempt (#4432) ────────────────────────────
+// The store is a config file like any other: since #5759 every config.json read is
+// bounded at CONFIG_MAX_BYTES, and the loader already reads defaults.json that way.
+// A save reads it under the same cap, so a store the loader refuses is never merged
+// into. The cap is inclusive: a store of exactly CONFIG_MAX_BYTES is read.
+describe('#5681: config-save-defaults reads the store under the #5759 config cap', () => {
+  const { CONFIG_MAX_BYTES } = require('../gsd-core/bin/lib/config-file-read.cjs');
+
+  /** A JSON object store of exactly `bytes` bytes: a mode plus a padding string. */
+  function storeOfSize(bytes) {
+    const shell = JSON.stringify({ mode: 'interactive', pad: '' });
+    const text = JSON.stringify({ mode: 'interactive', pad: 'x'.repeat(bytes - shell.length) });
+    assert.strictEqual(Buffer.byteLength(text), bytes);
+    return text;
+  }
+
+  function seed(t, text) {
+    const gsdHome = createTempDir('gsd-5681-cap-');
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+      cleanup(gsdHome);
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, text);
+    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+    return { defaultsPath, save };
+  }
+
+  for (const [label, bytes] of [['one byte under the cap', CONFIG_MAX_BYTES - 1], ['exactly the cap', CONFIG_MAX_BYTES]]) {
+    test(`a store of ${label} is merged into`, async (t) => {
+      const before = storeOfSize(bytes);
+      const { defaultsPath, save } = seed(t, before);
+
+      const result = await save();
+
+      assert.strictEqual(result.ok, true, result.err);
+      const after = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+      assert.strictEqual(after.mode, 'yolo');
+      assert.strictEqual(after.pad, JSON.parse(before).pad, 'the key the save does not name survives');
+    });
+  }
+
+  test('a store one byte over the cap is refused and left as it was', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES + 1);
+    const { defaultsPath, save } = seed(t, before);
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_invalid');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+});
+
+// ─── config-set hooks.secret_read_exempt (#4432)────────────────────────────
 //
 // Matrix rows covered (50-test-matrix.md, suite C): 26 39 40.
 // The hook (hooks/lib/secret-read-exemptions.js) cannot require src/, so

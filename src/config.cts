@@ -19,7 +19,7 @@ const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
 const { CONFIG_DEFAULTS, LEGACY_FLAT_KEYS, resolvePlannerStallDetectionEnabled } = configLoader;
-import { platformWriteSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installerMigrations = require('./installer-migrations.cjs');
@@ -968,9 +968,21 @@ function saveDefaultsStore(
     } catch (err) {
       return { message: `Refusing to overwrite ${defaultsPath}: its path cannot be resolved (${(err as Error).message}).`, reason: invalid };
     }
+    // Read as a bounded regular file, as the loader reads it (#5759): a FIFO or
+    // device cannot block the save, and a store the loader would refuse (not a
+    // regular file, or over CONFIG_MAX_BYTES) is refused rather than merged into.
+    let text: string | null;
+    try {
+      text = configLoader.readConfigFileBounded(storePath);
+    } catch (err) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it cannot be read as a config file (${(err as Error).message}).`, reason: invalid };
+    }
+    if (text === null) {
+      return { message: `Refusing to overwrite ${defaultsPath}: it disappeared while being read. Save again.`, reason: invalid };
+    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+      parsed = JSON.parse(text);
     } catch (err) {
       return { message: `Refusing to overwrite ${defaultsPath}: it is not valid JSON (${(err as Error).message}). Fix or remove it, then save again.`, reason: invalid };
     }
@@ -981,15 +993,28 @@ function saveDefaultsStore(
   }
 
   // Written to a temp file and renamed over the store, never written in place:
-  // platformWriteSync falls back to a direct write when the temp write fails,
-  // and a failed direct write (ENOSPC) truncates the existing store. Same
-  // pattern as installer-migrations' atomicWriteInstallState.
-  const tmpPath = `${storePath}.tmp-${process.pid}`;
+  // when platformWriteSync cannot use its temp file it falls back to rewriting
+  // the target in place, which leaves the store half-written until its restore
+  // runs, and lost if the restore fails too. Same pattern as
+  // installer-migrations' atomicWriteInstallState. The temp file is
+  // created exclusively under a random name (#5759), so an entry planted beside
+  // the store, a link or a FIFO, is never opened, written through or blocked on.
+  const data = JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n';
+  let tmpPath: string | null = null;
   try {
-    fs.writeFileSync(tmpPath, JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n', 'utf8');
+    const temp = openExclusiveTempSync(storePath);
+    tmpPath = temp.tmpPath;
+    try {
+      fs.writeFileSync(temp.fd, data, 'utf8');
+    } finally {
+      fs.closeSync(temp.fd);
+    }
     retryRenameSync(tmpPath, storePath);
   } catch (err) {
-    try { fs.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
+    // Only a temp file this call created exclusively is removed.
+    if (tmpPath !== null) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
+    }
     return { message: 'Failed to write defaults.json: ' + (err as Error).message, reason: ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED };
   }
   return { created };

@@ -763,9 +763,12 @@ keep winning or be copied into new projects. A missing file is created, and a st
 symlink is written through to its target, so the link survives; a link whose target is missing
 is refused. The search flags that new
 projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
-`tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. A store that is not
-valid JSON, or not a JSON object, is refused and left as it was, and a write that fails leaves
-the store as it was.
+`tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. The store is read the
+way the loader reads every config file: one that is not a regular file (a FIFO or device), is
+larger than 1 MiB, is not valid JSON, or is not a JSON object is refused and left as it was. A
+write goes to a temp file created exclusively under a random name and is renamed over the
+store, so a write that fails leaves the store as it was and nothing planted beside it is
+opened.
 
 A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
 so two saves, or a save and an install, run one after the other and neither loses the other's

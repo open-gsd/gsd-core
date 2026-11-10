@@ -59,13 +59,21 @@
  *   (symlink-keyword)
  * - #5681 "a dangling symlinked store is refused, and the link is left as it was"
  *   — creates a real dangling file symlink (symlink-keyword)
+ * - #5681 "a FIFO at defaults.json is refused instead of waited on" and the two
+ *   "planted at the old predictable temp name" rows — create real named pipes with
+ *   `mkfifo` and a real file symlink; there is no FIFO on Windows and the temp-file
+ *   hardening they pin (#5759) is POSIX link semantics (process-platform,
+ *   raw-child-process, symlink-keyword). Skipped on win32.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv } = require('./helpers.cjs');
+const { execFileSync } = require('node:child_process');
+const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv, installSpawnEnv, TOOLS_PATH } = require('./helpers.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 function readConfig(tmpDir) {
@@ -608,5 +616,86 @@ describe('#5681: a symlinked defaults store', () => {
     assert.ok(fs.lstatSync(defaultsPath).isSymbolicLink(), 'the link must survive a refused save');
     assert.strictEqual(fs.readlinkSync(defaultsPath), missing);
     assert.ok(!fs.existsSync(missing), 'nothing is written at the missing target');
+  });
+});
+
+// The store is a config file like any other (#5759): it is read as a bounded regular
+// file, so a FIFO there cannot block the save, and it is replaced through a temp file
+// created exclusively under a random name, so nothing planted beside it is opened.
+describe('#5681: the defaults store is read bounded and replaced through an exclusive temp file', {
+  skip: process.platform === 'win32' ? 'no FIFOs on Windows' : false,
+}, () => {
+  const CONFIG_LIB_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config.cjs');
+  const PATCH = JSON.stringify({ model_profile: 'balanced' });
+
+  function seedStore(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-bounded-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    if (contents !== undefined) fs.writeFileSync(defaultsPath, contents);
+    return { gsdHome, defaultsPath };
+  }
+
+  test('a FIFO at defaults.json is refused instead of waited on, and is left a FIFO', (t) => {
+    const { gsdHome, defaultsPath } = seedStore(t);
+    execFileSync('mkfifo', [defaultsPath], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+
+    const r = runNode([TOOLS_PATH, '--json-errors', 'config-save-defaults', PATCH], {
+      cwd: gsdHome,
+      env: installSpawnEnv({ GSD_HOME: gsdHome }),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, `the save must return, not block on the FIFO: ${r.summary}`);
+    assert.strictEqual(r.exitCode, 1, r.summary);
+    assert.strictEqual(JSON.parse(r.stderr.trim()).reason, 'config_defaults_invalid');
+    assert.ok(fs.lstatSync(defaultsPath).isFIFO(), 'the FIFO is left as it was');
+  });
+
+  // The pre-fix temp name was `<store>.tmp-<pid>`, so the child plants its own
+  // pid-keyed entry before it saves. A random-suffixed exclusive temp never meets it.
+  const PLANTED_TMP_SCRIPT = [
+    'const fs = require("node:fs");',
+    'const path = require("node:path");',
+    'const { execFileSync } = require("node:child_process");',
+    'const config = require(process.argv[1]);',
+    'const gsdHome = process.argv[2];',
+    'const planted = path.join(gsdHome, ".gsd", "defaults.json") + ".tmp-" + process.pid;',
+    'if (process.argv[3] === "fifo") execFileSync("mkfifo", [planted]);',
+    'else fs.symlinkSync(process.argv[4], planted);',
+    'config.cmdConfigSaveDefaults(gsdHome, process.argv[5], false);',
+  ].join('\n');
+
+  function saveWithPlanted(gsdHome, kind, victim = '') {
+    return runNode(['-e', PLANTED_TMP_SCRIPT, CONFIG_LIB_PATH, gsdHome, kind, victim, PATCH], {
+      cwd: gsdHome,
+      env: installSpawnEnv({ GSD_HOME: gsdHome }),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+  }
+
+  test('a symlink planted at the old predictable temp name is not written through', (t) => {
+    const { gsdHome, defaultsPath } = seedStore(t, JSON.stringify({ runtime: 'codex' }));
+    const victim = path.join(gsdHome, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIGINAL');
+
+    const r = saveWithPlanted(gsdHome, 'symlink', victim);
+
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    assert.strictEqual(r.exitCode, 0, r.summary);
+    assert.strictEqual(fs.readFileSync(victim, 'utf-8'), 'ORIGINAL', 'the link target is never written');
+    assert.ok(fs.lstatSync(defaultsPath).isFile(), 'the store is a regular file, not the planted link');
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
+  });
+
+  test('a FIFO planted at the old predictable temp name does not hang the save', (t) => {
+    const { gsdHome, defaultsPath } = seedStore(t, JSON.stringify({ runtime: 'codex' }));
+
+    const r = saveWithPlanted(gsdHome, 'fifo');
+
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, `the save must return, not block on the planted FIFO: ${r.summary}`);
+    assert.strictEqual(r.exitCode, 0, r.summary);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
   });
 });
