@@ -936,19 +936,19 @@
     {
       "id": "RAW-STATE-WRITE.GUARD.SEAM.limits",
       "klass": "RAW-STATE-WRITE",
-      "value": "sees only code paths the suite executes; wraps the fs write/append/rename/copy/cp entry points (sync, callback, promise), not fs.openSync+writeSync, FileHandles, write streams or native addons; a child whose env replaces NODE_OPTIONS is unguarded; a write under a JS mock of an fs function is attributed to the mock's frame; the caller is the nearest JS frame, so product code handing STATE.md to a helper outside gsd-core/bin/ is attributed to that helper",
+      "value": "sees only code paths the suite executes; wraps fs writeFile/appendFile/rename/copyFile/cp in sync and callback form and fs.promises writeFile/appendFile/rename/copyFile (fs.promises.cp is seen through the fs.promises.copyFile it calls), not fs.openSync+writeSync, FileHandles, write streams or native addons; a child whose env replaces NODE_OPTIONS is unguarded; a write under a JS mock of an fs function is attributed to the mock's frame; the caller is the nearest JS frame, so product code handing STATE.md to a helper outside gsd-core/bin/ is attributed to that helper",
       "line": 894
     },
     {
       "id": "RAW-STATE-WRITE.GUARD.SEAM.module",
       "klass": "RAW-STATE-WRITE",
-      "value": "scripts/raw-state-write-guard.cjs (test-only; excluded from the npm tarball by package.json files[] beside run-tests.cjs; NOT scripts/lib/, which the installer copies to users); exports [classifyStateWrite, nodeOptionsWithRequire, readStateWriteLedger, formatStateWriteReport, SEAM_FUNCTIONS]; driven by scripts/run-tests.cjs, which reads the ledger after the last chunk and fails the run on a violation (#5120, ADR-4629 guard roster row \"No raw STATE.md write outside the seam\")",
+      "value": "scripts/raw-state-write-guard.cjs (test-only; excluded from the npm tarball by package.json files[] beside run-tests.cjs; NOT scripts/lib/, which the installer copies to users); exports [classifyStateWrite, nodeOptionsWithRequire, readStateWriteLedger, formatStateWriteReport, SEAM_FUNCTIONS, LEDGER_ENV, TEST_FILE_ENV]; driven by scripts/run-tests.cjs, which reads the ledger after the last chunk and fails the run on a violation (#5120, ADR-4629 guard roster row \"No raw STATE.md write outside the seam\")",
       "line": 890
     },
     {
       "id": "RAW-STATE-WRITE.GUARD.SEAM.report",
       "klass": "RAW-STATE-WRITE",
-      "value": "one stderr line on every run pairing the violation count with the seam-write count and the unlocked seam-write count (ADR-3408 Decision 5: the zero is never printed alone); a missing or unreadable ledger FAILS the run as unreadable evidence (#5170), torn ledger lines are counted beside the zero; the unlocked seam-write count is reported, not enforced; every process that installs the wrappers appends one install sentinel line ({installed:true,pid}) and the line prints the sentinel count, and a run that executed >= 1 chunk with ZERO sentinels FAILS (the preload never loaded, so an empty ledger is not evidence of zero violations); residual: zero-vs-some, not sentinel-count-vs-chunk-count",
+      "value": "one stderr line on every run pairing the violation count with the seam-write count and the unlocked seam-write count (ADR-3408 Decision 5: the zero is never printed alone); a missing or unreadable ledger FAILS the run as unreadable evidence (#5170), torn ledger lines are counted beside the zero; the unlocked seam-write count is reported, not enforced; every process that installs the wrappers appends one install sentinel line ({installed:true,pid}) and the line prints the sentinel count, and a run with FEWER sentinels than chunks spawned FAILS (every spawned chunk is a node process that loads the shim, so a missing sentinel is a chunk whose preload never loaded and whose empty ledger is not evidence of zero violations), naming the shim path and the NODE_OPTIONS the chunks received because the runner deletes its events dir (shim and ledger) right after printing; residual: a test-file child or gsd-tools subprocess that lost NODE_OPTIONS is not told apart from one more chunk-level sentinel",
       "line": 893
     },
     {

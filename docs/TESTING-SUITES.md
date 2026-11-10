@@ -463,9 +463,11 @@ and the test file whose run produced it (`unknown` for a child built with
 `isolated-env.cjs`, which strips the attribution variable). A missing or
 unreadable ledger fails the run as unreadable evidence, never as a zero. Each process that
 installs the check appends one install sentinel to the ledger, and `P` counts
-them; a run that executed at least one chunk and holds no sentinel fails too,
-because a preload that never loaded leaves an empty ledger, and an empty ledger
-alone would otherwise read as zero violations.
+them; every chunk the runner spawns is itself a node process that loads the
+shim, so a run with fewer sentinels than spawned chunks fails too, naming the
+shim path and the `NODE_OPTIONS` the chunks received: a chunk whose preload
+never loaded leaves no sentinel, and an empty ledger alone would otherwise
+read as zero violations.
 
 Limits, stated plainly: it sees only code paths the suite executes; it wraps
 the `fs` write, append, rename, copy and cp entry points in their sync and
@@ -475,9 +477,10 @@ callback forms and the promise forms of write, append, rename and copyFile
 descriptor, so it is not counted among the seam writes); a test that replaces
 `NODE_OPTIONS` runs its child unguarded, and leaves no sentinel and no record,
 so it is unseen; a write made under a JS mock of an fs function is attributed
-to the mock's frame; and the install sentinel proves the check loaded in at
-least one process of the run, not in every chunk or child (the runner fails on
-zero sentinels and does not compare the count with the chunk count).
+to the mock's frame; and the install sentinels prove the check loaded in at
+least as many processes as chunks were spawned, not in every child a test
+spawns (a child that lost `NODE_OPTIONS` is not told apart from one more
+chunk-level sentinel).
 
 ## The mergeability preflight
 

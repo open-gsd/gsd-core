@@ -2265,8 +2265,9 @@ async function main() {
   }
 
   let firstFailureExit = 0;
-  // #5120: chunks that were actually spawned, for the raw STATE.md write check's
-  // install-sentinel comparison (a chunk skipped after a timeout abort is not counted).
+  // #5120: chunks that were actually spawned, compared with the raw STATE.md write
+  // check's install sentinels after the loop (every spawned chunk is a node process
+  // that loads the shim; a chunk skipped after a timeout abort is not counted).
   let chunksRun = 0;
   for (let i = 0; i < chunks.length; i++) {
     if (chunks.length > 1) {
@@ -2502,9 +2503,14 @@ async function main() {
   // real chunk-loop exit code.
   // #5120: read before eventsDir is removed. The count is printed on every run,
   // beside the seam-write counts (ADR-3408 Decision 5: never the zero alone).
-  // A run that executed a chunk and holds no install sentinel never loaded the preload,
-  // so its empty ledger is not evidence; the report fails it (#5120 audit).
-  const stateWriteReport = formatStateWriteReport(readStateWriteLedger(stateWriteLedgerPath), { chunksRun });
+  // Fewer install sentinels than spawned chunks means a chunk whose preload never loaded,
+  // so its empty ledger is not evidence; the report fails it and names the shim and the
+  // NODE_OPTIONS the chunks received, because eventsDir (shim and ledger) is removed below.
+  const stateWriteReport = formatStateWriteReport(readStateWriteLedger(stateWriteLedgerPath), {
+    chunksRun,
+    shimPath: stateWritePreloadPath,
+    nodeOptions: stateWriteNodeOptions,
+  });
   for (const line of stateWriteReport.lines) console.error(line);
   if (stateWriteReport.failed && firstFailureExit === 0) firstFailureExit = 1;
 

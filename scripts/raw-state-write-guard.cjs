@@ -36,9 +36,10 @@
 // chunk the runner reads the ledger and fails the run on any violation. Seam writes are recorded
 // as well, with whether this process held the STATE.md lock, so the report never states the zero
 // alone (ADR-3408 Decision 5). Each process that installs the wrappers also appends one install
-// sentinel line, and the runner fails a run that executed at least one chunk whose ledger holds
-// no sentinel: a preload that never loaded leaves an empty ledger, and an empty ledger alone
-// would otherwise read as zero violations.
+// sentinel line; every chunk the runner spawns is itself a node process that loads the shim, so
+// the runner fails a run whose ledger holds fewer sentinels than chunks spawned: a chunk whose
+// preload never loaded leaves no sentinel, and an empty ledger alone would otherwise read as
+// zero violations.
 //
 // Limits, stated plainly. It sees only code paths the suite executes. It wraps the fs entry points
 // listed in WRAPPED and WRAPPED_PROMISES (fs.promises.cp is seen through the fs.promises.copyFile
@@ -53,10 +54,11 @@
 // a test that mocks an fs function with a JS wrapper (mock.method) puts its own frame nearest, so a
 // product write made under that mock is not recorded. The basename match is case-sensitive. Without
 // a ledger path the module installs nothing. A ledger line a killed process left torn is counted
-// and printed beside the zero, never silently dropped. The install sentinel proves the preload
-// loaded in at least one process of the run, not in every chunk or every child: the runner fails
-// only on zero sentinels, it does not compare the count with the chunk count, and a child whose
-// env replaced NODE_OPTIONS leaves no sentinel and no records, so it stays unguarded and unseen.
+// and printed beside the zero, never silently dropped. The install sentinels prove the preload
+// loaded in at least as many processes as chunks were spawned, not in every child a test spawns:
+// a test-file child or a gsd-tools subprocess whose env replaced NODE_OPTIONS leaves no sentinel
+// and no records, and its absence is not told apart from one more chunk-level sentinel, so such
+// a child stays unguarded and unseen.
 
 const fs = require('fs');
 const path = require('path');
@@ -125,9 +127,10 @@ function nodeOptionsWithRequire(existing, file) {
 }
 
 /**
- * `{ entries, tornLines }`: the ledger's entries and the count of lines that did not parse (a line a
- * killed process left torn), or `{ entries: null, tornLines: 0 }` when the ledger cannot be read
- * (unreadable evidence, #5170).
+ * `{ entries, installs, tornLines }`: the ledger's write entries, the count of install sentinel
+ * lines (one per process that installed the wrappers), and the count of lines that did not parse
+ * to an object (a line a killed process left torn), or `{ entries: null, installs: 0, tornLines: 0 }`
+ * when the ledger cannot be read (unreadable evidence, #5170).
  */
 function readStateWriteLedger(file) {
   let text;
@@ -148,7 +151,11 @@ function readStateWriteLedger(file) {
       tornLines++;
       continue;
     }
-    if (parsed && parsed.installed === true) installs++;
+    if (!parsed || typeof parsed !== 'object') {
+      tornLines++;
+      continue;
+    }
+    if (parsed.installed === true) installs++;
     else entries.push(parsed);
   }
   return { entries, installs, tornLines };
@@ -156,11 +163,13 @@ function readStateWriteLedger(file) {
 
 /**
  * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result.
- * `chunksRun` is how many test chunks the runner executed: when at least one ran and no
- * process recorded the install sentinel, the preload never loaded, and an empty ledger is
- * not evidence of zero violations, so the run fails.
+ * `chunksRun` is how many test chunks the runner spawned; each is a node process that loads the
+ * shim, so fewer install sentinels than chunks means a chunk whose preload never loaded, whose
+ * empty ledger is not evidence of zero violations: the run fails, and the line names the shim
+ * (`shimPath`) and the NODE_OPTIONS the chunks received (`nodeOptions`, bounded), because the
+ * runner deletes its events directory, shim and ledger included, right after printing.
  */
-function formatStateWriteReport({ entries, installs = 0, tornLines }, { chunksRun } = {}) {
+function formatStateWriteReport({ entries, installs = 0, tornLines }, { chunksRun, shimPath, nodeOptions } = {}) {
   if (entries === null) {
     return { failed: true, lines: ['run-tests: raw STATE.md write check: ledger unreadable, so the check did not run'] };
   }
@@ -173,11 +182,14 @@ function formatStateWriteReport({ entries, installs = 0, tornLines }, { chunksRu
       `(seam writes onto STATE.md: ${seamWrites.length}, of which without the STATE.md lock: ${unlocked}${torn}); ` +
       `the check loaded in ${installs} processes`,
   ];
-  const neverLoaded = Number.isInteger(chunksRun) && chunksRun > 0 && installs === 0;
+  const neverLoaded = Number.isInteger(chunksRun) && installs < chunksRun;
   if (neverLoaded) {
+    const options = String(nodeOptions == null ? '' : nodeOptions);
+    const shown = options.length > 120 ? `${options.slice(0, 120)}... (${options.length} chars)` : options;
     lines.push(
-      `run-tests: raw STATE.md write check: the preload loaded in no process of this run ` +
-        `(${chunksRun} chunk${chunksRun === 1 ? '' : 's'} ran), so the zero above is not evidence`,
+      `run-tests: raw STATE.md write check: ${chunksRun} chunk${chunksRun === 1 ? ' was' : 's were'} spawned but only ` +
+        `${installs} process${installs === 1 ? '' : 'es'} recorded the preload, so the zero above is not evidence; ` +
+        `the shim was ${shimPath == null ? 'unknown' : shimPath} and each chunk received NODE_OPTIONS ${shown}`,
     );
   }
   for (const v of violations) {
@@ -293,9 +305,10 @@ function install(ledger) {
   }
 
   // One install sentinel per process, written after the wrappers are in place. The runner
-  // counts these: a run that executed a chunk and holds none never loaded this file, and its
-  // empty ledger is not evidence of zero violations. Never thrown into the process being
-  // loaded; a lost sentinel is said once, like a lost record.
+  // counts these against the chunks it spawned: a chunk whose preload never loaded leaves no
+  // sentinel, and its empty ledger is not evidence of zero violations. Never thrown into the
+  // process being loaded; a lost sentinel shares the one once-flag with a lost record (same
+  // ledger, same cause), so the run hears about the first loss only.
   try {
     originalAppend.call(fs, ledger, `${JSON.stringify({ installed: true, pid: process.pid, testFile: testFile || null })}\n`);
   } catch (err) {
