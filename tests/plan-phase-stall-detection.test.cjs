@@ -48,6 +48,7 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 const { cleanup, readFileNormalized, readWorkflowCombined, runGsdTools } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
@@ -169,13 +170,19 @@ function extractStallHelpersBash() {
  * @param {string[]} [args]  positional args passed to the script (become
  *   $1, $2, ... inside it) — empty when the caller embeds values directly
  *   into the script text instead (e.g. via JSON.stringify).
- * @param {object} [opts]  extra process-seam options (`{ timeoutMs, cwd, env, input,
- *   killSignal }`), merged over the defaults below. NOTE the key is `timeoutMs`, not
- *   spawnSync's `timeout` — the seam reads only its own documented options, so a stray
- *   `timeout` key is silently ignored rather than honoured.
+ * @param {object} [opts]  extra process-seam options (`{ timeoutMs, cwd, input,
+ *   killSignal }`), merged over the defaults below, plus `home` (the child's HOME and
+ *   USERPROFILE; defaults to the script's own temp dir) and `env` (overrides laid over
+ *   the isolated environment, never a whole environment). The child's environment is
+ *   always built by `isolatedEnv` (CONTRIBUTING.md "Isolating a child's environment"),
+ *   so no ambient `GSD_*`, config-location or session-identity variable reaches the
+ *   helpers under test. NOTE the key is `timeoutMs`, not spawnSync's `timeout` — the
+ *   seam reads only its own documented options, so a stray `timeout` key is silently
+ *   ignored rather than honoured.
  */
 function runBashScript(script, args = [], opts = {}) {
   const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2650-sh-'));
+  const { home = scriptDir, env: override, ...seamOpts } = opts;
   try {
     const scriptPath = path.join(scriptDir, 'script.sh');
     fs.writeFileSync(scriptPath, `#!/usr/bin/env bash\n${script}`, { mode: 0o755 });
@@ -202,7 +209,8 @@ function runBashScript(script, args = [], opts = {}) {
     const result = processSeam.runHook(scriptPath, args, {
       interpreter: 'bash',
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-      ...opts,
+      env: isolatedEnv({ home, override }),
+      ...seamOpts,
     });
     // `status` is aliased from `exitCode` by toLegacyResult so the existing assertions in
     // this file keep reading the shape they were written against; `outcome`/`timedOut`
@@ -685,7 +693,8 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          home: tmp,
+          env: { GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
         },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -723,7 +732,8 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
         [],
         {
           cwd: tmp,
-          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+          home: tmp,
+          env: { GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
         },
       );
       assert.equal(result.status, 0, result.stderr);
@@ -968,12 +978,24 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
   test('bounds the fan-out with the class norm, and an explicit override still wins', (t) => {
     t.after(() => mock.restoreAll());
     const seen = [];
-    mock.method(processSeam, 'runHook', (target, args, opts) => {
+    mock.method(processSeam, 'runHook', (_target, _args, opts) => {
       seen.push(opts);
       return { outcome: OUTCOME.EXITED, exitCode: 0, stdout: '', stderr: '', timedOut: false, signal: null, killed: false, code: null };
     });
 
+    // An ambient GSD_* variable planted for this test must never reach the child
+    // (CONTRIBUTING.md "Isolating a child's environment": isolatedEnv strips every
+    // ambient GSD_*, config-location and session-identity key).
+    const LEAK = 'GSD_STALL_DETECTION_TEST_LEAK';
+    process.env[LEAK] = 'leaked';
+    t.after(() => { delete process.env[LEAK]; });
+
     runBashScript('echo hi\n');
+    assert.ok(seen[0].env && typeof seen[0].env === 'object', 'runBashScript must hand the seam an explicit, isolated env');
+    assert.equal(seen[0].env[LEAK], undefined, 'an ambient GSD_* variable must not reach the child (isolatedEnv)');
+    assert.ok(path.isAbsolute(seen[0].env.HOME) && seen[0].env.HOME !== process.env.HOME,
+      'the child HOME must be an isolated absolute path, never the real home');
+    assert.equal(seen[0].env.USERPROFILE, seen[0].env.HOME, 'USERPROFILE must follow the isolated HOME');
     assert.equal(seen.length, 1,
       'runBashScript must route through the process seam (CONTRIBUTING.md: never a hand-rolled spawnSync in a suite)');
     assert.equal(seen[0].timeoutMs, HOOK_FANOUT_TIMEOUT_MS,
@@ -982,6 +1004,15 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
 
     runBashScript('echo hi\n', [], { timeoutMs: RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS });
     assert.equal(seen[1].timeoutMs, RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS, 'an explicit timeoutMs must override the class norm');
+  });
+
+  test('a caller-supplied home and env overrides reach the real child, on top of the isolated base', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5182-home-'));
+    t.after(() => cleanup(home));
+    const result = runBashScript('printf \'%s|%s|%s\' "$HOME" "$USERPROFILE" "$GSD_STALL_DETECTION_TEST_OVERRIDE"\n', [],
+      { home, env: { GSD_STALL_DETECTION_TEST_OVERRIDE: 'set' } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `${home}|${home}|set`, 'home must set HOME and USERPROFILE; env entries must override the isolated base');
   });
 
   test('an exceeded bound reports TIMED_OUT, not a bare null status', () => {
