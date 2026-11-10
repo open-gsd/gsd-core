@@ -12,7 +12,7 @@
 
 'use strict';
 
-const { describe, test } = require('node:test');
+const { describe, test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -246,7 +246,6 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
 });
 
 describe('#5019 — --auto re-review keeps the external reviewer lane evidence', () => {
-  const { before } = require('node:test');
   let FIX, REVIEW, persistLaneEvidence, laneStatePath;
   before(() => {
     FIX = fs.readFileSync(WORKFLOW_PATH, 'utf8');
@@ -261,9 +260,15 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   // snippet, which must fail loudly here instead of running a truncated fence.
   const bash = (script, env) => {
     script = `gsd_run() { node "${GSD_TOOLS}" "$@"; }\n${script}`; // the launcher's resolved gsd_run, pointed at this tree
-    const syntax = runHook('-n', ['-c', script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
-    assert.strictEqual(syntax.exitCode, 0, `extracted snippet is not complete shell: ${syntax.stderr}`);
-    return runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, ...(env && { env: { ...process.env, ...env } }) });
+    // Run from a file, not `bash -c`: the dispatch fence outgrows the Windows command-line limit (~8K).
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'lane-bash-'));
+    try {
+      const file = path.join(dir, 'snippet.sh');
+      fs.writeFileSync(file, script);
+      const syntax = runHook('-n', [file], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(syntax.exitCode, 0, `extracted snippet is not complete shell: ${syntax.stderr}`);
+      return runHook(file, [], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, ...(env && { env: { ...process.env, ...env } }) });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   };
   const sandbox = (t, fn) => fn(require('./helpers/lane-sandbox.cjs')(t));
   // The env a fresh workflow shell has: the phase layout the real REVIEW_PATH expression derives from.
@@ -272,7 +277,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   const CALL = 'gsd_run lane-evidence-clear "$REVIEW_PATH" || true';
   // the two removals that only an --fix / --fix --auto run makes (other runs keep their old cleanup)
   const CALL_FLAG = '[ "$FIX_FLAG" = "true" ] && { gsd_run lane-evidence-clear "$REVIEW_PATH" || true; }';
-  const CALL_AUTO = '[ "${FIX_AUTO:-}" = "true" ] && { gsd_run lane-evidence-clear "$REVIEW_PATH" || true; }';
+  const CALL_AUTO = 'if [ "${FIX_AUTO:-}" = "true" ]; then gsd_run lane-evidence-clear "$REVIEW_PATH" || true; fi';
   const FIX_ENV = '; FIX_FLAG=true; FIX_AUTO=true';
   // dispatch_reviewer_lanes run for real; only `review-lane dispatch-step` (it would spawn a CLI) is stubbed
   // to return `results`. It is the one fence that holds EXTERNAL_EVIDENCE_BLOCK and LANE_RUN_DIR, so it owns persisting them.

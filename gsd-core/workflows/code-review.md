@@ -888,7 +888,7 @@ No REVIEW.md created. You can retry with /gsd:code-review ${PHASE_ARG} or check 
 A `--fix --auto` run persisted its lane evidence; remove it so it cannot leak into a later `code-review-fix` run:
 ```bash
 # #5019: the reviewer agent failed, so commit_review never runs
-[ "${FIX_AUTO:-}" = "true" ] && { gsd_run lane-evidence-clear "$REVIEW_PATH" || true; }
+if [ "${FIX_AUTO:-}" = "true" ]; then gsd_run lane-evidence-clear "$REVIEW_PATH" || true; fi
 ```
 
 Do NOT proceed to commit_review step. Do NOT create a partial or empty REVIEW.md. Exit workflow.

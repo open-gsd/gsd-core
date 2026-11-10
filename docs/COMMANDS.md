@@ -2490,11 +2490,11 @@ A `--fix --auto` `code-review` run persists at dispatch (an empty block persists
 reviewer agent fails. A run without `--fix --auto` persists nothing and keeps the single lane-directory removal in `commit_review` it had before; `code-review-fix` reads before each re-review and clears at every exit after `REVIEW_PATH`
 is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
 
-Limits of the contract: the key is the review path as the caller passes it, so the workflows make `REVIEW_PATH`
+The key is the review path as the caller passes it, so the workflows make `REVIEW_PATH`
 absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it.
-`lane-evidence-clear` removes a malformed state but cannot find its lane directory, which stays (this follows only hand corruption).
-The state is bound to the review path, not to one REVIEW.md, so an `auto` state under 6 hours old can reach a later standalone
-`code-review-fix --auto` run for the same phase; the block is framed UNVERIFIED. The workflow fences read `${TMPDIR:-/tmp}`
+`lane-evidence-clear` removes a malformed state and leaves any lane directory, because no valid suffix names it.
+The state is bound to the review path, not to one REVIEW.md: a later standalone `code-review-fix --auto` run for the same phase
+reads an `auto` state under 6 hours old, and frames the block UNVERIFIED. The workflow fences read `${TMPDIR:-/tmp}`
 while the verbs use `os.tmpdir()` on Windows when `TMPDIR` is unset: under Git Bash set `TMPDIR` so both name one directory.
 
 **Prerequisites:** none — they read no project state and need no resolvable project root
@@ -2508,7 +2508,7 @@ gsd_run lane-evidence-clear "$REVIEW_PATH" --keep-auto
 
 The suffix is data, not a path: only a 6-character alphanumeric value names a `$TMPDIR/gsd-review-lanes-<suffix>`
 directory. A symlinked or foreign-owned state or lane directory is never followed. A malformed state, a state that is not
-`auto`, or one idle for 6 hours is not read (read prints a warning); only a usable read refreshes the state's mtime.
+`auto`, a state whose lane directory is missing, or one idle for 6 hours is not read (read prints a warning); only a usable read refreshes the state's mtime.
 
 ---
 
