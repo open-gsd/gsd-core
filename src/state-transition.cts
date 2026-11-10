@@ -34,6 +34,9 @@ import planningScopeMod = require('./planning-scope.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMdSchemaMod = require('./state-md-schema.cjs');
 const { STATE_FIELD_SCHEMA } = stateMdSchemaMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ioMod = require('./io.cjs');
+const { ERROR_REASON } = ioMod;
 type StateFieldSchema = stateMdSchemaMod.StateFieldSchema;
 
 const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, FRONTMATTER_UNPARSEABLE } = frontmatter;
@@ -1735,7 +1738,7 @@ type PlanFieldName = 'Plan' | 'Current Plan';
 
 const PLAN_SHAPE_N = /^(\d+)((?:\s.*)?)$/;
 // The total ends at a word boundary, so `2 of 5.` and `2 of 5)` read; a separator that continues the number (`5.5`, `5/7`) does not.
-const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)\b(?![^\s\w]\d)((?:\W.*)?)$/;
+const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)(?![\p{L}\p{N}_])(?![^\s\w]\d)((?:\W.*)?)$/u;
 
 /**
  * Parse a decimal group into a plan number, or `null` if it is not a value we
@@ -1868,12 +1871,12 @@ export function readRecordedPlanTotal(content: string): number | null {
  * unreadable line is rewritten only when no other plan line reads and no `Total Plans in Phase:` line records the count.
  */
 function planLinesForPlanned(content: string, count: number, samePhase: boolean, totalRecorded: boolean):
-  { error: { reason: string; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
+  { error: { reason: typeof ERROR_REASON.PLANS_NO_LINE | typeof ERROR_REASON.PLANS_BELOW_POSITION | typeof ERROR_REASON.AMBIGUOUS_PLAN_POSITION; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
   const lines = readPlanLines(content);
   const { legacy, planPos } = lines;
   if (lines.plan === null && lines.currentPlan === null && !totalRecorded) {
     return { error: {
-      reason: 'plans_no_line',
+      reason: ERROR_REASON.PLANS_NO_LINE,
       message: 'state planned-phase: --plans has no line to land on. ' +
         'Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.',
     } };
@@ -1882,14 +1885,14 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     // A recorded position past the safe-integer range (`n` is null) is above every count that can be written.
     if ((legacy && legacy.n === null) || (planPos && planPos.n === null)) {
       return { error: {
-        reason: 'plans_below_position',
+        reason: ERROR_REASON.PLANS_BELOW_POSITION,
         message: `state planned-phase: the recorded plan position is above ${Number.MAX_SAFE_INTEGER}, ` +
           'so no --plans count can hold it. Correct the position line.',
       } };
     }
     if (lines.ambiguous) {
       return { error: {
-        reason: 'ambiguous_plan_position',
+        reason: ERROR_REASON.AMBIGUOUS_PLAN_POSITION,
         message: `state planned-phase: Plan and Current Plan record different plan positions (${lines.currentPlan} vs ${lines.plan}). ` +
           'Correct one of them and retry.',
       } };
@@ -1897,7 +1900,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     const position = Math.max(0, legacy?.n ?? 0, planPos?.n ?? 0);
     if (position > count) {
       return { error: {
-        reason: 'plans_below_position',
+        reason: ERROR_REASON.PLANS_BELOW_POSITION,
         message: `state planned-phase: --plans ${count} is below the recorded plan position ${position}. ` +
           `Use --plans ${position} or more, or correct the position line.`,
       } };
@@ -2194,7 +2197,7 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
       updated: [],
       data: {
         error: true,
-        reason: 'ambiguous_plan_position',
+        reason: ERROR_REASON.AMBIGUOUS_PLAN_POSITION,
         plan_candidates: [
           `Current Plan: ${legacyPlan}`,
           `Plan: ${planField}`,
