@@ -42,7 +42,7 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const { runMinimalInstall, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, installRuntimeFixture, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { cleanup, createTempDir, toPosixPath } = require('./helpers.cjs');
 const {
   negotiateHostCapabilities,
@@ -66,9 +66,8 @@ const KIMI_CAP = JSON.parse(
 // UPGRADE 1: native hook bus (~/.kimi/config.toml [[hooks]])
 // ---------------------------------------------------------------------------
 
-test('kimi --global: native config.toml [[hooks]] bus wired at <HOME>/.kimi/config.toml (UPGRADE 1)', (t) => {
-  const { root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
-  t.after(() => cleanup(root));
+test('kimi --global: native config.toml [[hooks]] bus wired at <HOME>/.kimi/config.toml (UPGRADE 1)', () => {
+  const { root } = installRuntimeFixture({ runtime: 'kimi', scope: 'global' });
 
   // FACTS: root === sandbox HOME for this helper (env HOME/USERPROFILE are
   // both pointed at `root`), and Kimi's native hook config is a sibling of
@@ -289,9 +288,8 @@ test('UPGRADE 2: a corrupted/undeclared dispatch still fails closed to inline (s
 // docs/reference/host-integration-capability-matrix.md's kimi EoS-status
 // paragraph) — the installer's deliverable stops at the Agent-tool grant plus
 // the negotiated backgroundDispatch axis asserted above.
-  test('UPGRADE 2 (installer-testable proxy): kimi --global install with subagents present grants kimi_cli.tools.agent:Agent on the root agent', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
-    t.after(() => cleanup(root));
+  test('UPGRADE 2 (installer-testable proxy): kimi --global install with subagents present grants kimi_cli.tools.agent:Agent on the root agent', () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'kimi', scope: 'global' });
 
     // #3547 — the root agent lives under the runtime's real global config
     // home (<root>/.config/agents), not the sandbox HOME itself.
@@ -318,9 +316,8 @@ test('capabilities/kimi/capability.json extendedHookEvents contains exactly the 
   assert.equal(events.length, 4);
 });
 
-test('boundary: every capability-declared extendedHookEvent is wired as a real event = "..." entry in config.toml, not merely declared', (t) => {
-  const { root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
-  t.after(() => cleanup(root));
+test('boundary: every capability-declared extendedHookEvent is wired as a real event = "..." entry in config.toml, not merely declared', () => {
+  const { root } = installRuntimeFixture({ runtime: 'kimi', scope: 'global' });
 
   const tomlPath = path.join(root, '.kimi', 'config.toml');
   const toml = fs.readFileSync(tomlPath, 'utf8');
@@ -337,9 +334,8 @@ test('boundary: every capability-declared extendedHookEvent is wired as a real e
   }
 });
 
-test('kimi: the secret read guard is wired on the native bus with the translated ReadFile|Grep|Shell matcher (#4221)', (t) => {
-  const { root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
-  t.after(() => cleanup(root));
+test('kimi: the secret read guard is wired on the native bus with the translated ReadFile|Grep|Shell matcher (#4221)', () => {
+  const { root } = installRuntimeFixture({ runtime: 'kimi', scope: 'global' });
 
   const toml = fs.readFileSync(path.join(root, '.kimi', 'config.toml'), 'utf8');
   // One [[hooks]] table per entry: event, then matcher, then command. Locate
@@ -390,9 +386,8 @@ function sandboxHome(t, prefix = 'gsd-2755-') {
 }
 
 describe('kimi vs kimi-code hooks-TOML root (#2755)', () => {
-  test('--kimi-code --global writes its hooks into ~/.kimi-code and never creates ~/.kimi', (t) => {
-    const root = sandboxHome(t);
-    runKimiInstall(root, 'kimi-code');
+  test('--kimi-code --global writes its hooks into ~/.kimi-code and never creates ~/.kimi', () => {
+    const { root } = installRuntimeFixture({ runtime: 'kimi-code', scope: 'global' });
 
     assert.ok(hasGsdHooksBlock(path.join(root, '.kimi-code', 'config.toml')),
       "the GSD [[hooks]] block must land in Kimi Code's own config.toml");
@@ -400,9 +395,8 @@ describe('kimi vs kimi-code hooks-TOML root (#2755)', () => {
       "a --kimi-code install must not create Kimi CLI's ~/.kimi root at all");
   });
 
-  test('--kimi-code --global installs its hook bundle under ~/.kimi-code/hooks', (t) => {
-    const root = sandboxHome(t);
-    runKimiInstall(root, 'kimi-code');
+  test('--kimi-code --global installs its hook bundle under ~/.kimi-code/hooks', () => {
+    const { root } = installRuntimeFixture({ runtime: 'kimi-code', scope: 'global' });
 
     const hooksDir = path.join(root, '.kimi-code', 'hooks');
     assert.ok(fs.existsSync(path.join(hooksDir, 'gsd-check-update.js')),
@@ -429,9 +423,8 @@ describe('kimi vs kimi-code hooks-TOML root (#2755)', () => {
     }
   });
 
-  test('--kimi --global still writes into ~/.kimi and never creates ~/.kimi-code', (t) => {
-    const root = sandboxHome(t);
-    runKimiInstall(root, 'kimi');
+  test('--kimi --global still writes into ~/.kimi and never creates ~/.kimi-code', () => {
+    const { root } = installRuntimeFixture({ runtime: 'kimi', scope: 'global' });
 
     assert.ok(hasGsdHooksBlock(path.join(root, '.kimi', 'config.toml')),
       "kimi's own destination must be unchanged by #2755");

@@ -647,7 +647,7 @@ function convertedAgentsKind(
       // function of configDir/targetDir) via the single shared precedence
       // resolver so kilo and opencode can never diverge (J8).
       const needsModelOverride = converterName === 'convertClaudeToOpencodeFrontmatter' || converterName === 'convertClaudeToKiloFrontmatter';
-      let converter: (content: string, isGlobal?: boolean, meta?: { agentName: string }) => string;
+      let converter: (content: string, isGlobal?: boolean, meta?: { agentName: string; pathPrefix?: string }) => string;
       if (needsModelOverride) {
         const overrideTargetDir = agentCtx?.targetDir ?? configDir;
         const modelOverrides = installModelOverrideResolver.readGsdEffectiveModelOverrides(overrideTargetDir);
@@ -693,6 +693,12 @@ function convertedAgentsKind(
         // (content) ignore the extra positional arg. Mirrors skillsKind's scope
         // threading (#1173).
         converter = (content) => rawConverter(content, isGlobalScope(scope));
+        if (converterName === 'convertClaudeAgentToTraeAgent') {
+          // #5715: the Trae agent converter needs the prefix the path-rewrite step
+          // already emitted, so it can leave it alone.
+          const traeConverter = rawConverter as unknown as (content: string, isGlobal: boolean, meta?: { pathPrefix?: string }) => string;
+          converter = (content, _isGlobal, meta) => traeConverter(content, isGlobalScope(scope), meta);
+        }
       }
       // ADR-1235 §1: when agentCtx is provided (by createRuntimeArtifactInstallPlan
       // for descriptor-driven runtimes), thread it through so stageAgentsForRuntimeWithConverter

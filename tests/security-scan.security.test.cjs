@@ -40,7 +40,7 @@ const os = require('os');
 const path = require('path');
 
 const { cleanup, createTempGitProject } = require('./helpers.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const {
   HOOK_FANOUT_TIMEOUT_MS,
@@ -209,16 +209,9 @@ describe('prompt-injection-scan.sh', { skip: IS_WINDOWS }, () => {
   });
 
   test('exits USAGE on missing arguments', () => {
-    try {
-      execFileSync(SCRIPTS.injection, [], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
-      });
-      assert.fail('Should have exited non-zero');
-    } catch (err) {
-      assert.equal(err.status, exitCodeFor('USAGE'));
-    }
+    const r = runHook(SCRIPTS.injection, [], { interpreter: 'bash', timeoutMs: SCAN_USAGE_ERROR_TIMEOUT_MS });
+    assert.equal(r.outcome, OUTCOME.EXITED, r.summary);
+    assert.equal(r.exitCode, exitCodeFor('USAGE'), r.summary);
   });
 });
 
@@ -300,16 +293,9 @@ describe('base64-scan.sh', { skip: IS_WINDOWS }, () => {
   });
 
   test('exits USAGE on missing arguments', () => {
-    try {
-      execFileSync(SCRIPTS.base64, [], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
-      });
-      assert.fail('Should have exited non-zero');
-    } catch (err) {
-      assert.equal(err.status, exitCodeFor('USAGE'));
-    }
+    const r = runHook(SCRIPTS.base64, [], { interpreter: 'bash', timeoutMs: SCAN_USAGE_ERROR_TIMEOUT_MS });
+    assert.equal(r.outcome, OUTCOME.EXITED, r.summary);
+    assert.equal(r.exitCode, exitCodeFor('USAGE'), r.summary);
   });
 
   // ── Locale / non-UTF8 regression tests (#116) ────────────────────────────
@@ -512,16 +498,9 @@ describe('secret-scan.sh', { skip: IS_WINDOWS }, () => {
   });
 
   test('exits USAGE on missing arguments', () => {
-    try {
-      execFileSync(SCRIPTS.secret, [], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
-      });
-      assert.fail('Should have exited non-zero');
-    } catch (err) {
-      assert.equal(err.status, exitCodeFor('USAGE'));
-    }
+    const r = runHook(SCRIPTS.secret, [], { interpreter: 'bash', timeoutMs: SCAN_USAGE_ERROR_TIMEOUT_MS });
+    assert.equal(r.outcome, OUTCOME.EXITED, r.summary);
+    assert.equal(r.exitCode, exitCodeFor('USAGE'), r.summary);
   });
 });
 

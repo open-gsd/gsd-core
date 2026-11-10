@@ -21,7 +21,7 @@ function createFixture(options = {}) {
     projectDoc = git,
   } = options;
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const tmpDir = fs.mkdtempSync(path.join(path.resolve(os.tmpdir()), prefix));
 
   if (planning) {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });

@@ -37,10 +37,14 @@ const ISSUE_LINK_REASON = Object.freeze({
   FAIL_FILE_LIST_INCOMPLETE: 'fail_file_list_incomplete',
 });
 
-// #1389: backmerge PRs are opened by CI against `next`, never by a human or a
-// fork, so they are exempt from the issue-link requirement outright — but
-// ONLY when combined with `sameRepo === true` below (see header comment).
-const BACKMERGE_BRANCH_PREFIX = 'chore/backmerge-main-to-next-';
+// #1389 / #5890: the release pipeline's own back-merge PRs (release/hotfix ->
+// main, chore/sync-next-version-* and chore/backmerge-main-to-next-* -> next)
+// are opened by CI, never by a human or a fork, and have no issue to link, so
+// they are exempt outright. The predicate lives in release-pipeline-pr.cjs —
+// shared with pr-title-validator.yml so the two gates agree — and requires
+// `sameRepo === true` plus the exact base branch, so a fork cannot forge it
+// by naming its branch.
+const { releasePipelinePrKind, BACKMERGE_BRANCH_PREFIX } = require('./release-pipeline-pr.cjs');
 
 // #4196: Dependabot has no mechanism to link a PR it opens to a repo issue —
 // its alerts live in the Security tab, not as issues, so there is nothing
@@ -135,7 +139,7 @@ function allPathsAreTestsOrDocs(changedFiles) {
   });
 }
 
-function evaluateIssueLink({ prBody, headRef, sameRepo, authorLogin, changedFiles, changedFilesTotal }) {
+function evaluateIssueLink({ prBody, headRef, baseRef, sameRepo, authorLogin, changedFiles, changedFilesTotal }) {
   if (authorLogin === DEPENDABOT_LOGIN) {
     return { ok: true, reason: ISSUE_LINK_REASON.OK_DEPENDABOT_EXEMPT };
   }
@@ -144,10 +148,14 @@ function evaluateIssueLink({ prBody, headRef, sameRepo, authorLogin, changedFile
     return { ok: true, reason: ISSUE_LINK_REASON.OK_CLOSING_KEYWORD };
   }
 
-  // #1389: `sameRepo === true` is required, not just the branch-name prefix —
-  // a fork PR could otherwise name its branch to forge this exemption.
-  if (String(headRef || '').startsWith(BACKMERGE_BRANCH_PREFIX) && sameRepo === true) {
-    return { ok: true, reason: ISSUE_LINK_REASON.OK_BACKMERGE_EXEMPT };
+  // #1389: `sameRepo === true` is required, not just the branch name — a fork
+  // PR could otherwise name its branch to forge this exemption (#5890 adds the
+  // base branch and the release/sync shapes; see release-pipeline-pr.cjs).
+  const releaseKind = releasePipelinePrKind({ headRef, baseRef, sameRepo });
+  if (releaseKind) {
+    // `kind` names which release-pipeline PR this is (the reason keeps its
+    // #1389 name so existing consumers of the enum are unchanged).
+    return { ok: true, reason: ISSUE_LINK_REASON.OK_BACKMERGE_EXEMPT, kind: releaseKind };
   }
 
   if (!hasFollowUpReference(prBody)) {
@@ -175,6 +183,7 @@ function main() {
   const result = evaluateIssueLink({
     prBody: process.env.PR_BODY || '',
     headRef: process.env.HEAD_REF || '',
+    baseRef: process.env.BASE_REF || '',
     sameRepo: process.env.SAME_REPO === 'true',
     authorLogin: process.env.PR_AUTHOR_LOGIN || '',
     changedFiles,
