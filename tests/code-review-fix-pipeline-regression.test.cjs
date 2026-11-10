@@ -261,14 +261,14 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   const bash = (script, env) => {
     script = `gsd_run() { node "${GSD_TOOLS}" "$@"; }\n${script}`; // the launcher's resolved gsd_run, pointed at this tree
     // Run from a file, not `bash -c`: the dispatch fence outgrows the Windows command-line limit (~8K).
-    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'lane-bash-'));
+    const dir = createTempDir('lane-bash-');
     try {
       const file = path.join(dir, 'snippet.sh');
       fs.writeFileSync(file, script);
       const syntax = runHook('-n', [file], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
       assert.strictEqual(syntax.exitCode, 0, `extracted snippet is not complete shell: ${syntax.stderr}`);
       return runHook(file, [], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, ...(env && { env: { ...process.env, ...env } }) });
-    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    } finally { cleanup(dir); }
   };
   const sandbox = (t, fn) => fn(require('./helpers/lane-sandbox.cjs')(t));
   // The env a fresh workflow shell has: the phase layout the real REVIEW_PATH expression derives from.
