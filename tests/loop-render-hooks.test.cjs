@@ -2239,16 +2239,17 @@ describe('cmdLoopRenderHooks --phase (#4030)', () => {
     const dir = makePhaseProject('05-widgets');
     t.after(() => cleanup(dir));
     const pad = fc.stringMatching(/^[ \t]{0,3}$/);
+    // `--x` prefix: no gsd-tools global flag (--ws, --cwd=, --h, ...) starts with it, so the value stays a plain --value.
     fc.assert(fc.property(fc.boolean(), pad, pad, fc.stringMatching(/^[a-zA-Z0-9._=-]{0,8}$/).filter((j) => !/^phase=/.test(j)), (eq, l, r, junk) => {
       const padded = `${l}05${r}`;
       const ok = renderWithPhase(dir, 'plan:pre', eq ? [`--phase=${padded}`, '--raw'] : ['--phase', padded, '--raw']);
       assert.strictEqual(ok.exitCode, 0, ok.stderr);
       assert.strictEqual(JSON.parse(ok.stdout.trim()).context.phase, '05');
-      const bad = renderWithPhase(dir, 'plan:pre', ['--phase', `--${junk}`, '--raw']);
+      const bad = renderWithPhase(dir, 'plan:pre', ['--phase', `--x${junk}`, '--raw']);
       assert.strictEqual(bad.exitCode, 0, bad.stderr);
       const env = JSON.parse(bad.stdout.trim());
       assert.ok(!('context' in env) && !('warnings' in env), 'a --value is not a phase token');
-    }), { numRuns: 12 });
+    }), { numRuns: 12, examples: [[true, '', '', 'ws=..'], [true, '', '', 'cwd=x']] });
   });
 
   // #4030: --phase-dir is accepted, but only as a check against what --phase
