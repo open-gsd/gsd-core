@@ -178,7 +178,7 @@ cargo test    # Rust
 
 **5. 创建第一个测试文件：**
 遵循项目约定的测试位置：
-- 源文件旁边的 `*.test.ts` / `*.spec.ts`
+- 源文件旁边的 `*.test.*` / `*.spec.*`
 - `tests/` / `test/` / `__tests__/` 目录（任意深度，不区分大小写）
 - `*_test.go`（Go）
 - `test_*.py` / `*_test.py`（Python；`test_*.py` 只匹配文件名）

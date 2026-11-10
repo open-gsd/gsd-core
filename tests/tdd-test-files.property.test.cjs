@@ -5,11 +5,11 @@
  *
  * Module: gsd-core/bin/lib/tdd-test-files.cjs (built from src/tdd-test-files.cts)
  * The matchers are module-private, so they are driven through the public
- * `isTestFilePath`, with samples from the shared SAMPLES_BY_SPEC.
+ * `isTestFilePath`, with samples from the shared SAMPLES_BY_GLOB.
  *
  * Properties tested:
  *   (a) separator invariance: `/` and `\` spell the same path
- *   (b) depth invariance: an instance of every pathspec stays a test file under any
+ *   (b) depth invariance: an instance of every glob stays a test file under any
  *       number of non-test parent directories (0, 1, 2, ... deep)
  *   (c) paths built only from non-test names are never test files, and `test_*.py` is a
  *       basename match, not a directory one
@@ -21,13 +21,14 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { isTestFilePath, TEST_FILE_GLOBS, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
-const { SAMPLES_BY_SPEC } = require('./helpers/tdd-test-paths.cjs');
+const { SAMPLES_BY_GLOB } = require('./helpers/tdd-test-paths.cjs');
 
 // A directory segment that is not a test directory name (`test`, `tests`, `__tests__`).
 const filler = fc.stringMatching(/^[a-z]{1,8}$/).filter((s) => s !== 'test' && s !== 'tests');
 const fillers = fc.array(filler, { maxLength: 4 });
-// Every shared sample of every pathspec, flattened; the owner is tests/helpers/tdd-test-paths.cjs.
-const samples = Object.entries(SAMPLES_BY_SPEC).flatMap(([spec, paths]) => paths.map((path) => [spec, path]));
+// Every shared sample of every glob, flattened; the owner is tests/helpers/tdd-test-paths.cjs.
+const samples = Object.entries(SAMPLES_BY_GLOB)
+  .flatMap(([glob, paths]) => paths.map((path) => [glob, path]));
 
 describe('#5181 tdd-test-files matcher properties', () => {
   test('(a) separator invariance', () => {
@@ -37,18 +38,10 @@ describe('#5181 tdd-test-files matcher properties', () => {
     }));
   });
 
-  test('(b) depth invariance: every pathspec instance is a test file at any depth', () => {
-    fc.assert(fc.property(fc.constantFrom(...samples), fillers, ([spec, sample], parents) => {
+  test('(b) depth invariance: every glob instance is a test file at any depth', () => {
+    fc.assert(fc.property(fc.constantFrom(...samples), fillers, ([glob, sample], parents) => {
       const p = [...parents, sample].join('/');
-      assert.equal(isTestFilePath(p), true, `${p} (from ${spec}) must be a test file`);
-    }));
-  });
-
-  test('(d) each pathspec is the depth-free, case-folding prefix plus one bare glob', () => {
-    assert.ok(Array.isArray(TEST_FILE_GLOBS), 'TEST_FILE_GLOBS must be exported');
-    assert.deepEqual(Object.keys(SAMPLES_BY_SPEC), TEST_FILE_GLOBS);
-    fc.assert(fc.property(fc.constantFrom(...TEST_FILE_GLOBS.keys()), (i) => {
-      assert.equal(TEST_FILE_PATHSPECS[i], `:(glob,icase)**/${TEST_FILE_GLOBS[i]}`);
+      assert.equal(isTestFilePath(p), true, `${p} (from ${glob}) must be a test file`);
     }));
   });
 
@@ -61,6 +54,13 @@ describe('#5181 tdd-test-files matcher properties', () => {
     fc.assert(fc.property(fillers, filler, filler, (parents, dir, name) => {
       const p = [...parents, `test_${dir}`, `${name}.py`].join('/');
       assert.equal(isTestFilePath(p), false, `${p} must not be a test file`);
+    }));
+  });
+
+  test('(d) each pathspec is the depth-free, case-folding prefix plus one bare glob', () => {
+    assert.ok(Array.isArray(TEST_FILE_GLOBS), 'TEST_FILE_GLOBS must be exported');
+    fc.assert(fc.property(fc.constantFrom(...TEST_FILE_GLOBS.keys()), (i) => {
+      assert.equal(TEST_FILE_PATHSPECS[i], `:(glob,icase)**/${TEST_FILE_GLOBS[i]}`);
     }));
   });
 });
