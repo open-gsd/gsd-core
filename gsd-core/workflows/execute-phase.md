@@ -241,11 +241,9 @@ if [ "$TDD_MODE" = "true" ]; then
     # #5164: the same resolver, scope and milestone bound as safe_resume_gate — anchored,
     # zero-pad tolerant (#4003, #4619, #4748), this branch only. A padded literal grep
     # hard-halted on a correct unpadded RED commit.
-    # #4379/#5181: this pathspec IS the gate's definition of "a test file". Every
-    # entry is `:(glob,icase)**/`: any depth (root included), no `*` across `/` (so
-    # `src/test_utils/x.py` is not a test), case-insensitive like the router. NOT widened
-    # to ordinary source — that would make the gate pass on any in-scope commit. Rust inline
-    # #[test]: references/tdd.md § Create first test file.
+    # #4379/#5181: this pathspec IS the gate's definition of "a test file": any depth, root
+    # included, case-insensitive like the router, `*` never crosses `/`. NOT widened to
+    # ordinary source. Rust inline #[test]: references/tdd.md § Create first test file.
 
     RED_COMMIT=$(gsd_run check evaluation-scope --plan "${PHASE_NUMBER}-${PLAN_ID}" --commits-only --milestone-bound --max-commits 1 --raw --pathspec ":(glob,icase)**/*.test.*" --pathspec ":(glob,icase)**/*.spec.*" --pathspec ":(glob,icase)**/tests/**" --pathspec ":(glob,icase)**/test/**" --pathspec ":(glob,icase)**/__tests__/**" --pathspec ":(glob,icase)**/*_test.go" --pathspec ":(glob,icase)**/test_*.py" --pathspec ":(glob,icase)**/*_test.py" --pathspec ":(glob,icase)**/*_test.exs" --pathspec ":(glob,icase)**/*_spec.rb" --pathspec ":(glob,icase)**/*_test.rb" 2>/dev/null) && RED_SCOPE_RC=0 || RED_SCOPE_RC=$?
     # Exit 69 (UNAVAILABLE) = the scope could not be resolved: that is not "missing RED commit" (#5170).
