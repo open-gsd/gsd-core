@@ -1233,6 +1233,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(para, /marker_received[^;]*## REVISION COMPLETE[^;]*step 10/, 'REVISION COMPLETE must route to the checker re-spawn (step 10)');
   });
 
+  // The revision stalled menu lists Accept before Retry (byte ceiling); like 11a's inline
+  // summary it must say the receipt case is Retry first, the REVISION_CONFLICT rule's order.
+  test('the revision stalled menu notes the receipt case is Retry first (#5182)', () => {
+    const para = sectionOf(readPlanPhase(), REVISION_SECTION).split('\n').find((l) => l.includes('(`revision`)'));
+    assert.ok(para, 'the revision ORCHESTRATOR RULE paragraph exists');
+    assert.match(para, /`stalled` -> 1\) Accept as revised[^;]*3\) Stop \(receipt case: Retry first\)/, 'the revision stalled menu must carry the receipt-case note');
+  });
+
   test('AC3: a finished revision yields marker_received within one poll interval', (t) => {
     const f = fixture(t);
     const revision = watchCallOf(sectionOf(readPlanPhase(), REVISION_SECTION));
