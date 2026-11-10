@@ -412,6 +412,11 @@ const ERROR_REASON = Object.freeze({
 
 type ErrorReasonValue = typeof ERROR_REASON[keyof typeof ERROR_REASON];
 
+/** The ERROR_REASON member whose wire value is `value`, or `undefined` when it is none (the one narrowing of a string code). */
+function errorReasonOf(value: unknown): ErrorReasonValue | undefined {
+  return Object.values(ERROR_REASON).find((reason) => reason === value);
+}
+
 // setJsonErrorMode / getJsonErrorMode now live in cli-exit.cts (imported above)
 // and are re-exported here for the callers that already import them from io.
 
@@ -603,6 +608,7 @@ export = {
   declineNoOp,
   serializeForOutput,
   ERROR_REASON,
+  errorReasonOf,
   setJsonErrorMode,
   getJsonErrorMode,
   error,

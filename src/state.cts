@@ -12,7 +12,7 @@ import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON } = ioMod;
+const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON, errorReasonOf } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
@@ -1335,7 +1335,7 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
     // spellings with DIFFERENT numbers. Same posture as the case above — name
     // the candidates and let the caller resolve them. Advancing either one
     // would write a number into the other that nothing derived for it.
-    if (resultData && resultData['reason'] === 'ambiguous_plan_position') {
+    if (resultData && resultData['reason'] === ERROR_REASON.AMBIGUOUS_PLAN_POSITION) {
       output({
         error: 'STATE.md carries two plan positions with different numbers — refusing to advance either. Resolve them to a single current plan and re-run.',
         reason: resultData['reason'],
@@ -6545,7 +6545,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     const result = transitionCore(content, intent, deps);
     // #5320: --plans cannot be recorded (no line to land on, or below the recorded plan position); exit before the write.
     if (result.data?.['error']) {
-      error(String(result.data['message']), Object.values(ERROR_REASON).find((r) => r === result.data?.['reason']) ?? ERROR_REASON.UNKNOWN);
+      error(String(result.data['message']), errorReasonOf(result.data?.['reason']) ?? ERROR_REASON.UNKNOWN);
     }
     precomputedUpdated = result.updated;
     if (resolvePhaseIdConvention(cwd) === 'bracket') {

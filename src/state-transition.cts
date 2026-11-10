@@ -1779,8 +1779,8 @@ type PlanPosition = {
 
 /**
  * The plan-position rule (#5320): reads a `Current Plan` / `Plan` /
- * `Total Plans in Phase` value for `advancePlanCore` and `plannedPhaseCore`,
- * the reader behind `readPlanLines` (so `advancePlanCore`, `planLinesForPlanned`, `readPlanPosition` and `readRecordedPlanTotal`). `null` when the value is absent or neither `N` nor `N of M` leads it.
+ * `Total Plans in Phase` value. `readPlanLines` calls this reader; `advancePlanCore`, `planLinesForPlanned`,
+ * `readPlanPosition` and `readRecordedPlanTotal` consume it through `readPlanLines`. `null` when the value is absent or neither `N` nor `N of M` leads it.
  * The slot is where a new total goes: an `N of M` value swaps only M (keeping
  * trailing text and, when M has a leading zero, its width), an unfilled total
  * (`1 of ?`) is swapped for the count, and a bare `N` gains ` of M` and drops
