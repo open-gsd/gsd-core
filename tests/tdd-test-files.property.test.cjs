@@ -13,12 +13,14 @@
  *       number of non-test parent directories (0, 1, 2, ... deep)
  *   (c) paths built only from non-test names are never test files, and `test_*.py` is a
  *       basename match, not a directory one
+ *   (d) every pathspec handed to git is one bare glob behind the depth-free, case-folding
+ *       `:(glob,icase)**\/` prefix, so git reads the same set at any depth
  */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+const { isTestFilePath, TEST_FILE_GLOBS, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
 const { SAMPLES_BY_SPEC } = require('./helpers/tdd-test-paths.cjs');
 
 // A directory segment that is not a test directory name (`test`, `tests`, `__tests__`).
@@ -39,6 +41,14 @@ describe('#5181 tdd-test-files matcher properties', () => {
     fc.assert(fc.property(fc.constantFrom(...samples), fillers, ([spec, sample], parents) => {
       const p = [...parents, sample].join('/');
       assert.equal(isTestFilePath(p), true, `${p} (from ${spec}) must be a test file`);
+    }));
+  });
+
+  test('(d) each pathspec is the depth-free, case-folding prefix plus one bare glob', () => {
+    assert.ok(Array.isArray(TEST_FILE_GLOBS), 'TEST_FILE_GLOBS must be exported');
+    assert.deepEqual(Object.keys(SAMPLES_BY_SPEC), TEST_FILE_GLOBS);
+    fc.assert(fc.property(fc.constantFrom(...TEST_FILE_GLOBS.keys()), (i) => {
+      assert.equal(TEST_FILE_PATHSPECS[i], `:(glob,icase)**/${TEST_FILE_GLOBS[i]}`);
     }));
   });
 
