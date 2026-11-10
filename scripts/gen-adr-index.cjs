@@ -1278,4 +1278,5 @@ function main() {
 // effect of loading it.
 if (require.main === module) runMain(main);
 
-module.exports = { STATUSES, REASON, extractLinks, maskCode, scanInlineLinks, existsCaseExact };
+module.exports = { STATUSES, REASON, extractLinks, maskCode, scanInlineLinks, existsCaseExact,
+  realRootOrFallback };

@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../../scripts/gen-features.cjs');
-const { maskCode, scanInlineLinks, existsCaseExact } = require('../../scripts/gen-adr-index.cjs');
+const { maskCode, scanInlineLinks, existsCaseExact, realRootOrFallback } = require('../../scripts/gen-adr-index.cjs');
 const { tokenizeHeadings } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -129,7 +129,7 @@ const repoPathOf = (h, where) => decode(nextRel(h).split(/[?#]/)[0], h, where);
 
 // The ADR gate owns the case-exact walk (a case-folding filesystem cannot pass a link GitHub
 // 404s) and the symlink-escape refusal.
-const REAL_ROOT = fs.realpathSync(ROOT);
+const REAL_ROOT = realRootOrFallback();
 const DIR_CACHE = new Map();
 const existsExact = (rel) => existsCaseExact(path.join(ROOT, rel), DIR_CACHE, REAL_ROOT).exists;
 // An empty segment after decoding (`x.md%2F`) is as bad as a raw one (isBadLink).

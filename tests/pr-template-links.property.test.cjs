@@ -81,6 +81,13 @@ describe('link extractor properties (#5427)', () => {
       }
     }));
   });
+  test('property: an angle destination keeps its spaces, with or without space before it', () => {
+    const words = fc.array(dest, { minLength: 2, maxLength: 3 }).map((w) => w.join(' '));
+    fc.assert(fc.property(words, fc.constantFrom('', ' '), title, (d, pad, t) => {
+      assert.deepEqual(hrefsIn(`[a](${pad}<${d}>${t})`), [d]);
+      assert.deepEqual(hrefsIn(`[a]: ${pad}<${d}>${t}`), [d]);
+    }));
+  });
   test('property: nothing is extracted from fenced code, inline code or HTML comments', () => {
     fc.assert(fc.property(dest, title, (d, t) => {
       for (const text of forms(d, t)) {
