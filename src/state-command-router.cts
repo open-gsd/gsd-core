@@ -69,9 +69,12 @@ interface RouteStateCommandOptions {
 
 // ─── Implementation ───────────────────────────────────────────────────────────
 
-function parsePlans(plans: string | null | undefined, error: (message: string, reason?: string) => void): number | null {
+// `--plans` is one flag with one plain count: no value (also `--plans --raw`), `--plans=3` and a repeated flag are refused,
+// because parseNamedArgs reports an absent flag and a valueless one alike.
+function parsePlans(args: string[], plans: string | null | undefined, error: (message: string, reason?: string) => void): number | null {
+  const given = args.filter((x) => x === '--plans' || x.startsWith('--plans=')).length;
   const parsedPlans = plans == null ? null : parsePlanCount(plans);
-  if (plans != null && parsedPlans === null) {
+  if (given > 1 || (given === 1 && parsedPlans === null) || (plans != null && parsedPlans === null)) {
     error(`Invalid --plans value. Expected a non-negative integer no larger than ${Number.MAX_SAFE_INTEGER}.`, ERROR_REASON.USAGE);
     return null;
   }
@@ -186,7 +189,7 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       },
       'begin-phase': () => {
         const a = parseNamedArgsOrExit(args, { valueFlags: ['phase', 'name', 'plans'], positionals: 2 }, error);
-        state.cmdStateBeginPhase(cwd, strArg(a, 'phase'), strArg(a, 'name'), parsePlans(strArg(a, 'plans'), error), raw);
+        state.cmdStateBeginPhase(cwd, strArg(a, 'phase'), strArg(a, 'name'), parsePlans(args, strArg(a, 'plans'), error), raw);
       },
       'signal-waiting': () => {
         const a = parseNamedArgsOrExit(args, { valueFlags: ['type', 'question', 'options', 'phase'], positionals: 2 }, error);
@@ -199,7 +202,7 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
         // signature had no channel for it), so the argument was silently
         // dropped. It now persists into the Current Position `Phase:` line and
         // the authoritative current_phase_name, mirroring begin-phase.
-        state.cmdStatePlannedPhase(cwd, strArg(a, 'phase'), strArg(a, 'name'), parsePlans(strArg(a, 'plans'), error), raw);
+        state.cmdStatePlannedPhase(cwd, strArg(a, 'phase'), strArg(a, 'name'), parsePlans(args, strArg(a, 'plans'), error), raw);
       },
       validate: () => {
         // #3696: --strict makes the verdict gateable by exit status. The
