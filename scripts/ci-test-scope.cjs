@@ -32,7 +32,7 @@ const WORKFLOW_LINT_TESTS = [
 // pull_request_template.md or a PULL_REQUEST_TEMPLATE/ directory (names case-insensitive).
 // CONTRIBUTING.md (the anchor target) and docs/registries/README.md (the registry-entry
 // link target) are docs whose links a test guards: they count as lightweight code
-// changes (like inert CI), so that test is selected.
+// changes (like inert CI), so the nine TEMPLATE_LINK_OBSERVERS are selected.
 const isPrTemplate = filePath =>
   /^(?:(?:\.github|docs)\/)?pull_request_template(?:\.md|\/.+)$/i.test(filePath);
 const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
