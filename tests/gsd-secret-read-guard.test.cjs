@@ -2496,6 +2496,36 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertBlocked(run(bash(`rg --pre sh KEY ${pq}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
   });
 
+  // #5267: the grammar scan does not grant the exemption. It reads a heredoc
+  // tag as one word, so by its own reading each of these tags leaves no
+  // substitution body on the line, and after each of them only that scan sees
+  // the listed path as an operand.
+  const SPAN_TAGS = ['$(case x in x) ;; esac)', '$(# )\n)', '$(case x in x) mv a b;; esac)'];
+  test('Bash exemption is not granted by the grammar scan (#5267)', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    const pq = absq('.env.production');
+    assertAllowed(run(bash(`cat <<EOF ${pq}`)), 'control: a plain tag with no body, as before');
+    for (const tag of SPAN_TAGS) {
+      assertBlocked(run(bash(`cat <<${tag} ${pq}`)), `after the tag ${JSON.stringify(tag)}`, { tool: 'Bash', path: p });
+      assertBlocked(run(bash(`cat ${pq} <<${tag} ${pq}`)), `on both sides of the tag ${JSON.stringify(tag)}`, { tool: 'Bash', path: p });
+    }
+  });
+
+  test('property: a listed path on a line with one of these tags is blocked wherever it sits (#5267)', () => {
+    listed('.env.production');
+    const pq = absq('.env.production');
+    const place = fc.constantFrom('after', 'before', 'both');
+    fc.assert(fc.property(
+      fc.constantFrom('cat', 'head', 'tail', 'wc', 'sort'), fc.constantFrom(...SPAN_TAGS), place,
+      (reader, tag, where) => {
+        const lead = where === 'after' ? '' : `${pq} `;
+        const trail = where === 'before' ? 'notes.txt' : pq;
+        return run(bash(`${reader} ${lead}<<${tag} ${trail}`)).status === 2;
+      },
+    ), PROPERTY_RUNS);
+  });
+
   // Row 13.
   test('ref:path never exempt', () => {
     listed('.env.production');
