@@ -236,7 +236,14 @@ package-lock.json
 tsconfig*.json
 .github/workflows/**
 .github/rulesets/**
+CONTRIBUTING.md
+docs/registries/README.md
+{,docs/,.github/}pull_request_template.md
+{,docs/,.github/}PULL_REQUEST_TEMPLATE/**
 ```
+
+The last four lines are the template-link docs (`isTemplateLinkDoc`); the template
+names match in any case. They and CI YAML are the lightweight paths.
 
 This list should stay aligned with changeset/docs policy where those gates care
 about the same user-facing surfaces.

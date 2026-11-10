@@ -11,7 +11,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, nextRel, missingNext, repoPathOf, unresolvedAnchors, headingSet,
   anchorKind,
-} =require('./helpers/pr-template-links.cjs');
+} = require('./helpers/pr-template-links.cjs');
 const { isPrTemplate, isTemplateLinkDoc } = require('../scripts/ci-test-scope.cjs');
 
 const ROOT = path.join(__dirname, '..');

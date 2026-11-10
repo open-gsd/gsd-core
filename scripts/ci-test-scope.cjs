@@ -53,7 +53,7 @@ const TEMPLATE_LINK_OBSERVERS = [
 // #6075: tests that read `.github/**` YAML content (workflow contracts). A CI
 // YAML edit re-runs them in the targeted lane (never full_matrix). Several are
 // conformance-tier members; that does not flip full_matrix for a CI-YAML-only
-// change because classify() exempts isCiYaml(file) from the windows-hint
+// change because classify() exempts isLightweight(file) from the windows-hint
 // escalation and forces full_matrix=false when only CI YAML changed.
 const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-218-release-version-validation.test.cjs',
@@ -672,7 +672,8 @@ function classify(files, reachabilityDeps = {}) {
         // (src/, agents/, commands/, hooks/, skills/, config paths). Only one
         // rule's escalation is live today: 'portability lint rules (ADR-1703)'.
         // Four others already had fullMatrix: true (no-op here), and CI YAML
-        // (the 'inert CI' rule) is excluded from this escalation entirely.
+        // or a template-link doc (isLightweight) is excluded from this
+        // escalation entirely.
         // Distinct, greppable reason so the conformance-lane coverage for it
         // is traceable per rule.
         // #6075: a lightweight file (CI YAML, a template-link doc) never escalates,

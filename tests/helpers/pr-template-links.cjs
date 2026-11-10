@@ -32,7 +32,7 @@ const REFDEF = new RegExp(REF_PREFIX + REF_DEST + REF_TITLE, 'gm');
 
 // Indented code (4+ spaces or a tab) follows a blank line or more code, and is not a list
 // item's continuation. Indentation and list state are judged on the RAW line, because
-// maskCode leaves a line that opens with an inline code span as blanks (D14); blank-ness
+// maskCode leaves a line that opens with an inline code span as blanks; blank-ness
 // is judged on the masked line.
 const maskIndentedCode = (raw, masked) => {
   const rawLines = raw.split('\n');
