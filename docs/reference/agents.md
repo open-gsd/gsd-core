@@ -183,6 +183,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Applies an ordered minimum-solution check after preserving locked decisions and requirement coverage, preferring existing project behavior, standard-library or native-platform capability, and already-installed dependencies before new implementation (#4089)
 - Performs reachability check to validate plan steps reference accessible files and APIs (v1.32)
 - Enforces a comment-text discipline HARD GATE at plan-write time (`verify.plan-structure`): a literal that an acceptance criterion negative-greps for (`grep -c 'LIT' file == 0`) must not appear verbatim in an `<action>` body; violations fail plan creation. Use `<!-- planner-discipline-allow: LIT -->` to allowlist a legitimate occurrence. (#429)
+- Records each count/match gate's measured baseline as `[HEAD=<value> EXPECT<op><value>]` beside the gate. `verify.plan-structure` rejects a notation that already holds at HEAD unless it carries `GUARD MUTATION: <ref>` (B1), and the plan-checker blocks on that finding (#4309). See [PLAN.md → Baseline notation](plan-md.md#baseline-notation).
 
 ---
 

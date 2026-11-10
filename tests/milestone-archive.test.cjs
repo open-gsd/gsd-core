@@ -1360,3 +1360,31 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
     assert.ok(!fs.existsSync(path.join(phasesDir, '02-printable-output')), '02-printable-output must no longer be on disk at its original location');
   });
 });
+
+describe('#5726 milestone complete on an empty STATE.md milestone value', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  // An empty `milestone:` is "no milestone field": the YAML `---` that follows
+  // it must never be read as the STATE milestone and echoed in a mismatch warning.
+  for (const [label, stateBody] of [
+    ['empty value followed by another key', '---\nmilestone:\nstatus: active\n---\n\n# State\n'],
+    ['empty value directly before the closing ---', '---\nmilestone:\n---\n\n# State\n'],
+    ['trailing-space value directly before the closing ---', '---\nmilestone: \n---\n\n# State\n'],
+  ]) {
+    test(`${label}: no mismatch warning, no --- echoed`, () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{}');
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateBody);
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+
+      const result = runGsdTools(['milestone', 'complete', 'v1.0', '--confirm'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      const stderr = String(result.error ?? '');
+      assert.ok(!stderr.includes('---'), `stderr must not mention ---: ${stderr}`);
+      assert.ok(!stderr.includes('STATE.md milestone'), `no mismatch warning expected: ${stderr}`);
+    });
+  }
+});
