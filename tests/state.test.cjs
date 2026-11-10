@@ -5907,6 +5907,10 @@ describe('state planned-phase command', () => {
       ['Plan: 1 of 10', 'Plan: 1 of 8'],
       ['Plan: 2 of 5', 'Plan: 2 of 8'],
       ['Plan: 1 of ?', 'Plan: 1 of 8'],
+      ['Plan: 2 of 5.', 'Plan: 2 of 8.'],
+      ['Plan: 2 of 5,', 'Plan: 2 of 8,'],
+      ['Plan: 2 of 5)', 'Plan: 2 of 8)'],
+      ['Plan: 2 of 5; wave 2', 'Plan: 2 of 8; wave 2'],
       ['Plan: 1 of B in current phase', 'Plan: 1 of 8 in current phase'],
       ['Current Plan: 3 (blocked)', 'Current Plan: 3 of 8 (blocked)'],
       ['Plan: 0 TBD in current phase', 'Plan: 0 of 8 in current phase'],
@@ -5916,6 +5920,18 @@ describe('state planned-phase command', () => {
       const r = runGsdTools([...PLAN_CMD, '8'], tmpDir);
       assert.ok(r.success, `${line}: ${r.error}`);
       assert.ok(`\n${fs.readFileSync(statePath, 'utf8')}`.includes(`\n${want}\n`), `${line} -> ${want}`);
+    }
+  });
+
+  test('#5320: plan lines in a CRLF STATE.md are rewritten from a CRLF document', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    for (const [line, want] of [['Plan: 2 of 5', 'Plan: 2 of 8'], ['Plan: 2 of 5.', 'Plan: 2 of 8.'], ['Plan: 0 TBD in current phase', 'Plan: 0 of 8 in current phase']]) {
+      writeTbdPlanFixture(['Phase: 19', line, 'Status: Ready']);
+      fs.writeFileSync(statePath, fs.readFileSync(statePath, 'utf8').replaceAll('\n', '\r\n'));
+      const r = runGsdTools([...PLAN_CMD, '8'], tmpDir);
+      assert.ok(r.success, `${line}: ${r.error}`);
+      const out = fs.readFileSync(statePath, 'utf8').replace(/\r\n/g, '\n');
+      assert.ok(`\n${out}`.includes(`\n${want}\n`), `${line} -> ${want}: ${JSON.stringify(out)}`);
     }
   });
 
@@ -6079,6 +6095,10 @@ describe('#3052: planned-phase preserves same-date last_activity_desc', () => {
       'progress:', '  total_phases: 1', '  completed_phases: 0', '  total_plans: 0', '  completed_plans: 0', '  percent: 0', '---', '',
     ];
     const tail = ['', '## Session Continuity', '', '**Last session:** 2024-01-10', '**Stopped at:** None', '**Resume file:** None', ''];
+    // Each test below pinned `planned-phase --plans` succeeding as a no-op on a STATE.md with no plan line,
+    // and stopped pinning it when #5320 made that a refusal: #3052 same-date desc, E8a `updated: []`,
+    // the two #3872 rows (5 plans, Current Position moved), the #3872 current_phase row, and the
+    // state-contract no-op (`plannedPhaseNoOpDoesNotPublish`). Their landing line keeps each protecting its own behaviour.
     // [original text of the fixture, its planned-phase command]
     for (const [lines, cmd] of [
       [
