@@ -108,5 +108,27 @@
       "consumes": ["ROADMAP.md", "REQUIREMENTS.md", "CONTEXT.md", ".planning/config.json", "Claude Code transcripts (~/.claude/projects/<slug>/)"]
     },
     "discussion": "https://github.com/open-gsd/gsd-core/discussions/5868"
+  },
+  {
+    "id": "standing-orders",
+    "name": "Standing Orders",
+    "type": "capability",
+    "repo": "The-Artificer-of-Ciphers-LLC/standing-orders",
+    "description": "Project-wide, context-scoped business rules for the GSD loop. Rules live in one ORDERS.yaml, scoped by the contexts they apply in. The planner receives only the rules that apply to the phase; planning is blocked at plan:post when rules conflict, are invalid, are not cited and projected into the plan's must_haves, or when a plan would edit a check file. After every execution wave, GSD's fail-first prover must prove each applicable test rule (optionally against concern-targeted mutants), and check files are hash-verified so an edited check is never trusted. At ship:pre a trace ledger records which rules the phase was held to, and impact/stale report what a rule change affects. Command family: select, conflicts, coverage, enforce, trace, impact, stale, validate, promote, semantic, mutants; skills: promote, conflict-review, harden. Off until standing-orders.enabled is true; no runtime dependencies.",
+    "author": "The Artificer of Ciphers LLC",
+    "license": "MIT",
+    "enginesGsd": ">=1.19.0 <2.0.0",
+    "install": "gsd capability install https://github.com/The-Artificer-of-Ciphers-LLC/standing-orders.git",
+    "uninstall": "gsd capability remove standing-orders",
+    "interactions": {
+      "loopExtensionPoints": ["discuss:post", "plan:pre", "plan:post", "execute:wave:post", "ship:pre"],
+      "hookKinds": ["step", "contribution", "gate"],
+      "configKeys": ["standing-orders.enabled", "standing-orders.block_on", "standing-orders.max_bytes"],
+      "requires": [],
+      "runtimeCompat": ["all"],
+      "produces": [".planning/standing-orders/ORDERS.yaml", ".planning/standing-orders/APPLICABLE.md", ".planning/standing-orders/CONFLICTS.json", ".planning/standing-orders/ENFORCEMENT.json", ".planning/standing-orders/MUTANTS.json", ".planning/standing-orders/TRACE.jsonl", "STANDING-ORDERS.md", "STANDING-ORDERS-INTEGRITY.json", "STANDING-ORDERS-SEMANTIC.json"],
+      "consumes": [".planning/standing-orders/ORDERS.yaml", "SPEC.md", "CONTEXT.md", "PLAN.md"]
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/5999"
   }
 ]
