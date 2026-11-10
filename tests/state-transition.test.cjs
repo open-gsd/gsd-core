@@ -5444,6 +5444,19 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.deepStrictEqual(plannedLines(lf.replace('\n', '\r\n'), 'mixed'), ['Plan: 1 of 5.']);
   });
 
+  test('plannedPhase property: for any generated tail after the total, a tail that does not continue the number is kept and one that does is never read as a total', () => {
+    // fast-check generates the tails (strings without line breaks or edge whitespace); the oracle is the stated rule, not the regex
+    const continues = (t) => /^[\p{L}\p{N}_]/u.test(t) || /^[^\s\w]\d/u.test(t);
+    fc.assert(
+      fc.property(fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()), (t) => {
+        fc.pre(!/^[0-9]/.test(t)); // ASCII digits extend the total itself
+        const out = lineOf(planned(`Plan: 2 of 5${t}`, 6).content);
+        return continues(t) ? out === `Plan: 2 of 6 of 5${t}` : out === `Plan: 2 of 6${t}`;
+      }),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
   test('plannedPhase unit: a total followed by punctuation keeps its punctuation and gains no second " of"', () => {
     for (const tail of ['.', ',', ')', ';', ' - wave 1']) {
       assert.strictEqual(lineOf(planned(`Plan: 2 of 5${tail}`, 6).content), `Plan: 2 of 6${tail}`, tail);
