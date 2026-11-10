@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 // Lines [from, to] of a workflow region, inclusive: first line containing `from`, first later line trimmed === `to`.
-// Shared by tests/code-review-fix-pipeline-regression.test.cjs and shipped.cjs; throws on a missing marker.
+// Used by tests/code-review-fix-pipeline-regression.test.cjs; throws on a missing marker.
 function lines(src, from, to) {
   const l = src.replace(/\r\n/g, '\n').split('\n');
   const a = l.findIndex((x) => x.includes(from));

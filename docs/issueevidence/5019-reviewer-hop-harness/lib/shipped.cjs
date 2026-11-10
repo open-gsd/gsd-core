@@ -1,7 +1,6 @@
 'use strict';
-// Slices SHIPPED bash out of the workflow .md files through the one slicer of tests/helpers/lines.cjs
-// (stepRegion / stepFence / lines), the same one tests/code-review-fix-pipeline-regression.test.cjs uses,
-// and prints a bash script on stdout. Nothing here is hand-written workflow logic except the
+// Slices SHIPPED bash out of the workflow .md files with its own small slicer (lines / stepRegion /
+// stepFence; it shares nothing with the product tests) and prints a bash script on stdout. Nothing here is hand-written workflow logic except the
 // stub of `review-lane dispatch-step` (the one call that would spawn a metered CLI).
 // usage: shipped.cjs dispatch|commit|prompt <worktree> <project> [head|base]
 const fs = require('node:fs');
@@ -12,9 +11,24 @@ const FIX = rd('code-review-fix.md'), REVIEW = rd('code-review.md');
 const GSD_TOOLS = path.join(wt, 'gsd-core', 'bin', 'gsd-tools.cjs');
 const fail = (m) => { console.error(m); process.exit(2); };
 
-const slice = require('../../../../tests/helpers/lines.cjs');
-const viaFail = (f) => (...a) => { try { return f(...a); } catch (e) { fail(e.message); } };
-const [lines, stepRegion, stepFence] = [slice, slice.stepRegion, slice.stepFence].map(viaFail);
+const lines = (src, from, to) => {
+  const l = src.replace(/\r\n/g, '\n').split('\n'), a = l.findIndex((x) => x.includes(from));
+  if (a < 0) fail(`marker "${from}" not found`);
+  const b = l.findIndex((x, k) => k >= a && x.trim() === to);
+  if (b < 0) fail(`end "${to}" not found`);
+  return l.slice(a, b + 1).join('\n');
+};
+const stepRegion = (src, name) => {
+  const open = src.indexOf(`<step name="${name}">`), close = src.indexOf('</step>', open);
+  if (open < 0 || close < 0) fail(`step "${name}" not found`);
+  return src.slice(open, close + 7);
+};
+const stepFence = (src, name) => {
+  const m = stepRegion(src, name).replace(/\r\n/g, '\n').split('\n'), a = m.findIndex((x) => /^```bash\s*$/.test(x));
+  const b = m.findIndex((x, k) => k > a && /^```\s*$/.test(x));
+  if (a < 0 || b < 0) fail(`step "${name}" carries no bash fence`);
+  return m.slice(a + 1, b).join('\n');
+};
 const T = '" 2>/dev/null)';
 const tmp = `${project}/tmp`, phase = `${project}/phase`;
 
