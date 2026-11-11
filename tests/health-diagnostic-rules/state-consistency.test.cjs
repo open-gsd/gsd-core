@@ -752,10 +752,19 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
     assert.match(diagnostics[0].remedy.args.command, /milestone archive-quick <version>/);
     // The remedy must not promise more than the tools do (#5830 review):
     // state prune never touches Quick Tasks, archive-quick needs a task
-    // directory, and /gsd-fast rows have no archive command.
+    // directory, and its reset drops EVERY data row (resetQuickTaskRows never
+    // reads the Directory cell), so directory-less /gsd-fast rows in a mixed
+    // table must be copied out before it runs (#5882 review).
     assert.match(diagnostics[0].remedy.args.command, /does not touch the Quick Tasks table/);
     assert.match(diagnostics[0].remedy.args.command, /only when at least one task directory exists/);
-    assert.match(diagnostics[0].remedy.args.command, /\/gsd-fast\) have no archive command/);
+    assert.ok(
+      diagnostics[0].remedy.args.command.includes(
+        'In a mixed table, the reset after archival also deletes rows without a task directory (logged by /gsd-fast), ' +
+        'so copy them out (or trim them) before running archive-quick.',
+      ),
+      'remedy warns that archive-quick deletes directory-less rows in a mixed table',
+    );
+    assert.doesNotMatch(diagnostics[0].remedy.args.command, /have no archive command/);
   });
 
   test('W031 counts CRLF lines the same as LF lines', (t) => {

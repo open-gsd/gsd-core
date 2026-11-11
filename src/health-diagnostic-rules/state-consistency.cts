@@ -411,9 +411,12 @@ const RULE_W026: Rule = {
  * Decisions/Recently Completed but never the Quick Tasks table, and
  * `milestone archive-quick <version>` (#2142, the command `/gsd-cleanup`
  * calls, opt-in) resets that table only when it moves at least one
- * `.planning/quick/` task directory. Rows with no directory (`/gsd-fast`)
- * have no archive tool, so the remedy says to trim them by hand. Fires only when the file is MORE than 3x the target, so a file
- * modestly over the target stays quiet.
+ * `.planning/quick/` task directory. That reset (`resetQuickTaskRows`)
+ * drops every data row, so in a mixed table it also deletes the rows with
+ * no directory (`/gsd-fast`), whose text is archived nowhere; the remedy
+ * says to copy them out (or trim them) BEFORE running `archive-quick`.
+ * Fires only when the file is MORE than 3x the target, so a file modestly
+ * over the target stays quiet.
  */
 const STATE_MD_OVERSIZE_FACTOR = 3;
 
@@ -435,8 +438,10 @@ const RULE_W031: Rule = {
         remedy: adviseRemedy(
           'Run `gsd-tools state prune` to archive old Decisions/Recently Completed entries (it does not touch the Quick Tasks table). ' +
           'For the Quick Tasks table, `gsd-tools milestone archive-quick <version>` moves the .planning/quick/ task directories into ' +
-          'milestones/<version>-quick/ and resets the table, but only when at least one task directory exists; ' +
-          'rows without a task directory (logged by /gsd-fast) have no archive command, so trim them by hand',
+          'milestones/<version>-quick/ and resets the table, but only when at least one task directory exists. ' +
+          'In a mixed table, the reset after archival also deletes rows without a task directory (logged by /gsd-fast), ' +
+          'so copy them out (or trim them) before running archive-quick. ' +
+          'When no row has a task directory, archive-quick leaves the table alone, so trim it by hand',
         ),
       },
     ];
