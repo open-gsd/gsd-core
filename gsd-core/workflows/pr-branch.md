@@ -136,9 +136,9 @@ for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${T
 # shq STR — STR shell-quoted for the printed recovery commands (branch names may hold ; $ ( ) & `).
 shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
 
-# _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout (no timeout binary); walks and checkout use TO=60.
+# _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout; walks and checkout use TO=60.
 _to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
-# picked SHA — rc 0 when analyze_commits' classification picks SHA, or the lookup fails.
+# picked SHA — rc 0 when analyze_commits would pick SHA, or its lookup fails.
 picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | tr '\0' '\n') || return 0; [ -n "$F" ] && { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; }; }
 
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for each path TIP changed
@@ -644,10 +644,10 @@ contradict default mode, which is specified to preserve structural files: a corr
 would report itself as failed on every phase that touched STATE.md, which is every phase.
 
 ```bash
-# Fail closed: an empty list passes both gates.
+# Fail closed: empty lists pass both gates.
 { DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n') &&
   DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n'); } ||
-  { echo "Cannot read $PR_BRANCH; re-run." >&2; exit 1; }
+  { git branch -qD "$PR_BRANCH"; echo "Cannot read $PR_BRANCH; deleted it, re-run." >&2; exit 1; }
 FORBIDDEN=$(echo "$DIFF_PATHS" | grep -Ec "$FORBIDDEN_RE" || true)
 PLANNING_TOTAL=$(echo "$DIFF_PATHS" | grep -c "^\.planning/" || true)
 ALLOWED=$((PLANNING_TOTAL - FORBIDDEN))

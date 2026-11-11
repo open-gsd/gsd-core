@@ -145,7 +145,8 @@ const { structuralRe, transientDirs } = readWorkflow();
 function verdicts(lists, strict) {
   const tmp = createTempDir('gsd-prpicked-');
   try {
-    lists.forEach((l, i) => fs.writeFileSync(path.join(tmp, `${i}.txt`), l.join('\n')));
+    // NUL-terminated, as `git -z --name-only` prints: the shipped `| tr '\0' '\n'` must split it.
+    lists.forEach((l, i) => fs.writeFileSync(path.join(tmp, `${i}.txt`), l.map((p) => `${p}\0`).join('')));
     const script = [
       `PR_STRICT=${strict}`,
       `STRUCTURAL_RE='${structuralRe}'`,

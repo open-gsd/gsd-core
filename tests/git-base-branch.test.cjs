@@ -2853,8 +2853,10 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
       g(['add', '-A']);
       g(['commit', '-qm', 'transient planning file']);
+      g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
       const out = runVerify(repo, `_to() { [ "$TO" = 60 ] || return 2; case "$*" in *"${cmd}"*) return 124 ;; esac; "$@"; }`);
-      assert.match(out, /Cannot read pr; re-run\./, out.slice(0, 400));
+      assert.match(out, /Cannot read pr; deleted it, re-run\./, out.slice(0, 400));
+      assert.throws(() => g(['rev-parse', '-q', '--verify', 'refs/heads/pr']), 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
       assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
     });
