@@ -2707,6 +2707,224 @@ describe('bug-967 verify key-links strict file-path contract', () => {
   });
 }
 
+// ── 7. Doc-contract guard #4946: planner Step 5 must load the shared guidance, and the guidance carries the key_links contract ──
+// Markdown prompt files are runtime contracts executed by LLM agents.
+// No per-line allow-test-rule markers needed since eslint-rules/no-source-grep.cjs inspects only .cjs/.cts/.js/.mjs/.mts/.ts source files, not markdown reads.
+describe('bug #4946: planner Step 5 must load the shared guidance, and the guidance carries the key_links contract', () => {
+  function verifyAuthoringReference(content) {
+    const step = content.match(/\*\*Step 5: Identify Key Links\*\*([\s\S]*?)<\/goal_backward>/);
+    assert.ok(step, 'planner must expose the key-link authoring block');
+    assert.match(
+      step[1],
+      /@~\/\.claude\/gsd-core\/references\/planner-guidance\.md/,
+      'key-link authoring must load the shared planner guidance',
+    );
+    assert.match(
+      step[1],
+      /`key_links` field contract \(`from`\/`to` are project-relative file paths; symbols and endpoints go in `via:`\)/,
+      'key-link authoring must name the key_links field contract (from/to are project-relative file paths; symbols and endpoints go in via:)',
+    );
+  }
+
+  function verifyGuidanceContractContent(label, content) {
+    assert.match(
+      content,
+      /### Key Links Field Contract/,
+      `${label} must include Key Links Field Contract section heading`,
+    );
+    assert.match(
+      content,
+      /\|\s*`key_links\[\]\.from`\s*\|\s*Source file \(relative path from project root\)\.\s*Describe components or symbols in `via:`\.\s*\|/i,
+      `${label} must include key_links[].from row requiring relative path from project root and symbols in via:`,
+    );
+    assert.match(
+      content,
+      /\|\s*`key_links\[\]\.to`\s*\|\s*Target file \(relative path from project root\)\.\s*Describe endpoints, APIs, or modules in `via:`\.\s*\|/i,
+      `${label} must include key_links[].to row requiring relative path from project root and endpoints in via:`,
+    );
+    assert.match(
+      content,
+      /\|\s*`key_links\[\]\.via`\s*\|\s*How they connect, including any endpoint or symbol name/i,
+      `${label} must include key_links[].via row documenting endpoint or symbol names belong in via:`,
+    );
+    assert.match(
+      content,
+      /`from:` and `to:` MUST be literal, project-relative file paths/i,
+      `${label} must specify that from: and to: must be literal, project-relative file paths`,
+    );
+    assert.match(
+      content,
+      /Never place functions, symbols.*HTTP endpoints.*in `from:` or `to:`/i,
+      `${label} must instruct never to place functions, symbols, or HTTP endpoints in from: or to:`,
+    );
+    assert.match(
+      content,
+      /All symbols, methods, and endpoints belong in `via:`/i,
+      `${label} must explicitly instruct that all symbols, methods, and endpoints belong in via:`,
+    );
+    assert.match(
+      content,
+      /@~\/\.claude\/gsd-core\/templates\/phase-prompt\.md/i,
+      `${label} must reference @~/.claude/gsd-core/templates/phase-prompt.md for complete schema`,
+    );
+  }
+
+  test('#4946: key-link authoring loads the shared field contract', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
+    verifyAuthoringReference(content);
+  });
+
+  test('#4946: a missing key-link authoring block is rejected', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
+    assert.throws(
+      () => verifyAuthoringReference(content.replace('**Step 5: Identify Key Links**', '')),
+      /planner must expose the key-link authoring block/,
+    );
+  });
+
+  test('#4946: key-link authoring without shared guidance is rejected', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
+    assert.throws(
+      () => verifyAuthoringReference(content.replaceAll('@~/.claude/gsd-core/references/planner-guidance.md', '')),
+      /key-link authoring must load the shared planner guidance/,
+    );
+  });
+
+  test('#4946: key-link authoring without the field contract is rejected', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'agents', 'gsd-planner.md'), 'utf-8');
+    verifyAuthoringReference(content);
+    const clause = '`key_links` field contract (`from`/`to` are project-relative file paths; symbols and endpoints go in `via:`)';
+    assert.throws(
+      () => verifyAuthoringReference(content.replace(clause, 'other notes')),
+      /key_links field contract/,
+    );
+  });
+
+  const guidancePath = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-guidance.md');
+  test('#4946: shared guidance states the file-path and via contracts', () => {
+    verifyGuidanceContractContent('planner-guidance.md', fs.readFileSync(guidancePath, 'utf-8'));
+  });
+
+  test('#4946: guidance rejects a missing field-contract section', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8').replace('### Key Links Field Contract', '### Other Section');
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', content), /Key Links Field Contract section heading/i);
+  });
+
+  test('#4946: guidance rejects source row without via placement', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /(\|\s*`key_links\[\]\.from`\s*\|\s*Source file \(relative path from project root\)\.\s*)Describe components or symbols in `via:`\.\s*\|/i,
+      '$1Other description.|',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /symbols in via:/i);
+  });
+
+  test('#4946: guidance rejects source row without relative paths', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace('Source file (relative path from project root)', 'Source file (any path format)');
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /from row requiring relative path from project root and symbols in via:/i);
+  });
+
+  test('#4946: guidance rejects target row without relative paths', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /\|\s*`key_links\[\]\.to`\s*\|\s*Target file \(relative path from project root\)/i,
+      '| `key_links[].to` | Target file (any path format)',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /relative path from project root and endpoints in via:/i);
+  });
+
+  test('#4946: guidance rejects target row without via placement', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace('Describe endpoints, APIs, or modules in `via:`.', 'Describe endpoints, APIs, or modules elsewhere.');
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /to row requiring relative path from project root and endpoints in via:/i);
+  });
+
+  test('#4946: guidance rejects via row without endpoint guidance', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /(\|\s*`key_links\[\]\.via`\s*\|\s*How they connect, including any )endpoint( or symbol name)/i,
+      '$1interface$2',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /endpoint or symbol names belong in via:/i);
+  });
+
+  test('#4946: guidance rejects via row without symbol guidance', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /(\|\s*`key_links\[\]\.via`\s*\|\s*How they connect, including any endpoint or )symbol( name)/i,
+      '$1component$2',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /endpoint or symbol names belong in via:/i);
+  });
+
+  test('#4946: guidance rejects callout without literal file paths', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /`from:` and `to:` MUST be literal, project-relative file paths/i,
+      '`from:` and `to:` may be arbitrary identifiers',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /literal, project-relative file paths/i);
+  });
+
+  test('#4946: guidance rejects callout allowing symbols in file fields', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /Never place functions, symbols, HTTP endpoints, or prose descriptions in `from:` or `to:`/i,
+      'Place functions and symbols anywhere',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /never to place functions, symbols, or HTTP endpoints/i);
+  });
+
+  test('#4946: guidance rejects callout without via placement', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /All symbols, methods, and endpoints belong in `via:`/i,
+      'Symbols and endpoints can be in any field',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /all symbols, methods, and endpoints belong in via:/i);
+  });
+
+  test('#4946: guidance rejects unresolvable schema pointer', () => {
+    const content = fs.readFileSync(guidancePath, 'utf-8');
+    const mutated = content.replace(
+      /@~\/\.claude\/gsd-core\/templates\/phase-prompt\.md/i,
+      'gsd-core/templates/phase-prompt.md',
+    );
+    assert.throws(() => verifyGuidanceContractContent('planner-guidance.md', mutated), /@~\/\.claude\/gsd-core\/templates\/phase-prompt\.md/i);
+  });
+
+  test('#4946: guidance from/to rows match phase-prompt and the via row is a prefix', () => {
+    const guidance = fs.readFileSync(guidancePath, 'utf-8');
+    const template = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'templates', 'phase-prompt.md'), 'utf-8');
+
+    function fieldRow(content, field) {
+      const row = content.split('\n').find((line) => {
+        const trimmed = line.trim();
+        return trimmed.startsWith('|') && trimmed.includes('`' + field + '`');
+      });
+      assert.ok(row, `missing ${field} table row`);
+      return row.trim();
+    }
+
+    assert.equal(fieldRow(guidance, 'key_links[].from'), fieldRow(template, 'key_links[].from'));
+    assert.equal(fieldRow(guidance, 'key_links[].to'), fieldRow(template, 'key_links[].to'));
+
+    // The guidance via row ends its shortened sentence where phase-prompt.md continues into an example.
+    const guidanceVia = fieldRow(guidance, 'key_links[].via');
+    const templateVia = fieldRow(template, 'key_links[].via');
+    const guidanceViaPrefix = guidanceVia.replace(/\.\s*\|\s*$/, '');
+    assert.ok(
+      templateVia.startsWith(guidanceViaPrefix),
+      'guidance key_links[].via row must be a prefix of the phase-prompt via row',
+    );
+    assert.ok(
+      templateVia.length > guidanceVia.length,
+      'phase-prompt via row must continue past the shortened guidance via row',
+    );
+  });
+});
+
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-2446-milestones-drift.test.cjs — consolidation epic #1969 (B3 #1972)
 // ────────────────────────────────────────────────────────────────────────
