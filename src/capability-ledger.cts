@@ -190,7 +190,7 @@ function readSmallRegularFile(filePath: string, maxBytes: number, options: ReadS
 function readSmallRegularFileBuffer(filePath: string, maxBytes: number, options: ReadSmallOptions = {}): Buffer | null {
   // O_RDONLY | O_NONBLOCK: never block on opening a FIFO/device — return the fd so fstat can reject it.
   // strict: refuse a symlink (lstat, because O_NOFOLLOW is 0 on Windows; O_NOFOLLOW at open is the race backstop).
-  const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (options.strict ? fs.constants.O_NOFOLLOW : 0);
+  const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOCTTY || 0) | (options.strict ? fs.constants.O_NOFOLLOW : 0);
   let fd: number;
   try {
     if (options.strict && fs.lstatSync(filePath).isSymbolicLink()) {

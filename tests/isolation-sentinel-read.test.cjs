@@ -133,10 +133,13 @@ describe('#5758 readSentinel: object-identity re-checks after the open', () => {
   });
 
   /** Stats-shaped copy of the real lstat of `p`, with `patch` applied. */
-  function patched(p, patch) {
-    const st = realLstat.call(fs, p);
+  function patched(p, patch, rest) {
+    const st = realLstat.call(fs, p, ...rest);
     return Object.assign(Object.create(Object.getPrototypeOf(st)), st, patch);
   }
+
+  /** `ino` one higher, in the same numeric type the caller asked for ({ bigint: true } gives bigint). */
+  const nextIno = (st) => ({ ino: typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1 });
 
   /** Make the Nth and later lstat calls for `target` answer `patchFor(target)`. */
   function swapAfter(target, calls, patch) {
@@ -144,7 +147,7 @@ describe('#5758 readSentinel: object-identity re-checks after the open', () => {
     mock.method(fs, 'lstatSync', (p, ...rest) => {
       if (path.resolve(String(p)) !== target) return realLstat.call(fs, p, ...rest);
       seen += 1;
-      return seen > calls ? patched(p, patch(realLstat.call(fs, p))) : realLstat.call(fs, p, ...rest);
+      return seen > calls ? patched(p, patch(realLstat.call(fs, p, ...rest)), rest) : realLstat.call(fs, p, ...rest);
     });
   }
 
@@ -155,7 +158,7 @@ describe('#5758 readSentinel: object-identity re-checks after the open', () => {
 
   test('a parent directory whose identity changes between the check and the open reads as absent', () => {
     h.writeFileAt(root, h.LEGACY_REL, JSON.stringify(h.validBody()));
-    swapAfter(path.join(root, '.gsd'), 1, (st) => ({ ino: st.ino + 1 }));
+    swapAfter(path.join(root, '.gsd'), 1, nextIno);
     assert.deepEqual(readSentinel(root), { present: false });
   });
 
@@ -167,7 +170,7 @@ describe('#5758 readSentinel: object-identity re-checks after the open', () => {
 
   test('a file that is not the object the pre-open lstat saw reads as absent', () => {
     h.writeFileAt(root, h.LEGACY_REL, JSON.stringify(h.validBody()));
-    swapAfter(path.join(root, h.LEGACY_REL), 0, (st) => ({ ino: st.ino + 1 }));
+    swapAfter(path.join(root, h.LEGACY_REL), 0, nextIno);
     assert.deepEqual(readSentinel(root), { present: false });
   });
 });
