@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 317,
+  "count": 323,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 44,
+    "SEAM": 50,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1257,6 +1257,26 @@
       "value": "the config-key four-level precedence walk (loadConfig result → workstream config.json → root config.json → registry.configSchema default → absent), owned solely by src/capability-activation.cts"
     },
     {
+      "id": "SEAM.criterion-baseline.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/criterion-baseline.test.cjs"
+    },
+    {
+      "id": "SEAM.criterion-baseline.owns",
+      "klass": "SEAM",
+      "value": "the [HEAD=… EXPECT…] notation grammar, its comparison kernel, and the plan-criteria-allow marker parser (#4309, ADR-4309)"
+    },
+    {
+      "id": "SEAM.criterion-replay.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/criterion-replay.test.cjs"
+    },
+    {
+      "id": "SEAM.criterion-replay.owns",
+      "klass": "SEAM",
+      "value": "opt-in replay of criterion baseline commands under the no-shell argv quarantine, and its observed-value derivation (#4310, ADR-4310)"
+    },
+    {
       "id": "SEAM.evaluation-scope.enforced-by",
       "klass": "SEAM",
       "value": "test:tests/evaluation-scope-drift-lint.test.cjs"
@@ -1397,6 +1417,16 @@
       "value": "phaseStatus(phaseDir, deps?) / phaseStatusFromFacts(...) is the single canonical owner of \"what state is phase P in?\" (ADR-5057 §2, epic #5056)"
     },
     {
+      "id": "SEAM.project-context.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/project-context.test.cjs"
+    },
+    {
+      "id": "SEAM.project-context.owns",
+      "klass": "SEAM",
+      "value": "Project Context Module — resolveProjectContext, legacyDispatchCwd, walkUpForPlanning; the only code that resolves which root a process acts in (projectRoot, planningRoot, worktreeRoot, repoRoot, gitCommonDir, isLinkedWorktree, provenance) (ADR-4908, #6043)"
+    },
+    {
       "id": "SEAM.runtime-descriptor-owner.enforced-by",
       "klass": "SEAM",
       "value": "test:tests/runtime-descriptor-owner.test.cjs"
@@ -1454,7 +1484,7 @@
     {
       "id": "SEAM.worktree-safety-policy.owns",
       "klass": "SEAM",
-      "value": "Worktree Safety Policy Module — resolveWorktreeContext, parseWorktreePorcelain, planWorktreePrune, executeWorktreePrunePlan, W017 classification (see WORKTREE.SEAM.* above for full interface/invariant detail)"
+      "value": "Worktree Safety Policy Module — parseWorktreePorcelain, planWorktreePrune, executeWorktreePrunePlan, W017 classification (see WORKTREE.SEAM.* above for full interface/invariant detail)"
     },
     {
       "id": "SESSION.2026-05-05",
@@ -1579,7 +1609,7 @@
     {
       "id": "WORKTREE.SEAM.interface",
       "klass": "WORKTREE",
-      "value": "[resolveWorktreeContext, parseWorktreePorcelain, planWorktreePrune, executeWorktreePrunePlan, planWorktreeRecordAgent, cmdWorktreeRecordAgent]"
+      "value": "[parseWorktreePorcelain, planWorktreePrune, executeWorktreePrunePlan, planWorktreeRecordAgent, cmdWorktreeRecordAgent]"
     },
     {
       "id": "WORKTREE.SEAM.invariant",
@@ -1604,7 +1634,7 @@
     {
       "id": "WORKTREE.SEAM.test-anchors",
       "klass": "WORKTREE",
-      "value": "[resolveWorktreeContext:has_local_planning|linked_worktree|not_git_repo|main_worktree, planWorktreePrune:git_list_failed|worktrees_present|no_worktrees|parser_throw_fallback, executeWorktreePrunePlan:missing_plan|skip_passthrough|unsupported_action|metadata_prune_only]"
+      "value": "[planWorktreePrune:git_list_failed|worktrees_present|no_worktrees|parser_throw_fallback, executeWorktreePrunePlan:missing_plan|skip_passthrough|unsupported_action|metadata_prune_only]"
     },
     {
       "id": "WORKTREE.SEAM.test-policy",

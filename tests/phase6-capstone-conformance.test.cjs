@@ -30,7 +30,7 @@ const { escapeRegex: escapeRegExp } = require('../gsd-core/bin/lib/pattern.cjs')
  * QUICK_SPAWN_TIMEOUT_MS and epic #4445 batch 13's
  * TASK_RESOLVER_INVOKE_TIMEOUT_MS, but describes neither of those
  * operations -- kept local. Also distinct from
- * LOOP_HOOK_POINT_CLI_TIMEOUT_MS (60000ms), whose own doc comment lists
+ * LOOP_HOOK_POINT_CLI_TIMEOUT_MS (80000ms), whose own doc comment lists
  * `check <check-id>` as one of its representative verbs at a heavier
  * bound -- this site's pre-existing value (10000ms) was not bench-
  * remeasured against that class norm and is preserved as-is, not

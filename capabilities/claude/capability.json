@@ -117,6 +117,7 @@
       "hyphenNameAgentBody": true,
       "skipCompactAgents": true,
       "omitBashRunnerOnWindows": true,
+      "powershellHooksOnWindows": true,
       "specRootSkillPass": true,
       "restoreAtRefTildeInAgents": true,
       "restoreAtRefTildeInSpecTree": true,
