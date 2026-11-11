@@ -1090,20 +1090,6 @@ describe('#6034: antigravity default follows the sandboxed home (probe reads the
   });
 });
 
-describe('#6034: an ambient CLAUDE_CONFIG_DIR cannot reach a default-path test', () => {
-  // The file-level hook scrubs config-location variables before every test, so a
-  // variable exported BEFORE the scrub (the ambient case) is gone by test time.
-  // This test models the ambient case by exporting, scrubbing again, and
-  // asserting the default; the restorer returns the env to its prior state.
-  test('claude default ignores an ambient CLAUDE_CONFIG_DIR', (t) => {
-    process.env.CLAUDE_CONFIG_DIR = '/ambient/should/not/win';
-    const restore = scrubConfigLocationEnv();
-    t.after(restore);
-    t.after(() => { delete process.env.CLAUDE_CONFIG_DIR; });
-    assert.strictEqual(getGlobalConfigDir('claude'), path.join(HOME, '.claude'));
-  });
-});
-
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-3126-global-skills-base-runtime-path.test.cjs — consolidation epic #1969 (B3 #1972)
 // ────────────────────────────────────────────────────────────────────────

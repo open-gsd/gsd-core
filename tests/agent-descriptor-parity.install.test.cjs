@@ -92,7 +92,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { cleanup, createTempDir, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
+const { cleanup, createTempDir, sandboxHome, scrubConfigLocationEnv, parseFrontmatter } = require('./helpers.cjs');
 const { createHermeticRoot } = require('./helpers/isolated-env.cjs');
 
 // #6034 (epic #4635 Phase 2; #4613): the real pipeline reads agent_tools from the
@@ -431,12 +431,19 @@ function plantProjectConfig(targetDir, config) {
   fs.writeFileSync(path.join(targetDir, '.planning', 'config.json'), JSON.stringify(config));
 }
 
+// The granted tools of one generated agent file, as a trimmed list read from its
+// parsed frontmatter `tools` field (an agent with no `tools` line yields []).
+function toolsOf(content) {
+  const { tools } = parseFrontmatter(content);
+  return typeof tools === 'string' ? tools.split(',').map((tool) => tool.trim()).filter(Boolean) : [];
+}
+
 test('agent-descriptor-parity: oracle models agent_tools: home grant', () => {
   plantHomeAgentTools({ '*': ['mcp__proof__*'] });
   const { expected, actual } = comparePipelines('claude', 'global');
   assertMapsIdentical(expected, actual);
   for (const name of ['gsd-planner.md', 'gsd-plan-checker.md']) {
-    assert.ok(expected.get(name).includes('mcp__proof__*'), `${name}: the home grant must appear in the oracle output (non-vacuous)`);
+    assert.ok(toolsOf(expected.get(name)).includes('mcp__proof__*'), `${name}: the home grant must appear in the oracle output (non-vacuous)`);
   }
 });
 
@@ -447,11 +454,11 @@ test('agent-descriptor-parity: oracle models agent_tools: home + project merge',
   });
   assertMapsIdentical(expected, actual);
   assert.ok(
-    expected.get('gsd-plan-checker.md').includes('mcp__proof_project__*'),
+    toolsOf(expected.get('gsd-plan-checker.md')).includes('mcp__proof_project__*'),
     'the project grant must appear on the agent it targets (non-vacuous)',
   );
   assert.ok(
-    !expected.get('gsd-planner.md').includes('mcp__proof_project__*'),
+    !toolsOf(expected.get('gsd-planner.md')).includes('mcp__proof_project__*'),
     'the project grant for gsd-plan-checker must not leak onto gsd-planner',
   );
 });
@@ -463,7 +470,7 @@ test('agent-descriptor-parity: oracle models agent_tools: empty project override
   });
   assertMapsIdentical(expected, actual);
   for (const [name, content] of expected) {
-    assert.ok(!content.includes('mcp__proof__*'), `${name}: an empty project agent_tools must blank the home grant`);
+    assert.ok(!toolsOf(content).includes('mcp__proof__*'), `${name}: an empty project agent_tools must blank the home grant`);
   }
 });
 
@@ -481,6 +488,7 @@ test('agent-descriptor-parity: an agent with no tools line is unchanged by a gra
   const actual = runRealDescriptorPath('claude', 'global', targetDir, ctx);
   assert.equal(expected.size, 1, 'fixture must produce one oracle file');
   assertMapsIdentical(expected, actual);
+  assert.deepEqual(toolsOf(expected.get('gsd-notools.md')), [], 'an agent with no tools line must gain no tools from the grant');
 });
 
 // ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { createTempDir, createTempProject, cleanup, parseFrontmatter } = require('./helpers.cjs');
+const { createTempDir, createTempProject, cleanup, parseFrontmatter, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const pkg = require('../package.json');
 
@@ -112,37 +112,13 @@ describe('getDirName — all runtimes', () => {
 });
 
 describe('getGlobalConfigDir — all runtimes default paths', () => {
-  // Derive env-var list from the registry so it stays auto-correct when new
-  // runtimes are added. GROK_AGENTS_HOME is kept explicitly because grok has
-  // no registry entry.
-  const { runtimes: _registryRuntimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
-  const _registryEnvKeys = Object.values(_registryRuntimes).flatMap((r) => {
-    const ch = r.runtime?.configHome;
-    if (!ch) return [];
-    const envs = Array.isArray(ch.env) ? ch.env : [];
-    const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
-    return [...envs, ...skillsEnvs];
-  });
-  const ENV_KEYS = [...new Set([..._registryEnvKeys, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
-  let savedEnv = {};
-
-  beforeEach(() => {
-    for (const key of ENV_KEYS) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
-    }
-  });
-
-  afterEach(() => {
-    for (const key of ENV_KEYS) {
-      if (savedEnv[key] !== undefined) process.env[key] = savedEnv[key];
-      else delete process.env[key];
-    }
-  });
-
   for (const runtime of allRuntimes.filter(runtime => runtime !== 'kimi')) {
-    test(`getGlobalConfigDir('${runtime}') returns expected home-relative path`, () => {
-      const expected = path.join(os.homedir(), RUNTIME_META[runtime].globalSuffix);
+    test(`getGlobalConfigDir('${runtime}') returns expected home-relative path`, (t) => {
+      const home = createTempDir('gsd-default-paths-home-');
+      t.after(() => cleanup(home));
+      sandboxHome(t, home);
+      t.after(scrubConfigLocationEnv());
+      const expected = path.join(home, RUNTIME_META[runtime].globalSuffix);
       assert.strictEqual(getGlobalConfigDir(runtime), expected);
     });
   }
