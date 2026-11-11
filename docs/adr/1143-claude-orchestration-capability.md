@@ -54,6 +54,8 @@ Net effect on Claude Code: **wave parallelism, the plan-checker, and the verifie
 
 ### 2. Registration at ADR-857 loop extension points
 
+> **Superseded.** Loop registration is replaced by the 2026-09-14 amendment (the `execute:wave:*` contribution is removed), and activation gating by the 2026-11-08 amendment (kill switches, not an Agent SDK version). Both are at the end of this ADR.
+
 The capability registers hooks at `execute:wave:pre`, `execute:wave:post`, and `execute:post`, resolved through `gsd_run loop render-hooks <point>`. Activation is gated by:
 
 - **Runtime/tool detection** — the active runtime must actually expose the Workflow tool (Claude Code / Agent SDK ≥ the pinned minimum). Detection miss → no-op.
@@ -175,3 +177,57 @@ Proposed" audit above already records that the end-to-end path has never been ex
 
 Wiring it properly needs a **host-level mechanism** for a capability to alter the orchestrator's
 own dispatch procedure. That does not exist today and is not proposed here.
+
+## Amendment (2026-11-08): re-grounded against documented Workflow behavior
+
+Issue [#4747](https://github.com/open-gsd/gsd-core/issues/4747).
+
+Decision §1, §2 and the amendments above are **historical record and are not rewritten**; this
+section supersedes them where they conflict. Sources: Claude Code's
+[workflows](https://code.claude.com/docs/en/workflows),
+[settings](https://code.claude.com/docs/en/settings) and
+[managed settings](https://code.claude.com/docs/en/managed-settings) pages, and the bundled
+`/workflow-authoring` reference, all read 2026-11-08.
+
+**1. Availability is not an Agent SDK version.** Claude Code documents dynamic workflows as
+available on all paid plans, with Anthropic API access, and on Amazon Bedrock, Google Cloud's
+Agent Platform and Microsoft Foundry, with a per-user toggle on Pro. They shipped as a research
+preview in Claude Code v2.1.154 and broadened later, so the surface is still allowed to change. The
+installed `@anthropic-ai/claude-agent-sdk` version says nothing about any of that, so the
+SDK-version gates are removed from `detectWorkflowBackend`. They are replaced by the documented
+kill switches, which a tool outside Claude Code *can* read: `CLAUDE_CODE_DISABLE_WORKFLOWS`, and
+`disableWorkflows: true` / `enableWorkflows: false` in managed, project-local, project or user
+settings, resolved with Claude Code's own precedence. Fail-closed is unchanged: an unreadable
+settings file, or a non-boolean value for either key, resolves to inline. Plan tier, the Pro
+toggle, `--settings` and non-file managed sources cannot be observed and are documented as such.
+`claude_orchestration.min_agent_sdk_version` stays declared, deprecated, and ignored, so existing
+configs still load.
+
+**2. The `ultracode` keyword is not a route for GSD.** The keyword starts a workflow only from
+input a person types. It does not from a `-p` prompt, an Agent SDK prompt not stamped as human
+input, a scheduled task, or relayed webhook or pull-request text. GSD's orchestrator is not a
+person typing, so the only route is a direct Workflow tool call — which is what
+`emitWorkflowScript` produces. Do not re-attempt the keyword route.
+
+**3. Resume is same-session, and harsher than the Decision table implies.** `resumeFromRunId`
+resumes a run within the same Claude Code session. A new session cannot relaunch an earlier run
+except by restarting the old session with `claude --resume`. On relaunch a failed agent runs again,
+and so does every agent the script started after it. The "Resume / `gsd-undo`" row of Decision §1
+therefore cannot back a cross-session `gsd-undo`.
+
+**4. Emission enforces the documented hard caps.** `emitWorkflowScript` rejects a manifest that
+would put more than 4,096 plans in one `parallel()` call or more than 1,000 agents in one run, and
+names the cap. Both are runtime rejections today, which the orchestrator would see as an opaque
+failure. The 16-agent concurrency default (raisable with
+`CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`), `workflowSizeGuideline` and the 25-agent
+`Large workflow` warning are advisory and are documented, not enforced.
+
+**5. Worktree metadata comes back as structured output.** A worktree plan's `agent()` call carries
+a JSON Schema for `{agent_id, worktree_path, branch, expected_base}`, so Claude Code validates the
+executor's reply (retrying up to five times) instead of the script regexing a `<worktree_metadata>`
+block out of prose. Each thunk catches its own failure, so the returned entry is
+`{plan, expects_worktree, metadata, error}`: a failed agent keeps its error text, and its siblings
+still return. `metadata: null` on a worktree plan remains the #3302 halt condition.
+
+**Not changed:** the backend still has no loop dispatch path (2026-09-14 amendment). Which route
+should wire it is a separate decision, outside this amendment.

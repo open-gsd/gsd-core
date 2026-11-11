@@ -2,7 +2,7 @@
 
 <purpose>
 
-Drive milestone phases autonomously — all remaining phases, a range via `--from N`/`--to N`, or a single phase via `--only N`. For each incomplete phase: discuss → plan → execute using Skill() flat invocations. When `--converge` or `--cross-ai` is set, route the planning step through plan-review convergence before execution. Pauses only for explicit user decisions (grey area acceptance, blockers, validation requests). Re-reads ROADMAP.md after each phase to catch dynamically inserted phases.
+Drive milestone phases autonomously — all remaining phases, a range via `--from N`/`--to N`, or a single phase via `--only N`. For each incomplete phase: discuss → plan → execute using Skill() flat invocations. When `--converge` or `--cross-ai` is set, route the planning step through plan-review convergence before execution. Pauses only for explicit user decisions (grey areas that need the user, blockers, validation requests). Re-reads ROADMAP.md after each phase to catch dynamically inserted phases.
 
 </purpose>
 
@@ -311,7 +311,7 @@ The discuss step in `--auto` mode MUST NOT loop. If CONTEXT.md already exists af
 Skill(skill="gsd-discuss-phase", args="${PHASE_NUM}")
 ```
 
-**If `INTERACTIVE` is NOT set:** Execute the smart_discuss step for this phase (batch table proposals, auto-optimized).
+**If `INTERACTIVE` is NOT set:** Execute the smart_discuss step for this phase (classified grey-area questions).
 
 After discuss completes (either mode), verify context was written:
 
@@ -573,7 +573,7 @@ Display the review result summary and score from UI-REVIEW.md if produced. Conti
 
 > Full instructions are in `gsd-core/references/autonomous-smart-discuss.md`. Read that file now and follow it exactly.
 
-Smart discuss is an autonomous-optimized variant of `gsd-discuss-phase`. It proposes grey area answers in batch tables — the user accepts or overrides per area — and writes an identical CONTEXT.md to what discuss-phase produces.
+Smart discuss is an autonomous-optimized variant of `gsd-discuss-phase`. It auto-decides reversible technical questions (logged), asks the rest (preference questions neutrally), and writes CONTEXT.md and DISCUSSION-LOG.md.
 
 **Inputs:** `PHASE_NUM` from execute_phase.
 
@@ -802,7 +802,7 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 
 <success_criteria>
 - [ ] All incomplete phases executed in order (smart discuss → ui-phase → plan → execute → ui-review each)
-- [ ] Smart discuss proposes grey area answers in tables, user accepts or overrides per area
+- [ ] Smart discuss auto-decides reversible technical questions and asks the rest
 - [ ] Progress banners displayed between phases
 - [ ] Execute-phase invoked with --no-transition (autonomous manages transitions)
 - [ ] Post-execution verification reads VERIFICATION.md and routes on status

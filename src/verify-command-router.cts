@@ -18,7 +18,7 @@ const { routeCheckCommand } = checkCommandRouter;
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface VerifyModule {
-  cmdVerifyPlanStructure(cwd: string, phase: string | undefined, raw: boolean): void;
+  cmdVerifyPlanStructure(cwd: string, phase: string | undefined, raw: boolean, opts?: { replay?: boolean }): void;
   cmdVerifyPhaseCompleteness(cwd: string, phase: string | undefined, raw: boolean): void;
   cmdVerifyReferences(cwd: string, phase: string | undefined, raw: boolean): void;
   cmdVerifyCommits(cwd: string, args: string[], raw: boolean): void;
@@ -44,7 +44,12 @@ function routeVerifyCommand({ verify, args, cwd, raw, error }: RouteVerifyComman
     error,
     unknownMessage: (_subcommand: string, available: string[]) => `Unknown verify subcommand. Available: ${available.join(', ')}`,
     handlers: {
-      'plan-structure': () => verify.cmdVerifyPlanStructure(cwd, args[2], raw),
+      'plan-structure': () => {
+        const rest = args.slice(2);
+        const replay = rest.includes('--replay');
+        const positional = rest.filter((a) => a !== '--replay');
+        verify.cmdVerifyPlanStructure(cwd, positional[0], raw, { replay });
+      },
       'phase-completeness': () => verify.cmdVerifyPhaseCompleteness(cwd, args[2], raw),
       references: () => verify.cmdVerifyReferences(cwd, args[2], raw),
       commits: () => verify.cmdVerifyCommits(cwd, args.slice(2), raw),
