@@ -770,7 +770,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runNode: runNodeSeam } = require('./helpers/process-seam.cjs');
+const { runNode: runNodeSeam, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const { ERROR_REASON } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'io.cjs'));
@@ -802,9 +802,9 @@ describe('bug-2943: config-get returns schema default for context_window', () =>
     // observed worst case (13.5s) with headroom.
     const r = runNodeSeam(args, { timeoutMs: PROBE_TIMEOUT_MS });
     // The legacy try/catch turned a timeout into exit 1 with empty output; assert
-    // the outcome so a timeout never reads as a plain exit-code mismatch.
-    assert.notEqual(r.timedOut, true, `config-get timed out: ${r.summary}`);
-    const exitCode = r.exitCode ?? 1;
+    // the outcome so a timeout or spawn failure never reads as a plain exit-code mismatch.
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    const exitCode = r.exitCode;
     const stdout = r.stdout;
     const stderr = r.stderr;
     return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };

@@ -988,7 +988,7 @@ describe('api-coverage CLI — STDIN + exit codes', () => {
       timeoutMs: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
-    return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr };
+    return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
   }
 
   test('exit 0 + JSON IR when integration detected', () => {

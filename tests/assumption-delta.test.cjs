@@ -16,6 +16,7 @@ const path = require('node:path');
 const { exitCodeFor } = require('../gsd-core/bin/lib/exit-code-registry.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'assumption-delta.cjs');
 
@@ -187,7 +188,7 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
       timeoutMs: PROBE_TIMEOUT_MS,
     });
     assert.strictEqual(res.outcome, OUTCOME.EXITED, res.summary);
-    return { status: res.exitCode, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+    return toLegacyResult(res);
   }
 
   test('exit 0 when a pluralization signal is present', () => {

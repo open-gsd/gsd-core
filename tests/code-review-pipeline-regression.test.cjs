@@ -4372,12 +4372,12 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
       env: { ...process.env, ...env },
       timeoutMs: PROBE_TIMEOUT_MS,
     });
-    if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+    // A timeout, kill or spawn failure has no status; reject it rather than return a null status.
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    if (r.exitCode === 0) {
       return { status: 0, stdout: r.stdout.trim(), stderr: '' };
     }
-    // A timeout or spawn failure has no status; the outcome summary names it in stderr.
-    const stderr = r.outcome === OUTCOME.EXITED ? r.stderr.trim() : `${r.summary}\n${r.stderr}`.trim();
-    return { status: r.exitCode, stdout: r.stdout.trim(), stderr };
+    return { status: r.exitCode, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
   }
 
   const stepLines = splitLines(fs.readFileSync(DISPOSITION_STEP_PATH, 'utf8'));

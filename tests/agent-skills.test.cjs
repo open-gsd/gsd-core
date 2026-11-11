@@ -2147,11 +2147,14 @@ describe('regressions: workflows forward the started workstream to agent-skills 
 
   // Linux/Windows benches may have no zsh, and a Windows `bash` can resolve to a
   // WSL shim without node: probe for the exact capabilities the scripts need.
+  // `sh -c <script>` through the process seam; runHook takes the `-c` flag as its target.
+  const runShellScript = (sh, script, opts = {}) => runHook('-c', [script], {
+    interpreter: sh, timeoutMs: PROBE_TIMEOUT_MS, ...opts,
+  });
+  // Availability probe: a missing shell (SPAWN_FAILED) means "unavailable", not a failure.
   const shellUsable = (sh) => {
     if (process.platform === 'win32') return false;
-    const probe = runHook('-c', ['command -v sed >/dev/null && command -v node >/dev/null'], {
-      interpreter: sh, timeoutMs: PROBE_TIMEOUT_MS,
-    });
+    const probe = runShellScript(sh, 'command -v sed >/dev/null && command -v node >/dev/null');
     return probe.outcome === OUTCOME.EXITED && probe.exitCode === 0;
   };
   const shells = ['bash', 'zsh'].filter(shellUsable);
@@ -2164,16 +2167,16 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     const { validateWorkstreamName } = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
     for (const name of ['a', 'ws-a', 'backend_api', 'v1.2', 'A9']) {
       assert.ok(validateWorkstreamName(name), `${name} is valid under the policy`);
-      const r = runHook('-c', [`${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        interpreter: 'bash', env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, timeoutMs: PROBE_TIMEOUT_MS,
+      const r = runShellScript('bash', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`, {
+        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` },
       });
       assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, `--ws ${name}`);
     }
     for (const name of ['-x', '.x', '_x']) {
       assert.ok(!validateWorkstreamName(name), `${name} is invalid under the policy`);
-      const r = runHook('-c', [`${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        interpreter: 'bash', env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, timeoutMs: PROBE_TIMEOUT_MS,
+      const r = runShellScript('bash', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`, {
+        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` },
       });
       assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, '', `${name} must not be captured`);
@@ -2187,10 +2190,8 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     describe(`flag parse and expansion under ${sh}`, () => {
       function expand(argumentsValue) {
         const script = `${CANONICAL_PARSE}\nset -- ${FLAG_EXPANSION}\nprintf '%s|%s' "$#" "$*"`;
-        const r = runHook('-c', [script], {
-          interpreter: sh,
+        const r = runShellScript(sh, script, {
           env: { ...process.env, GSD_ARGS: argumentsValue },
-          timeoutMs: PROBE_TIMEOUT_MS,
         });
         assertSeamExit(assert, r, 0, r.stderr);
         return r.stdout;
@@ -2243,8 +2244,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     }
 
     function exec(sh, { script, argumentsValue }, printVars) {
-      const r = runHook('-c', [`${script}\n${printVars}`], {
-        interpreter: sh,
+      const r = runShellScript(sh, `${script}\n${printVars}`, {
         cwd: proj,
         env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
         timeoutMs: PROBE_TIMEOUT_MS * 4,
@@ -2284,8 +2284,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     test('--ws none is forwarded and fails loudly (reserved name), never resolving workstreams/none', (t) => {
       if (!shells.includes('bash')) return t.skip('no usable bash on this platform');
       const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
-      const r = runHook('-c', [`${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
-        interpreter: 'bash',
+      const r = runShellScript('bash', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`, {
         cwd: proj,
         env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
         timeoutMs: PROBE_TIMEOUT_MS * 4,

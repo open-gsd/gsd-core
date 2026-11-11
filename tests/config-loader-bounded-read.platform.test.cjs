@@ -2780,7 +2780,7 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
       ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
     const child = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
 
-    assert.notStrictEqual(child.outcome, OUTCOME.TIMED_OUT, `the prune must not hang on a FIFO (${child.summary})`);
+    assert.strictEqual(child.outcome, OUTCOME.EXITED, `the prune must exit on a FIFO, not hang, die or fail to spawn (${child.summary})`);
     assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
   });
@@ -2794,7 +2794,7 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
         `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: ${dryRun}, silent: true }, true);`;
       const child = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
 
-      assert.notStrictEqual(child.outcome, OUTCOME.TIMED_OUT, `the prune must not hang on a FIFO (${child.summary})`);
+      assert.strictEqual(child.outcome, OUTCOME.EXITED, `the prune must exit on a FIFO, not hang, die or fail to spawn (${child.summary})`);
       assert.notStrictEqual(child.exitCode, 0, 'the prune fails');
       assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
     });
@@ -2806,7 +2806,7 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
     const script = `require(${JSON.stringify(STATE_LIB_PATH)}).cmdStateUpdate(${JSON.stringify(tmpDir)}, 'Status', 'x');`;
     const child = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
 
-    assert.notStrictEqual(child.outcome, OUTCOME.TIMED_OUT, `the command must not hang on a FIFO (${child.summary})`);
+    assert.strictEqual(child.outcome, OUTCOME.EXITED, `the command must exit on a FIFO, not hang, die or fail to spawn (${child.summary})`);
     assert.notStrictEqual(child.exitCode, 0, 'the command fails');
     assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
   });

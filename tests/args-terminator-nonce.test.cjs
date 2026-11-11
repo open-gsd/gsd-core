@@ -38,8 +38,15 @@ const CAPTURE = [
   "GSD_ARGS=${GSD_ARGS%$'\\n'}",
 ];
 const FENCE = ['```bash', ...CAPTURE, 'printf "%s" "$GSD_ARGS"', '```'].join('\n');
+
+/** Run `shell` with `argv` (e.g. ['-c', script]). runHook places its target first in argv, so argv[0] is passed as the target. */
+function runShell(shell, argv, opts = {}) {
+  return runHook(argv[0], argv.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS, ...opts });
+}
+
+// Availability probe: a missing shell (SPAWN_FAILED) means "unavailable", not a failure.
 const SHELLS = ['bash', 'zsh'].filter((sh) => {
-  const probe = runHook('--version', [], { interpreter: sh, timeoutMs: PROBE_TIMEOUT_MS });
+  const probe = runShell(sh, ['--version']);
   return probe.outcome === OUTCOME.EXITED && probe.exitCode === 0;
 });
 
@@ -57,8 +64,8 @@ function runStamped(shell, fenceText, typed) {
   try {
     const script = fenceBody(fenceText).map((l) => (l === '$ARGUMENTS' ? typed : l)).join('\n');
     const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
-    const r = runHook(args[0], args.slice(1), { interpreter: shell, cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
-    assert.notStrictEqual(r.outcome, OUTCOME.TIMED_OUT, r.summary);
+    const r = runShell(shell, args, { cwd: dir });
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     const stdout = String(r.stdout || '');
     return { stdout, canary: fs.existsSync(path.join(dir, 'CANARY')) };
   } finally {

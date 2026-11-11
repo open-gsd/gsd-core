@@ -454,7 +454,7 @@ describe('verify context-drift CLI', () => {
       timeoutMs: PROBE_TIMEOUT_MS,
       env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '' },
     });
-    assert.notStrictEqual(r.outcome, OUTCOME.TIMED_OUT, `the child must not time out: ${r.summary}`);
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     const data = JSON.parse(r.stdout);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phases-dir-unreadable', 'the unreadable arm, not the documented skip (no-phases-directory)');

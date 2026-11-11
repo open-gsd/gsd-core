@@ -73,8 +73,8 @@ function runStep0(t, { branch, sequential, linkedWorktree = true, protectedBranc
     'printf "GUARD_PASSED\\n"',
   ].join('\n'), { mode: 0o755 });
   const r = runHook(script, [], { interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
-  // A timeout must not read as a bare exit-status mismatch (status null) in the callers.
-  assert.notEqual(r.outcome, OUTCOME.TIMED_OUT, `guard script timed out: ${r.summary}`);
+  // A timeout or spawn failure must not read as a bare exit-status mismatch (status null) in the callers.
+  assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
   return toLegacyResult(r);
 }
 

@@ -152,11 +152,72 @@ describe('census and classification', () => {
       assert.deepEqual(r.excludedSites.map((x) => x.kind), ['EXEMPT']);
     });
 
-    test('a resolution of an exclusion kind with a missing, empty or blank reason throws; an unknown kind throws', () => {
+    const CLASSIFIED = { file: 'tests/spawner.test.cjs', callee: 'projection.execArgvQuarantined', cls: 'SEAM', resolvedCallee: 'runNode', note: 'forwarded' };
+    const NAMED = /resolution tests\/spawner\.test\.cjs projection\.execArgvQuarantined: /;
+
+    test('rule a: a resolution that sets both kind and cls throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, cls: 'SEAM' }]), new RegExp(NAMED.source + 'sets both kind and cls'));
+    });
+
+    test('rule b: a resolution that sets neither kind nor cls throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ file: UNDER_TEST.file, callee: UNDER_TEST.callee }]), new RegExp(NAMED.source + 'sets neither kind nor cls'));
+    });
+
+    test('rule c: an unknown kind throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, kind: 'BOGUS' }]), new RegExp(NAMED.source + 'unknown kind'));
+    });
+
+    test('rule d: a kind resolution with a missing, empty or blank reason throws, naming file and callee', () => {
       for (const reason of [undefined, '', '   ']) {
-        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, reason }]), /requires a non-empty reason/);
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, reason }]), new RegExp(NAMED.source + 'kind UNDER_TEST requires a non-empty reason'));
       }
-      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, kind: 'BOGUS' }]), /unknown kind/);
+    });
+
+    test('rule e: an unknown cls throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...CLASSIFIED, cls: 'BOGUS' }]), new RegExp(NAMED.source + 'unknown cls'));
+    });
+
+    test('rule f: a cls resolution with a missing, empty or blank resolvedCallee or note throws, naming file and callee', () => {
+      for (const v of [undefined, '', '   ']) {
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...CLASSIFIED, resolvedCallee: v }]), new RegExp(NAMED.source + 'cls SEAM requires a non-empty resolvedCallee'));
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...CLASSIFIED, note: v }]), new RegExp(NAMED.source + 'cls SEAM requires a non-empty note'));
+      }
+    });
+
+    test('a well-formed kind resolution and a well-formed cls resolution both validate', () => {
+      assert.doesNotThrow(() => script.validateResolutions([UNDER_TEST, CLASSIFIED]));
+    });
+
+    test('property: validateResolutions throws exactly when a resolution violates rules a-f', () => {
+      const orUndef = (arb) => fc.oneof(fc.constant(undefined), arb);
+      fc.assert(
+        fc.property(
+          orUndef(fc.constantFrom('UNDER_TEST', 'EXEMPT', 'BOGUS')),
+          orUndef(fc.constantFrom('SEAM', 'DIRECT', 'BOGUS')),
+          orUndef(fc.constantFrom('', '   ', 'why')),
+          orUndef(fc.constantFrom('', '   ', 'runNode')),
+          orUndef(fc.constantFrom('', '   ', 'note')),
+          (kind, cls, reason, resolvedCallee, note) => {
+            const entry = { file: 'tests/p.test.cjs', callee: 'c' };
+            for (const [k, v] of Object.entries({ kind, cls, reason, resolvedCallee, note })) if (v !== undefined) entry[k] = v;
+            const ok = (v) => v !== undefined && v.trim() !== '';
+            let violates;
+            if (kind !== undefined && cls !== undefined) violates = true;
+            else if (kind === undefined && cls === undefined) violates = true;
+            else if (kind !== undefined) violates = !['UNDER_TEST', 'EXEMPT'].includes(kind) || !ok(reason);
+            else violates = !['SEAM', 'DIRECT'].includes(cls) || !ok(resolvedCallee) || !ok(note);
+            if (violates) assert.throws(() => script.validateResolutions([entry]), /resolution tests\/p\.test\.cjs c: /);
+            else assert.doesNotThrow(() => script.validateResolutions([entry]));
+          },
+        ),
+      );
+    });
+
+    test('a resolution whose optionKey no site carries is reported as unused and excludes nothing', () => {
+      const r = buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, optionKey: 'stdio' }]);
+      assert.deepEqual(r.unusedResolutions.map((o) => o.optionKey), ['stdio']);
+      assert.deepEqual(r.excludedSites, []);
+      assert.equal(r.sites.length, 1);
     });
 
     test('an under-test resolution that matches nothing is reported as unused', () => {

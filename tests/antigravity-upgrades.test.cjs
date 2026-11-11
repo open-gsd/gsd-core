@@ -226,7 +226,7 @@ test('UPGRADE 2: gsd-mcp-server companion is reachable — spawn, initialize, to
     env: { ...process.env, GSD_TEST_MODE: '1' },
   });
 
-  assertSeamExit(assert, res, 0, `gsd-mcp-server must exit cleanly on stdin EOF`);
+  assertSeamExit(assert, res, 0, `gsd-mcp-server must exit cleanly on stdin EOF; stderr: ${res.stderr}`);
   const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
   assert.strictEqual(lines.length, 2, 'one response per request');
   assert.strictEqual(lines[0].result.protocolVersion, PROTOCOL_VERSION, 'initialize handshake succeeds');

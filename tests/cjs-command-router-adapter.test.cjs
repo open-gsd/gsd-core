@@ -542,16 +542,12 @@ const GSD_TOOLS = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cj
 
 function run(args, cwd) {
   const r = runNode([GSD_TOOLS, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  // A timeout, kill or spawn failure is never a plain non-zero exit; reject it here.
+  assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+  if (r.exitCode === 0) {
     return { ok: true, stdout: r.stdout };
   }
-  return {
-    ok: false,
-    stdout: r.stdout,
-    stderr: r.stderr,
-    // A timeout or spawn failure has no exit code; report the outcome summary instead.
-    code: r.outcome === OUTCOME.EXITED ? r.exitCode : r.summary,
-  };
+  return { ok: false, stdout: r.stdout, stderr: r.stderr, code: r.exitCode };
 }
 
 function makeFixture() {
