@@ -2913,13 +2913,13 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
   const command = fc.array(token, { minLength: 1, maxLength: 16 }).map((parts) => parts.join(''));
 
   test('property: every command the frozen scanner denies, the hook denies', () => {
-    const { findSecretRead, findSecretReadUnderOtherReadings } = require(HOOK_PATH);
-    const head = { findSecretRead, findSecretReadUnderOtherReadings };
+    // The hook's own entry (main() calls scanBashCommand), on its one budget.
+    const { scanBashCommand } = require(HOOK_PATH);
     let denied = 0;
     fc.assert(fc.property(command, (cmd) => {
       if (scan(base, cmd) === null) return true;
       denied++;
-      return scan(head, cmd) !== null;
+      return scanBashCommand(cmd) !== null;
     }), { seed: 5285, numRuns: 30000 });
     // A soup that the frozen scanner never denied would pass this vacuously.
     assert.ok(denied >= 1000, `the frozen scanner denied ${denied} of 30,000`);
