@@ -139,11 +139,62 @@ const MACOS_GENERATED_HEADER =
   '// Windows-oriented tier in platform-conformance-tier.generated.cjs — see\n' +
   '// docs/adr/4593-macos-conformance-tier-architecture.md for the full rationale.\n';
 
+// #6002 child_process call-site shapes. First arguments that are node itself:
+// `process.execPath` or the literal 'node' / "node".
+const NODE_FIRST_ARG = "(?:process\\.execPath\\s*[,)]|(['\"])node\\1\\s*[,)])";
+const NOT_NODE_FIRST_ARG = '(?!' + NODE_FIRST_ARG + ')';
+// One source of truth for the call names every shape below matches.
+const CHILD_SYNC_NAMES = 'spawnSync|execSync|execFileSync';
+const CHILD_ASYNC_NAMES = 'spawn|execFile|exec';
+const CHILD_CALL_NAMES = CHILD_SYNC_NAMES + '|' + CHILD_ASYNC_NAMES;
+const CHILD_NON_NODE_CALL = new RegExp(
+  '(?:\\b(?:' + CHILD_SYNC_NAMES + ')|(?<![.\\w$])(?:' + CHILD_ASYNC_NAMES + '))\\(\\s*' + NOT_NODE_FIRST_ARG,
+);
+// Member form `<ident>.spawn(...)` (e.g. `cp.spawn('bash')`, `child_process.execFile('git')`).
+// Heuristic: any `<ident>.(spawn|spawnSync|execFile|execFileSync|exec|execSync)(` whose first
+// argument is not node counts as a non-node call, EXCEPT a regex `.exec(` — the receiver is a
+// regex literal (preceded by `/`) or an identifier ending in re/Re/RE/regex/Regex/REGEX.
+const CHILD_MEMBER_CALL = new RegExp(
+  '([\\w$]+)\\.(?:' + CHILD_CALL_NAMES + ')\\(\\s*' + NOT_NODE_FIRST_ARG,
+  'g',
+);
+const REGEX_RECEIVER_NAME = /(?:re|Re|RE|regex|Regex|REGEX)$/;
+function hasMemberNonNodeCall(content) {
+  CHILD_MEMBER_CALL.lastIndex = 0;
+  let m;
+  while ((m = CHILD_MEMBER_CALL.exec(content)) !== null) {
+    if (content[m.index - 1] === '/') continue; // regex-literal receiver: /x/g.exec(
+    if (/\.exec\(/.test(m[0]) && REGEX_RECEIVER_NAME.test(m[1])) continue;
+    return true;
+  }
+  return false;
+}
+// `promisify(cp.execFile)` hides the call sites from the call-shape scan: an unidentifiable,
+// counted site.
+const CHILD_PROMISIFIED = /\bpromisify\(\s*(?:[\w$]+\.)?(?:execFile|exec|spawn)\b/;
+const CHILD_NODE_ONLY_CALL = new RegExp(
+  '\\b(?:' + CHILD_CALL_NAMES + ')\\(\\s*' + NODE_FIRST_ARG + '|(?<![.\\w$])fork\\(',
+);
+// Code constructs only: a bare `lock` word matches prose, so lock-ness is a lockfile/lock-helper
+// identifier, a `.lock` path suffix, a rename/unlink call, EBUSY/EPERM, the installer or --config-dir.
+const FS_LOCK_OR_INSTALL =
+  /\b(?:lockfile|acquireLock|releaseLock|withLock|lockSync|proper-lockfile)\b|\.lock\b|\b(?:rename|unlink)(?:Sync)?\(|\bE(?:BUSY|PERM)\b|install\.js|--config-dir/;
+const CHILD_SHELL_TRUE = /\bshell\s*:\s*true\b/;
+// Pre-#6002 raw-child-process test, kept for source-file reachability
+// (scripts/ci-test-scope.cjs), whose behavior must not change.
+function preIssue6002RawChildProcess(content) {
+  if (/require\((['"])(?:node:)?child_process\1\)/.test(content)) return true;
+  if (!content.includes('child_process')) return false;
+  return /\bspawnSync\(|\bexecSync\(|\bexecFileSync\(/.test(content);
+}
+
 /**
  * Detection categories (#4591 design doc). Each entry's `test` receives the
  * raw file content string and returns true when that category's signal is
  * present. Order matches the design doc's enumeration; `signals` in
- * `classifyContent`'s return value preserves this order.
+ * `classifyContent`'s return value preserves this order. Optional fields
+ * (the pre-#6002 view used by `classifyUnstrippedContent`): `raw: <fn>`
+ * replaces `test` there; `rawSkip: true` omits the category there.
  */
 const CATEGORIES = [
   {
@@ -172,15 +223,42 @@ const CATEGORIES = [
   },
   {
     name: 'raw-child-process',
-    // Requires BOTH the child_process import/reference token AND one of the
-    // three call names in the same file — this is what keeps a same-named
-    // local identifier (e.g. a variable called `spawnResult`) from false-
-    // positiving: `spawnResult` never forms the substring `spawnSync(`.
+    raw: preIssue6002RawChildProcess, // pre-#6002 test used by classifyUnstrippedContent
+    // #6002: matches a call that can spawn a platform-dependent binary, not
+    // the mere presence of the module. Requires the child_process token AND a
+    // sync or async spawn call (spawnSync/execSync/execFileSync/spawn/execFile/
+    // exec) whose first argument is NOT node itself (`process.execPath` or the
+    // literal 'node' / "node"): a child that only re-runs node behaves
+    // identically on every OS and is no real-OS signal. `fork(` always runs
+    // node, so it is node-only by construction and never a signal on its own.
+    // Any other first argument (another literal, an identifier, a template
+    // literal) matches (over-inclusion, the safe direction), as does
+    // `shell: true` anywhere in a child_process-using file. A file that
+    // requires child_process but whose call sites cannot be identified at all
+    // (aliased or destructured-and-renamed usage) also counts. A same-named
+    // local identifier (e.g. `spawnResult`) never forms the substring
+    // `spawnSync(`; bare `.exec(` member calls (e.g. `re.exec(`) are not
+    // spawn call sites.
     test: (content) => {
-      if (/require\((['"])(?:node:)?child_process\1\)/.test(content)) return true;
       if (!content.includes('child_process')) return false;
-      return /\bspawnSync\(|\bexecSync\(|\bexecFileSync\(/.test(content);
+      if (CHILD_SHELL_TRUE.test(content)) return true;
+      if (CHILD_NON_NODE_CALL.test(content)) return true;
+      if (hasMemberNonNodeCall(content)) return true;
+      if (CHILD_PROMISIFIED.test(content)) return true;
+      return !CHILD_NODE_ONLY_CALL.test(content);
     },
+  },
+  {
+    name: 'fs-lock-or-install-child',
+    rawSkip: true, // did not exist pre-#6002; classifyUnstrippedContent omits it
+    // #6002 decision: a node-only child still counts when the file also
+    // exercises Windows-sensitive filesystem behavior (locking, rename/unlink
+    // semantics, EBUSY/EPERM, the installer, --config-dir), because the child
+    // is then driving that behavior in a real process.
+    test: (content) =>
+      content.includes('child_process') &&
+      CHILD_NODE_ONLY_CALL.test(content) &&
+      FS_LOCK_OR_INSTALL.test(content),
   },
   {
     name: 'shell-interpreter-spawn',
@@ -259,15 +337,8 @@ const NOISY_FOR_SOURCE_REACHABILITY = new Set(['symlink-keyword']);
  * expressible as content; reach for this map only when it structurally is
  * not.
  *
- * Current entries:
- * - tests/external-descriptor-confinement.test.cjs: exercises `isPathConfined`
- *   (src/external-descriptor-trust.cts:41-49), which calls the AMBIENT
- *   `path` module directly — `path.resolve(root, target)` and `path.sep` —
- *   with no platform/path injection seam. Its win32 semantics (drive
- *   letters, UNC paths, `\` separator) are therefore only reachable by
- *   actually running on Windows; the win32 branch is unreachable on Linux.
- *   This is a security-relevant write-confinement gate, so a silent gap
- *   here is a security regression, not a coverage nit (#4641).
+ * Entries and their reasons live in the Map below (the single source); each
+ * reason is a required value, so none can be added without one.
  */
 const ALWAYS_REAL_OS = new Map([
   [
@@ -275,6 +346,13 @@ const ALWAYS_REAL_OS = new Map([
     'Exercises isPathConfined (src/external-descriptor-trust.cts:41-49), which uses the ambient ' +
       'path module (path.resolve/path.sep) with no platform injection; its win32 branch (drive ' +
       'letters, UNC paths, \\ separator) is unreachable on Linux. Security-relevant write-confinement gate.',
+  ],
+  [
+    'tests/state-todos-render.test.cjs',
+    'Exercises renderPendingTodosMarkdown (src/init.cts:2646-2650), which uses the ambient path module ' +
+      '(path.isAbsolute/path.relative) with no platform injection to build repo-relative todo links ' +
+      '(#4384/#4421); its win32 branch (drive letters, \\ separator) is unreachable on Linux. The test ' +
+      "file's only content signal was a node-only spawnSync, which #6002 deliberately ignores.",
   ],
 ]);
 
@@ -301,21 +379,180 @@ const MACOS_CATEGORIES = [
   { name: 'case-sensitivity', test: (content) => /case.?insensitiv|case.?sensitiv/i.test(content) },
   { name: 'chmod-mode-bit', test: (content) => /chmodSync|chmod\(/.test(content) || /0o[0-7]{3,4}\b/.test(content) },
   { name: 'symlink-keyword', test: (content) => /\bsymlink/i.test(content) },
+  // #6002: realpath calls normalize the macOS /var -> /private/var tmpdir symlink.
+  { name: 'realpath', test: (content) => /\brealpath(Sync)?\b/.test(content) },
 ];
+
+/** Keywords after which a `/` begins a regex literal rather than a division. */
+const REGEX_AFTER_KEYWORD = new Set([
+  'return', 'typeof', 'case', 'in', 'of', 'delete', 'void', 'throw', 'new', 'else', 'do', 'instanceof', 'yield', 'await',
+]);
+const REGEX_AFTER_CHAR = '(,=:[!&|?{};+-*%<>~^';
+
+function regexAllowedAfter(out) {
+  let j = out.length - 1;
+  while (j >= 0 && /\s/.test(out[j])) j--;
+  if (j < 0) return true;
+  if (REGEX_AFTER_CHAR.includes(out[j])) return true;
+  if (/[A-Za-z0-9_$]/.test(out[j])) {
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(out[k])) k--;
+    return REGEX_AFTER_KEYWORD.has(out.slice(k + 1, j + 1));
+  }
+  return false;
+}
+
+/**
+ * #6002 — remove `//` line comments and block comments from source text so
+ * the CATEGORIES / MACOS_CATEGORIES tests match platform BEHAVIOR in code, not
+ * words in prose. A single-pass scanner tracks whether it is inside a '…', "…"
+ * or `…` string literal (honoring backslash escapes), so a `//` inside a
+ * string (e.g. a URL) does not start a comment. A `/` is read as the start of
+ * a regex literal (scanned to its closing unescaped `/`, honoring `[...]`
+ * classes and escapes) when the previous significant character is one of
+ * `( , = : [ ! & | ? { } ; + - * % < > ~ ^`, the start of input, or a keyword
+ * such as return/typeof; the regex body is kept verbatim so quotes or `//`
+ * inside it cannot corrupt string or comment tracking. An unterminated regex
+ * (newline first) falls back to a plain `/`. '…' and "…" strings end at a
+ * newline so an unbalanced quote cannot swallow the rest of the file. A line
+ * comment is dropped up to (not including) its newline; a block comment
+ * becomes one space (its newlines are kept) so adjacent tokens never fuse.
+ *
+ * @param {string} content
+ * @returns {string}
+ */
+function stripComments(content) {
+  const src = typeof content === 'string' ? content : '';
+  const n = src.length;
+  let out = '';
+  let i = 0;
+
+  // Scans code from `i`. When `inExpr` (inside a template `${ … }`), returns at the
+  // matching unnested `}` (not consumed); otherwise runs to end of input.
+  function scanCode(inExpr) {
+    let depth = 0;
+    while (i < n) {
+      const ch = src[i];
+      const next = src[i + 1];
+      if (inExpr && ch === '}' && depth === 0) return;
+      if (inExpr && ch === '{') depth++;
+      else if (inExpr && ch === '}') depth--;
+      if (ch === '/' && next === '/') {
+        while (i < n && src[i] !== '\n') i++;
+      } else if (ch === '/' && next === '*') {
+        i += 2;
+        let newlines = '';
+        while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+          if (src[i] === '\n') newlines += '\n';
+          i++;
+        }
+        i += 2;
+        out += ' ' + newlines;
+      } else if (ch === '/' && regexAllowedAfter(out)) {
+        let j = i + 1;
+        let inClass = false;
+        let closed = false;
+        while (j < n && src[j] !== '\n') {
+          const c = src[j];
+          if (c === '\\') {
+            j += 2;
+            continue;
+          }
+          if (c === '[') inClass = true;
+          else if (c === ']') inClass = false;
+          else if (c === '/' && !inClass) {
+            closed = true;
+            break;
+          }
+          j++;
+        }
+        if (closed) {
+          out += src.slice(i, j + 1);
+          i = j + 1;
+        } else {
+          out += ch;
+          i++;
+        }
+      } else if (ch === '`') {
+        out += ch;
+        i++;
+        while (i < n) {
+          const c = src[i];
+          if (c === '\\' && i + 1 < n) {
+            out += c + src[i + 1];
+            i += 2;
+            continue;
+          }
+          if (c === '$' && src[i + 1] === '{') {
+            out += '${';
+            i += 2;
+            scanCode(true);
+            continue;
+          }
+          out += c;
+          i++;
+          if (c === '`') break;
+        }
+      } else if (ch === "'" || ch === '"') {
+        out += ch;
+        i++;
+        while (i < n) {
+          const c = src[i];
+          if (c === '\\' && i + 1 < n) {
+            out += c + src[i + 1];
+            i += 2;
+            continue;
+          }
+          if (c === '\n') break;
+          out += c;
+          i++;
+          if (c === ch) break;
+        }
+      } else {
+        out += ch;
+        i++;
+      }
+    }
+  }
+
+  scanCode(false);
+  return out;
+}
 
 /**
  * Pure classifier: given a test file's raw string content, returns which
  * platform-conformance categories matched and whether the file needs real-OS
- * coverage (true iff at least one category matched).
+ * coverage (true iff at least one category matched). Comments are stripped
+ * first (#6002).
  *
  * @param {string} content
  * @returns {{needsRealOs: boolean, signals: string[]}}
  */
 function classifyContent(content) {
-  const text = typeof content === 'string' ? content : '';
+  const text = stripComments(content);
   const signals = [];
   for (const category of CATEGORIES) {
     if (category.test(text)) signals.push(category.name);
+  }
+  return { needsRealOs: signals.length > 0, signals };
+}
+
+/**
+ * Pre-#6002 classification: no comment stripping and the legacy
+ * raw-child-process test (any child_process require counts); the
+ * fs-lock-or-install-child category does not exist here. Used by
+ * scripts/ci-test-scope.cjs for src/ reachability, whose behavior #6002 must
+ * not change.
+ *
+ * @param {string} content
+ * @returns {{needsRealOs: boolean, signals: string[]}}
+ */
+function classifyUnstrippedContent(content) {
+  const text = typeof content === 'string' ? content : '';
+  const signals = [];
+  for (const category of CATEGORIES) {
+    if (category.rawSkip) continue;
+    if ((category.raw || category.test)(text)) signals.push(category.name);
   }
   return { needsRealOs: signals.length > 0, signals };
 }
@@ -328,7 +565,7 @@ function classifyContent(content) {
  * @returns {{needsRealOs: boolean, signals: string[]}}
  */
 function classifyMacosContent(content) {
-  const text = typeof content === 'string' ? content : '';
+  const text = stripComments(content); // #6002
   const signals = [];
   for (const category of MACOS_CATEGORIES) {
     if (category.test(text)) signals.push(category.name);
@@ -728,6 +965,8 @@ if (require.main === module) {
 
 module.exports = {
   classifyContent,
+  classifyUnstrippedContent,
+  stripComments,
   CATEGORIES,
   NOISY_FOR_SOURCE_REACHABILITY,
   ALWAYS_REAL_OS,

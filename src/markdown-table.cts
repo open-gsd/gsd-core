@@ -1104,6 +1104,9 @@ export function resetQuickTaskRows(
   return { ok: true, value: { content, cleared, variant: match.label } };
 }
 
+/** The one Traceability heading rule shared by the write and the existence read. */
+const TRACEABILITY_HEADING_RE = /^Traceability(?:[ \t]+Status)?\b/i;
+
 /**
  * `updateTableCell` scoped to REQUIREMENTS.md's `## Traceability` (or
  * `## Traceability Status`) section (#2245 F1, #5762): `updateTableCell` binds
@@ -1121,7 +1124,7 @@ export function updateTraceabilityCell(
   newValue: string | ((current: string) => string),
 ): Result<string> {
   const headings = tokenizeHeadings(text);
-  const index = headings.findIndex((h) => h.level === 2 && /^Traceability(?:[ \t]+Status)?\b/i.test(h.text));
+  const index = headings.findIndex((h) => h.level === 2 && TRACEABILITY_HEADING_RE.test(h.text));
   if (index === -1) return updateTableCell(text, match, column, newValue);
   let result: Result<string> = { ok: false, reason: 'no matching row' };
   const edited = editHeadingSlice(text, headingSliceRange(text, headings, index, 2), (scoped) => {
@@ -1129,6 +1132,40 @@ export function updateTraceabilityCell(
     return result.ok ? result.value : scoped;
   });
   return result.ok ? { ok: true, value: edited } : result;
+}
+
+/**
+ * Row-existence READ for REQUIREMENTS.md's Traceability section (#5844): true
+ * when any table row in the section has `id` (case-insensitive) as its first
+ * cell, whatever the table's columns. `updateTraceabilityCell(..., 'Status', …)`
+ * answers "is there a row" only for tables that HAVE a Status column; this
+ * answers it for every table. Scoping mirrors `updateTraceabilityCell`: the
+ * same heading rule, and only the FIRST table of the scoped text (with no
+ * Traceability heading that is the first table in the file), so a table
+ * elsewhere whose first cell equals the ID is not a Traceability row.
+ */
+export function traceabilityRowExists(text: string, id: string): boolean {
+  const headings = tokenizeHeadings(text);
+  const index = headings.findIndex((h) => h.level === 2 && TRACEABILITY_HEADING_RE.test(h.text));
+  let scoped = text;
+  if (index !== -1) {
+    editHeadingSlice(text, headingSliceRange(text, headings, index, 2), (slice) => {
+      scoped = slice;
+      return slice;
+    });
+  }
+  const wanted = id.trim().toLowerCase();
+  let inTable = false;
+  for (const line of scoped.split(/\r?\n/)) {
+    if (!line.trim().startsWith('|')) {
+      if (inTable) return false;
+      continue;
+    }
+    inTable = true;
+    const cells = splitTableRow(line);
+    if (cells.length > 0 && cells[0].trim().toLowerCase() === wanted) return true;
+  }
+  return false;
 }
 
 // Consumers: require('../gsd-core/bin/lib/markdown-table.cjs')

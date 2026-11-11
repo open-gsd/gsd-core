@@ -8,6 +8,7 @@ on:
       - 'release/**'
       - 'hotfix/**'
   pull_request:
+    # Default types (opened, synchronize, reopened). Label changes do not start a run (#6076): fix-next-rerun.yml re-runs only "Base branch health" when fix-next is added or removed.
     branches:
       - next
       - main
@@ -24,7 +25,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  # Only a new commit supersedes a PR run. `gh pr create --label` fires `opened`
+  # and `labeled` in the same second for the same head; with an unconditional
+  # cancel, one cancels the other and its cancelled jobs stay on the head commit
+  # as a red check the merge gate refuses (#6092). A label event now queues
+  # behind the running run instead of killing it; pushes still cancel as before.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action == 'synchronize' }}
 
 permissions:
   contents: read
@@ -100,6 +106,8 @@ jobs:
           # inside a `run:` block.
           GITHUB_TOKEN: ${{ github.token }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # When set, the script reads the PR's current labels from the API (#6076).
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
           MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}

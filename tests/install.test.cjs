@@ -3189,13 +3189,14 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
     assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
 
-  test('Claude global install: .js hook command stays shell-neutral on Windows Git Bash', () => {
+  test('Claude global install: .js hook command is the PowerShell runner on Windows even with Git Bash (#5850)', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
       platform: 'win32',
       runtime: 'claude',
     });
-    assert.ok(!cmd.startsWith('& '), `Claude hook command must not use PowerShell call operator: ${cmd}`);
-    assert.equal(parseHookCommand(cmd).hookPath, 'C:/Users/me/.claude/hooks/gsd-check-update.js');
+    assert.ok(cmd.startsWith('& '), `Claude hook command must use the PowerShell call operator: ${cmd}`);
+    assert.ok(!cmd.includes('$(for'), `no POSIX runner chain on Windows: ${cmd}`);
+    assert.ok(cmd.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })"), cmd);
   });
 
   test('Windows .js hook with no runtime stays shell-neutral', () => {
@@ -3352,7 +3353,7 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     );
   });
 
-  test('Claude on Windows strips stale PowerShell prefix from managed hooks on reinstall (#3413)', () => {
+  test('Claude on Windows rewrites a stale bare PowerShell-prefixed managed hook to the PowerShell runner on reinstall (#3413, #5850)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
@@ -3361,12 +3362,14 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
       },
     };
     const runner = '"/usr/local/bin/node"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'claude' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, {
+      platform: 'win32',
+      runtime: 'claude',
+    });
     assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '"/usr/local/bin/node" "C:/Users/me/.claude/hooks/gsd-check-update.js"',
-    );
+    const command = settings.hooks.SessionStart[0].hooks[0].command;
+    assert.ok(command.startsWith('& ((@('), command);
+    assert.ok(command.endsWith("'C:/Users/me/.claude/hooks/gsd-check-update.js'; exit $(if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 1 })"), command);
   });
 
   test('does NOT touch user-authored bare-node hooks (filename not in managed allowlist)', () => {
