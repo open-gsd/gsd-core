@@ -2120,6 +2120,15 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
+    test('in process: a commit message holding a reading trigger is scanned to about 70,000 characters', () => {
+      // The user guide's figure: two levels, eight scans each, and #5513's
+      // heredoc passes put the boundary near 69,900 characters. Pinned at
+      // 10% either side, so the guide's "about" stays true.
+      const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
+      assert.equal(scanBashCommand(message(63000)), null);
+      assert.deepEqual(scanBashCommand(message(77000)), TOO_COMPLEX);
+    });
+
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
       assert.deepEqual(scanBashCommand(`echo ${runs('$$(')}`), TOO_COMPLEX);
       assert.equal(scanBashCommand('echo ok; ls'), null);
