@@ -9,7 +9,8 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { cleanup, createTempProject, canonicalizePath } = require('./helpers.cjs');
+const { cleanup, createTempProject } = require('./helpers.cjs');
+const { runGateWithStatFailure } = require('./helpers/fs-failure.cjs');
 const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
 const { buildWorkstreamInventory, isCompletedInventory, pickRollupWinners } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');
 const { inspectWorkstream } = require('../gsd-core/bin/lib/workstream-inventory.cjs');
@@ -1974,8 +1975,6 @@ describe('#3057 B3: inspectWorkstream — verification staleness-check indetermi
 // the Windows and macOS conformance tiers; adding the same signal to
 // decisions.test.cjs pushed the Windows tier over its 33% ceiling.
 describe('#5798: decision-coverage stat injection follows an alias of the phase directory', () => {
-  const { routeCheckCommand } = require('../gsd-core/bin/lib/check-command-router.cjs');
-
   function runAliasedGate(t, subcommand) {
     const tmpDir = createTempProject('gsd-5798-alias-');
     t.after(() => cleanup(tmpDir));
@@ -1997,39 +1996,7 @@ describe('#5798: decision-coverage stat injection follows an alias of the phase 
     const alias = path.join(tmpDir, 'phase-alias');
     fs.symlinkSync(phaseDir, alias, 'junction');
 
-    const realStatSync = fs.statSync;
-    const resolvedPhaseDir = canonicalizePath(alias);
-    t.mock.method(fs, 'statSync', (p, ...rest) => {
-      if (typeof p === 'string') {
-        let resolvedPath;
-        try {
-          resolvedPath = canonicalizePath(p);
-        } catch {
-          return realStatSync.call(fs, p, ...rest);
-        }
-        if (resolvedPath !== resolvedPhaseDir) return realStatSync.call(fs, p, ...rest);
-        const err = new Error(`EACCES: injected stat failure, stat '${p}'`);
-        err.code = 'EACCES';
-        throw err;
-      }
-      return realStatSync.call(fs, p, ...rest);
-    });
-    let captured = '';
-    const realWriteSync = fs.writeSync;
-    t.mock.method(fs, 'writeSync', (fd, ...args) => {
-      if (fd === 1) {
-        const buf = args[0];
-        captured += Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
-        return Buffer.isBuffer(buf) ? buf.length : Buffer.byteLength(String(buf));
-      }
-      return realWriteSync.call(fs, fd, ...args);
-    });
-    try {
-      routeCheckCommand({ args: ['check', subcommand, alias, contextPath], cwd: tmpDir, raw: false });
-    } finally {
-      t.mock.restoreAll();
-    }
-    return JSON.parse(captured || '{}');
+    return runGateWithStatFailure(t, alias, subcommand, 'EACCES', { cwd: tmpDir, contextPath });
   }
 
   test('#5798: decision-coverage-plan reports stat errors through an aliased phase directory', (t) => {
