@@ -1,5 +1,5 @@
 ---
 type: Fixed
-pr: 5300
+pr: 5958
 ---
 **Installs, updates and uninstalls no longer replace a symlinked `settings.json` with a plain file** — without `GSD_ALLOW_SYMLINKED_DEST` they stop with an error instead, and with it the write goes through to the link's target; a local Claude install treats a symlinked `settings.local.json` the same way. (#5037)
