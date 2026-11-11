@@ -133,10 +133,8 @@
 //   `{((' $(cat .env >&2) '));}` (bash, zsh),
 //   `echo $[ \[ ' $(cat .env >&2) ' ]` (bash, zsh),
 //   `echo $[ \] ' $(cat .env >&2) ' ]` (bash, zsh),
-//   `(( \( ' $(cat .env >&2) ' ))` (bash),
-//   `(( \) ' $(cat .env >&2) ' ))` (bash, zsh),
-//   `echo "$$$[ " ]"; cat .env` (zsh) and
-//   `echo ${x:-"$[ " ' $(cat .env >&2) ' " ]"}` (zsh);
+//   `(( \( ' $(cat .env >&2) ' ))` (bash) and
+//   `(( \) ' $(cat .env >&2) ' ))` (bash, zsh);
 //   a `#` comment in a
 //   `$( )`, whose `(` or `)` the scan counts
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
@@ -1202,34 +1200,74 @@ function zshMathEnd(str, i, reading) {
   return -1;
 }
 
+// One element of a "…" at `i` (not its closing `"`), read as `reading` reads
+// it. tokenize and doubleQuoteEnd both read a "…" through this alone, so they
+// cannot end one in different places. Returns where reading resumes and the
+// element's text in the word's value. A backslash escapes `"`, a backslash, `$`, a
+// backtick and a newline, which it removes; before any other character it is
+// text. Under any reading but the plain one a run of `$` is paired first
+// (quotedRun), and an odd run's last `$` is then read as a lone one, so zsh's
+// `$[ … ]`, a `${…}` and a `$(` are tested after the run: zsh runs the read
+// in `echo "$$$[ " ]"; cat .env`. A `${…}` is not opened in a heredoc tag
+// (`inTag`), which is not expanded. The commands of a `$( )` or backtick span
+// go to `nested`, when given, and so do those inside a `${…}`: once it
+// closes when `keepOnClose`, which tokenize passes, else as they are read.
+function dqElement(str, i, reading, inTag, nested, keepOnClose) {
+  const c = str[i];
+  if (c === '\\' && i + 1 < str.length && '"\\$`\n'.includes(str[i + 1])) {
+    return { next: i + 2, text: str[i + 1] === '\n' ? '' : str[i + 1] };
+  }
+  let text = '';
+  if (reading && c === '$') {
+    const run = quotedRun(str, i);
+    if (run) {
+      text = run.text;
+      i = run.next;
+      if (str[i] !== '$') return { next: i, text };
+    }
+  }
+  if (str[i] === '$' && str[i + 1] === '[') {
+    const math = zshMathEnd(str, i + 1, reading);
+    if (math !== -1) {
+      if (nested) collectSubstitutions(str.slice(i + 2, math), nested, reading);
+      return { next: math + 1, text: text + str.slice(i, math + 1) };
+    }
+  }
+  const brace = reading && !asBefore && !inTag && str[i] === '$' ? quotedBraceOpen(str, i, reading) : -1;
+  if (brace !== -1) {
+    const inner = keepOnClose ? [] : nested;
+    const j = ansiCBraceClose(str, brace + 1, reading, inner, true);
+    if (j !== -1) {
+      if (keepOnClose && nested) for (const cmd of inner) nested.push(cmd);
+      return { next: j + 1, text: text + str.slice(i, j + 1) };
+    }
+  }
+  if (str[i] === '$' && str[i + 1] === '(') {
+    const e = findParenClose(str, i + 2, reading);
+    if (nested) nested.push(str.slice(i + 2, e));
+    return { next: e + 1, text };
+  }
+  if (str[i] === '`') {
+    const j = str.indexOf('`', i + 1);
+    const e = j === -1 ? str.length : j;
+    if (nested) nested.push(str.slice(i + 1, e));
+    return { next: e + 1, text };
+  }
+  return { next: i + 1, text: text + str[i] };
+}
+
 // Index of the `"` closing a "…" whose text starts at `i`, or str.length
-// when it never closes: a `"` inside a `$( )` or backticks, or after a
-// backslash, does not close it, nor, under any reading but the plain one,
-// one inside a `${…}` (`"${x:-"a"}"`). Shared by findParenClose and
-// ansiCBraceClose, which also passes `nested` for the commands of those spans.
+// when it never closes, read by dqElement as tokenize reads it. Shared by
+// findParenClose and ansiCBraceClose, which also passes `nested` for the
+// commands of the spans inside.
 function doubleQuoteEnd(str, i, reading, nested) {
-  const span = (from, to) => { if (nested) nested.push(str.slice(from, to)); return to + 1; };
   let read = i;
   while (i < str.length && str[i] !== '"') {
     if (reading) {
       chargeReader(i + 1 - read);
       read = i + 1;
     }
-    if (str[i] === '\\') { i += 2; continue; }
-    const dqRun = reading && str[i] === '$' ? quotedRun(str, i) : null;
-    if (dqRun) { i = dqRun.next; if (str[i] !== '$') continue; }
-    const brace = reading && !asBefore && str[i] === '$' ? quotedBraceOpen(str, i, reading) : -1;
-    if (brace !== -1) {
-      const j = ansiCBraceClose(str, brace + 1, reading, nested, true);
-      if (j !== -1) { i = j + 1; continue; }
-    }
-    if (str[i] === '$' && str[i + 1] === '(') { i = span(i + 2, findParenClose(str, i + 2, reading)); continue; }
-    if (str[i] === '`') {
-      const j = str.indexOf('`', i + 1);
-      i = span(i + 1, j === -1 ? str.length : j);
-      continue;
-    }
-    i++;
+    i = dqElement(str, i, reading, false, nested, false).next;
   }
   if (reading) chargeReader(Math.min(i + 1, str.length) - read);
   return Math.min(i, str.length);
@@ -1530,51 +1568,9 @@ function tokenize(str, reading) {
       if (quoted === 'none') quoted = 'double';
       i++;
       while (i < str.length && str[i] !== '"') {
-        const c = str[i];
-        if (c === '\\' && i + 1 < str.length && '"\\$`\n'.includes(str[i + 1])) {
-          if (str[i + 1] !== '\n') buf += str[i + 1];
-          i += 2;
-          continue;
-        }
-        // bash, zsh and dash pair a `$` run here; an odd run's last `$` stays (`c`
-        // is still `$` for the branches below). A heredoc tag word is not expanded.
-        const math = c === '$' && str[i + 1] === '[' ? zshMathEnd(str, i + 1, reading) : -1;
-        if (math !== -1) {
-          buf += str.slice(i, math + 1);
-          collectSubstitutions(str.slice(i + 2, math), nested, reading);
-          i = math + 1;
-          continue;
-        }
-        const dqRun = reading && c === '$' ? quotedRun(str, i) : null;
-        if (dqRun) { buf += dqRun.text; i = dqRun.next; if (str[i] !== '$') continue; }
-        // A "…" inside a `${…}` inside "…" does not end the outer one
-        // (ansiCBraceClose). A heredoc tag word is not expanded.
-        const brace = reading && !asBefore && str[i] === '$' && expectTag === null ? quotedBraceOpen(str, i, reading) : -1;
-        if (brace !== -1) {
-          const inner = [];
-          const j = ansiCBraceClose(str, brace + 1, reading, inner, true);
-          if (j !== -1) {
-            for (const cmd of inner) nested.push(cmd);
-            buf += str.slice(i, j + 1);
-            i = j + 1;
-            continue;
-          }
-        }
-        if (str[i] === '$' && str[i + 1] === '(') {
-          const e = findParenClose(str, i + 2, reading);
-          nested.push(str.slice(i + 2, e));
-          i = e + 1;
-          continue;
-        }
-        if (c === '`') {
-          const j = str.indexOf('`', i + 1);
-          const e = j === -1 ? str.length : j;
-          nested.push(str.slice(i + 1, e));
-          i = e + 1;
-          continue;
-        }
-        buf += c;
-        i++;
+        const el = dqElement(str, i, reading, expectTag !== null, nested, true);
+        buf += el.text;
+        i = el.next;
       }
       i++;
       continue;
@@ -2760,6 +2756,6 @@ function main() {
   });
 }
 
-module.exports = { decodeAnsiC, findSecretRead, findSecretReadUnderOtherReadings };
+module.exports = { decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, tokenize };
 
 if (require.main === module) main();

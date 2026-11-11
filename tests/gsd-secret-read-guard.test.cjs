@@ -2104,8 +2104,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "echo $[ \\] ' $(cat .env >&2) ' ]",
       "(( \\( ' $(cat .env >&2) ' ))",
       "(( \\) ' $(cat .env >&2) ' ))",
-      'echo "$$$[ " ]"; cat .env',
-      'echo ${x:-"$[ " \' $(cat .env >&2) \' " ]"}',
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
@@ -2241,6 +2239,45 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         const cmd = form(b);
         assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
       }), { seed: 5285, numRuns: 30 });
+    });
+
+    // zsh reads a `$[` after an odd run of `$` inside "…" as arithmetic too:
+    // the run's last `$` opens it, and a quote in its body is not one (zsh 5.9
+    // runs the read in each row). An even run is all PIDs, so its `[` is text.
+    for (const cmd of [
+      'echo "$$$[ " ]"; cat .env',
+      'echo "$$$$$[ " ]"; cat .env',
+      'echo "$(echo "$$$[ " ]")"; cat .env',
+      'echo ${x:-"$[ " \' $(cat .env >&2) \' " ]"}',
+      'echo $(echo "$[ " \' $(cat .env >&2) \' " ]")',
+    ]) {
+      test(`blocked: ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      });
+    }
+    test('allowed: an even run before `[` inside "…" is PIDs and text', () => {
+      const cmd = 'echo "$$[ " ]"; ls';
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+
+    test('property: tokenize and doubleQuoteEnd end a "…" in the same place under every reading', () => {
+      const { findSecretRead, tokenize, doubleQuoteEnd } = require(HOOK_PATH);
+      const piece = fc.constantFrom('$[', '$((', '))', ']', '$', '$$', '$$$', ' ', '"', "'", 'a', '(', ')', '${', '}', '$(', '`', '\\"');
+      const words = (text, reading) => tokenize(text, reading).tokens.filter((t) => t.kind === 'word').map((t) => t.text);
+      fc.assert(fc.property(fc.array(piece, { minLength: 1, maxLength: 8 }), fc.constantFrom(false, 'bash', 'zsh', 'dash'), (parts, reading) => {
+        findSecretRead(':', 0); // resets the readers' step budget for the direct calls below
+        const str = `"${parts.join('')}"`;
+        const end = doubleQuoteEnd(str, 1, reading);
+        if (end < str.length) {
+          // The "…" that doubleQuoteEnd ends at `end` is one word to tokenize too, and ` Z` after it another.
+          const w = words(`${str.slice(0, end + 1)} Z`, reading);
+          assert.equal(w.length, 2, `${JSON.stringify(str)} under ${reading}: ${JSON.stringify(w)}`);
+          assert.equal(w[1], 'Z');
+        } else {
+          // A "…" that never closes takes ` Z` with it.
+          assert.equal(words(`${str} Z`, reading).length, 1, `${JSON.stringify(str)} under ${reading}`);
+        }
+      }), { seed: 5285, numRuns: 600 });
     });
   });
 
