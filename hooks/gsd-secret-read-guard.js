@@ -2222,10 +2222,15 @@ function unfinishedBy(e) {
 }
 
 // The first error in a reading that was not a limit: a bug. The hook reports it
-// when it has found nothing to deny (main), so that a reading that stopped
+// when it has found nothing to deny (main), as one JSON line on stderr whose
+// `code` is DIAGNOSTIC.READING_FAILED, so that a reading that stopped
 // working does not go unseen. The other scans run on, and their denials stand;
 // what that reading alone would have denied at that level is lost with it.
 let readingBug = null;
+
+// The codes of the hook's stderr diagnostics, which are not blocks: each is one
+// JSON line, `{ hook, code, message }`.
+const DIAGNOSTIC = Object.freeze({ READING_FAILED: 'reading-failed' });
 
 // A word with no value to check found in a body the scan rescans, held so that
 // a read later in the same pass is the block reported. Nested bodies are
@@ -2769,7 +2774,9 @@ function main() {
       if (hit !== null) emitBlock(hit.code, tool, hit.text);
       const spawn = findDebuggerCliSpawnEitherWay(command);
       if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
-      if (readingBug !== null) process.stderr.write(`gsd-secret-read-guard: a reading failed: ${readingBug.message}\n`);
+      if (readingBug !== null) {
+        process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
+      }
       allow(undefined);
     } catch (e) {
       // A stack overflow is a limit, not a bug: failing open on it allows a
@@ -2786,7 +2793,7 @@ function main() {
 }
 
 module.exports = {
-  decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, tokenize, workSpent,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, tokenize, workSpent,
   MAX_SCAN_CHARACTERS,
 };
 

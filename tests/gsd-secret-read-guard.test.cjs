@@ -2823,7 +2823,9 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
   test('a bug in a reading is reported on stderr when nothing else denies', () => {
     const r = faulty(R`echo $'\x41FAULT'; ls`);
     assertAllowed(r, 'a faulty reading, no read');
-    assert.match(r.stderr, /a reading failed: decoder bug/);
+    const { DIAGNOSTIC } = require(HOOK_PATH);
+    const report = JSON.parse(r.stderr);
+    assert.deepEqual(report, { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
   });
 
   for (const cmd of [
