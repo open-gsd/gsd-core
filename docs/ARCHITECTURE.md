@@ -580,10 +580,10 @@ Conceptual spawn-pattern taxonomy for the primary agents. For the authoritative 
 | **Verifiers**    | gsd-verifier                                                                            | Sequential (after all executors complete)                                                       |
 | **Mappers**      | gsd-codebase-mapper                                                                     | 4 parallel (tech, arch, quality, concerns)                                                      |
 | **Debuggers**    | gsd-debugger                                                                            | Sequential (interactive)                                                                        |
-| **Auditors**     | gsd-ui-auditor, gsd-security-auditor                                                    | Sequential                                                                                |
-| **Doc Writers**  | gsd-doc-writer, gsd-doc-verifier                                                        | Sequential (writer then verifier)                                                         |
-| **Profilers**    | gsd-user-profiler                                                                       | Sequential                                                                                |
-| **Analyzers**    | gsd-assumptions-analyzer                                                                | Sequential (during discuss-phase)                                                         |
+| **Auditors**     | gsd-ui-auditor, gsd-security-auditor                                                    | Sequential                                                                                      |
+| **Doc Writers**  | gsd-doc-writer, gsd-doc-verifier                                                        | Sequential (writer then verifier)                                                               |
+| **Profilers**    | gsd-user-profiler                                                                       | Sequential                                                                                      |
+| **Analyzers**    | gsd-assumptions-analyzer                                                                | Sequential (during discuss-phase)                                                               |
 
 
 ### Wave Execution Model

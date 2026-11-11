@@ -138,12 +138,17 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.match(body, /earlier contents will be lost; only committed copies remain in git/);
     assert.match(body, /`rm -f "\{research_dir\}\/STACK\.md"`, `rm -f "\{research_dir\}\/FEATURES\.md"`, `rm -f "\{research_dir\}\/ARCHITECTURE\.md"`, and `rm -f "\{research_dir\}\/PITFALLS\.md"`/,
       'the removal must cover every dimension file, not only the kept ones');
-    for (const file of ['STACK.md', 'FEATURES.md', 'ARCHITECTURE.md', 'PITFALLS.md']) {
-      assert.ok(body.includes(`Replacing research files:`) && body.includes(`{research_dir}/${file}`),
-        `the replacement notice must name ${file}`);
-    }
     assert.doesNotMatch(body.slice(body.indexOf('Replacing research files:'), body.indexOf('Spawn {N} parallel')),
       /left in place and never read/, 'no stale file may be left behind for the synthesizer or self-heal');
+    assert.match(body, /Only when this run actually spawns researchers: when `agents_installed` is false the parallel research spawn is skipped/,
+      'the clearing must be conditional on the spawn actually going ahead');
+    assert.match(body, /do not remove anything on that path — the earlier research files stay on disk/,
+      'the agents_installed=false path must leave the earlier research files on disk');
+    const noticeStart = body.indexOf('Replacing research files:');
+    const notice = body.slice(noticeStart, body.indexOf('`', noticeStart));
+    for (const file of ['SUMMARY.md', 'STACK.md', 'FEATURES.md', 'ARCHITECTURE.md', 'PITFALLS.md']) {
+      assert.ok(notice.includes(`{research_dir}/${file}`), `the replacement notice must name ${file}`);
+    }
   });
 });
 
