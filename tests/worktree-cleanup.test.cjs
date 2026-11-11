@@ -1969,9 +1969,9 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     assert.equal(fs.existsSync(foreign), true, 'foreign agent worktree stays');
   });
 
-  test('cleanup-tail preserves the manifest when a detached agent worktree names this wave', (t) => {
-    const cleanupTailBash = extractCleanupTailBash();
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-tail-detached-'));
+  // Harness agent worktrees are named worktree-agent-<id> and carry no wave or phase token.
+  function tailFixture(t, prefix, { detach }) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     t.after(() => {
       try { cleanup(root); } catch (_) { /* best-effort */ }
     });
@@ -1984,19 +1984,38 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
     gitOrThrow(['add', 'init.txt'], { cwd: repo });
     gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+    const base = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim();
 
-    const detached = path.join(repo, '.claude', 'worktrees', 'worktree-agent-wave-1-detached');
-    gitOrThrow(['worktree', 'add', '-q', '--detach', detached], { cwd: repo });
+    const agent = path.join(repo, '.claude', 'worktrees', 'agent-a1b2c3d4');
+    const branch = 'worktree-agent-a1b2c3d4';
+    gitOrThrow(detach
+      ? ['worktree', 'add', '-q', '--detach', agent]
+      : ['worktree', 'add', '-q', '-b', branch, agent], { cwd: repo });
 
-    const manifestPath = path.join(repo, '.planning', 'wave-1-manifest.json');
+    const manifestPath = path.join(repo, '.planning', 'phases', '01-feature', 'wave-1-manifest.json');
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-    fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repo, worktrees: [] }) + '\n');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      orchestrator_root: repo,
+      worktrees: [{ agent_id: 'a1b2c3d4', worktree_path: agent, branch, expected_base: base }],
+    }) + '\n');
+    return { root, repo, agent, manifestPath };
+  }
 
-    const res = runCleanupTail(root, repo, manifestPath, cleanupTailBash);
-    const stderr = (res.stderr || '').toString();
-    assert.match(stderr, /Residual worktrees remain; preserving manifest at/);
-    assert.equal(fs.existsSync(manifestPath), true, 'detached owned agent must keep the manifest');
-    assert.equal(fs.existsSync(detached), true);
+  test('cleanup-tail keeps a detached worktree the manifest lists, and the manifest (#4853)', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-4853-tail-detached-', { detach: true });
+    const res = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    const output = `${res.stdout || ''}${res.stderr || ''}`;
+    assert.match(output, /is detached \(no branch\) — not removed/);
+    assert.match(output, /Residual worktrees remain; preserving manifest at/);
+    assert.equal(fs.existsSync(manifestPath), true, 'a detached listed worktree may hold unmerged commits');
+    assert.equal(fs.existsSync(agent), true);
+  });
+
+  test('cleanup-tail removes a listed worktree on its branch and then the manifest (#4853)', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-4853-tail-branch-', { detach: false });
+    const res = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    assert.equal(fs.existsSync(agent), false, `the listed worktree is removed: ${res.stderr || ''}`);
+    assert.equal(fs.existsSync(manifestPath), false, 'nothing left to reconcile, so the manifest is removed');
   });
 
   test('execute-phase dispatch block creates manifest and blocks overwrite on pre-existing manifest', (t) => {
@@ -2360,6 +2379,40 @@ ${creationBash}
       runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/PLAN.md'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
       0,
       'PLAN.md must be tracked after explicit directory commit',
+    );
+  });
+
+  test('cmdCommit excludes the wave manifest of a project in a repo subdirectory (#4853)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-subdir-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    // The project lives in app/, so its planning root is app/.planning, not <repo>/.planning.
+    const app = path.join(root, 'app');
+    const phase = path.join(app, '.planning', 'phases', '01-a');
+    fs.mkdirSync(phase, { recursive: true });
+    fs.writeFileSync(path.join(phase, 'PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phase, 'wave-1-manifest.json'), JSON.stringify({ orchestrator_root: app, worktrees: [] }));
+
+    const res = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(01): add plan', '--files', '.planning/'], { cwd: app });
+    assert.equal(res.status, 0, `subdirectory commit should succeed: ${res.stderr?.toString()}`);
+    assert.notEqual(
+      runGit(['ls-files', '--error-unmatch', 'app/.planning/phases/01-a/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'the wave manifest under app/.planning must not be committed',
+    );
+    assert.equal(
+      runGit(['ls-files', '--error-unmatch', 'app/.planning/phases/01-a/PLAN.md'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'the plan next to it must be committed',
     );
   });
 

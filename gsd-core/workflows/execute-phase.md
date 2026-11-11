@@ -837,7 +837,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    if [ "$SKIP_HOOKS" = "true" ]; then
      # Stash uncommitted changes under a named ref so we always pop (bare `git stash` strands them on hook/script failure). #3542: `refs/stash` is shared across worktrees, so this helper runs ONLY in the orchestrator's main checkout after all wave worktrees have been merged + removed; executors are forbidden from running any `git stash` subcommand (see `<destructive_git_prohibition>` in `agents/gsd-executor.md`).
      STASH_BEFORE=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
-     git stash push -u -m "gsd-post-wave-hook-$$" -- ":(top,exclude,glob).planning/**/wave-[1-9]-manifest.json" ":(top,exclude,glob).planning/**/wave-[1-9][0-9]-manifest.json" ":(top,exclude,glob).planning/**/wave-[1-9][0-9][0-9]-manifest.json" >/dev/null 2>&1 || true
+     git stash push -u -m "gsd-post-wave-hook-$$" -- ":(exclude,glob).planning/**/wave-[1-9]-manifest.json" ":(exclude,glob).planning/**/wave-[1-9][0-9]-manifest.json" ":(exclude,glob).planning/**/wave-[1-9][0-9][0-9]-manifest.json" >/dev/null 2>&1 || true
      STASH_AFTER=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
      STASHED=false
      [ -n "$STASH_AFTER" ] && [ "$STASH_AFTER" != "$STASH_BEFORE" ] && STASHED=true

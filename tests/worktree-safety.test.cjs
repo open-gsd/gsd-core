@@ -783,6 +783,29 @@ describe('planWorktreeWaveCleanup', () => {
     assert.equal(plan.reason, 'empty_manifest');
     assert.deepEqual(plan.entries, []);
   });
+
+  test('an empty manifest fails closed by default (#4853)', () => {
+    const plan = planWorktreeWaveCleanup('/repo/main', { orchestrator_root: '/repo/main', worktrees: [] });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.action, 'skip');
+    assert.equal(plan.reason, 'empty_manifest');
+  });
+
+  test('allowEmpty reconciles an empty manifest as a no-op (#4853)', () => {
+    const plan = planWorktreeWaveCleanup('/repo/main', { orchestrator_root: '/repo/main', worktrees: [] }, { allowEmpty: true });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.action, 'cleanup_wave');
+    assert.equal(plan.reason, 'empty_manifest');
+    assert.deepEqual(plan.entries, []);
+  });
+
+  test('allowEmpty does not accept a manifest whose entries were all rejected (#4853)', () => {
+    const plan = planWorktreeWaveCleanup('/repo/main', {
+      worktrees: [{ agent_id: 'x', worktree_path: '/repo/.claude/worktrees/agent-x', branch: 'feature/user-work', expected_base: 'abc123' }],
+    }, { allowEmpty: true });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'empty_manifest');
+  });
 });
 
 // ─── planWorktreeRecordAgent (#1298 writer verb) ──────────────────────────────
@@ -10002,7 +10025,32 @@ ${creationBash}
       }
     });
 
-    test('cleanup-wave reconciles and unlinks an empty manifest from an interrupted wave', () => {
+    test('cleanup-wave refuses an empty manifest, keeps it, and names the recovery (#4853)', () => {
+      const repoDir = createTempDir('cleanup-empty-refused-');
+      const gitOpts = { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS };
+      try {
+        gitOrThrow(['init', '-b', 'main', '-q'], gitOpts);
+        const phaseDir = path.join(repoDir, '.planning', 'phases', '01-feature');
+        fs.mkdirSync(phaseDir, { recursive: true });
+        const manifestPath = resolveWaveManifestPath(phaseDir, 1);
+        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }) + '\n');
+
+        const res = runNode([GSD_TOOLS, 'worktree', 'cleanup-wave', '--manifest', manifestPath],
+          { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS });
+        assert.equal(res.exitCode, 1, 'an empty manifest means recording failed, so cleanup-wave must not succeed');
+        const parsed = JSON.parse(res.stdout);
+        assert.equal(parsed.ok, false);
+        assert.equal(parsed.result.reason, 'empty_manifest');
+        assert.equal(parsed.manifest_unlinked, false);
+        assert.ok(fs.existsSync(manifestPath), 'the refused manifest must stay on disk');
+        assert.match(res.stderr, /--allow-empty/);
+        assert.match(res.stderr, /git branch --list 'worktree-agent-\*'/);
+      } finally {
+        cleanup(repoDir);
+      }
+    });
+
+    test('cleanup-wave --allow-empty reconciles an empty manifest from an interrupted wave, unblocking re-dispatch (#4853)', () => {
       const repoDir = createTempDir('cleanup-empty-manifest-');
       const gitOpts = { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS };
       try {
@@ -10042,10 +10090,10 @@ ${creationBash}
         assert.notEqual(preCleanupRes.status, 0, 'dispatch block must block while manifest exists');
         assert.match(preCleanupRes.stderr?.toString() || '', /BLOCKED: pre-existing wave manifest found at/);
 
-        // Run cleanup-wave on empty manifest: must succeed with exit 0 and unlink manifest
+        // With the explicit opt-in, cleanup-wave succeeds on the empty manifest and unlinks it
         const cleanupRes = runNode([
           GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
+          '--manifest', manifestPath, '--allow-empty',
         ], { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS });
         assert.equal(cleanupRes.exitCode, 0, `cleanup-wave must succeed on empty manifest: ${cleanupRes.stderr}`);
         const parsed = JSON.parse(cleanupRes.stdout);
@@ -10217,82 +10265,6 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('cleanup-wave fails closed when empty manifest is reconciled but unmanifested agent worktrees exist', () => {
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-unmanifested-wt-'));
-      try {
-        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
-        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
-        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
-        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
-        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
-
-        // Create an unmanifested agent worktree
-        const agentWtDir = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-leak');
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wave-1-leak', agentWtDir, 'HEAD'], { cwd: repoDir });
-
-        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
-        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
-
-        const cleanupRes = childProcess.spawnSync('node', [
-          GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
-        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
-
-        assert.notEqual(cleanupRes.status, 0, 'cleanup-wave must fail closed when unmanifested agent worktrees exist');
-        const parsed = JSON.parse(cleanupRes.stdout);
-        assert.equal(parsed.ok, false);
-        assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
-        assert.equal(parsed.manifest_unlinked, false);
-        assert.equal(fs.existsSync(manifestPath), true, 'manifest must NOT be unlinked when unmanifested worktrees exist');
-      } finally {
-        cleanup(repoDir);
-      }
-    });
-
-    test('cleanup-wave fails closed with unmanifested_worktrees_present when manifest is partial (recorded 1 agent, 2nd agent on disk)', () => {
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-partial-manifest-'));
-      try {
-        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
-        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
-        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
-        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
-        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
-        const baseSha = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repoDir }).trim();
-
-        const wt1 = path.join(repoDir, 'agent-wt1');
-        const wt2 = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-wt2');
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wt1', wt1, 'HEAD'], { cwd: repoDir });
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wave-1-wt2', wt2, 'HEAD'], { cwd: repoDir });
-
-        // Manifest records ONLY wt1 (partial manifest from crash after 1st agent)
-        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
-        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-        fs.writeFileSync(manifestPath, JSON.stringify({
-          orchestrator_root: repoDir,
-          worktrees: [{ agent_id: 'wt1', worktree_path: wt1, branch: 'worktree-agent-wt1', expected_base: baseSha }],
-        }));
-
-        const cleanupRes = childProcess.spawnSync('node', [
-          GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
-        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
-
-        assert.notEqual(cleanupRes.status, 0, 'cleanup-wave must fail closed when unmanifested agent worktree wt2 exists');
-        const parsed = JSON.parse(cleanupRes.stdout);
-        assert.equal(parsed.ok, false);
-        assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
-        assert.equal(parsed.manifest_unlinked, false);
-        assert.equal(fs.existsSync(manifestPath), true, 'manifest must NOT be unlinked on partial manifest');
-      } finally {
-        cleanup(repoDir);
-      }
-    });
-
     test('cleanup-wave in lane A succeeds despite active agent worktree in foreign lane B', () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-foreign-lane-'));
       try {
@@ -10345,39 +10317,6 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('cleanup-wave detects detached-HEAD agent worktree and fails closed with unmanifested_worktrees_present', () => {
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-detached-agent-'));
-      try {
-        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
-        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
-        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
-        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
-        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
-
-        const agentWtDir = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-detached');
-        gitOrThrow(['worktree', 'add', '--detach', agentWtDir, 'HEAD'], { cwd: repoDir });
-
-        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
-        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
-
-        const cleanupRes = childProcess.spawnSync('node', [
-          GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
-        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
-
-        assert.notEqual(cleanupRes.status, 0, 'cleanup-wave must fail closed on detached-HEAD agent worktree');
-        const parsed = JSON.parse(cleanupRes.stdout);
-        assert.equal(parsed.ok, false);
-        assert.equal(parsed.result.reason, 'unmanifested_worktrees_present');
-        assert.match(cleanupRes.stderr.toString(), /unmanifested_worktrees_present/);
-      } finally {
-        cleanup(repoDir);
-      }
-    });
-
     test('cleanup-wave ignores a foreign agent worktree under the same repo root', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-foreign-in-root-'));
       try {
@@ -10400,7 +10339,7 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
 
         const cleanupRes = childProcess.spawnSync('node', [
           GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
+          '--manifest', manifestPath, '--allow-empty',
         ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
 
         assert.equal(cleanupRes.status, 0, `foreign in-root agent must not block. stderr: ${cleanupRes.stderr?.toString()}`);
@@ -10408,156 +10347,6 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
         assert.equal(parsed.ok, true);
         assert.equal(parsed.manifest_unlinked, true);
         assert.equal(fs.existsSync(foreign), true, 'foreign agent worktree is left in place');
-      } finally {
-        cleanup(repoDir);
-      }
-    });
-
-    test('cleanup-wave ignores an agent that names the wave but not this phase directory', () => {
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-other-phase-'));
-      try {
-        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
-        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
-        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
-        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
-        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
-
-        const other = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-other');
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-wave-1-other', other, 'HEAD'], { cwd: repoDir });
-
-        const phaseDir = path.join(repoDir, '.planning', 'phases', '01-foundation');
-        const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
-        fs.mkdirSync(phaseDir, { recursive: true });
-        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
-
-        const cleanupRes = childProcess.spawnSync('node', [
-          GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
-        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
-
-        assert.equal(cleanupRes.status, 0, `other-phase agent must not block. stderr: ${cleanupRes.stderr?.toString()}`);
-        assert.equal(fs.existsSync(manifestPath), false);
-        assert.equal(fs.existsSync(other), true);
-      } finally {
-        cleanup(repoDir);
-      }
-    });
-
-    test('an unresolvable listed agent worktree counts as present', () => {
-      const ghost = path.join(os.tmpdir(), `worktree-agent-wave-1-ghost-${Date.now()}`);
-      const manifestPath = path.join(os.tmpdir(), '.planning', 'wave-1-manifest.json');
-      const porcelain = `worktree ${ghost}\nHEAD abc\ndetached\n`;
-      const result = executeWorktreeWaveCleanupPlan({
-        ok: true,
-        repoRoot: os.tmpdir(),
-        manifestPath,
-        action: 'cleanup_wave',
-        discovery: 'manifest',
-        reason: 'ok',
-        entries: [],
-      }, {
-        execGit: (args) => {
-          if (args.join(' ') === 'worktree list --porcelain') {
-            return { exitCode: 0, stdout: porcelain, stderr: '' };
-          }
-          throw new Error(`unexpected git call: ${args.join(' ')}`);
-        },
-        statSync: () => {
-          const err = new Error('eacces');
-          err.code = 'EACCES';
-          throw err;
-        },
-      });
-      assert.equal(result.ok, false);
-      assert.equal(result.reason, 'unmanifested_worktrees_present');
-    });
-
-    test('an unresolvable agent that does not name this wave does not block', () => {
-      const ghost = path.join(os.tmpdir(), `agent-quick-unreadable-${Date.now()}`);
-      const manifestPath = path.join(os.tmpdir(), '.planning', 'wave-1-manifest.json');
-      const porcelain = `worktree ${ghost}\nbranch refs/heads/worktree-agent-quick\n`;
-      const result = executeWorktreeWaveCleanupPlan({
-        ok: true,
-        repoRoot: os.tmpdir(),
-        manifestPath,
-        action: 'cleanup_wave',
-        discovery: 'manifest',
-        reason: '',
-        entries: [],
-      }, {
-        execGit: (args) => {
-          if (args.join(' ') === 'worktree list --porcelain') {
-            return { exitCode: 0, stdout: porcelain, stderr: '' };
-          }
-          throw new Error(`unexpected git call: ${args.join(' ')}`);
-        },
-        statSync: () => {
-          const err = new Error('eacces');
-          err.code = 'EACCES';
-          throw err;
-        },
-      });
-      assert.equal(result.ok, true, 'an unreadable foreign agent is not this wave');
-      assert.equal(result.reason, 'empty_manifest');
-    });
-
-    test('wave-1 does not own wave-10 or wave-1x, and a phase directory named with wave-1 does not own a nested foreign agent', () => {
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wave-token-'));
-      try {
-        const phaseDir = path.join(repoDir, '.planning', 'phases', '04-wave-1-redesign');
-        const foreign = path.join(phaseDir, '.claude', 'worktrees', 'agent-quick');
-        const owned = path.join(phaseDir, '.claude', 'worktrees', 'worktree-agent-wave-1');
-        const wave1x = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1x');
-        const wave10 = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-10');
-        const wave1dash = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-notes');
-        for (const dir of [foreign, owned, wave1x, wave10, wave1dash]) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        const run = (manifestPath, wt, branch) => executeWorktreeWaveCleanupPlan({
-          ok: true,
-          repoRoot: repoDir,
-          manifestPath,
-          action: 'cleanup_wave',
-          discovery: 'manifest',
-          reason: '',
-          entries: [],
-        }, {
-          execGit: (args) => {
-            if (args.join(' ') === 'worktree list --porcelain') {
-              return { exitCode: 0, stdout: `worktree ${wt}\nbranch refs/heads/${branch}\n\n`, stderr: '' };
-            }
-            throw new Error(`unexpected git call: ${args.join(' ')}`);
-          },
-        });
-        const phaseManifest = path.join(phaseDir, 'wave-1-manifest.json');
-        const foreignResult = run(phaseManifest, foreign, 'worktree-agent-quick');
-        assert.equal(foreignResult.reason, 'empty_manifest', 'phase-directory wave-1 must not own a nested foreign agent');
-        const ownedResult = run(phaseManifest, owned, 'worktree-agent-wave-1');
-        assert.equal(ownedResult.reason, 'unmanifested_worktrees_present', 'an explicit wave-1 agent under that phase still counts');
-        const rootManifest = path.join(repoDir, '.planning', 'wave-1-manifest.json');
-        assert.equal(run(rootManifest, wave1x, 'worktree-agent-wave-1x').reason, 'empty_manifest', 'wave-1x is not wave 1');
-        assert.equal(run(rootManifest, wave10, 'worktree-agent-wave-10').reason, 'empty_manifest', 'wave-10 is not wave 1');
-        assert.equal(run(rootManifest, wave1dash, 'worktree-agent-wave-1-notes').reason, 'unmanifested_worktrees_present', 'wave-1-notes names wave 1');
-        const dottedPhase = path.join(repoDir, '.planning', 'phases', '01-v1.2');
-        const dottedAgent = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-1-dotted');
-        fs.mkdirSync(dottedAgent, { recursive: true });
-        const dotted = run(
-          path.join(dottedPhase, 'wave-1-manifest.json'),
-          dottedAgent,
-          'worktree-agent-01-v1X2-wave-1',
-        );
-        assert.equal(dotted.reason, 'empty_manifest', 'a dot in the phase name is literal, so 01-v1X2 is not 01-v1.2');
-        const shortPhase = path.join(repoDir, '.planning', 'phases', '01');
-        const wave101 = path.join(repoDir, '.claude', 'worktrees', 'worktree-agent-wave-101');
-        fs.mkdirSync(wave101, { recursive: true });
-        const short = run(
-          path.join(shortPhase, 'wave-1-manifest.json'),
-          wave101,
-          'worktree-agent-wave-101',
-        );
-        assert.equal(short.reason, 'empty_manifest', 'phase name 01 must not turn wave-101 into wave-1');
       } finally {
         cleanup(repoDir);
       }
@@ -10600,38 +10389,6 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       }
     });
 
-    test('cleanup-wave ignores stale prunable worktree whose directory is gone', () => {
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-prunable-agent-'));
-      try {
-        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
-        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
-        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
-        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
-        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
-
-        const agentWtDir = path.join(repoDir, 'worktree-agent-prunable');
-        gitOrThrow(['worktree', 'add', '-b', 'worktree-agent-prunable', agentWtDir, 'HEAD'], { cwd: repoDir });
-        cleanup(agentWtDir);
-
-        const manifestPath = path.join(repoDir, '.planning', 'wave-1-manifest.json');
-        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
-
-        const cleanupRes = childProcess.spawnSync('node', [
-          GSD_TOOLS, 'worktree', 'cleanup-wave',
-          '--manifest', manifestPath,
-        ], { cwd: repoDir, timeout: SUBPROCESS_TIMEOUT_MS });
-
-        assert.equal(cleanupRes.status, 0, `cleanup-wave must ignore gone prunable worktree. stderr: ${cleanupRes.stderr?.toString()}`);
-        const parsed = JSON.parse(cleanupRes.stdout);
-        assert.equal(parsed.ok, true);
-        assert.equal(parsed.manifest_unlinked, true);
-      } finally {
-        cleanup(repoDir);
-      }
-    });
 
     test('cmdWorktreeManifestPath rejects .planning tree root itself as uncontained', () => {
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-root-dir-'));
