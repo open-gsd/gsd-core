@@ -1745,7 +1745,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const { scanBashCommand, workSpent } = require(HOOK_PATH);
       const cmd = `echo ${'$'.repeat(1024 * 1024 - 'echo ; ls'.length)}; ls`;
       assert.equal(scanBashCommand(cmd), null);
-      assert.deepEqual(workSpent(), { scan: cmd.length, reader: 0 });
+      assert.deepEqual(workSpent(), { scan: cmd.length, reader: 0, separators: 1, exhausted: false });
       const read = `echo ${'$'.repeat(1024 * 1024 - 'echo ; cat .env'.length)}; cat .env`;
       assert.deepEqual(scanBashCommand(read), { code: 'secret-read', text: '.env' });
     });
@@ -2007,22 +2007,35 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     // hook is spawned once, to check the code it emits.
     const R = String.raw;
     const {
-      scanBashCommand, findSecretRead, workSpent, MAX_SCAN_CHARACTERS,
+      scanBashCommand, scanDebuggerSpawn, findSecretRead, workSpent, MAX_SCAN_CHARACTERS, MAX_SCAN_SEPARATORS,
     } = require(HOOK_PATH);
     const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
-    const spentBudget = () => {
-      const w = workSpent();
-      return w.scan === MAX_SCAN_CHARACTERS || w.reader === MAX_SCAN_CHARACTERS;
-    };
+    const spentBudget = () => workSpent().exhausted;
+    const BIG = 2 ** 40;
     const need = (cmd) => {
-      scanBashCommand(cmd, 2 ** 40);
+      scanBashCommand(cmd, BIG, BIG);
       return workSpent();
     };
     const runs = (unit) => unit.repeat(Math.floor((1024 * 1024 - 'echo '.length) / unit.length));
 
-    test('the budget is eight times the length cap', () => {
+    test('the budget is eight times the length cap, and a quarter of a million separators', () => {
       assert.equal(MAX_SCAN_CHARACTERS, 8 * 1024 * 1024);
+      assert.equal(MAX_SCAN_SEPARATORS, 256 * 1024);
     });
+
+    // The scan's work is mostly per segment, which the character budgets do not
+    // see: 1 MiB of these after a reading trigger took 4 to 6 s of CPU with
+    // those alone, against about 2 s for the costliest shape they do bound.
+    for (const unit of ['x;y|', 'a;b&', 'a|b c|', 'a|(b)|', 'a|$x|']) {
+      test(`in process: a megabyte of \`${unit}\` spends the separator budget and is command-too-complex`, () => {
+        const cmd = `echo $'a'; ${runs(unit)}`;
+        assert.deepEqual(scanBashCommand(cmd), TOO_COMPLEX);
+        assert.ok(spentBudget(), `1 MiB of ${unit}`);
+        // The separators stop it, long before the characters would: its first
+        // tokenize holds more than the separator budget.
+        assert.ok(workSpent().scan <= cmd.length, `scan ${workSpent().scan}`);
+      });
+    }
 
     for (const unit of ['$$(', '$$$(']) {
       test(`in process: a megabyte of \`${unit}\` spends the budget and is command-too-complex`, () => {
@@ -2073,12 +2086,11 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
 
     // Each operand's last segment was cut with `/[\\/]+$/`, quadratic in a run
     // of separators, and each reading checks each operand again at each `$( )`
-    // level that holds dollar-quoting. That cost is a regex's backtracking,
-    // which no step counter sees, so this row spawns the hook: with the linear
-    // cut it is denied in about 0.1 s, and without it the read took 23 to 210 s.
-    test('a read after two dollar-quoted `$( )` levels around a 200,000-separator operand is still named', () => {
+    // level that holds dollar-quoting. With that regex the read took 23 to 210 s;
+    // with lastSegment's linear loop it is named in about 0.1 s, in process.
+    test('in process: a read after two dollar-quoted `$( )` levels around a 200,000-separator operand is still named', () => {
       const cmd = `cat $(cat $(cat ${'/'.repeat(200000)}x $'a') $'a') .env`;
-      assertBlocked(runHook(bash(cmd)), 'read after a long separator run', { tool: 'Bash', path: '.env' });
+      assert.deepEqual(scanBashCommand(cmd), { code: 'secret-read', text: '.env' });
     });
 
     test('in process: the budget is per command', () => {
@@ -2091,8 +2103,10 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     test('in process: the scan budget is compared at limit - 1, limit and limit + 1', () => {
       // No reading trigger: the command is tokenized once, so its work is its length.
       const cmd = `echo ${'a'.repeat(995)}`;
-      assert.deepEqual(need(cmd), { scan: 1000, reader: 0 });
+      assert.deepEqual(need(cmd), { scan: 1000, reader: 0, separators: 0, exhausted: false });
       assert.deepEqual(scanBashCommand(cmd, 999), TOO_COMPLEX, 'limit - 1');
+      // A refused charge charges nothing, so workSpent reports the work done.
+      assert.deepEqual(workSpent(), { scan: 0, reader: 0, separators: 0, exhausted: true });
       assert.equal(scanBashCommand(cmd, 1000), null, 'limit');
       assert.equal(scanBashCommand(cmd, 1001), null, 'limit + 1');
     });
@@ -2105,6 +2119,31 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, reader - 1), TOO_COMPLEX, 'limit - 1');
       assert.equal(scanBashCommand(cmd, reader), null, 'limit');
       assert.equal(scanBashCommand(cmd, reader + 1), null, 'limit + 1');
+    });
+
+    test('in process: the separator budget is compared at limit - 1, limit and limit + 1', () => {
+      // No reading trigger: one tokenize, a hundred `;`.
+      const cmd = 'echo a; '.repeat(100);
+      const { separators } = need(cmd);
+      assert.equal(separators, 100);
+      assert.deepEqual(scanBashCommand(cmd, BIG, separators - 1), TOO_COMPLEX, 'limit - 1');
+      assert.equal(scanBashCommand(cmd, BIG, separators), null, 'limit');
+      assert.equal(scanBashCommand(cmd, BIG, separators + 1), null, 'limit + 1');
+    });
+
+    test('in process: the debugger-spawn check spends what the secret scan left', () => {
+      // main() runs it after scanBashCommand on the same budget, so the hook's
+      // work on one command is bounded as a whole.
+      const cmd = `echo $'a'; ${'echo a; '.repeat(100)}`;
+      scanBashCommand(cmd, BIG, BIG);
+      const scanned = workSpent().separators;
+      assert.equal(scanDebuggerSpawn(cmd), null);
+      const total = workSpent().separators;
+      assert.ok(total > scanned, `debugger check ${total - scanned} separators`);
+      scanBashCommand(cmd, BIG, total - 1);
+      assert.deepEqual(scanDebuggerSpawn(cmd), TOO_COMPLEX, 'one short');
+      scanBashCommand(cmd, BIG, total);
+      assert.equal(scanDebuggerSpawn(cmd), null, 'the whole need');
     });
 
     test('in process: the readings, the second look and the heredoc passes draw on one budget', () => {

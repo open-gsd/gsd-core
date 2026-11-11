@@ -219,12 +219,15 @@ const MAX_NESTING_DEPTH = 3;
 // own length on top, at each level; and a command holding `<<` is scanned
 // again under #5513's other heredoc readings (findSecretReadUnderOtherReadings),
 // up to three passes, or five when a heredoc tag holds a brace. A heredoc file
-// write holding a trigger therefore costs about 24 times its length. The most
-// any of 1,384,856 distinct real agent commands needed was 3,040,992 (a
-// 126,708-character heredoc write), and the least-cheap shape measured, a
-// megabyte of `$$(`, spends the whole budget in about 2 s of CPU on a host at
-// load 30-45. That keeps a denial well inside the 8 s after which the Kilo and
-// OpenCode adapters allow a command. A command that needs more is denied as
+// write holding a trigger therefore costs about 24 times its length. The
+// separators every tokenize finds are bounded separately (MAX_SCAN_SEPARATORS),
+// the debugger-spawn check's included. The most any of 1,384,856 distinct real
+// agent commands needed was 3,040,992 (a 126,708-character heredoc write). The
+// costliest shape measured is 1 MiB of one long segment after a `$'a'`, which
+// the spawned hook scans to the end in at most 1.9 s wall, 1.6 s CPU, at load
+// 30-34 on 32 cores (`next`'s own costliest, 1 MiB of `x;y|`, took 1.0 s and
+// 1.4 s at load 24). That keeps the hook well inside the 8 s after which the
+// Kilo and OpenCode adapters allow a command. A command that needs more is denied as
 // `command-too-complex` rather than scanned on. Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
@@ -276,7 +279,7 @@ function lineIsReadOnly(command) {
 }
 
 function lineIsReadOnlyUnder(command, reading) {
-  const { tokens, nested, unreadable } = tokenize(command, reading);
+  const { tokens, nested, unreadable } = tokenizeCharged(command, reading);
   if (nested.length > 0 || unreadable) return false;
   const bySeg = new Map();
   for (const t of tokens) {
@@ -1996,7 +1999,7 @@ function reconstructedScript(words) {
 
 // Same rule applied to a `<( … )` / `>( … )` inner script's first segment.
 function reconstructedProcsub(inner, reading) {
-  const { tokens } = tokenize(inner, reading);
+  const { tokens } = tokenizeCharged(inner, reading);
   const words = [];
   for (const t of tokens) {
     if (t.kind === 'sep') break;
@@ -2080,6 +2083,10 @@ function findSecretRead(command, depth) {
     scanBudget = MAX_SCAN_CHARACTERS;
     readerSteps = MAX_SCAN_CHARACTERS;
     budgetSize = MAX_SCAN_CHARACTERS;
+    separatorSteps = MAX_SCAN_SEPARATORS;
+    separatorSize = MAX_SCAN_SEPARATORS;
+    readerSpent = false;
+    scanSpent = false;
   }
   let hit = null;
   let failure = null;
@@ -2119,10 +2126,14 @@ let budgetSize = MAX_SCAN_CHARACTERS;
 // an 8 s timeout and allow a command whose hook it kills, so the bound is on
 // the whole command. `budget` is for tests, which pin the boundary on a small
 // one; the hook passes none.
-function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS) {
+function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
   scanBudget = budget;
   readerSteps = budget;
   budgetSize = budget;
+  separatorSteps = separatorBudget;
+  separatorSize = separatorBudget;
+  readerSpent = false;
+  scanSpent = false;
   budgetHeld = true;
   try {
     return findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
@@ -2131,11 +2142,31 @@ function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS) {
   }
 }
 
-// The work the last scan charged, in characters, against the budgets it had:
-// scanCommand's (`scan`) and the readers' (`reader`).
+// The debugger-spawn check of `command` (findDebuggerCliSpawnEitherWay), on
+// what scanBashCommand left of the command's budget: a `debugger-cli-spawn`
+// block, `command-too-complex` when the budget runs out first, or null.
+function scanDebuggerSpawn(command) {
+  budgetHeld = true;
+  try {
+    const spawn = findDebuggerCliSpawnEitherWay(command);
+    return spawn === null ? null : { code: 'debugger-cli-spawn', text: spawn };
+  } catch (e) {
+    if (e === SCAN_BUDGET_SPENT) return { code: 'command-too-complex', text: '' };
+    throw e;
+  } finally {
+    budgetHeld = false;
+  }
+}
+
+// The work the last scan charged against the budgets it had: characters to
+// scanCommand's (`scan`) and the readers' (`reader`), separators to
+// separatorSteps (`separators`), and whether a charge found one spent
+// (`exhausted`). A refused charge charges nothing, so these are work done.
 function workSpent() {
-  const spent = (left) => budgetSize - Math.max(left, 0);
-  return { scan: spent(scanBudget), reader: spent(readerSteps) };
+  const spent = (left) => budgetSize - left;
+  return {
+    scan: spent(scanBudget), reader: spent(readerSteps), separators: separatorSize - separatorSteps, exhausted: readerSpent || scanSpent,
+  };
 }
 
 // Set while readAsBefore runs: ansiCBraceClose, findParenClose, doubleQuoteEnd
@@ -2208,15 +2239,76 @@ let scanBudget = MAX_SCAN_CHARACTERS;
 // 1,384,856 real agent commands above passes is 339,388.
 let readerSteps = MAX_SCAN_CHARACTERS;
 
+// Set when a charge would take more than is left: readerSpent for readerSteps,
+// scanSpent for scanBudget and separatorSteps. Every later charge to the same
+// budget in the same command then throws too, so a pass that finds it spent
+// stops at once, and the counters keep the work actually done (workSpent).
+// The readers' latch stops only the readings that charge them, so the plain
+// reading still runs, and can still name a read, after they have spent theirs.
+let readerSpent = false;
+let scanSpent = false;
+
+// The separators (`;`, `|`, `&&`, a newline, `(` …) the tokenizes of one Bash
+// command may produce, across every pass (separatorSteps). A scan's work is
+// mostly per segment — grouping its tokens, resolving its command, checking
+// its operands — so a command cut into many short segments costs far more per
+// character than one long one, which the character budgets do not see: with
+// those alone, 1 MiB of `x;y|` after a `$'a'` took about 5.7 s of CPU, and
+// 1 MiB of `a ` 0.6 s. With this budget each such shape is denied in under
+// half a second, and the costliest shape left is one long segment that spends
+// the character budget. The most any of the 1,384,856 real agent commands
+// above needs is 20,043 (a 4,543-character heredoc commit message).
+const MAX_SCAN_SEPARATORS = 256 * 1024;
+
+// The separators left in the current command, set with scanBudget.
+let separatorSteps = MAX_SCAN_SEPARATORS;
+
+// The size separatorSteps was last set to (workSpent).
+let separatorSize = MAX_SCAN_SEPARATORS;
+
 // Charges `n` characters read to readerSteps, or throws SCAN_BUDGET_SPENT,
 // charging nothing, when that is more than is left.
 function chargeReader(n) {
   if (n <= 0) return;
-  if (n > readerSteps) {
-    readerSteps = -1;
+  if (readerSpent || n > readerSteps) {
+    readerSpent = true;
     throw SCAN_BUDGET_SPENT;
   }
   readerSteps -= n;
+}
+
+// Charges `n` to scanBudget the same way.
+function chargeScan(n) {
+  if (scanSpent || n > scanBudget) {
+    scanSpent = true;
+    throw SCAN_BUDGET_SPENT;
+  }
+  scanBudget -= n;
+}
+
+// Charges `n` separators to separatorSteps the same way.
+function chargeSeparators(n) {
+  if (scanSpent || n > separatorSteps) {
+    scanSpent = true;
+    throw SCAN_BUDGET_SPENT;
+  }
+  separatorSteps -= n;
+}
+
+// tokenize, charged: its separators to separatorSteps, and, for a scan
+// (scanCommand), `str`'s characters to scanBudget before it runs. Every
+// tokenize the hook runs on a Bash command goes through here, so its work on
+// the command is bounded as a whole. The others — the debugger-spawn check, the
+// exemption's read-only check and a process substitution's first segment —
+// charge separators only: their cost is per segment, a tokenize alone is cheap
+// per character, and they read text the scan has already charged.
+function tokenizeCharged(str, reading, chargeCharacters = false) {
+  if (chargeCharacters) chargeScan(str.length);
+  const result = tokenize(str, reading);
+  let separators = 0;
+  for (const t of result.tokens) if (t.kind === 'sep') separators++;
+  chargeSeparators(separators);
+  return result;
 }
 
 // A reader's -1 for a `${` that does not close: the text from `read` to the
@@ -2302,12 +2394,7 @@ function secretRead(text) {
 // shell ('bash' | 'zsh' | 'dash') whose reading it is; an ANSI-C reading
 // (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
-  if (command.length > scanBudget) {
-    scanBudget = -1;
-    throw SCAN_BUDGET_SPENT;
-  }
-  scanBudget -= command.length;
-  const { tokens, nested, unreadable } = tokenize(command, reading);
+  const { tokens, nested, unreadable } = tokenizeCharged(command, reading, true);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -2434,7 +2521,7 @@ function isDebuggerAgent(value) {
 
 // Returns the `--agent` value text of a debugger launch, or null.
 function findDebuggerCliSpawn(command, depth) {
-  const { tokens, nested } = tokenize(command);
+  const { tokens, nested } = tokenizeCharged(command);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -2783,8 +2870,8 @@ function main() {
       exemption.bashLine = command;
       const hit = scanBashCommand(command);
       if (hit !== null) emitBlock(hit.code, tool, hit.text);
-      const spawn = findDebuggerCliSpawnEitherWay(command);
-      if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+      const spawn = scanDebuggerSpawn(command);
+      if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
       }
@@ -2804,7 +2891,7 @@ function main() {
 }
 
 module.exports = {
-  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, tokenize, workSpent,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
   MAX_SCAN_CHARACTERS,
 };
 
