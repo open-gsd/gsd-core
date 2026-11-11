@@ -93,7 +93,7 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
     b('# Create PR branch from target'),
     extractPickLoop(text),
     b('git checkout "$CURRENT_BRANCH"'),
-    b('DIFF_PATHS=$(TO=60 _to git -c core.quotepath=off diff'),
+    b('{ DIFF_PATHS=$('),
     b('git update-ref "$PENDING_REF"'),
   ].join('\n');
   return runSh(script, cwd);
@@ -900,7 +900,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(rwt, /^run-with-timeout 60 -- git -c color.ui=never -c diff.relative=false log -p /m, 'the patch walk ran bounded (60 s), with its output config pinned');
     // Every walk and the checkout take the 60 s bound, not the 10 s default.
     for (const call of ['git patch-id --stable', 'git rev-list --no-merges --left-only', 'git rev-list --no-merges --topo-order --right-only',
-      'git log --oneline', 'git rev-list --reverse', 'git checkout -q --no-track -B', 'git -c core.quotepath=off diff --name-only', 'git rev-list --count']) {
+      'git log --oneline', 'git rev-list --reverse', 'git checkout -q --no-track -B', 'git diff -z --name-only', 'git rev-list --count']) {
       assert.ok(splitLines(rwt).some((l) => l.startsWith(`run-with-timeout 60 -- ${call}`)), `${call} ran with TO=60:\n${rwt}`);
     }
   });
@@ -1258,17 +1258,19 @@ describe('#5469 pr-branch published marker (real git)', () => {
     });
   }
 
-  // git quotes a non-ASCII path by default (core.quotePath); the pick rule must still see it under .planning/.
-  test('default mode: a commit that touches only a non-ASCII "other" planning path is not picked', () => {
-    const dir = repo();
-    write(dir, '.planning/notes-é.md', 'n\n');
-    commitAll(dir, 'docs: notes');
-    write(dir, 'x.txt', 'x\n');
-    commitAll(dir, 'feat: code');
-    const r = publish(dir, 'main', { mode: 'false' });
-    assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(changed(dir), ['x.txt']);
-  });
+  // git quotes a non-ASCII path, and one with a double quote, in a plain name list; the pick rule must still see it under .planning/.
+  for (const name of ['notes-é.md', 'a"b.md']) {
+    test(`default mode: a commit that touches only the "other" planning path ${name} is not picked`, { skip: name.includes('"') && process.platform === 'win32' }, () => {
+      const dir = repo();
+      write(dir, `.planning/${name}`, 'n\n');
+      commitAll(dir, 'docs: notes');
+      write(dir, 'x.txt', 'x\n');
+      commitAll(dir, 'feat: code');
+      const r = publish(dir, 'main', { mode: 'false' });
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(changed(dir), ['x.txt']);
+    });
+  }
 
   // The matcher skips what the pick list skips: an unpublished config.json-only commit below the published copy.
   test('default mode: a new config.json-only commit below the rebased published round: no warning, only round 2 is replayed', () => {

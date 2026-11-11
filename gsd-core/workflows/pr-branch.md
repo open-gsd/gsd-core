@@ -139,7 +139,7 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout (no timeout binary); walks and checkout use TO=60.
 _to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
 # picked SHA — rc 0 when analyze_commits' classification picks SHA, or the lookup fails.
-picked() { local F; F=$(_to git -c core.quotepath=off diff-tree --no-commit-id --name-only -r "$1") || return 0; [ -n "$F" ] && { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; }; }
+picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | tr '\0' '\n') || return 0; [ -n "$F" ] && { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; }; }
 
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for each path TIP changed
 # since their fork (squash/rebase), or gh reports $PR_BRANCH merged into it with head TIP.
@@ -450,7 +450,6 @@ Classify commits:
 ```bash
 # Get all commits ahead of the base: these are the only candidates to pick
 TO=60 _to git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA"
-# Pick list, oldest first.
 REVS=$(TO=60 _to git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA") || { echo "Cannot list the commits to pick; re-run." >&2; exit 1; }
 INCLUDED_COMMITS=$(for H in $(printf '%s' "$REVS"); do picked "$H" && echo "$H"; done)
 ```
@@ -459,7 +458,7 @@ For each commit, check what it touches:
 
 ```bash
 # For each commit hash
-FILES=$(git -c core.quotepath=off diff-tree --no-commit-id --name-only -r $HASH)
+FILES=$(git diff-tree -z --no-commit-id --name-only -r $HASH | tr '\0' '\n')
 NON_PLANNING=$(echo "$FILES" | grep -Ecv '^(\.planning/|$)' || true)
 STRUCTURAL=$(echo "$FILES" | grep -Ec "$STRUCTURAL_RE" || true)
 PLANNING_COUNT=$(echo "$FILES" | grep -c "^\.planning/" || true)
@@ -646,8 +645,8 @@ would report itself as failed on every phase that touched STATE.md, which is eve
 
 ```bash
 # Fail closed: an empty list passes both gates.
-DIFF_PATHS=$(TO=60 _to git -c core.quotepath=off diff --name-only "$TARGET_SHA".."$PR_BRANCH") &&
-  DELETED=$(TO=60 _to git -c core.quotepath=off diff --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH") ||
+{ DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n') &&
+  DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n'); } ||
   { echo "Cannot read $PR_BRANCH; re-run." >&2; exit 1; }
 FORBIDDEN=$(echo "$DIFF_PATHS" | grep -Ec "$FORBIDDEN_RE" || true)
 PLANNING_TOTAL=$(echo "$DIFF_PATHS" | grep -c "^\.planning/" || true)
