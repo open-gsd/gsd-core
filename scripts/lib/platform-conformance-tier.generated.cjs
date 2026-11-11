@@ -276,6 +276,7 @@ module.exports = {
   "tests/runtime-artifact-layout.test.cjs",
   "tests/runtime-converters.test.cjs",
   "tests/runtime-descriptor-owner.test.cjs",
+  "tests/runtime-home-hermeticity.test.cjs",
   "tests/runtime-homes-descriptor-drive.test.cjs",
   "tests/runtime-identity.test.cjs",
   "tests/runtime-launcher-parity.test.cjs",
