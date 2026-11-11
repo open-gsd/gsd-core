@@ -381,6 +381,13 @@ const MACOS_CATEGORIES = [
   { name: 'symlink-keyword', test: (content) => /\bsymlink/i.test(content) },
   // #6002: realpath calls normalize the macOS /var -> /private/var tmpdir symlink.
   { name: 'realpath', test: (content) => /\brealpath(Sync)?\b/.test(content) },
+  // #5798: tests/helpers.cjs wraps that normalization in canonicalizePath / createCanonicalTempDir,
+  // and tests/helpers/fs-failure.cjs's runGateWithStatFailure canonicalizes the phase directory it
+  // mocks. A test that calls any of them needs the real macOS tmpdir symlink without naming realpath.
+  {
+    name: 'canonical-tmpdir',
+    test: (content) => /\b(?:canonicalizePath|createCanonicalTempDir|runGateWithStatFailure)\s*\(/.test(content),
+  },
 ];
 
 /** Keywords after which a `/` begins a regex literal rather than a division. */
