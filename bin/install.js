@@ -6697,8 +6697,9 @@ function resolveSymlinkWriteTarget(filePath) {
 
 /**
  * #5716: refuse a symlinked Codex config.toml unless GSD_ALLOW_SYMLINKED_DEST is set, as
- * installCodexConfig and the hooks.json writer refuse it. Callers run this only when they
- * are about to write config.toml, so a link GSD would leave alone is never refused.
+ * installCodexConfig and the hooks.json writer refuse it. Callers run this only for a run
+ * that will write config.toml, so a link GSD would leave alone is never refused, and run
+ * it before that run changes anything else, so a refused run leaves the install whole.
  * Returns whether config.toml is a symlink, so a caller that goes on to write it acts on
  * the same observation the check made.
  */
@@ -8770,6 +8771,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   let removedCount = 0;
+
+  // #5716: the config.toml strip further down refuses a symlinked config.toml it would
+  // change unless GSD_ALLOW_SYMLINKED_DEST is set. Refuse here, before anything is
+  // removed, so a refused uninstall leaves the install whole instead of deleting the
+  // skills, agent files and hooks while config.toml still registers them. A link the
+  // strip would leave unchanged is not refused.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (fs.existsSync(codexConfigPath)) {
+      const content = fs.readFileSync(codexConfigPath, 'utf8');
+      if (stripGsdFromCodexConfig(content) !== content) assertCodexConfigLinkAllowed(codexConfigPath);
+    }
+  }
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR uninstall run that died between staging and
@@ -11452,6 +11466,21 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     rollback();
   };
 
+  // #5716: when the profile registers no Codex agent roles, this install strips GSD content
+  // from config.toml and the validated rewrite after it always writes the file, so without
+  // GSD_ALLOW_SYMLINKED_DEST a symlinked config.toml is refused even when the strip has
+  // nothing to change. Refuse here, before the install's first write, so a refused run
+  // changes nothing instead of depending on the best-effort pre-config rollback, which
+  // leaves saveLocalPatches's gsd-local-patches/ backup behind. The roles follow the
+  // profile resolved from a committed Runtime Surface above, before preflight. A dangling
+  // link is skipped, as the strip skips it.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (!_codexAgentRolesEnabled() && fs.existsSync(codexConfigPath)) {
+      assertCodexConfigLinkAllowed(codexConfigPath);
+    }
+  }
+
   // Save any locally modified GSD files before they get wiped.
   // The pristine context lets saveLocalPatches populate gsd-pristine/ via
   // the install transform pipeline, giving the reapply-patches Step 5
@@ -12498,10 +12527,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // resolvedProfile. Reuse the same helper that powers `--uninstall`.
   if (!_codexAgentRolesEnabled() && hostBehaviorsFor(runtime).tomlConfigInstall) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
+    // #5716: a symlinked config.toml without GSD_ALLOW_SYMLINKED_DEST was already refused
+    // before the install's first write (writeStrippedCodexConfig still checks at the write).
     if (fs.existsSync(codexConfigPath)) {
-      // #5716: the validated config.toml rewrite later in this install always writes
-      // this file, so a symlink is refused here even when the strip changes nothing.
-      assertCodexConfigLinkAllowed(codexConfigPath);
       const existing = fs.readFileSync(codexConfigPath, 'utf8');
       const cleaned = stripGsdFromCodexConfig(existing);
       if (cleaned !== existing) {
