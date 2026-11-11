@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { CLI_SURFACE, UNDECLARED_VERBS, specFor } = require('../gsd-core/bin/lib/cli-surface.cjs');
 
@@ -20,7 +20,8 @@ const COMMITTED = path.join(ROOT, 'docs', 'CLI-SURFACE-MANIFEST.json');
 
 function runGen(args) {
   const r = runNode([SCRIPT, ...args], { cwd: ROOT, timeoutMs: GENERATOR_SCRIPT_TIMEOUT_MS });
-  return { code: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
+  // A timeout, kill or spawn failure is not an exit: `code` is then the seam's one-line summary, which equals no number.
+  return { code: r.outcome === OUTCOME.EXITED ? r.exitCode : r.summary, stdout: r.stdout, stderr: r.stderr };
 }
 
 function withTmp(t) {
