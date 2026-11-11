@@ -32,9 +32,8 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const { parseDecisions, extractDecisions } = require('../gsd-core/bin/lib/decisions.cjs');
 const { iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-const { runGsdTools, createTempProject, cleanup, canonicalizePath } = require('./helpers.cjs');
-const { routeCheckCommand } = require('../gsd-core/bin/lib/check-command-router.cjs');
-const { writeMethodFailurePreload } = require('./helpers/fs-failure.cjs');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { writeMethodFailurePreload, runGateWithStatFailure: runStatFailureGate } = require('./helpers/fs-failure.cjs');
 const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 
 // ─── Regression #1364: markdown-header fallback ───────────────────────────────
@@ -3352,39 +3351,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   // in-process by mocking fs.statSync for the phase dir alone, not by removing
   // permission bits: root bypasses them and Windows ignores them.
   function runGateWithStatFailure(t, subcommand, code) {
-    const realStatSync = fs.statSync;
-    const resolvedPhaseDir = canonicalizePath(phaseDir);
-    t.mock.method(fs, 'statSync', (p, ...rest) => {
-      if (typeof p === 'string') {
-        let resolvedPath;
-        try {
-          resolvedPath = canonicalizePath(p);
-        } catch {
-          return realStatSync.call(fs, p, ...rest);
-        }
-        if (resolvedPath !== resolvedPhaseDir) return realStatSync.call(fs, p, ...rest);
-        const err = new Error(`${code}: injected stat failure, stat '${p}'`);
-        err.code = code;
-        throw err;
-      }
-      return realStatSync.call(fs, p, ...rest);
-    });
-    let captured = '';
-    const realWriteSync = fs.writeSync;
-    t.mock.method(fs, 'writeSync', (fd, ...args) => {
-      if (fd === 1) {
-        const buf = args[0];
-        captured += Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
-        return Buffer.isBuffer(buf) ? buf.length : Buffer.byteLength(String(buf));
-      }
-      return realWriteSync.call(fs, fd, ...args);
-    });
-    try {
-      routeCheckCommand({ args: ['check', subcommand, phaseDir, contextPath], cwd: tmpDir, raw: false });
-    } finally {
-      t.mock.restoreAll();
-    }
-    return JSON.parse(captured || '{}');
+    return runStatFailureGate(t, phaseDir, subcommand, code, { cwd: tmpDir, contextPath });
   }
 
   test('#4939: plan gate — an ENOENT stat failure is named as a missing directory', (t) => {
