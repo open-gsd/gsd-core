@@ -1494,6 +1494,59 @@ describe('#3587 per-phase commit_docs override', () => {
       assertParseFailure(['commit_docs', '--raw'], { GSD_WORKSTREAM: 'alpha' }, 'GSD_WORKSTREAM');
     });
 
+    // Under a workstream the root config is on the resolution path too, and its flat
+    // `commit_docs` outranks the workstream's nested one. With the root discarded the
+    // resolved value is unknowable, so the read fails even though the workstream's own
+    // file sets the key. (`next` walked the workstream's file alone and answered
+    // whichever spelling that file wrote.)
+    for (const [label, wsConfig] of [
+      ['nested', { planning: { commit_docs: false, search_gitignored: true } }],
+      ['flat', { commit_docs: false, search_gitignored: true }],
+    ]) {
+      test(`a corrupt root config fails a read under a workstream whose own config sets the keys (${label})`, () => {
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
+        fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'), JSON.stringify(wsConfig));
+        for (const key of LOADER_KEYS) {
+          assertParseFailure([key, '--raw'], { GSD_WORKSTREAM: 'alpha' }, `corrupt root under a workstream (${label}), ${key}`);
+        }
+      });
+    }
+
+    // With no .planning/, ~/.gsd/defaults.json is the file the loader resolves from, so a
+    // corrupt one is an unusable file on the resolution path. With a project config the
+    // loader may still open it for a diagnostic, but no value is resolved from it.
+    test('with no .planning/, a corrupt ~/.gsd/defaults.json fails the read, --default included', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{ not json');
+      for (const key of LOADER_KEYS) assertParseFailure([key, '--raw'], {}, `corrupt defaults.json, ${key}`);
+      assertParseFailure(['commit_docs', '--raw', '--default', 'false'], {}, 'corrupt defaults.json, --default false');
+    });
+
+    test('with a project config, a corrupt ~/.gsd/defaults.json is not on the resolution path', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{ not json');
+      const result = configGetCli(['commit_docs', '--raw']);
+      assert.strictEqual(result.exitCode, 0, result.error);
+      assert.strictEqual(result.output.trim(), 'false');
+    });
+
+    test("a usable root's flat commit_docs outranks a workstream's nested one", () => {
+      writeConfig(tmpDir, { commit_docs: true });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'),
+        JSON.stringify({ planning: { commit_docs: false } }),
+      );
+      for (const key of ['commit_docs', 'planning.commit_docs']) {
+        const result = configGetCli([key, '--raw'], { GSD_WORKSTREAM: 'alpha' });
+        assert.strictEqual(result.exitCode, 0, result.error);
+        assert.strictEqual(result.output.trim(), 'true', key);
+      }
+    });
+
     test('a parseable config with a non-object section still answers: only an unusable file fails', () => {
       writeConfig(tmpDir, { planning: 'not-an-object', commit_docs: false });
       const result = configGetCli(['commit_docs', '--raw']);
