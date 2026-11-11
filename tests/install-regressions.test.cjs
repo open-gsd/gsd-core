@@ -2178,6 +2178,13 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
     assert.ok(result.stderr.includes(code), `stderr must carry the refusal code ${code}\n${result.stderr}`);
   }
 
+  // The read-only cases make the link target's directory read-only with chmod.
+  const READ_ONLY_DIR_SKIP = process.platform === 'win32'
+    ? 'chmod does not make a directory read-only on Windows'
+    : (process.getuid && process.getuid() === 0)
+      ? 'root ignores directory write permissions, so chmod cannot make the directory read-only'
+      : false;
+
   function runInstaller(root, args, { optIn }) {
     const env = installSpawnEnv({
       HOME: root,
@@ -2298,6 +2305,52 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
         }
       });
     }
+
+    // With the opt-in, the shared write puts a temp file beside the link's
+    // target, so a read-only target directory would fail it after
+    // settings.local.json was already written. The check before the local
+    // write catches that too. The opt-in twin above is the passing control.
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 a linked settings.json in a read-only directory is refused before writing either settings file', {
+      skip: READ_ONLY_DIR_SKIP,
+    }, (t) => {
+      const root = createTempDir('gsd-5037-local-readonly-');
+      // linkSettings puts the link target in <root>/dotfiles, which this test
+      // makes read-only. t.after hooks run in the order they are added, so the
+      // write bit goes back in the same hook, just before the root is removed.
+      const dotfilesDir = path.join(root, 'dotfiles');
+      t.after(() => {
+        if (fs.existsSync(dotfilesDir)) fs.chmodSync(dotfilesDir, 0o755);
+        cleanup(root);
+      });
+      const claudeDir = path.join(root, '.claude');
+      const sharedSettingsPath = path.join(claudeDir, 'settings.json');
+      const sharedBefore = JSON.stringify({
+        ...USER_SETTINGS,
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: `${process.execPath} ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` }] },
+          ],
+        },
+      }, null, 2) + '\n';
+      const targetPath = linkSettings(root, sharedSettingsPath, sharedBefore);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const localSettingsPath = path.join(claudeDir, 'settings.local.json');
+      const localBefore = JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }, null, 2) + '\n';
+      fs.writeFileSync(localSettingsPath, localBefore);
+
+      fs.chmodSync(dotfilesDir, 0o555);
+      const result = runInstaller(root, ['--claude', '--local'], { optIn: true });
+
+      assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.TARGET_NOT_WRITABLE, 'a refused settings write must fail the install');
+      assert.ok(fs.lstatSync(sharedSettingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(sharedSettingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
+      assert.strictEqual(fs.readFileSync(localSettingsPath, 'utf8'), localBefore,
+        'settings.local.json must not be half-migrated when the shared write cannot happen');
+    });
 
     // The migration writes settings.local.json through writeSettings too, so
     // a symlinked settings.local.json gets the same policy. The opt-in twin
@@ -2434,6 +2487,39 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
         }
       });
     }
+
+    // With the opt-in, step 6 puts a temp file beside the link's target, so a
+    // read-only target directory would fail it after GSD's files were removed.
+    // The check before the first removal catches that too. The opt-in twin
+    // above is the passing control.
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 uninstall refuses a link into a read-only directory before removing anything', {
+      skip: READ_ONLY_DIR_SKIP,
+    }, (t) => {
+      const root = createTempDir('gsd-5037-uninstall-readonly-');
+      // linkSettings puts the link target in <root>/dotfiles, which this test
+      // makes read-only. t.after hooks run in the order they are added, so the
+      // write bit goes back in the same hook, just before the root is removed.
+      const dotfilesDir = path.join(root, 'dotfiles');
+      t.after(() => {
+        if (fs.existsSync(dotfilesDir)) fs.chmodSync(dotfilesDir, 0o755);
+        cleanup(root);
+      });
+      const l = installClaudeGlobal(root);
+      const installedSettings = fs.readFileSync(l.settingsPath, 'utf8');
+      fs.unlinkSync(l.settingsPath);
+      l.targetPath = linkSettings(root, l.settingsPath, installedSettings);
+      if (!l.targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      assert.ok(hasGsdSessionStartHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
+      const before = { tree: snapshotTree(l.claudeDir), target: installedSettings };
+
+      fs.chmodSync(dotfilesDir, 0o555);
+      const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', l.claudeDir], { optIn: true });
+
+      assertRefusedUnchanged(result, SYMLINKED_LEAF_REFUSAL.TARGET_NOT_WRITABLE, l, before);
+    });
 
     test('without GSD_ALLOW_SYMLINKED_DEST uninstall succeeds over a linked settings.json with no GSD entries and leaves it untouched', (t) => {
       const root = createTempDir('gsd-5037-uninstall-clean-');

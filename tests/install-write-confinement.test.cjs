@@ -5494,10 +5494,11 @@ describe('resolveSymlinkedLeafWritePath (#5037)', () => {
   // fails if a different refusal, or any other error, is thrown.
   const refusedWith = (code) => (err) => err instanceof Error && err.code === code;
 
-  test('SYMLINKED_LEAF_REFUSAL is frozen and holds exactly the three refusals', () => {
+  test('SYMLINKED_LEAF_REFUSAL is frozen and holds exactly the four refusals', () => {
     assert.ok(Object.isFrozen(SYMLINKED_LEAF_REFUSAL), 'the codes must be frozen');
-    assert.deepStrictEqual(Object.keys(SYMLINKED_LEAF_REFUSAL).sort(), ['NOT_FOLLOWABLE', 'NOT_TRUSTED', 'TARGET_MISSING']);
-    assert.strictEqual(new Set(Object.values(SYMLINKED_LEAF_REFUSAL)).size, 3, 'each code must be distinct');
+    assert.deepStrictEqual(Object.keys(SYMLINKED_LEAF_REFUSAL).sort(),
+      ['NOT_FOLLOWABLE', 'NOT_TRUSTED', 'TARGET_MISSING', 'TARGET_NOT_WRITABLE']);
+    assert.strictEqual(new Set(Object.values(SYMLINKED_LEAF_REFUSAL)).size, 4, 'each code must be distinct');
   });
 
   let savedOptIn;
