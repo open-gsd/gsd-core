@@ -3122,6 +3122,62 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused uninstall must leave the install as it was');
       });
 
+      // With the opt-in, uninstall writes the stripped config.toml in place at the file the link
+      // resolves to, so that file must be writable; its directory need not be. A read-only
+      // target used to fail that write only after the skills, agent files and hooks were gone.
+      const READ_ONLY_SKIP = process.platform === 'win32'
+        ? 'pins POSIX permission bits; chmod on Windows only toggles a read-only attribute, and not for directories'
+        : (process.getuid && process.getuid() === 0)
+          ? 'root ignores write permissions, so chmod cannot make the file or directory read-only'
+          : false;
+      const READ_ONLY_REFUSAL = { message: /is a symlink to a file GSD cannot write/ };
+
+      test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 refuses a link whose target file is read-only before it removes anything', {
+        skip: READ_ONLY_SKIP,
+      }, () => {
+        const realConfig = linkConfigToml(withUserKeys(installGsdOnlyConfig()));
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+        assertUninstallSurfacesPresent();
+        const before = fs.readFileSync(realConfig, 'utf8');
+        // No restore needed: the Codex home's teardown unlinks the target, and unlinking
+        // needs write permission on the directory, not on the file.
+        fs.chmodSync(realConfig, 0o444);
+        const tree = snapshotCodexHome();
+
+        assert.throws(() => runCodexUninstall(codexHome), READ_ONLY_REFUSAL);
+
+        assertLinkedTo(realConfig);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), before);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused uninstall must leave the install as it was');
+      });
+
+      // The control for the check above: the write is in place, so a writable target in a
+      // read-only directory is still written through.
+      test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 writes through a link whose target sits in a read-only directory', {
+        skip: READ_ONLY_SKIP,
+      }, (t) => {
+        const content = withUserKeys(installGsdOnlyConfig());
+        // Outside the Codex home: its afterEach teardown runs before t.after hooks and could
+        // not empty a read-only directory. This hook gives the directory its write bit back
+        // before removing it.
+        const dotfilesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5716-readonly-dir-'));
+        t.after(() => {
+          fs.chmodSync(dotfilesDir, 0o755);
+          cleanup(dotfilesDir);
+        });
+        const realConfig = path.join(dotfilesDir, 'codex.toml');
+        fs.writeFileSync(realConfig, content);
+        fs.unlinkSync(configTomlPath());
+        fs.symlinkSync(realConfig, configTomlPath());
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+        fs.chmodSync(dotfilesDir, 0o555);
+
+        assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+        assertLinkedTo(realConfig);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS);
+      });
+
       test('uninstall without the opt-in leaves a link with no GSD content alone and does not refuse', () => {
         runCodexInstall(codexHome);
         const realConfig = linkConfigToml(userKeysOnly());
