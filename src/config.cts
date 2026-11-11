@@ -1548,15 +1548,16 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // A config file on the resolution path that exists but cannot be read or
   // parsed is not reported as a value: the loader discards it and resolves
   // defaults, so `true` would read as the user's setting. config-get fails
-  // with CONFIG_PARSE_FAILED instead, as the walk below does and as it did for
-  // these keys before #5470 (ADR-1411: corrupt is not absent). The loader has
-  // already named the file on stderr.
+  // with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent). The file
+  // can be the scoped config.json, the root config.json a workstream inherits
+  // from, or ~/.gsd/defaults.json when there is no .planning/; the loader has
+  // already named it on stderr.
   const loaderAlias = configLoader.configKeyAliasFor(kp);
   if (loaderAlias?.configGet === 'loader') {
     const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
     if (resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNPARSEABLE
       || resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNREADABLE) {
-      error(`Failed to read config.json: ${resolution.reason}`, ERROR_REASON.CONFIG_PARSE_FAILED);
+      error(`Failed to read config: ${resolution.reason} (the file named in the warning above)`, ERROR_REASON.CONFIG_PARSE_FAILED);
     }
     const resolved = configLoader.readResolvedAlias(resolution.config, loaderAlias);
     if (resolved !== undefined) {
