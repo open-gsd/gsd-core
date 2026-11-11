@@ -59,8 +59,8 @@ const canonical = (cwd, file) => {
 };
 
 // Per-offset execution counts, the contract merge grouping preserves. Ranges are painted in array order
-// (normalized pre-order: outer before inner, so inner ranges overwrite); zeros are painted then dropped so an
-// inner zero-count range overriding a non-zero parent is detected.
+// (normalized pre-order: outer before inner, so inner ranges overwrite). Zero counts are kept: v8-to-istanbul
+// marks a line uncovered only through a zero-count range, so a lost never-called function must show up here.
 const offsetCounts = (cwd, file) => {
   const { result } = JSON.parse(fs.readFileSync(file, 'utf8'));
   return result
@@ -71,13 +71,13 @@ const offsetCounts = (cwd, file) => {
           for (let o = r.startOffset; o < r.endOffset; o++) painted.set(o, r.count);
         }
       }
-      const counts = [...painted].filter(([, count]) => count !== 0).sort((x, y) => x[0] - y[0]);
+      const counts = [...painted].sort((x, y) => x[0] - y[0]);
       return [relOf(cwd, s.url), counts];
     })
     .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
 };
 
-// V8-shaped multi-range generators. Function slot i owns root [i*100, i*100+90]; block-level functions add two
+// Multi-range generators (a superset of V8 output: they also emit shapes V8 normalization never would). Function slot i owns root [i*100, i*100+90]; block-level functions add two
 // sibling blocks and optionally a block nested in the first. Counts are small so equal sums (ties) are frequent.
 const genFiles = ['gsd-core/bin/lib/a.cjs', 'gsd-core/bin/lib/b.cjs', 'scripts/c.cjs', 'tests/t.cjs', 'node_modules/x/i.js'];
 const countArb = fc.nat({ max: 6 });
