@@ -2919,9 +2919,10 @@ describe('#2627 dispatch-isolation CLI route', () => {
   after(() => cleanup(cwd));
 
   // generation pins OpenCode: 1 or 2, or 'unset' to drop an inherited value.
-  // path replaces PATH and Path together. cwd defaults to the repo root.
-  function query(runtimeId, extraArgs = [], { generation = 1, path: pathOverride, cwd = REPO_ROOT } = {}) {
-    const env = { ...process.env, GSD_RUNTIME: runtimeId };
+  // baseEnv is merged over the inherited environment before generation is applied, so a test can
+  // seed the value 'unset' must remove. path replaces PATH and Path together. cwd defaults to the repo root.
+  function query(runtimeId, extraArgs = [], { generation = 1, baseEnv = {}, path: pathOverride, cwd = REPO_ROOT } = {}) {
+    const env = { ...process.env, ...baseEnv, GSD_RUNTIME: runtimeId };
     if (runtimeId === 'opencode') {
       if (generation === 'unset') {
         delete env.GSD_OPENCODE_GENERATION;
@@ -2990,20 +2991,17 @@ describe('#2627 dispatch-isolation CLI route', () => {
     assert.equal(queryJson('kimi-code', ['--cwd-target', '/tmp/wt', '--prompt', 'P']).exec.cwd, '/tmp/wt');
   });
 
-  test('OpenCode 2 binds the worktree through process cwd without --dir', () => {
+  test('OpenCode 2 binds the worktree through process cwd without --dir', (t) => {
     const tempDir = createCanonicalTempDir('gsd-opencode2-');
-    try {
-      const result = JSON.parse(
-        query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], { generation: 2, cwd: tempDir }),
-      );
-      assert.deepEqual(result.exec.args, ['run', 'P']);
-      assert.equal(result.exec.cwd, '/tmp/wt');
-    } finally {
-      cleanup(tempDir);
-    }
+    t.after(() => cleanup(tempDir));
+    const result = JSON.parse(
+      query('opencode', ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'], { generation: 2, cwd: tempDir }),
+    );
+    assert.deepEqual(result.exec.args, ['run', 'P']);
+    assert.equal(result.exec.cwd, '/tmp/wt');
   });
 
-  test('absent OpenCode generation retains --dir on the CLI route', (t) => {
+  test('an inherited OpenCode generation 2 is removed, so --dir is retained on the CLI route', (t) => {
     const tempDir = createCanonicalTempDir('gsd-opencode-absent-');
     t.after(() => cleanup(tempDir));
     const emptyBinDir = path.join(tempDir, 'empty-bin');
@@ -3012,7 +3010,9 @@ describe('#2627 dispatch-isolation CLI route', () => {
       query(
         'opencode',
         ['--json', '--cwd-target', '/tmp/wt', '--prompt', 'P'],
-        { generation: 'unset', cwd: tempDir, path: emptyBinDir },
+        // The child starts with generation 2 inherited. If 'unset' failed to remove it, the route
+        // would bind through process cwd and drop --dir, which the assertion below would catch.
+        { generation: 'unset', baseEnv: { GSD_OPENCODE_GENERATION: '2' }, cwd: tempDir, path: emptyBinDir },
       ),
     );
     assert.deepEqual(result.exec.args, ['run', '--dir', '/tmp/wt', 'P']);
