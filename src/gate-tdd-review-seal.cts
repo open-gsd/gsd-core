@@ -21,7 +21,7 @@ export type SealPlans = Record<string, Partial<SealEntry>>;
 
 // Cap for repo-controlled text the gate reads (the seal and SUMMARY.md); a real one is a few KiB at most; anything bigger is not read (repo content, so hostile).
 export const REPO_TEXT_MAX_BYTES = 64 * 1024;
-/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn and, when git does not know it, one `git rev-parse --verify` (the loop stops at the first id that is not gone), so at most 2 * SUMMARY_REFS_MAX spawns; plus, at most once per run (the caller's `historyComplete` memo), one `git rev-parse --is-shallow-repository`; plus, when every id exists, one `git rev-list` per call and one `git show` per id. */
+/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn and, when git does not know it, one `git rev-parse --verify` (the loop stops at the first id that is not gone), so at most 2 * SUMMARY_REFS_MAX spawns; plus, at most once per run (the caller's `historyComplete` memo), one `git rev-parse --is-shallow-repository`; plus, when every id exists, one `git rev-list` and one `git show` per call. */
 export const SUMMARY_REFS_MAX = 64;
 
 function parseSeal(text: string): Evidence<SealPlans> {
@@ -49,8 +49,8 @@ export function readSeal(phaseDir: string): Evidence<SealPlans> {
   return text.kind === 'found' ? parseSeal(text.value) : text;
 }
 
-/** Merge `evidence` into the phase's seal via temp file + rename, refusing an existing non-regular target (a symlink would redirect the write). `prior` is never `unreadable`: the caller returns early on that, so no earlier plan's credit is dropped. */
-export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>, prior: Evidence<SealPlans>): void {
+/** Merge `evidence` into the phase's seal via temp file + rename, refusing an existing non-regular target (a symlink would redirect the write). `prior` cannot be `unreadable` (the caller returns early on that), so no earlier plan's credit is dropped. */
+export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>, prior: Exclude<Evidence<SealPlans>, { readonly kind: 'unreadable' }>): void {
   const file = path.join(phaseDir, SEAL_FILE);
   const content = `${JSON.stringify({ plans: { ...(prior.kind === 'found' ? prior.value : {}), ...evidence } }, null, 2)}\n`;
   const st = lstatEvidence(file);
@@ -96,15 +96,21 @@ export function commitIsGone(reach: CommitReachability | null, historyComplete: 
 
 /**
  * #5354: a plan was squashed away when it has no live plan commit and no seal entry, and its SUMMARY
- * names task commits none of which is reachable from HEAD (a missing object counts as unreachable only
- * in a complete history). A never-existing id looks the same as a squashed commit that was garbage-collected
- * or never fetched, so it is `NotEvaluable` by rule: the gate stays advisory and the row names the
- * plan and its reason. The first existing candidate name (`summaryCandidates`) decides: an unreadable one (a symlink or
- * other non-regular file, or over `REPO_TEXT_MAX_BYTES`) is an ordinary failure and no later name is tried. No SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct
- * hashes, or any reachable hash is an ordinary failure. When every ref exists and its subject still
- * occurs on a commit reachable from HEAD but not from the refs, the plan was rewritten (rebase/amend),
- * not squashed, so it is not unreachable. Squash evidence for a plan whose task subjects survive is the
- * seal (`--record` before the squash), which `planRow` reads first.
+ * names task commits none of which is reachable from HEAD. A missing object counts as unreachable only
+ * in a complete history.
+ *
+ * A never-existing id looks the same as a squashed commit that was garbage-collected or never fetched,
+ * so it is `NotEvaluable` by rule: the gate stays advisory and the row names the plan and its reason.
+ *
+ * The first existing candidate name (`summaryCandidates`) decides, and no later name is tried. These are
+ * ordinary failures: an unreadable SUMMARY (a symlink or other non-regular file, or over
+ * `REPO_TEXT_MAX_BYTES`), no SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct hashes, and
+ * any reachable hash.
+ *
+ * When every ref exists and its subject still occurs on a commit reachable from HEAD but not from the
+ * refs, a rebase or amend rewrote the plan. It was not squashed, so it is not unreachable. Squash
+ * evidence for a plan whose task subjects survive is the seal (`--record` before the squash), which
+ * `planRow` reads first.
  */
 export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string, historyComplete: () => boolean): boolean {
   const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');

@@ -446,7 +446,8 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   try {
     // rev-list prints a `commit <sha>` header line before each subject line.
     const onHead = new Set(git(['rev-list', '--format=%s', 'HEAD', '--not', ...ids]).split('\n').filter((_, i) => i % 2 === 1));
-    return ids.every((id) => onHead.has(git(['show', '-s', '--format=%s', id]).trim()));
+    // One `show` prints one subject line per id, in argument order.
+    return git(['show', '-s', '--format=%s', ...ids]).split('\n').every((subject) => onHead.has(subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;

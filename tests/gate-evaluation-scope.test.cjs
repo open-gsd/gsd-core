@@ -1571,10 +1571,14 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    const b = commit(repo, 'b.txt', 'test(03-01): b');
+    repo.git('reset', '--hard', base);
     commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
-    repo.git('reset', '--soft', 'HEAD~2');
-    repo.git('commit', '-m', 'feat(03-01): a');
-    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'the subject survives a rewrite');
+    commit(repo, 'b.txt', 'test(03-01): b', 'amended\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), true, 'every subject survives a rewrite');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'one dropped subject is enough');
     repo.git('reset', '--hard', base);
     commit(repo, 'a.txt', 'feat(03): squashed phase');
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), false, 'a squash drops the subject');
