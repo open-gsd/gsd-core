@@ -1602,7 +1602,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
     { command: 'config-set-model-profile', positionals: ['quality'] },
     { command: 'migrate-config', positionals: [] },
   ];
-  const unsupportedFlags = ['--dry-run', '--bogus-flag', '--dry-run=', '--raw=true', '---dry-run', '--5', '--', '-1', '-'];
+  const unsupportedFlags = ['--json', '--force', '--workstream', '--dry-run', '--bogus-flag', '--dry-run=', '--raw=true', '---dry-run', '--5', '--', '-1', '-'];
   // Noncanonical bytes and a real legacy key expose both rewriting and migration.
   const legacyBytes = '{ "depth" : "comprehensive", "model_profile" : "balanced", "commit_docs" : false }\n';
 
@@ -1692,6 +1692,29 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         });
       }
 
+      for (const existing of [false, true]) {
+        for (const globalFlag of ['--default', '--pick']) {
+          for (const flag of ['--dry-run', '-n']) {
+            test(`${invocation} ${globalFlag} ${flag} refuses before mutation with existing=${existing}`, (t) => {
+              const f = fixture(existing);
+              t.after(() => cleanup(f.dir));
+              const result = runGsdTools([...prefix, command, ...positionals, globalFlag, flag, '--json-errors'], f.dir, homeSandboxEnv(f.dir));
+              assertUnchanged(f);
+              assertUsage(result, command, globalFlag);
+            });
+          }
+        }
+        for (const globalFlag of ['--cwd', '--project-dir']) {
+          test(`${invocation} refuses repeated ${globalFlag} with existing=${existing}`, (t) => {
+            const f = fixture(existing);
+            t.after(() => cleanup(f.dir));
+            const result = runGsdTools([...prefix, command, ...positionals, globalFlag, f.dir, globalFlag, f.dir, '--json-errors'], f.dir, homeSandboxEnv(f.dir));
+            assertUnchanged(f);
+            assertUsage(result, command, globalFlag);
+          });
+        }
+      }
+
       test(`${invocation} accepts a repeated --raw without changing the mutation`, (t) => {
         const f = fixture(command === 'migrate-config');
         t.after(() => cleanup(f.dir));
@@ -1765,19 +1788,20 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         query: fc.boolean(),
         raw: fc.boolean(),
         existing: fc.boolean(),
+        adjacent: fc.constantFrom(null, '--default', '--pick'),
       }),
-      ({ suffix, short, leading, query, raw, existing }) => {
+      ({ suffix, short, leading, query, raw, existing, adjacent }) => {
         const flag = `${short ? '-' : '--'}unknown-${suffix.join('')}`;
         for (const { command, positionals } of verbs) {
           const f = fixture(existing);
           fixtures.push(f.dir);
             const result = runGsdTools([
               ...(query ? ['query'] : []), command,
-              ...(leading ? [flag] : []), ...positionals,
-              ...(raw ? ['--raw'] : []), ...(leading ? [] : [flag]), '--json-errors',
+              ...(leading ? [...(adjacent ? [adjacent] : []), flag] : []), ...positionals,
+              ...(raw ? ['--raw'] : []), ...(leading ? [] : [...(adjacent ? [adjacent] : []), flag]), '--json-errors',
             ], f.dir, homeSandboxEnv(f.dir));
             assertUnchanged(f);
-            assertUsage(result, command, flag);
+            assertUsage(result, command, adjacent ?? flag);
         }
       },
     ), { seed: 5286, numRuns: 12 });

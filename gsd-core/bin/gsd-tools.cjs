@@ -5629,6 +5629,15 @@ async function main() {
   const raw = rawIndex !== -1;
   if (rawIndex !== -1) args.splice(rawIndex, 1);
 
+  // Closed mutation verbs do not consume output selectors or config-get defaults.
+  // Refuse them before global value extraction can hide an unsupported flag.
+  const configMutationCommand = args[0] === 'query' ? args[1] : args[0];
+  if (['config-ensure-section', 'config-set-model-profile', 'migrate-config'].includes(configMutationCommand)) {
+    for (const flag of ['--pick', '--default']) {
+      if (args.includes(flag)) error(`Unknown flag for ${configMutationCommand}: ${flag}`, ERROR_REASON.USAGE);
+    }
+  }
+
   // --pick <name>: extract a single field from JSON output (replaces jq dependency).
   // Supports dot-notation (e.g., --pick workflow.research) and bracket notation
   // for arrays (e.g., --pick directories[-1]).
@@ -5636,7 +5645,7 @@ async function main() {
   let pickField = null;
   if (pickIdx !== -1) {
     pickField = args[pickIdx + 1];
-    if (!pickField || pickField.startsWith('--')) error('Missing value for --pick', ERROR_REASON.USAGE);
+    if (!pickField || pickField.startsWith('-')) error('Missing value for --pick', ERROR_REASON.USAGE);
     args.splice(pickIdx, 2);
   }
 
