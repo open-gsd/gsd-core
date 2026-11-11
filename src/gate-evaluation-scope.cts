@@ -133,6 +133,8 @@ export const SCOPE_EXCLUSION_PATHSPECS: readonly string[] = Object.freeze([
 
 /** 41 chars per sha; 400 of them stay well under the 28K Windows-safe argv chunk. */
 const SHA_CHUNK = 400;
+/** Stdout cap of the one whole-history listing of `subjectsOccurOnHead`; past it git cannot answer (`null`), never a "no". */
+const HISTORY_LISTING_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_COMMITS = 200;
 const MAX_PATHSPECS = 20;
 const MAX_SUB_REPOS = 64;
@@ -447,8 +449,8 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
     const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
-    // Infinity: the listing is the whole history after a squash and must not stop at the runner's 1 MiB default.
-    const onHead = new Set(parseLog(git(['log', logFormat(false), 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
+    // The listing is the whole history after a squash: it outgrows the runner's 1 MiB default, so it gets its own cap.
+    const onHead = new Set(parseLog(git(['log', logFormat(false), 'HEAD', '--not', ...ids, '--'], undefined, HISTORY_LISTING_MAX_BYTES), false).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;

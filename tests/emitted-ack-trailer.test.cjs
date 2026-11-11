@@ -44,7 +44,7 @@ const crypto = require('node:crypto');
 const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
-const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, growHistoryFastImport, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const {
   ACK_TRAILER_HASH,
   ACK_TRAILER_GROWTH,
@@ -106,38 +106,6 @@ function trailerLine(name, key, reason) {
 
 function withCleanup(t, dir) {
   t.after(() => cleanup(dir));
-}
-
-/**
- * Build `commitCount` trivial linear commits on `refs/heads/main` via a
- * single `git fast-import` stream (one subprocess spawn, not one per
- * commit) and return the root commit's sha.
- *
- * Used by row 24 to force `git log`'s real formatting work comfortably
- * past a small `timeoutMs`, without racing real subprocess completion
- * time the way a razor-thin `timeoutMs: 1` against a trivial 2-commit
- * repo does (#3985: `process-seam.cjs`'s own documented at-the-boundary
- * case — a child finishing right at the deadline can report a real
- * `status` alongside `error.code === 'ETIMEDOUT'`, which the seam
- * correctly classifies as EXITED, not TIMED_OUT). A large real-work
- * margin (tens of thousands of commits vs a ~20ms bound) is reliable on
- * any real hardware and any platform — no PATH/PATHEXT/shebang concerns,
- * unlike an approach that tries to intercept the `git` binary itself.
- */
-function growHistoryFastImport(dir, commitCount) {
-  let stream = '';
-  for (let i = 1; i <= commitCount; i++) {
-    const message = `c${i}\n`;
-    stream += 'commit refs/heads/main\n';
-    stream += `mark :${i}\n`;
-    stream += `committer Ack Trailer Fixture <ack-trailer-fixture@example.com> ${1700000000 + i} +0000\n`;
-    stream += `data ${Buffer.byteLength(message, 'utf-8')}\n`;
-    stream += message;
-    if (i > 1) stream += `from :${i - 1}\n`;
-    stream += '\n';
-  }
-  gitOrThrow(['fast-import', '--quiet'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS, input: stream });
-  return gitOrThrow(['rev-list', '--max-parents=0', 'HEAD'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
 }
 
 // ─── grammar and hostile keys (pure parser) — rows 8, 9-18, 28-30 ────────────

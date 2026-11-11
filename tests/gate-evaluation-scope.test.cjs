@@ -17,8 +17,8 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { gitOrThrow, growHistoryFastImport } = require('./helpers/git-fixture.cjs');
+const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -1595,17 +1595,23 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const b = commit(repo, 'b.txt', 'test(03-01): b');
     repo.git('reset', '--hard', base);
     // 9000 commits of about 180 bytes of log record each are over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
-    // The stream is built through `git fast-import`, the way tests/emitted-ack-trailer.test.cjs builds its history.
     const filler = 'x'.repeat(100);
-    let stream = '';
-    for (let i = 0; i < 9000; i++) {
-      const msg = i === 0 ? 'feat(03-01): a' : `chore: ${filler} ${i}`;
-      stream += `commit refs/heads/main\ncommitter T <t@t.io> ${1700000000 + i} +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\n${i === 0 ? `from ${base}\n` : ''}\n`;
-    }
-    gitOrThrow(['fast-import', '--quiet'], { cwd: repo.dir, timeoutMs: GIT_TIMEOUT_MS, input: stream });
+    growHistoryFastImport(repo.dir, 9000, { from: base, message: (i) => (i === 1 ? 'feat(03-01): a\n' : `chore: ${filler} ${i}\n`) });
     repo.git('reset', '--hard', 'main');
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject 9000 commits deep is found');
-    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from every page is no');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from the whole history is no');
+  });
+
+  test('[happy] only the whole-history listing asks the runner for a larger buffer', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    const seen = [];
+    subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push(opts); return execGit(args, opts); });
+    assert.equal(seen.length, 2);
+    assert.equal('maxBuffer' in seen[0], false, 'the id lookup keeps the default cap');
+    assert.ok(Number.isFinite(seen[1].maxBuffer) && seen[1].maxBuffer > 1024 * 1024, 'the listing has a finite cap over the default');
   });
 
   test('[negative] an id named like a working-tree file is read as a revision', () => {

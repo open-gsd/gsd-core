@@ -172,8 +172,44 @@ function toLegacyResult(result) {
   return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
+/**
+ * Build `commitCount` trivial linear commits on `refs/heads/main` via a
+ * single `git fast-import` stream (one subprocess spawn, not one per
+ * commit) and return the root commit's sha.
+ *
+ * `message(i)` gives the message of commit `i` (1-based, default `c<i>\n`);
+ * `from` is a commit the first one builds on (default: an orphan root).
+ * Used where a test needs real `git log` work or output volume that a
+ * handful of commits cannot give: tests/emitted-ack-trailer.test.cjs (a
+ * history long enough to outrun a small `timeoutMs`, #3985) and
+ * tests/gate-evaluation-scope.test.cjs (a listing past the 1 MiB default of
+ * the git runner's stdout buffer).
+ *
+ * @param {string} dir
+ * @param {number} commitCount
+ * @param {{ message?: (i: number) => string, from?: string }} [options]
+ * @returns {string}
+ */
+function growHistoryFastImport(dir, commitCount, { message = (i) => `c${i}\n`, from } = {}) {
+  let stream = '';
+  for (let i = 1; i <= commitCount; i++) {
+    const text = message(i);
+    stream += 'commit refs/heads/main\n';
+    stream += `mark :${i}\n`;
+    stream += `committer Fixture <fixture@example.com> ${1700000000 + i} +0000\n`;
+    stream += `data ${Buffer.byteLength(text, 'utf-8')}\n`;
+    stream += text;
+    if (i > 1) stream += `from :${i - 1}\n`;
+    else if (from) stream += `from ${from}\n`;
+    stream += '\n';
+  }
+  gitOrThrow(['fast-import', '--quiet'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS, input: stream });
+  return gitOrThrow(['rev-list', '--max-parents=0', 'HEAD'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
+}
+
 module.exports = {
   gitOrThrow,
+  growHistoryFastImport,
   throwIfFailed,
   toLegacyResult,
   DEFAULT_GIT_TIMEOUT_MS,
