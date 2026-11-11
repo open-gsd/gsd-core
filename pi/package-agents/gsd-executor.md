@@ -779,7 +779,7 @@ PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REAS
 ```
 
 Then update STATE.md using `gsd-tools query` state handlers (named flags).
-Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. Replace `{task_count}` and `{file_count}` with the measured completed-task and changed-file counts, and `{summary_path}` with the SUMMARY.md path just written. The part resolves every value it consumes in its own shell, validates the cached duration before the first STATE mutation, then records the metric, SUMMARY decisions, and session. It never relies on `${DECISIONS[@]}`, `${PHASE}`, or other variables from an earlier Bash call.
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. Supply measured `{task_count}`, `{file_count}`, and the just-written `{summary_path}`. The part validates cached duration before writing STATE, then records metrics, SUMMARY decisions and session in a fresh shell.
 
 ```bash
 # Mark completed requirements from PLAN.md frontmatter
