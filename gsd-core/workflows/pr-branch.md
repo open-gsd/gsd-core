@@ -139,7 +139,7 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout (no timeout binary); walks and checkout use TO=60.
 _to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
 # picked SHA — rc 0 when analyze_commits' classification picks SHA, or the lookup fails.
-picked() { local F; F=$(_to git diff-tree --no-commit-id --name-only -r "$1") || return 0; [ -n "$F" ] && { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; }; }
+picked() { local F; F=$(_to git -c core.quotepath=off diff-tree --no-commit-id --name-only -r "$1") || return 0; [ -n "$F" ] && { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; }; }
 
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for each path TIP changed
 # since their fork (squash/rebase), or gh reports $PR_BRANCH merged into it with head TIP.
@@ -165,9 +165,9 @@ PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
 PR_BRANCH_MERGED=
 PENDING_VERDICT=
 [ -n "$PR_BRANCH_TIP" ] && pr_merged "$PR_BRANCH_TIP" && PR_BRANCH_MERGED=1
-# drop_pending and the printed DISCARD_PENDING remove the same two refs.
-drop_pending() { git update-ref -d "$PENDING_REF"; git update-ref -d "$PR_TIP_REF" 2>/dev/null; }
+# drop_pending runs the printed discard command.
 DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"
+drop_pending() { eval "$DISCARD_PENDING"; }
 if [ -n "$PENDING_TIP" ]; then
   # The built tip must be merged; the -pr verdict stands in only while the -pr holds the built tip (amended).
   PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
@@ -215,7 +215,7 @@ RW_PATHS_EOF
     # Section and F commit lines start with a TAB; git quotes any path holding one, so none can match.
     if RW_L=$(TO=60 _to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
       RW_R=$(TO=60 _to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET_SHA" 2>/dev/null) &&
-      RW_N=$(for H in $RW_L $RW_R; do picked "$H" || echo "$H"; done) &&
+      RW_N=$(for H in $(printf '%s\n%s' "$RW_L" "$RW_R"); do picked "$H" || echo "$H"; done) &&
       RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET_SHA" 2>/dev/null) &&
       RW_F=$(rw_git log --full-history --no-merges --name-only --format='%x09%H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
       RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null | TO=60 _to git patch-id --stable); then
@@ -459,8 +459,8 @@ For each commit, check what it touches:
 
 ```bash
 # For each commit hash
-FILES=$(git diff-tree --no-commit-id --name-only -r $HASH)
-NON_PLANNING=$(echo "$FILES" | grep -c -v "^\.planning/" || true)
+FILES=$(git -c core.quotepath=off diff-tree --no-commit-id --name-only -r $HASH)
+NON_PLANNING=$(echo "$FILES" | grep -Ecv '^(\.planning/|$)' || true)
 STRUCTURAL=$(echo "$FILES" | grep -Ec "$STRUCTURAL_RE" || true)
 PLANNING_COUNT=$(echo "$FILES" | grep -c "^\.planning/" || true)
 ```

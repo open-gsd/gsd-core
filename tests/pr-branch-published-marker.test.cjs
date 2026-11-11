@@ -1262,6 +1262,18 @@ describe('#5469 pr-branch published marker (real git)', () => {
     });
   }
 
+  // git quotes a non-ASCII path by default (core.quotePath); the pick rule must still see it under .planning/.
+  test('default mode: a commit that touches only a non-ASCII "other" planning path is not picked', () => {
+    const dir = repo();
+    write(dir, '.planning/notes-é.md', 'n\n');
+    commitAll(dir, 'docs: notes');
+    write(dir, 'x.txt', 'x\n');
+    commitAll(dir, 'feat: code');
+    const r = publish(dir, 'main', { mode: 'false' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(changed(dir), ['x.txt']);
+  });
+
   // The matcher skips what the pick list skips: an unpublished config.json-only commit below the published copy.
   test('default mode: a new config.json-only commit below the rebased published round: no warning, only round 2 is replayed', () => {
     const dir = repo();

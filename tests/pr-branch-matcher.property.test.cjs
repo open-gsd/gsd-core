@@ -16,8 +16,8 @@
  *   (b) file names that spell the section markers or a `commit <sha>` line never change
  *       the verdict;
  *   (c) a picked commit that has no patch-id (a failed or empty patch walk) always gives WARN;
- *   (d) `picked` agrees with `classifyCommit` (the classification of analyze_commits) on any
- *       file list, in both modes.
+ *   (d) `picked`, the per-commit counts and arms of analyze_commits, and `classifyCommit`
+ *       agree on any file list, in both modes.
  */
 
 const { describe, test } = require('node:test');
@@ -127,12 +127,22 @@ describe('pr-branch rewritten-history matcher (property)', () => {
   });
 });
 
+const WORKFLOW_TEXT = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
 // The shipped `picked` function, with `_to` standing in for the bounded `git diff-tree` read.
-const PICKED = extractBashBlockContaining(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'PR_BRANCH="${CURRENT_BRANCH}-pr"').match(/^picked\(\) \{.*\}$/m)[0];
+const PICKED = extractBashBlockContaining(WORKFLOW_TEXT, 'PR_BRANCH="${CURRENT_BRANCH}-pr"').match(/^picked\(\) \{.*\}$/m)[0];
+// The shipped per-commit counts of analyze_commits, with `git` standing in for `git diff-tree`.
+const COUNTS = extractBashBlockContaining(WORKFLOW_TEXT, 'NON_PLANNING=$(');
+// The classification arms of analyze_commits, over those counts: 1 INCLUDE, 0 EXCLUDE.
+const ARMS = [
+  'if [ "$NON_PLANNING" -gt 0 ]; then echo 1', // code commits, mixed code+planning commits (both modes)
+  'elif [ "$PR_STRICT" = true ]; then echo 0', // strict mode has no structural carve-out
+  'elif [ "$PLANNING_COUNT" -gt 0 ] && [ "$STRUCTURAL" -gt 0 ]; then echo 1', // structural-only and mixed planning commits
+  'else echo 0; fi', // transient-only and other planning commits, empty commits
+].join('\n');
 const { structuralRe, transientDirs } = readWorkflow();
 
-// One bash run: picked's verdict (1 picked, 0 not) for each file list, in order.
-function pickedAll(lists, strict) {
+// One bash run per mode: for each file list, picked's verdict and the arms' verdict, then picked's verdict on a failed lookup.
+function verdicts(lists, strict) {
   const tmp = createTempDir('gsd-prpicked-');
   try {
     lists.forEach((l, i) => fs.writeFileSync(path.join(tmp, `${i}.txt`), l.join('\n')));
@@ -140,7 +150,13 @@ function pickedAll(lists, strict) {
       `PR_STRICT=${strict}`,
       `STRUCTURAL_RE='${structuralRe}'`,
       PICKED,
-      `for i in $(seq 0 ${lists.length - 1}); do _to() { cat "$i.txt"; }; picked x && echo 1 || echo 0; done`,
+      `for i in $(seq 0 ${lists.length - 1}); do`,
+      '  _to() { cat "$i.txt"; }; git() { cat "$i.txt"; }; HASH=x',
+      '  P=$(picked x && echo 1 || echo 0)',
+      COUNTS,
+      `  A=$(${ARMS})`,
+      '  echo "$P $A"',
+      'done',
       '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
     ].join('\n');
     fs.writeFileSync(path.join(tmp, 'run.sh'), `${script}\n`);
@@ -150,16 +166,16 @@ function pickedAll(lists, strict) {
   } finally { cleanup(tmp); }
 }
 
-const PATHS = ['src/a.js', 'README.md', '.planningX/a', '.planning/STATE.md', '.planning/STATEX.md', '.planning/ROADMAP.md',
-  '.planning/config.json', '.planning/intel/x.md', '.planning/phases/01/PLAN.md', '.planning/milestones/v1-ROADMAP.md',
+const PATHS = ['src/a.js', 'src/é.js', 'README.md', '.planningX/a', '.planning/STATE.md', '.planning/STATEX.md', '.planning/ROADMAP.md',
+  '.planning/config.json', '.planning/notes-é.md', '.planning/intel/x.md', '.planning/phases/01/PLAN.md', '.planning/milestones/v1-ROADMAP.md',
   '.planning/milestones/v1-phases/p.md', '.planning/workstreams/w.md'];
 
 describe('pr-branch pick rule (property)', () => {
   for (const strict of [true, false]) {
-    test(`picked agrees with the classification in ${strict ? 'strict' : 'default'} mode, and a failed lookup picks`, () => {
+    test(`picked, the analyze_commits arms and the classification agree in ${strict ? 'strict' : 'default'} mode; a failed lookup picks`, () => {
       fc.assert(fc.property(fc.array(fc.uniqueArray(fc.constantFrom(...PATHS), { maxLength: 4 }), { minLength: 1, maxLength: 8 }), (lists) => {
-        const want = lists.map((l) => (classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? '1' : '0'));
-        assert.deepEqual(pickedAll(lists, strict), [...want, '1']);
+        const want = lists.map((l) => (classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? '1 1' : '0 0'));
+        assert.deepEqual(verdicts(lists, strict), [...want, '1']);
       }), { numRuns: 15 });
     });
   }
