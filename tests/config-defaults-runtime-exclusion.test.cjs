@@ -15,6 +15,7 @@ const { canonicalizeRuntimeName } = require('../gsd-core/bin/lib/runtime-name-po
 const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const {
   MODEL_RESOLVER_DIAGNOSTIC,
+  resolveModelInternal,
   _setInstallRuntimeMarkerForTests,
   _resetInstallRuntimeMarkerCacheForTests,
 } = require('../gsd-core/bin/lib/model-resolver.cjs');
@@ -224,13 +225,25 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     ['claude', 'claude'], ['cline', 'claude'], ['codex', 'cline'],
     [null, 'claude'], ['', 'claude'], ['foo', 'claude'],
   ]) {
-    test(`runtime choice ${JSON.stringify(choice)} and environment ${runtime} preserve resolution across seeding`, () => {
+    test(`runtime choice ${JSON.stringify(choice)} and environment ${runtime} preserve resolution across seeding`, (t) => {
+      const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
+      const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      t.after(() => {
+        for (const key of keys) {
+          if (original[key] === undefined) delete process.env[key];
+          else process.env[key] = original[key];
+        }
+      });
+      Object.assign(process.env, env, { GSD_RUNTIME: runtime });
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
       fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
-      const before = resolve('gsd-executor', runtime).model;
-      const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', { runtime: choice }, project, runtime);
+      const before = resolveModelInternal(project, 'gsd-executor');
+      configCommands.cmdConfigNewProject(project, JSON.stringify({ runtime: choice }), false);
+      const config = JSON.parse(fs.readFileSync(path.join(project, '.planning', 'config.json'), 'utf8'));
       if (choice === null) assert.equal(Object.hasOwn(config, 'runtime'), false);
       else assert.equal(config.runtime, choice);
-      assert.equal(resolve('gsd-executor', runtime).model, before);
+      assert.equal(resolveModelInternal(project, 'gsd-executor'), before);
       if (runtime === 'claude') assert.equal(before, 'sonnet');
       else assert.equal(before, '');
     });
