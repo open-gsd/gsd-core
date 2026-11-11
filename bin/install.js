@@ -6735,14 +6735,21 @@ function writeStrippedCodexConfig(configPath, cleaned) {
 }
 
 /**
- * #5716: stripGsdFromCodexConfig as uninstall applies it to config.toml. An empty file
- * behind a symlink is what an earlier uninstall left there, so it comes back unchanged
- * instead of as null (GSD-only): a rerun neither rewrites it nor reports work it did not
- * do, and without the opt-in it is not refused.
+ * #5716: stripGsdFromCodexConfig as uninstall applies it to config.toml. Behind a symlink,
+ * a result that differs from the file only in whitespace at either end means the file held
+ * no GSD content, so the file comes back unchanged instead. That covers an empty file an
+ * earlier uninstall left there, perhaps with a newline an editor added since (the strip
+ * calls whitespace alone GSD-only, null), and a user's own file whose leading or trailing
+ * blank space the strip would trim. A rerun neither rewrites such a file nor reports work
+ * it did not do, and without the opt-in it is not refused.
  */
 function stripGsdFromCodexConfigOnUninstall(configPath, content) {
-  if (content === '' && fs.lstatSync(configPath).isSymbolicLink()) return content;
-  return stripGsdFromCodexConfig(content);
+  const stripped = stripGsdFromCodexConfig(content);
+  if (stripped !== content && (stripped ?? '').trim() === content.trim()
+    && fs.lstatSync(configPath).isSymbolicLink()) {
+    return content;
+  }
+  return stripped;
 }
 
 function mergeCodexConfig(configPath, gsdBlock) {
