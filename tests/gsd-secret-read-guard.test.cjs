@@ -3149,6 +3149,10 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertBlocked(run(bash(`cat ${pq} > out.txt`)), 'output redirect to a file', { tool: 'Bash', path: p });
     assertBlocked(run(bash(`sort -o out.txt ${pq}`)), 'sort -o writes', { tool: 'Bash', path: p });
     assertBlocked(run(bash(`rg --pre sh KEY ${pq}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
+    // The line is read as the scan reads it (#5255): bash runs `mv` here, where
+    // the plain reading takes `'; mv a b` as an open quote and sees only `cat`.
+    assertBlocked(run(bash(`cat ${pq} $'\\''; mv a b`)), "a $'…' span hiding mv", { tool: 'Bash', path: p });
+    assertAllowed(run(bash(`cat ${pq} $'x'`)), "a $'…' word on a read-only line");
   });
 
   // Row 13.

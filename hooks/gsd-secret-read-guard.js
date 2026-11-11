@@ -260,42 +260,52 @@ function readOnlyOptionsOnly(base, operands) {
 
 // Fail closed: a substitution body, heredoc, process substitution, file
 // redirect out, unresolved or unlisted command word, or any exception is false.
+// The line is read as the scan reads it (#5255): a command holding a reading
+// trigger is read-only only if it is under the plain reading and under each of
+// READINGS, since a `$'…'` span the plain reading takes as an open quote can
+// hide a command bash runs (`cat <exempt> $'\''; mv a b`), and a word with no
+// value to check is not read-only.
 function lineIsReadOnly(command) {
   try {
-    const { tokens, nested } = tokenize(command);
-    if (nested.length > 0) return false;
-    const bySeg = new Map();
-    for (const t of tokens) {
-      if (t.kind === 'heredoc') return false;
-      if (t.kind === 'sep') continue;
-      if (t.kind === 'word' && t.procsub !== undefined) return false;
-      if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
-      bySeg.get(t.seg).push(t);
-    }
-    for (const segTokens of bySeg.values()) {
-      const words = [];
-      for (let k = 0; k < segTokens.length; k++) {
-        const t = segTokens[k];
-        if (t.kind === 'op') {
-          if (t.dup) continue;
-          const target = segTokens[k + 1];
-          if (!target || target.kind !== 'word') return false;
-          k++;
-          if (!t.read && target.text !== '/dev/null') return false; // output to a file
-          if (t.text.endsWith('<<<')) return false;
-          continue;
-        }
-        words.push(t);
-      }
-      if (words.length === 0) return false;
-      const cmd = resolveCommand(words);
-      if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
-      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
-    }
-    return true;
+    const readings = readsEachWay(command) ? [false, ...READINGS] : [false];
+    return readings.every((reading) => lineIsReadOnlyUnder(command, reading));
   } catch {
     return false;
   }
+}
+
+function lineIsReadOnlyUnder(command, reading) {
+  const { tokens, nested, unreadable } = tokenize(command, reading);
+  if (nested.length > 0 || unreadable) return false;
+  const bySeg = new Map();
+  for (const t of tokens) {
+    if (t.kind === 'heredoc') return false;
+    if (t.kind === 'sep') continue;
+    if (t.kind === 'word' && t.procsub !== undefined) return false;
+    if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+    bySeg.get(t.seg).push(t);
+  }
+  for (const segTokens of bySeg.values()) {
+    const words = [];
+    for (let k = 0; k < segTokens.length; k++) {
+      const t = segTokens[k];
+      if (t.kind === 'op') {
+        if (t.dup) continue;
+        const target = segTokens[k + 1];
+        if (!target || target.kind !== 'word') return false;
+        k++;
+        if (!t.read && target.text !== '/dev/null') return false; // output to a file
+        if (t.text.endsWith('<<<')) return false;
+        continue;
+      }
+      words.push(t);
+    }
+    if (words.length === 0) return false;
+    const cmd = resolveCommand(words);
+    if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
+    if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+  }
+  return true;
 }
 
 function isExemptSecret(tok) {
