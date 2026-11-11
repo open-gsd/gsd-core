@@ -3010,6 +3010,45 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), '');
       });
 
+      // A link target can hold no GSD content and still differ from what the strip returns:
+      // the strip calls whitespace alone GSD-only (an editor that saves an emptied target adds
+      // a newline), and it trims blank space at either end of a file it otherwise leaves
+      // alone. There is no GSD content to remove in either, so the link and its target are
+      // left as they are in both opt-in states.
+      const NO_GSD_SHAPES = [
+        ['holds only whitespace', '\n'],
+        ['holds user keys with no final newline', 'model = "gpt-5"'],
+      ];
+      function linkNoGsdConfig(content) {
+        runCodexInstall(codexHome);
+        assert.notStrictEqual(_stripGsdFromCodexConfig(content), content, 'fixture: the strip changes this file, which holds no GSD content');
+        return linkConfigToml(content);
+      }
+
+      for (const [shape, content] of NO_GSD_SHAPES) {
+        test(`uninstall with GSD_ALLOW_SYMLINKED_DEST=1 does not rewrite a link target that ${shape}`, () => {
+          const realConfig = linkNoGsdConfig(content);
+          process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+          const past = new Date('2001-01-01T00:00:00Z');
+          fs.utimesSync(realConfig, past, past);
+
+          assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+          assertLinkedTo(realConfig);
+          assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
+          assert.strictEqual(fs.statSync(realConfig).mtimeMs, past.getTime(), 'the target must not be written');
+        });
+
+        test(`uninstall without the opt-in does not refuse a link whose target ${shape}`, () => {
+          const realConfig = linkNoGsdConfig(content);
+
+          assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+          assertLinkedTo(realConfig);
+          assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
+        });
+      }
+
       test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 leaves exactly the user keys in the target of a link that also holds them', () => {
         const realConfig = linkConfigToml(withUserKeys(installGsdOnlyConfig()));
         process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
