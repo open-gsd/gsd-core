@@ -1739,13 +1739,15 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    test('a megabyte of `$` is read once, not once per character', () => {
-      // A run rescanned from every position is quadratic, and a hook that
-      // runs past its host timeout does not block.
-      const run = '$'.repeat(1024 * 1024 - 'echo ; ls'.length);
-      assertAllowed(runHook(bash(`echo ${run}; ls`)), '1 MiB run of $');
-      const read = '$'.repeat(1024 * 1024 - 'echo ; cat .env'.length);
-      assertBlocked(runHook(bash(`echo ${read}; cat .env`)), '1 MiB run of $, then a read', { tool: 'Bash', path: '.env' });
+    test('in process: a megabyte of `$` is read once, not once per character', () => {
+      // A run rescanned from every position is quadratic. This command holds no
+      // reading trigger, so it is tokenized once: its work is its length.
+      const { scanBashCommand, workSpent } = require(HOOK_PATH);
+      const cmd = `echo ${'$'.repeat(1024 * 1024 - 'echo ; ls'.length)}; ls`;
+      assert.equal(scanBashCommand(cmd), null);
+      assert.deepEqual(workSpent(), { scan: cmd.length, reader: 0 });
+      const read = `echo ${'$'.repeat(1024 * 1024 - 'echo ; cat .env'.length)}; cat .env`;
+      assert.deepEqual(scanBashCommand(read), { code: 'secret-read', text: '.env' });
     });
 
     test("an error in the ANSI-C reading does not cost the plain reading's verdict", () => {
@@ -1997,25 +1999,43 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   });
 
   describe('a command that needs more than the scan budget is denied as command-too-complex (#5255)', () => {
-    // Four readings, each rescanning each nested `$( )`, multiply the work: a
-    // megabyte of `$$(` is tokenized about 60 times over, which took seconds
-    // per Bash call. The budget is eight times the length cap, so a command
-    // at the cap still gets every reading (the length-cap rows under
-    // 'boundaries'); the budget's own boundary is the last test here.
+    // scanBashCommand sets one budget for every pass over a command: the four
+    // readings, the second look, nested rescans and #5513's heredoc passes all
+    // spend it. These rows run in process and assert the verdict and that a
+    // budget was spent, so none of them hangs on wall-clock time: a shape whose
+    // work were unbounded would spend the budget here by construction. The
+    // hook is spawned once, to check the code it emits.
+    const R = String.raw;
+    const {
+      scanBashCommand, findSecretRead, workSpent, MAX_SCAN_CHARACTERS,
+    } = require(HOOK_PATH);
+    const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
+    const spentBudget = () => {
+      const w = workSpent();
+      return w.scan === MAX_SCAN_CHARACTERS || w.reader === MAX_SCAN_CHARACTERS;
+    };
+    const need = (cmd) => {
+      scanBashCommand(cmd, 2 ** 40);
+      return workSpent();
+    };
     const runs = (unit) => unit.repeat(Math.floor((1024 * 1024 - 'echo '.length) / unit.length));
 
+    test('the budget is eight times the length cap', () => {
+      assert.equal(MAX_SCAN_CHARACTERS, 8 * 1024 * 1024);
+    });
+
     for (const unit of ['$$(', '$$$(']) {
-      test(`a megabyte of \`${unit}\` is denied once the budget is spent`, () => {
-        assertBlocked(runHook(bash(`echo ${runs(unit)}`)), `1 MiB of ${unit}`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+      test(`in process: a megabyte of \`${unit}\` spends the budget and is command-too-complex`, () => {
+        assert.deepEqual(scanBashCommand(`echo ${runs(unit)}`), TOO_COMPLEX);
+        assert.ok(spentBudget(), `1 MiB of ${unit}`);
       });
     }
 
     // Each `${$(` that does not close doubled the dollar-quoting readings'
-    // work, and a few dozen outran the hook's timeout, which lets the command run; so does
-    // each `${"${`. Text after each unclosed `${$(` or `${"}` (plain, a run of `$`, heredocs),
-    // or a run of unclosed `$[` in a `$( )`, makes the work quadratic. The readers now charge
-    // every character they pass to a step budget of their own. Without it these rows outlast
-    // the spawn timeout and fail on the verdict.
+    // work, and so does each `${"${`. Text after each unclosed `${$(` or `${"}`
+    // (plain, a run of `$`, heredocs), or a run of unclosed `$[` in a `$( )`,
+    // makes the work quadratic. The readers charge every character they pass
+    // to a step budget of their own, which each of these spends.
     for (const [label, unclosed] of [
       ['200 unclosed `${$(`', '${$('.repeat(200)],
       ['200 unclosed `${"${`', '${"${'.repeat(200)],
@@ -2026,65 +2046,84 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       ['50 unclosed `${"}`, each before 2,000 `$`', `\${"}${'$'.repeat(2000)}`.repeat(50)],
       ['50 unclosed `$(${`, each before 2,000 `)`', `$(\${${')'.repeat(2000)}`.repeat(50)],
     ]) {
-      test(`a read on the line before ${label} is still named`, () => {
-        const cmd = `cat .env\necho $'a'; ${unclosed}`;
-        assertBlocked(runHook(bash(cmd)), `read, then ${label}`, { tool: 'Bash', path: '.env' });
+      test(`in process: a read on the line before ${label} is still named`, () => {
+        assert.deepEqual(scanBashCommand(`cat .env\necho $'a'; ${unclosed}`), { code: 'secret-read', text: '.env' });
+        assert.ok(spentBudget(), label);
       });
-      test(`a read only the dollar-quoting readings decode, before ${label}, is denied as command-too-complex`, () => {
-        const cmd = `cat $'.e\\x6ev'\n${unclosed}`;
-        assertBlocked(runHook(bash(cmd)), `decoded read, then ${label}`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+      test(`in process: a read only the dollar-quoting readings decode, before ${label}, is command-too-complex`, () => {
+        assert.deepEqual(scanBashCommand(`cat $'.e\\x6ev'\n${unclosed}`), TOO_COMPLEX);
+        assert.ok(spentBudget(), label);
       });
     }
 
-    // Each operand's last segment was cut with `/[\\/]+$/`, quadratic in
-    // a run of separators, and each reading checks each operand again at each `$( )` level
-    // that holds dollar-quoting, so a read after two such levels around a 200,000-separator
-    // operand outlasted the hook's timeout. Without the linear cut this row outlasts the spawn
-    // timeout and fails on the verdict.
+    test('in process: a read before 200,000 unclosed `$[` in a ${…} is still named', () => {
+      // The first reading finds the read and returns before the tail costs it the budget.
+      assert.deepEqual(scanBashCommand(`cat .env\necho $'a' \${x+${'$['.repeat(200000)}`), { code: 'secret-read', text: '.env' });
+    });
+
+    test('in process: 200,000 unclosed `$[` in a ${…} spend the budget and are command-too-complex', () => {
+      assert.deepEqual(scanBashCommand(`echo $'a' \${x+${'$['.repeat(200000)}`), TOO_COMPLEX);
+      assert.ok(spentBudget(), 'unclosed $[');
+    });
+
+    test('the hook emits command-too-complex for a command that spends the budget', () => {
+      const cmd = `cat $'.e\\x6ev'\n${'${$('.repeat(200)}`;
+      assertBlocked(runHook(bash(cmd)), 'decoded read, then 200 unclosed ${$(', { code: 'command-too-complex', tool: 'Bash', path: '' });
+    });
+
+    // Each operand's last segment was cut with `/[\\/]+$/`, quadratic in a run
+    // of separators, and each reading checks each operand again at each `$( )`
+    // level that holds dollar-quoting. That cost is a regex's backtracking,
+    // which no step counter sees, so this row spawns the hook: with the linear
+    // cut it is denied in about 0.1 s, and without it the read took 23 to 210 s.
     test('a read after two dollar-quoted `$( )` levels around a 200,000-separator operand is still named', () => {
       const cmd = `cat $(cat $(cat ${'/'.repeat(200000)}x $'a') $'a') .env`;
       assertBlocked(runHook(bash(cmd)), 'read after a long separator run', { tool: 'Bash', path: '.env' });
     });
 
     test('in process: the budget is per command', () => {
-      const { findSecretRead } = require(HOOK_PATH);
-      assert.deepEqual(findSecretRead(`echo ${runs('$$(')}`, 0), { code: 'command-too-complex', text: '' });
+      assert.deepEqual(scanBashCommand(`echo ${runs('$$(')}`), TOO_COMPLEX);
+      assert.deepEqual(scanBashCommand(R`echo $'x'; cat .env`), { code: 'secret-read', text: '.env' });
+      assert.deepEqual(findSecretRead(`echo ${runs('$$(')}`, 0), TOO_COMPLEX);
       assert.deepEqual(findSecretRead(R`echo $'x'; cat .env`, 0), { code: 'secret-read', text: '.env' });
     });
 
-    test('in process: work up to the budget is scanned, and one character past it is command-too-complex', () => {
-      // A command holding `$'…'` is scanned four times (bash's, zsh's and
-      // dash's readings, then the plain one), and each scan rescans each
-      // `$( )` it reads, so the two-level nest costs 4 × (command + both
-      // nested bodies) and each padding character 4 more. The trailing
-      // `"$$(echo c…)"` is read as a `$( )` by the plain reading alone (the
-      // others pair `$$` as the PID), so its body is charged once, which
-      // steps the total by 1 and lands it on budget - 1, budget and
-      // budget + 1. If another reading starts extracting it, the rows move
-      // and fail. The padding is U+1F600: two UTF-16 units (what the budget
-      // and the length cap count), one code point and four UTF-8 bytes, so a
-      // budget charged in either of the other units fails the rows too. Each
-      // padding character costs 4 × 2.
-      const { findSecretRead } = require(HOOK_PATH);
-      const BUDGET = 8 * 1024 * 1024;
-      const PAD = '\u{1F600}';
-      const spending = (work) => {
-        const inner2 = `echo ${'a'.repeat(699000)}`;
-        const inner1 = `echo "$(${inner2})"`;
-        for (let m = 1; m <= 8; m++) {
-          const once = `echo ${'c'.repeat(m)}`;
-          const head = `echo $'x' "$(${inner1})" "$$(${once})" `;
-          const rest = work - 4 * (head.length + inner1.length + inner2.length) - once.length;
-          if (rest >= 0 && rest % (4 * PAD.length) === 0) return head + PAD.repeat(rest / (4 * PAD.length));
-        }
-        throw new Error(`no padding reaches ${work}`);
-      };
-      for (const [label, work] of [['budget - 1', BUDGET - 1], ['budget', BUDGET]]) {
-        const cmd = spending(work);
-        assert.ok(cmd.length <= 1024 * 1024, `${label}: under the length cap`);
-        assert.equal(findSecretRead(cmd, 0), null, label);
-      }
-      assert.deepEqual(findSecretRead(spending(BUDGET + 1), 0), { code: 'command-too-complex', text: '' }, 'budget + 1');
+    test('in process: the scan budget is compared at limit - 1, limit and limit + 1', () => {
+      // No reading trigger: the command is tokenized once, so its work is its length.
+      const cmd = `echo ${'a'.repeat(995)}`;
+      assert.deepEqual(need(cmd), { scan: 1000, reader: 0 });
+      assert.deepEqual(scanBashCommand(cmd, 999), TOO_COMPLEX, 'limit - 1');
+      assert.equal(scanBashCommand(cmd, 1000), null, 'limit');
+      assert.equal(scanBashCommand(cmd, 1001), null, 'limit + 1');
+    });
+
+    test("in process: the readers' step budget is compared at limit - 1, limit and limit + 1", () => {
+      // Unclosed `$[` in a `${…}` charge the readers far more than scanCommand.
+      const cmd = `echo $'a' \${x+${'$['.repeat(40)}`;
+      const { scan, reader } = need(cmd);
+      assert.ok(reader > scan, `reader ${reader} > scan ${scan}`);
+      assert.deepEqual(scanBashCommand(cmd, reader - 1), TOO_COMPLEX, 'limit - 1');
+      assert.equal(scanBashCommand(cmd, reader), null, 'limit');
+      assert.equal(scanBashCommand(cmd, reader + 1), null, 'limit + 1');
+    });
+
+    test('in process: the readings, the second look and the heredoc passes draw on one budget', () => {
+      // A reading trigger, a heredoc and a brace tag: the readings, then the
+      // second look, then four heredoc passes. Each pass alone needs less than
+      // the whole, so a budget per pass would scan this on `need - 1`.
+      const cmd = `: <<}\n}\ncat <<E\nx\nE\necho $'a' ${'b'.repeat(1000)}; ls`;
+      const whole = need(cmd).scan;
+      findSecretRead(cmd, 0);
+      const firstPass = workSpent().scan;
+      assert.ok(firstPass < whole / 2, `first pass ${firstPass} of ${whole}`);
+      assert.equal(scanBashCommand(cmd, whole), null, 'on the whole need');
+      assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
+    });
+
+    test('in process: a budget spent by an earlier command does not carry to the next', () => {
+      assert.deepEqual(scanBashCommand(`echo ${runs('$$(')}`), TOO_COMPLEX);
+      assert.equal(scanBashCommand('echo ok; ls'), null);
+      assert.ok(workSpent().scan < 100);
     });
   });
 
@@ -2219,16 +2258,6 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         assertAllowed(runHook(bash(cmd)), cmd);
       });
     }
-
-    test('a read before 200,000 unclosed `$[` in a ${…} is still named', () => {
-      const cmd = `cat .env\necho $'a' \${x+${'$['.repeat(200000)}`;
-      assertBlocked(runHook(bash(cmd)), 'read, then unclosed $[', { tool: 'Bash', path: '.env' });
-    });
-
-    test('200,000 unclosed `$[` in a ${…} end in command-too-complex, not a hook timeout', () => {
-      const cmd = `echo $'a' \${x+${'$['.repeat(200000)}`;
-      assertBlocked(runHook(bash(cmd)), 'unclosed $[', { code: 'command-too-complex', tool: 'Bash', path: '' });
-    });
 
     test('property: zsh reads past a quote in `$(( ))` and `$[ ]` wherever the read follows', () => {
       const body = fc.array(fc.constantFrom('1', '+', ' ', '"', '"'), { minLength: 1, maxLength: 5 })
@@ -2455,7 +2484,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
     });
 
-    test('in process: the second look keeps its verdict when it spends its own budget', () => {
+    test('in process: the second look keeps its verdict when it spends the budget', () => {
       // The readings take `${x:-\}; bash -c $'…'; echo }` as one word and
       // finish. That scan ends it at the escaped `}`,
       // rescans the decoded `bash -c` script, and spends the budget, so the

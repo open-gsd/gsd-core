@@ -207,35 +207,24 @@ const MAX_COMMAND_LENGTH = 1024 * 1024;
 // Recursion budget for `$( )` / backtick / `<( )` / nested-shell rescans.
 const MAX_NESTING_DEPTH = 3;
 
-// Work budget for one Bash command, in characters tokenized across every
-// reading and every nested rescan (#5255). Four readings, each rescanning
-// each nested `$( )`, multiply the work: a 1 MiB run of `$$(` is tokenized
-// about 60 times over and took seconds per call. A command holding a reading
-// trigger (`$'`, `$"`, `$${`, `$$(`, or a quote with `((` or `$[`;
-// readsEachWay) is scanned
-// four times, and a nested body it rescans (`$( )`, backticks, `<( )`,
-// `eval`, `bash -c`, a heredoc or here-string fed to a shell) that holds one
-// is scanned four times under each of those. Eight times the length cap lets
-// a 1 MiB command get all four readings and a nested level that holds no
-// trigger. Through `$( )`, backticks, `<( )`, `eval` or `bash -c`, each
-// triggering level multiplies its text's cost by 4: text inside one reaches
-// the budget at about 420,000 characters (`git commit -m "$(cat <<'EOF' …`
-// with a `$'\t'` in the message: 419,445 is scanned, 419,446 is not), inside
-// two at about 100,000 and inside three, the nesting cap, at about 24,700. A
-// `$( )` in a heredoc fed to a shell is rescanned both as a nested body and
-// as part of the heredoc's script, so that shape reaches it sooner: one level
-// at 83,903, two at 8,456. The most work any of 539,601 real agent commands
-// needed was about 250,000 characters. A command that needs more is denied as
-// `command-too-complex` rather than scanned on. readAsBefore's scan of a
-// command the readings finished has a budget of its own, and is denied
-// the same way when it spends it. A command holding `<<` (a heredoc, or a
-// here-string or a shift) that is not denied is scanned again under each of
-// #5513's two other heredoc readings, and one that met a brace in a heredoc
-// tag, at any depth, under the two that read it the earlier way
-// (findSecretReadUnderOtherReadings). Each pass is a full findSecretRead with
-// these budgets of its own, so it can take up to three times all of the above,
-// or five with both; the figures above are per pass.
-// Characters here, and in
+// Work budget for one Bash command, in characters tokenized, across every
+// pass the scan makes over it (#5255): scanBashCommand sets it once, and every
+// reading, nested rescan, second look and heredoc pass spends from it. A
+// command holding a reading trigger (`$'`, `$"`, `$${`, `$$(`, or a quote with
+// `((` or `$[`; readsEachWay) is scanned under four readings and then, when
+// they find nothing, four more times by readAsBefore, so its text costs 8 times
+// its length; a nested body that holds one (`$( )`, backticks, `<( )`,
+// `eval`, `bash -c`, a heredoc or here-string fed to a shell) costs 8 times its
+// own length on top, at each level; and a command holding `<<` is scanned
+// again under #5513's other heredoc readings (findSecretReadUnderOtherReadings),
+// up to three passes, or five when a heredoc tag holds a brace. A heredoc file
+// write holding a trigger therefore costs about 24 times its length. The most
+// any of 1,384,856 distinct real agent commands needed was 3,040,992 (a
+// 126,708-character heredoc write), and the least-cheap shape measured, a
+// megabyte of `$$(`, spends the whole budget in about 2 s of CPU on a host at
+// load 30-45. That keeps a denial well inside the 8 s after which the Kilo and
+// OpenCode adapters allow a command. A command that needs more is denied as
+// `command-too-complex` rather than scanned on. Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
 
@@ -2076,8 +2065,11 @@ function findSecretRead(command, depth) {
   heldNested = null;
   scanUnfinished = false;
   readingsRan = false;
-  scanBudget = MAX_SCAN_CHARACTERS;
-  readerSteps = MAX_SCAN_CHARACTERS;
+  if (!budgetHeld) {
+    scanBudget = MAX_SCAN_CHARACTERS;
+    readerSteps = MAX_SCAN_CHARACTERS;
+    budgetSize = MAX_SCAN_CHARACTERS;
+  }
   let hit = null;
   let failure = null;
   try {
@@ -2101,6 +2093,40 @@ function findSecretRead(command, depth) {
 // Set when readEachWay ran the readings on `command` or a body it rescans.
 let readingsRan = false;
 
+// Set while scanBashCommand runs, so findSecretRead leaves the budgets alone.
+let budgetHeld = false;
+
+// The size the budgets were last set to (workSpent).
+let budgetSize = MAX_SCAN_CHARACTERS;
+
+// The Bash scan of `command`: findSecretRead, then #5513's heredoc passes
+// (findSecretReadUnderOtherReadings), every one of them, with readAsBefore
+// inside each, on ONE pair of budgets set here (scanBudget, readerSteps).
+// A pass that finds the budgets spent stops at once, so the scan's total work
+// is bounded per command, not per pass: a command with no read found by then
+// is `command-too-complex`. The Kilo and OpenCode adapters run the hook under
+// an 8 s timeout and allow a command whose hook it kills, so the bound is on
+// the whole command. `budget` is for tests, which pin the boundary on a small
+// one; the hook passes none.
+function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS) {
+  scanBudget = budget;
+  readerSteps = budget;
+  budgetSize = budget;
+  budgetHeld = true;
+  try {
+    return findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+  } finally {
+    budgetHeld = false;
+  }
+}
+
+// The work the last scan charged, in characters, against the budgets it had:
+// scanCommand's (`scan`) and the readers' (`reader`).
+function workSpent() {
+  const spent = (left) => budgetSize - Math.max(left, 0);
+  return { scan: spent(scanBudget), reader: spent(readerSteps) };
+}
+
 // Set while readAsBefore runs: ansiCBraceClose, findParenClose, doubleQuoteEnd
 // and tokenize then end a `${…}` the simple way, and zshMathEnd reads nothing.
 let asBefore = false;
@@ -2111,15 +2137,13 @@ let asBefore = false;
 // `case` pattern's `)` in a `$( )` in a `${…}`) it can end one later than the
 // shell and miss a read the simple end found. So nothing that scan blocks is
 // allowed: findSecretRead runs it on a command the readings found nothing in,
-// and blocks on what it blocks. It has a budget of its own, and fails closed
+// and blocks on what it blocks. It spends the command's budget, and fails closed
 // (`command-too-complex`). A command the readings could not finish is denied
 // anyway, so it is not read again; nor is one no reading reached, which that
 // scan reads exactly as the plain one does.
 function readAsBefore(command) {
   asBefore = true;
   scanUnfinished = false;
-  scanBudget = MAX_SCAN_CHARACTERS;
-  readerSteps = MAX_SCAN_CHARACTERS;
   let hit = null;
   try {
     hit = readEachWay(command, 0);
@@ -2143,13 +2167,14 @@ function readAsBefore(command) {
 let scanUnfinished = false;
 
 // What is left of MAX_SCAN_CHARACTERS for the current command; scanCommand
-// throws SCAN_BUDGET_SPENT once it is gone, and every later scan of the
-// command throws at once, so an over-budget command stops in one pass.
+// throws SCAN_BUDGET_SPENT, charging nothing, when a scan would take more than
+// is left, and every later scan of the command throws at once, so an
+// over-budget command stops in one pass.
 let scanBudget = MAX_SCAN_CHARACTERS;
 
 // What is left of the characters the readings' readers (ansiCBraceClose,
 // zshMathEnd, and findParenClose and doubleQuoteEnd under a reading) may
-// pass in one findSecretRead pass, reset with scanBudget. They call each
+// pass in the current command, set with scanBudget. They call each
 // other, and when a `${`, `$(` or `$[` inside does not close, the one that
 // called it goes on through the text after it and reads it again: so each
 // `${$(` or `${"${` doubled their work (with `cat .env` on the line before,
@@ -2168,18 +2193,19 @@ let scanBudget = MAX_SCAN_CHARACTERS;
 // the line before is still named by the plain reading (unless the readings
 // also spent scanBudget, which stops the plain reading too), and an
 // unfinished command with no read found is denied as `command-too-complex`.
-// The plain reading reads as before and charges nothing. The most one pass
-// over any of 600,000 real agent commands passes is 18,936, and a commit
-// message at MAX_SCAN_CHARACTERS's 419,445-character boundary 1.3 to 1.5
-// million, depending on its text, so this moves none of those commands'
-// verdicts and none of MAX_SCAN_CHARACTERS's figures.
+// The plain reading reads as before and charges nothing. The most any of the
+// 1,384,856 real agent commands above passes is 339,388.
 let readerSteps = MAX_SCAN_CHARACTERS;
 
-// Charges `n` characters read to readerSteps.
+// Charges `n` characters read to readerSteps, or throws SCAN_BUDGET_SPENT,
+// charging nothing, when that is more than is left.
 function chargeReader(n) {
   if (n <= 0) return;
+  if (n > readerSteps) {
+    readerSteps = -1;
+    throw SCAN_BUDGET_SPENT;
+  }
   readerSteps -= n;
-  if (readerSteps < 0) throw SCAN_BUDGET_SPENT;
 }
 
 // A reader's -1 for a `${` that does not close: the text from `read` to the
@@ -2260,8 +2286,11 @@ function secretRead(text) {
 // shell ('bash' | 'zsh' | 'dash') whose reading it is; an ANSI-C reading
 // (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
+  if (command.length > scanBudget) {
+    scanBudget = -1;
+    throw SCAN_BUDGET_SPENT;
+  }
   scanBudget -= command.length;
-  if (scanBudget < 0) throw SCAN_BUDGET_SPENT;
   const { tokens, nested, unreadable } = tokenize(command, reading);
 
   for (const sub of nested) {
@@ -2736,7 +2765,7 @@ function main() {
       if (command === '') allow(undefined);
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       exemption.bashLine = command;
-      const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
+      const hit = scanBashCommand(command);
       if (hit !== null) emitBlock(hit.code, tool, hit.text);
       const spawn = findDebuggerCliSpawnEitherWay(command);
       if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
@@ -2756,6 +2785,9 @@ function main() {
   });
 }
 
-module.exports = { decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, tokenize };
+module.exports = {
+  decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, tokenize, workSpent,
+  MAX_SCAN_CHARACTERS,
+};
 
 if (require.main === module) main();
