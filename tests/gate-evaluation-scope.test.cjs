@@ -1586,4 +1586,20 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, ['--all']), null, 'an option-like id is never passed to git');
     assert.equal(subjectsOccurOnHead(repo.dir, []), null);
   });
+
+  test('property: true exactly when every named subject is on a kept commit (empty, spaced, unicode, repeated)', () => {
+    const subject = fc.stringMatching(/^[ aé]{0,3}$/);
+    fc.assert(fc.property(fc.array(fc.tuple(subject, fc.boolean()), { minLength: 1, maxLength: 3 }), (rows) => {
+      const repo = makeRepo();
+      const base = repo.git('rev-parse', 'HEAD');
+      const make = (msg) => { repo.git('commit', '--allow-empty', '--allow-empty-message', '--cleanup=verbatim', '-m', msg); return repo.git('rev-parse', 'HEAD'); };
+      const ids = rows.map(([msg]) => make(msg));
+      repo.git('reset', '--hard', base);
+      // A new parent, so a kept commit never gets the same sha as its original (same tree, message and second).
+      make('rewrite');
+      for (const [msg, kept] of rows) if (kept) make(msg);
+      const keptSubjects = new Set(rows.filter(([, kept]) => kept).map(([msg]) => msg));
+      assert.equal(subjectsOccurOnHead(repo.dir, ids), rows.every(([msg]) => keptSubjects.has(msg)));
+    }), { numRuns: 12 });
+  });
 });

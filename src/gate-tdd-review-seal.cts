@@ -21,7 +21,13 @@ export type SealPlans = Record<string, Partial<SealEntry>>;
 
 // Cap for repo-controlled text the gate reads (the seal and SUMMARY.md); a real one is a few KiB at most; anything bigger is not read (repo content, so hostile).
 export const REPO_TEXT_MAX_BYTES = 64 * 1024;
-/** #5354: most distinct SUMMARY task commits probed per plan; each costs one `git merge-base` spawn and, when git does not know it, one `git rev-parse --verify` (the loop stops at the first id that is not gone), so at most 2 * SUMMARY_REFS_MAX spawns; plus, at most once per run (the caller's `historyComplete` memo), one `git rev-parse --is-shallow-repository`; plus, when every id exists, one `git rev-list` and one `git show` per call. */
+/**
+ * #5354: most distinct SUMMARY task commits probed per plan. The git spawns per plan:
+ * - each id costs one `git merge-base`, and one `git rev-parse --verify` when git does not know it;
+ *   the loop stops at the first id that is not gone, so at most 2 * SUMMARY_REFS_MAX;
+ * - one `git rev-parse --is-shallow-repository`, at most once per run (the caller's `historyComplete` memo);
+ * - when every id exists, one `git rev-list` and one `git show`.
+ */
 export const SUMMARY_REFS_MAX = 64;
 
 function parseSeal(text: string): Evidence<SealPlans> {
