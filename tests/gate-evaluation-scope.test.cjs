@@ -12,7 +12,6 @@
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
@@ -1589,21 +1588,21 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, []), null);
   });
 
-  test('[negative] a history larger than the runner buffer still answers, by reading HEAD in pages', () => {
+  test('[negative] a history larger than the default runner buffer still answers', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     const b = commit(repo, 'b.txt', 'test(03-01): b');
     repo.git('reset', '--hard', base);
     // 9000 commits of about 180 bytes of log record each are over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
+    // The stream is built through `git fast-import`, the way tests/emitted-ack-trailer.test.cjs builds its history.
     const filler = 'x'.repeat(100);
     let stream = '';
     for (let i = 0; i < 9000; i++) {
       const msg = i === 0 ? 'feat(03-01): a' : `chore: ${filler} ${i}`;
       stream += `commit refs/heads/main\ncommitter T <t@t.io> ${1700000000 + i} +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\n${i === 0 ? `from ${base}\n` : ''}\n`;
     }
-    const imported = spawnSync('git', ['fast-import', '--quiet'], { cwd: repo.dir, input: stream, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
-    assert.equal(imported.status, 0, imported.stderr);
+    gitOrThrow(['fast-import', '--quiet'], { cwd: repo.dir, timeoutMs: GIT_TIMEOUT_MS, input: stream });
     repo.git('reset', '--hard', 'main');
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject 9000 commits deep is found');
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from every page is no');
@@ -1629,9 +1628,11 @@ describe('subjectsOccurOnHead (#5354)', () => {
       repo.git('reset', '--hard', base);
       // A new parent, so a kept commit never gets the same sha as its original (same tree, message and second).
       make('rewrite');
-      for (const [msg, kept] of rows) if (kept) make(msg);
-      const keptSubjects = new Set(rows.filter(([, kept]) => kept).map(([msg]) => msg));
-      assert.equal(subjectsOccurOnHead(repo.dir, ids), rows.every(([msg]) => keptSubjects.has(msg)));
+      const keptIds = rows.filter(([, kept]) => kept).map(([msg]) => make(msg));
+      // The oracle reads the subjects as git reports them: git strips trailing whitespace and reads a blank message as empty.
+      const subjectOf = (sha) => gitOrThrow(['log', '-1', '--format=%s%x1e', sha], { cwd: repo.dir }).split('\x1e')[0];
+      const keptSubjects = new Set(keptIds.map(subjectOf));
+      assert.equal(subjectsOccurOnHead(repo.dir, ids), ids.every((id) => keptSubjects.has(subjectOf(id))));
     }), { numRuns: 12 });
   });
 });

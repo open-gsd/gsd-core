@@ -76,7 +76,7 @@ export interface ScopeOptions {
   shaChunk?: number;
 }
 
-export type GitRunner = (args: string[], opts?: { cwd?: string }) => SpawnResultOutput;
+export type GitRunner = (args: string[], opts?: { cwd?: string; maxBuffer?: number }) => SpawnResultOutput;
 
 export interface ScopeCommit {
   sha: string;
@@ -133,8 +133,6 @@ export const SCOPE_EXCLUSION_PATHSPECS: readonly string[] = Object.freeze([
 
 /** 41 chars per sha; 400 of them stay well under the 28K Windows-safe argv chunk. */
 const SHA_CHUNK = 400;
-/** 2000 log records of about 180 bytes stay well under the 1 MiB output buffer of the git runner. */
-const LOG_PAGE = 2000;
 const DEFAULT_MAX_COMMITS = 200;
 const MAX_PATHSPECS = 20;
 const MAX_SUB_REPOS = 64;
@@ -316,7 +314,7 @@ class ScopeUnreadable extends Error {
   }
 }
 
-type Git = (args: string[], cwd?: string) => string;
+type Git = (args: string[], cwd?: string, maxBuffer?: number) => string;
 
 /** The git subcommand of `args`: the first argument after any leading `-c <key=value>` pairs. */
 function gitSubcommand(args: readonly string[]): string {
@@ -338,8 +336,8 @@ const SUB_REPO_GIT_HARDENING: readonly string[] = [
 ];
 
 function makeGit(projectDir: string, runner: GitRunner, leading: readonly string[] = []): Git {
-  return (args, cwd = projectDir) => {
-    const result = runner([...leading, ...args], { cwd });
+  return (args, cwd = projectDir, maxBuffer) => {
+    const result = runner([...leading, ...args], maxBuffer === undefined ? { cwd } : { cwd, maxBuffer });
     if (result.timedOut) throw new ScopeUnreadable('git-timeout');
     if (result.exitCode === 127) throw new ScopeUnreadable('git-unavailable');
     if (result.exitCode !== 0) throw new ScopeUnreadable(`git-failed:${gitSubcommand(args)}`, result.exitCode);
@@ -447,14 +445,11 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   const git = makeGit(projectDir, execGit ?? execGitSeam);
   try {
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
-    const wanted = new Set(subjectsFor(git, ids, false, SHA_CHUNK, new Map()).map((c) => c.subject));
-    // HEAD is read a page at a time, so no listing outgrows the runner's output buffer; stop at the last wanted subject.
-    for (let skip = 0; ; skip += LOG_PAGE) {
-      const page = parseLog(git(['log', logFormat(false), `--skip=${skip}`, `--max-count=${LOG_PAGE}`, 'HEAD', '--not', ...ids, '--']), false);
-      for (const commit of page) wanted.delete(commit.subject);
-      if (wanted.size === 0) return true;
-      if (page.length < LOG_PAGE) return false;
-    }
+    // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
+    const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
+    // Infinity: the listing is the whole history after a squash and must not stop at the runner's 1 MiB default.
+    const onHead = new Set(parseLog(git(['log', logFormat(false), 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
+    return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;
@@ -901,7 +896,7 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): Scope
 function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group, '--']), withBody, parentsOut));
+    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
   }
   return out;
 }
