@@ -1403,6 +1403,39 @@ describe('#3587 per-phase commit_docs override', () => {
       assert.strictEqual(configGet('commit_docs'), 'false');
     });
 
+    // `--default` does not apply to these keys: the loader always resolves a value,
+    // so a caller's `--default false` fail-closed guard reads the resolved policy.
+    function writeGlobalDefaults(defaults) {
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(defaults));
+    }
+
+    test('with no .planning/ directory, --default false reads the built-in default true', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      assert.strictEqual(configGet('commit_docs', 'false'), 'true');
+      assert.strictEqual(configGet('planning.commit_docs', 'false'), 'true');
+    });
+
+    test('with no .planning/ directory, --default false reads the global defaults file when it sets commit_docs', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      writeGlobalDefaults({ commit_docs: false });
+      assert.strictEqual(runtimeCommitDocs(), false);
+      assert.strictEqual(configGet('commit_docs', 'false'), 'false');
+      assert.strictEqual(configGet('commit_docs', 'true'), 'false');
+    });
+
+    // `.planning/` present with no config.json is the one state where the loader
+    // resolves built-in defaults without reading ~/.gsd/defaults.json.
+    test('with .planning/ but no config.json, commit_docs reads true and the global defaults file is not consulted', () => {
+      cleanup(path.join(tmpDir, '.planning', 'config.json'));
+      assert.ok(fs.existsSync(path.join(tmpDir, '.planning')), 'the fixture keeps .planning/');
+      assert.strictEqual(configGet('commit_docs'), 'true');
+      assert.strictEqual(configGet('commit_docs', 'false'), 'true');
+      writeGlobalDefaults({ commit_docs: false });
+      assert.strictEqual(runtimeCommitDocs(), true);
+      assert.strictEqual(configGet('commit_docs'), 'true');
+    });
+
     // An unusable config.json is not an absent one (ADR-1411). The loader discards
     // it and resolves defaults, so printing its `commit_docs` would report `true`
     // (commit) as if the user had set it. config-get fails instead, with the reason
