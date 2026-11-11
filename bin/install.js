@@ -9805,11 +9805,15 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   } catch { /* absent or not empty */ }
 
   // #5335: OpenCode never reads settings.json, but the shared-settings install step creates it as `{}`.
-  // An empty one carries nothing of the user's; a populated one is left alone.
+  // An empty one carries nothing of the user's; a populated one is left alone. So is a symlinked one,
+  // whatever it holds and whether or not GSD_ALLOW_SYMLINKED_DEST is set (#5037, #5948): the install
+  // never creates a link, so a link is the user's, and rmSync would delete the link itself.
   if (resolveInstallPlan(runtime).finishPermissionWriter === 'opencode') {
     const emptySettingsPath = path.join(targetDir, 'settings.json');
     try {
-      const parsed = JSON.parse(fs.readFileSync(emptySettingsPath, 'utf8'));
+      const parsed = fs.lstatSync(emptySettingsPath).isSymbolicLink()
+        ? null
+        : JSON.parse(fs.readFileSync(emptySettingsPath, 'utf8'));
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
         fs.rmSync(emptySettingsPath, { force: true });
         removedCount++;
