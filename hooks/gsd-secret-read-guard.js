@@ -2259,13 +2259,15 @@ let scanSpent = false;
 // 1 MiB of `a ` 0.6 s. With this budget each such shape is denied in at most
 // 1.5 s wall at load 42, and the costliest shape left spends the character
 // budget (MAX_SCAN_CHARACTERS). Every pass re-tokenizes what it reads, and a
-// nested body is read again at each outer pass, so the charge multiplies with
-// nesting. A script a shell reads from a heredoc that holds a reading trigger
-// is charged about 15 separators a character: `bash <<'EOF'` scripts reach
-// about 31,000-59,000 characters before this budget denies them, by shape;
-// inside `$( )` or a second heredoc the charge is 40-60 a character, and such
-// scripts reach about 9,000-14,000. The most any of the 1,384,856 real agent
-// commands above needs is 20,043 (a 4,543-character heredoc commit message).
+// nested body is read again at each outer pass, so the charge on a script a
+// shell reads from a heredoc is a fixed multiple of its length, set by its
+// nesting. With a reading trigger in it, each character of a `bash <<'EOF'`
+// script is scanned about 120 times and charged up to about 33 separators,
+// and such scripts are denied from about 16,000-70,000 characters by shape;
+// inside `$( )` or a second heredoc each is scanned about 500 times and
+// charged up to about 130, and they are denied from about 4,000-17,000. The
+// most any of the 1,384,856 real agent commands above needs is 20,043 (a
+// 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;
 
 // The separators left in the current command, set with scanBudget.
