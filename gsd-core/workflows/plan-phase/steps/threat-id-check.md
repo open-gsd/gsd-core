@@ -13,6 +13,11 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 After every planner return (including revisions and bounce), and immediately before committing plans, run this fresh scan. Never reuse the initial payload. This gate applies with `--skip-verify`, disabled plan-checker, and `commit_docs=false`.
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 PHASE="${PHASE:-<phase number from planning context>}"
 THREAT_SCAN=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") || { echo "BLOCKED: threat-ID scan failed" >&2; exit 1; }
 if [[ "$THREAT_SCAN" == @file:* ]]; then THREAT_SCAN=$(cat "${THREAT_SCAN#@file:}") || exit 1; fi
