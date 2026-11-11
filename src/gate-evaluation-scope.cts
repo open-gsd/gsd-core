@@ -133,6 +133,8 @@ export const SCOPE_EXCLUSION_PATHSPECS: readonly string[] = Object.freeze([
 
 /** 41 chars per sha; 400 of them stay well under the 28K Windows-safe argv chunk. */
 const SHA_CHUNK = 400;
+/** 2000 log records of about 180 bytes stay well under the 1 MiB output buffer of the git runner. */
+const LOG_PAGE = 2000;
 const DEFAULT_MAX_COMMITS = 200;
 const MAX_PATHSPECS = 20;
 const MAX_SUB_REPOS = 64;
@@ -445,8 +447,14 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   const git = makeGit(projectDir, execGit ?? execGitSeam);
   try {
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
-    const onHead = new Set(parseLog(git(['log', logFormat(false), 'HEAD', '--not', ...ids]), false).map((c) => c.subject));
-    return subjectsFor(git, ids, false, SHA_CHUNK, new Map()).every((c) => onHead.has(c.subject));
+    const wanted = new Set(subjectsFor(git, ids, false, SHA_CHUNK, new Map()).map((c) => c.subject));
+    // HEAD is read a page at a time, so no listing outgrows the runner's output buffer; stop at the last wanted subject.
+    for (let skip = 0; ; skip += LOG_PAGE) {
+      const page = parseLog(git(['log', logFormat(false), `--skip=${skip}`, `--max-count=${LOG_PAGE}`, 'HEAD', '--not', ...ids, '--']), false);
+      for (const commit of page) wanted.delete(commit.subject);
+      if (wanted.size === 0) return true;
+      if (page.length < LOG_PAGE) return false;
+    }
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;
@@ -893,7 +901,7 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): Scope
 function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
+    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group, '--']), withBody, parentsOut));
   }
   return out;
 }

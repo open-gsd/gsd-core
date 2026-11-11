@@ -26,7 +26,7 @@ export const REPO_TEXT_MAX_BYTES = 64 * 1024;
  * - each id costs one `git merge-base`, and one `git rev-parse --verify` when git does not know it;
  *   the loop stops at the first id that is not gone, so at most 2 * SUMMARY_REFS_MAX;
  * - one `git rev-parse --is-shallow-repository`, at most once per run (the caller's `historyComplete` memo);
- * - when every id exists, one `git log` over HEAD and one `git log --no-walk` per chunk of ids.
+ * - when every id exists, one `git log --no-walk` per chunk of ids and one `git log` per page of 2000 commits on HEAD, until every subject is found.
  */
 export const SUMMARY_REFS_MAX = 64;
 

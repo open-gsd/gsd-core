@@ -12,12 +12,14 @@
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -1585,6 +1587,36 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, ['f'.repeat(40)]), null, 'an unknown id is no answer');
     assert.equal(subjectsOccurOnHead(repo.dir, ['--all']), null, 'an option-like id is never passed to git');
     assert.equal(subjectsOccurOnHead(repo.dir, []), null);
+  });
+
+  test('[negative] a history larger than the runner buffer still answers, by reading HEAD in pages', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    const b = commit(repo, 'b.txt', 'test(03-01): b');
+    repo.git('reset', '--hard', base);
+    // 9000 commits of about 180 bytes of log record each are over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
+    const filler = 'x'.repeat(100);
+    let stream = '';
+    for (let i = 0; i < 9000; i++) {
+      const msg = i === 0 ? 'feat(03-01): a' : `chore: ${filler} ${i}`;
+      stream += `commit refs/heads/main\ncommitter T <t@t.io> ${1700000000 + i} +0000\ndata ${Buffer.byteLength(msg)}\n${msg}\n${i === 0 ? `from ${base}\n` : ''}\n`;
+    }
+    const imported = spawnSync('git', ['fast-import', '--quiet'], { cwd: repo.dir, input: stream, encoding: 'utf-8', timeout: GIT_TIMEOUT_MS });
+    assert.equal(imported.status, 0, imported.stderr);
+    repo.git('reset', '--hard', 'main');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject 9000 commits deep is found');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from every page is no');
+  });
+
+  test('[negative] an id named like a working-tree file is read as a revision', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
+    fs.writeFileSync(path.join(repo.dir, a.slice(0, 40)), 'file named like the id\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
   });
 
   test('property: true exactly when every named subject is on a kept commit (empty, spaced, unicode, repeated)', () => {
