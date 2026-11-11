@@ -2134,11 +2134,11 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.equal(scanBashCommand(cmd, BIG, separators + 1), null, 'limit + 1');
     });
 
-    test('in process: a script a shell reads from a heredoc is scanned to about 35,000 characters', () => {
-      // The hook comment's and the user guide's figure. Every pass re-tokenizes
-      // the script, so with a reading trigger (the `$((` beside a quote) it is
-      // charged its separators about 115 times, and the separator budget stops
-      // it before the character budget would. Pinned well either side.
+    test('in process: a case-block script a shell reads from a heredoc is denied between 30,000 and 40,000 characters', () => {
+      // One of the reaches the hook comment and the user guide give. Every pass
+      // re-tokenizes the script, so with a reading trigger (the `$((` beside a
+      // quote) each character is charged several separators, and the separator
+      // budget stops it before the character budget would. Pinned either side.
       const block = (i) => `case "$x" in\n  a${i}) y=1 ;;\n  b${i}) y=2 ;;\n  *) y=0 ;;\nesac\n[ "$y" -gt 0 ] && echo "$((y * ${i}))"\n`;
       const script = (chars) => {
         let body = '';
@@ -2148,6 +2148,22 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
       assert.ok(allowed(script(30000)), '30,000 characters');
       assert.ok(!allowed(script(40000)), '40,000 characters');
+      assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
+    });
+
+    test('in process: the same kind of script inside `$( )` is denied between 3,000 and 5,000 characters', () => {
+      // The lowest reach the hook comment and the user guide give. A body nested
+      // one level deeper is read again at each outer pass, so a strict-mode
+      // script of `(( n += K ))` lines given to `bash <<'EOF'` inside `$( )` is
+      // charged about 130 separators a character. `next` scans it to the end.
+      const script = (chars) => {
+        let body = "set -euo pipefail\nIFS=$'\\n\\t'\n";
+        for (let k = 0; body.length < chars; k++) body += `(( n += ${k} ))\n`;
+        return `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"`;
+      };
+      const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
+      assert.ok(allowed(script(3000)), '3,000 characters');
+      assert.ok(!allowed(script(5000)), '5,000 characters');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
     });
 
