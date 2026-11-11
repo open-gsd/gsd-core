@@ -73,7 +73,6 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('node:child_process');
 const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv, installSpawnEnv, TOOLS_PATH } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -640,9 +639,18 @@ describe('#5681: the defaults store is read bounded and replaced through an excl
     return { gsdHome, defaultsPath };
   }
 
+  // mkfifo runs inside a node child, so the spawn goes through the process seam.
+  function makeFifo(fifoPath) {
+    const r = runNode(['-e', 'require("node:child_process").execFileSync("mkfifo", [process.argv[1]])', fifoPath], {
+      env: installSpawnEnv({}),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    assert.strictEqual(r.exitCode, 0, `mkfifo must succeed: ${r.summary}`);
+  }
+
   test('a FIFO at defaults.json is refused instead of waited on, and is left a FIFO', (t) => {
     const { gsdHome, defaultsPath } = seedStore(t);
-    execFileSync('mkfifo', [defaultsPath], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+    makeFifo(defaultsPath);
 
     const r = runNode([TOOLS_PATH, '--json-errors', 'config-save-defaults', PATCH], {
       cwd: gsdHome,
