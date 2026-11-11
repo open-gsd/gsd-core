@@ -2302,15 +2302,24 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const { findSecretRead, tokenize, doubleQuoteEnd } = require(HOOK_PATH);
       const piece = fc.constantFrom('$[', '$((', '))', ']', '$', '$$', '$$$', ' ', '"', "'", 'a', '(', ')', '${', '}', '$(', '`', '\\"');
       const words = (text, reading) => tokenize(text, reading).tokens.filter((t) => t.kind === 'word').map((t) => t.text);
-      fc.assert(fc.property(fc.array(piece, { minLength: 1, maxLength: 8 }), fc.constantFrom(false, 'bash', 'zsh', 'dash'), (parts, reading) => {
+      // Free sequences, and sequences framed by an arithmetic opener and its closer with a quote
+      // able to sit between: the shape the two readers disagreed on (`"$[ " ]"` under zsh), which
+      // free sequences reach about once in 600 runs.
+      const free = fc.array(piece, { minLength: 1, maxLength: 8 });
+      const framed = fc.tuple(
+        fc.array(piece, { maxLength: 2 }), fc.constantFrom('$[', '$$$[', '$$[', '$((', '$$$(('),
+        fc.array(fc.oneof(piece, fc.constant('"')), { maxLength: 4 }), fc.constantFrom(']', '))'), fc.array(piece, { maxLength: 2 }),
+      ).map(([a, o, b, c, d]) => [...a, o, ...b, c, ...d]);
+      fc.assert(fc.property(fc.oneof(free, framed), fc.constantFrom(false, 'bash', 'zsh', 'dash'), (parts, reading) => {
         findSecretRead(':', 0); // resets the readers' step budget for the direct calls below
         const str = `"${parts.join('')}"`;
         const end = doubleQuoteEnd(str, 1, reading);
         if (end < str.length) {
-          // The "…" that doubleQuoteEnd ends at `end` is one word to tokenize too, and ` Z` after it another.
-          const w = words(`${str.slice(0, end + 1)} Z`, reading);
-          assert.equal(w.length, 2, `${JSON.stringify(str)} under ${reading}: ${JSON.stringify(w)}`);
-          assert.equal(w[1], 'Z');
+          // Put ` Z ` right after the `"` doubleQuoteEnd ends at and keep the rest, so tokenize
+          // reads the same text: it must end the "…" there too, making `Z` its second word.
+          // Cutting the rest off instead would drop a closing `]` and agree with a wrong end.
+          const w = words(`${str.slice(0, end + 1)} Z ${str.slice(end + 1)}`, reading);
+          assert.equal(w[1], 'Z', `${JSON.stringify(str)} under ${reading}: end ${end}, ${JSON.stringify(w)}`);
         } else {
           // A "…" that never closes takes ` Z` with it.
           assert.equal(words(`${str} Z`, reading).length, 1, `${JSON.stringify(str)} under ${reading}`);
