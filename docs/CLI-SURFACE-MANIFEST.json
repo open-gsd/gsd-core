@@ -535,6 +535,14 @@
       "workstreamScoped": false
     },
     {
+      "verb": "project-context",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
       "verb": "project-instruction-file",
       "aliases": [],
       "positionals": 1,

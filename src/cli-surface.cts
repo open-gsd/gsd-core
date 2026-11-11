@@ -123,6 +123,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     listFlags: ['files', 'files-removed'],
   },
   'check-commit': { positionals: 1 },
+  // #6043: prints the ProjectContext main() resolved; it reads no flags of its own.
+  'project-context': { positionals: 1 },
   'commit-docs-guard.disable': { positionals: 2 },
   'commit-docs-guard.enable': { positionals: 2 },
   'commit-to-subrepo': { positionals: 2, listFlags: ['files'] },

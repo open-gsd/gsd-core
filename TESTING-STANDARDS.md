@@ -87,28 +87,26 @@ See [`CONTRIBUTING.md` — "QA Matrix Requirements"](CONTRIBUTING.md#qa-matrix-r
 
 A counter-test that feeds a hostile or failing input satisfies the letter of contract 6 above and can still be worthless. If a function has an error or fallback branch — a guard that degrades permissively on bad input, a resolver that falls back to a default root, a lock that expires — the test for that branch must assert the **specific degraded verdict** the branch produces, not merely that the call completed without throwing or returned *some* value of the right type.
 
-**Non-compliant (the actual pre-fix shape of `tests/worktree-safety.test.cjs`'s `resolveWorktreeContext` timeout counter-test, per [#3050](https://github.com/open-gsd/gsd-core/issues/3050) finding 2 and epic [#3051](https://github.com/open-gsd/gsd-core/issues/3051) Phase 3, generalized here as [#3053](https://github.com/open-gsd/gsd-core/issues/3053) H4):**
+**Non-compliant (the pre-fix shape of the timeout counter-test, here written against `resolveProjectContext`, per [#3050](https://github.com/open-gsd/gsd-core/issues/3050) finding 2 and epic [#3051](https://github.com/open-gsd/gsd-core/issues/3051) Phase 3, generalized here as [#3053](https://github.com/open-gsd/gsd-core/issues/3053) H4):**
 
 ```javascript
 // A liveness test wearing a correctness test's name — it proves the call
 // survived a timeout, not that it degraded to the RIGHT shape.
-test('resolveWorktreeContext handles a timeout', () => {
-  const result = resolveWorktreeContext('/repo/wt', { execGit: makeTimeoutStub() });
-  assert.doesNotThrow(() => resolveWorktreeContext('/repo/wt', { execGit: makeTimeoutStub() }));
-  assert.strictEqual(typeof result.effectiveRoot, 'string'); // true of ANY string, including the wrong one
+test('resolveProjectContext handles a timeout', () => {
+  const ctx = resolveProjectContext('/repo/wt', { deps: { execGit: makeTimeoutStub() } });
+  assert.doesNotThrow(() => resolveProjectContext('/repo/wt', { deps: { execGit: makeTimeoutStub() } }));
+  assert.strictEqual(typeof ctx.projectRoot, 'string'); // true of ANY string, including the wrong one
 });
 ```
 
-**Compliant (the actual fixed test, `tests/worktree-safety.test.cjs`):**
+**Compliant (the fixed shape, asserting the degraded provenance `resolveProjectContext` reports):**
 
 ```javascript
-test('returns effectiveRoot=cwd, mode=current_directory, reason=git_timed_out on timeout, not throw', () => {
-  const result = resolveWorktreeContext('/tmp', { execGit: makeTimeoutStub() });
-  assert.deepStrictEqual(result, {
-    effectiveRoot: '/tmp',           // the specific degraded value, not just "a string"
-    mode: 'current_directory',
-    reason: 'git_timed_out',
-  });
+test('degrades to the start directory with reason=git_timed_out on timeout, not throw', () => {
+  const ctx = resolveProjectContext('/tmp', { deps: { execGit: makeTimeoutStub() } });
+  assert.strictEqual(ctx.worktreeRoot, '/tmp');   // the specific degraded value, not just "a string"
+  assert.strictEqual(ctx.provenance.reason, 'git_timed_out');
+  assert.strictEqual(ctx.provenance.degraded, true);
 });
 ```
 

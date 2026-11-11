@@ -244,6 +244,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/plan-scan.cjs',
       'gsd-core/bin/lib/fallow-runner.cjs',
       'gsd-core/bin/lib/project-root.cjs',
+      'gsd-core/bin/lib/project-context.cjs',
       'gsd-core/bin/lib/installer-migration-authoring.cjs',
       'gsd-core/bin/lib/update-context.cjs',
       'gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs',
