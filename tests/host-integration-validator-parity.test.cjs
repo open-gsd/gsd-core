@@ -782,4 +782,22 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     assert.equal(result.success, false, 'a missing --isolation is a usage error');
     assert.match(result.error, /--isolation <harness-worktree\|orchestrator-worktree\|none\|fourth-mode>/, 'the usage text is read from the owner');
   });
+
+  test('record-dispatch-isolation refuses a mode outside the owner vocabulary and records nothing', (t) => {
+    const sentinel = (dir) => path.join(dir, '.gsd', 'dispatch-isolation-sentinel.json');
+    // Positive control: the same fixture records a mode the owner has.
+    const control = createTempDir('gsd-4904-record-valid-');
+    t.after(() => cleanup(control));
+    const ok = runGsdTools(['record-dispatch-isolation', '--isolation', 'none'], control);
+    assert.equal(ok.success, true, ok.error);
+    assert.equal(fs.existsSync(sentinel(control)), true, 'a valid mode writes the record in this fixture');
+    for (const mode of ['bogus', 'None', 'none ', 'harness_worktree', '__proto__', 'constructor', '']) {
+      const dir = createTempDir('gsd-4904-record-invalid-');
+      t.after(() => cleanup(dir));
+      const result = runGsdTools(['record-dispatch-isolation', '--isolation', mode], dir);
+      assert.equal(result.success, false, `${JSON.stringify(mode)} must be refused`);
+      assert.match(result.error, /Usage: record-dispatch-isolation --isolation </, JSON.stringify(mode));
+      assert.equal(fs.existsSync(sentinel(dir)), false, `${JSON.stringify(mode)} must record nothing`);
+    }
+  });
 });
