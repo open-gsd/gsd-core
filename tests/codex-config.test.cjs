@@ -3014,6 +3014,24 @@ describe('mergeCodexConfig', () => {
     });
   });
 
+  test('#5199: install preserves non-standalone marker text and appends exactly one managed block', () => {
+    const { managedCodexMarkers } = require('../bin/install.js');
+    const configPath = path.join(tmpDir, 'config.toml');
+    for (const input of [
+      `x = "${GSD_CODEX_MARKER}"\n`,
+      `k = 1 # ${GSD_CODEX_MARKER}\n`,
+      `${GSD_CODEX_MARKER} extra text\n`,
+    ]) {
+      fs.writeFileSync(configPath, input);
+      mergeCodexConfig(configPath, sampleBlock);
+      const content = fs.readFileSync(configPath, 'utf8');
+      assert.equal(content, `${input.trimEnd()}\n\n${sampleBlock}\n`);
+      assert.equal(managedCodexMarkers(content).length, 1);
+      mergeCodexConfig(configPath, sampleBlock);
+      assert.equal(fs.readFileSync(configPath, 'utf8'), content, 'update preserves the same single block');
+    }
+  });
+
   test('case 3: appends to config without GSD marker', () => {
     const configPath = path.join(tmpDir, 'config.toml');
     fs.writeFileSync(configPath, '[model]\nname = "o3"\n');

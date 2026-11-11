@@ -6725,9 +6725,9 @@ function mergeCodexConfig(configPath, gsdBlock) {
       ? records[1].end + records[1].eol.length
       : records[0].end + records[0].eol.length;
     const markerStripped = rawAfter.slice(end);
-    // Keep install/update merge behavior outside #5199 unchanged. The only
-    // ownership-line change here is whitespace-tolerant marker removal above;
-    // uninstall owns structural hooks-feature cleanup.
+    // Install/update shares standalone-marker detection and whitespace-tolerant
+    // ownership-line parsing with cleanup. Structural hooks-feature cleanup
+    // remains specific to uninstall.
     const afterUser = stripLeakedGsdCodexSections(markerStripped).trim();
 
     // #3610: top-level keys that survived BELOW the marker were file-scoped
