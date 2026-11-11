@@ -1,13 +1,15 @@
 'use strict';
 
-// FROZEN: the Bash scanner of hooks/gsd-secret-read-guard.js as it stood on `next`
-// at d47f196d1c, before #5255. tests/gsd-secret-read-guard.test.cjs compares the live
-// hook against it to hold the claim that nothing it denied is allowed. Do not
+// FROZEN: the Bash scanner of hooks/gsd-secret-read-guard.js as it stands on `next`
+// at 51cc7322a, before #5255, with #5834's committed-file exemption and #5874's
+// sudo/doas value options. tests/gsd-secret-read-guard.test.cjs compares the live
+// hook against it to hold the claim that nothing it denies is allowed. Do not
 // edit or reformat it. The Read and Grep arms and the hook's stdin entry are cut,
 // and the two exports at the end are added; hooks/lib is the live one.
-/* eslint-disable no-unused-vars -- the cut arms and stdin entry were the only users of MAX_COMMAND_LENGTH, classifyGrepGlob and findDebuggerCliSpawn */
+/* eslint-disable no-unused-vars -- the cut arms and stdin entry were the only users of these */
 
 const { finalExtension, normalizeWindowsBasename, lastSegment } = require('../../hooks/lib/filename-classification.js');
+
 
 // Commands longer than this are denied rather than scanned (see header).
 const MAX_COMMAND_LENGTH = 1024 * 1024;
@@ -17,6 +19,95 @@ const MAX_NESTING_DEPTH = 3;
 
 // Brace-alternative budget for a Grep glob before it is denied as too complex.
 const MAX_GLOB_ALTERNATIVES = 64;
+
+// #4432: project exemptions (`hooks.secret_read_exempt` in the ROOT project's
+// .planning/config.json). `root`/`allowRelative` are set once per invocation by
+// the stdin handler; `checker` is built lazily on the first secret-classified
+// token. Any failure while building or calling it means NOT exempt — never an
+// allow, and never a throw into the fail-open crash path.
+const exemption = { root: null, allowRelative: false, checker: null, configured: false, bashLine: null, bashReadOnly: null };
+
+// F3: a Bash exemption holds only when every command on the line is one of
+// these read-only readers; any other command anywhere on the line withdraws it
+// for every token (`mv a b && cat <exempt>` re-anchors or launders the name).
+const READ_ONLY_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'grep', 'egrep', 'fgrep', 'rg', 'wc', 'diff', 'cmp', 'sort', 'uniq', 'cut', 'nl', 'od',
+]);
+
+// Per-command options that write a file or run a program, so the command is
+// not read-only: `sort -o f`, `sort --compress-program`, `rg --pre`.
+function readOnlyOptionsOnly(base, operands) {
+  let positional = 0;
+  for (const w of operands) {
+    const t = w.text;
+    if (base === 'sort' && (/^-[A-Za-z]*o/.test(t) || /^--(output|compress-program|files0-from)/.test(t))) return false;
+    if (base === 'rg' && /^--(pre|pre-glob|hostname-bin)(=|$)/.test(t)) return false;
+    if (base === 'uniq' && !t.startsWith('-')) positional++;
+  }
+  return base !== 'uniq' || positional <= 1; // `uniq in out` writes `out`
+}
+
+// Fail closed: a substitution body, heredoc, process substitution, file
+// redirect out, unresolved or unlisted command word, or any exception is false.
+function lineIsReadOnly(command) {
+  try {
+    const { tokens, nested } = tokenize(command);
+    if (nested.length > 0) return false;
+    const bySeg = new Map();
+    for (const t of tokens) {
+      if (t.kind === 'heredoc') return false;
+      if (t.kind === 'sep') continue;
+      if (t.kind === 'word' && t.procsub !== undefined) return false;
+      if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+      bySeg.get(t.seg).push(t);
+    }
+    for (const segTokens of bySeg.values()) {
+      const words = [];
+      for (let k = 0; k < segTokens.length; k++) {
+        const t = segTokens[k];
+        if (t.kind === 'op') {
+          if (t.dup) continue;
+          const target = segTokens[k + 1];
+          if (!target || target.kind !== 'word') return false;
+          k++;
+          if (!t.read && target.text !== '/dev/null') return false; // output to a file
+          if (t.text.endsWith('<<<')) return false;
+          continue;
+        }
+        words.push(t);
+      }
+      if (words.length === 0) return false;
+      const cmd = resolveCommand(words);
+      if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
+      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isExemptSecret(tok) {
+  if (exemption.root === null) return false;
+  if (exemption.bashLine !== null) {
+    if (exemption.bashReadOnly === null) exemption.bashReadOnly = lineIsReadOnly(exemption.bashLine);
+    if (exemption.bashReadOnly !== true) return false;
+  }
+  try {
+    if (exemption.checker === null) {
+      const lib = require('../../hooks/lib/secret-read-exemptions.js');
+      const entries = lib.readExemptEntries(exemption.root);
+      exemption.configured = entries.length > 0;
+      exemption.checker = entries.length === 0
+        ? () => false
+        : lib.createExemptionChecker({ root: exemption.root, entries, allowRelative: exemption.allowRelative });
+    }
+    return exemption.checker(tok) === true;
+  } catch {
+    exemption.checker = () => false;
+    return false;
+  }
+}
 
 // `.env.<suffix>` names that are templates, not secrets (case-insensitive).
 const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist']);
@@ -33,8 +124,11 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 // stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
 // (the option's value becomes the command word), so keep it to the man pages.
 const WRAPPERS = new Map([
-  ['sudo', { short: 'CDghpRrTtUu', long: ['--close-from', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'] }],
-  ['doas', { short: 'Cu' }],
+  ['sudo', { short: 'aCcDghpRrTtUu', long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'],
+    // No-value long options, so an exact one never prefix-matches a longer
+    // valued one (`--login` vs `--login-class`).
+    flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'] }],
+  ['doas', { short: 'aCu' }],
   ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
@@ -179,12 +273,21 @@ function isSecretBasename(name) {
 // lower case once at the top so `.ENV` / `.Secrets` match on the
 // case-insensitive filesystems (macOS, Windows) where they ARE the secret file
 // — the same stance as the write guard's `/i` patterns.
-function namesSecret(tok) {
+function namesSecretByName(tok) {
   if (typeof tok !== 'string' || tok === '') return false;
   const lower = tok.toLowerCase();
   if (isSecretBasename(lastSegment(lower))) return true;
   const colon = lower.lastIndexOf(':');
   return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
+}
+
+// A secret-by-name token is still allowed when the project listed that exact
+// committed file under `hooks.secret_read_exempt` (#4432). The exemption is
+// consulted only on the secret-classified branch, so an ordinary token costs
+// no I/O.
+function namesSecret(tok) {
+  if (!namesSecretByName(tok)) return false;
+  return !isExemptSecret(tok);
 }
 
 // ---------------------------------------------------------------------------
@@ -756,7 +859,9 @@ const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
 function wrapperOptionWidth(word, spec) {
   if (word.startsWith('--')) {
     if (word.includes('=')) return 1;
-    // getopt_long accepts any unambiguous prefix (`--adj 5`).
+    // getopt_long takes an exact match over any longer option it prefixes
+    // (`sudo --login` is not `--login-class`), else any unambiguous prefix (`--adj 5`).
+    if ((spec.flags || []).includes(word)) return 1;
     return word.length > 2 && (spec.long || []).some((l) => l.startsWith(word)) ? 2 : 1;
   }
   const valued = spec.short || '';

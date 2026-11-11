@@ -2899,7 +2899,9 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
 });
 
 describe('nothing the scanner denied before #5255 is allowed', () => {
-  // tests/fixtures/secret-read-guard-base-scanner.cjs is `next`'s scanner, frozen.
+  // tests/fixtures/secret-read-guard-base-scanner.cjs is `next`'s scanner, frozen
+  // at 51cc7322a, the `next` this branch merged: #5834's exemption and #5874's
+  // sudo/doas value options included.
   // A seeded token soup of the shapes the readings change, in process, so the
   // property can afford enough commands to reach them. The hook's own entry
   // takes both passes, so both are compared; a throw in the frozen copy is that
@@ -2918,6 +2920,8 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
     '<<', '<<E', 'E\n', '<(', ':-', '%', 'x', "\\'", 'eval ', 'bash -c ', '{', '<<}', '<<{', '<<-', '<<<',
     "$'\\x41'", "$'.e\\x6ev'", '$${', '$$(', '$\\\n', 'case a in a) ', ';; esac',
     ' E\r\n', 'E\r\n', ' E$(x y)F\n', 'E$(x y)F\n', "<''<", '<', "eval '", "bash -c '",
+    // #5874's value options, so the comparison reaches what `next` changed there.
+    'sudo ', 'sudo -a x ', 'sudo -c x ', 'doas -a x ', '.ENV',
   );
   const command = fc.array(token, { minLength: 1, maxLength: 16 }).map((parts) => parts.join(''));
 
