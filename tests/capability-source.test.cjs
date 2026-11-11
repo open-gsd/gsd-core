@@ -237,7 +237,8 @@ describe('#5297 git adapter — exact pinned target', {
     if (args.includes('clone')) cloneDirs.push(args.at(-1));
     const localArgs = args.map((arg) => arg === sourceUrl ? pathToFileURL(repo).href : arg);
     const result = execGit(localArgs, { ...opts, env: {
-      ...env, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '.githooks',
+      ...env, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '.githooks',
+      GIT_CONFIG_KEY_1: 'clone.defaultRemoteName', GIT_CONFIG_VALUE_1: 'custom-upstream',
     } });
     if (result.exitCode === 0 && (args.includes('clone') || args.includes('checkout'))) {
       const cloneDir = args.includes('clone') ? args.at(-1) : args[args.indexOf('-C') + 1];
@@ -299,6 +300,10 @@ describe('#5297 git adapter — exact pinned target', {
       assert.strictEqual(fs.existsSync(path.join(result.stagedDir, 'lifecycle-ran')), false);
       assert.strictEqual(fs.existsSync(path.join(result.stagedDir, 'hook-ran')), false, 'inherited relative Git hooks must not execute capability code');
       assert.ok(calls.every(({ timeout }) => timeout > 0 && timeout <= 60_000), 'every retrieval subprocess is bounded');
+      const clone = calls.find(({ args }) => args.includes('clone'));
+      const checkout = calls.find(({ args }) => args.includes('checkout'));
+      assert.equal(clone.args[clone.args.indexOf('--origin') + 1], 'origin');
+      if (checkout) assert.equal(checkout.timeout, clone.timeout, 'checkout writes the tree with the clone budget');
     } finally {
       cleanup(result.stagedDir);
     }
@@ -400,7 +405,14 @@ describe('#5297 git adapter — exact pinned target', {
     const result = await resolveCapabilitySource(`${sourceUrl}#main`, {
       gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
     });
+    t.after(() => cleanup(result.stagedDir));
     assert.equal(result.id, 'pinned-cap');
+    assert.equal(retrieved.commit, commits.tip);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(result.stagedDir, 'payload.json'), 'utf8')), { payload: 'default branch tip' });
+    assert.deepEqual(warnings, ['GSD_GIT_REF_LOCAL_FALLBACK']);
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#not-in-shallow-clone`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
+    }), { message: 'git fetch "not-in-shallow-clone" failed (exit 1): network unavailable' });
     assert.deepEqual(warnings, ['GSD_GIT_REF_LOCAL_FALLBACK']);
   });
 
@@ -462,15 +474,17 @@ describe('#5297 git adapter — normalized ref safety', () => {
   test('PROPERTY (fc): unsafe typed refs reject before any Git operation', async (t) => {
     const gsdHome = createTempDir('gsd-unsafe-typed-');
     t.after(() => cleanup(gsdHome));
+    const body = fc.array(fc.constantFrom('a', 'b', 'Z', '0', '1', '/', '.', '_'), { minLength: 1, maxLength: 30 }).map((chars) => chars.join(''));
     await fc.assert(fc.asyncProperty(
       fc.constantFrom('tag:', 'TAG:', 'Tag:', 'sha:', 'SHA:', 'Sha:'),
-      fc.constantFrom('+bad', '-bad', 'bad:ref'),
-      fc.constantFrom('', ' ', '  '),
-      async (prefix, value, padding) => {
+      body, fc.constantFrom('+', '-', ':'), body,
+      async (prefix, left, operator, right) => {
+        const value = operator === ':' ? `${left}:${right}` : `${operator}${left}${right}`;
+        const reason = operator === '-' ? 'leading dash not allowed' : 'fetch refspec not allowed';
         let calls = 0;
-        await assert.rejects(() => resolveCapabilitySource(`https://example.com/repo.git#${padding}${prefix}${value}${padding}`, {
+        await assert.rejects(() => resolveCapabilitySource(`https://example.com/repo.git#${prefix}${value}`, {
           gsdHome, hostVersion: '1.5.0', execOverrides: { git: () => { calls += 1; return spawnOk(''); } },
-        }));
+        }), { message: `Unsafe git ref (${reason}): "${prefix}${value}"` });
         assert.equal(calls, 0);
       },
     ));
@@ -488,6 +502,7 @@ describe('#5297 git adapter — normalized ref safety', () => {
     };
     try {
       const cases = [
+        ...['v*', 'v?', 'v[', 'tag:v*', 'tag:v?', 'tag:v[', 'tag:v^', 'tag:v~'].map((fragment) => [fragment, /invalid ref-name character/]),
         ['tag:--foo', /leading dash not allowed/],
         ['sha:--foo', /leading dash not allowed/],
         ['TAG:-foo', /leading dash not allowed/],

@@ -1046,6 +1046,11 @@ function resolveGit(
   if (ref.value.startsWith('-')) {
     throw new Error(`Unsafe git ref (leading dash not allowed): "${parsed.ref}"`);
   }
+  // Patterns cannot name one target. Typed tags also forbid revision operators;
+  // bare commit-ish operators retain the previously accepted tip-local fallback.
+  if (/[*?\[]/.test(ref.value) || (ref.kind !== 'bare' && /[\^~]/.test(ref.value))) {
+    throw new Error(`Unsafe git ref (invalid ref-name character): "${parsed.ref}"`);
+  }
   if (ref.kind === 'sha' && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ref.value)) {
     throw new Error(`Invalid git ref: "${parsed.ref}" — sha: pin must be a full 40- or 64-hex object name`);
   }
@@ -1054,15 +1059,16 @@ function resolveGit(
   const cloneDir = path.join(scratchDir, 'repo');
   const hooksDir = path.join(scratchDir, 'empty-hooks');
   const gitConfig = ['-c', `core.hooksPath=${hooksDir}`];
+  const treeWriteTimeoutMs = 60_000;
   try {
     // Keep hooks outside the cloned tree: an inherited relative core.hooksPath
     // could otherwise execute a tracked post-checkout hook during clone/checkout.
     fs.mkdirSync(hooksDir);
     const cloneResult = execGit([
-      ...gitConfig, 'clone', '--depth', '1',
+      ...gitConfig, 'clone', '--origin', 'origin', '--depth', '1',
       ...(ref.kind === 'none' ? [] : ['--no-checkout']),
       '--', parsed.target, cloneDir,
-    ], { timeout: 60_000 });
+    ], { timeout: treeWriteTimeoutMs });
     if (cloneResult.exitCode !== 0) {
       throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.stderr}`);
     }
@@ -1095,7 +1101,7 @@ function resolveGit(
       }
       const checkoutResult = execGit([
         ...gitConfig, '-C', cloneDir, 'checkout', '--detach', checkoutTarget, '--',
-      ], { timeout: 10_000 });
+      ], { timeout: treeWriteTimeoutMs });
       if (checkoutResult.exitCode !== 0) {
         throw new Error(
           `git checkout "${parsed.ref}" failed (exit ${checkoutResult.exitCode}): ${checkoutResult.stderr}`
