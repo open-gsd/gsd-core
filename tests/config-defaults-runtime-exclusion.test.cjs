@@ -10,6 +10,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempDir, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { diagnosticCodes } = require('./helpers/diagnostic-codes.cjs');
+const { canonicalizeRuntimeName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const {
   MODEL_RESOLVER_DIAGNOSTIC,
@@ -122,12 +124,8 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     return JSON.parse(result.output);
   }
 
-  function diagnosticCodes(stderr) {
-    return [...stderr.matchAll(/\[([a-z][a-z0-9_]{0,63})\]/g)].map((match) => match[1]);
-  }
-
-  const tierMapRuntimes = Object.keys(RUNTIME_PROFILE_MAP).filter((runtime) => runtime !== 'claude').sort();
-  const noTierMapRuntimes = [...KNOWN_RUNTIMES].filter((runtime) => !RUNTIME_PROFILE_MAP[runtime]).sort();
+  const tierMapRuntimes = Object.keys(RUNTIME_PROFILE_MAP).filter((runtime) => runtime !== 'claude' && canonicalizeRuntimeName(runtime) !== null).sort();
+  const noTierMapRuntimes = [...KNOWN_RUNTIMES].filter((runtime) => !RUNTIME_PROFILE_MAP[runtime] || canonicalizeRuntimeName(runtime) === null).sort();
 
   for (const command of ['config-new-project', 'config-ensure-section', 'config-set-model-profile']) {
     for (const runtime of [undefined, 'codex', 'opencode']) {
@@ -217,16 +215,29 @@ describe('#5329 — shared omit must not become explicit project model intent', 
       fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
       const sharedModel = resolve('gsd-executor', runtime).model;
       const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', {}, project, runtime);
-      assert.equal(config.resolve_model_ids === 'omit', sharedModel === '');
+      assert.equal(Object.hasOwn(config, 'resolve_model_ids'), !RUNTIME_PROFILE_MAP[runtime] || canonicalizeRuntimeName(runtime) === null);
       assert.equal(resolve('gsd-executor', runtime).model, sharedModel);
     });
   }
 
-  test('an explicit no-tier runtime choice keeps shared omit despite a Claude environment', () => {
-    const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', { runtime: 'cline' });
-    assert.equal(config.runtime, 'cline');
-    assert.equal(config.resolve_model_ids, 'omit');
-  });
+  for (const [choice, runtime] of [
+    ['claude', 'claude'], ['cline', 'claude'], ['codex', 'cline'],
+    [null, 'claude'], ['', 'claude'], ['foo', 'claude'],
+  ]) {
+    test(`runtime choice ${JSON.stringify(choice)} and environment ${runtime} preserve resolution across seeding`, () => {
+      fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
+      fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+      const configPath = path.join(project, '.planning', 'config.json');
+      fs.writeFileSync(configPath, JSON.stringify({ runtime: choice }));
+      const before = resolve('gsd-executor', runtime).model;
+      fs.unlinkSync(configPath);
+      const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', { runtime: choice }, project, runtime);
+      assert.equal(config.runtime, choice);
+      assert.equal(resolve('gsd-executor', runtime).model, before);
+      if (runtime === 'claude') assert.equal(before, 'sonnet');
+      else assert.equal(before, '');
+    });
+  }
 
   test('existing project CLI resolution warns without either creation command rewriting its config', () => {
     fs.mkdirSync(path.join(project, '.planning'));

@@ -31,7 +31,7 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cj
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 
-import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults, hasRuntimeModelTierMap } from './model-catalog.cjs';
+import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults } from './model-catalog.cjs';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -637,8 +637,7 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // map, but only outranks the omit gate when that key canonicalizes to a
   // recognised non-Claude runtime.
   const omitApplies = config['resolve_model_ids'] === 'omit'
-    && (projectExplicitlySetsOmit(cwd)
-      || (!hasNativeModelAliases(activeRuntime) && !hasRuntimeModelTierMap(activeRuntime)));
+    && (projectExplicitlySetsOmit(cwd) || !hasNativeModelAliases(activeRuntime));
   // CANONICALIZED, not the raw field. Comparing the raw value against the literal
   // 'claude' made every spelling that is not exactly that string count as a
   // non-Claude opt-in and outrank the omit gate: `runtime:"Claude"`,

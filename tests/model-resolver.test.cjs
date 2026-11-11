@@ -31,6 +31,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { diagnosticCodes } = require('./helpers/diagnostic-codes.cjs');
 
 const { cleanup, createTempDir, scrubConfigLocationEnv, homeSandboxEnv,
   withIsolatedProcessState, resetRuntimeWarningCaches } = require('./helpers.cjs');
@@ -7073,7 +7074,7 @@ describe('#5329 — existing Claude project omit diagnostic', () => {
         assert.equal(modelResolver.resolveModelInternal(project, agent), '');
       }
       assert.equal(writes.length, 1, 'one project warning must cover all omitted agents');
-      const codes = writes.flatMap((line) => [...line.matchAll(/\[([a-z][a-z0-9_]{0,63})\]/g)].map((match) => match[1]));
+      const codes = writes.flatMap(diagnosticCodes);
       assert.deepEqual(codes, [modelResolver.MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT]);
     });
   });
@@ -7083,7 +7084,7 @@ describe('#5329 — existing Claude project omit diagnostic', () => {
     fs.writeFileSync(path.join(home, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
     withConfig({ model_profile: 'balanced' }, 'claude', writes => {
       assert.equal(modelResolver.resolveModelInternal(project, 'gsd-executor'), 'sonnet');
-      const codes = writes.flatMap((line) => [...line.matchAll(/\[([a-z][a-z0-9_]{0,63})\]/g)].map((match) => match[1]));
+      const codes = writes.flatMap(diagnosticCodes);
       assert.equal(codes.includes(modelResolver.MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT), false,
         'a shared-only omit must not emit the project-omit diagnostic');
     });

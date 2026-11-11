@@ -2274,7 +2274,7 @@ On the Claude runtime, tier resolution stays on Claude Code's adaptive tier alia
 4. Claude-native default — `model_profile` tier as alias (current default).
 5. `inherit` — propagates literal `inherit` for `Task(model="inherit")` semantics.
 
-**Backwards compatibility.** Setups without `runtime` set see zero behavior change — every existing config continues to work identically. Codex installs that auto-set `resolve_model_ids: "omit"` continue to omit the model field unless the user opts in by setting `runtime: "codex"`.
+**Backwards compatibility.** A recognized Codex identity from the environment, project config or install marker resolves through the Codex tier map. An explicit project `resolve_model_ids: "omit"` keeps its existing precedence: a populated non-Claude tier entry can resolve before the omit gate; paths without such an entry keep the empty-model result.
 
 **Unknown runtimes.** If `runtime` is set to a value with no built-in tier map and no `model_profile_overrides[<runtime>]`, GSD falls back to the Claude-alias safe default rather than emit a model ID the runtime cannot accept. To support a new runtime, populate `model_profile_overrides.<runtime>.{opus,sonnet,haiku}` with valid IDs.
 

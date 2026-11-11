@@ -31,6 +31,7 @@ const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapability
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
 import { hasRuntimeModelTierMap } from './model-catalog.cjs';
 import { resolveActiveRuntime } from './runtime-slash.cjs';
+import { canonicalizeRuntimeName } from './runtime-name-policy.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
 // #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
@@ -486,11 +487,13 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // Projects detect the runtime from the install path / .gsd-runtime marker.
   const safeDefaults = { ...userDefaults };
   delete safeDefaults['runtime'];
-  const activeRuntime = resolveActiveRuntime(choices, Object.hasOwn(choices, 'runtime')
-    ? { ...process.env, GSD_RUNTIME: undefined } : process.env);
-  const activeRuntimeHasTierMap = hasRuntimeModelTierMap(activeRuntime);
+  const activeRuntime = resolveActiveRuntime(choices);
+  // Match the loader identity boundary: a catalog-only future runtime is not
+  // materialized as config.runtime, so removing omit would change its route.
+  const activeRuntimeHasTierMap = hasRuntimeModelTierMap(activeRuntime)
+    && canonicalizeRuntimeName(activeRuntime) !== null;
   if (safeDefaults['resolve_model_ids'] === 'omit'
-      && (activeRuntime === 'claude' || activeRuntimeHasTierMap)) {
+      && activeRuntimeHasTierMap) {
     delete safeDefaults['resolve_model_ids'];
   }
 
