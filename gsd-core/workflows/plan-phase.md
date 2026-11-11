@@ -1289,7 +1289,8 @@ if [ "${CONVERGENCE_ENABLED}" = "true" ] && [ -n "${REVIEWS_FILE}" ]; then
 fi
 ```
 
-Run `plan-phase/steps/threat-id-check.md` § After planning, then spawn checker again (step 10) and increment `iteration_count`.
+Run `plan-phase/steps/threat-id-check.md` § After planning.
+Spawn checker again (step 10), then increment `iteration_count`.
 
 **If iteration_count >= 3:**
 
