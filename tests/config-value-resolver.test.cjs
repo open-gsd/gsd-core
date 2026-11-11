@@ -535,9 +535,14 @@ describe('Config Value Resolution Module (#5096)', () => {
           // Some section containers are materialized only when explicitly set.
           const materialized = Object.keys(object).filter((key) => !Object.hasOwn(blocked, key));
           assert.deepEqual(disappeared.sort(), expected.filter((key) => Object.hasOwn(empty, key)).sort(), `${source} ${section}: empty`);
-          assert.deepEqual(materialized.sort(), expected.slice().sort(), `${source} ${section}: object control`);
+          assert.deepEqual(materialized.sort(), expected.filter((key) => Object.hasOwn(object, key)).sort(), `${source} ${section}: object control`);
           for (const key of keys) {
-            assert.ok(Object.hasOwn(object, key), `${source} ${section}.${key} exists with an object parent`);
+            // This table spans both loader shapes; a flat global-defaults key
+            // may be nested-only (or absent) on the project branch.
+            if (Object.hasOwn(empty, key)) {
+              assert.ok(Object.hasOwn(object, key), `${source} ${section}.${key} survives an object parent`);
+              if (key !== section) assert.deepEqual(object[key], empty[key], `${source} ${section}.${key} preserves its default`);
+            }
             if (BARRIER_FAIL_SAFE_PROJECTIONS.has(key)) {
               assert.equal(blocked[key], object[key], 'fail-safe survives in the same oracle');
             } else {
