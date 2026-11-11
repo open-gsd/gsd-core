@@ -1091,9 +1091,9 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   // Minor 13: root files named like the matcher's old section markers.
-  test('files named P, D and `commit <sha>` do not shift the matcher sections', () => {
+  test('files named L, R, D, F, P and `commit <sha>` do not shift the matcher sections', () => {
     const dir = repo();
-    for (const f of ['P', 'D', 'F', `commit ${'a'.repeat(40)}`]) write(dir, f, `${f}\n`);
+    for (const f of ['L', 'R', 'D', 'F', 'P', `commit ${'a'.repeat(40)}`]) write(dir, f, `${f}\n`);
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
     const prelude = ghPrelude(builtOf(dir));
