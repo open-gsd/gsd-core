@@ -19,6 +19,7 @@ const { runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const {
   WORKFLOW_PATH,
@@ -904,7 +905,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     // Every walk and the checkout take the 60 s bound, not the 10 s default.
     for (const call of ['git patch-id --stable', 'git rev-list --no-merges --left-only', 'git rev-list --no-merges --topo-order --right-only',
       'git log --oneline', 'git rev-list --reverse', 'git checkout -q --no-track -B', 'git diff --name-only', 'git rev-list --count']) {
-      assert.ok(rwt.split('\n').some((l) => l.startsWith(`run-with-timeout 60 -- ${call}`)), `${call} ran with TO=60:\n${rwt}`);
+      assert.ok(splitLines(rwt).some((l) => l.startsWith(`run-with-timeout 60 -- ${call}`)), `${call} ran with TO=60:\n${rwt}`);
     }
   });
 
