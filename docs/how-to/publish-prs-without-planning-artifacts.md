@@ -111,7 +111,7 @@ allowed population.
 | `Cannot check <published-ref>; re-run.` | The check whether the last published tip is still in your branch failed or timed out. The run stops and changes nothing. | Re-run. |
 | `Cannot list the commits to pick; re-run.` | The commit list failed or timed out. The run stops before it creates the `-pr` branch. | Re-run. |
 | `could not create <branch>-pr from <target>` | Git could not create the `-pr` branch, for example because a ref named `<branch>-pr/...` exists. | Remove the blocking ref, then re-run. |
-| `Cannot read <branch>-pr; re-run.` | A read of the built `-pr` branch failed or timed out, so the run cannot check it. Nothing is recorded as pending. | Re-run. |
+| `Cannot read <branch>-pr; deleted it, re-run.` | A read of the built `-pr` branch failed or timed out, so the run cannot check it. The run deletes that branch and records nothing as pending. | Re-run. |
 | `WARNING: could not record <ref>; next run will replay commits.` | Git could not write the published or pending ref, for example because a ref blocks its path. | Remove the blocking ref. Else the next run replays the commits of this round. |
 | `No commits ahead of the last published tip (or <target>)` | There is nothing to filter. | Not an error — you have not committed anything since the last publish (or since the target, on a first run), or the target is wrong. |
 
