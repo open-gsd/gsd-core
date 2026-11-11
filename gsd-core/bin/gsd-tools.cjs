@@ -5631,12 +5631,14 @@ async function main() {
 
   // Closed mutation verbs do not consume output selectors or config-get defaults.
   // Refuse them before global value extraction can hide an unsupported flag.
-  const configMutationCommand = args[0] === 'query' ? args[1] : args[0];
-  if (['config-ensure-section', 'config-set-model-profile', 'migrate-config'].includes(configMutationCommand)) {
-    for (const flag of ['--pick', '--default']) {
-      if (args.includes(flag)) error(`Unknown flag for ${configMutationCommand}: ${flag}`, ERROR_REASON.USAGE);
+  const configMutationValueFlags = ['--pick', '--default'].filter((flag) => args.includes(flag));
+  function rejectConfigMutationValueFlags(verb) {
+    if (configMutationValueFlags.length > 0
+        && ['config-ensure-section', 'config-set-model-profile', 'migrate-config'].includes(verb)) {
+      error(`Unknown flag for ${verb}: ${configMutationValueFlags[0]}`, ERROR_REASON.USAGE);
     }
   }
+  rejectConfigMutationValueFlags(args[0] === 'query' ? args[1] : args[0]);
 
   // --pick <name>: extract a single field from JSON output (replaces jq dependency).
   // Supports dot-notation (e.g., --pick workflow.research) and bracket notation
@@ -5687,6 +5689,10 @@ async function main() {
       args = [head, rest, ...args.slice(1)];
     }
   }
+
+  // A global value flag may precede the verb. Its original presence survives
+  // extraction so a dash-led value cannot be swallowed before route validation.
+  rejectConfigMutationValueFlags(command);
 
   if (!command) {
     error(TOP_LEVEL_USAGE);

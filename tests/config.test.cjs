@@ -1789,22 +1789,27 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         raw: fc.boolean(),
         existing: fc.boolean(),
         adjacent: fc.constantFrom(null, '--default', '--pick'),
+        beforeCommand: fc.boolean(),
       }),
-      ({ suffix, short, leading, query, raw, existing, adjacent }) => {
+      ({ suffix, short, leading, query, raw, existing, adjacent, beforeCommand }) => {
         const flag = `${short ? '-' : '--'}unknown-${suffix.join('')}`;
+        const globalPrefix = adjacent === '--default' && beforeCommand;
         for (const { command, positionals } of verbs) {
           const f = fixture(existing);
           fixtures.push(f.dir);
             const result = runGsdTools([
-              ...(query ? ['query'] : []), command,
-              ...(leading ? [...(adjacent ? [adjacent] : []), flag] : []), ...positionals,
-              ...(raw ? ['--raw'] : []), ...(leading ? [] : [...(adjacent ? [adjacent] : []), flag]), '--json-errors',
+              ...(globalPrefix ? [adjacent, flag] : []), ...(query ? ['query'] : []), command,
+              ...(leading && !globalPrefix ? [...(adjacent ? [adjacent] : []), flag] : []), ...positionals,
+              ...(raw ? ['--raw'] : []), ...(leading || globalPrefix ? [] : [...(adjacent ? [adjacent] : []), flag]), '--json-errors',
             ], f.dir, homeSandboxEnv(f.dir));
             assertUnchanged(f);
             assertUsage(result, command, adjacent ?? flag);
         }
       },
-    ), { seed: 5286, numRuns: 12 });
+    ), { seed: 5286, numRuns: 12, examples: [[{
+      suffix: ['a'], short: false, leading: false, query: true, raw: false,
+      existing: true, adjacent: '--default', beforeCommand: true,
+    }]] });
   });
 });
 
