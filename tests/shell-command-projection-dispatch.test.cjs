@@ -107,6 +107,13 @@ describe('execGit', () => {
       assert.notStrictEqual(execGit(['cat-file', '-p', blob], { cwd: tmpDir, maxBuffer: undefined }).exitCode, 0);
     });
 
+    test('[boundary] output of N bytes overflows maxBuffer N-1 and fits N and N+1', () => {
+      const run = (maxBuffer) => execGit(['cat-file', '-p', blob], { cwd: tmpDir, maxBuffer });
+      assert.notStrictEqual(run(BIG - 1).exitCode, 0);
+      assert.strictEqual(run(BIG).exitCode, 0);
+      assert.strictEqual(run(BIG + 1).exitCode, 0);
+    });
+
     test('[happy] a given maxBuffer is honored', () => {
       const result = execGit(['cat-file', '-p', blob], { cwd: tmpDir, maxBuffer: 2 * BIG });
       assert.strictEqual(result.exitCode, 0);

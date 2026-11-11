@@ -1614,6 +1614,18 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.ok(Number.isFinite(seen[1].maxBuffer) && seen[1].maxBuffer > 1024 * 1024, 'the listing has a finite cap over the default');
   });
 
+  test('[negative] a whole-history listing git cannot deliver is no answer, never a "no"', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    // The second call is the HEAD listing: an overflow reads as exit 1 (spawnSync ENOBUFS), a hang as a timeout.
+    const failing = (second) => { let n = 0; return (args, opts) => (++n === 2 ? second : execGit(args, opts)); };
+    const overflow = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(overflow)), null);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...overflow, exitCode: 1, timedOut: true })), null);
+  });
+
   test('[negative] an id named like a working-tree file is read as a revision', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
