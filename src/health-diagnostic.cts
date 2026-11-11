@@ -398,7 +398,11 @@ function runRepairAction(
     case REMEDY_ACTION.ADD_NYQUIST_KEY:
     case REMEDY_ACTION.ADD_AI_INTEGRATION_PHASE_KEY: {
       const key = action === REMEDY_ACTION.ADD_NYQUIST_KEY ? 'nyquist_validation' : 'ai_integration_phase';
-      const configRaw = fs.readFileSync(configPath, 'utf-8');
+      // Bounded read (#5759): a FIFO/device/oversized config throws (the repair fails, never blocks).
+      const configRaw = configLoaderMod.readConfigFileBounded(configPath);
+      if (configRaw === null) {
+        throw Object.assign(new Error(`ENOENT: no such file or directory, open '${configPath}'`), { code: 'ENOENT' });
+      }
       const configParsed = JSON.parse(configRaw) as Record<string, unknown>;
       if (!configParsed['workflow']) configParsed['workflow'] = {};
       const wf = configParsed['workflow'] as Record<string, unknown>;

@@ -315,3 +315,161 @@ describe('#3345 phase-plan-index — blocked plan lands in incomplete', () => {
     }
   });
 });
+
+// ─── #5789: a non-regular SUMMARY must never hang the status predicates ────
+//
+// The FIFO and device-file rows (which spawn child processes and need a POSIX
+// filesystem) live in tests/phase.platform.test.cjs; the rows here are
+// platform-neutral and call the predicates in-process.
+
+const SUMMARY_CAP_5789 = 64 * 1024;
+
+function writeCliPhase5789(projectDir) {
+  const phaseDir = join(projectDir, '.planning', 'phases', '01-test');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  const planFm = [
+    '---',
+    'phase: 01-test',
+    'plan: "01"',
+    'type: execute',
+    'wave: 1',
+    'depends_on: []',
+    'files_modified: []',
+    'autonomous: true',
+    '---',
+    '# plan',
+    '',
+  ].join('\n');
+  fs.writeFileSync(join(phaseDir, '01-01-PLAN.md'), planFm);
+  return phaseDir;
+}
+
+describe('#5789 regular SUMMARY behaviour is unchanged', () => {
+  function withSummary(name, content, fn) {
+    const dir = tempDir(`gsd-5789-${name}-`);
+    try {
+      const file = join(dir, '01-01-SUMMARY.md');
+      fs.writeFileSync(file, content);
+      fn(file, dir);
+    } finally {
+      cleanup(dir);
+    }
+  }
+  const { isSummaryFileHalted, isSummaryFileBlocked } = planDependencyGraph;
+
+  test('#5789 row 8: status halted is halted', () => {
+    withSummary('r8', summaryWithStatus('halted'), (f) => {
+      assert.equal(isSummaryFileHalted(f), true);
+      assert.equal(isSummaryFileBlocked(f), false);
+    });
+  });
+
+  test('#5789 row 9: status halted with trailing YAML comment is halted', () => {
+    withSummary('r9', summaryWithStatus('halted # designed stop'), (f) => {
+      assert.equal(isSummaryFileHalted(f), true);
+    });
+  });
+
+  test('#5789 row 10: status blocked is blocked and not halted', () => {
+    withSummary('r10', summaryWithStatus('blocked'), (f) => {
+      assert.equal(isSummaryFileBlocked(f), true);
+      assert.equal(isSummaryFileHalted(f), false);
+    });
+  });
+
+  test('#5789 row 11: oversized file with halted frontmatter at byte 0 is read as a prefix', () => {
+    withSummary('r11', `${summaryWithStatus('halted')}${'x'.repeat(SUMMARY_CAP_5789 * 3)}\n`, (f) => {
+      assert.equal(isSummaryFileHalted(f), true);
+    });
+  });
+
+  test('#5789 row 13: a directory named like a SUMMARY is neither halted nor blocked', () => {
+    const dir = tempDir('gsd-5789-r13-');
+    try {
+      const sub = join(dir, '01-01-SUMMARY.md');
+      fs.mkdirSync(sub);
+      assert.equal(isSummaryFileHalted(sub), false);
+      assert.equal(isSummaryFileBlocked(sub), false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('#5789 absent SUMMARY is neither halted nor blocked', () => {
+    const dir = tempDir('gsd-5789-absent-');
+    try {
+      const missing = join(dir, '01-01-SUMMARY.md');
+      assert.equal(isSummaryFileHalted(missing), false);
+      assert.equal(isSummaryFileBlocked(missing), false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // Cap boundary (limit-1, limit, limit+1): the closing fence ends at byte
+  // cap-1, cap, cap+1. A prefix read cannot see a terminator past the cap.
+  for (const [delta, expected] of [[-1, true], [0, true], [1, false]]) {
+    test(`#5789 cap boundary: closing fence ends at cap${delta >= 0 ? '+' : ''}${delta} -> halted ${expected}`, () => {
+      const head = '---\nstatus: halted\np: ';
+      const tail = '\n---';
+      const padLen = SUMMARY_CAP_5789 + delta - head.length - tail.length;
+      const content = `${head}${'x'.repeat(padLen)}${tail}\n\n# body\n`;
+      assert.equal(Buffer.byteLength(head + 'x'.repeat(padLen) + tail), SUMMARY_CAP_5789 + delta);
+      withSummary(`cap${delta}`, content, (f) => {
+        assert.equal(isSummaryFileHalted(f), expected);
+        assert.equal(isSummaryFileBlocked(f), false);
+      });
+    });
+  }
+
+  test('#5789 row 14: halt propagation to a dependent is unchanged (phase-plan-index blocked_by)', () => {
+    const project = createTempProject('gsd-5789-r14-');
+    try {
+      const phaseDir = writeCliPhase5789(project);
+      fs.writeFileSync(join(phaseDir, '01-01-SUMMARY.md'), summaryWithStatus('halted'));
+      fs.writeFileSync(
+        join(phaseDir, '01-02-PLAN.md'),
+        '---\nphase: 01-test\nplan: "02"\ntype: execute\nwave: 2\ndepends_on: ["01-01"]\nfiles_modified: []\nautonomous: true\n---\n# plan\n',
+      );
+      const r = runGsdTools(['phase-plan-index', '01-test', '--json'], project);
+      assert.equal(r.exitCode, 0, r.output);
+      const idx = JSON.parse(r.output);
+      const dependent = idx.plans.find((p) => p.id === '01-02');
+      assert.ok(dependent, 'plan 01-02 must be indexed');
+      assert.deepEqual(dependent.blocked_by, ['01-01']);
+    } finally {
+      cleanup(project);
+    }
+  });
+});
+
+describe('#5789 parity — both predicates treat every input class the same way', () => {
+  const INPUT_CLASSES = [
+    // `halted`/`blocked` are the expected results. The read classes use
+    // contents that make the two predicates DIFFER when the file is read
+    // (halted true / blocked false and the reverse); the unreadable classes
+    // expect false/false for both, so a predicate that read an input the
+    // other treats as unreadable would diverge from the table.
+    { id: 'regular-halted', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, summaryWithStatus('halted')); return f; }, halted: true, blocked: false },
+    { id: 'regular-blocked', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, summaryWithStatus('blocked')); return f; }, halted: false, blocked: true },
+    { id: 'empty', make: (dir) => { const f = join(dir, 's.md'); fs.writeFileSync(f, ''); return f; }, halted: false, blocked: false },
+    { id: 'directory', make: (dir) => { const f = join(dir, 's.md'); fs.mkdirSync(f); return f; }, halted: false, blocked: false },
+    { id: 'missing', make: (dir) => join(dir, 'nope.md'), halted: false, blocked: false },
+    // The device-file and fifo classes are in tests/phase.platform.test.cjs.
+  ];
+  const { isSummaryFileHalted, isSummaryFileBlocked } = planDependencyGraph;
+  for (const cls of INPUT_CLASSES) {
+    test(`#5789 parity: ${cls.id} — halted and blocked agree on whether the file is read`, () => {
+      const dir = tempDir(`gsd-5789-par-${cls.id}-`);
+      try {
+        const f = cls.make(dir);
+        const halted = isSummaryFileHalted(f);
+        const blocked = isSummaryFileBlocked(f);
+        assert.equal(halted, cls.halted, `#5789 parity: ${cls.id} isSummaryFileHalted`);
+        assert.equal(blocked, cls.blocked, `#5789 parity: ${cls.id} isSummaryFileBlocked`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+  }
+});
