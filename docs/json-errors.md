@@ -296,9 +296,9 @@ text (unstable).
 |------|-------------|
 | `config_key_not_found` | `config-get` for a key that is absent from the config file |
 | `config_no_file` | Config operation when `.planning/config.json` does not exist |
-| `config_parse_failed` | Config file exists but is not valid JSON |
+| `config_parse_failed` | Config file exists but is not valid JSON; also `config-save-defaults` for a key the prototype-pollution guard refuses (`__proto__`, `prototype`, `constructor`) |
 | `config_invalid_key` | `config-set` for a key outside the allowed whitelist |
-| `config_defaults_invalid` | `config-save-defaults` when `$GSD_HOME/.gsd/defaults.json` exists but cannot be read (for example, permission denied), is not a regular file (a FIFO or device), is larger than 1 MiB, is not valid JSON, is not a JSON object, is a link whose target cannot be resolved, or disappears while it is read; the store is left as it was (#5681, #5759) |
+| `config_defaults_invalid` | `config-save-defaults` when `$GSD_HOME/.gsd/defaults.json` exists but cannot be read (for example, permission denied), is not a regular file (a FIFO or device), is larger than 1 MiB, is not valid JSON, is not a JSON object, is a link whose target cannot be resolved, disappears while it is read, or is nested too deeply to merge into; the store is left as it was (#5681, #5759) |
 | `config_defaults_write_failed` | `config-save-defaults` when writing the merged store fails, or when the merged store, written as 2-space JSON, would be larger than 1 MiB; the store is left as it was (#5681, #5759) |
 | `config_defaults_lock_unavailable` | `config-save-defaults` when the installer lock on `$GSD_HOME/.gsd/` cannot be taken, for example while another install or save holds it; the error carries `holder_pid` and `holder_since` when the holder is known. Nothing is written (#5681) |
 | `config_defaults_lock_release_failed` | `config-save-defaults` saved the store but could not release the lock; the error carries `saved`, `created` and `path` (#5681) |

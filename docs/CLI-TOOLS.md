@@ -770,7 +770,9 @@ as it was. The store is written as 2-space JSON, and a save whose result in that
 larger than 1 MiB is refused too, since the loader could not read it; a compact hand-written store
 can reach that size without gaining keys. A write goes to a temp file created exclusively under a
 random name and renamed over the store. The temp file is created with the store's own file mode,
-narrowed by the umask, or `0600` when that mode cannot be read, so a save never widens it. A write
+narrowed by the umask, or `0600` when that mode cannot be read, so a save never opens the store to
+group or others (a `0400` store whose mode cannot be read comes back `0600`). A store nested too
+deeply to merge into is refused and left as it was. A write
 that fails therefore leaves the store as it was, and an existing entry at a temp-file name is never
 opened.
 
@@ -782,10 +784,11 @@ With `--json-errors`, each refusal carries a typed reason
 ([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
 `usage` for settings that are not one JSON object (including an empty or blank argument) or
 that give both spellings of one setting (`commit_docs` and `planning.commit_docs`),
-`config_invalid_key` for a key `config-set` does not accept, the reason `config-set` itself
+`config_invalid_key` for a key that is not a known setting, is written dotted
+(`workflow.research` rather than nested) or gives a section a scalar, the reason `config-set` itself
 reports for a value it does not accept (`unknown` for most values, `usage` for a malformed number
 such as `context_window`), `config_parse_failed` for a key the prototype-pollution guard refuses
-(`__proto__`, `constructor`), `config_defaults_invalid` for a store
+(`__proto__`, `prototype`, `constructor`), `config_defaults_invalid` for a store
 that is not a readable JSON object, `config_defaults_write_failed` for a failed write or a store
 that would grow past 1 MiB, and
 `config_defaults_lock_unavailable` when the lock cannot be taken, for example while another

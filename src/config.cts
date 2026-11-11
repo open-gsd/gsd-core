@@ -1002,7 +1002,16 @@ function saveDefaultsStore(
     }
   }
 
-  const data = JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n';
+  // The merge and the serializer recurse, so a store the loader reads (JSON.parse
+  // is iterative) can still be nested too deeply for them: refuse that store with
+  // its own reason rather than letting the stack overflow reach the command.
+  let data: string;
+  try {
+    data = JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n';
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return { message: `Refusing to overwrite ${defaultsPath}: it is nested too deeply to merge into (${err.message}). Flatten it, then save again.`, reason: ERROR_REASON.CONFIG_DEFAULTS_INVALID };
+  }
   // The cap holds for what is written as well as for what is read: a store over
   // CONFIG_MAX_BYTES is one the loader and the next save both refuse, so a save
   // that would grow the store past it writes nothing.

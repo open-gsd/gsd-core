@@ -4710,6 +4710,23 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
   });
 
+  // A store the loader reads (JSON.parse is iterative) can still be too deep for the
+  // recursive merge and serializer. That is a refusal of the store, with its own
+  // reason, not a crash of the command.
+  test('a store nested too deeply to merge is refused and left as it was', async (t) => {
+    const depth = 50000;
+    const before = '{"a":'.repeat(depth) + '1' + '}'.repeat(depth);
+    assert.ok(Buffer.byteLength(before) < CONFIG_MAX_BYTES, 'precondition: under the cap');
+    const { defaultsPath, save } = seed(t, before);
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_invalid');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
   test('a save that ends exactly at the cap is written', async (t) => {
     const before = storeOfSize(CONFIG_MAX_BYTES - 'interactive'.length + 'yolo'.length, 'yolo');
     const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
