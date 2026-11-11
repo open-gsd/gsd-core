@@ -6325,6 +6325,27 @@ describe('gsd-tools.cjs dispatch/help/skip-list parity (DEFECT.GENERATIVE-FIX, #
     );
   });
 
+  test('lane-evidence verbs are routed, listed in --help and skip root resolution (#5019)', () => {
+    const help = parseHelpCommandNames(TOP_LEVEL_USAGE);
+    for (const verb of ['lane-evidence-persist', 'lane-evidence-read', 'lane-evidence-clear']) {
+      assert.ok(Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, verb), `${verb} must be routed`);
+      assert.ok(help.includes(verb), `${verb} must be listed in TOP_LEVEL_USAGE`);
+      assert.ok(skipsRootResolution(verb), `${verb} must skip root resolution`);
+    }
+  });
+
+  test('lane-evidence-clear accepts --keep-auto and keeps an auto state (#5019)', (t) => {
+    const dir = createTempDir('gsd-5019-');
+    t.after(() => cleanup(dir));
+    const { persistLaneEvidence, laneStatePath } = require('../gsd-core/bin/lib/lane-evidence.cjs');
+    const review = path.join(dir, '01-REVIEW.md');
+    fs.mkdirSync(path.join(dir, 'gsd-review-lanes-abc123'));
+    persistLaneEvidence(review, 'abc123', 'auto', 'block', dir);
+    const r = runNode([require('./helpers.cjs').TOOLS_PATH, 'lane-evidence-clear', review, '--keep-auto'], { env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir } });
+    assert.strictEqual(r.exitCode, 0, r.stderr);
+    assert.strictEqual(fs.existsSync(laneStatePath(review, dir)), true);
+  });
+
   test('SKIP_ROOT_RESOLUTION is not exported as a mutable live Set (DEFECT.MUTABLE-EXPORTED-SET, #2928)', () => {
     const gsdTools = require('../gsd-core/bin/gsd-tools.cjs');
     assert.equal(

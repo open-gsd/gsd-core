@@ -2480,6 +2480,36 @@ node gsd-tools.cjs state complete-phase --phase 3
 
 ---
 
+### `lane-evidence-persist`, `lane-evidence-read`, `lane-evidence-clear`
+
+Persist, re-read and remove the external-reviewer lane evidence that `/gsd-code-review` carries into
+`code-review-fix --auto` re-reviews (#5019). The state is a file under `$TMPDIR` (`/tmp` when unset, `os.tmpdir()` on Windows) keyed to the
+review file, `<suffix>\n<auto|once>\n<block>`; nothing is written into the project or its git metadata.
+A `--fix --auto` `code-review` run persists at dispatch (an empty block persists nothing and removes the lane directory), and clears at
+`check_empty_scope` (any `--fix` run), in `commit_review` (`--keep-auto` keeps an `--auto` state for the fixer loop only when REVIEW.md is valid; otherwise `commit_review` clears it) and when the
+reviewer agent fails. A run without `--fix --auto` persists nothing and keeps the single lane-directory removal in `commit_review` it had before; `code-review-fix` reads before each re-review and clears at every exit after `REVIEW_PATH`
+is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
+
+The key is the review path as the caller passes it, so the workflows make `REVIEW_PATH`
+absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it.
+`lane-evidence-clear` removes a malformed state.
+The state is bound to the review path, not to one REVIEW.md; `code-review-fix` frames the block it reads UNVERIFIED.
+
+**Prerequisites:** none — they read no project state and need no resolvable project root
+**Produces:** `lane-evidence-read` prints the block exactly as stored, or nothing; the others print nothing. All exit 0 whether or not there was anything to do; non-zero only for a usage error (an empty `<review-path>`, an invalid `<suffix>` or mode) and, for `lane-evidence-persist`, an unreadable stdin block (the lane directory is kept under a `once` state that `commit_review` then clears)
+
+```bash
+printf '%s' "$EXTERNAL_EVIDENCE_BLOCK" | gsd_run lane-evidence-persist "$REVIEW_PATH" "$SUFFIX" auto
+gsd_run lane-evidence-read "$REVIEW_PATH"
+gsd_run lane-evidence-clear "$REVIEW_PATH" --keep-auto
+```
+
+The suffix is data, not a path: only a 6-character alphanumeric value names a `$TMPDIR/gsd-review-lanes-<suffix>`
+directory. A symlinked or foreign-owned state or lane directory is never followed. A malformed state, a state that is not
+`auto`, a state whose lane directory is missing, or one idle for 6 hours is not read (read prints a warning); only a usable read refreshes the state's mtime.
+
+---
+
 ### `runtime-identity`
 
 Report the package coordinates of the `gsd-tools` that is executing. Used by the runtime
