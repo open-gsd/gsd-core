@@ -463,14 +463,26 @@ test('agent-descriptor-parity: oracle models agent_tools: home + project merge',
   );
 });
 
-test('agent-descriptor-parity: oracle models agent_tools: empty project override', () => {
+// CONFIGURATION.md (agent_tools row): "A project selector replaces the corresponding global selector."
+test('agent-descriptor-parity: oracle models agent_tools: project selector replaces the home selector', () => {
+  plantHomeAgentTools({ '*': ['mcp__proof__*'] });
+  const { expected, actual } = comparePipelines('claude', 'global', undefined, ({ targetDir }) => {
+    plantProjectConfig(targetDir, { agent_tools: { '*': [] } });
+  });
+  assertMapsIdentical(expected, actual);
+  for (const [name, content] of expected) {
+    assert.ok(!toolsOf(content).includes('mcp__proof__*'), `${name}: a project "*" selector must replace the home "*" grant`);
+  }
+});
+
+test('agent-descriptor-parity: oracle models agent_tools: an empty project map keeps the home grant', () => {
   plantHomeAgentTools({ '*': ['mcp__proof__*'] });
   const { expected, actual } = comparePipelines('claude', 'global', undefined, ({ targetDir }) => {
     plantProjectConfig(targetDir, { agent_tools: {} });
   });
   assertMapsIdentical(expected, actual);
-  for (const [name, content] of expected) {
-    assert.ok(!toolsOf(content).includes('mcp__proof__*'), `${name}: an empty project agent_tools must blank the home grant`);
+  for (const name of ['gsd-planner.md', 'gsd-plan-checker.md']) {
+    assert.ok(toolsOf(expected.get(name)).includes('mcp__proof__*'), `${name}: a project map naming no selector must keep the home grant`);
   }
 });
 
