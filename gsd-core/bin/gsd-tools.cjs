@@ -2465,7 +2465,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // neither applies to sequential dispatch.
     const forceIdx = args.indexOf('--force-isolation');
     const forcedIsolation = forceIdx !== -1 ? args[forceIdx + 1] : undefined;
-    if (forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation)) {
+    // Decided once: the hold and the record's provenance below read it too.
+    const forcedApplied = dispatchIsolationOwner().isDispatchIsolation(forcedIsolation);
+    if (forcedApplied) {
       isolation = forcedIsolation;
       if (isolation === 'none') {
         harnessFlag = null;
@@ -2547,7 +2549,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // plan, which the guard applies to every plan of the phase. Where the
     // harness forks from origin/HEAD, a flagged spawn on that diverged base is
     // still stopped by the spawn-time branch check (`exit 42`).
-    const forcedApplied = Boolean(forcedIsolation && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(forcedIsolation));
     const heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
@@ -2998,7 +2999,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         ? registry.runtimes[runtimeId]
         : null;
       const declared = runtimeEntry?.runtime?.hostIntegration?.dispatch?.isolation ?? null;
-      if (typeof declared === 'string' && dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY.has(declared)) {
+      if (dispatchIsolationOwner().isDispatchIsolation(declared)) {
         isolation = declared;
       }
 
@@ -3373,12 +3374,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // registry+config check, so a missing sentinel is safe, just less precise.
     //
     // Output: { recorded: true|false, path, error? }
-    // #4561: the same owner `routeDispatchIsolation` validates against — the
+    // #4561: the same owner guard `routeDispatchIsolation` validates with — the
     // two verbs can no longer disagree on what a mode is.
-    const VALID_ISOLATION = dispatchIsolationOwner().DISPATCH_ISOLATION_VOCABULARY;
     const isoIdx = args.indexOf('--isolation');
     const isolation = isoIdx !== -1 ? args[isoIdx + 1] : undefined;
-    if (!isolation || !VALID_ISOLATION.has(isolation)) {
+    if (!dispatchIsolationOwner().isDispatchIsolation(isolation)) {
       // The mode list is read from the owner, so the usage text cannot name a
       // vocabulary the validation one line up does not accept.
       error(
