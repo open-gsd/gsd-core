@@ -861,6 +861,7 @@ const {
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
   resolveSymlinkedLeafWritePath,
+  SYMLINKED_LEAF_REFUSAL,
   migrateLegacyDevPreferencesToSkill,
   USER_OWNED_ARTIFACTS,
   _snapshotDir,
@@ -1701,9 +1702,26 @@ function resolveSettingsWritePath(settingsPath) {
  * then leaves both files as they were instead of half-migrated. Uninstall
  * checks settings.json before its first removal, when step 6 would rewrite
  * it, for the same reason.
+ *
+ * With the opt-in, the write puts a temp file beside the link's target and
+ * renames it into place, so it needs that directory writable, not the file
+ * itself. A read-only directory would fail the write only after the caller
+ * had changed other files, so it is refused here too.
  */
 function assertSettingsWriteAllowed(settingsPath) {
-  resolveSettingsWritePath(settingsPath);
+  const writePath = resolveSettingsWritePath(settingsPath);
+  if (writePath === settingsPath) return; // not a symlink: written in place as before
+  try {
+    fs.accessSync(path.dirname(writePath), fs.constants.W_OK);
+  } catch (cause) {
+    const err = new Error(
+      `writeSettings: settings file "${settingsPath}" is a symlink to "${writePath}", whose directory ` +
+        `GSD cannot write (${cause.code}), so it was not written. Make that directory writable, then re-run.`,
+      { cause },
+    );
+    err.code = SYMLINKED_LEAF_REFUSAL.TARGET_NOT_WRITABLE;
+    throw err;
+  }
 }
 
 // #2875 Part 2 (J8): model-override resolution (readGsdGlobalModelOverrides /
