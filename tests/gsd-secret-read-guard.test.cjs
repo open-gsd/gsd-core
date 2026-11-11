@@ -1883,7 +1883,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   });
 
   describe('dash reading: a run of `$` pairs before `{` and `(`, and every quote is plain (#5255)', () => {
-    // dash (0.5.12 here; the maintainer's review, macOS /bin/dash) reads `$$` as
+    // dash (0.5.12 on Debian and Ubuntu, and macOS /bin/dash) reads `$$` as
     // the PID and `{` as a literal, as bash does, but has no `$'…'`: in
     // `echo $${$'\''}'; cat .env` the `$` is a literal and `'\'` and `'}'` are
     // plain quotes, so dash runs the read. bash's and zsh's readings see
@@ -2382,7 +2382,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     // marked. Rows marked "head blocked" are blocked with the reader off too;
     // the rest are not.
     const blocks = [
-      "echo ${x#'$'}; cat $'.env'", // the review's two rows
+      "echo ${x#'$'}; cat $'.env'", // a plain-quoted `$` inside `${…}`: this row and the next
       "echo ${x:-'$'}; cat $'.e\\x6ev'",
       "echo ${x:-\"$'\"}; cat $'.env'",
       "echo ${x:-\\$'\\'}; cat $'.env' #'",
