@@ -2667,6 +2667,9 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
       const run = runResolveBlock(dir, file, `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`, pinned(T0 + 60000));
       assert.equal(run.exitCode, 0, run.stderr);
       assert.match(run.stderr, /held at none/);
+      // A later tool call restores `_RENEW_HELD` from this line, so both blocks must print it.
+      assert.match(run.stderr, new RegExp(`held at none.* _RENEW_HELD=${T0}$`, 'm'),
+        'the held warning must end with the value a later tool call restores');
       const sentinel = readSentinelRaw(dir);
       assert.equal(sentinel.written_at, T0 + 60000, 'the site re-recorded');
       assert.equal(sentinel.decided_at, T0, 'and kept the held decision\'s time');
@@ -2719,6 +2722,16 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
   // After a held phase-level answer the per-plan
   // gate inherits USE_WORKTREES=false and forces a literal `none` for each
   // plan. Without the held answer's time that write restarted the hold.
+  function perPlanReRecordBlock() {
+    const perPlan = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'per-plan-worktree-gate.md');
+    const lines = splitLines(fs.readFileSync(perPlan, 'utf8'));
+    const marker = lines.findIndex((l) => l.includes('if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then'));
+    assert.notEqual(marker, -1, 'the per-plan re-record block is where this test expects it');
+    let open = marker; while (open > 0 && lines[open].trim() !== '```bash') open--;
+    let close = marker; while (close < lines.length && lines[close].trim() !== '```') close++;
+    return lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+  }
+
   test('per-plan-worktree-gate.md after a held answer: the plan-scoped record keeps the held decision time', { skip: NO_BASH }, (t) => {
     const dir = createTempProject('gsd-4904-perplan-renew-');
     t.after(() => cleanup(dir));
@@ -2726,13 +2739,7 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
       { GSD_RUNTIME: 'claude', HOME: dir, GSD_TEST_MODE: '1', GSD_NOW_MS: String(T0) });
     assert.equal(r.success, true, r.error);
-    const perPlan = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'per-plan-worktree-gate.md');
-    const lines = splitLines(fs.readFileSync(perPlan, 'utf8'));
-    const marker = lines.findIndex((l) => l.includes('if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then'));
-    assert.notEqual(marker, -1, 'the per-plan re-record block is where this test expects it');
-    let open = marker; while (open > 0 && lines[open].trim() !== '```bash') open--;
-    let close = marker; while (close < lines.length && lines[close].trim() !== '```') close++;
-    const perPlanBlock = lines.slice(open + 1, close).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+    const perPlanBlock = perPlanReRecordBlock();
     const script = path.join(dir, 'per-plan.sh');
     fs.writeFileSync(script, [
       'set -u',
@@ -2752,6 +2759,42 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
     assert.equal(sentinel.plan, 'plan-a', 'the per-plan gate wrote the last record');
     assert.equal(sentinel.written_at, T0 + 60000);
     assert.equal(sentinel.decided_at, T0, 'and it kept the held phase decision\'s time');
+  });
+
+  // Execute-phase resolves at step 2.5 and runs Part 2 at step 3, in a later
+  // tool call whose shell no longer holds `_RENEW_HELD`. The orchestrator
+  // restores it from the held warning; with nothing printed, Part 2 recorded
+  // a fresh decision and restarted the ten minutes on every plan.
+  test('executor-isolation-dispatch.md -> per-plan Part 2 in a new shell: the value restored from the held warning keeps the decision time', { skip: NO_BASH }, (t) => {
+    const dir = createTempProject('gsd-4904-perplan-restore-');
+    t.after(() => cleanup(dir));
+    const T0 = 1_000_000_000_000;
+    const pinned = (now) => ({ GSD_TEST_MODE: '1', GSD_NOW_MS: String(now) });
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '7', '--force-isolation', 'none'], dir,
+      { GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0) });
+    assert.equal(r.success, true, r.error);
+    const gsdRun = `gsd_run() { node ${JSON.stringify(TOOLS)} "$@"; }`;
+    const resolve = runResolveBlock(dir, GATE_SOURCES[1][1], gsdRun, pinned(T0 + 60000));
+    assert.equal(resolve.exitCode, 0, resolve.stderr);
+    const printed = /held at none.* _RENEW_HELD=(\S*)$/m.exec(resolve.stderr);
+    assert.ok(printed, `the held warning printed no _RENEW_HELD for the next tool call to restore: ${resolve.stderr}`);
+    assert.equal(printed[1], String(T0));
+
+    const script = path.join(dir, 'per-plan-restored.sh');
+    fs.writeFileSync(script, [
+      'set -u',
+      gsdRun,
+      `PHASE_NUMBER=7; plan_id=plan-a; USE_WORKTREES_FOR_PLAN=false; _RENEW_HELD=${JSON.stringify(printed[1])}`,
+      perPlanReRecordBlock(),
+    ].join('\n'));
+    const childEnv = { ...process.env, GSD_RUNTIME: 'claude', HOME: dir, ...pinned(T0 + 120000) };
+    delete childEnv.CLAUDE_ENV_FILE;
+    const run = runHookSeam(script, [], { interpreter: 'bash', cwd: dir, env: childEnv, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.equal(run.exitCode, 0, run.stderr);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.plan, 'plan-a', 'Part 2 wrote the last record');
+    assert.equal(sentinel.written_at, T0 + 120000);
+    assert.equal(sentinel.decided_at, T0, 'the restored value kept the held decision time, so the hold did not restart');
   });
 
   for (const [name, file] of GATE_SOURCES) test(`${name}: with no record the block resolves the live capability and records it`, { skip: NO_BASH }, (t) => {

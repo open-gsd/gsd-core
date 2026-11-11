@@ -53,9 +53,9 @@ esac
 # not a capability verdict: run the wave sequentially instead of failing closed.
 _RENEW_HELD=""
 if [ "$ISOLATION" = "none" ] && [ "$ISOLATION_RESOLVED" = "true" ] && [ "${_ISOLATION_HELD%%:*}" = "held" ]; then
-  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded phase ${PHASE_NUMBER:-} to sequential dispatch within the last 10 minutes. Running its plans sequentially." >&2
   USE_WORKTREES=false
   _RENEW_HELD="${_ISOLATION_HELD#held:}"
+  echo "⚠ Dispatch isolation is held at none: an earlier step of this run degraded phase ${PHASE_NUMBER:-} to sequential dispatch within the last 10 minutes. Running its plans sequentially. _RENEW_HELD=$_RENEW_HELD" >&2
 fi
 
 # Project-level opt-out wins on every host; a host with no primitive fails closed.
