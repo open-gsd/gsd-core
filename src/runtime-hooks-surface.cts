@@ -1224,10 +1224,11 @@ function resolveCodexHooksJsonDestination(targetDir: string): string {
   // real target, so the caller's read AND write operate on the file the
   // user's symlink points at and the link itself stays in place.
   //
-  // The existsSync gate keeps this writer's existing handling of a dangling
-  // hooks.json link: existsSync reports false for one, so the write replaces
-  // it. writeSettings refuses a dangling link instead. #5037 leaves how
-  // hooks.json treats a symlink as it was.
+  // The existsSync gate keeps the existing handling of a dangling hooks.json
+  // link for both callers: existsSync reports false for one, so the install
+  // preflight lets it through and the writer replaces it. writeSettings
+  // refuses a dangling link instead. #5037 leaves how hooks.json treats a
+  // symlink as it was.
   return fs.existsSync(hooksJsonPath)
     ? _installEngineSymlinkGuard().resolveSymlinkedLeafWritePath(targetDir, hooksJsonPath, 'hooks.json at')
     : hooksJsonPath;
