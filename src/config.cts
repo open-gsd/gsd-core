@@ -1545,9 +1545,20 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // apply. The other loader aliases stay on the walk below, which ADR-5057
   // makes the authority for gate config. `persist: false` because a read must
   // not rewrite config.json (#3648).
+  // A config file on the resolution path that exists but cannot be read or
+  // parsed is not reported as a value: the loader discards it and resolves
+  // defaults, so `true` would read as the user's setting. config-get fails
+  // with CONFIG_PARSE_FAILED instead, as the walk below does and as it did for
+  // these keys before #5470 (ADR-1411: corrupt is not absent). The loader has
+  // already named the file on stderr.
   const loaderAlias = configLoader.configKeyAliasFor(kp);
   if (loaderAlias?.configGet === 'loader') {
-    const resolved = configLoader.readResolvedAlias(configLoader.loadConfig(cwd, { persist: false }), loaderAlias);
+    const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
+    if (resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNPARSEABLE
+      || resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNREADABLE) {
+      error(`Failed to read config.json: ${resolution.reason}`, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const resolved = configLoader.readResolvedAlias(resolution.config, loaderAlias);
     if (resolved !== undefined) {
       emitConfigValue(kp, resolved, raw);
       return;

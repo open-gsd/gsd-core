@@ -1403,16 +1403,69 @@ describe('#3587 per-phase commit_docs override', () => {
       assert.strictEqual(configGet('commit_docs'), 'false');
     });
 
-    test('an unparseable config.json reads the loader fallback, which the loader reports as degraded', (t) => {
-      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
-      // The loader warns on stderr that the file was not applied.
+    // An unusable config.json is not an absent one (ADR-1411). The loader discards
+    // it and resolves defaults, so printing its `commit_docs` would report `true`
+    // (commit) as if the user had set it. config-get fails instead, with the reason
+    // the literal walk gives a file it cannot parse. The loader's warning naming
+    // the file comes first on stderr; the JSON error is the last line.
+    function configGetCli(args, env = {}) {
+      return runGsdTools(['query', 'config-get', ...args], tmpDir, { GSD_HOME: gsdHome, GSD_JSON_ERRORS: '1', ...env });
+    }
+    function assertParseFailure(args, env, label) {
+      const result = configGetCli(args, env);
+      assert.strictEqual(result.success, false, `${label}: config-get ${args.join(' ')} must fail`);
+      assert.strictEqual(result.output.trim(), '', `${label}: nothing on stdout`);
+      const lastLine = result.error.trim().split(/\r?\n/).pop();
+      assert.strictEqual(JSON.parse(lastLine).reason, 'config_parse_failed', label);
+    }
+    const LOADER_KEYS = ['commit_docs', 'planning.commit_docs', 'search_gitignored', 'planning.search_gitignored'];
+
+    // Every shape the loader classifies unparseable: not JSON, or JSON that is not an object.
+    for (const [label, body] of [
+      ['invalid JSON', '{ not json'],
+      ['an empty file', ''],
+      ['a JSON array', '[]'],
+      ['a JSON string', '"str"'],
+      ['a JSON number', '123'],
+      ['JSON null', 'null'],
+    ]) {
+      test(`a config.json holding ${label} fails with config_parse_failed for every loader key, --default included`, (t) => {
+        const file = path.join(tmpDir, '.planning', 'config.json');
+        fs.writeFileSync(file, body);
+        t.mock.method(process.stderr, 'write', () => true);
+        assert.strictEqual(loadConfigResolved(tmpDir, { workstream: null, persist: false }).reason, CONFIG_REASON.CONFIG_UNPARSEABLE);
+        for (const key of LOADER_KEYS) assertParseFailure([key, '--raw'], {}, `${label}, ${key}`);
+        assertParseFailure(['commit_docs', '--raw', '--default', 'false'], {}, `${label}, --default false`);
+        assert.strictEqual(fs.readFileSync(file, 'utf-8'), body, 'the read leaves the file as it was');
+      });
+    }
+
+    test('a config.json that cannot be read (a directory) fails with config_parse_failed', (t) => {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'config.json'));
       t.mock.method(process.stderr, 'write', () => true);
-      const resolution = loadConfigResolved(tmpDir, { workstream: null, persist: false });
-      assert.strictEqual(resolution.degraded, true);
-      assert.strictEqual(resolution.reason, CONFIG_REASON.CONFIG_UNPARSEABLE);
-      assert.strictEqual(configGet('commit_docs'), String(resolution.config.commit_docs));
-      // The fallback is the built-in default, not merely whatever the loader says.
-      assert.strictEqual(configGet('commit_docs'), 'true');
+      assert.strictEqual(loadConfigResolved(tmpDir, { workstream: null, persist: false }).reason, CONFIG_REASON.CONFIG_UNREADABLE);
+      for (const key of LOADER_KEYS) assertParseFailure([key, '--raw'], {}, `directory, ${key}`);
+    });
+
+    test("an unparseable GSD_PROJECT config fails rather than reading the root's value", () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'proj'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'proj', 'config.json'), '{ not json');
+      assertParseFailure(['commit_docs', '--raw'], { GSD_PROJECT: 'proj' }, 'GSD_PROJECT');
+    });
+
+    test('an unparseable workstream config fails rather than reading the root config the loader falls back to', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'), '{ not json');
+      assertParseFailure(['commit_docs', '--raw'], { GSD_WORKSTREAM: 'alpha' }, 'GSD_WORKSTREAM');
+    });
+
+    test('a parseable config with a non-object section still answers: only an unusable file fails', () => {
+      writeConfig(tmpDir, { planning: 'not-an-object', commit_docs: false });
+      const result = configGetCli(['commit_docs', '--raw']);
+      assert.strictEqual(result.exitCode, 0, result.error);
+      assert.strictEqual(result.output.trim(), 'false');
     });
 
     test('multiRepo: true with detected sub-repos reads false through both keys', () => {
