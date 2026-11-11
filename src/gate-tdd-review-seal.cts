@@ -9,14 +9,11 @@
 
 import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
-import { extractTaskCommitRefs, commitIsAncestor, isSafeRefArgument } from './gate-evaluation-scope.cjs';
-import { execGit } from './shell-command-projection.cjs';
+import { extractTaskCommitRefs, commitIsAncestor, isSafeRefArgument, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
+import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { summaryCandidates } = coreUtilsMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- runtime-hooks-surface.cjs is an export= CommonJS module
-import hooksSurfaceMod = require('./runtime-hooks-surface.cjs');
-const { atomicWriteFileSync } = hooksSurfaceMod;
 
 export const SEAL_FILE = 'TDD-REVIEW-SEAL.json';
 export type SealEntry = { red: string; green: string };
@@ -59,7 +56,7 @@ export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>,
   const st = lstatEvidence(file);
   if (st.kind === 'unreadable') throw new Error(`${SEAL_FILE} cannot be examined: ${st.reason}`);
   if (st.kind === 'found' && !st.value.isFile()) throw new Error(`${SEAL_FILE} exists and is not a regular file`);
-  atomicWriteFileSync(file, content, 'utf8');
+  platformWriteSync(file, content, { atomic: true });
 }
 
 /**
@@ -110,10 +107,6 @@ export function commitIsGone(reach: CommitReachability | null, historyComplete: 
  * seal (`--record` before the squash), which `planRow` reads first.
  */
 export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string, historyComplete: () => boolean): boolean {
-  const subjectOf = (id: string): string => {
-    const s = execGit(['show', '-s', '--format=%s', id], { cwd: projectDir });
-    return !s.timedOut && s.exitCode === 0 ? s.stdout.trim() : '';
-  };
   const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
   for (const candidate of summaryCandidates(rel)) {
     const summary = readBoundedText(path.join(phaseDir, candidate));
@@ -131,12 +124,8 @@ export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: strin
     }
     // A ref that no longer exists was squashed away, so not every ref was rewritten.
     if (existing.length < refs.length) return true;
-    // Subjects of commits reachable from HEAD but not from the refs; a failed log leans to FAIL (rewritten).
-    const log = execGit(['rev-list', '--format=%s', 'HEAD', '--not', ...existing], { cwd: projectDir });
-    if (log.timedOut || log.exitCode !== 0) return false;
-    // rev-list prints a `commit <sha>` header line before each subject line.
-    const onHead = new Set(log.stdout.split('\n').filter((_, i) => i % 2 === 1));
-    return !existing.every((id) => onHead.has(subjectOf(id)));
+    // Squashed only when some subject is gone from HEAD; a failed lookup (null) leans to FAIL, like rewritten.
+    return subjectsOccurOnHead(projectDir, existing) === false;
   }
   return false;
 }

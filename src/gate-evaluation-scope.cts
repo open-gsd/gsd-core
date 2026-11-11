@@ -385,7 +385,9 @@ export function isSafeDateArgument(candidate: string): boolean {
 }
 
 /** True for a full 40-character lowercase hex object name. */
-export const isFullSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+export function isFullSha(v: unknown): v is string {
+  return typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+}
 
 function isAncestor(git: Git, sha: string, of: string): boolean {
   return gitOrNo(git, ['merge-base', '--is-ancestor', sha, of]) !== null;
@@ -427,6 +429,24 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
       }
     }
     return null;
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return null;
+    throw error;
+  }
+}
+
+/**
+ * Whether the subject of each commit in `ids` still occurs on a commit reachable from HEAD but not from
+ * `ids` (#5354): a rebase or amend rewrote them rather than a squash dropping them. `null` means git could
+ * not answer (a timeout, no git, an unsafe or unknown id): not a "no".
+ */
+export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], execGit?: GitRunner): boolean | null {
+  if (ids.length === 0 || !ids.every(isSafeRefArgument)) return null;
+  const git = makeGit(projectDir, execGit ?? execGitSeam);
+  try {
+    // rev-list prints a `commit <sha>` header line before each subject line.
+    const onHead = new Set(git(['rev-list', '--format=%s', 'HEAD', '--not', ...ids]).split('\n').filter((_, i) => i % 2 === 1));
+    return ids.every((id) => onHead.has(git(['show', '-s', '--format=%s', id]).trim()));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;

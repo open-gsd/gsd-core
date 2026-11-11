@@ -25,10 +25,9 @@
  * Argv after the verb: `<phase>` (a number; an unresolvable phase reports zero plans) and an optional
  * `--record` (#5354), which also WRITES `TDD-REVIEW-SEAL.json` in the phase directory: one entry per
  * plan that passes, so a failing sibling plan does not cost the others their credit after a squash.
- * ADR-5057 §4 says a gate returns a verdict and never calls `output()`; it says nothing on writes, so this
- * write is a disclosed exception. The seal file I/O lives in `gate-tdd-review-seal` (this module imports no io
- * module); the write is requested here because the seal is derived from the very evaluation this gate
- * performs, and a separate verb would have to repeat it.
+ * ADR-5057 §4 says a gate returns a verdict and never calls `output()`; it says nothing on writes. The seal
+ * file I/O lives in `gate-tdd-review-seal` (this module imports no io module). This gate requests the write
+ * because the seal comes from the evaluation it just ran, and a separate verb would have to repeat that.
  */
 
 import path from 'node:path';
@@ -186,8 +185,8 @@ function planRow(
   const planId = path.basename(planPath, '-PLAN.md');
   const commits = planCommits(projectDir, planId);
   const reds = shasOfKind(commits, 'test');
-  // #5354: the seal stands in once the plan was squashed away, and the seal tells it: its RED (else its GREEN) is gone,
-  // that is no longer reachable from HEAD (an absent object counts only in a complete history). A live `test(<plan>):`
+  // #5354: the seal stands in once the plan was squashed away. The test: its RED (else its GREEN) is no longer
+  // reachable from HEAD (an absent object counts only in a complete history). A live `test(<plan>):`
   // commit proves nothing, since a squash may carry that title or be followed by one. A seal whose RED is still reachable
   // was not squashed, so it credits nothing. It credits each kind no live commit credits; the evidence keeps a live GREEN, and the seal's
   // RED when the seal supplied the credit.

@@ -26,6 +26,7 @@ const {
   qualifiedPlanSubjectPattern,
   isSafeRefArgument,
   isFullSha,
+  subjectsOccurOnHead,
   parseGitVersion,
   remergeDiffSupported,
   SCOPE_EXCLUSION_PATHSPECS,
@@ -1562,5 +1563,23 @@ describe('isFullSha (#5354)', () => {
     commit(repo, 'a.txt', 'feat(03-01): a');
     const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { commitsOnly: true });
     assert.ok(scope.commits.every((c) => isFullSha(c.sha)));
+  });
+});
+
+describe('subjectsOccurOnHead (#5354)', () => {
+  test('true after an amend, false after a squash, null when git cannot answer', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
+    repo.git('reset', '--soft', 'HEAD~2');
+    repo.git('commit', '-m', 'feat(03-01): a');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'the subject survives a rewrite');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03): squashed phase');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), false, 'a squash drops the subject');
+    assert.equal(subjectsOccurOnHead(repo.dir, ['f'.repeat(40)]), null, 'an unknown id is no answer');
+    assert.equal(subjectsOccurOnHead(repo.dir, ['--all']), null, 'an option-like id is never passed to git');
+    assert.equal(subjectsOccurOnHead(repo.dir, []), null);
   });
 });

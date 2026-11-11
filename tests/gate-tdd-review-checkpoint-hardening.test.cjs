@@ -477,9 +477,9 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const prior = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
     w(dir, SEAL, prior);
-    const real = fs.writeFileSync;
-    t.mock.method(fs, 'writeFileSync', (f, ...rest) => {
-      if (String(f).includes('.tmp')) throw Object.assign(new Error('temp file exists'), { code: 'EEXIST' });
+    const real = fs.openSync;
+    t.mock.method(fs, 'openSync', (f, ...rest) => {
+      if (String(f).includes('.tmp.')) throw Object.assign(new Error('temp file exists'), { code: 'EEXIST' });
       return real(f, ...rest);
     });
     assert.equal(run(dir, '--record').outcome, 'unreadable');
@@ -770,8 +770,8 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(dir).outcome, 'unreadable');
   });
 
-  // Each distinct SUMMARY hash costs a `git merge-base` spawn and, when git does not know it, a `git rev-parse --verify`: the count is capped (64).
-  const REFS_CAP = 64;
+  // Each distinct SUMMARY hash costs a `git merge-base` spawn and, when git does not know it, a `git rev-parse --verify`: the count is capped (`SUMMARY_REFS_MAX`).
+  const REFS_CAP = SUMMARY_REFS_MAX;
   for (const [label, count, status] of [['limit-1', REFS_CAP - 1, 'NotEvaluable'], ['limit', REFS_CAP, 'NotEvaluable'], ['limit+1', REFS_CAP + 1, 'FAIL']]) {
     test(`SUMMARY with ${label} (${count}) distinct unreachable task commits -> ${status}`, () => {
       const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
@@ -804,8 +804,8 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('--record into an unwritable phase directory reports unreadable', (t) => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.writeFileSync;
-    t.mock.method(fs, 'writeFileSync', (f, ...rest) => {
+    const real = fs.openSync;
+    t.mock.method(fs, 'openSync', (f, ...rest) => {
       if (String(f).includes('TDD-REVIEW-SEAL.json')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
       return real(f, ...rest);
     });
@@ -816,12 +816,12 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a failed --record leaves no temp file behind', (t) => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.writeFileSync;
-    let wrote = false;
-    t.mock.method(fs, 'writeFileSync', (f, ...rest) => { if (String(f).includes('.tmp')) wrote = true; return real(f, ...rest); });
+    const real = fs.openSync;
+    let opened = false;
+    t.mock.method(fs, 'openSync', (f, ...rest) => { if (String(f).includes('.tmp.')) opened = true; return real(f, ...rest); });
     t.mock.method(fs, 'renameSync', () => { throw Object.assign(new Error('rename failed'), { code: 'EPERM' }); });
-    run(dir, '--record');
-    assert.ok(wrote, 'the temp file was created before the rename failed');
+    assert.equal(run(dir, '--record').outcome, 'unreadable');
+    assert.ok(opened, 'the temp file was created before the rename failed');
     assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
   });
 
@@ -831,7 +831,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     w(dir, SEAL, prior);
     const real = fs.writeFileSync;
     t.mock.method(fs, 'writeFileSync', (f, data, ...rest) => {
-      if (!String(f).includes('.tmp')) return real(f, data, ...rest);
+      if (typeof f !== 'number' || !String(data).includes('"01-01"')) return real(f, data, ...rest);
       real(f, String(data).slice(0, 10), ...rest);
       throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
     });
