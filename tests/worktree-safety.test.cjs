@@ -6374,7 +6374,8 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     // The step the old exemption pointed at must still give it nothing to apply to.
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
     assert.ok(fragmentSource.includes('VERIFY-ONLY'), 'canonical fragment must still declare itself VERIFY-ONLY (#48)');
-    assert.doesNotMatch(fragmentSource, /git\b.*\sreset/i, 'canonical fragment must contain no `git reset` in any form (#48)');
+    // Either word order: the command (`git reset`, `git -C <dir> reset`) or prose ("reset the branch with git").
+    assert.doesNotMatch(fragmentSource, /git\b.*\sreset|\breset\b.*\bgit\b/i, 'canonical fragment must contain no `git reset` in any form (#48)');
   });
 
   test('git-integration.md, required reading for the executor, offers no hard reset as recovery (#48, #5310)', () => {
