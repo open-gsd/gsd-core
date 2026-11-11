@@ -5,7 +5,7 @@
 // hook against it to hold the claim that nothing it denied is allowed. Do not
 // edit or reformat it. The Read and Grep arms and the hook's stdin entry are cut,
 // and the two exports at the end are added; hooks/lib is the live one.
-/* eslint-disable */
+/* eslint-disable no-unused-vars -- the cut arms and stdin entry were the only users of MAX_COMMAND_LENGTH, classifyGrepGlob and findDebuggerCliSpawn */
 
 const { finalExtension, normalizeWindowsBasename, lastSegment } = require('../../hooks/lib/filename-classification.js');
 
