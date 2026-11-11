@@ -20,6 +20,7 @@ const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cj
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   WORKFLOW_PATH,
@@ -31,12 +32,7 @@ const MARKER = 'refs/gsd/pr-published/strict/main/feature';
 const PENDING = 'refs/gsd/pr-built/strict/main/feature';
 const BUILT = 'refs/gsd/pr-built-head/strict/main/feature';
 
-const ISOLATED_ENV = (home) => ({
-  PATH: process.env.PATH,
-  HOME: home,
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  GIT_CONFIG_NOSYSTEM: '1',
-});
+const ISOLATED_ENV = (home) => isolatedEnv({ home, override: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
 
 function git(dir, ...args) {
   return gitOrThrow(args, { cwd: dir, env: ISOLATED_ENV(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
@@ -97,7 +93,7 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
     b('# Create PR branch from target'),
     extractPickLoop(text),
     b('git checkout "$CURRENT_BRANCH"'),
-    b('DIFF_PATHS=$(TO=60 _to git diff'),
+    b('DIFF_PATHS=$(TO=60 _to git -c core.quotepath=off diff'),
     b('git update-ref "$PENDING_REF"'),
   ].join('\n');
   return runSh(script, cwd);
@@ -904,7 +900,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(rwt, /^run-with-timeout 60 -- git -c color.ui=never -c diff.relative=false log -p /m, 'the patch walk ran bounded (60 s), with its output config pinned');
     // Every walk and the checkout take the 60 s bound, not the 10 s default.
     for (const call of ['git patch-id --stable', 'git rev-list --no-merges --left-only', 'git rev-list --no-merges --topo-order --right-only',
-      'git log --oneline', 'git rev-list --reverse', 'git checkout -q --no-track -B', 'git diff --name-only', 'git rev-list --count']) {
+      'git log --oneline', 'git rev-list --reverse', 'git checkout -q --no-track -B', 'git -c core.quotepath=off diff --name-only', 'git rev-list --count']) {
       assert.ok(splitLines(rwt).some((l) => l.startsWith(`run-with-timeout 60 -- ${call}`)), `${call} ran with TO=60:\n${rwt}`);
     }
   });
@@ -1219,15 +1215,15 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(pendingOf(dir), '');
   });
 
-  test('an unreadable .planning/milestones stops the run with exit 1 and changes no ref', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
-    const dir = repo();
-    commitRound(dir, 1);
+  test('an unreadable .planning/milestones stops the run with exit 1 and changes no ref', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, (t) => {
+    const dir = buildRepo(); // not repo(): afterEach runs before t.after, and cleanup must read the dir
     const ms = path.join(dir, '.planning', 'milestones');
+    t.after(() => { fs.chmodSync(ms, 0o755); cleanup(dir); });
+    commitRound(dir, 1);
     fs.mkdirSync(path.join(ms, 'v1-phases'), { recursive: true });
     fs.chmodSync(ms, 0o000);
     const refs = () => git(dir, 'for-each-ref', 'refs/gsd');
-    let r;
-    try { r = publish(dir, 'main', { mode: 'false' }); } finally { fs.chmodSync(ms, 0o755); } // the suite's cleanup must read the dir
+    const r = publish(dir, 'main', { mode: 'false' });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Cannot list \.planning\/milestones/);
     assert.equal(refs(), '');

@@ -2811,6 +2811,29 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.equal(pendingRef(repo), gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim(), 'both gates pass: HEAD is the pending build');
   });
 
+  // git quotes a non-ASCII path by default (core.quotePath); both gates must still see it under .planning/.
+  test('verify counts a non-ASCII planning deletion and a non-ASCII forbidden path', (t) => {
+    const repo = createTempDir('gsd-3679-verify-nonascii-');
+    t.after(() => cleanup(repo));
+    const g = (args) => gitOrThrow(args, { cwd: repo });
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 't@t']);
+    g(['config', 'user.name', 't']);
+    fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.planning', 'notes-é.md'), 'n\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['checkout', '-qb', 'pr']);
+    g(['rm', '-q', '.planning/notes-é.md']);
+    fs.writeFileSync(path.join(repo, '.planning', 'phases', 'é.md'), 'p\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'delete one, leak one']);
+    const out = runVerify(repo);
+    assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
+    assert.match(out, /GATE_PLANNING_DELETIONS=1/, out.slice(0, 400));
+    assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
+  });
+
   // A timed-out read leaves an empty list, which would pass both gates: verify must stop instead.
   for (const cmd of ['--name-only', '--diff-filter=D']) {
     test(`verify stops with exit 1 when its bounded diff read (${cmd}) times out`, (t) => {

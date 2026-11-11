@@ -646,7 +646,9 @@ would report itself as failed on every phase that touched STATE.md, which is eve
 
 ```bash
 # Fail closed: an empty list passes both gates.
-DIFF_PATHS=$(TO=60 _to git diff --name-only "$TARGET_SHA".."$PR_BRANCH") || { echo "Cannot read $PR_BRANCH; re-run." >&2; exit 1; }
+DIFF_PATHS=$(TO=60 _to git -c core.quotepath=off diff --name-only "$TARGET_SHA".."$PR_BRANCH") &&
+  DELETED=$(TO=60 _to git -c core.quotepath=off diff --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH") ||
+  { echo "Cannot read $PR_BRANCH; re-run." >&2; exit 1; }
 FORBIDDEN=$(echo "$DIFF_PATHS" | grep -Ec "$FORBIDDEN_RE" || true)
 PLANNING_TOTAL=$(echo "$DIFF_PATHS" | grep -c "^\.planning/" || true)
 ALLOWED=$((PLANNING_TOTAL - FORBIDDEN))
@@ -658,7 +660,6 @@ PR_COMMITS=$(TO=60 _to git rev-list --count "$TARGET_SHA".."$PR_BRANCH")
 # planning files must survive byte-identical. Name-only counting cannot see
 # status (a deleted structural/allowed path verifies clean there), so gate on
 # deletions explicitly, across every planning category.
-DELETED=$(TO=60 _to git diff --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH") || { echo "Cannot read $PR_BRANCH; re-run." >&2; exit 1; }
 PLANNING_DELETIONS=$(echo "$DELETED" | grep -c "^\.planning/" || true)
 
 # Default mode preserves anything under .planning/ that is neither transient nor
