@@ -615,13 +615,12 @@ describe('health repair — GSD_PROJECT scoping (#3749)', () => {
 // ─── W031 remedy (#5505): the pasted command untracks exactly the tracked paths ──
 
 describe('W031 remedy under bash (#5505)', () => {
-  const { spawnSync } = require('node:child_process');
   const { gitOrThrow, isFsLegalName } = require('./helpers/git-fixture.cjs');
-  const { resolveInterpreter } = require('./helpers/process-seam.cjs');
+  const { resolveInterpreter, runHook } = require('./helpers/process-seam.cjs');
   const configValidation = require('../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
   const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const bash = resolveInterpreter('bash');
-  const hasBash = bash !== null && spawnSync(bash, ['-c', 'true'], { timeout: GIT_TIMEOUT_MS }).status === 0;
+  const hasBash = bash !== null && runHook('-s', [], { interpreter: 'bash', input: 'true', timeoutMs: GIT_TIMEOUT_MS }).exitCode === 0;
 
   test('W031 remedy untracks exactly the tracked paths under bash', { skip: !hasBash }, (t) => {
     const cwd = createTempGitProject('gsd-5505-w031-bash-');
@@ -649,8 +648,8 @@ describe('W031 remedy under bash (#5505)', () => {
     const [diagnostic] = w031.check(buildPlanningSnapshot(cwd));
     const command = diagnostic.remedy.args.untrack;
     assert.equal(command, configValidation.w031UntrackCommand(diagnostic.remedy.args.paths));
-    const run = spawnSync(bash, ['-c', command], { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS });
-    assert.equal(run.status, 0, run.stderr);
+    const run = runHook('-s', [], { interpreter: 'bash', input: command, timeoutMs: GIT_TIMEOUT_MS, cwd });
+    assert.equal(run.exitCode, 0, run.stderr);
 
     const tracked = gitOrThrow(['ls-files', '-z'], { cwd }).split('\0').filter(Boolean);
     assert.deepEqual(tracked.filter((f) => f.endsWith('/state.json')), ['.planning/intel/state.json'], `still tracked: ${tracked}`);

@@ -132,6 +132,7 @@ module.exports = {
   "tests/gsd-write-guard.test.cjs",
   "tests/health-diagnostic-rules/config-validation.test.cjs",
   "tests/health-diagnostic-rules/worktree-health.test.cjs",
+  "tests/health-diagnostic.test.cjs",
   "tests/helpers-cleanup.test.cjs",
   "tests/helpers-process-isolation.test.cjs",
   "tests/hermes-skills-migration.test.cjs",
