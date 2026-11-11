@@ -2,9 +2,10 @@
 
 Configuration options for `.planning/` directory behavior.
 
-A present non-object section is an inheritance barrier. `workflow: null` disables
-the inherited research, plan-checker and verifier defaults; init payloads report
-absent gate flags as `false`. `review: null` removes the default prompt budget, so
+A present non-object section is an inheritance barrier. `workflow: null` removes
+every `workflow.*` default, including research, plan-checker, verifier, Nyquist validation,
+TDD, subagent timeout and security settings (`security_enforcement`, `security_asvs_level`,
+`security_block_on`); init payloads report absent gate flags as `false`. `review: null` removes the default prompt budget, so
 lanes run without default prompt trimming. `planner: null` is the documented exception:
 the assembled watchdog projection remains `true` while its raw key is absent.
 

@@ -8,7 +8,7 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { resolveConfigValue } = require('../gsd-core/bin/lib/config-value-resolver.cjs');
-const { loadConfigResolved, BLOCKED_SECTION_PROJECTIONS } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { loadConfigResolved, BLOCKED_SECTION_PROJECTIONS, BARRIER_FAIL_SAFE_PROJECTIONS } = require('../gsd-core/bin/lib/config-loader.cjs');
 const { _unusableInputEmissionCountForTests } = require('../gsd-core/bin/lib/unusable-input.cjs');
 const { parseJsonc } = require('../gsd-core/bin/lib/settings-jsonc.cjs');
 
@@ -59,18 +59,17 @@ function corruptLayer(cwd, layer) {
   return file;
 }
 
-/** Run `fn` with stderr captured; returns only the unusable-config diagnostics. */
+/** Mute stderr while returning the typed unusable-config diagnostic count. */
 function captureConfigDiagnostics(fn) {
   const before = _unusableInputEmissionCountForTests();
   const originalWrite = process.stderr.write;
-  const chunks = [];
-  process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+  process.stderr.write = () => true;
   try {
     fn();
   } finally {
     process.stderr.write = originalWrite;
   }
-  return Array.from({ length: _unusableInputEmissionCountForTests() - before });
+  return _unusableInputEmissionCountForTests() - before;
 }
 
 const LADDERS = {
@@ -134,11 +133,13 @@ function expectedLadder(family, states, fallback) {
 
 describe('Config Value Resolution Module (#5096)', () => {
   test('fast-check JSONC comments and trailing commas preserve JSON-safe values', () => {
-    fc.assert(fc.property(fc.jsonValue(), (value) => {
+    fc.assert(fc.property(fc.jsonValue(), fc.string({ maxLength: 120 }), (value, comment) => {
+      fc.pre(!comment.includes('*/'));
       const json = JSON.stringify(value);
       // JSON.stringify confines the value to its own string-safe token stream;
       // comments and a trailing comma are inserted only in the wrapper object.
-      const jsonc = '{ /* before value */ "fixture": // value follows\n' + json + ', /* trailing */ }';
+      const lineComment = JSON.stringify(comment);
+      const jsonc = `{ /* ${comment} */ "fixture": // ${lineComment}\n${json}, /* ${comment} */ }`;
       // The known string-comma bug is tracked separately; keep this generator
       // discriminating for comment handling without absorbing that follow-up.
       fc.pre(!/,\s{0,4096}[}\]]/.test(json));
@@ -185,7 +186,7 @@ describe('Config Value Resolution Module (#5096)', () => {
           });
           const expected = expectedLadder(spec.family, states, fallbacks.get(spec.key));
           assert.deepEqual(actual, expected.resolution);
-          assert.equal(diagnostics.length, expected.faults);
+          assert.equal(diagnostics, expected.faults);
         });
       },
     ));
@@ -232,7 +233,7 @@ describe('Config Value Resolution Module (#5096)', () => {
           : { found: true, value, layer, composite,
             reason: fault ?? (layer === 'root' && states[0].kind !== 'leaves' ? 'workstream_fallback' : 'resolved') };
         assert.deepEqual(actual, expected);
-        assert.equal(diagnostics.length, faults);
+        assert.equal(diagnostics, faults);
       });
     }));
   });
@@ -313,7 +314,7 @@ describe('Config Value Resolution Module (#5096)', () => {
             result = resolveConfigValue(key, { cwd });
           });
           assert.equal(result.reason, 'config_unparseable');
-          assert.equal(diagnostics.length, 1);
+          assert.equal(diagnostics, 1);
         });
       }
     }
@@ -331,7 +332,7 @@ describe('Config Value Resolution Module (#5096)', () => {
           assert.equal(result.reason, 'config_unparseable');
         }
       });
-      assert.equal(diagnostics.length, 1);
+      assert.equal(diagnostics, 1);
     });
   });
 
@@ -350,7 +351,7 @@ describe('Config Value Resolution Module (#5096)', () => {
           found: true, value: 'local', layer: 'runtime-local', reason: 'resolved',
         });
       });
-      assert.deepEqual(diagnostics, []);
+      assert.equal(diagnostics, 0);
     });
   });
 
@@ -363,7 +364,7 @@ describe('Config Value Resolution Module (#5096)', () => {
           found: true, value: 'user', layer: 'runtime-user', reason: 'config_unparseable',
         });
       });
-      assert.equal(diagnostics.length, 1);
+      assert.equal(diagnostics, 1);
     });
   });
 
@@ -379,7 +380,7 @@ describe('Config Value Resolution Module (#5096)', () => {
         found: true, value: { planner: 'workstream' }, layer: 'workstream',
         reason: 'config_unparseable', composite: { planner: 'workstream' },
       });
-      assert.equal(diagnostics.length, 1);
+      assert.equal(diagnostics, 1);
     });
   });
 
@@ -521,14 +522,26 @@ describe('Config Value Resolution Module (#5096)', () => {
     for (const source of ['root', 'global-defaults']) {
       for (const [section, keys] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
         withLayers((cwd) => {
+          writeLayer(cwd, source, {});
+          const empty = loadConfigResolved(cwd, { persist: false }).config;
+          writeLayer(cwd, source, { [section]: {} });
+          const object = loadConfigResolved(cwd, { persist: false }).config;
           writeLayer(cwd, source, { [section]: null });
-          const config = loadConfigResolved(cwd, { persist: false }).config;
+          const blocked = loadConfigResolved(cwd, { persist: false }).config;
+          // Derive the actual disappearing keys from assembled output, including
+          // keys outside the policy table, then compare against the policy.
+          const disappeared = Object.keys(empty).filter((key) => !Object.hasOwn(blocked, key));
+          const expected = keys.filter((key) => !BARRIER_FAIL_SAFE_PROJECTIONS.has(key));
+          // Some section containers are materialized only when explicitly set.
+          const materialized = Object.keys(object).filter((key) => !Object.hasOwn(blocked, key));
+          assert.deepEqual(disappeared.sort(), expected.filter((key) => Object.hasOwn(empty, key)).sort(), `${source} ${section}: empty`);
+          assert.deepEqual(materialized.sort(), expected.slice().sort(), `${source} ${section}: object control`);
           for (const key of keys) {
-            if (key === 'planner_stall_detection_enabled') {
-              assert.equal(config[key], true, 'the documented fail-safe survivor');
-              assert.equal(resolveConfigValue('planner.stall_detection_enabled', { cwd }).found, false);
+            assert.ok(Object.hasOwn(object, key), `${source} ${section}.${key} exists with an object parent`);
+            if (BARRIER_FAIL_SAFE_PROJECTIONS.has(key)) {
+              assert.equal(blocked[key], object[key], 'fail-safe survives in the same oracle');
             } else {
-              assert.equal(Object.hasOwn(config, key), false, `${source} ${section}.${key}`);
+              assert.equal(Object.hasOwn(blocked, key), false, `${source} ${section}.${key}`);
             }
           }
         });

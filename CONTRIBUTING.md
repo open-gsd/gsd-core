@@ -511,8 +511,15 @@ local helper and delegate the spawn to the seam.
 of subprocess call takes (a CLI probe, git plumbing on a fixture repo, a hooks build, a full
 `bin/install.js` run), not a single suite's preference, so import them rather than re-declaring the
 same literal with the same comment in yet another file. Only write a local constant when a site
-genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...) — and give that
-local constant its own justifying comment explaining why it departs from the norm.
+genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...). Give that
+local constant its own name, never a `timeouts.cjs` export name, and its own justifying comment
+explaining why it departs from the norm.
+
+Every timeout constant states its evidence: the worst observed duration, the platform it came from,
+and a margin of at least 2x over it. A constant exported from `timeouts.cjs` also needs a matching
+`TIMEOUT_EVIDENCE` entry, which `tests/timeout-evidence.test.cjs` checks. See TESTING-STANDARDS.md,
+"Every new or changed timeout constant states its evidence", for the shape and the exempt kinds
+(fixture data, test backstop, mirror).
 
 #### When you want git to *throw*: `gitOrThrow`
 
@@ -624,6 +631,40 @@ Windows, or `stdio` redirection to a real fd) and the `// allow-spawn-timeout-ce
 marker above for a bound over the 600000 ms ceiling. Never reach for `eslint-disable` on this rule
 — with the allowlist gone, that is the only remaining way to silence it, and a test asserts that no
 such comment exists anywhere under `tests/`.
+
+### Isolating a child's environment: `tests/helpers/isolated-env.cjs`
+
+A test that spawns a child must not let the developer's machine into it. That means
+controlling the child's home directory, its PATH, the config-location and `GSD_*` variables GSD
+reads, the test runner's own control variables, and the project config GSD discovers by walking
+up from a directory. Build the child's env with the isolation helper instead of hand-writing
+`{ ...process.env, HOME: x }` or filtering `process.env.PATH` yourself. Hand-written copies are
+how a suite ends up hermetic on its author's machine and red, or vacuously green, on everyone
+else's (#4635).
+
+```javascript
+const { isolatedEnv, isolatedPath, createHermeticRoot } = require('./helpers/isolated-env.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+
+const home = createTempDir('my-home-');
+t.after(() => cleanup(home));
+
+const r = runNode([SCRIPT], { env: isolatedEnv({ home }) });
+```
+
+| Export | Returns | Guarantees |
+|---|---|---|
+| `isolatedEnv({ home, path?, claudeConfigDir?, override?, base? })` | a plain env object | `HOME` and `USERPROFILE` both set to `home` (required, absolute). Every config-location and session-identity variable is blanked, using the same registry-derived list as `testEnvBase()` in `tests/helpers.cjs`. Every ambient `GSD_*`, `RUN_TESTS_*`, `NODE_TEST_CONTEXT`, `BASH_ENV` and `CLAUDE_ENV_FILE` is removed. Each key the helper sets appears exactly once, whatever its casing (Windows reports PATH as `Path`). |
+| `isolatedPath({ without, basePath? })` | `{ path, nodeBinDir }` | No directory holding a tool named in `without` stays on PATH, and neither do relative or empty entries. `node` stays resolvable from a dedicated directory placed first. Clean up `nodeBinDir`. |
+| `linkExecutable(dir, name)` | `dir` | Puts an executable named `name` in `dir` that runs this Node interpreter. It uses a symlink on POSIX, and a hard link on Windows (falling back to a copy across volumes). Use it to plant a tool on a fixture PATH. |
+| `createHermeticRoot(prefix, { parent? })` | an absolute temp directory | Contains a neutral `.planning/config.json`. GSD's upward project-config search stops there, so it cannot reach an ancestor's real config. This matters when you run from a worktree nested inside another checkout. |
+
+To keep a variable the helper strips, pass it in `override`. For example,
+`override: { RUN_TESTS_SHARD_RESERVE: '2' }` for a test about that switch. `override` is applied
+last and is the only way to opt back in.
+
+This covers child processes. A test that calls the installer in-process still clears the parent's
+config-location variables with `scrubConfigLocationEnv()` from `tests/helpers.cjs`.
 
 ### Test Structure
 
@@ -1325,6 +1366,12 @@ whoever applied the label has write or admin permission. A PR author cannot
 self-apply it to bypass the gate. If other entries are queued ahead of the
 fix, the group is larger than one commit and the bypass is refused; dequeue
 the others first. Remove the label once the fix has merged.
+
+Adding or removing `fix-next` re-runs only `Base branch health` (and the
+dependent `Required tests`) through the `fix-next re-run` workflow, which reads
+the label from the API; no other label change starts a Tests run. If the PR's
+latest Tests run was cancelled or its head has moved, the workflow skips and the
+newer run reads the label itself.
 
 A push run that is still in flight, including a re-run of a failed run, never
 counts as healthy: a re-run whose previous attempt failed is red, otherwise the
