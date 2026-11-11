@@ -228,6 +228,7 @@ module.exports = {
   "tests/plugin-manifest.test.cjs",
   "tests/policy-160-route0-resume.test.cjs",
   "tests/policy-shell-pinning.test.cjs",
+  "tests/pr-branch-matcher.property.test.cjs",
   "tests/pr-branch-planning-filter.test.cjs",
   "tests/pr-branch-published-marker.test.cjs",
   "tests/precommit-alias-drift-hook.test.cjs",

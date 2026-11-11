@@ -78,7 +78,7 @@ function commitRound(dir, n, file = 'code.txt') {
 }
 
 // Runs the shipped blocks in workflow order under pr_strict.
-function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh = 'return 1', prelude = '', afterPre = '' } = {}) {
+function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh = 'return 1', prelude = '', afterPre = '', cwd = dir } = {}) {
   const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
   const b = (marker) => extractBashBlockContaining(text, marker);
   const script = [
@@ -99,7 +99,7 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
     b('DIFF_PATHS=$(git diff'),
     b('git update-ref "$PENDING_REF"'),
   ].join('\n');
-  return runSh(script, dir);
+  return runSh(script, cwd);
 }
 
 // Script goes through a temp file, not argv (Windows MSYS2 mis-parses long quote-heavy argv).
@@ -653,7 +653,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
-    const probe = (cwd) => runSh(`TARGET=main PR_BRANCH=feature-pr PR_BASE=main\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd).stdout.trim();
+    const probe = (cwd) => runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd).stdout.trim();
     assert.equal(probe(dir), 'UNMERGED');
     assert.equal(probe(path.join(dir, '.planning', 'phases')), 'UNMERGED');
   });
@@ -899,7 +899,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
-    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 10 -- git log -p /m, 'the patch comparison ran bounded');
+    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 60 -- git -c color.ui=never -c diff.relative=false log -p /m, 'the patch walk ran bounded (60 s), with its output config pinned');
   });
 
   test('default mode: published code-only commits rebase-merged, then `git rebase main`: no warning, only round 2 is replayed', () => {
@@ -1000,7 +1000,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
     // run-with-timeout reports 124 for the patch walk only; every other call runs as usual
-    const slow = `${prelude}\ngsd_run() { case "$*" in *"git log -p"*) return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }`;
+    const slow = `${prelude}\ngsd_run() { case "$*" in *"log -p"*) return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }`;
     const r = publish(dir, 'main', { prelude: slow });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
@@ -1049,7 +1049,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitAll(dir, 'feat: lib');
     git(dir, 'branch', 'feature-pr', 'feature');
     git(dir, 'config', 'diff.relative', 'true');
-    const probe = runSh(`TARGET=main PR_BRANCH=feature-pr PR_BASE=main\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, path.join(dir, 'lib')).stdout.trim();
+    const probe = runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, path.join(dir, 'lib')).stdout.trim();
     assert.equal(probe, 'UNMERGED');
   });
 
@@ -1065,5 +1065,193 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const r = publish(dir, 'main', { prelude });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
+  });
+
+  // #5486 review 2026-11-08 (Major 1): the patch walk must not depend on the user's git output config.
+  test('color.ui=always: the rebased round still matches its published patch; only round 2 is replayed', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    git(dir, 'config', 'color.ui', 'always');
+    const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  test('diff.relative=true, run from .planning/phases: the rebased round still matches; only round 2 is replayed', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    git(dir, 'config', 'diff.relative', 'true');
+    const r = publish(dir, 'main', { prelude, cwd: path.join(dir, '.planning', 'phases') });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  // Minor 13: root files named like the matcher's old section markers.
+  test('files named P, D and `commit <sha>` do not shift the matcher sections', () => {
+    const dir = repo();
+    for (const f of ['P', 'D', 'F', `commit ${'a'.repeat(40)}`]) write(dir, f, `${f}\n`);
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    const prelude = ghPrelude(builtOf(dir));
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  // Nit 16: the published tip was a merge, and the merge was redone, so no non-merge commit is left on the marker side.
+  test('marker side made only of a merge: warns and uses the target', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    const o = git(dir, 'rev-parse', 'main');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'merge main', o);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    git(dir, 'reset', '-q', '--hard', 'HEAD~1');
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'merge main again', o);
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
+  // Nit 17: the gh proof needs the exact sha, not a line that only contains it.
+  test('gh reporting a longer sha that starts with the built tip does not prove the merge', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    const pendingBefore = pendingOf(dir);
+    squashMerge(dir, { later: true, deletePr: true });
+    commitRound(dir, 2, 'two.txt');
+    publish(dir, 'main', { prelude: ghPrelude(`${builtOf(dir)}0`) });
+    assert.ok(fs.existsSync(path.join(dir, '.git', 'gh-called')), 'gh was queried');
+    assert.equal(markerOf(dir), '');
+    assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
+  });
+
+  // Nit 17: an unpublished commit whose committer date is older than the rebased published copy; only --topo-order keeps the order.
+  test('rebased branch with a clock-skewed unpublished commit on top: the published copy is still the base', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    write(dir, 'u.txt', 'u\n');
+    git(dir, 'add', '-A');
+    const c = runSh("GIT_COMMITTER_DATE='2001-01-01T00:00:00Z' GIT_AUTHOR_DATE='2001-01-01T00:00:00Z' git commit -q -m 'feat: unpublished'", dir);
+    assert.equal(c.status, 0, c.stderr);
+    const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['u.txt']);
+  });
+
+  // Major 2: TARGET comes from repo config (git.base_branch), so an option-like value must never reach git.
+  test('a target that starts with - is refused and never reaches git as an option', (t) => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const out = createTempDir('gsd-prmarker-pwned-');
+    t.after(() => cleanup(out));
+    const pwned = path.join(out, 'pwned').replace(/\\/g, '/');
+    const r = publish(dir, `--output=${pwned}`);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /starts with -/);
+    assert.ok(!fs.existsSync(pwned), 'git wrote no file');
+  });
+
+  // Minor 6 and 11: a merged -pr reset to the target holds no built tip; the build is dropped with its WARNING.
+  test('merged -pr reset to the target after a promoted round: the next build is dropped with a WARNING naming the fix', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    commitRound(dir, 2, 'two.txt');
+    assert.equal(publish(dir).status, 0);
+    const pending = pendingOf(dir);
+    git(dir, 'branch', '-f', 'feature-pr', 'main');
+    commitRound(dir, 3, 'three.txt');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /WARNING: dropped the pending build/);
+    assert.match(r.stderr, /update main, then re-anchor/);
+    assert.ok(r.stderr.includes(`git update-ref refs/gsd/pr-published/strict/main/feature ${pending}`), r.stderr);
+  });
+
+  // Nit 19: a failed marker write warns. A ref named refs/gsd/pr-published blocks the marker path (a file where a directory is needed).
+  test('a failed marker write warns that the next run replays commits', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    git(dir, 'update-ref', 'refs/gsd/pr-published', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-published\/strict\/main\/feature/);
+  });
+
+  // Minor 5: the pending write fails the same way; the run warns and records no pending ref.
+  test('a failed pending write warns and leaves no pending ref', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'update-ref', 'refs/gsd/pr-built-head', 'main');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-built\/strict\/main\/feature/);
+    assert.equal(pendingOf(dir), '');
+  });
+
+  test('an unreadable .planning/milestones stops the run with exit 1 and changes no ref', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const ms = path.join(dir, '.planning', 'milestones');
+    fs.mkdirSync(path.join(ms, 'v1-phases'), { recursive: true });
+    fs.chmodSync(ms, 0o000);
+    const refs = () => git(dir, 'for-each-ref', 'refs/gsd');
+    let r;
+    try { r = publish(dir, 'main', { mode: 'false' }); } finally { fs.chmodSync(ms, 0o755); } // the suite's cleanup must read the dir
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Cannot list \.planning\/milestones/);
+    assert.equal(refs(), '');
+    assert.equal(refOf(dir, 'refs/heads/feature-pr'), '');
+  });
+
+  // Minor 8: a commit that touches only .planning/config.json is excluded in default mode, as the classification says.
+  test('default mode: a config.json-only commit is not picked', () => {
+    const dir = repo();
+    write(dir, '.planning/config.json', '{"x":1}\n');
+    commitAll(dir, 'chore: config');
+    write(dir, 'x.txt', 'x\n');
+    commitAll(dir, 'feat: code');
+    const r = publish(dir, 'main', { mode: 'false' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(changed(dir), ['x.txt']);
+  });
+
+  // Minor 10: a path list cut short by a timeout must not prove the merge.
+  test('pr_merged: a --name-only list cut short by a timeout is not a content proof', () => {
+    const dir = repo();
+    write(dir, 'a.txt', 'a\n');
+    write(dir, 'b.txt', 'b\n');
+    commitAll(dir, 'feat: a and b');
+    git(dir, 'branch', 'feature-pr', 'feature');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'a.txt', 'a\n');
+    commitAll(dir, 'feat: only a');
+    git(dir, 'checkout', '-q', 'feature');
+    const stub = 'gsd_run() { shift 3; case "$*" in *--name-only*-z*) printf \'a.txt\\0\'; return 124 ;; esac; "$@"; }';
+    const probe = runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\n${stub}\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, dir).stdout.trim();
+    assert.equal(probe, 'UNMERGED');
   });
 });

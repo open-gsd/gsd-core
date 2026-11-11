@@ -2733,17 +2733,25 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['add', '-A']);
     g(['commit', '-qm', 'changes + planning deletion']);
 
-    const verifyBash = extractStepBash('verify');
+    const out = runVerify(repo);
+    assert.match(out, /GATE_PLANNING_DELETIONS=1/, `deletion count must be non-zero: ${out.slice(0, 400)}`);
+    assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
+  });
+
+  // #5486: the pending build is recorded only when both gates pass.
+  const PENDING_REF = 'refs/gsd/pr-built/strict/main/feature';
+  function runVerify(repo) {
     const script = [
       'set -u',
       'TARGET=main',
+      'TARGET_SHA=main',
       'PR_BRANCH=pr',
       'TIP=HEAD',
-      'PENDING_REF=refs/gsd/pr-built/strict/main/feature',
+      `PENDING_REF=${PENDING_REF}`,
       'PR_TIP_REF=refs/gsd/pr-built-head/strict/main/feature',
       'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
       'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
-      verifyBash,
+      extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
       'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
     ].join('\n');
@@ -2753,8 +2761,30 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       cwd: repo,
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
-    const out = r.stdout + r.stderr;
-    assert.match(out, /GATE_PLANNING_DELETIONS=1/, `deletion count must be non-zero: ${out.slice(0, 400)}`);
+    return r.stdout + r.stderr;
+  }
+  const pendingRef = (repo) => {
+    try { return gitOrThrow(['rev-parse', '-q', '--verify', PENDING_REF], { cwd: repo }).trim(); } catch { return ''; }
+  };
+
+  test('verify records no pending build when the PR diff holds a forbidden planning path', (t) => {
+    const repo = createTempDir('gsd-3679-verify-forbidden-');
+    t.after(() => cleanup(repo));
+    const g = (args) => gitOrThrow(args, { cwd: repo });
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 't@t']);
+    g(['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['checkout', '-qb', 'pr']);
+    fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'transient planning file']);
+    const out = runVerify(repo);
+    assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
+    assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
   });
 
   test('verify passes a clean diff with zero deletions', (t) => {
@@ -2774,28 +2804,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['add', '-A']);
     g(['commit', '-qm', 'code only']);
 
-    const verifyBash = extractStepBash('verify');
-    const script = [
-      'set -u',
-      'TARGET=main',
-      'PR_BRANCH=pr',
-      'TIP=HEAD',
-      'PENDING_REF=refs/gsd/pr-built/strict/main/feature',
-      'PR_TIP_REF=refs/gsd/pr-built-head/strict/main/feature',
-      'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
-      'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
-      verifyBash,
-      'echo "GATE_FORBIDDEN=$FORBIDDEN"',
-      'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
-    ].join('\n');
-    fs.writeFileSync(path.join(repo, 'verify.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'verify.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
-    const out = r.stdout + r.stderr;
+    const out = runVerify(repo);
     assert.match(out, /GATE_PLANNING_DELETIONS=0/, `clean diff must count zero deletions: ${out.slice(0, 400)}`);
+    assert.equal(pendingRef(repo), gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim(), 'both gates pass: HEAD is the pending build');
   });
 
   test('create loop preserves pre-existing transient content (#3720 guarantee pinned)', (t) => {
@@ -2830,6 +2841,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       `CURRENT_BRANCH=feature`,
       'TARGET=main',
+      'TARGET_SHA=main',
+      '_to() { "$@"; }', // stands in for the bounded runner the preconditions block defines
       'PR_BRANCH=feature-pr',
       `INCLUDED_COMMITS="${hash}"`,
       // Newline-joined (#4605) — the shipped consumption loop is
@@ -2886,6 +2899,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       'CURRENT_BRANCH=feature',
       'TARGET=main',
+      'TARGET_SHA=main',
+      '_to() { "$@"; }', // stands in for the bounded runner the preconditions block defines
       'PR_BRANCH=feature-pr',
       `INCLUDED_COMMITS="${hash}"`,
       // See the sibling #3720 test above: newline-joined, matching the shipped

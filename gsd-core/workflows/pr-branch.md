@@ -30,12 +30,14 @@ CURRENT_BRANCH=$(git branch --show-current)
 TARGET=${1:-$(gsd_run query git.base-branch)}
 ```
 
-Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `BASE`, `TIP`, `PR_BRANCH`, `PR_STRICT`, `PR_MODE`, `*_REF`, `shq`); run them all in one shell session, in order:
+Check preconditions. The bash blocks of this step and of the later steps share variables (`CURRENT_BRANCH`, `TARGET`, `TARGET_SHA`, `BASE`, `TIP`, `PR_BRANCH`, `PR_STRICT`, `PR_MODE`, `*_REF`, `shq`); run them all in one shell session, in order:
 - Must be on a feature branch (not main/master)
 - Must have commits since the last published tip (or ahead of target when nothing was published)
 - Working tree must be clean
 
 ```bash
+# Every path below is root-relative.
+cd "$(git rev-parse --show-toplevel)" || exit 1
 # Resolve the filter mode from config. A non-zero exit or an unset key means the default
 # mode; only the literal string `true` selects strict.
 PR_STRICT=$(gsd_run query config-get planning.pr_strict --raw 2>/dev/null)
@@ -114,12 +116,13 @@ fi
 The preconditions below read the filter projections above, so they come first.
 
 ```bash
+# TARGET comes from repo config: refuse an option-like name; git takes only its sha.
+case $TARGET in -*) echo "Refusing target $TARGET: it starts with -." >&2; exit 1 ;; esac
+TARGET_SHA=$(git rev-parse -q --verify "$TARGET^{commit}") || { echo "Unknown target: $TARGET" >&2; exit 1; }
 PR_BRANCH="${CURRENT_BRANCH}-pr"
 TIP=$(git rev-parse "$CURRENT_BRANCH")
-# Keyed by mode: strict skips commits default publishes, so one mode's marker is wrong for the other.
-# refkey STR — one ref component: "%", "/", control and non-ASCII bytes, and every char git forbids in ref
-# names encoded as %XX (so "HEAD~3" is valid, "..", "@{" and ".lock" cannot occur, no ref is a directory
-# prefix of another, and the key is injective for any TARGET).
+# Keyed by mode (strict skips commits default publishes). refkey STR: one ref component, "%", "/", control,
+# non-ASCII and git-forbidden bytes as %XX: always valid, injective, never a prefix of another key.
 refkey() { printf %s "$1" | od -An -v -tu1 | LC_ALL=C awk 'BEGIN{ORS=""}{for(i=1;i<=NF;i++){b=$i;c=sprintf("%c",b);if(b<32||b>126||index("%/ ~^:?*[\\.@",c))printf "%%%02X",b;else printf "%s",c}}'; }
 REF_KEY="$PR_MODE/$(refkey "$TARGET")/$(refkey "$CURRENT_BRANCH")"
 MARKER_REF="refs/gsd/pr-published/$REF_KEY"
@@ -133,32 +136,28 @@ for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${T
 # shq STR — STR shell-quoted for the recovery commands printed below (branch names may hold ; $ ( ) & `).
 shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
 
-# _to CMD... — CMD capped at 10s by gsd_run run-with-timeout (no timeout binary needed), so a hung git cannot stall the run.
-_to() { gsd_run run-with-timeout 10 -- "$@"; }
+# _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout (no timeout binary needed); walks and checkout take TO=60.
+_to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
 
-# pr_merged TIP — TIP is in $TARGET: an ancestor, or (squash/rebase merge) $TARGET holds TIP's
-# content for every path TIP changed since it forked from $TARGET, or (once $TARGET has since
-# edited those paths) GitHub reports a PR for $PR_BRANCH merged into the target whose head was TIP.
+# pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for every path TIP
+# changed since their fork (squash/rebase merge), or gh reports a PR for $PR_BRANCH merged into it with head TIP.
 pr_merged() {
   local _sha _fork _top _g
   _top=$(_to git rev-parse --show-toplevel) || return 1 # --name-only paths are root-relative; pathspecs resolve against cwd
-  _to git merge-base --is-ancestor "$1" "$TARGET" 2>/dev/null && return 0
+  _to git merge-base --is-ancestor "$1" "$TARGET_SHA" 2>/dev/null && return 0
   _sha=$(_to git rev-parse -q --verify "$1") || return 1
-  if _fork=$(_to git merge-base "$_sha" "$TARGET" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only --no-renames "$_fork" "$_sha")" ] &&
-    _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET" --; then
+  # pipefail: a path list cut short by a failure or timeout proves nothing.
+  if _fork=$(_to git merge-base "$_sha" "$TARGET_SHA" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only --no-renames "$_fork" "$_sha")" ] &&
+    ( set -o pipefail; _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET_SHA" -- ); then
     return 0
   fi
-  # Last proof: gh, run only as an executable (a shell function or alias cannot be bounded) and capped at 10s.
-  # No answer from gh counts as "not merged", so a merge the run cannot confirm is never published by guess.
-  # Base-filtered: markers are keyed per target ($PR_BASE).
+  # Last proof: gh, only as an executable (a function or alias cannot be bounded). No answer means not merged.
   _g=$(command -v gh) || return 1
   case $_g in /*) ;; *) return 1 ;; esac
   _to gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
 }
 
-# The last build counts as published only once its -pr tip (PR_TIP_REF) is merged, even if
-# the local -pr branch was since deleted; an unmerged build whose -pr branch is gone was
-# discarded, so its commits must be replayed.
+# The last build counts as published once its -pr tip (PR_TIP_REF) is merged, even with the -pr deleted.
 PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
 # One verdict for the leftover -pr branch (each lookup may call gh); the refusal below reads it.
 PR_BRANCH_MERGED=
@@ -168,72 +167,67 @@ PENDING_VERDICT=
 drop_pending() { git update-ref -d "$PENDING_REF"; git update-ref -d "$PR_TIP_REF" 2>/dev/null; }
 DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"
 if [ -n "$PENDING_TIP" ]; then
-  # The recorded built tip must itself be merged. The leftover branch's verdict stands in for it only when that
-  # proof fails and the branch still contains the built tip (amended since); a -pr reset to the target says nothing about the build.
+  # The built tip must itself be merged; a -pr verdict stands in only when the -pr still holds the built tip (amended).
   PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
   BUILT_MERGED=
   if pr_merged "$PR_TIP_REF"; then BUILT_MERGED=1
   elif [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; fi
-  # The verdict is only recorded here; settle_pending applies it once no refusal can follow.
+  # Recorded only; settle_pending applies it once no refusal can follow. A build not proven merged is dropped.
   if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
-  elif [ -z "$PR_BRANCH_TIP" ]; then PENDING_VERDICT=drop
   elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(_to git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
+  else PENDING_VERDICT=drop
   fi
 fi
 settle_pending() {
   case $PENDING_VERDICT in
-    promote) git update-ref "$MARKER_REF" "$PENDING_TIP" && drop_pending ;;
+    promote) if git update-ref "$MARKER_REF" "$PENDING_TIP"; then drop_pending; else echo "WARNING: could not record $MARKER_REF; next run will replay commits." >&2; fi ;;
     drop)
       drop_pending
-      echo "WARNING: dropped the pending build $PENDING_TIP: $PR_BRANCH is gone and its tip is not merged into $TARGET, so its commits will be replayed. If it was squash/rebase merged and $TARGET changed those files since, re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2 ;;
+      echo "WARNING: dropped the pending build $PENDING_TIP: its merge into $TARGET is not proven, so its commits will be replayed. If it was merged (squash, rebase, or on a remote $TARGET not yet pulled), update $TARGET, then re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2 ;;
   esac
 }
 
-# BASE bounds every commit range below: the last published tip when still an ancestor
-# (repeat publish picks only new commits), else $TARGET.
-BASE="$TARGET"
+# BASE bounds every commit range below: the last published tip when still an ancestor, else $TARGET.
+BASE="$TARGET_SHA"
 MARKER_TIP=$(git rev-parse -q --verify "$MARKER_REF")
 [ "$PENDING_VERDICT" = promote ] && MARKER_TIP=$PENDING_TIP
 if [ -n "$MARKER_TIP" ]; then
   if _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; then
     BASE="$MARKER_TIP"
   else
-    # History rewritten (rebase, reword): match commits by patch-id over the paths outside $FILTER_PATHS (what
-    # the -pr keeps), so a rewritten mixed commit still matches its -pr copy. A published commit with no equal
-    # patch counts when the files it touched are unchanged between the published tip and $TARGET (squash
-    # merge, then a rebase). BASE ends the leading run of published-equivalent commits; $TARGET when none.
-    # Warn on an unmatched published commit (folded, conflict-resolved), a matched commit above an unpublished
-    # one (reordered), or a failed or timed-out git lookup (a missing patch would read as published).
-    # rw_git GIT-ARGS... — git run bounded, limited to the paths outside $FILTER_PATHS.
+    # History rewritten: match commits by patch-id over the paths the -pr keeps (outside $FILTER_PATHS). A published
+    # commit with no equal patch counts when its files are unchanged from the published tip to $TARGET (squash, then
+    # rebase). BASE ends the leading run of published or empty commits; $TARGET when none. Warn on an unmatched
+    # published commit, a matched one above an unpublished one, a commit with kept files but no patch-id, or a failed lookup.
+    # rw_git GIT-ARGS... — git with its output config pinned, bounded, limited to the kept paths.
     rw_git() {
-      set -- "$@" -- ':/'
+      set -- "$@" --no-color --no-ext-diff -- ':/'
       while IFS= read -r _p; do [ -n "$_p" ] && set -- "$@" ":(exclude,top)$_p"; done <<RW_PATHS_EOF
 $FILTER_PATHS
 RW_PATHS_EOF
-      _to git "$@"
+      TO=60 _to git -c color.ui=never -c diff.relative=false "$@"
     }
-    RW_TMP=$(mktemp)
     REWRITE=WARN
+    # Sections and the commit lines of F start with a TAB: git quotes a path that holds one, so no path can match.
     if RW_L=$(_to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
-      RW_R=$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET" 2>/dev/null) &&
-      RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET" 2>/dev/null) &&
-      RW_F=$(rw_git log --full-history --no-merges --name-only --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
-      rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" >"$RW_TMP" 2>/dev/null &&
-      RW_P=$(git patch-id --stable <"$RW_TMP"); then
-      REWRITE=$(printf 'L\n%s\nR\n%s\nD\n%s\nF\n%s\nP\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" |
-        awk '/^L$/{s=1;next} /^R$/{s=2;next} /^D$/{s=3;next} /^F$/{s=4;next} /^P$/{s=5;next}
-          s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&NF{dif[$0]=1}
-          s==4&&/^commit [0-9a-f]+$/{cur=$2;next} s==4&&NF&&($0 in dif){nd[cur]++}
+      RW_R=$(_to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET_SHA" 2>/dev/null) &&
+      RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET_SHA" 2>/dev/null) &&
+      RW_F=$(rw_git log --full-history --no-merges --name-only --format='%x09%H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
+      RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null | _to git patch-id --stable); then
+      REWRITE=$(printf '\tL\n%s\n\tR\n%s\n\tD\n%s\n\tF\n%s\n\tP\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" |
+        awk '/^\t[LRDFP]$/{s=index("LRDFP",substr($0,2));next}
+          s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&$0!=""{dif[$0]=1}
+          s==4&&/^\t/{cur=substr($0,2);next} s==4&&$0!=""{nf[cur]++; if($0 in dif)nd[cur]++}
           s==5&&NF{pid[$2]=$1}
           END{ if(!nl){print "WARN";exit}
             for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
-            for(c in L) if((c in pid)&&!(pid[c] in here)&&nd[c]>0){print "WARN";exit}
+            for(c in L) if((c in pid)?(!(pid[c] in here)&&nd[c]>0):nf[c]>0){print "WARN";exit}
             for(i=n;i>=1;i--){ c=R[i]
-              if(!stop && (!(c in pid) || (pid[c] in lp))){tip=c;continue}
-              stop=1; if((c in pid)&&(pid[c] in lp)){print "WARN";exit} }
+              if(nf[c]&&!(c in pid)){print "WARN";exit}
+              if(!stop && (!nf[c] || (pid[c] in lp))){tip=c;continue}
+              stop=1; if(pid[c] in lp){print "WARN";exit} }
             print "OK", (tip==""?"-":tip) }')
     fi
-    rm -f "$RW_TMP"
     case $REWRITE in
       "OK -") ;;
       OK\ *) BASE=${REWRITE#OK } ;;
@@ -258,7 +252,7 @@ fi
 # A leftover -pr branch is reset only when already merged. Refuse here, before handle_sub_repos
 # pushes branches and opens PRs, so a refused run has no outward effects.
 if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDICT" = unproven ]; }; then
-  if [ -z "$PR_BRANCH_MERGED" ]; then echo "$PR_BRANCH exists and is not merged into $TARGET. Choose one, then re-run:" >&2
+  if [ -z "$PR_BRANCH_MERGED" ]; then echo "$PR_BRANCH exists and is not merged into $TARGET (if it was merged on a remote $TARGET, update $TARGET and re-run). Else choose one, then re-run:" >&2
   else echo "$PR_BRANCH is merged into $TARGET but no longer holds the pending build $PENDING_TIP. Choose one, then re-run:" >&2; fi
   if [ "$PENDING_VERDICT" != promote ] && git rev-parse -q --verify "$PENDING_REF" >/dev/null; then
     echo "  published (re-anchor): git update-ref $(shq "$MARKER_REF") \$(git rev-parse $(shq "$PENDING_REF")) && git branch -D $(shq "$PR_BRANCH") && $DISCARD_PENDING" >&2
@@ -269,7 +263,7 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   exit 1
 fi
 settle_pending
-AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET" 2>/dev/null)
+AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA" 2>/dev/null)
 if [ "$AHEAD" = "0" ]; then
   echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
   exit 0
@@ -450,9 +444,10 @@ Classify commits:
 
 ```bash
 # Get all commits ahead of the base: these are the only candidates to pick
-git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET"
-# Default pick list, oldest first; the pick loop drops a commit that is empty after filtering.
-INCLUDED_COMMITS=$(git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET")
+TO=60 _to git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA"
+# Pick list, oldest first, by the classification below: a commit with a path outside .planning/, or (default mode) a structural one; a failed lookup keeps it.
+REVS=$(TO=60 _to git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA") || { echo "Cannot list the commits to pick; re-run." >&2; exit 1; }
+INCLUDED_COMMITS=$(for H in $(printf '%s' "$REVS"); do F=$(_to git diff-tree --no-commit-id --name-only -r "$H") || F=x; { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; } && echo "$H"; done)
 ```
 
 For each commit, check what it touches:
@@ -499,7 +494,7 @@ Mixed planning commits: {N} ({included — structural + transient/other, plannin
 <step name="create_pr_branch">
 ```bash
 # Create PR branch from target. A leftover branch here is merged (an unmerged one was refused in the preconditions); -B resets it.
-git checkout -q --no-track -B "$PR_BRANCH" "$TARGET" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
+TO=60 _to git checkout -q --no-track -B "$PR_BRANCH" "$TARGET_SHA" || { echo "could not create $PR_BRANCH from $TARGET" >&2; exit 1; }
 ```
 
 Cherry-pick the included commits, in order, filtering `$FILTER_PATHS` out of each one.
@@ -645,19 +640,19 @@ contradict default mode, which is specified to preserve structural files: a corr
 would report itself as failed on every phase that touched STATE.md, which is every phase.
 
 ```bash
-DIFF_PATHS=$(git diff --name-only "$TARGET".."$PR_BRANCH")
+DIFF_PATHS=$(git diff --name-only "$TARGET_SHA".."$PR_BRANCH")
 FORBIDDEN=$(echo "$DIFF_PATHS" | grep -Ec "$FORBIDDEN_RE" || true)
 PLANNING_TOTAL=$(echo "$DIFF_PATHS" | grep -c "^\.planning/" || true)
 ALLOWED=$((PLANNING_TOTAL - FORBIDDEN))
 TOTAL_FILES=$(echo "$DIFF_PATHS" | grep -c . || true)
-PR_COMMITS=$(git rev-list --count "$TARGET".."$PR_BRANCH")
+PR_COMMITS=$(git rev-list --count "$TARGET_SHA".."$PR_BRANCH")
 
 # #3679: a DELETED planning path is never legitimate — this workflow only ever
 # excludes content a cherry-picked commit ADDED; pre-existing target-tracked
 # planning files must survive byte-identical. Name-only counting cannot see
 # status (a deleted structural/allowed path verifies clean there), so gate on
 # deletions explicitly, across every planning category.
-PLANNING_DELETIONS=$(git diff --name-status --no-renames "$TARGET".."$PR_BRANCH" | grep "^D" | grep -c "\.planning/" || true)
+PLANNING_DELETIONS=$(git diff --name-status --no-renames "$TARGET_SHA".."$PR_BRANCH" | grep "^D" | grep -c "\.planning/" || true)
 
 # Default mode preserves anything under .planning/ that is neither transient nor
 # structural — config.json, intel/, workstreams/. That is deliberate and unchanged, but it
