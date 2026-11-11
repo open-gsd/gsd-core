@@ -478,9 +478,10 @@ function linkTargetIsMissing(linkPath: string): boolean {
 }
 
 /**
- * Why `resolveSymlinkedLeafWritePath` refused a file, set as the thrown
- * error's `code` (#5037). Callers and tests tell the refusals apart by this
- * code; the message is for the user and may be reworded.
+ * Why `resolveSymlinkedLeafWritePath`, or the installer's settings pre-check
+ * built on it, refused a file, set as the thrown error's `code` (#5037).
+ * Callers and tests tell the refusals apart by this code; the message is for
+ * the user and may be reworded.
  */
 const SYMLINKED_LEAF_REFUSAL = Object.freeze({
   /** A symlink the install root does not trust, and no opt-in. */
@@ -489,6 +490,12 @@ const SYMLINKED_LEAF_REFUSAL = Object.freeze({
   TARGET_MISSING: 'SYMLINKED_LEAF_TARGET_MISSING',
   /** The link resolves to the install root itself or cannot be resolved, so the opt-in would not help. */
   NOT_FOLLOWABLE: 'SYMLINKED_LEAF_NOT_FOLLOWABLE',
+  /**
+   * With the opt-in, the link's target is in a directory this process cannot write, so the temp file
+   * the write puts beside it cannot be created. Thrown by the installer's settings pre-check
+   * (`assertSettingsWriteAllowed`), so a caller can stop before it changes anything else.
+   */
+  TARGET_NOT_WRITABLE: 'SYMLINKED_LEAF_TARGET_NOT_WRITABLE',
 });
 
 /**
