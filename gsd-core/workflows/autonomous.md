@@ -330,8 +330,6 @@ Check `has_context`. If false → go to handle_blocker: "Discuss for phase ${PHA
 
 > Full instructions are in `gsd-core/references/autonomous-ui-design-contract.md`. Read that file now and follow it exactly.
 
-**Inputs:** `PHASE_NUM`, `PHASE_DIR` from execute_phase. Resolves whether the phase needs a UI-SPEC.md generated before planning via active `plan:pre` step hooks. Always non-blocking — proceeds to 3b regardless of outcome.
-
 Read and execute: `$HOME/.claude/gsd-core/references/autonomous-ui-design-contract.md`
 
 **3b. Plan**
@@ -424,7 +422,12 @@ Auto-invoke code review and fix chain. Autonomous mode chains both review and fi
 
 **Capability dispatch:**
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw --phase "${PHASE_NUM}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
@@ -546,8 +549,13 @@ On **"Stop autonomous mode"**: Go to handle_blocker with "User stopped — gaps 
 Resolve the active post-verification hooks and the UI-SPEC gate:
 
 ```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
-HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "${PHASE_DIR}" --raw)
+HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "${PHASE_DIR}" --raw --phase "${PHASE_NUM}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Read the `activeHooks` array directly from the `HOOKS_JSON` value already in context (do not invoke a shell `jq` pipeline — parse as the JSON object it is). **If `activeHooks` is empty or absent:** skip silently to the iterate step. `--after-fingerprint "${PHASE_DIR}"` (#5105) moves a step whose declared artifact already exists in `PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already ran it, so it is not re-dispatched here.
@@ -784,17 +792,7 @@ When any phase operation fails or a blocker is detected, present 3 options via A
 
 **On "Skip this phase":** Log `Phase {N} ⏭ {Name} — Skipped by user` and proceed to iterate.
 
-**On "Stop autonomous mode":** Display progress summary:
-
-```
-### GSD ► AUTONOMOUS ▸ STOPPED
-
- Completed: {list of completed phases}
- Skipped: {list of skipped phases}
- Remaining: {list of remaining phases}
-
- Resume with: /gsd:autonomous ${ONLY_PHASE ? "--only " + ONLY_PHASE : "--from " + next_phase}${TO_PHASE ? " --to " + TO_PHASE : ""}
-```
+**On "Stop autonomous mode":** Read and execute `gsd-core/workflows/autonomous/steps/stop-summary.md`.
 
 </step>
 

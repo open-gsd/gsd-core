@@ -630,7 +630,7 @@
     "message": "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames."
   },
   {
-    "file": "gsd-core/workflows/plan-phase.md",
+    "file": "gsd-core/workflows/plan-phase/steps/ai-spec-artifact.md",
     "code": "2012",
     "message": "Use find instead of ls to better handle non-alphanumeric filenames."
   },
