@@ -2707,6 +2707,32 @@ describe('#4561 — a plain re-query holds a fresh shell-computed `none` degrade
         'the dispatch must not lapse with the HELD record\'s ten minutes');
     });
 
+    // The pick prints `held:` with nothing after it unless `decidedAt` is a
+    // non-negative safe integer. The block then follows the hold with an empty
+    // `_RENEW_HELD`, so its re-record is a fresh decision. That restarts the ten
+    // minutes, so the degrade can last longer than a renewal would keep it, never
+    // shorter: the safe direction, since the held answer is sequential dispatch.
+    test(`${name}: a HELD none with no usable decidedAt runs sequentially and re-records it as a fresh decision`, { skip: NO_BASH }, (t) => {
+      for (const decidedAt of [undefined, null, '1000000000000', -1, 1.5]) {
+        const label = `decidedAt=${JSON.stringify(decidedAt)}`;
+        const dir = createTempProject('gsd-4904-gate-held-nodate-');
+        t.after(() => cleanup(dir));
+        const answer = JSON.stringify({ runtime: 'claude', isolation: 'none', exec: null, harnessFlag: null, held: true, decidedAt });
+        const log = path.join(dir, 'gsd-run.log');
+        const run = runResolveBlock(dir, file,
+          `gsd_run() { case "$*" in *"--json"*) printf '%s' '${answer}' ;; *) printf '%s\\n' "$*" >> ${JSON.stringify(log)} ;; esac; }`);
+        assert.equal(run.outcome, 'exited', `${label}: ${run.stderr}`);
+        assert.equal(run.exitCode, 0, `${label}: the block failed closed on a held none: ${run.stderr}`);
+        assert.match(run.stdout, /^ISOLATION=none$/m, label);
+        assert.match(run.stdout, /^USE_WORKTREES=false$/m, label);
+        assert.match(run.stderr, /held at none.* _RENEW_HELD=$/m, `${label}: the warning prints an empty value`);
+        const calls = splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean);
+        const reRecord = calls.filter((c) => c.includes('--force-isolation none'));
+        assert.equal(reRecord.length, 1, `${label}: expected one re-record, got ${JSON.stringify(calls)}`);
+        assert.doesNotMatch(reRecord[0], /--renew-held/, `${label}: with no decision time the re-record must not claim a renewal`);
+      }
+    });
+
     test(`${name}: a none that is NOT held is a host with no primitive — still FATAL`, { skip: NO_BASH }, (t) => {
       const dir = createTempProject('gsd-4904-gate-declared-');
       t.after(() => cleanup(dir));
