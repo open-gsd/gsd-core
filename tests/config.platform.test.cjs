@@ -64,8 +64,9 @@
  *   `mkfifo` and a real file symlink; there is no FIFO on Windows and the temp-file
  *   hardening they pin (#5759) is POSIX link semantics (process-platform,
  *   raw-child-process, symlink-keyword). Skipped on win32.
- * - #5681 "a save keeps the store file mode" — asserts POSIX mode bits (0600) on the
- *   replaced store; Windows has no such bits (process-platform). Skipped on win32.
+ * - #5681 "a save keeps the store file mode" and "a save whose mode lookup fails does
+ *   not widen the store" — assert POSIX mode bits (0600) on the replaced store under a
+ *   child-set umask; Windows has no such bits (process-platform). Skipped on win32.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -693,18 +694,46 @@ describe('#5681: the defaults store is read bounded and replaced through an excl
 
   // The store is replaced by rename, so the replacement's creation mode is what the
   // store ends with: a private store must not come back group- and world-readable.
-  test('a save keeps the store file mode', (t) => {
-    const { gsdHome, defaultsPath } = seedStore(t, JSON.stringify({ runtime: 'codex' }));
-    fs.chmodSync(defaultsPath, 0o600);
+  // The child sets umask 022 itself, so the row does not depend on the runner's
+  // umask (under 077 a default-mode replacement is 0600 anyway). With "stat-fails",
+  // the child makes the mode lookup on the store fail, as a store swapped or
+  // unmounted between the read and the lookup would.
+  const MODE_SCRIPT = [
+    'const fs = require("node:fs");',
+    'const config = require(process.argv[1]);',
+    'const gsdHome = process.argv[2];',
+    'if (process.argv[3] === "stat-fails") {',
+    '  const store = fs.realpathSync(require("node:path").join(gsdHome, ".gsd", "defaults.json"));',
+    '  const statSync = fs.statSync;',
+    '  fs.statSync = function (p, ...rest) {',
+    '    if (String(p) === store) throw Object.assign(new Error("EIO: simulated stat failure"), { code: "EIO" });',
+    '    return statSync.call(fs, p, ...rest);',
+    '  };',
+    '}',
+    'process.umask(0o022);',
+    'config.cmdConfigSaveDefaults(gsdHome, process.argv[4], false);',
+  ].join('\n');
 
-    const result = runGsdTools(['config-save-defaults', PATCH], gsdHome, { GSD_HOME: gsdHome });
+  for (const [label, kind] of [['a save keeps the store file mode', 'plain'],
+    ['a save whose mode lookup fails does not widen the store', 'stat-fails']]) {
+    test(label, (t) => {
+      const { gsdHome, defaultsPath } = seedStore(t, JSON.stringify({ runtime: 'codex' }));
+      fs.chmodSync(defaultsPath, 0o600);
 
-    assert.ok(result.success, result.error);
-    if (process.platform !== 'win32') {
-      assert.strictEqual(fs.statSync(defaultsPath).mode & 0o777, 0o600);
-    }
-    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
-  });
+      const r = runNode(['-e', MODE_SCRIPT, CONFIG_LIB_PATH, gsdHome, kind, PATCH], {
+        cwd: gsdHome,
+        env: installSpawnEnv({ GSD_HOME: gsdHome }),
+        timeoutMs: PROBE_TIMEOUT_MS,
+      });
+
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+      assert.strictEqual(r.exitCode, 0, r.summary);
+      if (process.platform !== 'win32') {
+        assert.strictEqual(fs.statSync(defaultsPath).mode & 0o777, 0o600);
+      }
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
+    });
+  }
 
   test('a FIFO planted at the old predictable temp name does not hang the save', (t) => {
     const { gsdHome, defaultsPath } = seedStore(t, JSON.stringify({ runtime: 'codex' }));

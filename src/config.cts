@@ -993,10 +993,12 @@ function saveDefaultsStore(
     existing = parsed;
     // The rename gives the store the replacement's mode, so a private store
     // (0600) is replaced by a file created with its mode, never a wider one.
+    // If the mode cannot be read, the replacement is private: narrowing an
+    // existing store is safe, widening one is not.
     try {
       storeMode = fs.statSync(storePath).mode & 0o777;
     } catch {
-      // the creation default below
+      storeMode = 0o600;
     }
   }
 

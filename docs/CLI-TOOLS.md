@@ -766,11 +766,13 @@ projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
 `tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. The store is read the
 way the loader reads every config file: one that cannot be read, is not a regular file (a FIFO
 or device), is larger than 1 MiB, is not valid JSON, or is not a JSON object is refused and left
-as it was. A save that would make the store larger than 1 MiB is refused too, since the loader
-could not read the result. A write goes to a temp file created exclusively under a random name,
-with the store's own file mode, and is renamed over the store. A write that fails therefore
-leaves the store as it was, an existing entry at a temp-file name is never opened, and a private
-store stays private.
+as it was. The store is written as 2-space JSON, and a save whose result in that form would be
+larger than 1 MiB is refused too, since the loader could not read it; a compact hand-written store
+can reach that size without gaining keys. A write goes to a temp file created exclusively under a
+random name and renamed over the store. The temp file is created with the store's own file mode,
+narrowed by the umask, or `0600` when that mode cannot be read, so a save never widens it. A write
+that fails therefore leaves the store as it was, and an existing entry at a temp-file name is never
+opened.
 
 A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
 so two saves, or a save and an install, run one after the other and neither loses the other's
@@ -780,8 +782,10 @@ With `--json-errors`, each refusal carries a typed reason
 ([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
 `usage` for settings that are not one JSON object (including an empty or blank argument) or
 that give both spellings of one setting (`commit_docs` and `planning.commit_docs`),
-`config_invalid_key` for a key `config-set` does not accept, `unknown` for a value `config-set`
-does not accept (the reason `config-set` itself reports), `config_defaults_invalid` for a store
+`config_invalid_key` for a key `config-set` does not accept, the reason `config-set` itself
+reports for a value it does not accept (`unknown` for most values, `usage` for a malformed number
+such as `context_window`), `config_parse_failed` for a key the prototype-pollution guard refuses
+(`__proto__`, `constructor`), `config_defaults_invalid` for a store
 that is not a readable JSON object, `config_defaults_write_failed` for a failed write or a store
 that would grow past 1 MiB, and
 `config_defaults_lock_unavailable` when the lock cannot be taken, for example while another

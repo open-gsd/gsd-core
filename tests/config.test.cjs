@@ -4630,9 +4630,11 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
    * form a save writes it (2-space JSON and a trailing newline), so the store's
    * size after a save differs from `bytes` only by the change in `mode`'s length.
    */
-  function storeOfSize(bytes, mode = 'interactive') {
+  function storeOfSize(bytes, mode = 'interactive', unit = 'x') {
     const render = (pad) => JSON.stringify({ mode, pad }, null, 2) + '\n';
-    const text = render('x'.repeat(bytes - render('').length));
+    const room = bytes - render('').length;
+    const unitBytes = Buffer.byteLength(unit);
+    const text = render(unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes));
     assert.strictEqual(Buffer.byteLength(text), bytes);
     return text;
   }
@@ -4692,6 +4694,20 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
     assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
     assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  // The cap is in bytes of the UTF-8 file, not in characters: padded with a
+  // two-byte character, this store is about half the cap in characters.
+  test('a save is measured in UTF-8 bytes, not characters', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES, 'yolo', 'é');
+    assert.ok(before.length < CONFIG_MAX_BYTES / 2 + 64, 'precondition: the store is far under the cap in characters');
+    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
   });
 
   test('a save that ends exactly at the cap is written', async (t) => {
