@@ -226,13 +226,10 @@ describe('#5329 — shared omit must not become explicit project model intent', 
   ]) {
     test(`runtime choice ${JSON.stringify(choice)} and environment ${runtime} preserve resolution across seeding`, () => {
       fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
-      fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
-      const configPath = path.join(project, '.planning', 'config.json');
-      fs.writeFileSync(configPath, JSON.stringify({ runtime: choice }));
       const before = resolve('gsd-executor', runtime).model;
-      fs.unlinkSync(configPath);
       const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', { runtime: choice }, project, runtime);
-      assert.equal(config.runtime, choice);
+      if (choice === null) assert.equal(Object.hasOwn(config, 'runtime'), false);
+      else assert.equal(config.runtime, choice);
       assert.equal(resolve('gsd-executor', runtime).model, before);
       if (runtime === 'claude') assert.equal(before, 'sonnet');
       else assert.equal(before, '');
