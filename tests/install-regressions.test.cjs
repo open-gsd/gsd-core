@@ -2161,10 +2161,22 @@ describe('#1874 F6 adjacent: malformed settings.local.json does not crash the in
 // so the only thing that differs between the two runs is the opt-in. The
 // install cases also require gsd-core/VERSION, which is written before either
 // settings write, so a run that failed earlier for some other reason cannot
-// pass as a refusal.
+// pass as a refusal. Every refusal must also put its SYMLINKED_LEAF_REFUSAL
+// code on stderr, so a different failure that exits 1 cannot pass either.
 
 describe('#5037: the installer never replaces a symlinked settings.json', () => {
   const USER_SETTINGS = { env: { MY_TOKEN: 'keep-me' } };
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  // The installer lets a refusal escape uncaught, and Node prints an uncaught
+  // error's own properties after its stack, so the refusal's `code` reaches
+  // stderr. The check looks for the frozen code value only, never the message.
+  function assertRefusedWith(result, code, why) {
+    assert.ok(typeof code === 'string' && code !== '', `unknown refusal code: ${code}`);
+    // 1, not merely non-zero: a timed-out or killed installer reports null.
+    assert.strictEqual(result.exitCode, 1, `${why}\n${result.stdout}\n${result.stderr}`);
+    assert.ok(result.stderr.includes(code), `stderr must carry the refusal code ${code}\n${result.stderr}`);
+  }
 
   function runInstaller(root, args, { optIn }) {
     const env = installSpawnEnv({
@@ -2228,9 +2240,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive the write-through');
           assert.ok(hasGsdSessionStartHook(after), 'GSD hooks must land in the link target');
         } else {
-          // 1, not merely non-zero: a timed-out or killed installer reports null.
-          assert.strictEqual(result.exitCode, 1,
-            `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
+          assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, 'a refused settings write must fail the install');
           assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
             'the install must have reached the settings write before failing');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
@@ -2279,9 +2289,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.ok(localAfter.permissions.allow.includes('Bash(npm test)'),
             'user permissions in settings.local.json must survive');
         } else {
-          // 1, not merely non-zero: a timed-out or killed installer reports null.
-          assert.strictEqual(result.exitCode, 1,
-            `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
+          assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, 'a refused settings write must fail the install');
           assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
             'the install must have reached the settings write before failing');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
@@ -2336,9 +2344,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.deepStrictEqual(sharedAfter.env, USER_SETTINGS.env, 'user settings must survive in settings.json');
           assert.strictEqual(hasGsdSessionStartHook(sharedAfter), false, 'GSD entries must be stripped from settings.json');
         } else {
-          // 1, not merely non-zero: a timed-out or killed installer reports null.
-          assert.strictEqual(result.exitCode, 1,
-            `a refused settings write must fail the install\n${result.stdout}\n${result.stderr}`);
+          assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, 'a refused settings write must fail the install');
           assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
             'the install must have reached the settings write before failing');
           assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), localBefore, 'the link target must be byte-for-byte unchanged');
@@ -2380,12 +2386,10 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
         });
     }
 
-    // Asserts a refused uninstall exited 1 and changed nothing in the config
-    // dir, and that the link and its target are as they were.
-    function assertRefusedUnchanged(result, l, before) {
-      // 1, not merely non-zero: a timed-out or killed uninstall reports null.
-      assert.strictEqual(result.exitCode, 1,
-        `a refused settings write must fail the uninstall\n${result.stdout}\n${result.stderr}`);
+    // Asserts a refused uninstall exited 1 with refusal `code` and changed
+    // nothing in the config dir, and that the link and its target are as they were.
+    function assertRefusedUnchanged(result, code, l, before) {
+      assertRefusedWith(result, code, 'a refused settings write must fail the uninstall');
       assert.deepStrictEqual(snapshotTree(l.claudeDir), before.tree, 'the config dir must be left unchanged');
       assert.ok(fs.lstatSync(l.settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
       assert.strictEqual(fs.readlinkSync(l.settingsPath), l.targetPath, 'the link must still point at the same target');
@@ -2426,7 +2430,7 @@ describe('#5037: the installer never replaces a symlinked settings.json', () => 
           assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive in the link target');
           assert.strictEqual(hasGsdSessionStartHook(after), false, 'GSD hooks must be removed from the link target');
         } else {
-          assertRefusedUnchanged(result, l, before);
+          assertRefusedUnchanged(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, l, before);
         }
       });
     }
