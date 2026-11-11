@@ -10,7 +10,7 @@
 import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
 import { extractTaskCommitRefs, commitIsAncestor, isSafeRefArgument, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
-import { execGit, platformWriteSync } from './shell-command-projection.cjs';
+import { execGit, platformWriteSync, toPosixPath } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { summaryCandidates } = coreUtilsMod;
@@ -26,7 +26,7 @@ export const REPO_TEXT_MAX_BYTES = 64 * 1024;
  * - each id costs one `git merge-base`, and one `git rev-parse --verify` when git does not know it;
  *   the loop stops at the first id that is not gone, so at most 2 * SUMMARY_REFS_MAX;
  * - one `git rev-parse --is-shallow-repository`, at most once per run (the caller's `historyComplete` memo);
- * - when every id exists, one `git rev-list` and one `git show`.
+ * - when every id exists, one `git log` over HEAD and one `git log --no-walk` per chunk of ids.
  */
 export const SUMMARY_REFS_MAX = 64;
 
@@ -119,7 +119,7 @@ export function commitIsGone(reach: CommitReachability | null, historyComplete: 
  * `planRow` reads first.
  */
 export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string, historyComplete: () => boolean): boolean {
-  const rel = path.relative(phaseDir, planPath).split(path.sep).join('/');
+  const rel = toPosixPath(path.relative(phaseDir, planPath));
   for (const candidate of summaryCandidates(rel)) {
     const summary = readBoundedText(path.join(phaseDir, candidate));
     if (summary.kind === 'none') continue;
