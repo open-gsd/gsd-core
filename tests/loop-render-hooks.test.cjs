@@ -834,12 +834,8 @@ describe('renderLoopHooks', () => {
         const id = rendered.split('\n')[0].split('skill:')[1].split(' ')[0];
         const stem = id.slice('gsd-'.length);
         assert.equal(stem, step.ref.skill);
-        const candidates = [
-          path.join(__dirname, '..', 'commands', 'gsd', `${stem}.md`),
-          path.join(__dirname, '..', 'capabilities', step.capId, 'skills', stem, 'SKILL.md'),
-          path.join(__dirname, '..', 'skills', id, 'SKILL.md'),
-        ];
-        assert.ok(candidates.some((file) => fs.existsSync(file)), `${id} names a shipped source`);
+        assert.ok(id.startsWith('gsd-'), `${id} has the shipped skill prefix`);
+        assert.ok(fs.existsSync(path.join(__dirname, '..', 'skills', id, 'SKILL.md')), `${id} names a shipped skill`);
         checked += 1;
       }
     }
