@@ -96,7 +96,7 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
     b('# Create PR branch from target'),
     extractPickLoop(text),
     b('git checkout "$CURRENT_BRANCH"'),
-    b('DIFF_PATHS=$(git diff'),
+    b('DIFF_PATHS=$(TO=60 _to git diff'),
     b('git update-ref "$PENDING_REF"'),
   ].join('\n');
   return runSh(script, cwd);
@@ -899,7 +899,13 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
-    assert.match(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8'), /^run-with-timeout 60 -- git -c color.ui=never -c diff.relative=false log -p /m, 'the patch walk ran bounded (60 s), with its output config pinned');
+    const rwt = fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8');
+    assert.match(rwt, /^run-with-timeout 60 -- git -c color.ui=never -c diff.relative=false log -p /m, 'the patch walk ran bounded (60 s), with its output config pinned');
+    // Every walk and the checkout take the 60 s bound, not the 10 s default.
+    for (const call of ['git patch-id --stable', 'git rev-list --no-merges --left-only', 'git rev-list --no-merges --topo-order --right-only',
+      'git log --oneline', 'git rev-list --reverse', 'git checkout -q --no-track -B', 'git diff --name-only', 'git rev-list --count']) {
+      assert.ok(rwt.split('\n').some((l) => l.startsWith(`run-with-timeout 60 -- ${call}`)), `${call} ran with TO=60:\n${rwt}`);
+    }
   });
 
   test('default mode: published code-only commits rebase-merged, then `git rebase main`: no warning, only round 2 is replayed', () => {
@@ -1067,7 +1073,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(r.stderr, WARNED);
   });
 
-  // #5486 review 2026-11-08 (Major 1): the patch walk must not depend on the user's git output config.
+  // The patch walk must not depend on the user's git output config.
   test('color.ui=always: the rebased round still matches its published patch; only round 2 is replayed', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     git(dir, 'rebase', '-q', 'main');
@@ -1090,7 +1096,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
   });
 
-  // Minor 13: root files named like the matcher's old section markers.
+  // Root files named like the matcher's old section markers.
   test('files named L, R, D, F, P and `commit <sha>` do not shift the matcher sections', () => {
     const dir = repo();
     for (const f of ['L', 'R', 'D', 'F', 'P', `commit ${'a'.repeat(40)}`]) write(dir, f, `${f}\n`);
@@ -1109,7 +1115,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
   });
 
-  // Nit 16: the published tip was a merge, and the merge was redone, so no non-merge commit is left on the marker side.
+  // The published tip was a merge, and the merge was redone, so no non-merge commit is left on the marker side.
   test('marker side made only of a merge: warns and uses the target', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1129,7 +1135,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(r.stderr, WARNED);
   });
 
-  // Nit 17: the gh proof needs the exact sha, not a line that only contains it.
+  // The gh proof needs the exact sha, not a line that only contains it.
   test('gh reporting a longer sha that starts with the built tip does not prove the merge', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1143,7 +1149,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
   });
 
-  // Nit 17: an unpublished commit whose committer date is older than the rebased published copy; only --topo-order keeps the order.
+  // An unpublished commit whose committer date is older than the rebased published copy; only --topo-order keeps the order.
   test('rebased branch with a clock-skewed unpublished commit on top: the published copy is still the base', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     git(dir, 'rebase', '-q', 'main');
@@ -1157,7 +1163,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(changed(dir), ['u.txt']);
   });
 
-  // Major 2: TARGET comes from repo config (git.base_branch), so an option-like value must never reach git.
+  // TARGET comes from repo config (git.base_branch), so an option-like value must never reach git.
   test('a target that starts with - is refused and never reaches git as an option', (t) => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1170,7 +1176,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(!fs.existsSync(pwned), 'git wrote no file');
   });
 
-  // Minor 6 and 11: a merged -pr reset to the target holds no built tip; the build is dropped with its WARNING.
+  // A merged -pr reset to the target holds no built tip; the build is dropped with its WARNING.
   test('merged -pr reset to the target after a promoted round: the next build is dropped with a WARNING naming the fix', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1188,7 +1194,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(r.stderr.includes(`git update-ref refs/gsd/pr-published/strict/main/feature ${pending}`), r.stderr);
   });
 
-  // Nit 19: a failed marker write warns. A ref named refs/gsd/pr-published blocks the marker path (a file where a directory is needed).
+  // A failed marker write warns. A ref named refs/gsd/pr-published blocks the marker path (a file where a directory is needed).
   test('a failed marker write warns that the next run replays commits', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1201,7 +1207,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-published\/strict\/main\/feature/);
   });
 
-  // Minor 5: the pending write fails the same way; the run warns and records no pending ref.
+  // The pending write fails the same way; the run warns and records no pending ref.
   test('a failed pending write warns and leaves no pending ref', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1227,7 +1233,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(refOf(dir, 'refs/heads/feature-pr'), '');
   });
 
-  // Minor 8: a commit that touches only .planning/config.json is excluded in default mode, as the classification says.
+  // A commit that touches only .planning/config.json is excluded in default mode, as the classification says.
   test('default mode: a config.json-only commit is not picked', () => {
     const dir = repo();
     write(dir, '.planning/config.json', '{"x":1}\n');
@@ -1239,7 +1245,97 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(changed(dir), ['x.txt']);
   });
 
-  // Minor 10: a path list cut short by a timeout must not prove the merge.
+  // The pick list per mode: a STATE.md-only commit is picked in default mode only; a transient-only commit never.
+  for (const [mode, want] of [['false', ['.planning/STATE.md', 'x.txt']], ['true', ['x.txt']]]) {
+    test(`${mode === 'true' ? 'strict' : 'default'} mode: STATE.md-only and transient-only commits are picked as the classification says`, () => {
+      const dir = repo();
+      write(dir, '.planning/STATE.md', 's1\n');
+      commitAll(dir, 'docs: state');
+      write(dir, '.planning/phases/p.md', 'p\n');
+      commitAll(dir, 'docs: plan');
+      write(dir, 'x.txt', 'x\n');
+      commitAll(dir, 'feat: code');
+      const r = publish(dir, 'main', { mode });
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(changed(dir), want);
+    });
+  }
+
+  // The matcher skips what the pick list skips: an unpublished config.json-only commit below the published copy.
+  test('default mode: a new config.json-only commit below the rebased published round: no warning, only round 2 is replayed', () => {
+    const dir = repo();
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code 1');
+    assert.equal(publish(dir, 'main', { mode: 'false' }).status, 0);
+    const prelude = ghPrelude(refOf(dir, 'refs/gsd/pr-built-head/default/main/feature'));
+    const pub = git(dir, 'rev-parse', 'feature');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: unrelated');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'reset', '-q', '--hard', 'main');
+    write(dir, '.planning/config.json', '{"x":1}\n');
+    commitAll(dir, 'chore: config');
+    git(dir, 'cherry-pick', pub);
+    write(dir, 'two.txt', '2\n');
+    commitAll(dir, 'feat: two');
+    const r = publish(dir, 'main', { mode: 'false', prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['two.txt']);
+  });
+
+  // Each new exit 1 path prints its message and changes no ref.
+  const noRefs = (dir) => {
+    assert.equal(git(dir, 'for-each-ref', 'refs/gsd'), '');
+    assert.equal(refOf(dir, 'refs/heads/feature-pr'), '');
+  };
+
+  test('an unknown target stops the run with exit 1 and changes no ref', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const r = publish(dir, 'nosuch');
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Unknown target: nosuch/);
+    noRefs(dir);
+  });
+
+  test('a failed pick-list lookup stops the run with exit 1 and changes no ref', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const stub = 'gsd_run() { case "$*" in *"rev-list --reverse"*) return 1 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
+    const r = publish(dir, 'main', { prelude: stub });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Cannot list the commits to pick; re-run\./);
+    noRefs(dir);
+  });
+
+  test('a -pr branch that cannot be created stops the run with exit 1 and records nothing', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'update-ref', 'refs/heads/feature-pr/x', 'main'); // a ref below the name blocks the branch
+    const r = publish(dir);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /could not create feature-pr from main/);
+    assert.equal(git(dir, 'for-each-ref', 'refs/gsd'), '');
+  });
+
+  test('a timed-out ancestor check of the marker stops the run with exit 1 instead of reading it as a rewrite', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    commitRound(dir, 2, 'two.txt');
+    const before = [markerOf(dir), pendingOf(dir), builtOf(dir), refOf(dir, 'refs/heads/feature-pr')];
+    const stub = 'gsd_run() { case "$*" in *--is-ancestor*" feature") return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
+    const r = publish(dir, 'main', { prelude: stub });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Cannot check refs\/gsd\/pr-published\/strict\/main\/feature; re-run\./);
+    assert.doesNotMatch(r.stderr, /history rewritten/);
+    assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir), refOf(dir, 'refs/heads/feature-pr')], before);
+  });
+
+  // A path list cut short by a timeout must not prove the merge.
   test('pr_merged: a --name-only list cut short by a timeout is not a content proof', () => {
     const dir = repo();
     write(dir, 'a.txt', 'a\n');

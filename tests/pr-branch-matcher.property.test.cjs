@@ -1,22 +1,23 @@
 'use strict';
 
 /**
- * #5469 / #5486 review 2026-11-08 (Minor 12, Minor 13, Major 1): property tests for the
- * rewritten-history matcher of `/gsd-pr-branch` — the shipped awk program that reads the
- * L, R, D, F and P sections and prints `OK <base>` or `WARN`.
+ * #5469: property tests for the rewritten-history matcher of `/gsd-pr-branch` — the shipped
+ * awk program that reads the L, R, D, F, P and N sections and prints `OK <base>` or `WARN` —
+ * and for `picked`, the one owner of the pick rule that both the pick list and the matcher use.
  *
- * The awk text is extracted from `gsd-core/workflows/pr-branch.md`, so the test runs the
- * shipped matcher. Its input is built in the shape `git rev-list`, `git log --name-only
+ * The shell text is extracted from `gsd-core/workflows/pr-branch.md`, so the tests run the
+ * shipped code. The matcher input is built in the shape `git rev-list`, `git log --name-only
  * --format=%x09%H` and `git patch-id --stable` print.
  *
  * Properties:
- *   (a) a linear rebase of published, unpublished and planning-only commits: the base is
- *       the last commit of the leading published-or-empty run, or WARN when a published
- *       copy sits above an unpublished commit;
+ *   (a) a linear rebase of published, unpublished, planning-only and unpicked commits: the
+ *       base is the last commit of the leading published-or-unpicked run, or WARN when a
+ *       published copy sits above an unpublished commit;
  *   (b) file names that spell the section markers or a `commit <sha>` line never change
  *       the verdict;
- *   (c) a commit that lists kept files but has no patch-id (a failed or empty patch walk)
- *       always gives WARN.
+ *   (c) a picked commit that has no patch-id (a failed or empty patch walk) always gives WARN;
+ *   (d) `picked` agrees with `classifyCommit` (the classification of analyze_commits) on any
+ *       file list, in both modes.
  */
 
 const { describe, test } = require('node:test');
@@ -26,7 +27,7 @@ const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { WORKFLOW_PATH, extractBashBlockContaining } = require('./helpers/pr-branch-filter.cjs');
+const { WORKFLOW_PATH, extractBashBlockContaining, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 const AWK = (() => {
   const block = extractBashBlockContaining(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'REWRITE=$(printf');
@@ -53,9 +54,11 @@ const hex = (prefix, i) => `${prefix}${i.toString(16).padStart(39, '0')}`;
 const NAMES = ['P', 'D', 'F', 'L', 'R', `commit ${'a'.repeat(40)}`, 'src/a.txt', 'b.txt'];
 
 // One rebased history: left = the published commits, right = the rebased branch, oldest first.
-// kind: 'pub' (copy of left[ref]), 'unpub' (new patch), 'empty' (only filtered paths: no files, no patch-id).
+// kind: 'pub' (copy of left[ref]), 'unpub' (new patch), 'empty' (only filtered paths: no files, no patch-id; not picked),
+// 'unpicked' (kept files and a new patch, but the pick list skips it, e.g. .planning/config.json in default mode).
+const NOT_PICKED = new Set(['empty', 'unpicked']);
 function render({ left, right, dropPid = -1 }) {
-  const lines = { L: [], R: [], F: [], P: [] };
+  const lines = { L: [], R: [], F: [], P: [], N: [] };
   left.forEach((c) => {
     lines.L.push(c.sha);
     lines.F.push(`\t${c.sha}`, '', ...c.files);
@@ -63,18 +66,19 @@ function render({ left, right, dropPid = -1 }) {
   });
   right.forEach((c, i) => {
     lines.R.unshift(c.sha); // rev-list prints newest first
+    if (NOT_PICKED.has(c.kind)) lines.N.push(c.sha);
     if (c.kind === 'empty') return;
     lines.F.push(`\t${c.sha}`, '', ...c.files);
     if (i !== dropPid) lines.P.push(`${c.pid} ${c.sha}`);
   });
   const sec = (k, arr) => `\t${k}\n${arr.join('\n')}\n`;
-  return sec('L', lines.L) + sec('R', lines.R) + sec('D', []) + sec('F', lines.F) + sec('P', lines.P);
+  return ['L', 'R'].map((k) => sec(k, lines[k])).join('') + sec('D', []) + ['F', 'P', 'N'].map((k) => sec(k, lines[k])).join('');
 }
 
 const history = fc.record({
   nLeft: fc.integer({ min: 1, max: 4 }),
   right: fc.array(fc.record({
-    kind: fc.constantFrom('pub', 'unpub', 'empty'),
+    kind: fc.constantFrom('pub', 'unpub', 'empty', 'unpicked'),
     ref: fc.nat(),
     files: fc.uniqueArray(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 3 }),
   }), { maxLength: 6 }),
@@ -91,7 +95,7 @@ const history = fc.record({
   };
 });
 
-// The model: the leading run of published or empty commits gives the base; a published copy after an unpublished commit warns.
+// The model: the leading run of published or unpicked commits gives the base; a published copy after an unpublished commit warns.
 function expected({ right }) {
   let tip = '-';
   let stopped = false;
@@ -110,10 +114,10 @@ describe('pr-branch rewritten-history matcher (property)', () => {
     }), { numRuns: 40 });
   });
 
-  test('a commit with kept files but no patch-id always warns (fail closed)', () => {
-    const withFiles = history.filter((h) => h.right.some((c) => c.kind !== 'empty'));
+  test('a picked commit with no patch-id always warns (fail closed)', () => {
+    const withFiles = history.filter((h) => h.right.some((c) => !NOT_PICKED.has(c.kind)));
     fc.assert(fc.property(withFiles, fc.nat(), (h, n) => {
-      const idx = h.right.map((c, i) => (c.kind === 'empty' ? -1 : i)).filter((i) => i >= 0);
+      const idx = h.right.map((c, i) => (NOT_PICKED.has(c.kind) ? -1 : i)).filter((i) => i >= 0);
       assert.equal(match(render({ ...h, dropPid: idx[n % idx.length] })), 'WARN');
     }), { numRuns: 30 });
   });
@@ -121,4 +125,42 @@ describe('pr-branch rewritten-history matcher (property)', () => {
   test('a marker-side range with no non-merge commit warns', () => {
     assert.equal(match('\tL\n\n\tR\n\n\tD\n\n\tF\n\n\tP\n\n'), 'WARN');
   });
+});
+
+// The shipped `picked` function, with `_to` standing in for the bounded `git diff-tree` read.
+const PICKED = extractBashBlockContaining(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'PR_BRANCH="${CURRENT_BRANCH}-pr"').match(/^picked\(\) \{.*\}$/m)[0];
+const { structuralRe, transientDirs } = readWorkflow();
+
+// One bash run: picked's verdict (1 picked, 0 not) for each file list, in order.
+function pickedAll(lists, strict) {
+  const tmp = createTempDir('gsd-prpicked-');
+  try {
+    lists.forEach((l, i) => fs.writeFileSync(path.join(tmp, `${i}.txt`), l.join('\n')));
+    const script = [
+      `PR_STRICT=${strict}`,
+      `STRUCTURAL_RE='${structuralRe}'`,
+      PICKED,
+      `for i in $(seq 0 ${lists.length - 1}); do _to() { cat "$i.txt"; }; picked x && echo 1 || echo 0; done`,
+      '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
+    ].join('\n');
+    fs.writeFileSync(path.join(tmp, 'run.sh'), `${script}\n`);
+    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp });
+    assert.equal(r.exitCode, 0, r.stderr);
+    return r.stdout.trim().split(/\r?\n/);
+  } finally { cleanup(tmp); }
+}
+
+const PATHS = ['src/a.js', 'README.md', '.planningX/a', '.planning/STATE.md', '.planning/STATEX.md', '.planning/ROADMAP.md',
+  '.planning/config.json', '.planning/intel/x.md', '.planning/phases/01/PLAN.md', '.planning/milestones/v1-ROADMAP.md',
+  '.planning/milestones/v1-phases/p.md', '.planning/workstreams/w.md'];
+
+describe('pr-branch pick rule (property)', () => {
+  for (const strict of [true, false]) {
+    test(`picked agrees with the classification in ${strict ? 'strict' : 'default'} mode, and a failed lookup picks`, () => {
+      fc.assert(fc.property(fc.array(fc.uniqueArray(fc.constantFrom(...PATHS), { maxLength: 4 }), { minLength: 1, maxLength: 8 }), (lists) => {
+        const want = lists.map((l) => (classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? '1' : '0'));
+        assert.deepEqual(pickedAll(lists, strict), [...want, '1']);
+      }), { numRuns: 15 });
+    });
+  }
 });

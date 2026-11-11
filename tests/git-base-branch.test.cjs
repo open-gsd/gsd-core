@@ -2740,9 +2740,11 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
 
   // #5486: the pending build is recorded only when both gates pass.
   const PENDING_REF = 'refs/gsd/pr-built/strict/main/feature';
-  function runVerify(repo) {
+  // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
+  function runVerify(repo, to = '_to() { "$@"; }') {
     const script = [
       'set -u',
+      to,
       'TARGET=main',
       'TARGET_SHA=main',
       'PR_BRANCH=pr',
@@ -2808,6 +2810,30 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.match(out, /GATE_PLANNING_DELETIONS=0/, `clean diff must count zero deletions: ${out.slice(0, 400)}`);
     assert.equal(pendingRef(repo), gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim(), 'both gates pass: HEAD is the pending build');
   });
+
+  // A timed-out read leaves an empty list, which would pass both gates: verify must stop instead.
+  for (const cmd of ['--name-only', '--diff-filter=D']) {
+    test(`verify stops with exit 1 when its bounded diff read (${cmd}) times out`, (t) => {
+      const repo = createTempDir('gsd-3679-verify-timeout-');
+      t.after(() => cleanup(repo));
+      const g = (args) => gitOrThrow(args, { cwd: repo });
+      g(['init', '-q', '-b', 'main']);
+      g(['config', 'user.email', 't@t']);
+      g(['config', 'user.name', 't']);
+      fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
+      g(['add', '-A']);
+      g(['commit', '-qm', 'base']);
+      g(['checkout', '-qb', 'pr']);
+      fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
+      g(['add', '-A']);
+      g(['commit', '-qm', 'transient planning file']);
+      const out = runVerify(repo, `_to() { [ "$TO" = 60 ] || return 2; case "$*" in *"${cmd}"*) return 124 ;; esac; "$@"; }`);
+      assert.match(out, /Cannot read pr; re-run\./, out.slice(0, 400));
+      assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
+      assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
+    });
+  }
 
   test('create loop preserves pre-existing transient content (#3720 guarantee pinned)', (t) => {
     const repo = createTempDir('gsd-3679-create-mixed-');
