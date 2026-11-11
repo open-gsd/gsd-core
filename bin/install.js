@@ -6714,6 +6714,25 @@ function assertCodexConfigLinkAllowed(configPath) {
 }
 
 /**
+ * #5716: with GSD_ALLOW_SYMLINKED_DEST, writeStrippedCodexConfig writes in place at the file a
+ * symlinked config.toml resolves to, so that file must be writable; its directory need not
+ * be. Uninstall runs this with its up-front check, so a read-only target is refused before
+ * anything is removed instead of failing the write after the skills, agent files and hooks
+ * are gone.
+ */
+function assertCodexConfigLinkTargetWritable(configPath) {
+  const target = fs.realpathSync(configPath);
+  try {
+    fs.accessSync(target, fs.constants.W_OK);
+  } catch (cause) {
+    throw new Error(
+      `Codex config.toml at "${configPath}" is a symlink to a file GSD cannot write ("${target}", ${cause.code}), refusing to change it. Make that file writable, then re-run.`,
+      { cause },
+    );
+  }
+}
+
+/**
  * #5716: save stripGsdFromCodexConfig's result back to config.toml. `cleaned` is null
  * when only GSD content was left, and a regular file is then deleted as before. Deleting
  * a symlinked config.toml would delete the user's link and leave the GSD block in the
@@ -8794,12 +8813,16 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // change unless GSD_ALLOW_SYMLINKED_DEST is set. Refuse here, before anything is
   // removed, so a refused uninstall leaves the install whole instead of deleting the
   // skills, agent files and hooks while config.toml still registers them. A link the
-  // strip would leave unchanged is not refused.
+  // strip would leave unchanged is not refused. With the opt-in, a link whose target file
+  // the strip could not write is refused here too.
   if (hostBehaviorsFor(runtime).tomlConfigInstall) {
     const codexConfigPath = path.join(targetDir, 'config.toml');
     if (fs.existsSync(codexConfigPath)) {
       const content = fs.readFileSync(codexConfigPath, 'utf8');
-      if (stripGsdFromCodexConfigOnUninstall(codexConfigPath, content) !== content) assertCodexConfigLinkAllowed(codexConfigPath);
+      if (stripGsdFromCodexConfigOnUninstall(codexConfigPath, content) !== content
+        && assertCodexConfigLinkAllowed(codexConfigPath)) {
+        assertCodexConfigLinkTargetWritable(codexConfigPath);
+      }
     }
   }
 
