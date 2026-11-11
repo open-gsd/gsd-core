@@ -2435,6 +2435,8 @@ Save settings as global defaults for future projects:
 
 Every reader and writer of this store resolves its root the same way: `GSD_HOME` when it is set and non-blank, otherwise your home directory. That covers the config loader, the install-time model / tools / effort resolvers, the installer's non-Claude defaults writer, the isolation hooks' runtime fallback, capability staging, and the `/gsd-settings` and `/gsd-new-project` workflows (#5017).
 
+`/gsd-settings` "save as global defaults" merges into this file through `config-save-defaults`: it updates the settings it shows and keeps every key it does not manage, such as `model_overrides`, `effort` and `runtime` (#5681).
+
 When `/gsd-new-project` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals.
 
 ### What a global file can and cannot set at runtime
@@ -2442,7 +2444,9 @@ When `/gsd-new-project` creates a new `config.json`, it reads global defaults an
 Two different rules apply, and the difference is deliberate ([#3532](https://github.com/open-gsd/gsd-core/issues/3532)):
 
 - **In a directory with no `.planning/` at all**, `$GSD_HOME/.gsd/defaults.json` is the active
-  configuration — model resolution reads it directly.
+  configuration — model resolution reads it directly. A setting with a legacy flat spelling
+  (`research` for `workflow.research`, `commit_docs` for `planning.commit_docs`) is read under
+  either spelling there, flat first, as in a project config (#5681).
 - **In a real project (`.planning/config.json` present, even if empty)**, the global file is
   **not read for model resolution** — every model-side key it sets (`model_profile`,
   `model_overrides`, `models`, `dynamic_routing`, `runtime`, and the rest of the resolution

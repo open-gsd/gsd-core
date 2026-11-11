@@ -647,7 +647,9 @@ describe('regressions', () => {
       // Keep all previous members while checking the three intentional additions.
       // #6043 (ADR-4908 §3) adds COMMIT_NOT_GIT_REPO and COMMIT_OUTSIDE_WORKTREE
       // for the commit verb's typed refusals: 30 -> 32.
-      assert.strictEqual(seen.reasonCount, 32);
+      // #5681 adds four config-save-defaults refusals (invalid store, failed
+      // write, lock unavailable, lock release failed): 32 -> 36.
+      assert.strictEqual(seen.reasonCount, 36);
       assert.deepEqual(seen.keys, [
         'CONFIG_KEY_NOT_FOUND', 'CONFIG_NO_FILE', 'CONFIG_PARSE_FAILED', 'CONFIG_INVALID_KEY',
         'SDK_FAIL_FAST', 'SDK_UNKNOWN_COMMAND', 'SDK_MISSING_ARG', 'PHASE_NOT_FOUND',
@@ -658,7 +660,8 @@ describe('regressions', () => {
         'COMMIT_DOCS_GUARD_HOOKS_PATH_SET', 'SECURITY_SCAN_FAILED', 'PICK_FIELD_ABSENT',
         'PICK_OUTPUT_NOT_JSON', 'SUMMARY_EXTRACT_UNPARSEABLE', 'VERIFICATION_STATUS_INVALID',
         'USAGE', 'UNKNOWN', 'PHASE_ID_COLLISION', 'AMBIGUOUS_PHASE_OWNER', 'PHASE_NAMING_NOT_CUSTOM',
-        'COMMIT_NOT_GIT_REPO', 'COMMIT_OUTSIDE_WORKTREE',
+        'CONFIG_DEFAULTS_INVALID', 'CONFIG_DEFAULTS_WRITE_FAILED', 'CONFIG_DEFAULTS_LOCK_UNAVAILABLE',
+        'CONFIG_DEFAULTS_LOCK_RELEASE_FAILED', 'COMMIT_NOT_GIT_REPO', 'COMMIT_OUTSIDE_WORKTREE',
       ].sort());
       assert.deepEqual(seen.phaseReasons, ['phase_id_collision', 'ambiguous_phase_owner', 'phase_naming_not_custom']);
       assert.ok(

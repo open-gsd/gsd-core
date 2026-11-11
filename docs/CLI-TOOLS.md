@@ -681,6 +681,9 @@ node gsd-tools.cjs config-set-model-profile <profile>
 
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
+
+# Merge settings into the global defaults store ($GSD_HOME/.gsd/defaults.json)
+node gsd-tools.cjs config-save-defaults '<settings-json>'
 ```
 
 `config-get` prints the key's value as JSON. A key absent from the config falls back to the
@@ -745,6 +748,54 @@ so a refused choice, malformed JSON included, fails even when `config.json` alre
 with valid choices and an existing `config.json`, the command reports `already_exists` and
 leaves it untouched. The user defaults file is read only to build a new config, so a problem in
 it is not reported when the config already exists.
+
+`config-save-defaults` is the write behind `/gsd-settings` "save as global defaults" (#5681).
+It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.json` unless
+`GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
+replaces. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+`resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
+`config-set` key and value rules first, as `config-new-project` choices are, so a key must be
+spelled the way `config-set` accepts it: `git.branching_strategy`, not `branching_strategy`
+(a few flat spellings, such as `commit_docs`, are accepted). Saving either spelling of a
+setting removes the other from the store (`research` for `workflow.research`,
+`planning.commit_docs` for `commit_docs`, `depth` for `granularity`), so a stale value cannot
+keep winning or be copied into new projects. A missing file is created, and a store kept as a
+symlink is written through to its target, so the link survives; a link whose target is missing
+is refused. The search flags that new
+projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
+`tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. The store is read the
+way the loader reads every config file: one that cannot be read, is not a regular file (a FIFO
+or device), is larger than 1 MiB, is not valid JSON, or is not a JSON object is refused and left
+as it was. The store is written as 2-space JSON, and a save whose result in that form would be
+larger than 1 MiB is refused too, since the loader could not read it; a compact hand-written store
+can reach that size without gaining keys. A write goes to a temp file created exclusively under a
+random name and renamed over the store. The temp file is created with the store's own file mode,
+narrowed by the umask, or `0600` when that mode cannot be read, so a save never opens the store to
+group or others (a `0400` store whose mode cannot be read comes back `0600`). A store nested too
+deeply to merge into is refused and left as it was. A write
+that fails therefore leaves the store as it was, and an existing entry at a temp-file name is never
+opened.
+
+A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
+so two saves, or a save and an install, run one after the other and neither loses the other's
+keys.
+
+With `--json-errors`, each refusal carries a typed reason
+([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
+`usage` for settings that are not one JSON object (including an empty or blank argument) or
+that give both spellings of one setting (`commit_docs` and `planning.commit_docs`),
+`config_invalid_key` for a key that is not a known setting, is written dotted
+(`workflow.research` rather than nested) or gives a section a scalar, the reason `config-set` itself
+reports for a value it does not accept (`unknown` for most values, `usage` for a malformed number
+such as `context_window`), `config_parse_failed` for a key the prototype-pollution guard refuses
+(`__proto__`, `prototype`, `constructor`), `config_defaults_invalid` for a store
+that is not a readable JSON object, `config_defaults_write_failed` for a failed write or a store
+that would grow past 1 MiB, and
+`config_defaults_lock_unavailable` when the lock cannot be taken, for example while another
+install or save holds it. The lock is released before the result is reported. If releasing it
+fails after a refusal, the refusal is still the error, with the release failure added to its
+message. If it fails after a save that landed, the error is
+`config_defaults_lock_release_failed`, and it carries `saved`, `created` and `path`.
 
 ---
 

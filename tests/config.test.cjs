@@ -3903,6 +3903,36 @@ async function runQuietly(fn) {
   return { ok: thrown === null, out, err };
 }
 
+/**
+ * runQuietly with --json-errors on, so a refusal's typed reason can be read:
+ * `error` is the parsed stderr line, or null when the verb succeeded.
+ */
+async function runQuietlyJson(fn) {
+  const { setJsonErrorMode, getJsonErrorMode } = require('../gsd-core/bin/lib/cli-exit.cjs');
+  const previous = getJsonErrorMode();
+  setJsonErrorMode(true);
+  try {
+    const result = await runQuietly(fn);
+    return { ...result, error: result.ok ? null : JSON.parse(result.err) };
+  } finally {
+    setJsonErrorMode(previous);
+  }
+}
+
+/** A refused `--json-errors` CLI call: exit 1, no stack trace, and the typed reason. */
+function assertRefused(result, reason) {
+  assert.strictEqual(result.success, false);
+  assert.strictEqual(result.exitCode, 1);
+  assert.strictEqual(/\n\s*at\s/.test(result.error), false, 'a refusal must not print a stack trace');
+  assert.strictEqual(JSON.parse(result.error).reason, reason);
+}
+
+/** Every leaf of a JSON object as [keyPath, value]; arrays and null are leaves. */
+function keyPathLeaves(obj, prefix = []) {
+  return Object.entries(obj).flatMap(([k, v]) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? keyPathLeaves(v, [...prefix, k]) : [[[...prefix, k], v]]);
+}
+
 /** The text that config-set parses back to `value`. */
 function cliText(value) {
   if (typeof value === 'string') return value;
@@ -4052,7 +4082,664 @@ describe('config-new-project: choices are held to config-set leaf by leaf (#5268
   });
 });
 
-// ─── config-set hooks.secret_read_exempt (#4432) ────────────────────────────
+describe('#5681 regression: config-save-defaults merges into the global defaults store', () => {
+  // The settings workflow's "save as global defaults" step wrote a fixed object,
+  // so every key only the defaults file carried was deleted, and the next install
+  // re-baked the agents without those overrides.
+  function store(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    if (contents !== undefined) {
+      fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+      fs.writeFileSync(defaultsPath, contents);
+    }
+    const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
+    const read = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+    return { defaultsPath, save, read };
+  }
+
+  test('keys the settings flow does not manage survive a save; the chosen settings are updated', (t) => {
+    const { save, read } = store(t, JSON.stringify({
+      model_profile: 'quality',
+      model_overrides: { 'gsd-codebase-mapper': 'opus' },
+      effort: { agent_overrides: { 'gsd-codebase-mapper': 'high' } },
+      runtime: 'codex',
+      resolve_model_ids: 'omit',
+      workflow: { research: true, unlisted_toggle: true },
+    }));
+    const result = save({ model_profile: 'balanced', workflow: { research: false, plan_check: true } });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), {
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-codebase-mapper': 'opus' },
+      effort: { agent_overrides: { 'gsd-codebase-mapper': 'high' } },
+      runtime: 'codex',
+      resolve_model_ids: 'omit',
+      workflow: { research: false, unlisted_toggle: true, plan_check: true },
+    });
+  });
+
+  test('a missing store is created with the saved settings', (t) => {
+    const { save, read } = store(t);
+    const result = save({ mode: 'yolo', workflow: { verifier: true } });
+    assert.ok(result.success, result.error);
+    assert.strictEqual(JSON.parse(result.output).created, true);
+    assert.deepStrictEqual(read(), { mode: 'yolo', workflow: { verifier: true } });
+  });
+
+  test('machine-detected search flags are not copied to the global store', (t) => {
+    const { save, read } = store(t, JSON.stringify({ mode: 'yolo' }));
+    const result = save({ model_profile: 'quality', brave_search: true, firecrawl: true, exa_search: true, tavily_search: true, ref_search: true, perplexity: true, jina: true });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), { mode: 'yolo', model_profile: 'quality' });
+  });
+
+  for (const [label, contents] of [['not valid JSON', '{"model_profile": "quality",'], ['not a JSON object', '["quality"]']]) {
+    test(`a store that is ${label} is refused and left byte-identical`, (t) => {
+      const { defaultsPath, save } = store(t, contents);
+      assertRefused(save({ model_profile: 'balanced' }), 'config_defaults_invalid');
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), contents);
+    });
+  }
+
+  test('settings that are not a JSON object are refused before the store is touched', (t) => {
+    const { defaultsPath, save } = store(t);
+    assertRefused(save(['model_profile']), 'usage');
+    assert.ok(!fs.existsSync(defaultsPath));
+  });
+});
+
+describe('#5681 regression: a saved setting replaces its legacy flat or nested twin', () => {
+  // Merging kept both spellings of a setting, and the stale one won: the loader
+  // reads a flat key first, and new-project creation keeps a nested value over a
+  // flat one. Each row follows the save through config-new-project and loadConfig.
+  const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+  function newProjectAfterSave(t, defaults, settings) {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(defaults));
+    const env = { GSD_HOME: gsdHome };
+    const saved = runGsdTools(['config-save-defaults', JSON.stringify(settings)], projectDir, env);
+    assert.ok(saved.success, saved.error);
+    const created = runGsdTools(['config-new-project', '{}'], projectDir, env);
+    assert.ok(created.success, created.error);
+    const store = JSON.parse(fs.readFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), 'utf-8'));
+    return { config: loadConfig(projectDir), store };
+  }
+
+  test('turning research off wins over a stale flat research: true', (t) => {
+    const { config } = newProjectAfterSave(t, { research: true }, { workflow: { research: false } });
+    assert.strictEqual(config.research, false);
+  });
+
+  // The save must use the nested spelling: new-project creation always writes
+  // git.branching_strategy (default "none"), and the loader keeps a set nested
+  // key over a flat one, so a saved flat "phase" came back as "none".
+  test('a saved non-default branching strategy reaches a new project', (t) => {
+    const { config } = newProjectAfterSave(t, {}, { git: { branching_strategy: 'phase' } });
+    assert.strictEqual(config.branching_strategy, 'phase');
+  });
+
+  test('a saved branching strategy wins over a stale flat branching_strategy', (t) => {
+    const { config } = newProjectAfterSave(t, { branching_strategy: 'milestone' }, { git: { branching_strategy: 'phase' } });
+    assert.strictEqual(config.branching_strategy, 'phase');
+  });
+
+  // A stale depth beside granularity is never migrated, so it was copied into
+  // every new project's config.json.
+  test('a saved granularity removes a stale depth from the store', (t) => {
+    const { config, store } = newProjectAfterSave(t, { depth: 'quick' }, { granularity: 'fine' });
+    assert.strictEqual(config.granularity, 'fine');
+    assert.deepStrictEqual(store, { granularity: 'fine' });
+  });
+
+  // Codex review: outside a project the loader read these keys flat-only, so a
+  // save that stored the nested spelling and dropped the flat one turned a
+  // saved `workflow.research: false` back into the default.
+  test('turning research off outside a project survives the save that drops the flat spelling', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const outside = createTempDir('gsd-5681-outside-');
+    t.after(() => { cleanup(gsdHome); cleanup(outside); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ research: false }));
+    assert.ok(runGsdTools(['config-save-defaults', JSON.stringify({ workflow: { research: false } })], outside, { GSD_HOME: gsdHome }).success);
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.strictEqual(loaded.research, false);
+  });
+
+  test('outside a project, each twin key the loader reads is honored under its nested spelling', (t) => {
+    const { LEGACY_FLAT_KEYS, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const keys = ['commit_docs', 'research', 'plan_checker', 'verifier', 'nyquist_validation', 'text_mode', 'subagent_timeout'];
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const outside = createTempDir('gsd-5681-outside-');
+    t.after(() => { cleanup(gsdHome); cleanup(outside); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    const store = {};
+    const want = {};
+    for (const key of keys) {
+      const { section, field } = LEGACY_FLAT_KEYS[key];
+      const fallback = CONFIG_DEFAULTS[key];
+      want[key] = typeof fallback === 'number' ? fallback + 1 : !fallback;
+      store[section] = { ...store[section], [field]: want[key] };
+    }
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(store));
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.deepStrictEqual(Object.fromEntries(keys.map((key) => [key, loaded[key]])), want);
+  });
+
+  test('clearing a setting with null removes it and its legacy spelling, so the default applies', (t) => {
+    const { config, store } = newProjectAfterSave(
+      t,
+      { quick_branch_template: 'old/{slug}', git: { quick_branch_template: 'older/{slug}' } },
+      { git: { quick_branch_template: null } },
+    );
+    assert.strictEqual(config.quick_branch_template, null);
+    assert.deepStrictEqual(store, {});
+  });
+
+  // Every key the /gsd-settings template saves, each set to a value that is not
+  // its default, over a store holding the stale legacy spellings. The saved
+  // values are what the new project's config.json holds. The keys are checked
+  // against the template in settings.md, so a key the workflow saves under a
+  // spelling new projects drop (a flat branching_strategy) fails here.
+  test('every setting the settings template saves reaches a new project', (t) => {
+    const template = {
+      mode: 'yolo', granularity: 'fine', model_profile: 'quality', commit_docs: false, parallelization: false,
+      git: { branching_strategy: 'phase', quick_branch_template: 'q/{slug}' },
+      workflow: {
+        research: false, plan_check: false, verifier: false, auto_advance: true, nyquist_validation: false,
+        pattern_mapper: false, ui_phase: false, ui_safety_gate: false, ai_integration_phase: false, tdd_mode: true,
+        code_review: false, code_review_depth: 'deep', ui_review: false, skip_discuss: true, compact_content: true,
+      },
+      plan_review: { source_grounding: false },
+      intel: { enabled: true },
+      graphify: { enabled: true, auto_update: true },
+    };
+    const dotted = (obj) => keyPathLeaves(obj).map(([keyPath]) => keyPath.join('.')).sort();
+    const settingsMd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md'), 'utf-8');
+    const open = "DEFAULTS_JSON=$(cat <<'JSON'\n";
+    const start = settingsMd.indexOf(open);
+    assert.ok(start !== -1, 'settings.md must assign DEFAULTS_JSON with a quoted heredoc');
+    const body = settingsMd.slice(start + open.length, settingsMd.indexOf('\nJSON\n', start));
+    const workflowTemplate = JSON.parse(body.replaceAll('<current>', 'null'));
+    assert.deepStrictEqual(dotted(template), dotted(workflowTemplate));
+
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({
+      research: true, plan_checker: true, branching_strategy: 'none', quick_branch_template: 'old/{slug}', depth: 'quick',
+    }));
+    const env = { GSD_HOME: gsdHome };
+    assert.ok(runGsdTools(['config-save-defaults', JSON.stringify(template)], projectDir, env).success);
+    assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, env).success);
+    const created = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+    for (const [keyPath, want] of keyPathLeaves(template)) {
+      assert.strictEqual(valueAt(created, keyPath.join('.')), want, keyPath.join('.'));
+    }
+    const config = loadConfig(projectDir);
+    assert.strictEqual(config.research, false);
+    assert.strictEqual(config.plan_checker, false);
+    assert.strictEqual(config.branching_strategy, 'phase');
+    assert.strictEqual(config.quick_branch_template, 'q/{slug}');
+    assert.strictEqual(config.granularity, 'fine');
+  });
+});
+
+describe('#5681: a save removes the other spelling of every spelling twin', () => {
+  // Table-driven over SPELLING_TWINS, the one list of [legacy, canonical] pairs,
+  // so a new LEGACY_FLAT_KEYS entry is covered without a new row.
+  const { SPELLING_TWINS } = configLib;
+  const at = valueAt;
+  const nested = (dotted, value) => {
+    const [head, field] = dotted.split('.');
+    return field === undefined ? { [head]: value } : { [head]: { [field]: value } };
+  };
+  function store(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-twins-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, JSON.stringify(contents));
+    const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
+    return { defaultsPath, save, read: () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')) };
+  }
+
+  test('saving each canonical spelling drops its stale legacy spelling', (t) => {
+    assert.ok(SPELLING_TWINS.length > 0, 'precondition: the twin table is not empty');
+    const seeded = {};
+    const patch = {};
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      seeded[legacy] = 'stale-legacy';
+      const [head, field] = canonical.split('.');
+      if (field === undefined) patch[head] = true;
+      else patch[head] = { ...patch[head], [field]: true };
+    }
+    // config-set's value rules accept `true` for every canonical key; the row is
+    // about which spelling survives, not the value.
+    const { save, read } = store(t, seeded);
+    const result = save(patch);
+    assert.ok(result.success, result.error);
+    const saved = read();
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      assert.strictEqual(at(saved, legacy), undefined, `${legacy} must be dropped when ${canonical} is saved`);
+      assert.strictEqual(at(saved, canonical), true, `${canonical} must hold the saved value`);
+    }
+  });
+
+  test('saving a legacy spelling drops its stale canonical spelling, or is refused untouched', (t) => {
+    const accepted = [];
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      const seeded = nested(canonical, 'stale-canonical');
+      const { defaultsPath, save, read } = store(t, seeded);
+      const before = fs.readFileSync(defaultsPath, 'utf-8');
+      const result = save({ [legacy]: true });
+      if (result.success) {
+        accepted.push(legacy);
+        assert.strictEqual(at(read(), canonical), undefined, `${canonical} must be dropped when ${legacy} is saved`);
+        assert.strictEqual(at(read(), legacy), true);
+      } else {
+        assertRefused(result, 'config_invalid_key');
+        assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before, `a refused ${legacy} save must leave the store as it was`);
+      }
+    }
+    // The settings template saves the flat `commit_docs`, so this direction is live.
+    assert.ok(accepted.includes('commit_docs'), `commit_docs must be an accepted legacy spelling (accepted: ${accepted.join(', ')})`);
+  });
+
+  // The installer's defaults writers hold this lock for their read-modify-write
+  // (bin/install.js), so a save that holds it cannot interleave with them.
+  test('a save holds the installer lock on .gsd/ while it writes, and releases it on every path', async (t) => {
+    const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+    const gsdHome = createTempDir('gsd-5681-lock-');
+    const lockPath = path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME);
+    const savedHome = process.env.GSD_HOME;
+    t.after(() => {
+      if (savedHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedHome;
+      cleanup(gsdHome);
+    });
+    process.env.GSD_HOME = gsdHome;
+    const heldAtWrite = [];
+    const realRename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      if (path.basename(String(to)) === 'defaults.json') heldAtWrite.push(fs.existsSync(lockPath));
+      return realRename.apply(this, arguments);
+    });
+
+    const saved = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
+    assert.ok(saved.ok, saved.err);
+    assert.deepStrictEqual(heldAtWrite, [true], 'the store must be written while the lock is held');
+    assert.ok(!fs.existsSync(lockPath), 'the lock must be released after a save');
+
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{"mode":');
+    const refused = await runQuietly(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
+    assert.strictEqual(refused.ok, false);
+    assert.ok(!fs.existsSync(lockPath), 'the lock must be released when the save is refused');
+  });
+});
+
+describe('#5681: config-save-defaults holds the settings to the config-set rules', () => {
+  // The store seeds every new project, so it takes only what config-set would
+  // store, as config-new-project's choices do (#5268).
+  function storeWith(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, contents);
+    const run = (args) => runGsdTools(['--json-errors', 'config-save-defaults', ...args], gsdHome, { GSD_HOME: gsdHome });
+    return { defaultsPath, run };
+  }
+  const BEFORE = JSON.stringify({ model_profile: 'quality' });
+
+  // config-set's value rules (validateConfigValue) raise no typed reason, in
+  // config-set as here, so an invalid value is reported as `unknown`.
+  for (const [label, settings, reason] of [
+    ['an unknown key', { workflow: { reserch: true } }, 'config_invalid_key'],
+    ['a legacy flat spelling', { branching_strategy: 'phase' }, 'config_invalid_key'],
+    ['an invalid value', { mode: 'bogus' }, 'unknown'],
+    ['a prototype key', JSON.parse('{"workflow":{"__proto__":{"x":1}}}'), 'config_invalid_key'],
+  ]) {
+    test(`${label} is refused and the store is left byte-identical`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      assertRefused(run([JSON.stringify(settings)]), reason);
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
+
+  // CONTRIBUTING.md "CLI and command routing": empty, whitespace-only and
+  // flag-like values. A flag-like positional is taken as the settings JSON.
+  for (const [label, arg] of [['not valid JSON', '{"model_profile":'], ['empty', ''], ['whitespace only', '   '], ['flag-like', '--weird']]) {
+    test(`a settings argument that is ${label} is a usage error`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      assertRefused(run([arg]), 'usage');
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
+
+  // Codex review: both spellings were stored, and the loader and new-project
+  // creation each read a different one first.
+  test('both spellings of one setting in one save is a usage error', (t) => {
+    const { defaultsPath, run } = storeWith(t, BEFORE);
+    assertRefused(run([JSON.stringify({ commit_docs: false, planning: { commit_docs: true } })]), 'usage');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+  });
+
+  for (const args of [[], ['{}', '{}']]) {
+    test(`${args.length} positionals is a usage error`, (t) => {
+      const { defaultsPath, run } = storeWith(t, BEFORE);
+      assertRefused(run(args), 'usage');
+      assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+    });
+  }
+
+  // In-process, so the fault lands on the store write and nothing before it.
+  // A partial write that fails (ENOSPC) must not reach the store: the old seam
+  // fell back to writing the store in place and truncated it.
+  test('a failed write is reported and leaves the existing store and no temp file', async (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    t.after(() => cleanup(gsdHome));
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, before);
+    // Matched by name: the store is written at its resolved path, which spells a
+    // temp dir differently when it sits behind a link (/var is /private/var on macOS).
+    // The temp file is written through an exclusively-created descriptor (#5759),
+    // so the write is matched by the path that descriptor was opened under.
+    t.after(mockPartialWriteThenThrow(fs, (target) => path.basename(String(target)).startsWith('defaults.json'), 5, { resolveDescriptors: true }));
+
+    const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  // The temp file is written but cannot replace the store (EACCES on every
+  // attempt, including the rename's retries): the store keeps its bytes, the
+  // temp file is removed, and the lock is released.
+  test('a rename that fails is reported and leaves the existing store, no temp file and no lock', async (t) => {
+    const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+      cleanup(gsdHome);
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, before);
+    const realRename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      if (path.basename(String(to)) === 'defaults.json') {
+        throw Object.assign(new Error('EACCES: permission denied, rename (injected)'), { code: 'EACCES' });
+      }
+      return realRename.apply(this, arguments);
+    });
+
+    const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+    assert.ok(!fs.existsSync(path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME)), 'the lock must be released');
+  });
+});
+
+describe('#5681: config-save-defaults reports lock failures through error()', () => {
+  // trek-e review 5814890657 (Minors 1 and 2): a lock that cannot be taken threw
+  // a plain Error (a stack trace from runMain), and a release that threw from
+  // `finally` replaced the save's own result.
+  const installerMigrations = require('../gsd-core/bin/lib/installer-migrations.cjs');
+  function inProcessHome(t, contents) {
+    const gsdHome = createTempDir('gsd-5681-lockfail-');
+    const savedHome = process.env.GSD_HOME;
+    t.after(() => {
+      if (savedHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedHome;
+      cleanup(gsdHome);
+    });
+    process.env.GSD_HOME = gsdHome;
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    if (contents !== undefined) fs.writeFileSync(defaultsPath, contents);
+    const lockPath = path.join(gsdHome, '.gsd', installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
+    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
+    return { gsdHome, defaultsPath, lockPath, save };
+  }
+  function failLockUnlink(t, lockPath) {
+    const realUnlink = fs.unlinkSync;
+    t.mock.method(fs, 'unlinkSync', function (target) {
+      if (path.resolve(String(target)) === path.resolve(lockPath)) {
+        throw Object.assign(new Error('EPERM: operation not permitted, unlink (injected)'), { code: 'EPERM' });
+      }
+      return realUnlink.apply(this, arguments);
+    });
+  }
+
+  test('a lock that cannot be released after a save is reported, and the save is kept', async (t) => {
+    const { defaultsPath, lockPath, save } = inProcessHome(t);
+    failLockUnlink(t, lockPath);
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    const { reason, saved, created, path: savedPath } = result.error;
+    assert.deepStrictEqual({ reason, saved, created, path: savedPath },
+      { reason: 'config_defaults_lock_release_failed', saved: true, created: true, path: defaultsPath });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { mode: 'yolo' });
+  });
+
+  test('a lock that cannot be released after a refusal keeps the refusal as the one error', async (t) => {
+    const { defaultsPath, lockPath, save } = inProcessHome(t, '{"mode":');
+    failLockUnlink(t, lockPath);
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.err.trim().split('\n').length, 1, '--json-errors writes exactly one line to stderr');
+    assert.strictEqual(result.error.reason, 'config_defaults_invalid');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), '{"mode":');
+  });
+
+  test('a lock held by another live process is a typed refusal that names the holder, and nothing is written', async (t) => {
+    const before = '{"mode":"interactive"}';
+    const { defaultsPath, lockPath, save } = inProcessHome(t, before);
+    // The parent (the test runner) is alive and is not this process, so the
+    // lock is not reclaimed; a zero timeout gives up at once.
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid, acquiredAt: '2026-11-07T00:00:00.000Z' }) + '\n');
+    // Not a subprocess timeout: the lock's own wait budget, zero so a held lock
+    // is refused on the first look instead of after the 30 s default.
+    const LOCK_WAIT_NONE_MS = 0;
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
+    assert.deepStrictEqual({ pid: result.error.holder_pid, since: result.error.holder_since },
+      { pid: process.ppid, since: '2026-11-07T00:00:00.000Z' }, 'the refusal names the lock holder');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.ok(fs.existsSync(lockPath), "another process's lock is left in place");
+  });
+});
+
+describe('#5681: mergeIntoGlobalDefaults properties', () => {
+  const { mergeIntoGlobalDefaults } = configLib;
+  // Few key names, so base and patch collide often and sections nest.
+  const key = fc.constantFrom('mode', 'git', 'workflow', 'research', 'effort');
+  const leaf = fc.oneof(fc.boolean(), fc.integer(), fc.string(), fc.array(fc.integer(), { maxLength: 3 }));
+  const tree = (withNull) => fc.letrec((tie) => ({
+    node: fc.dictionary(key, fc.oneof({ depthSize: 'small' }, withNull ? fc.oneof(leaf, fc.constant(null)) : leaf, tie('node')), { maxKeys: 4 }),
+  })).node;
+
+  test('a base key the patch does not name survives unchanged', () => {
+    fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
+      const merged = mergeIntoGlobalDefaults(base, patch);
+      for (const k of Object.keys(base)) {
+        if (!(k in patch)) assert.deepStrictEqual(merged[k], base[k]);
+      }
+    }));
+  });
+
+  test('every patch leaf is in the result, and a null leaf is absent', () => {
+    fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
+      const merged = mergeIntoGlobalDefaults(base, patch);
+      for (const [keyPath, value] of keyPathLeaves(patch)) {
+        if (value === null) assert.strictEqual(valueAt(merged, keyPath.join('.')), undefined);
+        else assert.deepStrictEqual(valueAt(merged, keyPath.join('.')), value);
+      }
+    }));
+  });
+
+  test('saving twice equals saving once', () => {
+    fc.assert(fc.property(tree(false), tree(true), (base, patch) => {
+      const once = mergeIntoGlobalDefaults(base, patch);
+      assert.deepStrictEqual(mergeIntoGlobalDefaults(once, patch), once);
+    }));
+  });
+});
+
+// The store is a config file like any other: since #5759 every config.json read is
+// bounded at CONFIG_MAX_BYTES, and the loader already reads defaults.json that way.
+// A save reads it under the same cap, so a store the loader refuses is never merged
+// into. The cap is inclusive: a store of exactly CONFIG_MAX_BYTES is read.
+describe('#5681: config-save-defaults reads the store under the #5759 config cap', () => {
+  const { CONFIG_MAX_BYTES } = require('../gsd-core/bin/lib/config-file-read.cjs');
+
+  /**
+   * A store of exactly `bytes` bytes holding `mode` plus a padding string, in the
+   * form a save writes it (2-space JSON and a trailing newline), so the store's
+   * size after a save differs from `bytes` only by the change in `mode`'s length.
+   */
+  function storeOfSize(bytes, mode = 'interactive', unit = 'x') {
+    const render = (pad) => JSON.stringify({ mode, pad }, null, 2) + '\n';
+    const room = bytes - render('').length;
+    const unitBytes = Buffer.byteLength(unit);
+    const text = render(unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes));
+    assert.strictEqual(Buffer.byteLength(text), bytes);
+    return text;
+  }
+
+  function seed(t, text, patch = { mode: 'yolo' }) {
+    const gsdHome = createTempDir('gsd-5681-cap-');
+    const savedGsdHome = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = savedGsdHome;
+      cleanup(gsdHome);
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, text);
+    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify(patch), false));
+    return { defaultsPath, save };
+  }
+
+  for (const [label, bytes] of [['one byte under the cap', CONFIG_MAX_BYTES - 1], ['exactly the cap', CONFIG_MAX_BYTES]]) {
+    test(`a store of ${label} is merged into`, async (t) => {
+      const before = storeOfSize(bytes);
+      const { defaultsPath, save } = seed(t, before);
+
+      const result = await save();
+
+      assert.strictEqual(result.ok, true, result.err);
+      const after = JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+      assert.strictEqual(after.mode, 'yolo');
+      assert.strictEqual(after.pad, JSON.parse(before).pad, 'the key the save does not name survives');
+    });
+  }
+
+  test('a store one byte over the cap is refused and left as it was', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES + 1);
+    const { defaultsPath, save } = seed(t, before);
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_invalid');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  // The cap holds for what a save writes, not only for what it reads: a save that
+  // would grow the store past CONFIG_MAX_BYTES would leave a store that the loader
+  // and the next save both refuse, so nothing is written.
+  test('a save that would grow the store past the cap is refused and writes nothing', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES, 'yolo');
+    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  // The cap is in bytes of the UTF-8 file, not in characters: padded with a
+  // two-byte character, this store is about half the cap in characters.
+  test('a save is measured in UTF-8 bytes, not characters', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES, 'yolo', 'é');
+    assert.ok(before.length < CONFIG_MAX_BYTES / 2 + 64, 'precondition: the store is far under the cap in characters');
+    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+  });
+
+  // A store the loader reads (JSON.parse is iterative) can still be too deep for the
+  // recursive merge and serializer. That is a refusal of the store, with its own
+  // reason, not a crash of the command.
+  test('a store nested too deeply to merge is refused and left as it was', async (t) => {
+    const depth = 50000;
+    const before = '{"a":'.repeat(depth) + '1' + '}'.repeat(depth);
+    assert.ok(Buffer.byteLength(before) < CONFIG_MAX_BYTES, 'precondition: under the cap');
+    const { defaultsPath, save } = seed(t, before);
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_invalid');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+  });
+
+  test('a save that ends exactly at the cap is written', async (t) => {
+    const before = storeOfSize(CONFIG_MAX_BYTES - 'interactive'.length + 'yolo'.length, 'yolo');
+    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+
+    const result = await save();
+
+    assert.strictEqual(result.ok, true, result.err);
+    assert.strictEqual(fs.statSync(defaultsPath).size, CONFIG_MAX_BYTES);
+    assert.strictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')).mode, 'interactive');
+  });
+});
+
+// ─── config-set hooks.secret_read_exempt (#4432)────────────────────────────
 //
 // Matrix rows covered (50-test-matrix.md, suite C): 26 39 40.
 // The hook (hooks/lib/secret-read-exemptions.js) cannot require src/, so

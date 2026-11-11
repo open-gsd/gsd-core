@@ -349,6 +349,14 @@ const ERROR_REASON = Object.freeze({
   CONFIG_NO_FILE: 'config_no_file',
   CONFIG_PARSE_FAILED: 'config_parse_failed',
   CONFIG_INVALID_KEY: 'config_invalid_key',
+  // config-save-defaults (#5681): $GSD_HOME/.gsd/defaults.json exists but is not
+  // a readable JSON object (refused, left as it was); the write failed; the
+  // installer lock on .gsd/ could not be taken; or it could not be released
+  // after a save that landed (the error carries saved/created/path).
+  CONFIG_DEFAULTS_INVALID: 'config_defaults_invalid',
+  CONFIG_DEFAULTS_WRITE_FAILED: 'config_defaults_write_failed',
+  CONFIG_DEFAULTS_LOCK_UNAVAILABLE: 'config_defaults_lock_unavailable',
+  CONFIG_DEFAULTS_LOCK_RELEASE_FAILED: 'config_defaults_lock_release_failed',
   // SDK / gsd-tools dispatch
   SDK_FAIL_FAST: EXIT_ENVELOPE_REASON,
   SDK_UNKNOWN_COMMAND: 'sdk_unknown_command',
@@ -522,6 +530,10 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   // run could proceed from — distinct from NO_INPUT's genuine emptiness.
   [ERROR_REASON.CONFIG_NO_FILE]: 'UNAVAILABLE',
   [ERROR_REASON.CONFIG_PARSE_FAILED]: 'UNAVAILABLE',
+  [ERROR_REASON.CONFIG_DEFAULTS_INVALID]: 'UNAVAILABLE',
+  [ERROR_REASON.CONFIG_DEFAULTS_WRITE_FAILED]: 'UNAVAILABLE',
+  [ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE]: 'UNAVAILABLE',
+  [ERROR_REASON.CONFIG_DEFAULTS_LOCK_RELEASE_FAILED]: 'UNAVAILABLE',
   [ERROR_REASON.PHASE_NOT_FOUND]: 'UNAVAILABLE',
   [ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE]: 'UNAVAILABLE',
   [ERROR_REASON.PHASE_PLAN_COVERAGE_INCOMPLETE]: 'UNAVAILABLE',

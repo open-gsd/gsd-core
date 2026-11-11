@@ -61,6 +61,7 @@ module.exports = {
   "tests/complete-milestone-release-map-routing.test.cjs",
   "tests/config-loader-bounded-read.platform.test.cjs",
   "tests/config-schema.property.test.cjs",
+  "tests/config.platform.test.cjs",
   "tests/config.test.cjs",
   "tests/contributor-standards.test.cjs",
   "tests/core-utils.test.cjs",
