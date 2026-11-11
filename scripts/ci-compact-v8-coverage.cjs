@@ -15,11 +15,15 @@
  * converts to istanbul — `_normalizeProcessCov` (node: urls, file:// urls,
  * include/exclude filter), `_normalizeSourceMapCache` (file-url keys; a
  * non-file key throws, as it does in c8) and then `@bcoe/v8-coverage`
- * `mergeProcessCovs`, applied incrementally in batches of MERGE_BATCH_SIZE
- * (`mergeProcessCovs([acc, ...batch])`), the same pairwise composition c8's own
- * `--merge-async` uses (c8 lib/report.js), so peak memory no longer grows with
- * the number of dumps (#6140); the result equals the one-pass merge (pinned by
- * test). The merged output is a valid c8 temp-directory dump, so the gate's unchanged
+ * `mergeProcessCovs`. Merging is applied in batches of MERGE_BATCH_SIZE
+ * (`mergeProcessCovs([acc, ...batch])`) so peak memory does not grow with the
+ * number of dumps (#6140). Merge grouping preserves every per-offset execution
+ * count (what line/statement coverage reads), but @bcoe/v8-coverage
+ * normalization is not associative in range structure: a block range can be
+ * wrapped or joined differently than in a one-pass merge, so istanbul branch
+ * totals may differ by merge grouping, the same variance the shard -> gate
+ * merge already has (pinned by test). The merged output is a valid c8
+ * temp-directory dump, so the gate's unchanged
  * `c8 report` commands read it as if it were one more raw dump. Retained urls
  * are the UNION of every include glob the gate uses, so both
  * `test:coverage:report` and `test:coverage:scripts-floor` see all of the
@@ -73,6 +77,7 @@ function normalizeBlockFlags(result) {
   }
 }
 
+// `mergeProcessCovs` is an injection point for tests; main() never passes it.
 function compact({ tempDirectory, outFile, cwd = process.cwd(), batchSize = MERGE_BATCH_SIZE, mergeProcessCovs: mergeOverride }) {
   if (!Number.isInteger(batchSize) || batchSize < 1) {
     throw new RangeError(`ci-compact-v8-coverage: batchSize must be a positive integer, got ${batchSize}`);
@@ -114,6 +119,11 @@ function compact({ tempDirectory, outFile, cwd = process.cwd(), batchSize = MERG
 
   let merged = null;
   let pending = [];
+  // Count equality across merge groupings relies on a V8 invariant: detailed
+  // (NODE_V8_COVERAGE) coverage reports isBlockCoverage:false only for a
+  // never-compiled function (one range, count 0). @bcoe/v8-coverage drops
+  // function-level entries when block-level ones exist, so a function-level
+  // entry with count > 0 would merge differently by grouping.
   const flush = () => {
     if (pending.length === 0) return;
     merged = mergeProcessCovs(merged ? [merged, ...pending] : pending);
