@@ -444,6 +444,7 @@
   "gsd-core/workflows/plan-phase/steps/research-only-modifiers.md",
   "gsd-core/workflows/plan-phase/steps/reviews-prerequisite.md",
   "gsd-core/workflows/plan-phase/steps/stall-detection-helpers.md",
+  "gsd-core/workflows/plan-phase/steps/threat-id-check.md",
   "gsd-core/workflows/plan-phase/steps/windows-troubleshooting.md",
   "gsd-core/workflows/plan-review-convergence.md",
   "gsd-core/workflows/plant-seed.md",
