@@ -140,7 +140,8 @@
 //   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
 //   continuation that opens a `$(` inside "…" or a heredoc body
 //   (`echo "$\<newline>(cat .env)"`). The tests
-//   pin each as allowed. The promise is "no looser than
+//   pin each as allowed, and #5945 and #6132 track them with the further
+//   shapes found while closing #5255. The promise is "no looser than
 //   the retired rules on plain commands, without arming the compound-`cd`
 //   prompt". Writes to secret files are out of scope (Write/Edit were never
 //   gated). Commands over 1 MiB are denied outright (`command-too-large`)
