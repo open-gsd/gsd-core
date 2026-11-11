@@ -2018,9 +2018,9 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     };
     const runs = (unit) => unit.repeat(Math.floor((1024 * 1024 - 'echo '.length) / unit.length));
 
-    test('the budget is eight times the length cap, and a quarter of a million separators', () => {
+    test('the budget is eight times the length cap, and half a million separators', () => {
       assert.equal(MAX_SCAN_CHARACTERS, 8 * 1024 * 1024);
-      assert.equal(MAX_SCAN_SEPARATORS, 256 * 1024);
+      assert.equal(MAX_SCAN_SEPARATORS, 512 * 1024);
     });
 
     // The scan's work is mostly per segment, which the character budgets do not
@@ -2031,9 +2031,10 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
         const cmd = `echo $'a'; ${runs(unit)}`;
         assert.deepEqual(scanBashCommand(cmd), TOO_COMPLEX);
         assert.ok(spentBudget(), `1 MiB of ${unit}`);
-        // The separators stop it, long before the characters would: its first
-        // tokenize holds more than the separator budget.
-        assert.ok(workSpent().scan <= cmd.length, `scan ${workSpent().scan}`);
+        // The separators stop it, long before the characters would.
+        const { scan, separators } = workSpent();
+        assert.ok(separators > MAX_SCAN_SEPARATORS, `separators ${separators}`);
+        assert.ok(scan <= 2 * cmd.length, `scan ${scan}`);
       });
     }
 
@@ -2127,8 +2128,27 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const { separators } = need(cmd);
       assert.equal(separators, 100);
       assert.deepEqual(scanBashCommand(cmd, BIG, separators - 1), TOO_COMPLEX, 'limit - 1');
+      // The tokenize ran before its separators were charged, so they are work done.
+      assert.deepEqual(workSpent(), { scan: cmd.length, reader: 0, separators: 100, exhausted: true });
       assert.equal(scanBashCommand(cmd, BIG, separators), null, 'limit');
       assert.equal(scanBashCommand(cmd, BIG, separators + 1), null, 'limit + 1');
+    });
+
+    test('in process: a script a shell reads from a heredoc is scanned to about 35,000 characters', () => {
+      // The hook comment's and the user guide's figure. Every pass re-tokenizes
+      // the script, so with a reading trigger (the `$((` beside a quote) it is
+      // charged its separators about 115 times, and the separator budget stops
+      // it before the character budget would. Pinned well either side.
+      const block = (i) => `case "$x" in\n  a${i}) y=1 ;;\n  b${i}) y=2 ;;\n  *) y=0 ;;\nesac\n[ "$y" -gt 0 ] && echo "$((y * ${i}))"\n`;
+      const script = (chars) => {
+        let body = '';
+        for (let i = 0; body.length < chars; i++) body += block(i);
+        return `bash <<'EOF'\n${body}EOF\n`;
+      };
+      const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
+      assert.ok(allowed(script(30000)), '30,000 characters');
+      assert.ok(!allowed(script(40000)), '40,000 characters');
+      assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
     });
 
     test('in process: the debugger-spawn check spends what the secret scan left', () => {

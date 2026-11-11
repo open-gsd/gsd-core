@@ -223,11 +223,12 @@ const MAX_NESTING_DEPTH = 3;
 // separators every tokenize finds are bounded separately (MAX_SCAN_SEPARATORS),
 // the debugger-spawn check's included. The most any of 1,384,856 distinct real
 // agent commands needed was 3,040,992 (a 126,708-character heredoc write). The
-// costliest shape measured is 1 MiB of one long segment after a `$'a'`, which
-// the spawned hook scans to the end in at most 1.9 s wall, 1.6 s CPU, at load
-// 30-34 on 32 cores (`next`'s own costliest, 1 MiB of `x;y|`, took 1.0 s and
-// 1.4 s at load 24). That keeps the hook well inside the 8 s after which the
-// Kilo and OpenCode adapters allow a command. A command that needs more is denied as
+// costliest shape measured is 1 MiB of redirections in one segment (`b<>`
+// repeated) after a `$'a'`, which the spawned hook scans to the end in at most
+// 2.2 s wall, 2.5 s CPU, at load 42 on 32 cores; at the same load `next`'s own
+// costliest, 1 MiB of `a;b&`, took up to 2.6 s wall. That keeps the hook well
+// inside the 8 s after which the Kilo and OpenCode adapters allow a command.
+// A command that needs more is denied as
 // `command-too-complex` rather than scanned on. Characters here, and in
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
@@ -2161,7 +2162,8 @@ function scanDebuggerSpawn(command) {
 // The work the last scan charged against the budgets it had: characters to
 // scanCommand's (`scan`) and the readers' (`reader`), separators to
 // separatorSteps (`separators`), and whether a charge found one spent
-// (`exhausted`). A refused charge charges nothing, so these are work done.
+// (`exhausted`). These are work done: a refused character charge charges
+// nothing, and a tokenize's separators are charged after it ran.
 function workSpent() {
   const spent = (left) => budgetSize - left;
   return {
@@ -2242,7 +2244,7 @@ let readerSteps = MAX_SCAN_CHARACTERS;
 // Set when a charge would take more than is left: readerSpent for readerSteps,
 // scanSpent for scanBudget and separatorSteps. Every later charge to the same
 // budget in the same command then throws too, so a pass that finds it spent
-// stops at once, and the counters keep the work actually done (workSpent).
+// stops at once.
 // The readers' latch stops only the readings that charge them, so the plain
 // reading still runs, and can still name a read, after they have spent theirs.
 let readerSpent = false;
@@ -2254,11 +2256,15 @@ let scanSpent = false;
 // its operands — so a command cut into many short segments costs far more per
 // character than one long one, which the character budgets do not see: with
 // those alone, 1 MiB of `x;y|` after a `$'a'` took about 5.7 s of CPU, and
-// 1 MiB of `a ` 0.6 s. With this budget each such shape is denied in under
-// half a second, and the costliest shape left is one long segment that spends
-// the character budget. The most any of the 1,384,856 real agent commands
-// above needs is 20,043 (a 4,543-character heredoc commit message).
-const MAX_SCAN_SEPARATORS = 256 * 1024;
+// 1 MiB of `a ` 0.6 s. With this budget each such shape is denied in at most
+// 1.5 s wall at load 42, and the costliest shape left spends the character
+// budget (MAX_SCAN_CHARACTERS). Every pass re-tokenizes what it reads, so a
+// script a shell reads from a heredoc is charged its separators about 115
+// times when it holds a reading trigger: such a script reaches about 35,000
+// characters before this budget denies it, against about 70,000 for the
+// character budget. The most any of the 1,384,856 real agent commands above
+// needs is 20,043 (a 4,543-character heredoc commit message).
+const MAX_SCAN_SEPARATORS = 512 * 1024;
 
 // The separators left in the current command, set with scanBudget.
 let separatorSteps = MAX_SCAN_SEPARATORS;
@@ -2286,13 +2292,16 @@ function chargeScan(n) {
   scanBudget -= n;
 }
 
-// Charges `n` separators to separatorSteps the same way.
+// Charges the `n` separators a tokenize found to separatorSteps, after it has
+// run, so they are charged even when they take more than is left (workSpent
+// then reports more than the budget), and then throws SCAN_BUDGET_SPENT.
 function chargeSeparators(n) {
-  if (scanSpent || n > separatorSteps) {
+  if (scanSpent) throw SCAN_BUDGET_SPENT;
+  separatorSteps -= n;
+  if (separatorSteps < 0) {
     scanSpent = true;
     throw SCAN_BUDGET_SPENT;
   }
-  separatorSteps -= n;
 }
 
 // tokenize, charged: its separators to separatorSteps, and, for a scan
