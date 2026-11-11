@@ -6309,9 +6309,13 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
   });
 
-  // One line naming a hard reset, however it is spelled: the flag anywhere after the word (`git reset -q --hard`,
-  // "`git reset` with `--hard`") or the two words (hard-reset, hard reset).
-  const HARD_RESET_SPELLING = /\breset\b.*--hard|\bhard[-\s]+reset/i;
+  // One line naming a hard reset: a word starting "hard" and a word starting "reset", in either order. That
+  // covers the flag after the word (`git reset -q --hard`, "`git reset` with `--hard`"), the flag first ("a
+  // `--hard` reset"), the two words joined or apart (hard-reset, "a hard git reset"), the word first ("reset
+  // hard to the last task") and inflections (hard-resets, hard-resetting). Any other line holding such a pair
+  // fails too, "a hardware reset" included; reword it. The first alternative also lets the whole-file check
+  // below catch "hard" and "reset" split across a line break.
+  const HARD_RESET_SPELLING = /\bhard[-\s]+reset|\bhard.*\breset|\breset.*\bhard/i;
 
   test('executor prohibits `git reset --hard` with no exception (#5310)', () => {
     // The exemption named the startup <worktree_branch_check> step, which has been verify-only
