@@ -667,7 +667,7 @@ describe('W026 — STATE milestone-complete/archived but ROADMAP lists a phase w
 // ─── W031 — STATE.md far over its documented line target (#5830) ──────────
 
 describe('W031 — STATE.md far over its documented line target (#5830)', () => {
-  const { STATE_MD_LINE_TARGET } = require('../../gsd-core/bin/lib/state-md-schema.cjs');
+  const { STATE_MD_LINE_TARGET, STATE_MD_ENTRY_MAX_CHARS } = require('../../gsd-core/bin/lib/state-md-schema.cjs');
 
   /**
    * A realistic STATE.md (template frontmatter + Current Position) whose
@@ -705,6 +705,22 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
       const text = fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
       const targets = [...text.matchAll(/^Keep STATE\.md under (\d+) lines\.$/gm)].map((m) => Number(m[1]));
       assert.deepEqual(targets, [STATE_MD_LINE_TARGET], `${rel} must state the target exactly once`);
+    });
+  }
+
+  // Same parity for the per-row length: the code warns above
+  // STATE_MD_ENTRY_MAX_CHARS, and these runtime-loaded workflows tell the
+  // agent the limit in prose, so a changed constant must fail here rather
+  // than leave them stating the old number (#5882 review).
+  for (const rel of [
+    'gsd-core/workflows/quick.md',
+    'gsd-core/workflows/fast.md',
+    'gsd-core/workflows/quick-batch/steps/completion.md',
+  ]) {
+    test(`STATE.md entry parity: ${rel} states the same limit as STATE_MD_ENTRY_MAX_CHARS`, () => {
+      const text = fs.readFileSync(path.join(__dirname, '..', '..', rel), 'utf8');
+      const limits = [...text.matchAll(/\b(?:at most|over) (\d+) characters\b/g)].map((m) => Number(m[1]));
+      assert.deepEqual(limits, [STATE_MD_ENTRY_MAX_CHARS], `${rel} must state the limit exactly once`);
     });
   }
 
