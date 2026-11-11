@@ -1624,7 +1624,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
     }
   }
 
-  const seamStrays = new Set(['---dry-run', '--5', '--', '-1', '-']);
+  const seamStrays = new Set(['-1', '-']);
 
   function assertUsage(result, command, flag) {
     assert.equal(result.success, false, 'an unsupported flag must fail');
