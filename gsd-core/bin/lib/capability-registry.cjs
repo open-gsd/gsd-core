@@ -633,6 +633,7 @@ const capabilities = {
         "hyphenNameAgentBody": true,
         "skipCompactAgents": true,
         "omitBashRunnerOnWindows": true,
+        "powershellHooksOnWindows": true,
         "specRootSkillPass": true,
         "restoreAtRefTildeInAgents": true,
         "restoreAtRefTildeInSpecTree": true,
@@ -714,7 +715,7 @@ const capabilities = {
     "role": "feature",
     "version": "1.20.1",
     "title": "Claude orchestration (Workflow backend)",
-    "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When the runtime exposes the Workflow tool and claude_orchestration.execution_backend resolves to 'workflow', execute-phase emits a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, resumeFromRunId wired to the phase run id, shared token budget) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
+    "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When every detection gate passes (Claude runtime, nesting-capable host, no Claude Code workflow kill switch set), the claude-orchestration commands emit a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, the phase run id carried in the summary for the Workflow tool's resumeFromRunId input, token budget recorded as intent only) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, aimed at restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. execute-phase does not dispatch through it yet: its loop contribution was removed in #4740 and no host-level dispatch path exists. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -756,12 +757,12 @@ const capabilities = {
           "inline"
         ],
         "default": "auto",
-        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability."
+        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) and 'workflow' both select the Workflow backend only when every detection gate passes: the runtime is Claude, the host can nest agents, and no Claude Code workflow kill switch is set (CLAUDE_CODE_DISABLE_WORKFLOWS, or disableWorkflows / enableWorkflows in managed, project or user settings); otherwise inline. 'inline' forces one-agent-per-message dispatch regardless."
       },
       "claude_orchestration.min_agent_sdk_version": {
         "type": "string",
         "default": "0.3.149",
-        "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
+        "description": "Deprecated (#4747) and ignored. The Workflow backend no longer gates on the installed Agent SDK version, which does not reflect whether a Claude Code session has dynamic workflows; detection reads Claude Code's documented kill switches instead. Kept so existing configs still load; remove it from your config."
       }
     },
     "steps": [],
@@ -2695,6 +2696,7 @@ const capabilities = {
       "gsd-mempalace-curator"
     ],
     "hooks": [],
+    "activationKey": "mempalace.enabled",
     "config": {
       "mempalace.enabled": {
         "type": "boolean",
@@ -2776,7 +2778,7 @@ const capabilities = {
         "consumes": [
           "CONTEXT.md"
         ],
-        "when": "mempalace.enabled",
+        "when": "mempalace.recall_on_plan",
         "onError": "skip"
       },
       {
@@ -4475,7 +4477,7 @@ const byLoopPoint = {
         "consumes": [
           "CONTEXT.md"
         ],
-        "when": "mempalace.enabled",
+        "when": "mempalace.recall_on_plan",
         "onError": "skip"
       },
       {
@@ -5186,7 +5188,7 @@ const configSchema = {
     "owner": "claude-orchestration",
     "type": "enum",
     "default": "auto",
-    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability.",
+    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) and 'workflow' both select the Workflow backend only when every detection gate passes: the runtime is Claude, the host can nest agents, and no Claude Code workflow kill switch is set (CLAUDE_CODE_DISABLE_WORKFLOWS, or disableWorkflows / enableWorkflows in managed, project or user settings); otherwise inline. 'inline' forces one-agent-per-message dispatch regardless.",
     "values": [
       "auto",
       "workflow",
@@ -5197,7 +5199,7 @@ const configSchema = {
     "owner": "claude-orchestration",
     "type": "string",
     "default": "0.3.149",
-    "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
+    "description": "Deprecated (#4747) and ignored. The Workflow backend no longer gates on the installed Agent SDK version, which does not reflect whether a Claude Code session has dynamic workflows; detection reads Claude Code's documented kill switches instead. Kept so existing configs still load; remove it from your config."
   },
   "workflow.code_review": {
     "owner": "code-review",
@@ -6126,6 +6128,7 @@ const runtimes = {
         "hyphenNameAgentBody": true,
         "skipCompactAgents": true,
         "omitBashRunnerOnWindows": true,
+        "powershellHooksOnWindows": true,
         "specRootSkillPass": true,
         "restoreAtRefTildeInAgents": true,
         "restoreAtRefTildeInSpecTree": true,

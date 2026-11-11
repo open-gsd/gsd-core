@@ -80,7 +80,7 @@ An explicit `--converge` on `/gsd-autonomous` overrides the gate for that run: c
 
 ## Run with interactive discuss
 
-By default, autonomous mode answers discuss questions automatically using smart discuss (batch table proposals). If you want to answer design questions yourself while keeping plan and execute out of the main context:
+By default, autonomous mode runs discuss as smart discuss: it decides reversible technical questions itself, asks you hard-to-reverse questions with a recommendation, and asks preference questions with no recommendation. To review or undo what it decided, see [Review or reverse an autonomous decision](#review-or-reverse-an-autonomous-decision). If you want to answer every design question yourself while keeping plan and execute out of the main context:
 
 ```bash
 /gsd-autonomous --interactive
@@ -90,6 +90,21 @@ In interactive mode:
 - `/gsd-discuss-phase` runs inline and waits for your answers
 - On runtimes that support nested background dispatch, planning and execution are dispatched as background agents so you can discuss the next phase while the current one builds; on Claude Code, planning and execution run inline (the next phase's discuss does not overlap)
 - The main context stays lean — only discuss conversations accumulate (on runtimes with background dispatch; on Claude Code, inline plan/execute also accumulate)
+
+---
+
+## Review or reverse an autonomous decision
+
+Smart discuss decides reversible technical questions (file layout, naming, internal data shapes, error-handling patterns, test approach) without asking. To check or change one before the phase is planned:
+
+1. Read the **Decided autonomously** table that smart discuss prints before its first question. If it printed none, nothing was decided for you in that phase.
+2. Open the phase's `CONTEXT.md` (`.planning/phases/<NN>-<name>/<NN>-CONTEXT.md`) and find `### Decided autonomously` inside `<decisions>`. Each line has the area, the question, the selected answer and why it is cheap to undo. The same items are in `<NN>-DISCUSSION-LOG.md` as `[auto] [Area] — Q: "…" → Selected: "…"` lines.
+3. To change one answer, delete its line from `### Decided autonomously` and add your answer as a bullet under that area's `### <Area>` heading. Planning reads `CONTEXT.md`, so the edit takes effect at the next plan step.
+4. To redo the whole discussion instead, delete the phase's `CONTEXT.md` and re-run discuss for it: `/gsd-discuss-phase <N>` asks every question interactively, and `/gsd-autonomous --only <N>` runs smart discuss again.
+
+Make the change before the phase is planned. After planning, a changed decision needs a re-plan (`/gsd-plan-phase <N>`).
+
+There is no confirmation step for autonomous decisions. To be asked about everything, run with `--interactive`.
 
 ---
 
