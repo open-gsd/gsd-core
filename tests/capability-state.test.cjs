@@ -17,7 +17,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { cleanup, runGsdTools, installSpawnEnv } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
@@ -779,19 +779,15 @@ describe('resolveCapabilityState — prototype pollution guard', () => {
 //
 // Because cmdCapabilityState destructures `output` at module load time, patching
 // core.cjs after the fact is ineffective. We instead invoke gsd-tools via
-// spawnSync so each test gets a fresh process with stdout captured.
-
-const { spawnSync } = require('node:child_process');
+// the process seam so each test gets a fresh process with stdout captured.
 
 const gsdToolsPath = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function runCapabilityState(cwd, configDir) {
-  const result = spawnSync(
-    process.execPath,
+  return runNode(
     [gsdToolsPath, 'capability', 'state', '--config-dir', configDir, '--raw', '--cwd', cwd],
-    { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+    { timeoutMs: PROBE_TIMEOUT_MS },
   );
-  return result;
 }
 
 describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
@@ -828,7 +824,7 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 
   test('emits envelope with runtimeConfigDir and capabilities array', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDir);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.ok(typeof envelope === 'object' && envelope !== null, 'envelope must be an object');
     assert.ok('runtimeConfigDir' in envelope, 'envelope must have runtimeConfigDir');
@@ -838,7 +834,7 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 
   test('with core profile marker: capabilities present (profile resolution does not throw)', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDirCore);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.ok(Array.isArray(envelope.capabilities));
     // ui capability should appear; installed=false because core profile doesn't include ui-phase/ui-review
@@ -849,14 +845,14 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 
   test('runtimeConfigDir is echoed in the envelope', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDir);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.strictEqual(envelope.runtimeConfigDir, tmpConfigDir);
   });
 
   test('surface-disabled UI capability reports enabled=false and inactive hooks', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDirUiDisabled);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     const uiCap = envelope.capabilities.find((c) => c.id === 'ui');
     assert.ok(uiCap, 'ui capability should be present in output');
@@ -1404,7 +1400,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
 
     test('security capability: enabled=true in installed runtime with security_enforcement=true', () => {
       const result = runCapabilityState(tmpInstalledProjectDir, tmpInstalledConfigDir);
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
       const secCap = envelope.capabilities.find((c) => c.id === 'security');
       assert.ok(secCap, 'security capability must be present in output');
@@ -1415,7 +1411,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
 
     test('nyquist capability: enabled=true in installed runtime with nyquist_validation=true', () => {
       const result = runCapabilityState(tmpInstalledProjectDir, tmpInstalledConfigDir);
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
       const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
       assert.ok(nyqCap, 'nyquist capability must be present in output');
@@ -1425,17 +1421,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('security hook at verify:post is active in installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           gsdToolsPath,
           'loop', 'render-hooks', 'verify:post',
           '--config-dir', tmpInstalledConfigDir,
           '--cwd', tmpInstalledProjectDir,
         ],
-        { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+        { timeoutMs: PROBE_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
       assert.strictEqual(envelope.point, 'verify:post');
       assert.ok(Array.isArray(envelope.activeHooks), 'activeHooks must be an array');
@@ -1454,17 +1449,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('nyquist hook at verify:post is active in installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           gsdToolsPath,
           'loop', 'render-hooks', 'verify:post',
           '--config-dir', tmpInstalledConfigDir,
           '--cwd', tmpInstalledProjectDir,
         ],
-        { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+        { timeoutMs: PROBE_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
       const nyquistHook = envelope.activeHooks.find(
         (h) => h.capId === 'nyquist' && h.kind === 'step',
@@ -1562,8 +1556,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('capability state: security & nyquist enabled in true installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           installedGsdTools,
           'capability', 'state',
@@ -1571,9 +1564,9 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--cwd', installedProjectDir,
           '--raw',
         ],
-        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+        { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
       const secCap = envelope.capabilities.find((c) => c.id === 'security');
       const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
@@ -1585,17 +1578,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('loop render-hooks verify:post: includes security & nyquist in true installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           installedGsdTools,
           'loop', 'render-hooks', 'verify:post',
           '--config-dir', installedConfigDir,
           '--cwd', installedProjectDir,
         ],
-        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+        { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
       assert.strictEqual(envelope.point, 'verify:post');
       assert.ok(Array.isArray(envelope.activeHooks), 'activeHooks must be an array');
@@ -1620,17 +1612,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           JSON.stringify({ workflow: { security_enforcement: false, nyquist_validation: false } }),
           'utf8',
         );
-        const result = spawnSync(
-          process.execPath,
+        const result = runNode(
           [
             installedGsdTools,
             'loop', 'render-hooks', 'verify:post',
             '--config-dir', installedConfigDir,
             '--cwd', disabledProj,
           ],
-          { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+          { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
         );
-        assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstderr: ${result.stderr}`);
+        assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstderr: ${result.stderr}`);
         const envelope = JSON.parse(result.stdout.trim());
         const sec = (envelope.activeHooks || []).find((h) => h.capId === 'security' && h.kind === 'step');
         const nyq = (envelope.activeHooks || []).find((h) => h.capId === 'nyquist' && h.kind === 'step');
