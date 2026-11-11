@@ -64,10 +64,10 @@ const {
   measuredPackageVersion,
   WORKTREE_TIMEOUT_MS,
   BUILD_LIB_TIMEOUT_MS,
-  BUILD_TIMEOUT_MS,
+  EMITTED_RUNTIME_BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 } = require('./helpers/emitted-runtime.cjs');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { runNode, runGit, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { EXPECTED_MANIFEST_COUNT, loadManifests } = require('./helpers/emitted-provenance.cjs');
 // ADR-3942 §6: scripts/lint-emitted-drift-ack.cjs (the legacy JSON-ack-file pre-merge
@@ -134,8 +134,8 @@ const FRESH_FIXTURE_GIT_TIMEOUT_MS = 30_000;
 const HEAVY_REAL_TREE_TEST_TIMEOUT_MS = 480_000;
 
 /**
- * Runs the exact same script as the shared BUILD_TIMEOUT_MS constant
- * (scripts/build-hooks.js) but at 4x that constant's bound. This site
+ * Runs the exact same script (scripts/build-hooks.js) as the shared BUILD_TIMEOUT_MS
+ * class norm in tests/helpers/timeouts.cjs (30000ms) but at 4x that norm's bound. This site
  * sits inside "differential attribution over the real tree", the single
  * heaviest test in the suite, where elevated system load plausibly
  * justifies the wider margin -- not equalized to the lighter shared norm
@@ -1530,9 +1530,13 @@ test(
     // proved that the hard way (#2767 review) when its first `git rev-parse HEAD` failed
     // closed. Reusing the SAME helper `buildBaselineAtRef` now uses (below) rather than
     // hand-rolling the flag here keeps the fix from silently diverging per call site.
-    const run = (...args) => execFileSync('git', [...safeDirArgs(REPO_ROOT), ...args], {
-      cwd: REPO_ROOT, encoding: 'utf8', timeout: REAL_REPO_GIT_TIMEOUT_MS, env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    const run = (...args) => {
+      const r = runGit([...safeDirArgs(REPO_ROOT), ...args], {
+        cwd: REPO_ROOT, timeoutMs: REAL_REPO_GIT_TIMEOUT_MS, env: gitEnv,
+      });
+      assertSeamExit(assert, r);
+      return r.stdout.trim();
+    };
 
     const headSha = run('rev-parse', 'HEAD');
     run('read-tree', 'HEAD');
@@ -1545,11 +1549,13 @@ test(
 
     // Precondition, ASSERTED not assumed: the synthetic commit truly lacks the file —
     // otherwise this test would prove nothing.
-    assert.throws(
-      () => execFileSync('git', [...safeDirArgs(REPO_ROOT), 'cat-file', '-e', `${syntheticSha}:scripts/gen-emitted-baseline.cjs`], {
-        cwd: REPO_ROOT, encoding: 'utf8', timeout: REAL_REPO_GIT_TIMEOUT_MS, stdio: 'pipe',
-      }),
-      /./,
+    const catFile = runGit(
+      [...safeDirArgs(REPO_ROOT), 'cat-file', '-e', `${syntheticSha}:scripts/gen-emitted-baseline.cjs`],
+      { cwd: REPO_ROOT, timeoutMs: REAL_REPO_GIT_TIMEOUT_MS },
+    );
+    assert.equal(catFile.outcome, OUTCOME.EXITED, catFile.summary);
+    assert.notEqual(
+      catFile.exitCode, 0,
       'the synthetic ref must genuinely lack the generator script for this test to prove anything',
     );
 
@@ -2807,8 +2813,8 @@ describe('#3271: emitted-runtime-bounds', () => {
 
   test('the step bound fires before the per-test timeout', () => {
     assert.ok(
-      BUILD_TIMEOUT_MS < PER_TEST_TIMEOUT_MS,
-      `step bound ${BUILD_TIMEOUT_MS}ms must be under the per-test timeout ${PER_TEST_TIMEOUT_MS}ms, ` +
+      EMITTED_RUNTIME_BUILD_TIMEOUT_MS < PER_TEST_TIMEOUT_MS,
+      `step bound ${EMITTED_RUNTIME_BUILD_TIMEOUT_MS}ms must be under the per-test timeout ${PER_TEST_TIMEOUT_MS}ms, ` +
       'or node:test kills the test before buildBaselineAtRef can say which step stalled',
     );
   });
@@ -2829,7 +2835,7 @@ describe('#3271: emitted-runtime-bounds', () => {
     // chunk allows and lock in an impossible ladder.
     const realisticPreamble = 60_000;
     assert.ok(
-      BUILD_TIMEOUT_MS + realisticPreamble < PER_TEST_TIMEOUT_MS,
+      EMITTED_RUNTIME_BUILD_TIMEOUT_MS + realisticPreamble < PER_TEST_TIMEOUT_MS,
       'the generator bound plus a realistic worktree+build preamble must fit inside the per-test timeout',
     );
   });
@@ -2841,7 +2847,7 @@ describe('#3271: emitted-runtime-bounds', () => {
     // exported values rather than by scanning source text.
     assert.equal(WORKTREE_TIMEOUT_MS, 60_000);
     assert.equal(BUILD_LIB_TIMEOUT_MS, 180_000);
-    assert.equal(BUILD_TIMEOUT_MS, 360_000);
+    assert.equal(EMITTED_RUNTIME_BUILD_TIMEOUT_MS, 360_000);
     assert.equal(CHUNK_TIMEOUT_CEILING_MS, 600_000);
   });
 

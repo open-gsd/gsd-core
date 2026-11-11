@@ -674,7 +674,7 @@ node gsd-tools.cjs config-ensure-section
 node gsd-tools.cjs config-set <key> <value>
 
 # Get a config value
-node gsd-tools.cjs config-get <key>
+node gsd-tools.cjs config-get <key> [--default <value>] [--raw]
 
 # Set model profile
 node gsd-tools.cjs config-set-model-profile <profile>
@@ -682,6 +682,23 @@ node gsd-tools.cjs config-set-model-profile <profile>
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 ```
+
+`config-get` prints the key's value as JSON. A key absent from the config falls back to the
+project root config (when a workstream is active), then to `--default`, then to the key's
+schema default; with none of those it fails with `CONFIG_KEY_NOT_FOUND` (`CONFIG_NO_FILE` when
+there is no `config.json`). `--default` is parsed
+exactly as `config-set` parses its value: `true`, `false` and `null` become those JSON values, a
+decimal number (`5`, `-1`, `.5`, `5.0`, `1e3`, with no surrounding spaces and no `0x` prefix)
+becomes a number, text starting with `[` or `{` is parsed as JSON (and stays a string if it is
+not valid JSON), and anything else is a string, including ` 5`, `0x10` and a number too large to
+represent (`1e400`). So `--default '[]'` prints `[]`,
+the same as a key set to an empty array.
+
+`--raw` prints the value as plain text for shell use. It is a display format, not JSON: an array
+prints its items joined by commas and an object prints `[object Object]`, so read structured
+values without `--raw`. Under `--raw`, a `--default` value prints exactly as typed (`007` stays
+`007`). Secret keys (`brave_search`, `firecrawl`, `exa_search`) print masked in both modes, and an
+unset one prints `(unset)`.
 
 `config-new-project` takes the chosen settings as one JSON object, nested by section
 (`'{"mode":"yolo","workflow":{"research":false}}'`), and layers them over the built-in and
