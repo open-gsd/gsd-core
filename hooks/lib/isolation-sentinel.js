@@ -64,8 +64,15 @@ const fs = require('fs');
 const path = require('path');
 const { parseDispatchIdentity } = require('./dispatch-identity.js');
 
-// Isolation modes ADR-1239 declares (mirrors gsd-tools.cjs
-// routeDispatchIsolation / routeRecordDispatchIsolation).
+// Isolation modes ADR-1239 declares. #4561: the OWNER of this vocabulary is
+// src/dispatch-isolation.cts (compiled to gsd-core/bin/lib/dispatch-isolation.cjs),
+// which gsd-tools.cjs, capability-validator.cjs, host-integration.cts and
+// worktree-base-ref.cts all consume. This file keeps a literal MIRROR on
+// purpose: the guard hooks must load on a raw plugin-marketplace install where
+// the compiled lib is absent and the self-healing build seam has not yet run,
+// and a hook that dies at module load is worse than one carrying a mirror. The
+// mirror is pinned to the owner by tests/host-integration-validator-parity.test.cjs
+// — add a mode there and this line fails a test until it is updated here too.
 const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
 
 const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.json');
@@ -198,8 +205,8 @@ function resolveSentinelRoot(cwd) {
  * Returns one of:
  *   { present: false }
  *   { present: true, stale: true,  malformed: true }
- *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, writtenAt }
- *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, writtenAt }
+ *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, decidedBy, writtenAt, decidedAt, holdExpired }
+ *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, decidedBy, writtenAt, decidedAt, holdExpired }
  *
  * A malformed/unparseable sentinel is treated as STALE, never fatal — the
  * caller's conservative fallback path covers both "absent" and "stale"
@@ -210,8 +217,31 @@ function resolveSentinelRoot(cwd) {
  * asserting on wall-clock time.
  */
 function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
-  const root = resolveSentinelRoot(cwd);
+  return readSentinelAt(resolveSentinelRoot(cwd), { clock, dispatchIds });
+}
 
+/**
+ * #4561: `readSentinel` minus the root resolution — reads the records under
+ * exactly `<root>/.gsd/`. Same return shape, same staleness and malformed-shape
+ * rules, same injectable `clock`; never throws. For a caller that already holds
+ * the resolved project root and needs to read the SAME files it would write
+ * (gsd-tools.cjs's `routeDispatchIsolation` writes under `<cwd>/.gsd/` with a cwd
+ * its dispatcher has already resolved, and uses this reader to decide whether a
+ * fresh degrade record is standing before it overwrites one). Kept in this module
+ * so the resolver and the guards share ONE definition of "fresh, well-formed,
+ * applicable".
+ *
+ * `ownScope` narrows the candidates to records AT `dispatchIds`' own scope, for
+ * the resolver's hold. The guards' `sentinelAppliesToDispatch` treats a record
+ * that names no phase as "cannot compare", so another orchestrator's newer
+ * unscoped write would win `latestWritten` and hide this query's own record, and
+ * the query would then overwrite it. Here a record counts only when every
+ * identifier `dispatchIds` names equals the record's, and a phase with no plan
+ * also reads that phase's plan records, which the legacy slot may have lost to
+ * another orchestrator's write. A query naming neither has no keyed record to
+ * read, so only the legacy slot is read, whatever scope it carries.
+ */
+function readSentinelAt(root, { clock = Date, dispatchIds = null, ownScope = false } = {}) {
   // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
   // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
   // well-formed and its contents agree with its own filename key; the legacy slot only when it
@@ -226,15 +256,23 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
       const c = parseSentinelFile(planFile, clock, keyedDirs);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
     }
-    const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
+    const phaseFile = ownScope && dispatchIds.plan ? null : phaseSentinelPath(root, dispatchIds.phase);
     if (phaseFile) {
       const c = parseSentinelFile(phaseFile, clock, keyedDirs);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
     }
+    if (ownScope && !dispatchIds.plan) {
+      for (const planFile of planRecordsOfPhase(root, dispatchIds.phase)) {
+        const c = parseSentinelFile(planFile, clock, keyedDirs);
+        if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan &&
+            keyedSentinelPath(root, c.phase, c.plan) === planFile) keyedCandidates.push(c);
+      }
+    }
   }
 
   const legacy = parseSentinelFile(sentinelPath(root), clock, [gsdDir]);
-  const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+  const legacyApplies = legacy.present && !legacy.malformed &&
+    (ownScope ? recordIsAtScope(legacy, dispatchIds) : sentinelAppliesToDispatch(legacy, dispatchIds));
 
   const fresh = keyedCandidates.filter((c) => !c.stale);
   if (legacyApplies && !legacy.stale) fresh.push(legacy);
@@ -244,6 +282,25 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
   // slot is returned exactly as before.
   if (keyedCandidates.length > 0) return latestWritten(keyedCandidates);
   return legacy;
+}
+
+/** Paths of the `<phase>--<plan>.json` records under `root`, or none unless the phase is a safe key. */
+function planRecordsOfPhase(root, phase) {
+  if (!isSafeSentinelKey(phase)) return [];
+  const dir = path.join(root, KEYED_SENTINEL_DIR);
+  try {
+    return fs.readdirSync(dir)
+      .filter((name) => name.startsWith(`${phase}--`) && name.endsWith('.json'))
+      .map((name) => path.join(dir, name));
+  } catch {
+    return [];
+  }
+}
+
+/** Does `record` carry every identifier `ids` names? An omitted identifier is unconstrained. */
+function recordIsAtScope(record, ids) {
+  if (!ids) return true;
+  return (!ids.phase || record.phase === ids.phase) && (!ids.plan || record.plan === ids.plan);
 }
 
 /** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
@@ -358,6 +415,27 @@ function parseSentinelFile(file, clock, parentDirs = []) {
   // treats a plan/phase MISMATCH (both sides present and disagreeing) as "no
   // applicable sentinel", not an allow.
   const plan = typeof parsed.plan === 'string' && parsed.plan.length > 0 ? parsed.plan : null;
+  // #4630 ADR Phase 2: WHO decided this isolation, so a re-query can tell a
+  // decision it may re-derive (`resolver`) from one it must honour
+  // (`caller` — a --force-isolation degrade computed at a dispatch site the
+  // resolver cannot see into). Anything that is not exactly `resolver` reads
+  // as `caller`, which covers a record written by a pre-#4630 gsd-tools. That
+  // default is the safe direction, not the lenient one: holding a degrade that
+  // could have been re-derived costs one sequential run, while clobbering one
+  // the caller owns makes the guard refuse the dispatch entirely (#4222).
+  const decidedBy = parsed.decided_by === 'resolver' ? 'resolver' : 'caller';
+  // #4904: WHEN the decision was first made. A gate that follows a
+  // held `none` re-records it (the guard judges the dispatch against the
+  // record present at that instant), which refreshes `written_at`; the
+  // re-record carries `decided_at` forward unchanged, so the hold below is
+  // bounded by the degrade's own age rather than renewed by every gate that
+  // follows it. Absent or not a finite number reads as `written_at` (a record
+  // from before this field). Never later than `written_at`: no record can
+  // have been decided after it was written, so a larger value cannot extend
+  // the hold.
+  const decidedAt = typeof parsed.decided_at === 'number' && Number.isFinite(parsed.decided_at)
+    ? Math.min(parsed.decided_at, parsed.written_at)
+    : parsed.written_at;
 
   const now = clock.now();
   const age = now - parsed.written_at;
@@ -365,6 +443,10 @@ function parseSentinelFile(file, clock, parentDirs = []) {
   // written in the future — never trust it, but still surface the parsed
   // fields so callers can log an actionable reason.
   const stale = age >= SENTINEL_STALE_MS || age < -5000;
+  // The resolver's hold (gsd-tools.cjs `heldDegradeRecord`) lapses on the
+  // same window as `stale`, measured from `decided_at`. The guards keep
+  // reading `stale`, which a re-record refreshes.
+  const holdExpired = stale || now - decidedAt >= SENTINEL_STALE_MS;
 
   return {
     present: true,
@@ -374,7 +456,10 @@ function parseSentinelFile(file, clock, parentDirs = []) {
     harnessFlag,
     phase,
     plan,
+    decidedBy,
     writtenAt: parsed.written_at,
+    decidedAt,
+    holdExpired,
   };
 }
 
@@ -508,6 +593,7 @@ module.exports = {
   sentinelPath,
   resolveSentinelRoot,
   readSentinel,
+  readSentinelAt,
   extractDispatchIdentifiers,
   sentinelAppliesToDispatch,
   agedNoneGovernsDispatch,
