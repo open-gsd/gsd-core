@@ -61,6 +61,10 @@
     "url": "git+https://github.com/open-gsd/gsd-core.git"
   },
   "homepage": "https://github.com/open-gsd/gsd-core",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/trek-e"
+  },
   "bugs": {
     "url": "https://github.com/open-gsd/gsd-core/issues"
   },
