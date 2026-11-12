@@ -34,11 +34,12 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { cleanup } = require('./helpers.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, SCAN_USAGE_ERROR_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -315,16 +316,9 @@ describe('lint: grandfathered entries (backward compat)', { skip: IS_WINDOWS }, 
   });
 
   test('exits 2 when --file argument is missing', () => {
-    try {
-      execFileSync(LINT_SCRIPT, [], {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: SCAN_USAGE_ERROR_TIMEOUT_MS,
-      });
-      assert.fail('Should have exited non-zero');
-    } catch (err) {
-      assert.equal(err.status, 2, `Expected exit 2 (usage error), got ${err.status}`);
-    }
+    const r = runHook(LINT_SCRIPT, [], { interpreter: 'bash', timeoutMs: SCAN_USAGE_ERROR_TIMEOUT_MS });
+    assert.equal(r.outcome, OUTCOME.EXITED, r.summary);
+    assert.equal(r.exitCode, 2, `Expected exit 2 (usage error), got ${r.exitCode}\n${r.summary}`);
   });
 });
 

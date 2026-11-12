@@ -27,6 +27,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Enable the Claude orchestration Workflow backend (BETA)](how-to/enable-claude-orchestration-workflow-backend.md) — turn the capability on, check whether workflows are available in your Claude Code setup, and emit a Workflow script for a phase
 - [Review reapplied patches hunk by hunk](how-to/review-reapplied-patches.md) — after `/gsd-update`, keep, retire, or rewrite each of your edits that upstream adopted, reworded around, or orphaned
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
+- [Resolve the project root in a worktree](how-to/resolve-the-project-root-in-a-worktree.md) — see which checkout GSD acts in, read the resolution provenance, and fix an `outside_worktree` or `not_git_repo` commit refusal
 - [Tag a multi-repository milestone](how-to/tag-a-multi-repo-milestone.md) — record each repository's own release against a milestone, create per-repository tags, and decide repository by repository what to push
 - [Replay recorded baselines](how-to/replay-recorded-baselines.md) — run each criterion's command with `verify plan-structure --replay` and compare what it prints with the recorded `HEAD`
 - [Resolve baseline-notation findings](how-to/resolve-baseline-notation-findings.md) — fix plan criteria that `verify plan-structure` flags as already true at HEAD (B1), legacy `# baseline at HEAD:` comments (B2), and unreadable notations
@@ -43,6 +44,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md) — bring an agent's completion contract, read-tag gate, or deleted-file test reference back into agreement with the registry
 - [Resolve unreachable-guard findings](how-to/resolve-unreachable-guard-findings.md) — fix shell guards whose fallback arm cannot run, and tell "nothing to report" apart from "could not look"
 - [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md) — terminate a GSD hook with `allow`/`deny`/`crash`, declare its `ON_CRASH` policy, and tell a hook's own crash apart from a check that could not run at all
+- [Declare a flag on a gsd-tools command](how-to/declare-a-gsd-tools-flag.md) — add a flag or a command through the CLI surface registry, regenerate the manifest, and let the parity test check dispatch against it
 - [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md) — capture a gate verb's status safely under `set -e` and tell a failing verdict from a gate that could not look
 - [Resolve a skipped capability probe](how-to/resolve-a-skipped-capability-probe.md) — act on a coverage gate that held your phase for an unestablished scope, or a planning checkpoint that reported `skipped` instead of a verdict
 - [Diagnose which gsd-tools is running](how-to/diagnose-a-foreign-gsd-tools.md) — tell this package's tool apart from the predecessor's colliding binary and from a gsd-core too old to identify itself
