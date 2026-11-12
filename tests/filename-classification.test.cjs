@@ -17,8 +17,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { spawnSync } = require('node:child_process');
-const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { finalExtension, normalizeWindowsBasename, lastSegment } = require('../hooks/lib/filename-classification.js');
 
 test('lastSegment: the text after the last / or \\, trailing separators ignored', () => {
@@ -32,16 +30,60 @@ test('lastSegment: the text after the last / or \\, trailing separators ignored'
 });
 
 // The Bash guard calls lastSegment on every command word, and an env -S split can
-// make a long run of separators one word. The regex form of the strip was quadratic
-// in such a run (minutes at this size). Run in a child so a regression fails at the
-// timeout rather than hanging the file.
-test('lastSegment: a 1,000,000-separator run inside a word, in linear time', () => {
-  const lib = require.resolve('../hooks/lib/filename-classification.js');
-  const script = `const { lastSegment } = require(${JSON.stringify(lib)});
-    process.stdout.write(lastSegment('foo' + '/'.repeat(1000000) + 'x') + '|' + lastSegment('foo' + '\\\\/'.repeat(500000)));`;
-  const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
-  assert.equal(r.signal, null, 'lastSegment did not finish within the timeout');
-  assert.equal(r.stdout, 'x|foo');
+// make a long run of separators one word. The regex form of the strip,
+// `/[\\/]+$/`, retried from each position of a run that does not end the word, so
+// it was quadratic in the run (minutes at 1,000,000). Pinned by a step count, not
+// a clock. The word is a proxy that answers every String method: each
+// single-character read (`word[i]`, `charAt`, `charCodeAt`, `codePointAt`, `at`)
+// counts, and the first read past twice the word's length throws, so a quadratic
+// strip fails at once; a call that takes a regex over the word (`replace`,
+// `replaceAll`, `match`, `matchAll`, `search`, or `split` by a RegExp) throws
+// too, because no read count can see a backtracking regex. So does converting
+// the word to a string or iterating it (`String(word)`, a template literal,
+// `RE.exec(word)`, `[...word]`): past a conversion nothing is counted. A method
+// that copies the whole word out (`word.slice(0)`) still escapes the count.
+function countedWord(word) {
+  const bound = 2 * word.length;
+  let reads = 0;
+  const read = () => {
+    if (++reads > bound) throw new Error(`more than ${bound} character reads for a ${word.length}-character word`);
+  };
+  const regexMethods = new Set(['replace', 'replaceAll', 'match', 'matchAll', 'search']);
+  const charMethods = new Set(['charAt', 'charCodeAt', 'codePointAt', 'at']);
+  const conversions = new Set([Symbol.toPrimitive, Symbol.iterator, 'toString', 'valueOf', 'toLocaleString']);
+  return new Proxy(Object.create(null), {
+    get(_, key) {
+      if (key === 'length') return word.length;
+      if (conversions.has(key)) {
+        return () => { throw new Error(`the word was converted or iterated (${String(key)}), past what this test counts`); };
+      }
+      if (typeof key === 'string' && /^[0-9]+$/.test(key)) {
+        read();
+        return word[key];
+      }
+      if (charMethods.has(key)) return (i) => { read(); return word[key](i); };
+      if (regexMethods.has(key)) return () => { throw new Error(`String.prototype.${key} ran a regex over the word`); };
+      if (key === 'split') {
+        return (sep, limit) => {
+          if (sep instanceof RegExp) throw new Error('String.prototype.split ran a regex over the word');
+          return word.split(sep, limit);
+        };
+      }
+      const value = word[key];
+      return typeof value === 'function' ? value.bind(word) : value;
+    },
+  });
+}
+
+test('lastSegment: reads each character of a long separator run at most twice, with no regex', () => {
+  const cases = [
+    ['foo' + '/'.repeat(100000) + 'x', 'x'],
+    ['foo' + '\\/'.repeat(50000), 'foo'],
+    ['x' + '/'.repeat(100000), 'x'],
+  ];
+  for (const [word, expected] of cases) {
+    assert.equal(String(lastSegment(countedWord(word))), expected);
+  }
 });
 
 test('fc: lastSegment matches the regex strip it replaced', () => {
