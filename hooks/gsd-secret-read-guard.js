@@ -919,6 +919,14 @@ function readFunsubHeredocTag(str, i) {
         tag += '$'.repeat(run.count);
         continue;
       }
+      // `$"…"` is a double-quoted string whose `$` bash removes from a tag, so
+      // an odd run's last `$` is dropped and the double-quote branch reads the
+      // rest: `$"E"` is `E`, `$$"E"` is `$$E`.
+      if (str[run.end] === '"') {
+        tag += '$'.repeat(run.count - (run.count % 2));
+        i = run.end;
+        continue;
+      }
       // The run is read once: its last `$` may open a `$( )` or a `${`.
       if (run.count > 1) { tag += '$'.repeat(run.count - 1); i = run.last; continue; }
     }

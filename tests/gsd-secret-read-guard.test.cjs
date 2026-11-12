@@ -1474,6 +1474,30 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     const command = "echo ${ cat <<$'E'\nx}\"\nE\n}; cat .env";
     assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
   });
+  // A tag part written `$"…"`, on the same open heredoc. bash removes the `$`
+  // of `$"…"` from a tag and reads the rest as a double-quoted part; in a run
+  // of `$` only an odd run's last one goes, and an even run is text. bash
+  // 5.3.20 runs the read in all six; next allows them, and so did the tag
+  // reader while it kept every `$`.
+  const LOCALE_IN_TAG = [
+    ['`$"E"`', '$"E"', 'E'],
+    ['`x$"E"`, after another part', 'x$"E"', 'xE'],
+    ['`$$"E"$"F"`, an even run kept whole, then a `$"…"` part', '$$"E"$"F"', '$$EF'],
+    ['`$$$"E"`, whose third `$` goes', '$$$"E"', '$$E'],
+    ['`$"E\\""`, holding an escaped quote', '$"E\\""', 'E"'],
+    ['`$"E"` split after its `$` by a line continuation', '$\\\n"E"', 'E'],
+  ];
+  for (const [label, tag, terminator] of LOCALE_IN_TAG) {
+    test(`blocks: a read after a heredoc whose tag is ${label}`, () => {
+      const command = `echo \${ cat <<${tag}; }\nit's\n${terminator}\ncat .env`;
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // The same for `$"E"`, on a heredoc that closes inside the substitution.
+  test('blocks: a read after a function substitution whose heredoc, tagged `$"E"`, closes inside it', () => {
+    const command = 'echo ${ cat <<$"E"\nx}"\nE\n}; cat .env';
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
 
   // Where `$'` is not a span. After `$$` the `'` opens a plain quote, which
   // the `\'` cannot keep open: read as a span, it would run past the `}` and
@@ -1619,17 +1643,18 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // takes the rest as the body. `<<$'\x45'` with the terminator `E` reads the
   // same way. At the top level next allows `cat <<$'E'` before a read as well.
   // The tag reader also finds where a heredoc that closes inside the
-  // substitution ends, and so which `}` closes it (the closed-inside row
+  // substitution ends, and so which `}` closes it (the closed-inside rows
   // above). A read inside that body is read again by tokenize, whose tag
   // reading is next's: `$'E'` gives it `$E`, so a read after the `E` line
-  // stays body text (also with `cat .env; }` on the `E` line). bash 5.3.20
-  // runs it; next and this change allow it.
-  // The three rows after it are examples of one gap, not a list of it: the
+  // stays body text (also with `cat .env; }` on the `E` line), and a `$"E"`
+  // tag there reads the same way. bash 5.3.20 runs both; next and this change
+  // allow them.
+  // The four rows after them are examples of one gap, not a list of it: the
   // tag reader keeps a `${…}` or `$( )` tag part as its text, while bash 5.3
   // rewrites the inside of one in more than one way. In `<<${x:-$'E'}` bash's
-  // tag holds `'E'`, in `<<"${x:-$'E'}"` it holds `E`, and bash prints
-  // `<<$(a  b)` again as `$(a b)`. bash 5.3.20 runs the three reads; next and
-  // this change allow them.
+  // tag holds `'E'`, in `<<${x:-$"E"}` it holds `"E"`, in `<<"${x:-$'E'}"`
+  // it holds `E`, and bash prints `<<$(a  b)` again as `$(a b)`. bash 5.3.20
+  // runs the four reads; next and this change allow them.
   // The last row only bash 3.2.57 runs. bash 3.2 reads a run of `$` before
   // `'` differently from bash 5 in more than one place: in the word of a
   // `${…}` an even run's span opens too, and inside `$( )` and `$(( ))` it
@@ -1641,7 +1666,9 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     ["a heredoc tag whose `$'…'` holds an escape, in a function substitution", "echo ${ echo }; cat <<$'E\\''\nbody\nE'\n}; cat .env"],
     ["#5255, a `$'…'` span in a `$( )` in a function substitution's body", "echo ${ echo }; echo $(echo $'\\''); }; cat .env"],
     ["a `$'E'` tag's heredoc closed inside the function substitution, read again by tokenize", "echo ${ cat <<$'E'\nit's\nE\ncat .env\n}"],
+    ['a `$"E"` tag\'s heredoc closed inside the function substitution, read again by tokenize', 'echo ${ cat <<$"E"\nit\'s\nE\ncat .env\n}'],
     ["a `${…}` tag part holding a `$'…'` span, which bash rewrites", "echo ${ cat <<${x:-$'E'}; }\nit's\n${x:-'E'}\ncat .env"],
+    ['a `${…}` tag part holding a `$"…"` string, which bash rewrites', 'echo ${ cat <<${x:-$"E"}; }\nit\'s\n${x:-"E"}\ncat .env'],
     ["a double-quoted `${…}` tag part holding a `$'…'` span, which bash rewrites", "echo ${ cat <<\"${x:-$'E'}\"; }\nit's\n${x:-E}\ncat .env"],
     ['a `$( )` tag part, which bash prints again', "echo ${ cat <<$(a  b); }\nit's\n$(a b)\ncat .env"],
     ["bash 3.2's span after an even `$` run in a `${…}` word", "echo ${x:-$$'\\'}'}\ncat .env\necho \"'\""],
