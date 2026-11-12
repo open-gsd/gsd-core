@@ -698,6 +698,13 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     ["sshpass -e ssh -o ProxyCommand='cat .env' host", '.env'],
     ['sshpass -f .env ssh host', '.env'],
     ['sshpass -f.env ssh host', '.env'],
+    // A valued option with no value word left reaches the read after it.
+    ['sshpass -f; cat .env', '.env'],
+    ['sshpass -p; cat .env', '.env'],
+    ['sshpass -P; cat .env', '.env'],
+    ['sshpass -d; cat .env', '.env'],
+    ['sudo sshpass -f; cat .env', '.env'],
+    ["bash -c 'sshpass -f'; cat .env", '.env'],
     // Credential helper forms (gitcredentials(7)); `Store` finds the store
     // helper on a case-insensitive filesystem.
     ["git -c credential.helper='C:\\bin\\cat .env' fetch", '.env'],
