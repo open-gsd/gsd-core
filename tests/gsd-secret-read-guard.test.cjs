@@ -2267,6 +2267,18 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertBlocked(run(bash(`rg --pre sh KEY ${pq}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
   });
 
+  // #5514: the line is judged read-only under each env -S reading, not only the
+  // first. Unsplit, each line below runs `cat`; split, env runs the string's
+  // command, which writes a file or runs a program for the first two.
+  test('Bash exemption: an env -S string is judged under the reading that splits it (#5514)', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    const pq = absq('.env.production');
+    assertBlocked(run(bash(`env -S 'sort -o out.txt' cat ${pq}`)), 'env -S sort -o', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`env -S 'rg --pre sh KEY' cat ${pq}`)), 'env -S rg --pre', { tool: 'Bash', path: p });
+    assertAllowed(run(bash(`env -S 'head -n 1' cat ${pq}`)), 'env -S head, read-only under every reading');
+  });
+
   // Row 13.
   test('ref:path never exempt', () => {
     listed('.env.production');

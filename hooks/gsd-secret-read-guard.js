@@ -1916,6 +1916,10 @@ process.stdin.on('end', () => {
       if (r.runs === 'split' && !splitSeen) continue;
       if (r.runs === 'split-or-throw' && !splitSeen && !threw) continue;
       reading = r;
+      // The #4432 exemption's read-only line (F3) is judged under this reading,
+      // never under the reading that ran first: a split string can hold a
+      // command that writes or runs a program where the unsplit reading saw `cat`.
+      exemption.bashReadOnly = null;
       const hit = secretScan();
       if (hit !== null) emitBlock('secret-read', tool, hit);
       const spawn = spawnScan();
