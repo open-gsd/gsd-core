@@ -1188,15 +1188,17 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
   // spending one budget: k prefixed git commands each rescan the editor
   // script, the same work in every reading (past the first, which also builds
   // the environment's config), so the smallest k whose three readings pass
-  // the budget together blocks, and one fewer is allowed.
+  // the budget together blocks, one fewer is allowed, and one more blocks.
   test('the readings of a heredoc command share one budget', () => {
     const make = (k) => `cat <<EOF\nx\nEOF\nexport GIT_EDITOR='git log; git log'\n${'X=1 git log; '.repeat(k)}`;
     const { max, work: [w1, w2] } = scanWork([make(1), make(2)]);
     const k = Math.floor((max / 3 - w1) / (w2 - w1)) + 2;
-    const { work: [under, over] } = scanWork([make(k - 1), make(k)]);
-    assert.ok(3 * under <= max && 3 * over > max && over <= max, `k=${k}: ${under}, ${over} against ${max}`);
+    const { work: [under, over, past] } = scanWork([make(k - 1), make(k), make(k + 1)]);
+    assert.ok(3 * under <= max && 3 * over > max && over <= max && 3 * past > max && past <= max,
+      `k=${k}: ${under}, ${over}, ${past} against ${max}`);
     assertAllowed(runHook(bash(make(k - 1))), `${k - 1} commands`);
     assertBlocked(runHook(bash(make(k))), `${k} commands`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+    assertBlocked(runHook(bash(make(k + 1))), `${k + 1} commands`, { code: 'command-too-complex', tool: 'Bash', path: '' });
   });
 
   // Whatever mix of the amplifying shapes and whatever their sizes, up to
