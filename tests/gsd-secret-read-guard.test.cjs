@@ -1493,6 +1493,48 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
   });
 
+  // Inside double quotes a backslash escapes `"`, `\\`, `$`, a backtick and a
+  // newline, and before any other character it is text. tokenize's word
+  // buffer and the function-substitution heredoc tag reader take that from
+  // one list (DOUBLE_QUOTE_ESCAPABLE), so each member has a row at each
+  // reader, and `\\n`, which is not one, has a row at each too.
+  // A tag row leaves a heredoc open at the substitution's `}` under a
+  // double-quoted tag holding one escape: bash 5.3.20 reads the body up to
+  // the line that matches the tag with the escape applied, then runs the
+  // read. With the tag read wrongly the body never ends and the read is data.
+  const BT = '`';
+  const ESCAPED_IN_TAG = [
+    ['`$`', '$', 'E$'],
+    ['`"`', '"', 'E"'],
+    ['a backslash', '\\', 'E\\'],
+    ['a backtick', BT, `E${BT}`],
+    ['a newline, which is dropped', '\nF', 'EF'],
+    ['`n`, which keeps its backslash', 'nF', 'E\\nF'],
+  ];
+  for (const [label, escaped, terminator] of ESCAPED_IN_TAG) {
+    test(`blocks: a read after a heredoc whose double-quoted tag escapes ${label}`, () => {
+      const command = `echo \${ cat <<"E\\${escaped}"; }\nit's\n${terminator}\ncat .env`;
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // The same escapes in a word. Every bash runs the read in the two block
+  // rows, and none runs one in the four allow rows.
+  const ESCAPED_IN_WORD = [
+    ['`$`, so `$(` opens nothing', 'echo "\\$(cat .env)"', false],
+    ['a backtick, so it opens nothing', `echo "\\${BT}cat .env\\${BT}"`, false],
+    ['`"`, so the string goes on', 'echo "\\"; cat .env; echo \\""', false],
+    ['a backslash, so the next `"` closes', 'echo "\\\\"; cat .env', true],
+    ['a newline, which is dropped', 'cat ".e\\\nnv"', true],
+    ['`n`, which keeps its backslash', 'cat ".e\\nv"', false],
+  ];
+  for (const [label, command, blocked] of ESCAPED_IN_WORD) {
+    test(`${blocked ? 'blocks' : 'allows'}: a double-quoted word that escapes ${label}`, () => {
+      const result = runHook(bash(command));
+      if (blocked) assertBlocked(result, command, { tool: 'Bash', path: '.env' });
+      else assertAllowed(result, command);
+    });
+  }
+
   // The debugger-spawn scan shares the tokenizer, so it takes the same reading.
   test('blocks a gsd-debugger spawn on the line after 5 nested double-quoted `${ … }`', () => {
     const command = 'echo "${ "${ "${ "${ "${ true; }" }" }" }" }"\nclaude --agent gsd-debugger -p x';

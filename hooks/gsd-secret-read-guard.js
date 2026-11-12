@@ -830,6 +830,11 @@ function funsubBody(str, i, e) {
   return body + str.slice(at, e);
 }
 
+// The characters a backslash escapes inside double quotes; before any other
+// it is text. One list for tokenize's word buffer and readFunsubHeredocTag,
+// which reads a quoted tag as tokenize reads a quoted word.
+const DOUBLE_QUOTE_ESCAPABLE = '"\\$`\n';
+
 // The tag after `<<` / `<<-` at `i` as bash reads it: quote removal as in
 // tokenize's word buffer (a `\` in double quotes escapes only `"`, `\`, `$`,
 // a backtick or a newline), a line continuation dropped, and, as
@@ -860,7 +865,7 @@ function readFunsubHeredocTag(str, i) {
       i++;
       while (i < str.length && str[i] !== '"') {
         scanStep(1);
-        if (str[i] === '\\' && i + 1 < str.length && '"\\$`\n'.includes(str[i + 1])) {
+        if (str[i] === '\\' && i + 1 < str.length && DOUBLE_QUOTE_ESCAPABLE.includes(str[i + 1])) {
           if (str[i + 1] !== '\n') tag += str[i + 1];
           i += 2;
           continue;
@@ -1464,7 +1469,7 @@ function tokenize(str) {
       while (i < str.length && str[i] !== '"') {
         scanStep(1);
         const c = str[i];
-        if (c === '\\' && i + 1 < str.length && '"\\$`\n'.includes(str[i + 1])) {
+        if (c === '\\' && i + 1 < str.length && DOUBLE_QUOTE_ESCAPABLE.includes(str[i + 1])) {
           if (str[i + 1] !== '\n') buf += str[i + 1];
           i += 2;
           continue;
