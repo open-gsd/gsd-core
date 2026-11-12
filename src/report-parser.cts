@@ -138,11 +138,10 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
   // Framing: `---`, at least one body line, `...` — the shape tap-parser re-emits for a
   // diagnostic block its YAML refused (emitExtra may indent the whole block by 4 spaces).
   if (lines.at(-1) !== '' || lines.length < 4) return null;
-  // A lone CR: js-yaml breaks lines on a bare \r (readLineBreak, ch === 13) while this
-  // segmentation splits on \n, so the two would disagree on the key set. tap-parser's
-  // own line splitter never passes one through, but the function refuses any \r in the
-  // block so it is fail-closed on its own contract, not on its caller's.
-  if (extra.includes('\r')) return null;
+  // No lone-CR guard is needed: tap-parser's own line splitter (`/^.*\r?\n/`) stops
+  // `.*` before a mid-line `\r`, so the line never matches and stays buffered — a
+  // block carrying one never reaches this function from its only caller (#5819
+  // re-review; the earlier guard was unreachable dead code and is removed).
   lines.pop();
   const openIndent = /^(\s*)---$/.exec(lines[0] ?? '')?.[1];
   if (openIndent === undefined || /^(\s*)\.\.\.$/.exec(lines.at(-1) ?? '')?.[1] !== openIndent) return null;

@@ -1794,27 +1794,10 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.deepEqual(ordinaryDup.evidence.report_errors, []);
   });
 
-  test('a recovered block carrying a lone CR is refused (review finding)', () => {
-    // Third review finding: the \r refusal has no test. js-yaml breaks lines on a
-    // bare CR while the segmentation splits on \n; a block containing one is
-    // refused whole rather than letting the two disagree on the key set.
-    const CR = String.fromCharCode(13);
-    const diag = [
-      "  failureType: 'testCodeFailure'",
-      "  error: 'a" + CR + "b'",
-      "  error: 'c'",
-      "  stack: 'frame one'",
-      "  stack: 'frame two'",
-    ];
-    const result = classifyRedEvidence(validRedInput({
-      output: dupDiagTAP(diag),
-      targetTest: 'rejects a malformed token',
-      targetFile: undefined,
-    }));
-    assert.equal(result.verdict, 'INVALID_RED');
-    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'),
-      JSON.stringify(result.evidence.report_errors));
-  });
+  // The lone-CR refusal (re-review Minor 1) is removed with its guard: tap-parser's
+  // line splitter (`/^.*\r?\n/`) stops `.*` before a mid-line \r, so the line never
+  // matches and stays buffered — the block cannot reach recoverDuplicateKeyDiagnostic
+  // from its only caller, making the guard unreachable dead code.
 
   test('repeated keys alongside another YAML error stay refused', () => {
     const diag = [...THROWS_REGEXP_DIAG, '  code: [unclosed'];
