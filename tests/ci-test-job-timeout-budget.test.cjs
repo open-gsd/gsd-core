@@ -278,8 +278,8 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  * fixedSecondsPerShard + secondsPerTierFile * tierFiles / shards, fitted by
  * least squares to the slowest Windows shard's job wall-clock in 60 runs, each
  * at its own tier size:
- *   - every `next` push run from 2026-11-08 to 11-11, 40 of them
- *     (42456493417 to 43090201759; 3 shards, 319-380 files);
+ *   - the 40 consecutive `next` push runs 42456493417 to 43090201759
+ *     (2026-11-08 to 11-11; 3 shards, 319-380 files);
  *   - the twelve 6-shard fork runs SHARD_BALANCE's baselines cite (367-375);
  *   - PR #5053's 6-shard runs 42078639141 and 42087947326 (375);
  *   - six 6-shard fork runs of 2026-11-12 on the partitions `next` has had
@@ -303,7 +303,7 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  *   all 60 (these constants)                  425s    10.24s     93.1%     59.3%
  *   after #6002 only (29 + 6)                 494s    10.34s     97.9%     63.8%
  *   before #6002 only (11 + 14)               404s     9.25s     85.3%     54.8%
- *   the first fit's constants                 584s     8.32s     90.0%     62.5%
+ *   the first fit's constants                 584s     8.32s    89.95%     62.5%
  *
  * The before-only fit passes three shards. It describes a per-file cost the
  * tier no longer has, which is why it is not used, but it shows the margin by
