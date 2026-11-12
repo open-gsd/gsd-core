@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-05-05
+- **Amended by:** [ADR-4909](4909-shipped-surface-contract-seam.md) (shipped-surface contract seam). The `<execution_context>` `@`-ref rule and the workflow reachability rule move into one extractor that covers `commands/`, `agents/`, `skills/` and `gsd-core/`, and resolves references against a generated post-install tree manifest. The frontmatter and `allowed-tools` rules stay here. Until ADR-4909 Phase 5 ([#6055](https://github.com/open-gsd/gsd-core/issues/6055)) merges, this ADR's rules are still the ones enforced.
 
 We decided to centralize the `commands/gsd/*.md` file contract into a single validation seam enforced at two layers: a fast lint script (`scripts/lint-command-contract.cjs`) that runs as a pre-test CI step, and a behavioral regression test (`tests/command-contract.test.cjs`) that validates the full contract against the live filesystem.
 

@@ -11,6 +11,8 @@ const DEFAULT_MAX_CONTENT = 1850;
 const SECTION_LIMITS = Object.freeze([
   ['Breaking', 4],
   ['Security', 4],
+  ['Removed', 3],
+  ['Deprecated', 3],
   ['Feature', 4],
   ['Fix', 4],
   ['Enhancement', 3],
@@ -49,6 +51,14 @@ function normalizeHeading(value) {
 
   if (lower.includes('breaking')) return 'Breaking';
   if (lower.includes('security')) return 'Security';
+  // Keep-a-Changelog headings (#5922): the release body is built from the
+  // CHANGELOG section, whose subsections use these names.
+  if (lower === 'added') return 'Feature';
+  if (lower === 'fixed') return 'Fix';
+  if (lower === 'changed') return 'Enhancement';
+  if (lower === 'deprecated') return 'Deprecated';
+  // Note: an old-format body with a `## Removed` heading now buckets under Removed (#5922).
+  if (lower === 'removed') return 'Removed';
   if (lower === 'feature' || lower === 'features') return 'Feature';
   if (lower === 'fix' || lower === 'fixes' || lower === 'bug fixes') return 'Fix';
   if (lower === 'enhancement' || lower === 'enhancements' || lower === 'improvements') return 'Enhancement';
@@ -58,11 +68,21 @@ function normalizeHeading(value) {
   return heading;
 }
 
+// A body built from a CHANGELOG section (#5922) carries Keep-a-Changelog
+// subsection headings. GitHub-generated and formatter output never does, so
+// its bullets keep the original (unchanged) handling.
+const CHANGELOG_HEADING_RE = /^###\s+(?:Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/m;
+
 function collectSections(body) {
+  const text = normalizeNewlines(body);
+  return CHANGELOG_HEADING_RE.test(text) ? collectChangelogSections(text) : collectLegacySections(text);
+}
+
+function collectLegacySections(text) {
   const sections = new Map();
   let current = null;
 
-  for (const line of normalizeNewlines(body).split('\n')) {
+  for (const line of text.split('\n')) {
     const trimmed = line.trim();
     const heading = trimmed.match(/^#{2,3}\s+(.+)$/);
 
@@ -84,6 +104,67 @@ function collectSections(body) {
   }
 
   return sections;
+}
+
+function collectChangelogSections(text) {
+  const sections = new Map();
+  let current = null;
+  // Bullet in flight: CHANGELOG bullets wrap onto indented continuation lines
+  // that carry the trailing (#issue) (#pr) references.
+  let pending = null;
+
+  function flush() {
+    if (!pending) return;
+    if (!sections.has(pending.section)) sections.set(pending.section, []);
+    sections.get(pending.section).push(summarizeChangelogBullet(pending.text) || cleanBullet(pending.text));
+    pending = null;
+  }
+
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    const heading = trimmed.match(/^#{2,3}\s+(.+)$/);
+
+    if (heading) {
+      flush();
+      current = normalizeHeading(heading[1]);
+      continue;
+    }
+
+    // Indented bullets are nested detail of a CHANGELOG bullet, not entries.
+    if (/^\s+[*-]\s/.test(line)) {
+      flush();
+      continue;
+    }
+
+    const bullet = trimmed.match(/^([*-])\s+(.+)$/);
+    if (!bullet || !current) {
+      if (pending && /^\s+\S/.test(line)) pending.text += ` ${trimmed}`;
+      else flush();
+      continue;
+    }
+
+    flush();
+    const section = current === "What's Changed" ? classifyTitle(trimmed) : current;
+    pending = { section, text: trimmed };
+  }
+  flush();
+
+  return sections;
+}
+
+/**
+ * CHANGELOG bullets read `- **Headline** — long explanation (#issue) (#pr)`.
+ * The bold headline is the user-visible summary; keep it and the trailing
+ * issue/PR references. Returns null for any other bullet shape.
+ * @param {string} bulletLine
+ * @returns {string|null}
+ */
+function summarizeChangelogBullet(bulletLine) {
+  const m = bulletLine.match(/^[*-]\s+\*\*(.+?)\*\*\s+[—–-]\s/);
+  if (!m) return null;
+  const refs = bulletLine.match(/(?:\s\(#\d+\))+\s*$/);
+  const headline = cleanBullet(`- ${m[1]}`);
+  return refs ? `${headline}${refs[0].replace(/\s+/g, ' ').replace(/\s+$/, '')}` : headline;
 }
 
 function cleanBullet(value) {

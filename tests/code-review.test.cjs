@@ -40,7 +40,7 @@ function extractBashBlocks(content) {
 }
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -487,6 +487,30 @@ describe('CR-WORKFLOW: code review workflow structure', () => {
         'check_config_gate must no longer gate on render-hooks execute:post — manual invocation must work regardless of workflow.code_review_point');
     });
 
+    // #5753: the fix workflow's gate follows the same toggle as the review workflow.
+    test('G2b (#5753): code-review-fix check_config_gate reads workflow.code_review, not execute:post hooks', () => {
+      const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review-fix.md'), 'utf-8');
+      const stepContent = extractStepBody(content, 'check_config_gate');
+      assert.ok(stepContent, 'code-review-fix.md missing check_config_gate step');
+
+      assert.ok(/gsd_run query config-get workflow\.code_review\b/.test(stepContent),
+        'check_config_gate must read workflow.code_review via gsd_run query config-get');
+      assert.ok(/\|\| echo "true"/.test(stepContent),
+        'check_config_gate must default to active when workflow.code_review is absent');
+      assert.ok(!stepContent.includes('render-hooks execute:post'),
+        'check_config_gate must not gate on render-hooks execute:post — it must work for any workflow.code_review_point');
+      assert.ok(stepContent.includes('Code review fix skipped (code-review capability inactive)'),
+        'skip message must be unchanged');
+    });
+
+    test('G2c (#5753): code-review-fix closing checklist describes the toggle check', () => {
+      const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review-fix.md'), 'utf-8');
+      const gateLine = (content.match(/^- \[ \] Capability gate checked.*$/m) || [])[0];
+      assert.ok(gateLine, 'code-review-fix.md missing "Capability gate checked" checklist item');
+      assert.ok(gateLine.includes('workflow.code_review'), 'checklist must name the workflow.code_review toggle');
+      assert.ok(!gateLine.includes('execute:post'), 'checklist must not name the execute:post hook');
+    });
+
     test('G3: computeFileScopeDerivesLastReviewCommit', () => {
       const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'code-review.md'), 'utf-8');
       const stepContent = extractStepBody(content, 'compute_file_scope');
@@ -733,8 +757,8 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
         'echo "CODE_REVIEW_POINT=[$CODE_REVIEW_POINT]"',
         'echo "EXPLICIT_JOINED=[$EXPLICIT_JOINED]"',
       ].join('\n');
-      const result = require('node:child_process').spawnSync('bash', ['-c', driver], { cwd: tmpDir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-      assert.equal(result.status, 0, `driver failed: stdout=${result.stdout} stderr=${result.stderr}`);
+      const result = runHook('-c', [driver], { interpreter: 'bash', cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS });
+      assertSeamExit(assert, result, 0, `driver failed: stdout=${result.stdout}`);
       assert.match(result.stdout, /CODE_REVIEW_POINT=\[execute:post\]/,
         `CODE_REVIEW_POINT must be computed and survive within the SAME fence that later uses it for --point, got: ${result.stdout}`);
       assert.match(result.stdout, /EXPLICIT_JOINED=\[codex\]/,
@@ -1006,8 +1030,11 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
 
   function runReducer(dispatchJson) {
     const script = `DISPATCH_JSON=${JSON.stringify(dispatchJson)}\n${extractEvidenceReducer()}\necho "$EVIDENCE_LIST"`;
-    const result = require('node:child_process').spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+    const result = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+    // A timeout must not pass as an empty-output run: fail with the outcome named.
+    assert.notEqual(result.outcome, OUTCOME.TIMED_OUT, `reducer timed out: ${result.summary}`);
+    assert.notEqual(result.outcome, OUTCOME.SPAWN_FAILED, `reducer failed to spawn: ${result.summary}`);
+    return { stdout: result.stdout, stderr: result.stderr, status: result.exitCode };
   }
 
   test('EVIDENCE_LIST reducer warns on a whole-dispatch rejection (B1), not just per-lane failures', () => {

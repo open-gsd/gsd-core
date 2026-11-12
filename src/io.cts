@@ -380,6 +380,10 @@ const ERROR_REASON = Object.freeze({
   COMMIT_DOCS_GUARD_NOT_A_REPO: 'commit_docs_guard_not_a_repo',
   COMMIT_DOCS_GUARD_FOREIGN_HOOK: 'commit_docs_guard_foreign_hook',
   COMMIT_DOCS_GUARD_HOOKS_PATH_SET: 'commit_docs_guard_hooks_path_set',
+  // commit verb (#6043, ADR-4908 §3): it commits in the worktree the process
+  // runs in, or refuses with one of these. Wire values are the typed `reason`.
+  COMMIT_NOT_GIT_REPO: 'not_git_repo',
+  COMMIT_OUTSIDE_WORKTREE: 'outside_worktree',
   // security-scan
   SECURITY_SCAN_FAILED: 'security_scan_failed',
   // --pick (#3365 / #3358, ADR-3473 §8.4): an absent field or non-JSON
@@ -531,6 +535,8 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.COMMIT_DOCS_GUARD_NOT_A_REPO]: 'UNAVAILABLE',
   [ERROR_REASON.COMMIT_DOCS_GUARD_FOREIGN_HOOK]: 'UNAVAILABLE',
   [ERROR_REASON.COMMIT_DOCS_GUARD_HOOKS_PATH_SET]: 'UNAVAILABLE',
+  [ERROR_REASON.COMMIT_NOT_GIT_REPO]: 'UNAVAILABLE',
+  [ERROR_REASON.COMMIT_OUTSIDE_WORKTREE]: 'FAIL',
   // Its own docstring: "an absent field or non-JSON command output is a
   // failure, never a demotion to an empty answer" — the field/output was
   // supposed to be there and was not; a prerequisite of the query failed.

@@ -370,7 +370,8 @@ validated silently and was never read. Such a key is now rejected by `config-set
 lanes are `claude`, `codex`, `opencode`, `cursor`, `agy` (the Antigravity lane — its key suffix is
 the CLI's own name, not the lane slug), `ollama`, `lm_studio` and `llama_cpp`.
 
-The same applies to `review.max_prompt_tokens_per_reviewer.<slug>`. `review.max_prompt_tokens`
+The same applies to `review.max_prompt_tokens_per_reviewer.<slug>` and
+`review.context_window_tokens.<slug>`. `review.max_prompt_tokens`
 (the global default), `review.default_reviewers` and `review.reviewer_instances` describe policy
 across lanes rather than one lane's behavior, so they remain central and are unaffected.
 
@@ -752,12 +753,16 @@ order. Default `false` keeps the original serial behavior byte-for-byte.
 
 ### Project-Root Resolution in Multi-Repo Workspaces
 
-When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels, never above `$HOME`):
+When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels):
 
 1. If the starting directory already has its own `.planning/`, it is the project root (no walk-up).
 2. Parent has `.planning/config.json` listing the starting directory's top-level segment in `sub_repos` (or the legacy `planning.sub_repos` shape).
 3. Parent has `.planning/config.json` with legacy `multiRepo: true` and the starting directory is inside a git repo.
 4. Parent has `.planning/` and an ancestor up to the candidate parent contains `.git` (heuristic fallback).
+
+The walk never reads above `$HOME`. When `$HOME` is a symlink, it stops there whether the path is spelled through the link or through its target. A starting directory at `$HOME` itself, with no `.planning/` of its own, resolves to itself.
+
+The isolation hooks resolve their project root through the same walk, so they keep the same `$HOME` boundary as `gsd-tools`.
 
 If none match, the starting directory is returned unchanged. Explicit `--project-dir /path/to/workspace` is idempotent under this resolution.
 
@@ -851,6 +856,7 @@ for a worked example.
 | `hooks.context_warning_threshold` | number | `35` | Percent of context window REMAINING at or below which the monitor emits CONTEXT WARNING. Must be greater than 0 and at most 100, and strictly greater than `hooks.context_critical_threshold` — `config-set` refuses 0, which no critical value can pair with. An out-of-domain value falls back **per key**; both keys revert to their defaults only when the RESOLVED pair violates `critical < warning`. Read from the root project config — a workstream-scoped `config-set` does not reach this hook. Inert on a runtime with no context-monitor hook installed, Codex among them (#2586); see [context-monitor.md](context-monitor.md) (#4285) |
 | `hooks.context_critical_threshold` | number | `25` | Percent of context window REMAINING at or below which the monitor escalates to CONTEXT CRITICAL. Must be at least 0 and less than 100, and strictly less than `hooks.context_warning_threshold` — `config-set` refuses 100, which no warning value can pair with. Setting only one of the pair is checked against the other's default, so tune both when moving either past the other. Same root-config scope, and the same installed-monitor prerequisite, as the key above (#4285) |
 | `hooks.workflow_guard` | boolean | `false` | Warn when file edits happen outside GSD workflow context (advises using `/gsd-quick` or `/gsd-fast`). When enabled, the hook's one hard block — `git add -f` on `agent-*`/`worktree-agent-*` branches — also fails closed on internal error (see `docs/explanation/security-model.md`, #3504) |
+| `hooks.secret_read_exempt` | array of strings | `[]` | Repo-relative paths of files the secret-read guard (`gsd-secret-read-guard.js`) lets agents read even though their names match a protected pattern — for example a committed placeholder template named `.env.production`. An exemption takes effect only while the file is committed in `HEAD` as a regular file and is a regular file (not a symlink) in the working tree; an untracked, staged-only or symlinked file stays blocked. Paths are exact: no globs, no absolute paths, no `..`; backslashes are read as `/` and a leading `./` is dropped. `config-set` refuses any other value. Read and Grep (`path`) resolve a relative path against the session directory; in Bash the file must be named by its absolute path, because a relative name can mean a different file after `cd` or inside `find -name`, and only when every command in the line is one of `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `wc`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `nl` or `od` (any other command, or a `$( )` / backtick body, withdraws the exemption for the whole line). A file inside a submodule cannot be exempted. A Grep `glob` is not widened. Read from the root project `.planning/config.json`. An unconfigured project blocks exactly as before. See [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) (#4432) |
 | `statusline.show_last_command` | boolean | `false` | Append `last: /<cmd>` suffix to the statusline showing the most recently invoked slash command. Opt-in; reads the active session transcript to extract the latest `<command-name>` tag (closes #2538) |
 | `statusline.context_position` | string | `"end"` | Position of the context-window meter. `"end"` (default) renders at line tail; `"front"` renders immediately after the model name so the meter stays visible in narrow terminals. Closes #2937 |
 | `statusline.show_context_tokens` | boolean | `false` | Append the absolute token count (e.g. `(156k)`) after the context meter's percentage. Sums input, cache-creation, cache-read, and output tokens from the hook payload — a broader basis than the meter's percentage (which excludes output tokens), so the two figures can diverge slightly. Opt-in; the meter is unchanged when the flag is absent |
@@ -1570,8 +1576,9 @@ Configure per-CLI model selection for `/gsd-review`. When set, overrides the CLI
 | `review.models.lm_studio` | string | (server default) | Model name passed to LM Studio when `--lm-studio` reviewer is invoked. If unset, the first available model reported by the server is used. |
 | `review.models.llama_cpp` | string | (server default) | Model name passed to llama.cpp when `--llama-cpp` reviewer is invoked. If unset, the first model reported by `/v1/models` is used. |
 | `review.default_reviewers` | string[] \| null | (all detected reviewers) | Default reviewer subset for no-flag `/gsd-review`. Example: `["codex","claude"]`. May include configured `review.reviewer_instances` names. Explicit flags and `--all` override this setting. |
-| `review.max_prompt_tokens` | number\|null | null | Default maximum estimated tokens for the assembled review prompt. When set, the prompt is deterministically trimmed before being sent to each reviewer. Per-reviewer overrides via `review.max_prompt_tokens_per_reviewer` take precedence. null = no trim (current behavior). |
-| `review.max_prompt_tokens_per_reviewer` | object | {} | Per-reviewer token budget overrides. Keys are reviewer slugs. Every declared reviewer lane accepts one (`claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). A lane's value of `-1` (the default) is unset and inherits `review.max_prompt_tokens`; `0` disables trimming for that lane specifically; any other number is that lane's own budget. |
+| `review.max_prompt_tokens` | number\|null | null | Prompt cap, in estimated tokens, for every reviewer lane whose own `review.max_prompt_tokens_per_reviewer.<slug>` is unset. A lane whose prompt is over its cap is refused, not trimmed. `0` turns the cap off for every lane that inherits it, including the default derived from the lane's context window. null = no global cap, so each lane falls back to its context-window default. |
+| `review.max_prompt_tokens_per_reviewer` | object | {} | Per-lane prompt caps. Keys are reviewer slugs; every declared reviewer lane accepts one (`claude`, `codex`, `coderabbit`, `opencode`, `qwen`, `cursor`, `antigravity`, `kimi-code`, `ollama`, `lm_studio`, `llama_cpp`). `-1` (the default) means unset: the lane inherits `review.max_prompt_tokens`. `0` turns the cap off for that lane. Any other number is that lane's own cap. |
+| `review.context_window_tokens` | object | {} | Per-lane context window in tokens, used to derive the default cap (65% of the window) when neither max-prompt key applies. Keys are reviewer slugs; every prompt-fed lane accepts one (all except `coderabbit`, which sends no prompt). `-1` (the default) uses the window the lane declares: `claude` 200000, `codex` 272000, `qwen` 131072, `kimi-code` 262144. The other lanes declare none and stay uncapped unless you set one here. `0` turns the derived default off for that lane. Raise it when you have pinned a larger model, for example `gsd config-set review.context_window_tokens.claude 1000000`. |
 | `review.parallel_lanes` | boolean | `false` | Dispatch independent reviewer lanes concurrently within a single `/gsd-review` pass. Default `false` keeps the sequential dispatch that protects against provider rate limits. Opt in only when your providers can accept concurrent requests. Convergence cycles stay sequential either way. |
 | `review.ollama_host` | string | `http://localhost:11434` | Base URL of the Ollama server. Override when running Ollama on a non-default port or remote host: `gsd config-set review.ollama_host http://192.168.1.10:11434` |
 | `review.lm_studio_host` | string | `http://localhost:1234` | Base URL of the LM Studio local server. Override when using a non-default port. |
@@ -1579,7 +1586,18 @@ Configure per-CLI model selection for `/gsd-review`. When set, overrides the CLI
 
 ### Prompt budgets for reviewer lanes
 
-Every declared reviewer lane can be capped, most usefully the local model servers (Ollama, llama.cpp, LM Studio), which typically accept far fewer tokens than cloud APIs — but any CLI lane can be given a budget too. Setting `review.max_prompt_tokens_per_reviewer` (or the global `review.max_prompt_tokens` fallback, which every lane whose own key is unset inherits) triggers deterministic prompt trimming before the prompt is sent to that reviewer: CONTEXT is dropped first, then RESEARCH, then REQUIREMENTS; PROJECT.md is head-shrunk to the first 40 lines; PLANs are tail-truncated proportionally — instructions and roadmap are always preserved. When a reviewer is trimmed, a disclosure note is injected at the top of the prompt and trim metadata (budget, omitted sections, truncation percentage) is recorded in the REVIEWS.md frontmatter under `trimmed_reviewers`. If even the minimum review set (instructions + roadmap + plan stubs) exceeds the budget, the reviewer is skipped with a warning rather than sending a truncated prompt that would produce misleading feedback.
+Every prompt-fed reviewer lane has a prompt cap. Each lane resolves its cap in this order, highest first:
+
+| Source | Key | Notes |
+|---|---|---|
+| Per-lane cap | `review.max_prompt_tokens_per_reviewer.<slug>` | `-1` = unset; `0` = no cap |
+| Global cap | `review.max_prompt_tokens` | `null` = unset; `0` = no cap |
+| Context-window default | 65% of `review.context_window_tokens.<slug>`, or of the lane's declared window | `claude` 130000, `codex` 176800, `qwen` 85196, `kimi-code` 170393 out of the box |
+| None | — | `opencode`, `cursor`, `antigravity` and the local servers declare no window, because GSD cannot know which model they run |
+
+When the review prompt is larger than the cap, **the lane does not run.** It reports the reason `prompt_exceeds_context` and writes a stub that starts `<slug> review did not run: prompt exceeds this lane's context cap`. The stub names the estimated size, the cap, where the cap came from, and the key to change. REVIEWS.md lists the lane under `refused_reviewers` in its frontmatter. If every selected lane is refused, no REVIEWS.md is written. The prompt is never trimmed. A trimmed prompt produced a review that read exactly like a clean pass on material the model never saw, so a refusal you can act on is the safer failure.
+
+Prompt size is estimated at four characters per token. Real tokenizers count source code more densely than that, and the 35% headroom absorbs the difference. The declared windows are the smallest that each CLI's default model can resolve to. If your plan or pinned model has a larger window, raise `review.context_window_tokens.<slug>`. To see each lane's resolved cap and its source, run `gsd-tools review-lane plan --selected <slug> --json` and read `promptBudget` and `promptCapSource`. To act on a refused lane, see [Fix a reviewer lane that refused an oversized prompt](how-to/fix-a-refused-reviewer-lane.md).
 
 ### Example
 
