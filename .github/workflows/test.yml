@@ -8,12 +8,7 @@ on:
       - 'release/**'
       - 'hotfix/**'
   pull_request:
-    # #6073: `labeled`/`unlabeled` so adding or removing `fix-next` starts a new
-    # run. `next-health` reads the label from the event payload (PR_LABELS), and a
-    # re-run reuses the old payload, so only a run started by the label event can
-    # see the label change. Every label event runs the whole workflow: a skipped
-    # `Required tests` would count as passing, so no label event may skip it.
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # Default types (opened, synchronize, reopened). Label changes do not start a run (#6076): fix-next-rerun.yml re-runs only "Base branch health" when fix-next is added or removed.
     branches:
       - next
       - main
@@ -30,7 +25,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  # Only a new commit supersedes a PR run. `gh pr create --label` fires `opened`
+  # and `labeled` in the same second for the same head; with an unconditional
+  # cancel, one cancels the other and its cancelled jobs stay on the head commit
+  # as a red check the merge gate refuses (#6092). A label event now queues
+  # behind the running run instead of killing it; pushes still cancel as before.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action == 'synchronize' }}
 
 permissions:
   contents: read
@@ -106,6 +106,8 @@ jobs:
           # inside a `run:` block.
           GITHUB_TOKEN: ${{ github.token }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # When set, the script reads the PR's current labels from the API (#6076).
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
           MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
@@ -503,8 +505,11 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: node scripts/ci-compact-v8-coverage.cjs --temp-directory coverage/tmp --out coverage/compact/shard-${{ strategy.job-index }}.json
 
+      # #6144: the durations artifact is diagnostic scheduling/timeout-evidence
+      # data, not a test result — an upload failure must not fail the job.
       - name: Upload per-file unit test durations
         if: always() && matrix.scope == 'full'
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-timings-ubuntu-unit-job${{ strategy.job-index }}
@@ -648,8 +653,8 @@ jobs:
     # by default, which leaves today's behavior untouched. A maintainer sets it
     # when the merge queue is enforced, so Windows/macOS are first exercised on the
     # queue's merge-group commit rather than after merge, and unsets it to roll
-    # back. `required-tests` already accepts this job as skipped. Applying the
-    # label starts a new run (#6073: `labeled` is a trigger type), which includes it.
+    # back. `required-tests` already accepts this job as skipped. A label applied
+    # after a run started does not re-run it: push a commit or dispatch the branch.
     if: >-
       needs.changes.outputs.code_changed == 'true' &&
       needs.changes.outputs.full_matrix == 'true' &&
@@ -789,8 +794,12 @@ jobs:
 
       # #5071: `always()` — a red or killed shard's completed files are still
       # real measurements, and a red run is exactly when fresh durations help.
+      # #6144: `continue-on-error` — the artifact is diagnostic scheduling/
+      # timeout-evidence data, not a test result; an upload failure must not
+      # fail the job.
       - name: Upload per-file test durations
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-timings-${{ matrix.os }}-job${{ strategy.job-index }}

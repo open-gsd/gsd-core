@@ -1184,7 +1184,21 @@ Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the p
 
 **Step A: Persist human verification items as UAT file.**
 
-Create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
+Merge or skip — never blindly create (#5845). A `{phase_num}-UAT.md` may already hold a human's recorded results (from `/gsd:verify-work`, or from an earlier run before gap-closure) that cannot be re-derived. Check first:
+
+```bash
+UAT_FILE="{phase_dir}/{phase_num}-UAT.md"
+if test -f "$UAT_FILE"; then echo "UAT_EXISTS"; else echo "UAT_ABSENT"; fi
+```
+
+**If `UAT_EXISTS`:** read the file and merge in place. Never reset, overwrite, or replace it, and do not rename it aside (`phase uat-passed` reads `{phase_num}-UAT.round1.md` in the phase directory as a live blocker).
+- Keep every recorded result exactly as written, including `result:` values other than `[pending]`, `source:`/`coverage_id:` lines, `## Gaps`, and `## Deferred Follow-Ups`. Keep `status` and `started` unchanged (`/gsd:verify-work` resume recomputes the status from the rows).
+- For each `human_verification` item in VERIFICATION.md, compare its description to the existing `### N. {description}` test entries. Items not already present (matched by description, case-insensitive with whitespace collapsed) are appended under `## Tests` as the next numbered entry with `expected:` from VERIFICATION.md and `result: [pending]`. Items already present are left untouched.
+- Recompute the `## Summary` counts (`total`, `passed`, `issues`, `pending`, `skipped`, `blocked`) from the merged test list; set `updated` to now.
+- If nothing to append (every item already present), do not write the file and do not commit; continue to Step B.
+- Otherwise commit the merged file with the command below.
+
+**If `UAT_ABSENT`:** create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
 
 ```markdown
 ---

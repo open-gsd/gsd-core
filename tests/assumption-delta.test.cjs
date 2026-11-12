@@ -12,10 +12,11 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { exitCodeFor } = require('../gsd-core/bin/lib/exit-code-registry.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'assumption-delta.cjs');
 
@@ -182,12 +183,12 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
   // "1" — nothing was examined, so they resolve NO_INPUT / UNAVAILABLE via
   // the exit-code registry (see the ADR-3889 Phase 3 describe block below).
   function runCli(stdin) {
-    const res = spawnSync(process.execPath, [MODULE_PATH], {
+    const res = runNode([MODULE_PATH], {
       input: stdin,
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
-    return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+    assert.strictEqual(res.outcome, OUTCOME.EXITED, res.summary);
+    return toLegacyResult(res);
   }
 
   test('exit 0 when a pluralization signal is present', () => {
@@ -210,12 +211,11 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
   });
 
   test('--json emits typed IR with detected field on stdout (exit 0)', () => {
-    const res = spawnSync(process.execPath, [MODULE_PATH, '--json'], {
+    const res = runNode([MODULE_PATH, '--json'], {
       input: 'introduces a configurable retry policy',
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
-    assert.strictEqual(res.status, 0);
+    assertSeamExit(assert, res, 0);
     const parsed = JSON.parse(res.stdout);
     assert.strictEqual(parsed.detected, true);
     assert.ok(Array.isArray(parsed.signals));
@@ -223,12 +223,11 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
   });
 
   test('--json emits detected:false on stdout (exit 1) for no-signal input', () => {
-    const res = spawnSync(process.execPath, [MODULE_PATH, '--json'], {
+    const res = runNode([MODULE_PATH, '--json'], {
       input: 'just a routine refactor',
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
-    assert.strictEqual(res.status, 1);
+    assertSeamExit(assert, res, 1);
     const parsed = JSON.parse(res.stdout);
     assert.strictEqual(parsed.detected, false);
     assert.deepStrictEqual(parsed.signals, []);
@@ -237,20 +236,18 @@ describe('assumption-delta CLI — STDIN exit codes (mirrors ui-safety-gate)', (
   // ── --terms config override (config-tunable vocabulary) ───────────────────
   test('--terms overrides the pluralization cues (custom term fires, default cue does not)', () => {
     // default cue "second" present, but overridden to "xyzzy" → must NOT fire
-    const noFire = spawnSync(process.execPath, [MODULE_PATH, '--terms', 'xyzzy', '--json'], {
+    const noFire = runNode([MODULE_PATH, '--terms', 'xyzzy', '--json'], {
       input: 'adds a second platform',
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
-    assert.strictEqual(noFire.status, 1);
+    assertSeamExit(assert, noFire, 1);
     assert.strictEqual(JSON.parse(noFire.stdout).detected, false);
 
-    const fire = spawnSync(process.execPath, [MODULE_PATH, '--terms', 'xyzzy', '--json'], {
+    const fire = runNode([MODULE_PATH, '--terms', 'xyzzy', '--json'], {
       input: 'introduces an xyzzy adapter',
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
-    assert.strictEqual(fire.status, 0);
+    assertSeamExit(assert, fire, 0);
     const parsed = JSON.parse(fire.stdout);
     assert.strictEqual(parsed.detected, true);
     assert.ok(parsed.signals.some((s) => s.term === 'xyzzy' && s.kind === 'pluralization'));
@@ -403,12 +400,11 @@ describe('assumption-delta hardening (Codex review)', () => {
   });
 
   test('CLI --terms "" (empty) restores curated defaults (does NOT disable pluralization)', () => {
-    const res = spawnSync(process.execPath, [MODULE_PATH, '--terms', '', '--json'], {
+    const res = runNode([MODULE_PATH, '--terms', '', '--json'], {
       input: 'adds a second platform',
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
-    assert.strictEqual(res.status, 0, 'empty --terms must fall back to defaults → detected');
+    assertSeamExit(assert, res, 0, 'empty --terms must fall back to defaults → detected');
     const parsed = JSON.parse(res.stdout);
     assert.strictEqual(parsed.detected, true);
     assert.ok(parsed.terms.pluralization.includes('second'), 'default pluralization cues restored');
