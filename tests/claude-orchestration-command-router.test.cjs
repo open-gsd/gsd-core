@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -40,8 +40,8 @@ function writeManifest(tmpDir) {
 }
 
 /** Run the command and assert it succeeded, returning the parsed JSON output. */
-function runAndParse(args, cwd) {
-  const res = runGsdTools(args, cwd);
+function runAndParse(args, cwd, env) {
+  const res = runGsdTools(args, cwd, env);
   assert.strictEqual(res.success, true, 'command should succeed; stderr: ' + (res.error || ''));
   assert.ok(res.output.length > 0, 'command should emit output');
   return JSON.parse(res.output);
@@ -119,7 +119,6 @@ describe('claude-orchestration detect-backend (CLI)', () => {
       const parsed = runAndParse([
         'claude-orchestration', 'detect-backend',
         '--runtime', 'claude',
-        '--agent-sdk-version', '1.0.0',
       ], tmp);
       assert.strictEqual(parsed.backend, 'inline');
       assert.strictEqual(parsed.available, false);
@@ -129,8 +128,12 @@ describe('claude-orchestration detect-backend (CLI)', () => {
     }
   });
 
-  test('enabled + claude + capable + new-enough SDK -> workflow', () => {
+  test('enabled + claude + capable + workflows available -> workflow', () => {
     const tmp = createTempProject('claw-detect-on-');
+    // #4747: availability is read from the real settings scopes; isolate the
+    // user scope and clear the env kill switch so the result is deterministic.
+    const cfgDir = createTempDir('claw-detect-cfg-');
+    const managedDir = createTempDir('claw-detect-managed-');
     try {
       fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
       fs.writeFileSync(
@@ -141,11 +144,12 @@ describe('claude-orchestration detect-backend (CLI)', () => {
       const parsed = runAndParse([
         'claude-orchestration', 'detect-backend',
         '--runtime', 'claude',
-        '--agent-sdk-version', '1.2.0',
-      ], tmp);
+      ], tmp, { CLAUDE_CONFIG_DIR: cfgDir, CLAUDE_CODE_DISABLE_WORKFLOWS: '', GSD_TEST_MANAGED_SETTINGS_DIR: managedDir, GSD_TEST_MODE: '1' });
       assert.strictEqual(parsed.backend, 'workflow');
       assert.strictEqual(parsed.available, true);
     } finally {
+      cleanup(cfgDir);
+      cleanup(managedDir);
       cleanup(tmp);
     }
   });
@@ -162,7 +166,6 @@ describe('claude-orchestration detect-backend (CLI)', () => {
       const parsed = runAndParse([
         'claude-orchestration', 'detect-backend',
         '--runtime', 'codex',
-        '--agent-sdk-version', '1.0.0',
       ], tmp);
       assert.strictEqual(parsed.backend, 'inline');
       assert.match(parsed.reason, /claude/i);

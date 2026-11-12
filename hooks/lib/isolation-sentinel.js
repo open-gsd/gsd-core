@@ -74,6 +74,10 @@ const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.js
 const KEYED_SENTINEL_DIR = path.join('.gsd', 'dispatch-isolation');
 const SAFE_SENTINEL_KEY_RE = /^[A-Za-z0-9._-]{1,100}$/;
 
+// #5758: a real sentinel payload is under 300 bytes. Anything larger is not one, and the cap bounds
+// the read so a hostile or runaway record cannot be pulled into the hook.
+const SENTINEL_MAX_BYTES = 4096;
+
 /** #5682: strict allow-list for a phase/plan string that becomes a path segment. */
 function isSafeSentinelKey(s) {
   return typeof s === 'string' && SAFE_SENTINEL_KEY_RE.test(s) && s !== '.' && s !== '..';
@@ -134,10 +138,10 @@ function sentinelPath(cwd) {
 /**
  * Resolve the project root a sentinel should be read from/written to, using
  * the SAME derivation gsd-tools.cjs's dispatcher applies to every `--cwd`
- * before invoking a route handler: `findProjectRoot(resolveMainWorktreeCwd(cwd))`
- * (gsd-core/bin/gsd-tools.cjs main(), :3506/:3603 — `record-dispatch-isolation`
- * and `dispatch-isolation` are not in SKIP_ROOT_RESOLUTION, so every write
- * goes through both steps).
+ * before invoking a route handler: `resolveProjectContext(cwd).projectRoot`
+ * (gsd-core/bin/gsd-tools.cjs main() — `record-dispatch-isolation` and
+ * `dispatch-isolation` are not in SKIP_ROOT_RESOLUTION, so every write goes
+ * through it).
  *
  * #3045 MINOR fix: the guard hooks previously read the sentinel from the raw
  * `data.cwd` / `workspace_roots[i]` the harness reports, with NO equivalent
@@ -150,7 +154,7 @@ function sentinelPath(cwd) {
  * written where it looked. Deriving both sides through this one function
  * closes that divergence.
  *
- * `findProjectRoot`/`resolveWorktreeRoot` are read from the sibling
+ * `resolveProjectContext` is read from the sibling
  * `gsd-core/bin/lib/*.cjs` modules staged alongside these hooks at install
  * time (same pattern the guard hooks already use for
  * capability-registry.cjs/runtime-name-policy.cjs) — two directories up from
@@ -176,10 +180,10 @@ function resolveSentinelRoot(cwd) {
     // cold-tree encounter.
     const { ensureRuntimeBuild } = require('../../gsd-core/bin/ensure-runtime-build.cjs');
     ensureRuntimeBuild();
-    const { resolveWorktreeRoot } = require('../../gsd-core/bin/lib/worktree-safety.cjs');
-    const { root } = resolveWorktreeRoot(cwd);
-    const { findProjectRoot } = require('../../gsd-core/bin/lib/project-root.cjs');
-    return findProjectRoot(root);
+    // #6043 (ADR-4908): the dispatcher resolves non-skip commands through the
+    // same seam, so the reader looks where the writer wrote.
+    const { resolveProjectContext } = require('../../gsd-core/bin/lib/project-context.cjs');
+    return resolveProjectContext(cwd).projectRoot;
   } catch {
     return cwd;
   }
@@ -213,21 +217,23 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
   // well-formed and its contents agree with its own filename key; the legacy slot only when it
   // applies to this dispatch. Among FRESH candidates the latest `writtenAt` wins, so a newer
   // phase-level decision is not shadowed by an older plan-scoped one (and vice versa).
+  const gsdDir = path.join(root, '.gsd');
+  const keyedDirs = [gsdDir, path.join(root, KEYED_SENTINEL_DIR)];
   const keyedCandidates = [];
   if (dispatchIds) {
     const planFile = keyedSentinelPath(root, dispatchIds.phase, dispatchIds.plan);
     if (planFile) {
-      const c = parseSentinelFile(planFile, clock);
+      const c = parseSentinelFile(planFile, clock, keyedDirs);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
     }
     const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
     if (phaseFile) {
-      const c = parseSentinelFile(phaseFile, clock);
+      const c = parseSentinelFile(phaseFile, clock, keyedDirs);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
     }
   }
 
-  const legacy = parseSentinelFile(sentinelPath(root), clock);
+  const legacy = parseSentinelFile(sentinelPath(root), clock, [gsdDir]);
   const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
 
   const fresh = keyedCandidates.filter((c) => !c.stale);
@@ -245,14 +251,87 @@ function latestWritten(candidates) {
   return candidates.reduce((best, c) => (c.writtenAt > best.writtenAt ? c : best));
 }
 
-/** Parse and validate one sentinel file. Never throws. Shape: see `readSentinel`. */
-function parseSentinelFile(file, clock) {
-  let raw;
+/**
+ * lstat of `dir` when it is a real directory, not a link (lstat does not follow); otherwise null.
+ * Never throws.
+ */
+function lstatRealDirectory(dir) {
   try {
-    raw = fs.readFileSync(file, 'utf-8');
+    // bigint: an NTFS file id is 64 bits and a JS number keeps 53, so ids are compared exactly.
+    const st = fs.lstatSync(dir, { bigint: true });
+    return st.isDirectory() && !st.isSymbolicLink() ? st : null;
   } catch {
-    return { present: false };
+    return null;
   }
+}
+
+/** Same filesystem object: equal dev and ino. A zero ino (some Windows volumes) cannot be compared. */
+function sameObject(a, b) {
+  return a.ino === 0n || b.ino === 0n || (a.dev === b.dev && a.ino === b.ino);
+}
+
+/**
+ * #5758: read one sentinel file as a bounded, non-blocking, link-refusing read of a regular file.
+ * Returns the text, or null for EVERY refusal (missing, link, FIFO, device, directory, oversized,
+ * short read, a hard link to another file, a parent directory that is a link), so a hostile record
+ * is exactly as absent as a missing one. `readFileSync` would block forever on a FIFO with no
+ * writer, follow a link to an endless device or to a file outside the project, and read without
+ * bound. The writers only ever produce a fresh temp file renamed into place (link count 1). A
+ * sentinel renamed over between the open and the fstat reads as nlink 0 and is refused for that one
+ * dispatch, which is the conservative no-sentinel decision.
+ *
+ * Parent directories are lstat-checked before the open and re-checked (same dev/ino, still a real
+ * directory) after it, and the opened file must be the object the pre-open lstat saw. Node has no
+ * openat, so this NARROWS the window for a parent swapped to a link between check and open; it does
+ * not close it.
+ */
+function readSentinelText(file, parentDirs) {
+  const parents = [];
+  for (const dir of parentDirs) {
+    const st = lstatRealDirectory(dir);
+    if (!st) return null;
+    parents.push({ dir, st });
+  }
+  let fd;
+  try {
+    const before = fs.lstatSync(file, { bigint: true });
+    if (!before.isFile() || before.size > BigInt(SENTINEL_MAX_BYTES)) return null;
+    // O_NONBLOCK makes an open of a FIFO swapped in after the lstat return at once; O_NOFOLLOW
+    // refuses a link swapped in. Windows lacks both flags (`|| 0`); lstat/fstat still guard.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd, { bigint: true });
+    if (!st.isFile() || st.nlink !== 1n || st.size > BigInt(SENTINEL_MAX_BYTES)) return null;
+    if (!sameObject(before, st)) return null;
+    const size = Number(st.size);
+    for (const p of parents) {
+      const after = lstatRealDirectory(p.dir);
+      if (!after || !sameObject(p.st, after)) return null;
+    }
+    const buf = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const n = fs.readSync(fd, buf, offset, size - offset, offset);
+      if (n === 0) return null;
+      offset += n;
+    }
+    return buf.toString('utf-8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* nothing left to release */ }
+    }
+  }
+}
+
+/**
+ * Parse and validate one sentinel file. Never throws. Shape: see `readSentinel`.
+ * `parentDirs` are the directories between the project root and the file that must be real
+ * directories (not links); a refusal anywhere reads as `{ present: false }`.
+ */
+function parseSentinelFile(file, clock, parentDirs = []) {
+  const raw = readSentinelText(file, parentDirs);
+  if (raw === null) return { present: false };
 
   let parsed;
   try {
@@ -424,6 +503,7 @@ module.exports = {
   keyedSentinelPath,
   phaseSentinelPath,
   SENTINEL_STALE_MS,
+  SENTINEL_MAX_BYTES,
   AGED_NONE_MAX_MS,
   sentinelPath,
   resolveSentinelRoot,

@@ -233,7 +233,7 @@ describe('#4780 the block survives every install converter', () => {
 // (the `quick-batch` pattern from #4780) and every later use reads the shell
 // variable, which expands as data and is never re-parsed.
 
-const { execFileSync } = require('node:child_process');
+const { runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
@@ -363,12 +363,10 @@ describe('#5143 the capture block treats hostile text as data (real bash)', () =
 
   // zsh is the macOS default shell; the capture must behave the same there.
   const SHELLS = ['bash', 'zsh'].filter((sh) => {
-    try {
-      execFileSync(sh, ['--version'], { stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
-      return true;
-    } catch (_err) {
-      return false;
-    }
+    // Excluded unless the shell ran and exited 0: SPAWN_FAILED (shell missing), a timeout and a
+    // non-zero exit all mean the shell is not usable here.
+    const r = runHook('--version', [], { interpreter: sh, timeoutMs: PROBE_TIMEOUT_MS });
+    return r.outcome === OUTCOME.EXITED && r.exitCode === 0;
   });
 
   function runCapture(shell, typed, tail) {
@@ -376,7 +374,9 @@ describe('#5143 the capture block treats hostile text as data (real bash)', () =
     try {
       const script = [...CAPTURE_LINES.map((l) => (l === '$ARGUMENTS' ? typed : l)), tail].join('\n');
       const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
-      const stdout = execFileSync(shell, args, { cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+      const r = runHook(args[0], args.slice(1), { interpreter: shell, cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+      assertSeamExit(assert, r, 0, `${shell} capture`);
+      const stdout = r.stdout;
       return { stdout, canary: fs.existsSync(path.join(dir, 'CANARY')) };
     } finally {
       cleanup(dir);
@@ -406,10 +406,10 @@ describe('#5143 the capture block treats hostile text as data (real bash)', () =
     const dir = createTempDir('gsd-5143-');
     try {
       const old = 'echo "$ARGUMENTS" | grep -q x'.replace('$ARGUMENTS', 'x"; touch CANARY; echo "');
-      execFileSync('bash', ['--noprofile', '--norc', '-c', old], { cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
-      assert.equal(fs.existsSync(path.join(dir, 'CANARY')), true);
-    } catch (_err) {
-      // grep -q may exit non-zero; the canary is what matters
+      const r = runHook('--noprofile', ['--norc', '-c', old], { interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+      // grep -q may exit non-zero; the exit code is ignored and the canary is what matters.
+      // A timeout or a failed spawn is not a result: it must name itself.
+      assert.ok(r.outcome !== OUTCOME.TIMED_OUT && r.outcome !== OUTCOME.SPAWN_FAILED, `control shell did not run to completion: ${r.summary}`);
       assert.equal(fs.existsSync(path.join(dir, 'CANARY')), true);
     } finally {
       cleanup(dir);
@@ -442,11 +442,11 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
         active.forEach((k) => {
           fs.writeFileSync(path.join(dir, `c${k}`), jobs[k].lines.slice(jobs[k].i, jobs[k].i + len).join('\n'));
         });
-        const ok = new Set(
-          execFileSync('bash', ['--noprofile', '--norc', '-c', 'for f in "$@"; do bash --noprofile --norc -n "$f" 2>/dev/null && echo "$f"; done; exit 0', 'probe', ...active.map((k) => `c${k}`)], {
-            cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS * 4,
-          }).split('\n').filter(Boolean),
-        );
+        const probe = runHook('--noprofile', ['--norc', '-c', 'for f in "$@"; do bash --noprofile --norc -n "$f" 2>/dev/null && echo "$f"; done; exit 0', 'probe', ...active.map((k) => `c${k}`)], {
+          interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS * 4,
+        });
+        assertSeamExit(assert, probe, 0, 'statement syntax probe');
+        const ok = new Set(probe.stdout.split('\n').filter(Boolean));
         for (const k of active) {
           if (ok.has(`c${k}`)) out[k] = jobs[k].lines.slice(jobs[k].i, jobs[k].i + len).join('\n');
         }
@@ -499,11 +499,10 @@ describe('#5143 every shipped statement that reads the typed text is injection-s
   const shq = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
 
   function run(script, dir) {
-    try {
-      return execFileSync('bash', ['--noprofile', '--norc', '-c', script], { cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
-    } catch (err) {
-      return String(err.stdout || '');
-    }
+    const r = runHook('--noprofile', ['--norc', '-c', script], { interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+    // A non-zero exit still yields its stdout (as before); a timeout or failed spawn must name itself.
+    assert.equal(r.outcome, OUTCOME.EXITED, `statement run did not exit: ${r.summary}`);
+    return r.stdout;
   }
 
   // One bash process per statement (spawning is the dominant cost, most of all
