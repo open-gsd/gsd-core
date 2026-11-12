@@ -964,24 +964,48 @@ function recordSpan(kind, i, end, mark) {
   spanCache.set(spanKey(kind, i), { end, tags });
 }
 
+// Index just past a `$( )`, function substitution or backtick span starting
+// at `i`, or -1 when none starts there. Each keeps its own quoting, inside
+// double quotes too, so every close finder skips it whole, here.
+function skipSubstitution(str, i) {
+  const ch = str[i];
+  if (ch === '`') {
+    const j = str.indexOf('`', i + 1);
+    return j === -1 ? str.length : j + 1;
+  }
+  if (ch !== '$') return -1;
+  if (str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); return e + 1; }
+  if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) return findFunsubClose(str, funsubStart(str, i)) + 1;
+  return -1;
+}
+
 // Index just past the `"` closing a double-quoted string whose text starts at
-// `i`. A `$( )`, backtick or function substitution inside keeps its own
-// quoting, so each is skipped whole.
+// `i`. A `'` is text there.
 function skipDoubleQuoted(str, i) {
   while (i < str.length && str[i] !== '"') {
     scanStep(1);
     if (str[i] === '\\') { i += 2; continue; }
-    if (str[i] === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
-    if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
+    const e = skipSubstitution(str, i);
+    if (e !== -1) { i = e; continue; }
     if (pairParams && str[i] === '$' && str[i + 1] === '{') { i = findParamClose(str, i + 2) + 1; continue; }
-    if (str[i] === '`') {
-      const j = str.indexOf('`', i + 1);
-      i = j === -1 ? str.length : j + 1;
-      continue;
-    }
     i++;
   }
   return i + 1;
+}
+
+// Index just past an escape, a quoted string or a substitution starting at
+// `i` outside double quotes, or -1 when none starts there. The one reading of
+// those the close finders share; a parameter expansion is not among them, as
+// each finder pairs one its own way.
+function skipQuotedOrSubstitution(str, i) {
+  const ch = str[i];
+  if (ch === '\\') return i + 2;
+  if (ch === "'") {
+    const j = str.indexOf("'", i + 1);
+    return j === -1 ? str.length : j + 1;
+  }
+  if (ch === '"') return skipDoubleQuoted(str, i + 1);
+  return skipSubstitution(str, i);
 }
 
 // Index of the `}` closing a `${…}` parameter expansion whose text starts at
@@ -994,21 +1018,13 @@ function findParamClose(str, i) {
   const open = [[i, funsubTags.length]]; // [start, funsubTags mark] of each `${` still open
   while (i < str.length) {
     scanStep(1);
+    // A double-quoted string is skipped from here rather than through the
+    // shared reader: `"${x:-"${x:-"…"}"}"` recurses once a level, and a call
+    // in between would have the stack hold a shallower nest than it did.
+    if (str[i] === '"') { i = skipDoubleQuoted(str, i + 1); continue; }
+    const part = skipQuotedOrSubstitution(str, i);
+    if (part !== -1) { i = part; continue; }
     const ch = str[i];
-    if (ch === '\\') { i += 2; continue; }
-    if (ch === "'") {
-      const j = str.indexOf("'", i + 1);
-      i = j === -1 ? str.length : j + 1;
-      continue;
-    }
-    if (ch === '"') { i = skipDoubleQuoted(str, i + 1); continue; }
-    if (ch === '`') {
-      const j = str.indexOf('`', i + 1);
-      i = j === -1 ? str.length : j + 1;
-      continue;
-    }
-    if (ch === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
-    if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
     if (ch === '$' && str[i + 1] === '{') {
       const known = knownSpan(PARAM_SPAN, i + 2);
       if (known !== -1) { i = known + 1; continue; }
@@ -1030,16 +1046,9 @@ function findParamClose(str, i) {
 // Index just past a quoted string, escape, substitution or parameter
 // expansion starting at `i`, or -1 when none starts there.
 function skipWordPart(str, i) {
-  const ch = str[i];
-  if (ch === '\\') return i + 2;
-  if (ch === "'" || ch === '`') {
-    const j = str.indexOf(ch, i + 1);
-    return j === -1 ? str.length : j + 1;
-  }
-  if (ch === '"') return skipDoubleQuoted(str, i + 1);
-  if (ch === '$' && str[i + 1] === '(') { const e = findParenClose(str, i + 2); scanStep(e - i); return e + 1; }
-  if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) return findFunsubClose(str, funsubStart(str, i)) + 1;
-  if (ch === '$' && str[i + 1] === '{') return findParamClose(str, i + 2) + 1;
+  const part = skipQuotedOrSubstitution(str, i);
+  if (part !== -1) return part;
+  if (str[i] === '$' && str[i + 1] === '{') return findParamClose(str, i + 2) + 1;
   return -1;
 }
 
@@ -1269,23 +1278,8 @@ function scanFunsubClose(str, i) {
       }
       if (ch === '<' || ch === '>') { endWord(); i++; continue; }
       if (!inWord) { inWord = true; wordAtCommand = atCommand; word = ''; }
-      if (ch === '\\') { word += '\0'; i += 2; continue; }
-      if (ch === "'") {
-        word += '\0';
-        const j = str.indexOf("'", i + 1);
-        i = j === -1 ? str.length : j + 1;
-        continue;
-      }
-      if (ch === '"') { word += '\0'; i = skipDoubleQuoted(str, i + 1); continue; }
-      if (ch === '`') {
-        word += '\0';
-        const j = str.indexOf('`', i + 1);
-        i = j === -1 ? str.length : j + 1;
-        continue;
-      }
-      if (ch === '$' && str[i + 1] === '(') { word += '\0'; const e = findParenClose(str, i + 2); scanStep(e - i); i = e + 1; continue; }
-      if (isFunsubOpen(str, i) && funsubDepth < MAX_FUNSUB_DEPTH) { word += '\0'; i = findFunsubClose(str, funsubStart(str, i)) + 1; continue; }
-      if (ch === '$' && str[i + 1] === '{') { word += '\0'; i = findParamClose(str, i + 2) + 1; continue; }
+      const part = skipWordPart(str, i);
+      if (part !== -1) { word += '\0'; i = part; continue; }
       word += ch;
       i++;
     }
