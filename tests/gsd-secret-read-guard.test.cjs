@@ -930,6 +930,28 @@ describe('gsd-secret-read-guard: git configuration set in the environment on the
     ["GIT_CONFIG_KEY_0=core.fsmonitor; GIT_CONFIG_VALUE_0='cat .env'; export GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; GIT_CONFIG_COUNT=1 git status", '.env'],
     ["export GIT_CONFIG_KEY_0=core.fsmonitor; GIT_CONFIG_COUNT=1 GIT_CONFIG_VALUE_0='cat .env' git status", '.env'],
     ["declare -x E='cat .env'; git --config-env=core.fsmonitor=E status", '.env'],
+    // A declaration behind a reserved word, a builtin prefix, an assignment
+    // prefix or a redirect still sets the variable for the rest of the script.
+    ["if true; then export GIT_EDITOR='cat .env #'; fi; git status", '.env'],
+    ["if false; then :; else export GIT_EDITOR='cat .env #'; fi; git status", '.env'],
+    ["if false; then :; elif export GIT_EDITOR='cat .env #'; then :; fi; git status", '.env'],
+    ["while false; do :; done; command export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["until export GIT_EDITOR='cat .env #'; do :; done; git status", '.env'],
+    ["set -- 1; for x do export GIT_EDITOR='cat .env #'; done; git status", '.env'],
+    ["! export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["builtin export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["command -p export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["time -p ! export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["X=1 command export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["GIT_EDITOR='cat .env #' export X=1; git status", '.env'], // kept in POSIX mode
+    ["if true; then GIT_EDITOR='cat .env #'; fi; export GIT_EDITOR; git status", '.env'],
+    [">/dev/null export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["GIT_EDITOR='cat .env #' >/dev/null; git status", '.env'],
+    ["{\\\n export GIT_EDITOR='cat .env #'; }; git status", '.env'],
+    ["case x in x) export GIT_EDITOR='cat .env #';; esac; git status", '.env'],
+    // A prefix with nothing after it reaches the read after it.
+    ['command; cat .env', '.env'],
+    ['time -p; cat .env', '.env'],
     ["GIT_EDITOR+='cat .env #' git status", '.env'], // bash's appending assignment
     ["export E='cat .env'; echo $(git --config-env=core.fsmonitor=E status)", '.env'],
     // A prefix reaches whatever its command runs.
@@ -980,6 +1002,8 @@ describe('gsd-secret-read-guard: git configuration set in the environment on the
     // The value comes from the inherited environment, which the hook cannot see.
     'git --config-env=sequence.editor=E rebase -i',
     "export E='cat .env'; git status",
+    // `command -v` only looks the name up; nothing is exported.
+    "command -v export GIT_EDITOR='cat .env #'; git status",
     "FOO='cat .env' make",
   ];
   for (const cmd of allows) {
