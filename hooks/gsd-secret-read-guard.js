@@ -1452,18 +1452,54 @@ function shellVarFrame(parent, assignments) {
   return { parent, vars, gitEnv: undefined, gitEnvScanned: false };
 }
 
+// Reserved words that may open a segment ahead of a command run in the same
+// shell; `{` is a word when a line continuation follows it.
+const LEADING_RESERVED = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', '{']);
+// Builtin prefixes that run a builtin in the current shell, with the options
+// that keep it running (`command -v` only looks the name up).
+const BUILTIN_PREFIXES = new Map([['builtin', ['--']], ['command', ['-p', '--']], ['time', ['-p', '--']]]);
+
+// Whether a segment's words set variables in the script's shell: bare
+// assignments, or a declaration builtin, behind leading reserved words,
+// builtin prefixes and assignment prefixes.
+function isAssignmentSegment(words) {
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i];
+    if (ASSIGNMENT_RE.test(w) || LEADING_RESERVED.has(w)) {
+      i++;
+    } else if ((w === 'for' || w === 'select') && words[i + 2] === 'do') {
+      i += 3; // `for NAME do …` without `in` puts the body in this segment
+    } else if (BUILTIN_PREFIXES.has(w)) {
+      const options = BUILTIN_PREFIXES.get(w);
+      i++;
+      while (i < words.length && options.includes(words[i])) i++;
+    } else {
+      break;
+    }
+  }
+  // Words that ran out leave only assignments to collect, possibly none.
+  return i === words.length || DECLARATION_COMMANDS.has(words[i]);
+}
+
 // The `NAME=value` words of a script's declaration builtins and bare
 // assignment segments.
 function scriptAssignments(tokens) {
   const bySeg = new Map();
-  for (const t of tokens) {
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k];
+    // A redirect's target is a file name, not a word of the command.
+    if (t.kind === 'op') {
+      if (!t.dup && tokens[k + 1] && tokens[k + 1].kind === 'word' && tokens[k + 1].seg === t.seg) k++;
+      continue;
+    }
     if (t.kind !== 'word') continue;
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
     bySeg.get(t.seg).push(t.text);
   }
   const assignments = [];
   for (const words of bySeg.values()) {
-    if (words.every((w) => ASSIGNMENT_RE.test(w)) || DECLARATION_COMMANDS.has(words[0])) {
+    if (isAssignmentSegment(words)) {
       for (const w of words) if (ASSIGNMENT_RE.test(w)) assignments.push(w);
     }
   }
