@@ -129,7 +129,7 @@ const LANE_COSTS = [
   },
   {
     job: 'test-conformance',
-    measuredMinutes: 22,
+    measuredMinutes: 23,
     // #5029: the first entry this lane has had. It ran uncovered from #4591
     // until now on the comment "no LANE_COSTS entry exists yet for this
     // brand-new job — generous until a real measurement exists", and that gap
@@ -146,13 +146,15 @@ const LANE_COSTS = [
     // three at 367 tier files) / 16m35s (375 files, run 42078639141), then
     // 15m27s on run 42087947326, 14m49s-18m29s across the twelve fork runs
     // SHARD_BALANCE's baselines come from (367-375 files; worst shard 2/6, run
-    // 42034565931), and 16m31s-18m45s across the six fork runs of 2026-11-12
-    // its gap comment cites (319-330 files; worst shard 2/6, run 43136204941):
-    // 39 six-shard runs in all. The worst of them, 21m43s
-    // (shard 5/6, run 40802722711), came from a slow VM: the same shard and
-    // partition took 18m17s on run 40798310354, and #5473's spawn watcher logged
-    // 12 slow probes (max 7.0s) against 4 (max 2.1s). By this file's convention
-    // it still counts: it rounds up to 22, so this cap may not drop below 33m.
+    // 42034565931), and 13m56s-22m15s across the eleven complete fork runs of
+    // 2026-11-12 its gap comment cites (319-330 files): 44 six-shard runs in
+    // all. The worst, 22m15s (shard 2/6, run 43248156906, 330 files), came
+    // from a slow VM: the same shard and partition took 18m45s on run
+    // 43136204941, every one of its five chunks ran 1.05-1.28x longer, and
+    // #5473's spawn watcher logged a slowest process sample of 8.5s against
+    // 2.3s. So did the previous worst, 21m43s (shard 5/6, run 40802722711,
+    // 367 files; 18m17s on run 40798310354). By this file's convention both
+    // count: 22m15s rounds up to 23, so this cap may not drop below 35m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
     // 18m13s-26m01s across six runs on this PR (repo-wide p90 26.0m over 43
@@ -188,7 +190,7 @@ const LANE_COSTS = [
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
     // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
-    evidence: 'run 40802722711 — windows shard 5/6 21m43s, worst of 39 6-shard runs (binding row); macOS 3-shard worst 19m54s on run 42078639141',
+    evidence: 'run 43248156906 — windows shard 2/6 22m15s, worst of 44 6-shard runs (binding row); macOS 3-shard worst 19m54s on run 42078639141',
   },
 ];
 
@@ -277,14 +279,16 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  *
  * Model: a shard's long pole is a fixed cost plus its share of the tier,
  * fixedSecondsPerShard + secondsPerTierFile * tierFiles / shards, fitted by
- * least squares to the slowest Windows shard's job wall-clock in the 35 runs
+ * least squares to the slowest Windows shard's job wall-clock in the 40 runs
  * on hand since #6002 changed which files the tier holds, each at its own
  * tier size:
  *   - the 29 consecutive `next` push runs 42520239603 to 43090201759
  *     (2026-11-08 to 11-11; 3 shards, 319-330 files);
- *   - six fork runs of 2026-11-12, each a `next` commit from that span merged
- *     with #5029 (43136204917, 43136204941, 43136205083, 43140668487,
- *     43140668934, 43140669065; 6 shards, 319-330 files).
+ *   - eleven fork runs of 2026-11-12, each a `next` commit from that span
+ *     with #5029's changes (43136204917, 43136204941, 43136205083,
+ *     43140668487, 43140668934, 43140669065, 43248156906, 43253932817,
+ *     43253932847, 43253934459, 43253940560; 6 shards, 319-330 files). A
+ *     twelfth, 43253938926, is left out: one of its shards never got a runner.
  * The tier size barely moves across them. The slope comes from the two shard
  * counts: 106-110 files per shard at three shards, 53-55 at six.
  *
@@ -308,8 +312,8 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  * at 367-375 files that SHARD_BALANCE's comments cite):
  *
  *   runs                                     fixed  per file  3 shards  6 shards
- *   after #6002, 29 + 6 (these constants)     494s    10.34s     97.9%     63.8%
- *   before and after, all 60                  425s    10.24s     93.1%     59.3%
+ *   after #6002, 29 + 11 (these constants)    500s    10.28s     97.8%     63.9%
+ *   before and after, all 65                  460s     9.93s     93.1%     60.4%
  *   before #6002 only, 11 + 14                404s     9.25s     85.3%     54.8%
  *   the first fit's constants                 584s     8.32s    89.95%     62.5%
  *
@@ -318,16 +322,17 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  * four shards or more.
  *
  * The constants model a typical runner on the current tier, and single runs
- * fall on either side: residuals run from -250s to +243s over the 29 3-shard
- * runs (median +15s) and from -53s to +62s over the six 6-shard runs (median
- * +20s; they project 17.7m at 330 files against 18m02s and 18m45s on the two
- * 330-file runs). They over-predict the tier as it was before #6002, by a
- * median of 167s on its 6-shard runs. The slow-runner skew is the margin for
- * the rest, and the last test below checks it covers the worst rows on record.
+ * fall on either side: residuals run from -249s to +244s over the 29 3-shard
+ * runs (median +15s) and from -223s to +270s over the eleven 6-shard runs
+ * (median +17s; they project 17.8m at 330 files, and the four 330-file runs
+ * took 17m13s to 22m15s). They over-predict the tier as it was before #6002,
+ * by a median of 170s on its 6-shard runs. The slow-runner skew is the margin
+ * for the rest, and the last test below checks it covers the worst rows on
+ * record.
  */
 const WINDOWS_CONFORMANCE_PROJECTION = {
-  fixedSecondsPerShard: 494,
-  secondsPerTierFile: 10.34,
+  fixedSecondsPerShard: 500,
+  secondsPerTierFile: 10.28,
   slowRunnerSkew: 1.62,
 };
 
@@ -423,7 +428,7 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
   await t.test('the skewed projection covers the worst row on record at each layout', () => {
     const worstRows = [
       { shards: 3, tierFiles: 329, seconds: 1871, run: '42651064527 (31m11s)' },
-      { shards: 6, tierFiles: 330, seconds: 1125, run: '43136204941 (18m45s)' },
+      { shards: 6, tierFiles: 330, seconds: 1335, run: '43248156906 (22m15s, slow VM)' },
       { shards: 6, tierFiles: 367, seconds: 1303, run: '40802722711 (21m43s, slow VM)' },
     ];
     for (const row of worstRows) {

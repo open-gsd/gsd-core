@@ -673,24 +673,25 @@ const SHARD_BALANCE = Object.freeze({
   //   - 430.5s over PR #5053's two runs on the 375-file partition its head
   //     had at 77b2d9a09 (42078639141 and 42087947326; 439s and 459s run by
   //     run);
-  //   - 357s over six fork runs on the 319-330 file partitions `next` has had
-  //     since #6002 (43136204917, 43136204941, 43136205083, 43140668487,
-  //     43140668934, 43140669065), where 2/6 is the slow shard (median 1038.5s
-  //     against 681.5s for 1/6) and single runs range from 328s to 546s;
-  //   - 218.5s over all twenty together, which is the size of window the daily
+  //   - 265.5s over twelve fork runs on the 319-330 file partitions `next` has
+  //     had since #6002 (43136204917, 43136204941, 43136205083, 43140668487,
+  //     43140668934, 43140669065, 43248156906, 43253932817, 43253932847,
+  //     43253934459, 43253938926, 43253940560), where 2/6 is the slow shard
+  //     (median 938s against 672.5s for 5/6) and single runs range from 328s
+  //     to 586s;
+  //   - 268s over the newest twenty of all 26, which is the window the daily
   //     check reads, and reads `ok`.
-  // So the margin is one of three things. A window on the partitions `next`
-  // has now, which is what the daily check reads first after #5029 merges,
-  // has 143s to spare (29%), with single runs already over the limit. A window
-  // on one unlucky partition has about 70s (14%). A window that mixes
-  // partitions has about 280s, but the 367-375 file ones are gone from `next`.
-  // The limit is kept and not re-derived, because the two honest
-  // re-derivations disagree:
-  // the pooled gap x 1.5 would be 328s, under what single partitions already
-  // measure, and one partition's gap x 1.5 would be 536-646s, sized to
-  // whichever partition was sampled. If the check opens a gap breach, read
-  // which shard is slow before changing this number: the cause above (#5807
-  // tracks the packing fix) is real imbalance and not runner noise.
+  // So the margin is one of two things. A window that spans the partitions
+  // `next` has now, which is what the daily check reads first after #5029
+  // merges, has about 235s to spare (47%), though single runs there are
+  // already over the limit. A window that sat on one unlucky partition would
+  // have about 70s (14%). The limit is kept and not re-derived, because the
+  // two honest re-derivations disagree: the gap over those twelve runs x 1.5
+  // would be 398s, under what one partition already measures, and that one
+  // partition's gap x 1.5 would be 646s, sized to whichever partition was
+  // sampled. If the check opens a gap breach, read which shard is slow before
+  // changing this number: the cause above (#5807 tracks the packing fix) is
+  // real imbalance and not runner noise.
   maxMedianGapMs: 500000,
   // Baselines. A shard's time moves with the tree: #5803 refreshed
   // tests/test-timings.json, and selectShard re-packs the light files whenever
@@ -704,9 +705,13 @@ const SHARD_BALANCE = Object.freeze({
   // 42034565931, 42034572698). Spanning partitions is deliberate: the daily
   // check reads the newest `windowRuns` push runs, which span them too. All
   // twelve ran on one day, so they do not sample day-to-day runner variation.
-  // The six later fork runs the gap comment lists (319-330 tier files) stay
-  // under every baseline row by row; the closest is 2/6 at 1125000 against
-  // 1196250.
+  // The twelve later fork runs the gap comment lists (319-330 tier files) read
+  // `ok` against these baselines: their p90s are 889000, 1125000, 999000,
+  // 973000, 749000 and 1034000, the closest being 2/6 at 1125000 against
+  // 1196250. One row of their 71 is above its baseline, 2/6 at 1335000 on run
+  // 43248156906, a slow VM (the test-conformance LANE_COSTS entry describes
+  // it). On the 330-file partition 2/6 starts with a chunk that is one 4-5
+  // minute file (`codex-config-agents`), so it is the shard to watch.
   //
   // The measured nearest-rank p90 of job wall-clock per shard (the same
   // `percentile` this file uses) over those runs is 1/6 889000, 2/6 957000,
@@ -715,8 +720,8 @@ const SHARD_BALANCE = Object.freeze({
   // fresh sample of the same distribution too often (3/6's own twelfth value,
   // 1047000, is already above 1028000), so the daily check would open a p90
   // breach on noise. 1.25 rather than the 1.5 used above keeps the rule a
-  // regression detector: x1.5 would let 3/6 reach ~26 min, past the 21m43s worst
-  // run the test-conformance LANE_COSTS entry records.
+  // regression detector: x1.5 would let 3/6 reach ~26 min, past the worst run
+  // the test-conformance LANE_COSTS entry records.
   baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
     '1/6': 1111250,
