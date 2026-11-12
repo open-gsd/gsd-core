@@ -10,7 +10,6 @@
  * these tests accept is exactly a spec the runner accepts.
  */
 
-const assert = require('node:assert/strict');
 const { parseShardArg } = require('../../scripts/run-tests.cjs');
 
 /** Parse an `i/n` shard spec into { index, total }, or null if malformed. */
@@ -32,23 +31,47 @@ function isCompleteShardSet(specs) {
 }
 
 /**
+ * Why declaredWindowsConformanceShards refused a workflow. The thrown error
+ * carries one of these as `code`; tests assert on the code, and the message
+ * is for the person reading the failure.
+ */
+const SHARD_SPEC_ERROR = Object.freeze({
+  MISSING: 'SHARD_SPEC_MISSING',
+  DISAGREE: 'SHARD_SPEC_DISAGREE',
+});
+
+function shardSpecError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+/**
  * The shard total test.yml's windows-latest conformance rows declare. Throws
- * unless every row carries a valid spec and all of them agree on one total.
+ * an error with a SHARD_SPEC_ERROR `code` unless every row carries a valid
+ * spec (MISSING, which also covers a workflow with no windows row) and all of
+ * them agree on one total (DISAGREE).
  */
 function declaredWindowsConformanceShards(workflow) {
   const entries = workflow.jobs['test-conformance'].strategy.matrix.include
     .filter((e) => e.os === 'windows-latest');
   const parsed = entries.map((e) => parseShardSpec(e.shard));
-  assert.ok(
-    parsed.length > 0 && parsed.every((p) => p !== null),
-    `windows conformance entries must each declare an i/n shard: ${JSON.stringify(entries)}`,
-  );
+  if (parsed.length === 0 || parsed.some((p) => p === null)) {
+    throw shardSpecError(
+      SHARD_SPEC_ERROR.MISSING,
+      `windows conformance entries must each declare an i/n shard: ${JSON.stringify(entries)}`,
+    );
+  }
   const totals = [...new Set(parsed.map((p) => p.total))];
-  assert.equal(totals.length, 1, `windows conformance entries disagree on the shard total: ${JSON.stringify(entries)}`);
+  if (totals.length !== 1) {
+    throw shardSpecError(
+      SHARD_SPEC_ERROR.DISAGREE,
+      `windows conformance entries disagree on the shard total: ${JSON.stringify(entries)}`,
+    );
+  }
   return totals[0];
 }
 
 module.exports = {
+  SHARD_SPEC_ERROR,
   parseShardSpec,
   isCompleteShardSet,
   declaredWindowsConformanceShards,

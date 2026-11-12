@@ -143,9 +143,12 @@ const LANE_COSTS = [
     // twenty 6-shard runs of this PR was 16m38s / 15m17s / 16m25s / 16m21s /
     // 17m22s / 18m15s / 16m31s / 18m07s / 15m34s / 18m49s / 18m38s / 19m15s /
     // 16m58s / 16m23s / 15m18s / 14m27s / 18m35s / 21m43s / 15m05s (those last
-    // three at 367 tier files) / 16m35s (375 files, run 42078639141), and
-    // 14m49s-18m29s across the twelve fork runs SHARD_BALANCE's baselines come
-    // from (367-375 files; worst shard 2/6, run 42034565931). The worst, 21m43s
+    // three at 367 tier files) / 16m35s (375 files, run 42078639141), then
+    // 15m27s on run 42087947326, 14m49s-18m29s across the twelve fork runs
+    // SHARD_BALANCE's baselines come from (367-375 files; worst shard 2/6, run
+    // 42034565931), and 16m31s-18m45s across the six fork runs of 2026-11-12
+    // its gap comment cites (319-330 files; worst shard 2/6, run 43136204941).
+    // That is 39 six-shard runs. The worst, 21m43s
     // (shard 5/6, run 40802722711), came from a slow VM: the same shard and
     // partition took 18m17s on run 40798310354, and #5473's spawn watcher logged
     // 12 slow probes (max 7.0s) against 4 (max 2.1s). By this file's convention
@@ -163,10 +166,12 @@ const LANE_COSTS = [
     // rounds up to 20, so windows still sets this entry. At that slow runner's
     // worst 2.1x it would be ~42m, which requires 63m: over the 45m cap, so a
     // 3-shard row on such a runner could force this decision again. None has
-    // been observed, and the 19m54s row may already be a slow one (its two
-    // single-file chunks took 1.6-1.8x their time on fork run 42019488063). If
-    // a macOS shard ever outruns windows, it sets this entry — re-measured,
-    // never scaled.
+    // been observed in 20 runs of the 3-shard layout (the next worst row is
+    // 16m25s, run 43136204941), and the 19m54s row may already be a slow one
+    // (its two single-file chunks took 1.6-1.8x their time on fork run
+    // 42019488063). #5029 names only Windows, so that headroom is tracked in
+    // #6148. If a macOS shard ever outruns windows, it sets this entry —
+    // re-measured, never scaled.
     //
     // Why six shards and not fewer, in budget terms: measured windows long
     // poles were 34m24s and 34m14s at 3 shards (runs 36322513056, 36357457440)
@@ -182,7 +187,7 @@ const LANE_COSTS = [
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
     // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
-    evidence: 'run 40802722711 — windows shard 5/6 21m43s, worst of 32 6-shard runs (binding row); macOS 3-shard worst 19m54s on run 42078639141',
+    evidence: 'run 40802722711 — windows shard 5/6 21m43s, worst of 39 6-shard runs (binding row); macOS 3-shard worst 19m54s on run 42078639141',
   },
 ];
 
@@ -271,22 +276,52 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  *
  * Model: a shard's long pole is a fixed cost plus its share of the tier,
  * fixedSecondsPerShard + secondsPerTierFile * tierFiles / shards, fitted by
- * least squares to the slowest Windows shard's job wall-clock in 45 runs: the
- * 30 newest `next` push runs as of 2026-10-28 (40204893388 to 40743658906; 3
- * shards, 353-367 files) and the 15 6-shard runs of PR #5053 whose heads carry
- * #5097's weights (36785097774 to 39722364921; 285-342 files). Fitting with
- * only the newest two or three 6-shard runs keeps the 3-shard projection at
- * 96.0-96.5% of the cap and lowers the 6-shard one (66% to 56-58%), so these
- * are the conservative constants. They model a typical runner, and single
- * runs fall on either side: for six shards they project 17.6m at 342 files
- * against 14m27s measured (run 39722364921), and 18.2m at 367 files against
- * 18m35s and, on a slow VM, 21m43s (runs 40798310354 and 40802722711; the
- * slow one is 1.19x the projection). The slow-runner skew is the margin for
- * those.
+ * least squares to the slowest Windows shard's job wall-clock in 60 runs, each
+ * at its own tier size:
+ *   - every `next` push run from 2026-11-08 to 11-11, 40 of them
+ *     (42456493417 to 43090201759; 3 shards, 319-380 files);
+ *   - the twelve 6-shard fork runs SHARD_BALANCE's baselines cite (367-375);
+ *   - PR #5053's 6-shard runs 42078639141 and 42087947326 (375);
+ *   - six 6-shard fork runs of 2026-11-12 on the partitions `next` has had
+ *     since #6002 (43136204917, 43136204941, 43136205083, 43140668487,
+ *     43140668934, 43140669065; 319-330).
+ *
+ * These constants are a refit (2026-11-12). The first fit (2026-10-28: 584s +
+ * 8.32s per file, 45 runs at 285-367 files) stopped describing the lane when
+ * #6002 took the tier from 380 files to 319. The files that left were light,
+ * so the lane did not get faster: the 3-shard long pole has a median of 27.0m
+ * (worst 31m11s, run 42651064527) over the 29 `next` runs after it, against
+ * 26.8m over the 11 before, and the old constants under-predict those 29 by a
+ * median of 141s (up to 375s). At 330 files they put three shards at 89.95%
+ * of the cap, just under the near-cap line, for a lane that still fails the
+ * LANE_COSTS rule above (31m11s rounds to 32, which needs 48m).
+ *
+ * The answer depends on which runs go in, so here is every fit, as the share
+ * of the cap at 330 files and the 1.62x skew:
+ *
+ *   runs                                     fixed  per file  3 shards  6 shards
+ *   all 60 (these constants)                  425s    10.24s     93.1%     59.3%
+ *   after #6002 only (29 + 6)                 494s    10.34s     97.9%     63.8%
+ *   before #6002 only (11 + 14)               404s     9.25s     85.3%     54.8%
+ *   the first fit's constants                 584s     8.32s     90.0%     62.5%
+ *
+ * The before-only fit passes three shards. It describes a per-file cost the
+ * tier no longer has, which is why it is not used, but it shows the margin by
+ * which three shards fail here (93.1% against a 90% line) is a property of the
+ * fit and not a measurement. Every fit admits four shards or more. A model in
+ * tier files cannot see which files a tier holds: when a change moves many
+ * light or heavy files at once, refit it from runs after that change.
+ *
+ * The constants model a typical runner, and single runs fall on either side:
+ * for six shards they project 17.8m at 375 files against 14m49s-18m29s
+ * measured on the 367-375 file runs, 16.5m at 330 files against 18m02s and
+ * 18m45s (all six runs since #6002 came in over the projection, by 22s to
+ * 137s), and 17.5m at 367 files against 21m43s on a slow VM (run 40802722711,
+ * 1.24x the projection). The slow-runner skew is the margin for those.
  */
 const WINDOWS_CONFORMANCE_PROJECTION = {
-  fixedSecondsPerShard: 584,
-  secondsPerTierFile: 8.32,
+  fixedSecondsPerShard: 425,
+  secondsPerTierFile: 10.24,
   slowRunnerSkew: 1.62,
 };
 
@@ -348,6 +383,35 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
         assert.ok(
           isNearCap(shareAtFewer) || !isNearCap(shareAtMore),
           `${fewer} shards clear the near-cap line but ${more} do not`,
+        );
+      },
+    ));
+  });
+
+  // The property above holds for any non-negative constants, so it cannot tell
+  // a good fit from a bad one. This one can: a tier that gains files must cost
+  // strictly more at the same shard count. A refit with a zero or negative
+  // per-file slope (which least squares can return on a narrow tier range)
+  // fails it, and so would a model that stopped reading the tier size.
+  await t.test('a larger tier always raises the projected share of the cap', () => {
+    assert.ok(WINDOWS_CONFORMANCE_PROJECTION.secondsPerTierFile > 0);
+    assert.ok(WINDOWS_CONFORMANCE_PROJECTION.fixedSecondsPerShard >= 0);
+    assert.ok(WINDOWS_CONFORMANCE_PROJECTION.slowRunnerSkew >= 1);
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 64 }),
+      fc.nat({ max: 5000 }),
+      fc.integer({ min: 1, max: 5000 }),
+      fc.integer({ min: 1, max: 360 }),
+      (shards, tierFiles, added, cap) => {
+        const before = slowRunnerCapShare(shards, tierFiles, cap);
+        const after = slowRunnerCapShare(shards, tierFiles + added, cap);
+        assert.ok(
+          after > before,
+          `${tierFiles + added} files share ${after}, not above ${tierFiles} files at ${before} (${shards} shards)`,
+        );
+        assert.ok(
+          isNearCap(after) || !isNearCap(before),
+          `${tierFiles} files are near the cap but ${tierFiles + added} are not (${shards} shards)`,
         );
       },
     ));

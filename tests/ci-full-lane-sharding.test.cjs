@@ -45,6 +45,7 @@ const {
   parseShardSpec,
   isCompleteShardSet,
   declaredWindowsConformanceShards,
+  SHARD_SPEC_ERROR,
 } = require('./helpers/shard-spec.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
@@ -421,8 +422,16 @@ test('the declared windows shard total is read strictly (#5029)', () => {
 
   assert.equal(declaredWindowsConformanceShards(workflowWith([windows('1/2'), windows('2/2'), macos('1/3')])), 2);
 
-  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows(undefined)])), /must each declare/);
-  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows('6')])), /must each declare/);
-  assert.throws(() => declaredWindowsConformanceShards(workflowWith([macos('1/3')])), /must each declare/);
-  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows('1/2'), windows('1/3')])), /disagree/);
+  const missing = { code: SHARD_SPEC_ERROR.MISSING };
+  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows(undefined)])), missing);
+  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows('6')])), missing);
+  assert.throws(() => declaredWindowsConformanceShards(workflowWith([macos('1/3')])), missing);
+  assert.throws(
+    () => declaredWindowsConformanceShards(workflowWith([windows('1/2'), windows('1/3')])),
+    { code: SHARD_SPEC_ERROR.DISAGREE },
+  );
+
+  // The codes are the contract: adding or renaming one changes this list too.
+  assert.deepEqual(Object.keys(SHARD_SPEC_ERROR).sort(), ['DISAGREE', 'MISSING']);
+  assert.equal(Object.isFrozen(SHARD_SPEC_ERROR), true);
 });
