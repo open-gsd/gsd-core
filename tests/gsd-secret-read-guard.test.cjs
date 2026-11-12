@@ -1704,6 +1704,49 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
     assertAllowed({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'budget of 1 without GSD_TEST_MODE');
   });
 
+  // The budget's edge (RULESET.TESTS.boundary-coverage). `echo a` holds no
+  // quote, expansion, substitution or heredoc, so its count can be read off
+  // the command: the secret-read scan and the debugger-spawn scan each read
+  // its 6 characters, and the first adds a step per token and one more
+  // (2 + 1), which makes 15. The hook denies once the steps pass the budget,
+  // so a budget equal to the count allows. A change to what the scan charges
+  // moves the count, and these rows with it.
+  const EDGE_COMMAND = 'echo a';
+  const EDGE_STEPS = 2 * EDGE_COMMAND.length + 2 + 1;
+  const budgetOf = (value) => runBudgeted(EDGE_COMMAND, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: value });
+  const assertCapped = (r, label) => assertBlocked(r, label, { code: 'scan-step-budget', tool: 'Bash', path: '' });
+  test(`the step budget denies a ${EDGE_STEPS}-step scan at ${EDGE_STEPS - 1} and allows it at ${EDGE_STEPS} and ${EDGE_STEPS + 1}`, () => {
+    assertCapped(budgetOf(String(EDGE_STEPS - 1)), 'one under the count');
+    assertAllowed(budgetOf(String(EDGE_STEPS)), 'the count');
+    assertAllowed(budgetOf(String(EDGE_STEPS + 1)), 'one over the count');
+  });
+
+  // The budget's parse: a positive decimal integer and nothing else. Any other
+  // value means no cap, never a cap of 0 or of the digits it holds: the seam
+  // can only deny, so a misread value must not turn into one that does.
+  // `7` is under the count, so each row would deny if its value were read as 7.
+  for (const value of ['0', '-7', '+7', '07', '7.5', ' 7', '7 ', '7e0', '0x7', '7n', 'abc', '']) {
+    test(`the step budget is no cap for the value ${JSON.stringify(value)}`, () => {
+      assertCapped(budgetOf('7'), 'the value 7 caps');
+      assertAllowed(budgetOf(value), `budget ${JSON.stringify(value)}`);
+    });
+  }
+  test('property: a positive decimal integer caps the scan at that many steps', () => {
+    const POSITIVE = fc.oneof(fc.integer({ min: 1, max: 3 * EDGE_STEPS }), fc.bigInt({ min: 1n, max: 10n ** 40n })).map(String);
+    fc.assert(fc.property(POSITIVE, (value) => {
+      const r = budgetOf(value);
+      if (BigInt(value) < BigInt(EDGE_STEPS)) assertCapped(r, value);
+      else assertAllowed(r, value);
+    }), PROPERTY_RUNS);
+  });
+  test('property: any value that is not a positive decimal integer is no cap', () => {
+    const CHAR = fc.constantFrom(...'0123456789 +-.,_eExXn\t');
+    const OTHER = fc.array(CHAR, { maxLength: 8 }).map((chars) => chars.join('')).filter((value) => !/^[1-9][0-9]*$/.test(value));
+    fc.assert(fc.property(OTHER, (value) => {
+      assertAllowed(budgetOf(value), JSON.stringify(value));
+    }), PROPERTY_RUNS);
+  });
+
   // A `((` that does not end in `))` is read again as subshells, and the
   // heredoc tags its nested substitution left were once pushed again with
   // them, doubling at every level: 31 levels aborted a 1 GB heap. Each row
