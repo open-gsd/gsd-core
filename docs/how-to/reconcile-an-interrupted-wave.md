@@ -50,7 +50,16 @@ gsd_run query worktree.cleanup-wave --manifest "<manifest-path>"
 
 `cleanup-wave` reconciles executor worktrees, removes finished worktrees, and unlinks the manifest file upon successful completion (`manifest_unlinked: true`).
 
-**If `cleanup-wave` blocks:** When worktree branches conflict, contain uncommitted modifications, unmanifested worktrees exist on disk, or residual worktrees fail to remove, `cleanup-wave` exits non-zero and retains the manifest on disk for investigation. Once the underlying blocking condition is addressed, re-running `cleanup-wave` completes the process and removes the manifest.
+**If `cleanup-wave` blocks:** When worktree branches conflict, contain uncommitted modifications, or residual worktrees fail to remove, `cleanup-wave` exits non-zero and retains the manifest on disk for investigation. Once the underlying blocking condition is addressed, re-running `cleanup-wave` completes the process and removes the manifest.
+
+**Agents the manifest does not list:** An executor that was still running when the wave was interrupted was never recorded. `cleanup-wave` does not touch its worktree or branch. Check for leftovers before and after cleanup:
+
+```bash
+git branch --list 'worktree-agent-*'
+git worktree list
+```
+
+Merge or keep any work you find, then remove the worktree with `git worktree remove "<path>"`.
 
 ---
 
@@ -69,8 +78,11 @@ Once `cleanup-wave` reports success and unlinks the manifest, re-run `/gsd-execu
   ```
 - **`FATAL: cannot resolve wave number before worktree dispatch`:**
   Occurs when neither `CURRENT_WAVE` nor incomplete plans with a defined wave could be resolved from `.planning/phases/`, or the resolved wave is outside `1..999`. Set `CURRENT_WAVE=<N>` explicitly or ensure phase plans carry valid `wave: <N>` frontmatter.
-- **`unmanifested_worktrees_present` (`Residual agent worktrees remain on disk that are not recorded in manifest`):**
-  Occurs when an executor worktree that names this wave (a delimited `wave-<N>` in its branch or path — `wave-1` does not match `wave-10` or `wave-1x`, and a phase-directory name that contains `wave-<N>` is not itself that token — and the phase-directory name when the manifest lives in a phase directory) is not recorded in the manifest. A detached-HEAD agent matches on its path. A listed worktree that names the wave but cannot be resolved counts as present. An agent under the same repo that does not name this wave does not block. Inspect registered worktrees with `git worktree list`. If an abandoned agent worktree remains, review or remove it with `git worktree remove --force "<path>"` before re-running cleanup.
+- **`empty_manifest`:**
+  The manifest records no worktree, usually because the wave was interrupted before any executor was recorded. `cleanup-wave` refuses it so a failed recording is never mistaken for a clean wave. Check `git branch --list 'worktree-agent-*'` and `git worktree list`, merge or keep that work, then remove the manifest:
+  ```bash
+  gsd_run query worktree.cleanup-wave --manifest "<manifest-path>" --allow-empty
+  ```
 - **`manifest_symlink_refused`:**
   Wave manifests must be regular files, not symbolic links. Remove or replace the symlink with a regular file.
 - **`manifest_check_failed`:**
