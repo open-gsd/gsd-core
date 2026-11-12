@@ -2379,6 +2379,27 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assert.ok(!plain.reason.includes(KEY), 'unconfigured reason is unchanged');
   });
 
+  // The hint says a listed file is readable from Bash by its absolute path.
+  // That is true only of a read-only line: any other is denied whatever path
+  // names the file, so its reason is the unconfigured one, byte for byte. The
+  // last command is read-only to the plain reading and not to the one that
+  // pairs `${x:-'}'}` as bash does, which is the reading that denies it.
+  test('Bash deny reason on a line that is not read-only carries no exemption hint', () => {
+    const pq = absq('.env.production');
+    for (const cmd of [
+      'mv a b; cat .env.production',
+      `mv a b; cat ${pq}`,
+      'mv a b; cat .env',
+      `cat ${pq}; cat \${x:-'}'}; mv a b; cat "'"`,
+    ]) {
+      configure(undefined);
+      const plain = assertBlocked(run(bash(cmd)), `unconfigured: ${cmd}`, { tool: 'Bash' });
+      listed('.env.production');
+      const configured = assertBlocked(run(bash(cmd)), `configured: ${cmd}`, { tool: 'Bash' });
+      assert.equal(configured.reason, plain.reason, cmd);
+    }
+  });
+
   test('Read deny reason is unchanged by configured exemptions', () => {
     configure(undefined);
     const plain = assertBlocked(run(read(abs('.env'))), 'unconfigured', { tool: 'Read' });

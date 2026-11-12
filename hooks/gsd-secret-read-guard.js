@@ -180,7 +180,7 @@ const MAX_GLOB_ALTERNATIVES = 64;
 // the stdin handler; `checker` is built lazily on the first secret-classified
 // token. Any failure while building or calling it means NOT exempt — never an
 // allow, and never a throw into the fail-open crash path.
-const exemption = { root: null, allowRelative: false, checker: null, configured: false, bashLine: null, bashReadOnly: null };
+const exemption = { root: null, allowRelative: false, checker: null, configured: false, hint: false, bashLine: null, bashReadOnly: null };
 
 // F3: a Bash exemption holds only when every command on the line is one of
 // these read-only readers; any other command anywhere on the line withdraws it
@@ -242,10 +242,15 @@ function lineIsReadOnly(command) {
   }
 }
 
-// The listed-file test runs first, so a project with no exemptions, and a
-// token that is not one, cost no second scan of the Bash line: lineIsReadOnly
-// tokenizes the whole command again, and on a long one that doubled the work
-// the Bash scan's step bound (#5518) counts.
+// The entries are read first, so a project with no exemptions costs no second
+// scan of the Bash line: lineIsReadOnly tokenizes the whole command again, and
+// on a long one that doubled the work the Bash scan's step bound (#5518)
+// counts.
+// `hint` is whether a Bash deny of this token says a listed file is readable
+// by its absolute path (reasonFor). That holds only on a read-only line: any
+// other is denied whatever path names the file, so its reason says nothing of
+// one, as on next. It is set for each token, under the reading that met it,
+// and a deny reports the last one, which is the token it denies.
 function isExemptSecret(tok) {
   if (exemption.root === null) return false;
   try {
@@ -257,6 +262,7 @@ function isExemptSecret(tok) {
         ? () => false
         : lib.createExemptionChecker({ root: exemption.root, entries, allowRelative: exemption.allowRelative });
     }
+    exemption.hint = exemption.configured && (exemption.bashLine === null || bashLineIsReadOnly() === true);
     if (exemption.checker(tok) !== true) return false;
   } catch {
     exemption.checker = () => false;
@@ -2309,7 +2315,7 @@ function reasonFor(code, tool, target) {
     `pattern (${PATTERN_TEXT}). Secret values must not be read into the conversation. ` +
     'If you need a specific value, ask the user for it; if you need the variable NAMES, ' +
     'read the non-secret template (.env.example) instead.' +
-    (tool === 'Bash' && exemption.configured
+    (tool === 'Bash' && exemption.hint
       ? ' Files the project lists under hooks.secret_read_exempt are readable from Bash only by their absolute path.'
       : '');
 }
