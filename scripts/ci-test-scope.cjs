@@ -36,6 +36,7 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-230-pr-target-policy.test.cjs',
   'tests/ci-conformance-pr-gating.test.cjs',
   'tests/ci-docs-guard-registry.test.cjs',
+  'tests/ci-durations-upload-nonfatal.test.cjs',
   'tests/ci-full-lane-sharding.test.cjs',
   'tests/ci-merge-group-wiring.test.cjs',
   'tests/ci-pr-mergeability.test.cjs',
