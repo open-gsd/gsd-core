@@ -1133,7 +1133,7 @@ function splitEnvString(value, dialect = splitDialect) {
       inWord = true;
       continue;
     }
-    if (quote === '' && ' \t\n\v\f\r'.includes(ch)) {
+    if (quote === '' && ENV_S_BLANKS.includes(ch)) {
       end();
       continue;
     }
