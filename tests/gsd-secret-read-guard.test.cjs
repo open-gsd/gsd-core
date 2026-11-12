@@ -1412,6 +1412,87 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
       assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
     });
   }
+  // `$'…'` is ANSI-C quoting: a backslash escapes the next character, so `\'`
+  // does not end the span, where it ends a plain '…'. The close finders share
+  // one reading of it (skipQuotedOrSubstitution). Read as a plain quote, the
+  // `'` after `\'` opened a quote that hid the rest of the line, so the
+  // substitution or expansion never closed and the read after it was text.
+  // Each row puts the span where a different finder meets it. `echo }` first
+  // keeps the pre-5.3 reading, which ends `${…}` at the first `}`, off the
+  // read. bash 5.3.20 runs the read in every row; 5.2.37 and 3.2.57 run it in
+  // the parameter-expansion row and read the others as one bad substitution.
+  // next allows all six.
+  const ANSI_C = [
+    ['a word of a function substitution', "echo ${ echo }; echo $'\\''; }; cat .env"],
+    ['an arithmetic command in a function substitution', "echo ${ echo }; (( $'\\'' )); }; cat .env"],
+    ['an array element in a function substitution', "echo ${ echo }; a=( $'\\'' ); }; cat .env"],
+    ['a parameter expansion\'s word, before a quoted `}`', "echo ${x:-$'\\'}'}\ncat .env"],
+    // bash 5.3 pairs a run of `$` left to right, `$$` being the PID: the third `$` opens the span.
+    ['a word of a function substitution, after `$$`', "echo ${ echo }; echo $$$'\\''; }; cat .env"],
+    // bash removes a line continuation first, so `$` and `'` still meet.
+    ['a word of a function substitution, split from its `$` by a line continuation', "echo ${ echo }; echo $\\\n'\\''; }; cat .env"],
+  ];
+  for (const [label, command] of ANSI_C) {
+    test(`blocks: a read after a \`$'…'\` span holding \`\\'\` in ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // A heredoc tag part written `$'…'`, on a heredoc the substitution leaves
+  // open at its `}`: with the tag read wrongly the body never ends and the
+  // read after it is data. bash takes the span's value as that part of the
+  // tag, and a span that holds no backslash is its own value, so the tag
+  // reader (readFunsubHeredocTag) takes its text. A tag is not expanded, so
+  // the other `$` of a run are text: `$$$'E'` is `$$E`, and in `$$'E'$'F'`
+  // only the second quote is a span, which gives `$$EF`. bash 5.3.20 runs the
+  // read in all five; next allows them.
+  const ANSI_C_IN_TAG = [
+    ["`$'E'`", "$'E'", 'E'],
+    ["`A$'B'\"C\"`, a span between two other parts", "A$'B'\"C\"", 'ABC'],
+    ["`$$$'E'`, whose third `$` opens the span", "$$$'E'", '$$E'],
+    ["`$$'E'$'F'`, a plain quote after two `$`, then a span", "$$'E'$'F'", '$$EF'],
+    ["`$'E'` split after its `$` by a line continuation", "$\\\n'E'", 'E'],
+  ];
+  for (const [label, tag, terminator] of ANSI_C_IN_TAG) {
+    test(`blocks: a read after a heredoc whose tag is ${label}`, () => {
+      const command = `echo \${ cat <<${tag}; }\nit's\n${terminator}\ncat .env`;
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // A span that holds an escape is not read as its text: bash's tag here is
+  // `E` and a newline, which no line can match, so the rest is the body and no
+  // bash runs the read. Taken as text, the tag would match the `E\n` line and
+  // the data after it would be denied as a command.
+  test("allows: a heredoc whose `$'…'` tag holds an escape, with a line that spells the tag's text", () => {
+    const command = "echo ${ cat <<$'E\\n'; }\nit's\nE\\n\ncat .env";
+    assertAllowed(runHook(bash(command)), command);
+  });
+  // The same tag on a heredoc that closes inside the substitution: the tag
+  // decides where the body ends, and so which `}` closes the substitution.
+  // With the tag read as `$E` the body ran to the end and the read after the
+  // `}` was data. bash 5.3.20 runs it; next allows it.
+  test("blocks: a read after a function substitution whose heredoc, tagged `$'E'`, closes inside it", () => {
+    const command = "echo ${ cat <<$'E'\nx}\"\nE\n}; cat .env";
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+
+  // Where `$'` is not a span. After `$$` the `'` opens a plain quote, which
+  // the `\'` cannot keep open: read as a span, it would run past the `}` and
+  // put the read a level deeper than MAX_NESTING_DEPTH, where it is not
+  // scanned. The `"}"` keeps the pre-5.3 reading off the read: it ends `${…}`
+  // at that `}`, and the `"` after it opens a string that never closes.
+  // In double-quoted text `$'` is two characters of text (the word of a
+  // `${…}` in it is another matter: bash reads a span there, as the
+  // parameter-expansion row above has it unquoted). bash 5.3.20 runs the read
+  // in both; next allows both.
+  test('blocks: a read after a plain quote that follows `$$` in a function substitution', () => {
+    const command = "echo $(echo $(echo $(echo ${ echo \"}\"; echo $$'\\'; }; cat .env)))";
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+  test('blocks: a read after `$\'` inside double quotes in a function substitution', () => {
+    const command = "echo $(echo $(echo $(echo ${ echo '}'; echo \"$'\"; }; cat .env)))";
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+
   // The debugger-spawn scan shares the tokenizer, so it takes the same reading.
   test('blocks a gsd-debugger spawn on the line after 5 nested double-quoted `${ … }`', () => {
     const command = 'echo "${ "${ "${ "${ "${ true; }" }" }" }" }"\nclaude --agent gsd-debugger -p x';
@@ -1474,8 +1555,49 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // `<<` in a top-level `((` as a heredoc (#5523 form G). A failed `((` once
   // duplicated the pending heredoc tags, and the copies made the bash 5.3
   // reading deny it by accident; closing the form flips its row.
+  // The next three rows are `$'…'` spans, which bash 5.3.20 runs and next
+  // allows. Two are read by code that is next's (#5255). The close finders end
+  // the first one's substitution where bash does, but its body is then read by
+  // tokenize, whose `'` is next's plain quote: the read sits inside the body,
+  // behind the quote the `\'` leaves open. Reading the span in tokenize is
+  // #5255's change and flips the row. In the third the span is inside a `$( )`,
+  // which findParenClose skips: that function is next's, byte for byte, and
+  // reads the `\'` as the quote's end, so the `$( )` never closes (a `<( )` or
+  // `>( )` there reads the same way).
+  // The second is read by this change's own tag reader
+  // (readFunsubHeredocTag). bash decodes the tag to `E'`. The reader takes a
+  // span's text as its value, which is right only for a span with no escape
+  // (the rows above); the value of one that holds an escape takes decoding,
+  // which is #5255's change too, so the reader never finds the terminator and
+  // takes the rest as the body. `<<$'\x45'` with the terminator `E` reads the
+  // same way. At the top level next allows `cat <<$'E'` before a read as well.
+  // The tag reader also finds where a heredoc that closes inside the
+  // substitution ends, and so which `}` closes it (the closed-inside row
+  // above). A read inside that body is read again by tokenize, whose tag
+  // reading is next's: `$'E'` gives it `$E`, so a read after the `E` line
+  // stays body text (also with `cat .env; }` on the `E` line). bash 5.3.20
+  // runs it; next and this change allow it.
+  // The three rows after it are examples of one gap, not a list of it: the
+  // tag reader keeps a `${…}` or `$( )` tag part as its text, while bash 5.3
+  // rewrites the inside of one in more than one way. In `<<${x:-$'E'}` bash's
+  // tag holds `'E'`, in `<<"${x:-$'E'}"` it holds `E`, and bash prints
+  // `<<$(a  b)` again as `$(a b)`. bash 5.3.20 runs the three reads; next and
+  // this change allow them.
+  // The last row only bash 3.2.57 runs. bash 3.2 reads a run of `$` before
+  // `'` differently from bash 5 in more than one place: in the word of a
+  // `${…}` an even run's span opens too, and inside `$( )` and `$(( ))` it
+  // differs again. The scan takes bash 5's reading only, and next allows the
+  // line as well.
   const NOT_REACHED = [
     ['#5523 form G, a top-level arithmetic shift read as a heredoc', 'x=${ (( ${ <<E ; } ) }; (( y = 1 << 2 ))\nE\ncat .env\n'],
+    ["#5255, a `$'…'` span before a read in a function substitution's body", "echo ${ echo $'\\''; cat .env; }"],
+    ["a heredoc tag whose `$'…'` holds an escape, in a function substitution", "echo ${ echo }; cat <<$'E\\''\nbody\nE'\n}; cat .env"],
+    ["#5255, a `$'…'` span in a `$( )` in a function substitution's body", "echo ${ echo }; echo $(echo $'\\''); }; cat .env"],
+    ["a `$'E'` tag's heredoc closed inside the function substitution, read again by tokenize", "echo ${ cat <<$'E'\nit's\nE\ncat .env\n}"],
+    ["a `${…}` tag part holding a `$'…'` span, which bash rewrites", "echo ${ cat <<${x:-$'E'}; }\nit's\n${x:-'E'}\ncat .env"],
+    ["a double-quoted `${…}` tag part holding a `$'…'` span, which bash rewrites", "echo ${ cat <<\"${x:-$'E'}\"; }\nit's\n${x:-E}\ncat .env"],
+    ['a `$( )` tag part, which bash prints again', "echo ${ cat <<$(a  b); }\nit's\n$(a b)\ncat .env"],
+    ["bash 3.2's span after an even `$` run in a `${…}` word", "echo ${x:-$$'\\'}'}\ncat .env\necho \"'\""],
   ];
   for (const [label, command] of NOT_REACHED) {
     test(`not reached, allows: ${label}`, () => {
@@ -1532,7 +1654,12 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // million-paren row: 0.40 s plain, 4.6 s covered). Deleting the key is not
   // enough: Node puts an inherited NODE_V8_COVERAGE back into a child env that
   // lacks it.
+  //  - with a run of `$` read again from each `$` in it, rather than once
+  //    (dollarRun, which charges the characters it reads): the 500000-`$` row
+  //    for a word, and the one after it for a heredoc tag.
   const TIMED = [
+    ['a read before 500000 `$` in one', 'cat .env\necho ${ ' + '$'.repeat(500000) + ' ; }'],
+    ['a read before a heredoc tag of 500000 `$` in one', 'cat .env\necho ${ cat <<' + '$'.repeat(500000) + '; }'],
     ['a read before 95000 nested ones each holding a pending heredoc', 'cat .env\necho ${ ' + '${ :<<E; } '.repeat(95000) + '; }'],
     ['a read before an unclosed `((` with 1000000 opening parens in one', 'cat .env\necho ${ (( ' + '('.repeat(1000000) + '}'],
     ['a read before 340000 nested subshells in one', 'cat .env\necho ${ ' + '('.repeat(340000) + 'a' + ') '.repeat(340000) + '}'],

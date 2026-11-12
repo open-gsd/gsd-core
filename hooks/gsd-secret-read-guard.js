@@ -886,6 +886,31 @@ function readFunsubHeredocTag(str, i) {
       i = e + 1;
       continue;
     }
+    if (ch === '$') {
+      // A tag is not expanded, so a run of `$` is text, except that an odd
+      // run's last `$` opens a `$'…'` span before a `'` (dollarRun,
+      // skipAnsiCQuoted). A span that holds no backslash is its own text.
+      // One that holds an escape has a value only decoding gives, which is
+      // #5255's change: it stays read as `$` and a plain quote, as before.
+      const run = dollarRun(str, i);
+      if (str[run.end] === "'") {
+        i = run.end;
+        if (run.count % 2 === 1) {
+          const e = skipAnsiCQuoted(str, i);
+          const text = str.slice(i + 1, str[e - 1] === "'" && e - 1 > i ? e - 1 : e);
+          if (!text.includes('\\')) {
+            tag += '$'.repeat(run.count - 1) + text;
+            quoted = true;
+            i = e;
+            continue;
+          }
+        }
+        tag += '$'.repeat(run.count);
+        continue;
+      }
+      // The run is read once: its last `$` may open a `$( )` or a `${`.
+      if (run.count > 1) { tag += '$'.repeat(run.count - 1); i = run.last; continue; }
+    }
     tag += ch;
     i++;
   }
@@ -980,7 +1005,9 @@ function skipSubstitution(str, i) {
 }
 
 // Index just past the `"` closing a double-quoted string whose text starts at
-// `i`. A `'` is text there.
+// `i`. A `'` is text there, and so is `$'`. In the word of a `${…}` the string
+// holds, bash outside posix mode reads `$'…'` as a span again, and
+// findParamClose reads it there.
 function skipDoubleQuoted(str, i) {
   while (i < str.length && str[i] !== '"') {
     scanStep(1);
@@ -993,10 +1020,45 @@ function skipDoubleQuoted(str, i) {
   return i + 1;
 }
 
-// Index just past an escape, a quoted string or a substitution starting at
-// `i` outside double quotes, or -1 when none starts there. The one reading of
-// those the close finders share; a parameter expansion is not among them, as
-// each finder pairs one its own way.
+// The run of `$` starting at `i`: `end` is the index just past it, `last` the
+// index of its last `$`, `count` how many it holds. bash removes a line
+// continuation before it reads anything, so one inside the run is not a break.
+// The caller's step covers the first character; the rest are charged here.
+function dollarRun(str, i) {
+  let end = i;
+  let last = i;
+  let count = 0;
+  for (;;) {
+    if (str[end] === '$') { count++; last = end; end++; }
+    else if (str[end] === '\\' && str[end + 1] === '\n') end += 2;
+    else break;
+  }
+  scanStep(end - i - 1);
+  return { end, last, count };
+}
+
+// Index just past the `'` closing a `$'…'` span whose opening quote is at `i`,
+// or str.length. ANSI-C quoting: a backslash escapes the next character, so
+// `\'` does not close the span, where it would close a plain '…'.
+function skipAnsiCQuoted(str, i) {
+  const open = i++;
+  while (i < str.length && str[i] !== "'") i += str[i] === '\\' ? 2 : 1;
+  const end = i < str.length ? i + 1 : str.length;
+  scanStep(end - open);
+  return end;
+}
+
+// Index just past an escape, a quoted string, a `$'…'` span or a substitution
+// starting at `i` outside double quotes, or -1 when none starts there. The
+// one reading of those the close finders share; a parameter expansion is not
+// among them, as each finder pairs one its own way.
+// bash 5 pairs a run of `$` left to right (`$$` is the PID), so only an odd
+// run's last `$` opens a span: `$'\''` is one quoted `'`, and `$$'\''` the PID,
+// a plain '\' and a quote left open. (bash 3.2 reads a run before `'` its own
+// way in places, an even run in the word of a `${…}` among them; that reading
+// is not taken.) The run is read once, and
+// a longer one not followed by `'` resumes on its last `$`, the only one that
+// can open a substitution or an expansion.
 function skipQuotedOrSubstitution(str, i) {
   const ch = str[i];
   if (ch === '\\') return i + 2;
@@ -1005,6 +1067,11 @@ function skipQuotedOrSubstitution(str, i) {
     return j === -1 ? str.length : j + 1;
   }
   if (ch === '"') return skipDoubleQuoted(str, i + 1);
+  if (ch === '$') {
+    const run = dollarRun(str, i);
+    if (str[run.end] === "'") return run.count % 2 === 1 ? skipAnsiCQuoted(str, run.end) : run.end;
+    if (run.count > 1) return run.last;
+  }
   return skipSubstitution(str, i);
 }
 
