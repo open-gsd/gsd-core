@@ -25,8 +25,8 @@
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
  *      blocks as guard-error; any other value allows. The stdin-not-closing
- *      cells need a real OS pipe and live in
- *      tests/gsd-secret-read-guard.platform.test.cjs.
+ *      cells hold the hook's stdin pipe open and live in
+ *      tests/gsd-secret-read-guard-stdin-timer.test.cjs.
  *
  * Every assertion reads typed fields off the stdout JSON (code, path, tool)
  * — never a regex over the reason prose (CONTRIBUTING.md).
@@ -768,7 +768,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // route those two failures, the outer catch and the stdin timer, through the
   // #3911 crash() seam as DENY. Unset, or any other value, keeps ALLOW. The
   // stdin-timer cells need a held-open pipe, a raw child process, so they live
-  // in tests/gsd-secret-read-guard.platform.test.cjs.
+  // in tests/gsd-secret-read-guard-stdin-timer.test.cjs.
   const DENY_ENV = { [ON_CRASH_ENV]: 'deny' };
   const MALFORMED = '{not json';
 

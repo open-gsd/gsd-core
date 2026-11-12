@@ -2,27 +2,28 @@
 
 /**
  * gsd-secret-read-guard.js — the stdin-timer cells of the host crash-policy
- * opt-in (#5784). They need a real OS pipe, so they live in this `.platform`
- * sibling of tests/gsd-secret-read-guard.test.cjs instead of in it.
- *
- * Tests, all new with #5784 rather than moved from the base file (describe
- * "gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)"):
- *   - "opted in: a stalled stdin blocks as guard-error" — holds the hook's
- *     stdin pipe open through a raw child process, so the hook's own 3 s timer
- *     (stdin not closed) is what ends it; pipe EOF and kill behaviour differ on Windows
- *     (raw-child-process).
- *   - "unset: a stalled stdin still allows, silently" — the same held-open
- *     pipe, with the opt-in unset (raw-child-process).
- *   - "opted in: a full payload whose stdin stays open blocks as guard-error" —
- *     writes a complete payload into the held-open pipe, so the timer must
- *     still fire after data arrived (raw-child-process).
- *   - "unset: a full payload whose stdin stays open still allows, silently" —
- *     the same written, held-open pipe, with the opt-in unset
- *     (raw-child-process).
+ * opt-in (#5784). Each holds the hook's stdin pipe open through a raw child
+ * process, so the hook's own 3 s timer (stdin not closed) is what ends it.
  *
  * The process seam cannot stand in for these: spawnSync with no `input` closes
  * the child's stdin at once, so the hook sees EOF and takes its outer catch,
  * never its stdin timer.
+ *
+ * Why a file of its own, and not a `.platform` sibling: the child runs only
+ * node, which is not a real-OS signal (#6002), so a sibling would carry no
+ * signal and break the split invariant (#5074). Nor are these cells in
+ * tests/gsd-secret-read-guard.test.cjs: a node-only child beside that file's
+ * unlinkSync reads as fs-lock-or-install-child and would move the whole guard
+ * suite onto the Windows conformance tier, which nothing here needs.
+ *
+ * Tests (describe "gsd-secret-read-guard: host opt-in to deny on its own
+ * failure (#5784)"):
+ *   - "opted in: a stalled stdin blocks as guard-error"
+ *   - "unset: a stalled stdin still allows, silently"
+ *   - "opted in: a full payload whose stdin stays open blocks as guard-error" —
+ *     writes a complete payload into the held-open pipe, so the timer must
+ *     still fire after data arrived.
+ *   - "unset: a full payload whose stdin stays open still allows, silently"
  */
 
 const { describe, test } = require('node:test');

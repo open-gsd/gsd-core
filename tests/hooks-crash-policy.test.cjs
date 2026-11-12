@@ -200,7 +200,7 @@ const TABLE = [
     // GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784); runHook builds every child env
     // from TEST_ENV_BASE alone, so this row always sees the default. The opt-in
     // is covered by tests/gsd-secret-read-guard.test.cjs and
-    // tests/gsd-secret-read-guard.platform.test.cjs.
+    // tests/gsd-secret-read-guard-stdin-timer.test.cjs.
     declaredOnCrash: 'allow',
     allow: () => ({ payload: { tool_name: 'Bash', tool_input: { command: 'cd /proj && grep -n foo src/a.js' } } }),
     // #4221: a plain secret-file read through Bash — the exact compound shape
