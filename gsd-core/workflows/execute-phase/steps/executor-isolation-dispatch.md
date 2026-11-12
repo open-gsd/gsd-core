@@ -394,10 +394,8 @@ The manifest is `{phase_dir}/wave-{N}-manifest.json` for wave `N` in `1..999`.
 Creation is exclusive (`wx`). A tracked manifest is fatal. A pre-existing
 manifest, including a directory or symlink at that path, blocks until
 `worktree.cleanup-wave` reconciles it. The cleanup tail keeps the manifest
-when `worktree residual-owned` reports an agent whose branch or path names
-this wave; a detached HEAD matches the path. `wave-1` does not match
-`wave-10` or `wave-1x`, and a phase-directory name that contains `wave-<N>`
-is not itself that token. `orchestrator_root`
+when a listed worktree remains (a detached one is never removed). An empty
+manifest needs `cleanup-wave --allow-empty`. `orchestrator_root`
 is the dispatch-time `git rev-parse --show-toplevel`, so later cleanup pins to
 this orchestrator's worktree rather than `git worktree list`'s first entry (#630).
 
