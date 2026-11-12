@@ -2,8 +2,10 @@
 
 /**
  * gsd-secret-read-guard.js — the stdin-timer cells of the host crash-policy
- * opt-in (#5784). Each holds the hook's stdin pipe open through a raw child
- * process, so the hook's own 3 s timer (stdin not closed) is what ends it.
+ * opt-in (#5784). Each drives the hook's stdin through a raw pipe that this
+ * file controls: four hold it open, so the hook's own 3 s timer (stdin not
+ * closed) is what ends them, and one closes it before that timer, so the scan
+ * does.
  *
  * The process seam cannot stand in for these: spawnSync with no `input` closes
  * the child's stdin at once, so the hook sees EOF and takes its outer catch,
@@ -24,6 +26,9 @@
  *     writes a complete payload into the held-open pipe, so the timer must
  *     still fire after data arrived.
  *   - "unset: a full payload whose stdin stays open still allows, silently"
+ *   - "opted in: a payload whose stdin closes before the timer gets its
+ *     ordinary verdict" — the other side of the 3 s boundary: the pipe closes
+ *     2 s after spawn, so the hook must reach its scan, not guard-error.
  */
 
 const { describe, test } = require('node:test');
@@ -53,14 +58,15 @@ function runHook(payload, extraEnv) {
   return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
 
-// Keeps the pipe open, so only the hook's own 3 s stdin timer can end it. With
-// a `written` string the payload goes in first, whole, and the pipe still stays
-// open. The kill is a hang backstop (that timer plus the quick-spawn bound),
+// Spawns the hook on a real pipe. With a `written` string the payload goes in
+// first, whole. With `closeAfterMs` the pipe then closes after that delay;
+// without it the pipe stays open, so only the hook's own 3 s stdin timer can
+// end it. The kill is a hang backstop (that timer plus the quick-spawn bound),
 // never an elapsed-time assertion. NODE_V8_COVERAGE is blanked rather than
 // deleted: a child under c8 inherits it and runs several times slower, and Node
 // restores an inherited key that the child env lacks but leaves an own key
 // alone.
-function runStalled(extraEnv, written) {
+function runPiped(extraEnv, written, closeAfterMs) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [HOOK_PATH], {
       env: hookEnv({ NODE_V8_COVERAGE: '', ...extraEnv }),
@@ -72,14 +78,21 @@ function runStalled(extraEnv, written) {
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.stdin.on('error', () => {});
     if (written !== undefined) child.stdin.write(written);
+    const closer = closeAfterMs === undefined ? null : setTimeout(() => child.stdin.end(), closeAfterMs);
     const backstop = setTimeout(() => child.kill('SIGKILL'), 3000 + QUICK_SPAWN_TIMEOUT_MS);
-    child.on('error', (err) => { clearTimeout(backstop); reject(err); });
+    child.on('error', (err) => { clearTimeout(closer); clearTimeout(backstop); reject(err); });
     child.on('close', (status) => {
+      clearTimeout(closer);
       clearTimeout(backstop);
       child.stdin.destroy();
       resolve({ status, stdout, stderr });
     });
   });
+}
+
+// The pipe held open: only the hook's 3 s stdin timer can end the run.
+function runStalled(extraEnv, written) {
+  return runPiped(extraEnv, written);
 }
 
 // Only the unset cells use it: the default path must stay silent on both
@@ -132,5 +145,28 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
 
   test('unset: a full payload whose stdin stays open still allows, silently', async () => {
     assertAllowed(await runStalled(undefined, FULL_PAYLOAD), 'written stall');
+  });
+
+  // The other side of the 3 s boundary. A separate hook process cannot take
+  // mock.timers, so this cell closes the pipe 2 s after spawn rather than at
+  // the timer's edge. The hook arms its timer only after it has started, so
+  // the close lands a little under 2 s into that timer: a timer cut below
+  // about 1.8 s fires first and fails the cell, while the correct one keeps
+  // about 1 s of headroom for a slow spawn or a late close. The delay only
+  // orders the close before the timer, and nothing asserts on elapsed time.
+  // Both payloads must reach the scan's own verdict, so a timer that fired
+  // anyway reads as guard-error in either one.
+  const CLOSE_BEFORE_TIMER_MS = 2000;
+
+  test('opted in: a payload whose stdin closes before the timer gets its ordinary verdict', async () => {
+    assertAllowed(await runPiped(DENY_ENV, FULL_PAYLOAD, CLOSE_BEFORE_TIMER_MS), 'allow, closed early');
+    const secret = '/p/' + '.e' + 'nv';
+    const read = JSON.stringify({ tool_name: 'Read', tool_input: { file_path: secret } });
+    const r = await runPiped(DENY_ENV, read, CLOSE_BEFORE_TIMER_MS);
+    assert.equal(r.status, 2, `secret read, closed early: expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.equal(out.code, 'secret-read', 'the scan must decide, not the stdin timer');
+    assert.equal(out.path, secret);
   });
 });
