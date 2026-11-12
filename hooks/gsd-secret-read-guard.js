@@ -116,7 +116,18 @@
 //   'cat .env'`, `xargs sudo sh -c 'cat .env'`; the sub-command's own operands
 //   are still checked). A `find -exec` sub-command is not resolved as a command
 //   either, so its shell script or `env -S` string is not read (`find . -exec
-//   sh -c 'cat .env' \;`); its words are still checked as operands. `env -S`
+//   sh -c 'cat .env' \;`); its words are still checked as operands. A
+//   shell reserved word before a command (`if`, `then`, `elif`, `else`,
+//   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
+//   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
+//   wrapper walk, a shell script, an `env -S` string and the debugger-spawn
+//   check behind it are not reached (`if true; then env -S 'cat .env'; fi`,
+//   `for i in 1; do env -S 'cat .env'; done`, `! env -S 'cat .env'`, which
+//   bash 5.2 and dash 0.5.12 run; `coproc env -S 'cat .env'`, which bash 5.2
+//   runs; `repeat 1 env -S 'cat .env'` and `noglob env -S 'cat .env'`, which
+//   zsh 5.9 runs; `if true; then sh -c 'cat .env'; fi`;
+//   `if true; then claude --agent gsd-debugger -p x; fi`); the command's own
+//   operands are still checked. `env -S`
 //   strings are
 //   split by GNU coreutils env's rules, and also by FreeBSD/macOS env's (a
 //   backslash before a blank is that blank) and uutils env's (a
