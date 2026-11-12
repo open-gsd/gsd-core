@@ -590,29 +590,42 @@ function classifyGrepGlob(glob) {
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
 
-// #5514: the `env -S` readings.
-//  - envSplitStrings: the string is split into words read in the option's place, as
-//    env runs it. false skips the string as the option's value, the reading before
-//    #5514, kept (see underUnsplitReading) so splitting can add a denial to it
-//    but never remove one. With it false, resolveCommand reads every command exactly
-//    as before #5514.
-//  - splitDialect: how the split reads the two things env implementations, or the
-//    environment, decide differently (see splitEnvString). `vars`: 'keep' keeps
-//    `${NAME}` as written, 'drop' reads it as an unset name, which every env
-//    expands to nothing. `escapes`: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and
-//    macOS, where a backslash before a blank is that blank) or 'uutils' (uutils
-//    coreutils, Ubuntu's env since 25.10, where a backslash before a newline is
-//    removed, inside quotes too, and a comment ends at a newline rather than
-//    ending the string). The first splitting reading is PRIMARY_SPLIT.
-//  - splitSeen: a reading met a split option. The splitting readings run when the
-//    reading before #5514 met one, or when a scan threw before it could tell; the
-//    other dialects run only when one was met.
+// #5514: the readings of an `env -S` string, declared once. The Bash path scans
+// the command once per reading, in this order, and any reading's hit denies, so a
+// reading can add a denial but never remove one.
+//  - split: false skips the string as the option's value, the reading before #5514;
+//    with it, resolveCommand reads every command exactly as before #5514. It runs
+//    first, on every command, and its denials are emitted before any reading that
+//    splits.
+//  - vars: 'keep' keeps `${NAME}` as written; 'drop' reads it as an unset name,
+//    which every env expands to nothing.
+//  - escapes: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and macOS, where a backslash
+//    before a blank is that blank) or 'uutils' (uutils coreutils, Ubuntu's env since
+//    25.10, where a backslash before a newline is removed, inside quotes too, and a
+//    comment ends at a newline rather than ending the string). See splitEnvString.
+//  - runs: 'always'; 'split-or-throw' when an earlier reading met a split option or
+//    a scan threw before it could tell; 'split' when one was met. Every splitting
+//    reading runs whenever a split option was met: which strings a reading reaches,
+//    and what they hold, can differ from what the first saw (an escape can build a
+//    `${` or a backslash-blank inside a nested string), so no screen over the
+//    strings the first reading split can tell which readings are needed.
+const ENV_S_READINGS = Object.freeze([
+  { name: 'unsplit', split: false, runs: 'always' },
+  { name: 'gnu', split: true, vars: 'keep', escapes: 'gnu', runs: 'split-or-throw' },
+  { name: 'bsd', split: true, vars: 'keep', escapes: 'bsd', runs: 'split' },
+  { name: 'uutils', split: true, vars: 'keep', escapes: 'uutils', runs: 'split' },
+  { name: 'gnu, unset ${NAME}', split: true, vars: 'drop', escapes: 'gnu', runs: 'split' },
+  { name: 'bsd, unset ${NAME}', split: true, vars: 'drop', escapes: 'bsd', runs: 'split' },
+  { name: 'uutils, unset ${NAME}', split: true, vars: 'drop', escapes: 'uutils', runs: 'split' },
+].map((r) => Object.freeze(r)));
+
+// The reading the scans apply: set only by the Bash path's loop over
+// ENV_S_READINGS, and the GNU split until then. What the scans report back:
+//  - splitSeen: a scan met a split option, so the readings that run on 'split' run.
 //  - splitTooDeep: a split string nested more than MAX_NESTING_DEPTH deep, whose
 //    command is not read. The Bash path denies it as `split-string-too-deep` rather
 //    than allow what it could not see.
-const PRIMARY_SPLIT = Object.freeze({ vars: 'keep', escapes: 'gnu' });
-let envSplitStrings = true;
-let splitDialect = PRIMARY_SPLIT;
+let reading = ENV_S_READINGS[1];
 let splitSeen = false;
 let splitTooDeep = false;
 
@@ -1106,7 +1119,7 @@ const ENV_S_VAR_RE = /\$\{[A-Za-z_][A-Za-z0-9_]*\}/y;
 // 'uutils' a backslash before a newline is removed, inside quotes too, and a
 // comment runs to the next newline, after which splitting goes on. Where env
 // would reject the string, the words read up to that point are returned.
-function splitEnvString(value, dialect = splitDialect) {
+function splitEnvString(value, dialect = reading) {
   const words = [];
   let word = '';
   let inWord = false;
@@ -1207,7 +1220,7 @@ function skipWrapperArgs(pending, spec) {
       const word = pending.pop();
       const split = splitOptionValue(text, spec);
       if (split !== undefined) splitSeen = true;
-      if (split === undefined || !envSplitStrings) {
+      if (split === undefined || !reading.split) {
         if (wrapperOptionWidth(text, spec) === 2) pending.pop();
       } else if (split === null) {
         const value = pending.pop();
@@ -1414,42 +1427,6 @@ function findSecretReadUnderOtherReadings(command) {
     } finally {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
-    }
-  }
-  return null;
-}
-
-// #5514: `scan` with `env -S` strings skipped as the option's value, the reading
-// before #5514. The Bash path runs it before any splitting reading, so splitting
-// can add a denial but never remove one.
-function underUnsplitReading(scan) {
-  envSplitStrings = false;
-  try {
-    return scan();
-  } finally {
-    envSplitStrings = true;
-  }
-}
-
-// #5514: `scan` again with `env -S` strings split under each splitDialect other
-// than PRIMARY_SPLIT, and returns the first hit. Every dialect runs whenever the
-// primary reading met a split option: which strings a dialect reaches, and what
-// they hold, can differ from what the primary reading saw (an escape can build a
-// `${` or a backslash-blank inside a nested string), so no screen over the
-// strings the primary reading split can tell which dialects are needed. These
-// readings run last (see the Bash path): each re-scans the whole command.
-function underOtherSplitDialects(scan) {
-  if (!splitSeen) return null;
-  for (const vars of ['keep', 'drop']) {
-    for (const escapes of ['gnu', 'bsd', 'uutils']) {
-      if (vars === PRIMARY_SPLIT.vars && escapes === PRIMARY_SPLIT.escapes) continue;
-      splitDialect = { vars, escapes };
-      try {
-        const hit = scan();
-        if (hit !== null) return hit;
-      } finally {
-        splitDialect = PRIMARY_SPLIT;
-      }
     }
   }
   return null;
@@ -1932,27 +1909,19 @@ process.stdin.on('end', () => {
     const secretScan = () => attempt(() => findSecretRead(command, 0))
       || attempt(() => findSecretReadUnderOtherReadings(command));
     const spawnScan = () => attempt(() => findDebuggerCliSpawn(command, 0));
-    // The reading before #5514 first, `env -S` strings skipped as the option's value.
-    // Every denial it makes is emitted before any splitting reading runs, so nothing
-    // a splitting reading does (its time, or a throw) can lose one.
-    const hit = underUnsplitReading(secretScan);
-    if (hit !== null) emitBlock('secret-read', tool, hit);
-    const spawn = underUnsplitReading(spawnScan);
-    if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
-    // A scan that threw may have stopped before a split option; read on.
-    if (!splitSeen && !threw) allow(undefined);
-    // The splitting readings (#5514) only add denials: GNU env's split, then the
-    // other env -S dialects, which re-scan the whole command once each.
-    const splitHit = secretScan();
-    if (splitHit !== null) emitBlock('secret-read', tool, splitHit);
-    const splitSpawn = spawnScan();
-    if (splitSpawn !== null) emitBlock('debugger-cli-spawn', tool, splitSpawn);
-    if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
-    const dialectHit = underOtherSplitDialects(secretScan);
-    if (dialectHit !== null) emitBlock('secret-read', tool, dialectHit);
-    const dialectSpawn = underOtherSplitDialects(spawnScan);
-    if (dialectSpawn !== null) emitBlock('debugger-cli-spawn', tool, dialectSpawn);
-    if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
+    // One pass per reading of ENV_S_READINGS, in its order (#5514). Each pass
+    // emits its denials before the next reading runs, so nothing a later reading
+    // does (its time, or a throw) can lose an earlier reading's denial.
+    for (const r of ENV_S_READINGS) {
+      if (r.runs === 'split' && !splitSeen) continue;
+      if (r.runs === 'split-or-throw' && !splitSeen && !threw) continue;
+      reading = r;
+      const hit = secretScan();
+      if (hit !== null) emitBlock('secret-read', tool, hit);
+      const spawn = spawnScan();
+      if (spawn !== null) emitBlock('debugger-cli-spawn', tool, spawn);
+      if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
+    }
     if (threw) crash(ON_CRASH, undefined);
     allow(undefined);
   } catch {
