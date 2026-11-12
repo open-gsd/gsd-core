@@ -1578,10 +1578,15 @@ describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => 
   // k - 1 levels deeper (funsubTags) and stops at k = MAX_NESTING_DEPTH + 1,
   // but the parameter-pairing reading (scanPairingParams) reads the chain as
   // one pre-5.3 word, as bash 5.2 does, and the read as the next command, so
-  // the read is denied at every k (measured to 40). That reading closed the
-  // gap the 5 row pinned as an allow; the bash 5.3 reading's own edge is no
-  // longer visible through the hook.
-  reach("the scan's reach over a read after a heredoc left pending k deep", [[3, true], [4, true], [5, true]], pendingChainThenRead);
+  // the read is denied at every k (measured to 40). These are plain deny rows,
+  // not a reach boundary: no k is allowed, and the bash 5.3 reading's own edge
+  // at k = 4 is not visible through the hook.
+  for (const k of [3, 4, 5]) {
+    test(`blocks: a read after a heredoc left pending ${k} function substitutions deep`, () => {
+      const command = pendingChainThenRead(k);
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
 
   // #5523 form A, which the parameter-pairing reading closes: the tokenizer's
   // `${` branch ended a pre-5.3 expansion at the first `}`, here the one in
