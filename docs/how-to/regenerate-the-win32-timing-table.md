@@ -19,7 +19,7 @@ fallback.
 
 Every `conformance test (windows-latest, …)` job in `test.yml` writes its
 per-file durations to a `test-timings-windows-latest-job<N>` artifact, on red
-runs too (the macOS job uploads `test-timings-macos-latest-job<N>` the same
+runs too (the macOS jobs upload `test-timings-macos-latest-job<N>` the same
 way). Artifacts are kept for 14 days.
 
 ## Steps

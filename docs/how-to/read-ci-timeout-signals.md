@@ -98,12 +98,11 @@ shard cancelled after it ran (killed at its cap) counts.
 - The gap between the slowest and fastest shard's median must be at most `maxMedianGapMs`.
 - No shard's p90 may be above its entry in `baselineP90Ms`.
 
-Both values live only in `SHARD_BALANCE`, with the runs they were measured on and the reasoning
-in the comment above them; this page deliberately does not copy them. Since #5029 they describe
-the layout `baselineShardTotal` names. The gap limit is the gap measured on that layout times
-1.5, not the 2 minutes #5101 set for the ~30-minute shards of its day: on shards half that long
-a single long test file moves one shard by minutes on its own. Each p90 baseline is the measured
-p90 times 1.25, so that a fresh sample's p90 does not breach on noise alone.
+Both values live only in `SHARD_BALANCE`, with the runs they were measured on, how each was
+derived and the margin later runs leave, in the comment above them; this page deliberately does
+not copy them. Since #5029 they describe the layout `baselineShardTotal` names. The gap limit is
+deliberately wider than the 2 minutes #5101 set for the ~30-minute shards of its day: on shorter
+shards a single long test file moves one shard by minutes on its own.
 
 **Where you see it.** Every run writes a table to the `shard-balance` step's summary. A breach, or
 a baseline mismatch, also opens an issue titled **CI: Windows conformance shard balance

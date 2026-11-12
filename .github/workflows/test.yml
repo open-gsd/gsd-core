@@ -634,8 +634,8 @@ jobs:
   # Windows/macOS — the OS-agnostic bulk of the suite already ran once on
   # ubuntu-latest in the `test` job above. Gated on product code changed AND
   # full_matrix (#4591); this is the sole gating signal for windows/macos
-  # coverage (#4603 retired the parallel legacy full-matrix job). Windows is
-  # sharded 6 ways and macos-latest 3 ways since #5029 (the measurements
+  # coverage (#4603 retired the parallel legacy full-matrix job). Both are
+  # sharded since #5029, as the matrix below declares (the measurements
   # that sized both are recorded once, in the test-conformance LANE_COSTS
   # entry of tests/ci-test-job-timeout-budget.test.cjs), for the same reason
   # a prior full-suite windows lane needed sharding at all (#3057, since
@@ -693,8 +693,8 @@ jobs:
           # (tests/ci-test-job-timeout-budget.test.cjs) rounds the long pole
           # UP and requires ceil(m * 1.5) <= the cap, so a 45m cap admits
           # m <= 30 EXACTLY, which is why the cap itself is not the lever. The
-          # measured long pole per layout (3, 4 and 6 shards), and why six, are
-          # recorded once in that file's test-conformance LANE_COSTS entry.
+          # measured long pole per layout, and why this count, are recorded
+          # once in that file's test-conformance LANE_COSTS entry.
           #
           # Windows cost is now modelled properly: #5071 -> #5097 added
           # tests/test-timings.win32.json and the platformTimings arm of
@@ -712,7 +712,7 @@ jobs:
           # Sharding is not free per shard. The #5029 projection in the same
           # test file fits each run's long pole as a fixed cost per shard plus
           # the shard's share of the tier. Steps outside the test step are one
-          # to two minutes of that fixed cost (50-151s, median 97s, over the 72
+          # to two and a half minutes of that cost (50-151s, median 97s, over the 72
           # Windows jobs of the runs SHARD_BALANCE's baselines cite); the rest
           # sits inside the test step and is unattributed. So each added shard
           # buys less while costing a 2x-billed Windows runner permanently.
@@ -839,8 +839,8 @@ jobs:
       # uploaded below, so the win32 table the packer prefers on Windows
       # (tests/test-timings.win32.json) can be regenerated from real Windows
       # measurements: `node scripts/gen-test-timings.cjs --platform win32
-      # <downloaded shard files>` — see docs/TESTING-SUITES.md. The macOS job
-      # exports too; no darwin table is committed yet.
+      # <downloaded shard files>` — see docs/TESTING-SUITES.md. The macOS jobs
+      # export too; no darwin table is committed yet.
       # #5473 (TEMPORARY): a job-long watcher beside the test step on every
       # Windows shard, recording UTC-stamped moments when the VM stops making
       # progress, to line up against the bounded-child ETIMEDOUT reds. Delete

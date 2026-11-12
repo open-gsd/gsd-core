@@ -652,11 +652,10 @@ hand-measured cost for that job — now all three of the jobs above, not just
 `windows-latest` and `macos-latest`, both sharded since #5029 (the `shard:`
 rows of the job's matrix in `test.yml` are the one statement of the counts) —
 the sole gating signal for real-OS coverage (#4603 retired the parallel legacy
-full-matrix safety-net job). It
-also declares a `timeout-minutes` cap and runs the same in-job near-cap check
-described below. Since #5029 it **is** covered by the headroom-factor gate. One
-cap covers every matrix row, so its `LANE_COSTS` entry is the slowest row,
-windows or macOS shard. That entry, in
+full-matrix safety-net job). It also declares a `timeout-minutes` cap and runs
+the same in-job near-cap check described below. Since #5029 it **is** covered
+by the headroom-factor gate. One cap covers every matrix row, so its
+`LANE_COSTS` entry is the slowest row, windows or macOS shard. That entry, in
 `tests/ci-test-job-timeout-budget.test.cjs`, is the one place the lane's
 measurements are recorded: the long pole per layout, why each OS is split the
 way it is (a slow macOS runner took the unsharded row past what the gate
@@ -665,14 +664,15 @@ since #4591, which is how it drifted to a 34m long pole against a 45m cap and
 began cancelling shards whose every chunk passed (#4935). The same file also
 projects the Windows rows' worst shard from the shard count `test.yml`
 declares and the current tier size, at the slow-runner skew #5029's triage
-measured, and fails when that shard would land in the near-cap band: it fails
-at the layout #5029 replaced and passes at the one `test.yml` declares now.
+measured, and fails when that shard would land in the near-cap band. At the
+tier size #5029 merged with, it fails at the layout #5029 replaced and passes
+at the one `test.yml` declares; the comment on the model says how far that
+verdict depends on the fit.
 
 #5071 → #5097 has since priced win32 files by win32 measurements, which evened
 out the shards. Whenever this lane is resharded again, in either direction,
 re-measure from the new runs and set the entry from the slowest row; never
-scale the existing figure. The per-shard
-balance check (`SHARD_BALANCE`, see
+scale the existing figure. The per-shard balance check (`SHARD_BALANCE`, see
 [Read CI timeout signals](how-to/read-ci-timeout-signals.md)) must then be
 re-baselined too; a test fails until it is.
 

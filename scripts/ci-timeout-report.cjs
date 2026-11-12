@@ -655,7 +655,7 @@ const SHARD_BALANCE = Object.freeze({
   // twelve 6-shard runs of PR #5053 whose heads carry #5097's win32 weights
   // (36785097774, 37024435915, 37031116287, 37037251805, 37041237415,
   // 37086102648, 37138563782, 37694227292, 37697717410, 38647499912,
-  // 38650210804, 38654860178), six ~12-min shards have a median gap of 332.5s
+  // 38650210804, 38654860178), six 11-17 min shards have a median gap of 332.5s
   // (5/6 median 1011.5s vs 6/6 679s). Its cause is not packing weights: a chunk
   // cannot finish before its longest file, and the tier has single files of
   // 3.5-6.5 min that land in different chunks of different shards (`install`
@@ -670,17 +670,22 @@ const SHARD_BALANCE = Object.freeze({
   // (slowest minus fastest per-shard median):
   //   - 229s over the twelve fork runs the baselines below come from (367-375
   //     tier files, nine partitions);
-  //   - 430.5s over PR #5053's two runs on its 375-file partition (42078639141
-  //     and 42087947326; 439s and 459s run by run);
+  //   - 430.5s over PR #5053's two runs on the 375-file partition its head
+  //     had at 77b2d9a09 (42078639141 and 42087947326; 439s and 459s run by
+  //     run);
   //   - 357s over six fork runs on the 319-330 file partitions `next` has had
   //     since #6002 (43136204917, 43136204941, 43136205083, 43140668487,
   //     43140668934, 43140669065), where 2/6 is the slow shard (median 1038.5s
   //     against 681.5s for 1/6) and single runs range from 328s to 546s;
   //   - 218.5s over all twenty together, which is the size of window the daily
   //     check reads, and reads `ok`.
-  // So a window that mixes partitions has more than half the limit to spare,
-  // and a window on one unlucky partition has about 70s (14%). The limit is
-  // kept and not re-derived, because the two honest re-derivations disagree:
+  // So the margin is one of three things. A window on the partitions `next`
+  // has now, which is what the daily check reads first after #5029 merges,
+  // has 143s to spare (29%), with single runs already over the limit. A window
+  // on one unlucky partition has about 70s (14%). A window that mixes
+  // partitions has about 280s, but the 367-375 file ones are gone from `next`.
+  // The limit is kept and not re-derived, because the two honest
+  // re-derivations disagree:
   // the pooled gap x 1.5 would be 328s, under what single partitions already
   // measure, and one partition's gap x 1.5 would be 536-646s, sized to
   // whichever partition was sampled. If the check opens a gap breach, read

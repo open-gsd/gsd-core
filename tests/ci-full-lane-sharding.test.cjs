@@ -15,7 +15,7 @@
  * exactly 15m05s and was CANCELLED on PR #3094, four shas in a row, and was
  * sharded three ways (#3057). #4641 later deleted that lane outright: windows
  * coverage now runs only in the `test-conformance` job, whose windows and
- * macos rows are each a complete shard set (six and three ways since #5029).
+ * macos rows are each a complete shard set since #5029.
  *
  * Sharding introduces two failure modes that stay GREEN while being wrong, so
  * both are pinned here:
@@ -86,8 +86,8 @@ test('the test job has no windows lane; test-conformance is the sole Windows sel
     + JSON.stringify(conformanceWindowsEntries),
   );
 
-  // macos-latest was a single UNSHARDED entry until #5029, which split it
-  // three ways after a slow runner took the whole tier to 39m43s against the
+  // macos-latest was a single UNSHARDED entry until #5029, which sharded it
+  // after a slow runner took the whole tier to 39m43s against the
   // job's 45m cap. Pinned the same way as windows above — a complete shard
   // set, whatever N is declared — which also keeps the two failure modes the
   // old single-entry check guarded against: an extra unsharded entry would
@@ -431,7 +431,8 @@ test('the declared windows shard total is read strictly (#5029)', () => {
     { code: SHARD_SPEC_ERROR.DISAGREE },
   );
 
-  // The codes are the contract: adding or renaming one changes this list too.
-  assert.deepEqual(Object.keys(SHARD_SPEC_ERROR).sort(), ['DISAGREE', 'MISSING']);
+  // The codes are the contract: adding, renaming or re-valuing one changes
+  // this too.
+  assert.deepEqual({ ...SHARD_SPEC_ERROR }, { MISSING: 'SHARD_SPEC_MISSING', DISAGREE: 'SHARD_SPEC_DISAGREE' });
   assert.equal(Object.isFrozen(SHARD_SPEC_ERROR), true);
 });
