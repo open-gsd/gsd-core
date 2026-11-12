@@ -106,6 +106,7 @@ const MANUAL_RESOLUTIONS = [
   { file: 'tests/install-regressions.test.cjs', callee: '(not-direct-arg) var=runOpts', cls: 'SEAM', resolvedCallee: 'runNode', note: 'runOpts is passed to runNode' },
   { file: 'tests/install-regressions.test.cjs', callee: '(not-direct-arg)', cls: 'SEAM', resolvedCallee: 'runNode', note: 'nested options object is passed to runNode' },
   { file: 'tests/helpers/opencode-real.cjs', callee: '(not-direct-arg)', cls: 'DIRECT', resolvedCallee: 'spawn', note: 'realRun default timeoutMs is passed to child_process spawn as {timeout}' },
+  { file: 'tests/codex-config-install.test.cjs', callee: 'spawnNode', cls: 'SEAM', resolvedCallee: 'runNode', note: 'validateAgents spawnNode parameter defaults to the process seam runNode (injectable so the budget test reads the options without spawning)' },
   { file: 'tests/loop-walk.qa.test.cjs', callee: 'execFileAsync', cls: 'DIRECT', resolvedCallee: 'execFileAsync', note: 'execFileAsync = promisify(execFile) from child_process' },
   { file: 'tests/review-lane-availability.test.cjs', callee: 'run', cls: 'DIRECT', resolvedCallee: 'run', note: 'run = promisify(execFile) from child_process' },
   { file: 'tests/review-lane-no-redirect-5433.test.cjs', callee: 'run', cls: 'DIRECT', resolvedCallee: 'run', note: 'run = promisify(execFile) from child_process' },
