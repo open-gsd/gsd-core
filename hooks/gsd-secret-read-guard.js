@@ -1209,7 +1209,8 @@ function skipWrapperArgs(words, start, spec) {
       break;
     }
   }
-  if (!spec.operands) return idx;
+  // A trailing valued option (`sshpass -f`) steps past the end; callers index words up to the result.
+  if (!spec.operands) return Math.min(idx, words.length);
   idx = Math.min(idx + spec.operands, words.length);
   // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
   return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
