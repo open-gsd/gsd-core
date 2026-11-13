@@ -164,7 +164,7 @@ gsd_run query config-new-project '{"mode":"yolo","granularity":"[selected]","par
 
 ```bash
 mkdir -p .planning
-gsd_run query commit "chore: add project config" --files .planning/config.json
+gsd_run query commit "chore: add project config" --files .planning/config.json .planning/.gitignore
 ```
 
 **Persist auto-advance chain flag to config (survives context compaction):**

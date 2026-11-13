@@ -435,6 +435,7 @@ module.exports = {
   runNode,
   runGit,
   runHook,
+  resolveInterpreter,
   OUTCOME,
   toSeamResult: finishSeamResult,
   formatSeamResult,

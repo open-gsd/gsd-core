@@ -213,14 +213,15 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  * That is the one place this read and config-get part ways — for a scoped
  * config.json that exists but cannot be read or parsed, config-get fails
  * with CONFIG_PARSE_FAILED instead of reporting a value.
+ * `project` names the scope when the caller reads a scope other than the env's (omitted: the env's `GSD_PROJECT`).
  * The value is returned uncoerced; each caller applies its own strict
  * comparison. Never throws: planningDir/planningRoot reject a
  * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
  * that shape resolves to "not present".
  */
-function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
+function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null, project?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
+    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream, project), 'config.json'), keyPath);
     if (scoped.present) return scoped;
     if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
       return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
@@ -229,6 +230,18 @@ function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string
     // Degrade to "not present" — see the contract above.
   }
   return CONFIG_VALUE_ABSENT;
+}
+
+/**
+ * #5505: the ONE flat-then-nested `commit_docs` lookup for a named scope: true when that scope's config sets the key
+ * (`commit_docs`, else `planning.commit_docs`) to a falsy value. Falsy is the same off test as
+ * `resolveCommitDocsTiers` (src/config-loader.cts, which this module cannot import: it imports us); a parity test
+ * pins the two. An absent key never opts out. Reads on the readScopedConfigValue ladder.
+ */
+function commitDocsOptedOut(cwd: string, workstream: string | null, project: string | null): boolean {
+  const flat = readScopedConfigValue(cwd, ['commit_docs'], workstream, project);
+  const found = flat.present ? flat : readScopedConfigValue(cwd, ['planning', 'commit_docs'], workstream, project);
+  return found.present && !found.value;
 }
 
 /**
@@ -734,6 +747,7 @@ function findPhaseSpecIn(files: readonly string[]): string | null {
 
 export = {
   worktreesOptedOut,
+  commitDocsOptedOut,
   readScopedConfigValue,
   createPlanningWorkspace,
   createSharedPointerAdapter,

@@ -37,7 +37,7 @@ const os = require('node:os');
 const coreUtils = require('../gsd-core/bin/lib/core-utils.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const {
-  cleanup, runGsdTools, scrubConfigLocationEnv,
+  cleanup, createTempDir, runGsdTools, scrubConfigLocationEnv,
   saveSessionEnv, restoreSessionEnv, clearSessionEnv, TEST_HOME_SANDBOX_MARKER,
   captureFdSync,
 } = require('./helpers.cjs');
@@ -1595,5 +1595,102 @@ describe('#5483 tickAnchoredPlanRow', () => {
 
   test('plan id ends at a boundary: 01-1 does not tick 01-10', () => {
     assert.strictEqual(tick('- [ ] 01-10-PLAN.md\n', '01-1'), '- [ ] 01-10-PLAN.md\n');
+  });
+});
+
+describe('state.json publish paths (#5505)', () => {
+  const mkdirs = (cwd, ...rels) => rels.forEach((rel) => fs.mkdirSync(path.join(cwd, rel), { recursive: true }));
+  const fresh = (t) => {
+    const cwd = createTempDir('gsd-5505-core-');
+    t.after(() => cleanup(cwd));
+    return cwd;
+  };
+
+  test('STATE_JSON_PATHSPECS lists the four glob shapes, in scope order', () => {
+    assert.deepStrictEqual(coreUtils.STATE_JSON_PATHSPECS, [
+      ':(glob).planning/state.json',
+      ':(glob).planning/workstreams/*/state.json',
+      ':(glob).planning/*/state.json',
+      ':(glob).planning/*/workstreams/*/state.json',
+    ]);
+  });
+
+  // Parity with the layout owner: whatever `planningDir` resolves for a scope is a publish path of that scope.
+  test('the directory planningDir resolves for every scope holds a publish path', (t) => {
+    const { planningDir } = require('../gsd-core/bin/lib/planning-workspace.cjs');
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/proj');
+    fs.writeFileSync(path.join(cwd, '.planning', 'proj', 'STATE.md'), '');
+    for (const [project, ws] of [[null, null], [null, 'ws1'], ['proj', null], ['proj', 'ws1']]) {
+      const rel = path.relative(cwd, path.join(planningDir(cwd, ws, project), 'state.json'));
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, rel), true, rel);
+    }
+  });
+
+  test('PLANNING_PROJECT_MARKERS is the frozen marker list', () => {
+    assert.deepStrictEqual([...coreUtils.PLANNING_PROJECT_MARKERS],
+      ['STATE.md', 'ROADMAP.md', 'PROJECT.md', 'config.json', 'phases', 'workstreams']);
+    assert.ok(Object.isFrozen(coreUtils.PLANNING_PROJECT_MARKERS));
+  });
+
+  test('root and workstream shapes are publish paths without any project marker', (t) => {
+    const cwd = fresh(t);
+    assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, '.planning/state.json'), true);
+    assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, '.planning/workstreams/ws1/state.json'), true);
+    assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, path.join('.planning', 'state.json')), true);
+  });
+
+  test('a project-scoped path counts for each marker alone, as a file or a directory', (t) => {
+    const cwd = fresh(t);
+    for (const marker of coreUtils.PLANNING_PROJECT_MARKERS) {
+      const project = `p-${marker}`;
+      mkdirs(cwd, `.planning/${project}`);
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, `.planning/${project}/state.json`), false, `${marker} absent`);
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, `.planning/${project}/workstreams/ws1/state.json`), false, `${marker} absent, workstream`);
+      if (/\./.test(marker)) fs.writeFileSync(path.join(cwd, '.planning', project, marker), '');
+      else mkdirs(cwd, `.planning/${project}/${marker}`);
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, `.planning/${project}/state.json`), true, `${marker} present`);
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, `.planning/${project}/workstreams/ws1/state.json`), true, `${marker} present, workstream`);
+    }
+  });
+
+  test('a marker outside .planning/<project>/ does not make the project', (t) => {
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/intel', 'intel');
+    fs.writeFileSync(path.join(cwd, 'intel', 'STATE.md'), '');
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '');
+    assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, '.planning/intel/state.json'), false);
+  });
+
+  test('the project segment is the second path segment', (t) => {
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/proj', '.planning/other');
+    fs.writeFileSync(path.join(cwd, '.planning', 'other', 'STATE.md'), '');
+    assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, '.planning/proj/state.json'), false);
+    assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, '.planning/other/state.json'), true);
+  });
+
+  test('the matcher accepts each of the four publish scopes', (t) => {
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/a');
+    fs.writeFileSync(path.join(cwd, '.planning', 'a', 'STATE.md'), '');
+    for (const rel of ['.planning/state.json', '.planning/a/state.json', '.planning/workstreams/w/state.json', '.planning/a/workstreams/w/state.json']) {
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, rel), true, rel);
+    }
+  });
+
+  test('the matcher is anchored at both ends and the dot and stars are literal', (t) => {
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/a/b');
+    fs.writeFileSync(path.join(cwd, '.planning', 'a', 'STATE.md'), '');
+    fs.writeFileSync(path.join(cwd, '.planning', 'a', 'b', 'STATE.md'), '');
+    for (const rel of [
+      'x.planning/state.json', '.planning/state.jsonx', '.planning/state.json/', 'Xplanning/state.json',
+      '.planning/stateXjson', '.planning//state.json', '.planning/workstreams//state.json',
+      '.planning/a/b/state.json', '.planning/a/workstreams/state.json', '.planning/a/workstreams/b/c/state.json',
+      '.planning/workstreams/a/b/state.json', 'sub/.planning/state.json',
+    ]) {
+      assert.strictEqual(coreUtils.isStateJsonPublishPath(cwd, rel), false, rel);
+    }
   });
 });

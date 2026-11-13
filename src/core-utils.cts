@@ -581,6 +581,50 @@ function planRowPattern(planId: string, opts: { anchored?: boolean; anyState?: b
   );
 }
 
+/** Files whose presence marks `.planning/<name>/` as a project directory (see `isStateJsonPublishPath`). */
+const PLANNING_PROJECT_MARKERS = Object.freeze(['STATE.md', 'ROADMAP.md', 'PROJECT.md', 'config.json', 'phases', 'workstreams']);
+
+/**
+ * The one list of shapes `publishStateContract` writes:
+ * `.planning[/<project>][/workstreams/<ws>]/state.json`. Each entry carries the git pathspec
+ * that lists it (`*` stays inside one path segment under `:(glob)`) and the matcher compiled from
+ * that same glob, so `STATE_JSON_PATHSPECS` and `isStateJsonPublishPath` cannot drift apart.
+ */
+const STATE_JSON_SCOPES = [false, true].flatMap((project) =>
+  [false, true].map((workstream) => {
+    // the directory comes from `planningDir`, the owner of the layout, with `*` standing in for each segment
+    const glob = `${toPosixPath(planningWorkspace.planningDir('.', workstream ? '*' : null, project ? '*' : null))}/state.json`;
+    return {
+      project,
+      workstream,
+      pathspec: `:(glob)${glob}`,
+      // the committed rule file beside it (`ignoreInTree`), which the migration stages and `cmdCommit` carries
+      ignorePathspec: `:(glob)${glob.replace(/state\.json$/, '.gitignore')}`,
+      matcher: new RegExp(`^${escapeRegex(glob).replace(/\\\*/g, '[^/]+')}$`),
+    };
+  }));
+const STATE_JSON_PATHSPECS = STATE_JSON_SCOPES.map((scope) => scope.pathspec);
+const STATE_JSON_IGNORE_PATHSPECS = STATE_JSON_SCOPES.map((scope) => scope.ignorePathspec);
+
+/**
+ * True when `rel` (a path relative to `cwd`) is a file `publishStateContract` writes (see
+ * `STATE_JSON_SCOPES`). The project segment is free text, so `.planning/<name>/…` counts only
+ * when `<name>` is a project directory, i.e. holds its own planning files;
+ * `.planning/intel/state.json` is not a publish path.
+ */
+function isStateJsonPublishPath(cwd: string, rel: string): boolean {
+  const posix = toPosixPath(rel);
+  const scope = STATE_JSON_SCOPES.find((s) => s.matcher.test(posix));
+  if (!scope) return false;
+  if (!scope.project) return true;
+  const project = posix.split('/')[1];
+  // `.planning/workstreams/state.json` and `.planning/phases/state.json` sit in directories GSD itself owns: never a project
+  // (their own `workstreams`/`phases` child would otherwise make them look like one)
+  if (!scope.workstream && (project === 'workstreams' || project === 'phases')) return false;
+  return PLANNING_PROJECT_MARKERS.some((x) =>
+    fs.existsSync(path.join(cwd, '.planning', project, x)));
+}
+
 /**
  * Tick the first line-anchored unchecked row for `planId` in `text` (the
  * `phase complete` / `roadmap update-plan-progress` bullet flip): a bullet
@@ -593,6 +637,10 @@ function tickAnchoredPlanRow(text: string, planId: string): string {
 
 export = {
   toPosixPath,
+  isStateJsonPublishPath,
+  STATE_JSON_PATHSPECS,
+  STATE_JSON_IGNORE_PATHSPECS,
+  PLANNING_PROJECT_MARKERS,
   normalizeLineEndings,
   detectSubRepos,
   extractOneLinerFromBody,

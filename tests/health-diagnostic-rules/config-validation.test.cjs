@@ -42,7 +42,9 @@ const path = require('node:path');
 const childProcess = require('node:child_process');
 
 const { createTempDir, createTempGitProject, cleanup } = require('../helpers.cjs');
-const { gitOrThrow } = require('../helpers/git-fixture.cjs');
+const { gitOrThrow, isFsLegalName } = require('../helpers/git-fixture.cjs');
+const { runHook, OUTCOME } = require('../helpers/process-seam.cjs');
+const { GIT_TIMEOUT_MS } = require('../helpers/timeouts.cjs');
 
 const configValidation = require('../../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
 const { RULES } = configValidation;
@@ -88,16 +90,16 @@ function ruleFor(code) {
 // ─── RULES shape ────────────────────────────────────────────────────────────
 
 describe('RULES (config-validation group)', () => {
-  test('exports exactly 11 rules: W003, E005, W004, W008, W016, W012, W013, W014, W015, W022, W029', () => {
+  test('exports exactly 12 rules: W003, E005, W004, W008, W016, W012, W013, W014, W015, W022, W029, W031', () => {
     assert.deepEqual(
       RULES.map((r) => r.code).sort(),
-      ['E005', 'W003', 'W004', 'W008', 'W012', 'W013', 'W014', 'W015', 'W016', 'W022', 'W029'].sort(),
+      ['E005', 'W003', 'W004', 'W008', 'W012', 'W013', 'W014', 'W015', 'W016', 'W022', 'W029', 'W031'].sort(),
     );
   });
 
   test('E005 is severity ERROR; the rest are severity WARNING', () => {
     assert.equal(ruleFor('E005').severity, SEVERITY.ERROR);
-    for (const code of ['W003', 'W004', 'W008', 'W012', 'W013', 'W014', 'W015', 'W016', 'W022', 'W029']) {
+    for (const code of ['W003', 'W004', 'W008', 'W012', 'W013', 'W014', 'W015', 'W016', 'W022', 'W029', 'W031']) {
       assert.equal(ruleFor(code).severity, SEVERITY.WARNING, `${code} should be WARNING`);
     }
   });
@@ -855,5 +857,252 @@ describe('W029 — .planning/ ignored but still tracked', () => {
     // The tracked file must still be in the index — nothing was untracked.
     const trackedAfter = gitOrThrow(['ls-files', '--', '.planning'], { cwd }).trim();
     assert.ok(trackedAfter.length > 0, '.planning/ must still be tracked after a --repair run');
+  });
+});
+
+// ─── W031 — derived state.json still tracked by git (#5505 Case B) ─────────
+//
+// Pure predicate over `snapshot.stateJsonTracked`, which runs its own bounded
+// `git ls-files` probe (`buildStateJsonTracked`), separate from W029's. Driven through the REAL buildPlanningSnapshot against
+// a REAL temp git repo, like the W029 group above.
+
+describe('W031 — derived state.json still tracked by git', () => {
+  function trackStateJson(cwd, rels) {
+    for (const rel of rels) {
+      fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true });
+      fs.writeFileSync(path.join(cwd, rel), '{}\n');
+    }
+    commitAll(cwd, 'track state.json');
+  }
+
+  // Runs the advised command in the project and lists what git still tracks: the remedy is judged by what it
+  // does, not by its wording. The command is the typed `remedy.args.untrack`, built from `remedy.args.paths`.
+  function runAdvisedThenListTracked(cwd, diagnostic) {
+    const command = diagnostic.remedy.args.untrack;
+    assert.equal(command, configValidation.w031UntrackCommand(diagnostic.remedy.args.paths));
+    const out = runHook('-s', [], { interpreter: 'bash', input: command, timeoutMs: GIT_TIMEOUT_MS, cwd });
+    assert.equal(out.exitCode, 0, `the advised command runs: ${out.stderr}`);
+    return gitOrThrow(['ls-files', '-z'], { cwd }).split('\0').filter(Boolean);
+  }
+
+  test('W031 fires naming every tracked publish path, with an idempotent git rm --cached remedy', (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-fire-');
+    t.after(() => cleanup(cwd));
+    trackStateJson(cwd, ['.planning/state.json', '.planning/workstreams/ws1/state.json']);
+
+    const diagnostics = ruleFor('W031').check(buildPlanningSnapshot(cwd));
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].code, 'W031');
+    assert.equal(diagnostics[0].severity, SEVERITY.WARNING);
+    assert.equal(diagnostics[0].remedy.action, REMEDY_ACTION.ADVISE);
+    const tracked = runAdvisedThenListTracked(cwd, diagnostics[0]);
+    assert.ok(!tracked.some((rel) => rel.endsWith('state.json')), `the remedy untracked every copy: ${tracked}`);
+    assert.ok(fs.existsSync(path.join(cwd, '.planning', 'state.json')), 'the file stays on disk');
+    runAdvisedThenListTracked(cwd, diagnostics[0]); // idempotent: --ignore-unmatch makes a rerun succeed
+  });
+
+  test('W031 single-quotes a path the shell would split or expand, so the advised command pastes safely', (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-quote-');
+    t.after(() => cleanup(cwd));
+    trackStateJson(cwd, [".planning/my $proj's/state.json", ".planning/my $proj's/STATE.md"]);
+
+    const [diagnostic] = ruleFor('W031').check(buildPlanningSnapshot(cwd));
+    assert.deepEqual(runAdvisedThenListTracked(cwd, diagnostic), ['.planning/PROJECT.md', ".planning/my $proj's/STATE.md"], 'the path with a quote and a dollar sign was untracked, its sibling kept');
+  });
+
+  test('W031 escapes control characters in a tracked name: no raw newline in the message, ANSI-C quoting in the command', { skip: !isFsLegalName('\n') && 'Windows rejects a newline in a file name' }, (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-ctrl-');
+    t.after(() => cleanup(cwd));
+    trackStateJson(cwd, ['.planning/a\nb/state.json', '.planning/a\nb/STATE.md']);
+
+    const [diagnostic] = ruleFor('W031').check(buildPlanningSnapshot(cwd));
+    assert.equal(diagnostic.code, 'W031');
+    assert.equal(diagnostic.severity, SEVERITY.WARNING);
+    assert.equal(diagnostic.remedy.action, REMEDY_ACTION.ADVISE);
+    assert.ok(configValidation.w031Listing(['.planning/a\nb/state.json']).shown.every((label) => !/[\n\r]/.test(label)), 'no raw newline reaches the listing');
+    assert.deepEqual(runAdvisedThenListTracked(cwd, diagnostic), ['.planning/PROJECT.md', '.planning/a\nb/STATE.md'], 'the advised command untracks the newline-named path');
+  });
+
+  test('W031 is silent when state.json is untracked, or only an unrelated state.json is tracked', (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-silent-');
+    t.after(() => cleanup(cwd));
+    trackStateJson(cwd, ['.planning/phases/01-x/state.json']);
+    fs.writeFileSync(path.join(cwd, '.planning', 'state.json'), '{}\n'); // untracked publish
+
+    assert.deepEqual(ruleFor('W031').check(buildPlanningSnapshot(cwd)), []);
+  });
+
+  test('W031 ignores a state.json in a directory that is not a project (no planning files beside it)', (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-reserved-');
+    t.after(() => cleanup(cwd));
+    trackStateJson(cwd, ['phases', 'milestones', 'codebase', 'workstreams', 'quick', 'todos', 'debug', 'research', 'intel', 'archive', 'seeds'].map((d) => `.planning/${d}/state.json`));
+
+    assert.deepEqual(ruleFor('W031').check(buildPlanningSnapshot(cwd)), []);
+  });
+
+  test('W031 names a project-scoped copy, with and without a workstream, once the project holds planning files', (t) => {
+    const cwd = createTempGitProject('gsd-5505-w031-project-');
+    t.after(() => cleanup(cwd));
+    trackStateJson(cwd, ['.planning/proj/state.json', '.planning/proj/ROADMAP.md', '.planning/proj/workstreams/ws1/state.json']);
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.equal(ruleFor('W031').check(snapshot).length, 1);
+    assert.deepEqual(configValidation.w031Listing(snapshot.stateJsonTracked.value).shown, ['.planning/proj/state.json', '.planning/proj/workstreams/ws1/state.json']);
+  });
+
+  // Property: for any single-segment name, `.planning/<name>[/workstreams/ws1]/state.json` is a publish path
+  // exactly when `<name>` holds a marker file or directory from the owner's own export (a workstream
+  // directory is itself the `workstreams` marker); the matcher has no reserved-name list to drift.
+  test('W031 property: publish-path matcher over the owner\'s markers', (t) => {
+    const fc = require('fast-check');
+    const { PLANNING_PROJECT_MARKERS } = require('../../gsd-core/bin/lib/core-utils.cjs');
+    const cwd = createTempGitProject('gsd-5505-w031-prop-');
+    t.after(() => cleanup(cwd));
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[a-z][a-z0-9_-]{0,11}$/).filter((n) => n !== 'workstreams'),
+        fc.subarray([...PLANNING_PROJECT_MARKERS]),
+        fc.boolean(),
+        (name, markers, ws) => {
+          const dir = path.join(cwd, '.planning', name);
+          cleanup(dir);
+          const rel = ws ? `.planning/${name}/workstreams/ws1/state.json` : `.planning/${name}/state.json`;
+          fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true });
+          fs.writeFileSync(path.join(cwd, rel), '{}\n');
+          for (const m of markers) {
+            if (m === 'phases' || m === 'workstreams') fs.mkdirSync(path.join(dir, m), { recursive: true });
+            else fs.writeFileSync(path.join(dir, m), '# s\n');
+          }
+          gitOrThrow(['add', '-f', '--', `.planning/${name}`], { cwd });
+          const snapshot = buildPlanningSnapshot(cwd);
+          const named = ruleFor('W031').check(snapshot).length > 0 && snapshot.stateJsonTracked.value.includes(rel);
+          gitOrThrow(['rm', '-rq', '--cached', '--', `.planning/${name}`], { cwd });
+          return named === (markers.length > 0 || ws);
+        },
+      ),
+      { numRuns: 40, seed: 5505 },
+    );
+  });
+
+  // The remedy's exclude promise is conditional: with commit_docs false GSD writes no exclude entry.
+  test('W031 lists one path and several the same way', () => {
+    for (const value of [['.planning/state.json'], ['.planning/state.json', '.planning/workstreams/ws1/state.json']]) {
+      assert.deepEqual(configValidation.w031Listing(value), { shown: value, more: 0 });
+    }
+  });
+
+  // Boundaries of the two caps: 4, 5 and 6 paths (the "and N more" suffix starts at 6) and names of
+  // 119, 120 and 121 characters (the cut and its ellipsis start at 121).
+  test('W031 path-count cap: 4 and 5 paths list all, 6 adds "and 1 more"', () => {
+    for (const count of [4, 5, 6]) {
+      const value = Array.from({ length: count }, (_, i) => `.planning/w${i}/state.json`);
+      assert.deepEqual(configValidation.w031Listing(value), { shown: value.slice(0, 5), more: count === 6 ? 1 : 0 });
+    }
+  });
+
+  test('W031 name cap: 119 and 120 characters stay whole, 121 is cut with an ellipsis', () => {
+    for (const length of [119, 120, 121]) {
+      const name = `.planning/${'a'.repeat(length - '/state.json'.length - '.planning/'.length)}/state.json`;
+      assert.equal([...name].length, length);
+      assert.deepEqual(configValidation.w031Listing([name]).shown, [length > 120 ? `${[...name].slice(0, 120).join('')}…` : name]);
+    }
+  });
+
+  // Property: over every `.planning/<segments>/state.json` shape, git lists a path through the owner's
+  // STATE_JSON_PATHSPECS exactly when the owner's matcher accepts it (every possible project directory
+  // holds a marker, so only the path shape decides); the pathspecs and the matcher are one grammar.
+  test('W031 property: STATE_JSON_PATHSPECS and the matcher accept the same paths (one scope list)', (t) => {
+    const fc = require('fast-check');
+    const { STATE_JSON_PATHSPECS, isStateJsonPublishPath } = require('../../gsd-core/bin/lib/core-utils.cjs');
+    const names = ['p', 'workstreams', 'w'];
+    const shapes = [[]];
+    for (let depth = 1; depth <= 3; depth++) {
+      for (const prefix of shapes.filter((s) => s.length === depth - 1)) for (const n of names) shapes.push([...prefix, n]);
+    }
+    const candidates = shapes.map((s) => ['.planning', ...s, 'state.json'].join('/'));
+    const cwd = createTempGitProject('gsd-5505-w031-grammar-');
+    t.after(() => cleanup(cwd));
+    fc.assert(
+      fc.property(fc.subarray(candidates), (chosen) => {
+        cleanup(path.join(cwd, '.planning'));
+        for (const rel of chosen) {
+          fs.mkdirSync(path.dirname(path.join(cwd, rel)), { recursive: true });
+          fs.writeFileSync(path.join(cwd, rel), '{}\n');
+        }
+        for (const n of names) {
+          fs.mkdirSync(path.join(cwd, '.planning', n), { recursive: true });
+          fs.writeFileSync(path.join(cwd, '.planning', n, 'config.json'), '{}\n');
+        }
+        gitOrThrow(['add', '-f', '--', '.planning'], { cwd });
+        const listed = gitOrThrow(['ls-files', '-z', '--', ...STATE_JSON_PATHSPECS], { cwd }).split('\0').filter(Boolean).sort();
+        gitOrThrow(['rm', '-rq', '--cached', '--', '.planning'], { cwd });
+        // `.planning/workstreams/state.json` is the one path the pathspec lists and the matcher refuses on purpose (GSD's own directory)
+        const reserved = '.planning/workstreams/state.json';
+        return JSON.stringify(listed.filter((rel) => rel !== reserved)) === JSON.stringify(chosen.filter((rel) => rel !== reserved && isStateJsonPublishPath(cwd, rel)).sort());
+      }),
+      { numRuns: 25, seed: 5505 },
+    );
+  });
+
+  test('W031 grammar: a directory GSD owns is never a project, however many markers it holds', (t) => {
+    const { isStateJsonPublishPath } = require('../../gsd-core/bin/lib/core-utils.cjs');
+    const cwd = createTempDir('gsd-5505-w031-reserved-');
+    t.after(() => cleanup(cwd));
+    for (const dir of ['workstreams', 'phases']) fs.mkdirSync(path.join(cwd, '.planning', dir, 'phases'), { recursive: true });
+    fs.mkdirSync(path.join(cwd, '.planning', 'workstreams', 'workstreams'), { recursive: true });
+    assert.equal(isStateJsonPublishPath(cwd, '.planning/workstreams/state.json'), false);
+    assert.equal(isStateJsonPublishPath(cwd, '.planning/phases/state.json'), false);
+    assert.equal(isStateJsonPublishPath(cwd, '.planning/workstreams/workstreams/state.json'), true, 'a workstream named workstreams is still a workstream');
+  });
+
+  // Property: the quoted remedy argument is read back by bash as exactly the tracked name
+  // (U+0080-U+009F as the UTF-8 bytes git tracks, C0/DEL, quotes and backslashes included).
+  test('W031 property: quoted remedy round-trips through bash', (t) => {
+    const fc = require('fast-check');
+    const bash = (script) => runHook('-s', [], { interpreter: 'bash', input: script, timeoutMs: GIT_TIMEOUT_MS });
+    if (bash('true').exitCode !== 0) { t.skip('bash unavailable'); return; }
+    const alphabet = ['a', 'Z', '0', ' ', "'", '\\', '"', '$', '\n', '\t', '\x1b', '\x7f', '\u0080', '\u0085', '\u009f', '\x01', 'é', '-', '/', '`', String.fromCodePoint(0x202e), String.fromCodePoint(0x200d), String.fromCodePoint(0x2028)];
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom(...alphabet), { minLength: 1, maxLength: 8 }), (chars) => {
+        const name = chars.join('');
+        const [diagnostic] = ruleFor('W031').check({ stateJsonTracked: { value: [name], scope: SCOPE.COMPLETE, reason: 'ok' } });
+        // A shell function stands in for git and prints the path argument bash parsed out of the advised command.
+        // The script goes in on stdin: Windows re-quotes argv for a child process, which mangles a newline next to a backslash.
+        const out = bash(`git() { shift 5; printf %s "$1"; }\n${diagnostic.remedy.args.untrack}`);
+        return out.outcome === OUTCOME.EXITED && out.exitCode === 0 && out.stdout === name;
+      }),
+      { numRuns: 100, seed: 5505 },
+    );
+  });
+
+  test('W031 listing escapes format characters, cuts a long name and caps the list', () => {
+    const rlo = String.fromCodePoint(0x202e);
+
+    assert.deepEqual(configValidation.w031Listing([`.planning/a${rlo}b/state.json`, '.planning/x`y/state.json']).shown[0], '.planning/a\\u{202e}b/state.json');
+
+    const long = `.planning/${'n'.repeat(300)}/state.json`;
+    assert.deepEqual(configValidation.w031Listing([long]).shown, [`${[...long].slice(0, 120).join('')}…`]);
+
+    const many = Array.from({ length: 8 }, (_, i) => `.planning/p${i}/state.json`);
+    assert.deepEqual(configValidation.w031Listing(many), { shown: many.slice(0, 5), more: 3 });
+  });
+
+  test('W031 is silent when git could not list the tracked files (a failed listing is not a finding)', () => {
+    const field = { value: ['.planning/state.json'], scope: SCOPE.UNREADABLE, reason: 'git_list_failed' };
+    assert.deepEqual(ruleFor('W031').check({ stateJsonTracked: field }), []);
+  });
+
+  test('W031: no git repo, or the field absent, produces zero findings', (t) => {
+    const cwd = createTempDir('gsd-5505-w031-nogit-');
+    t.after(() => cleanup(cwd));
+    fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'state.json'), '{}\n');
+
+    assert.deepEqual(ruleFor('W031').check(buildPlanningSnapshot(cwd)), []);
+    assert.deepEqual(ruleFor('W031').check({}), []);
+  });
+
+  test('W031 is non-repairable — --repair never untracks', () => {
+    assert.equal(ruleFor('W031').repairable, false);
   });
 });

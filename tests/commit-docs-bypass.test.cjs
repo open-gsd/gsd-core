@@ -844,7 +844,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+const { cleanup, createTempGitProject, withTempGitProject, captureFdSync } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -1287,6 +1287,35 @@ describe('#3587 per-phase commit_docs override', () => {
             assert.strictEqual(r.resolved, true);
           },
         ),
+      );
+    });
+
+    // The state-contract publisher's exclude gate is the commit policy's answer for every config shape (#5505):
+    // commit_docs, then an ignored .planning/; and `quiet` changes only stderr, never the value.
+    test('F2: the state-contract exclude gate equals resolveCommitDocsPolicy', () => {
+      const { loadConfig, isGitIgnored } = require('../gsd-core/bin/lib/config-loader.cjs');
+      const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
+      const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+      const valueArb = fc.oneof(fc.constant(undefined), fc.boolean(), fc.string({ maxLength: 4 }), fc.integer({ min: -1, max: 2 }));
+      fc.assert(
+        fc.property(valueArb, valueArb, fc.boolean(), fc.boolean(), (flat, nested, hasConfig, ignored) => withTempGitProject((cwd) => {
+            if (hasConfig) {
+              const cfg = {};
+              if (flat !== undefined) cfg.commit_docs = flat;
+              if (nested !== undefined) cfg.planning = { commit_docs: nested };
+              fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify(cfg));
+            }
+            if (ignored) fs.appendFileSync(path.join(cwd, '.git', 'info', 'exclude'), '.planning\n');
+            const config = loadConfig(cwd, { persist: false });
+            const expected = resolveCommitDocsPolicy(config, null, () => isGitIgnored(cwd, '.planning')).resolved;
+            assert.deepStrictEqual(loadConfig(cwd, { persist: false, quiet: true }).commit_docs, config.commit_docs);
+            const thunk = () => isGitIgnored(cwd, '.planning');
+            assert.deepStrictEqual(resolveCommitDocsPolicy(config, null, thunk), require('../gsd-core/bin/lib/config-loader.cjs').resolveCommitDocsTiers(undefined, config.commit_docs, thunk));
+            assert.strictEqual(publishStateContract(cwd).published, true);
+            const exclude = splitLines(fs.readFileSync(path.join(cwd, '.git', 'info', 'exclude'), 'utf8'));
+            assert.strictEqual(exclude.includes('/.planning/state.json'), Boolean(expected));
+        })),
+        { numRuns: 30, seed: 5505 },
       );
     });
   });

@@ -705,7 +705,7 @@ The following combinations of `mode`, `granularity`, `model_profile`, and workfl
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `planning.commit_docs` | boolean | `true` | Whether `.planning/` files are committed to git |
+| `planning.commit_docs` | boolean | `true` | Whether `.planning/` files are committed to git. When `false`, GSD neither adds the derived `.planning/state.json` to `.git/info/exclude` nor untracks it, so it is not auto-ignored (see [W031 caveat](#caveat-a-tracked-planningstatejson)); the per-machine `milestone.lock` claim is excluded whatever this says, in a repo that owns the project. |
 | `planning.pr_strict` | boolean | `false` | Filter mode for [`/gsd-pr-branch`](COMMANDS.md#gsd-pr-branch). `false` — the generated PR branch keeps structural planning state (`STATE.md`, `ROADMAP.md`, `MILESTONES.md`, `PROJECT.md`, `REQUIREMENTS.md`, `milestones/**`) and drops the transient subdirectories. `true` — every `.planning/` path is dropped, structural files included, and a commit is carried over only when it touches at least one file outside `.planning/`. Applies to the root repository's PR branch only; `planning.sub_repos` companion branches are unaffected |
 | `planning.search_gitignored` | boolean | `false` | Add `--no-ignore` to broad searches to include `.planning/` |
 | `planning.sub_repos` | array of strings | `[]` | Paths of nested sub-repos relative to the project root. When set, GSD-aware tooling scopes phase-lookup, path-resolution, and commit operations per sub-repo instead of treating the outer repo as a monorepo |
@@ -787,7 +787,7 @@ W029  .planning/ is gitignored but N file(s) are still tracked by git
       Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"
 ```
 
-The warning is advisory. GSD never untracks files for you — `--repair` deliberately will not act on
+The warning is advisory. GSD never untracks `.planning/` for you — `--repair` deliberately will not act on
 `W029`, because removing files from the index is destructive and the timing is yours to choose.
 
 Once you run the `git rm -r --cached` above, `.planning/` is untracked, the ignore rule takes full
@@ -796,6 +796,10 @@ effect, and the warning clears.
 Note: a file deliberately force-added under an otherwise-ignored `.planning/` (`git add -f
 .planning/keep.md`) triggers this same warning — there is no reliable way to distinguish an
 intentional force-add from the accidental case above, so `W029` is expected in that situation too.
+
+#### Caveat: a tracked `.planning/state.json`
+
+A new project commits `.planning/.gitignore` with a `/state.json` rule, so a fresh clone ignores the file from the start. With `commit_docs` on, the first boundary command in each clone also adds `/<prefix>state.json` to `.git/info/exclude`, and untracks a copy git already tracks (staged, file kept on disk, idempotent; the next `commit` carries it), because an ignore rule cannot hide a tracked file. With `commit_docs` `false` (or `.planning/` already git-ignored) GSD leaves that file alone, so a copy committed earlier stays modified after every boundary and `/gsd-ship` refuses the dirty tree. `/gsd-health` reports such a copy as **`W031`** with the exact `git --literal-pathspecs rm --cached --ignore-unmatch -- <paths>` to run once, from the project directory (the one holding `.planning/`). Like `W029` it only advises: `--repair` never runs it.
 
 ### Per-Phase Override (`phase_commit_docs`)
 

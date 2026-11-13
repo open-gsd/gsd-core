@@ -24,6 +24,7 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { matchLines, writeScope, type WriteScope } from './markdown-line-diff.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 import { readOnlyGitEnv } from './read-only-git-env.cjs';
+import { sanitizeLabel } from './security.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -491,6 +492,25 @@ export function shellSingleQuote(value: string): string {
   return "'" + escapeSingleQuotedShellLiteral(value) + "'";
 }
 
+const ANSI_C_BYTES = /[\p{Cf}\p{Zl}\p{Zp}\u0080-\u009f`]/u;
+
+/**
+ * #5505: one shell token for text that comes from the repository (a tracked file name) and sits in a
+ * command printed for a person to paste, as the health remedies do. Plain when it holds only
+ * `[\w./-]`; POSIX single quotes otherwise; ANSI-C `$'..'` when it holds a control character, a
+ * format character (Cf, U+2028/2029: invisible, or able to reorder the displayed text) or a backtick
+ * (ends the markdown code span around the command). In `$'..'`, `\` and `'` are backslashed, Cf,
+ * U+2028/2029, C1 and backtick become their UTF-8 bytes, and C0/DEL keep their `\n`, `\t`, `\x1b`
+ * forms through `sanitizeLabel`.
+ */
+export function quoteShellArg(value: string): string {
+  if (/^[\w./-]+$/.test(value)) return value;
+  if (!/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}`]/u.test(value)) return shellSingleQuote(value);
+  const bytes = (ch: string): string => [...Buffer.from(ch)].map((b) => `\\x${b.toString(16).padStart(2, '0')}`).join('');
+  const escape = (ch: string): string => (ch === '\\' || ch === "'" ? `\\${ch}` : ANSI_C_BYTES.test(ch) ? bytes(ch) : sanitizeLabel(ch));
+  return `$'${[...value].map(escape).join('')}'`;
+}
+
 /**
  * The `export PATH="<dir>:$PATH"` line every persistence lane appends, plus the escaped directory
  * token it embeds. One builder because three lanes emit this line: a lane that re-escapes it
@@ -688,7 +708,7 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
 // #5548: owned by read-only-git-env.cts (its default base is scrubbed); re-exported for callers.
 export { GIT_LOCATION_ENV_VARS, scrubGitLocationEnv } from './read-only-git-env.cjs';
 
-export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): SpawnResultOutput {
+export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number; maxBuffer?: number } = {}): SpawnResultOutput {
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
   // can override via opts.env.
@@ -716,6 +736,8 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
     encoding: 'utf-8',
     stdio: 'pipe',
     timeout: opts.timeout ?? 10_000,
+    // a caller that only asks "is there any output" caps it: spawnSync kills git at the first byte past the cap (ENOBUFS)
+    ...(opts.maxBuffer === undefined ? {} : { maxBuffer: opts.maxBuffer }),
     windowsHide: true,
   });
   return _spawnResult(result, 'git');

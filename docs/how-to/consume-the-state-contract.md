@@ -199,10 +199,47 @@ checkbox list is used instead, and a checkbox can only say complete or not — t
 in-progress phase is identified from `STATE.md`. Regenerating the progress table
 resolves most disagreements.
 
-**Should I commit `state.json`?** Your call. GSD does not add it to
-`.gitignore`. It is a derived cache — safe to delete, regenerated at the next
-boundary — so committing it mostly creates merge noise. If you keep `.planning/`
-out of your repo entirely, see
+**Should I commit `state.json`?** No. A new project ignores it from its first
+commit: `config-new-project` writes `/state.json` into `.planning/.gitignore`,
+which `/gsd-new-project` commits with `config.json`, so a fresh clone or CI
+checkout is clean before any boundary command runs. The first boundary command
+in each clone also adds `/<prefix>state.json` (e.g. `/.planning/state.json`) to
+`.git/info/exclude` as a per-clone fallback, so an untracked copy never shows in
+`git status` even when no committed rule exists.
+
+A copy that is already tracked is migrated for you. An ignore rule cannot hide a
+tracked file, so the first boundary command that finds one (with `commit_docs`
+on, in a repo that owns the project) runs
+`git --literal-pathspecs rm --cached --ignore-unmatch` over every tracked publish
+path (`.planning/state.json`, `.planning/workstreams/<name>/state.json`,
+`.planning/<project>/state.json`, `.planning/<project>/workstreams/<name>/state.json`),
+writes the same `/state.json` rule into the `.gitignore` beside each, and stages
+both. The file stays on disk, rerunning the migration is a no-op, and the next
+`commit` carries the staged removal and rule, so `git status` is clean after the
+workflow's final commit. `commit` carries them only when everything staged before it is that
+removal or that one added `/state.json` line; a staged edit of your own to the same `.gitignore`
+stays staged for you to commit. Each scope decides for itself: a copy whose own (or inherited)
+`commit_docs` is `false`, or whose `.gitignore` holds a `!` rule for the file, stays tracked,
+even when a sibling workstream or project beside it is migrated.
+A teammate whose tracked copy is modified (the usual case) cannot pull that commit
+(`Your local changes ... would be overwritten by merge`): they run
+`git checkout -- <path>` (or stash) first, and the next boundary regenerates the
+file. `/gsd-health` (`validate health`) reports a copy GSD left tracked as warning
+`W031` with the exact command for the paths it found, e.g.
+`git --literal-pathspecs rm --cached --ignore-unmatch -- .planning/state.json`;
+`--repair` never runs it for you.
+
+When `commit_docs` resolves to false (set as `commit_docs` or `planning.commit_docs`)
+or `.planning/` is already ignored, GSD neither adds `state.json` to
+`.git/info/exclude` nor untracks it. The exclude and the untrack apply only to a
+repo that owns the project; a repo that merely encloses it, tracking no file under
+it, is left alone, and the same ownership check guards the per-machine
+`milestone.lock` claim, which is excluded whatever `commit_docs` says. A negation
+you wrote (`!/.planning/state.json`, or a glob such as `!/.planning/*.json`) is
+respected: GSD asks git (`check-ignore -v`) whether the last matching rule is a
+`!` rule before it appends anything.
+
+If you keep `.planning/` out of your repo entirely, see
 [Keep planning docs out of a shared repo](keep-planning-docs-private.md).
 
 ## Related

@@ -81,6 +81,11 @@ describe('execGit', () => {
     assert.ok(result.stdout.length > 0, 'stdout should not be empty for git --version');
   });
 
+  test('maxBuffer stops the child at the first output past the cap and reports ENOBUFS', () => {
+    const result = execGit(['ls-files', '-z', '--', '.'], { cwd: tmpDir, maxBuffer: 1 });
+    assert.strictEqual(result.error && result.error.code, 'ENOBUFS');
+  });
+
   test('exitCode non-zero for failing command — does not throw', () => {
     const result = execGit(['status', '--porcelain'], { cwd: '/tmp/definitely-not-a-git-repo-8675309' });
     assert.notStrictEqual(result.exitCode, 0);
