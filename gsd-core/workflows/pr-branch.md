@@ -671,7 +671,7 @@ did not do what this mode promised; report it and do not tell the user to push.
 
 `$PLANNING_DELETIONS` is a second hard gate (#3679) — it must also be `0`. A non-zero
 value means the PR branch would DELETE planning files the target branch tracks
-(`echo "$DELETED" | grep "^\.planning/"` lists
+(`grep "^\.planning/" <<<"$DELETED"` lists
 them). That is data loss, not filtering — report it, do not tell the user to push, and
 rebuild the branch.
 

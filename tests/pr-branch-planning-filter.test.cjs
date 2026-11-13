@@ -472,16 +472,13 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       }
     });
 
-    test('22b: the shipped pick list keeps a transient-only planning commit out of the loop', () => {
+    test('22b: the shipped pick list keeps a transient-only planning commit out of the loop', (t) => {
+      t.after(teardown);
       const dir = buildFixture({ planningOnlySecondCommit: true });
-      try {
-        const result = runFilterLoop(dir, { strict: false, transientDirs: currentTransientDirs(), shippedPickList: true });
-        assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
-        const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
-        assert.strictEqual(count, 1, 'only c1 lands; the planning-only c2 is not picked');
-      } finally {
-        teardown();
-      }
+      const result = runFilterLoop(dir, { strict: false, transientDirs: currentTransientDirs(), shippedPickList: true });
+      assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
+      const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+      assert.strictEqual(count, 1, 'only c1 lands; the planning-only c2 is not picked');
     });
 
     test('23: default end-to-end — diff carries code + STATE.md, nothing forbidden-default', () => {

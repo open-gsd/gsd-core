@@ -2819,22 +2819,18 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   });
 
   test('verify keeps the pending ref when the marker write failed (KEEP)', (t) => {
-    const repo = createTempDir('gsd-3679-verify-keep-');
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-keep-', defaultBranch: 'main' });
     t.after(() => cleanup(repo));
     const g = gitIn(repo);
-    g(['init', '-q', '-b', 'main']);
-    g(['config', 'user.email', 't@t']);
-    g(['config', 'user.name', 't']);
-    fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
-    g(['add', '-A']);
-    g(['commit', '-qm', 'base']);
+    const seeded = refOf(repo, 'main');
+    g(['update-ref', PENDING_REF, seeded]);
     g(['checkout', '-qb', 'pr']);
     fs.writeFileSync(path.join(repo, 'code.sh'), 'code2\n');
     g(['add', '-A']);
     g(['commit', '-qm', 'code only']);
 
     runVerify(repo, '_to() { "$@"; }\nKEEP=1');
-    assert.equal(pendingRef(repo), '', 'the failed marker write leaves the pending ref untouched');
+    assert.equal(pendingRef(repo), seeded, 'the failed marker write leaves the seeded pending ref untouched');
   });
 
   // git quotes a non-ASCII path, and one with a double quote, in a plain name list; both gates must still see it under .planning/.
