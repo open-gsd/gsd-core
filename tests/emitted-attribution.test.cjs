@@ -2496,6 +2496,49 @@ test('a base-branch ref on an unrelated history keeps the pin and reports the fa
     `the failed line must name the relatedness check \`merge-base ${orphan} HEAD\`: ${messages[1]}`);
 });
 
+// Fresh review case (f): origin/next's first-parent chain is rooted at R1, outside the floor's
+// history, which joined `next` only through a second-parent merge J = merge(A1 <- C1). HEAD is
+// a PR on C1 and contains no commit of that chain, so the walk ends at the root R1, which has
+// no first parent. That is "no chain commit is in HEAD", not a git failure: the floor is kept
+// and the line must say so truthfully.
+test('a first-parent chain rooted outside HEAD keeps the pin and says no base commit is in HEAD', (t) => {
+  const root = createTempDir('gsd-rooted-chain-');
+  t.after(() => cleanup(root));
+  const commit = (file, body, message) => {
+    fs.writeFileSync(path.join(root, file), body);
+    gitFixture(root, ['add', file]);
+    gitFixture(root, ['commit', '-q', '-m', message]);
+    return gitFixture(root, ['rev-parse', 'HEAD']);
+  };
+  gitFixture(root, ['init', '-q', '-b', 'next']);
+  const r1 = commit('a.txt', 'r1\n', 'R1: next\'s first-parent root');
+  commit('a.txt', 'a1\n', 'A1');
+  gitFixture(root, ['checkout', '-q', '--orphan', 'other']);
+  gitFixture(root, ['rm', '-rq', '--cached', '.']);
+  commit('c.txt', 'r2\n', 'R2: a second root');
+  const c1 = commit('c.txt', 'c1\n', 'C1: the pin');
+  gitFixture(root, ['checkout', '-q', '-b', 'pr']);
+  commit('p.txt', 'p\n', 'PR on C1');
+  gitFixture(root, ['checkout', '-q', '-f', 'next']);
+  gitFixture(root, ['merge', '-q', '--no-ff', '--no-edit', '--allow-unrelated-histories', 'other']);
+  const tip = commit('a.txt', 'b\n', 'B: next after J');
+  gitFixture(root, ['checkout', '-q', '-f', '--detach', 'pr']);
+  gitFixture(root, ['update-ref', 'refs/remotes/origin/next', tip]);
+  gitFixture(root, ['branch', '-q', '-D', 'next', 'other', 'pr']);
+  assert.deepEqual(
+    gitFixture(root, ['rev-list', '--first-parent', tip, `^${c1}`]).split('\n').at(-1), r1,
+    'fixture: the walk above the floor must end at the root R1');
+
+  const messages = [];
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: c1, GITHUB_BASE_REF: 'next' },
+    { cwd: root, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, c1, 'the pin\'s merge-base must be kept');
+  assert.equal(messages.length, 2, `the resolved-base line plus exactly one kept-floor line: ${messages.join(' | ')}`);
+  assert.ok(messages[1].includes(c1), `the kept-floor line must name the pin's merge-base ${c1}: ${messages[1]}`);
+  assert.match(messages[1], /no origin\/next first-parent commit is in HEAD/);
+  assert.doesNotMatch(messages[1], /failed/, 'no git command failed, so the line must not say one did');
+});
+
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
   const { root, b2 } = makeStalePinMergeRefRepo(t);
   const messages = [];
