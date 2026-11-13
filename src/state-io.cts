@@ -22,7 +22,9 @@
  * #500/#905/#1230 lost-update family). The seam writes LF line endings and
  * one trailing newline, and normalizes spacing where the write changed the
  * document (#5165; a new file is normalized whole), so those bytes are the
- * seam's, not the caller's; it refuses a symlinked, FIFO or device target.
+ * seam's, not the caller's. An existing STATE.md that is not a regular file
+ * (a symlink, live or dangling, a FIFO or a device) is refused with an ENXIO
+ * error under the lock and nothing is written (refuseNonRegularStateMd).
  * It is an exact-content write under the lock: it runs no sync or
  * preservation pipeline, so it sits outside ADR-3408 section 8.3's closed
  * exception list (the maintainer's call, recorded in the #5120 PR). The
@@ -74,7 +76,46 @@ function writeStateMdThroughSeam(filePath: string, content: string): void {
   const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { platformWriteSync } = require('./shell-command-projection.cjs') as { platformWriteSync: (filePath: string, content: string) => void };
-  withStateLock(filePath, () => platformWriteSync(filePath, content));
+  withStateLock(filePath, () => {
+    refuseNonRegularStateMd(filePath);
+    platformWriteSync(filePath, content);
+  });
+}
+
+/**
+ * #5120 review (M1): an existing STATE.md that is not a regular file (a symlink, live or
+ * dangling, a FIFO, a device, a socket, a directory) is refused with an ENXIO error and
+ * nothing is written. The seam alone would not refuse it: its atomic path replaces whatever
+ * sits at the target by rename (platformWriteSync's docblock), so a symlinked STATE.md came
+ * back as a private regular file while the link's real target kept its old bytes. lstat
+ * opens nothing, so a FIFO is classified without blocking.
+ *
+ * Checked under the STATE.md lock, right before the write: every lock-respecting writer is
+ * serialized out of the window between this check and the write, which a check before the
+ * lock would leave open for the whole lock wait. A process that ignores the lock and swaps a
+ * link or FIFO in after the check still meets the seam's rename, which replaces it and never
+ * writes through it, so that residual race gives the pre-check behavior, never a write
+ * through a link and never a block on a FIFO.
+ */
+function refuseNonRegularStateMd(filePath: string): void {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(filePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return; // a new STATE.md: the seam creates it
+    throw err;
+  }
+  if (st.isFile()) return;
+  const kind = st.isSymbolicLink() ? 'a symlink'
+    : st.isFIFO() ? 'a FIFO'
+      : st.isCharacterDevice() || st.isBlockDevice() ? 'a device'
+        : st.isDirectory() ? 'a directory'
+          : 'a special file';
+  throw Object.assign(
+    new Error(`ENXIO: cannot write ${filePath}: STATE.md is not a regular file (it is ${kind}); refusing, so nothing is written through or over it`),
+    { code: 'ENXIO' },
+  );
 }
 
 export function createStateIO(

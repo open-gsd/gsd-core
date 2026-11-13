@@ -191,9 +191,11 @@ file it replaces, and to the whole document when the file is new; the
 frontmatter block is kept exactly. The write is the host's content as given:
 no sync or preservation pipeline runs. A STATE.md held by another live writer
 makes the write wait for the lock (up to 30 seconds); a lock that cannot be
-taken returns a tool error and writes nothing. A `STATE.md` that is a
-symlink, a FIFO or a device is refused with a tool error, where the raw write
-used to follow it. Every other `path` is written exactly as given.
+taken returns a tool error and writes nothing. An existing `STATE.md` that
+is not a regular file (a symlink, live or dangling, a FIFO or a device) is
+refused with a tool error and nothing is written, neither the link's target
+nor the link itself, where the raw write used to write through it. Every
+other `path` is written exactly as given.
 
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.
