@@ -8,9 +8,12 @@
  * exists to delete, and would double the rate `next` advances.
  *
  * ── The load-bearing part ────────────────────────────────────────────────────
- * ADR-2719 §5, as amended for #5797, keys the cache on the `next` sha the PR's tree is
- * based on, and says: "That key discipline is load-bearing — a stale baseline
- * mis-attributes silently."
+ * ADR-2719 §5 says: "That key discipline is load-bearing — a stale baseline
+ * mis-attributes silently." As amended for #5797, the PR lane's cache key stays the pin
+ * (`emitted-baseline-<pull_request.base.sha>`), so on a stale pin the restore still hits
+ * whenever the push lane cached the pin's sha. The gate needs a baseline built at the
+ * attribution base, so `validateBaseline` below refuses a restored artifact built at any
+ * other sha and `resolveBaseline` sends the run to the in-job build at that base.
  *
  * Note the asymmetry that makes staleness worse than absence: a MISSING baseline fails
  * loudly and gets fixed. A STALE one produces a confident wrong answer — it attributes

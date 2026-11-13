@@ -506,16 +506,20 @@ function resolveNextRef({ cwd = REPO_ROOT } = {}) {
  * their ack trailers. So on a lane that names its base branch (`GITHUB_BASE_REF`) the
  * merge-base is advanced to `advanceToMergedBase`'s result: the invariant is that the
  * attribution base is always a commit HEAD contains, the pin bounds it from below and
- * the tree bounds it from above. When the pin is the merged base (the usual case) this
- * changes nothing and the cache key (`emitted-baseline-<base.sha>`) still hits; when it
- * is stale the key misses and `resolveBaseline` builds the baseline in-job at the
- * advanced sha (ADR-2719 §5).
+ * the tree bounds it from above. The baseline cache key stays the pin
+ * (`emitted-baseline-<base.sha>`, `.github/workflows/test.yml`), so the restore hits
+ * whenever the push lane cached the pin's sha, stale pin or not. When the pin is the
+ * merged base (the usual case) the restored artifact is built at the attribution base and
+ * is used. When the pin is stale the artifact was built at the pin, not at the advanced
+ * sha, so `validateBaseline` refuses it as stale and `resolveBaseline` falls through to
+ * the in-job build at the advanced sha (ADR-2719 §5, as amended for #5797).
  *
  * A release-merge PR (`release/X.Y.0` or `hotfix/X.Y.Z` -> `main`, #5902) is the exception:
  * its base is the fork point on `next` (`origin/next`, `upstream/next`, `next`; first that
  * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, so that fork point is never
- * advanced, and that sha is not `base.sha`, so the `emitted-baseline-<base.sha>` cache key
- * misses and the baseline is built in-job.
+ * advanced, and that sha is not `base.sha`: whatever the `emitted-baseline-<base.sha>`
+ * restore returns was not built at the fork point, so `validateBaseline` refuses it (or the
+ * restore misses) and the baseline is built in-job.
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
