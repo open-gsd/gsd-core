@@ -502,6 +502,42 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(fs.readFileSync(state, 'utf8'), migrated, 'the other writer\'s STATE.md is untouched');
   });
 
+  // #5120 re-review (Major-1): the STATE.md snapshot is taken under the STATE.md
+  // lock, from the file the migration actually rewrites. Taken before the lock, a
+  // writer that landed while the migration waited for the lock was missing from the
+  // snapshot, so the rollback put the older bytes back over that writer's content
+  // and still reported "rolled back".
+  test('a writer that lands while the migration waits for the STATE.md lock survives the rollback (#5120 re-review)', (t) => {
+    const dir = setup('m13-state-wait-writer-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json')); // a later step fails, so the rollback runs
+
+    // The other writer appends its note just before this migration's first lock
+    // open: it held the lock and released it while the migration was waiting.
+    const withNote = `${original}\nOther writer note: keep me\n`;
+    let injected = false;
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (!injected && String(file) === `${state}.lock`) {
+        injected = true;
+        realWrite.call(fs, state, withNote);
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: config\.json cannot be updated/);
+    mock.restoreAll();
+    assert.equal(injected, true, 'precondition: the other writer ran');
+    assert.equal(fs.readFileSync(state, 'utf8'), withNote, 'the rollback restores the STATE.md the migration rewrote, the other writer\'s note included');
+  });
+
   test('rewriteRoadmapLines: identical headings in two milestones stay distinct by line index; heading, checklist and fenced edits', () => {
     const lines = [
       '## v1.0: A', // 0

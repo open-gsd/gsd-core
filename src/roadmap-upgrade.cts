@@ -2447,12 +2447,18 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     if (stateEdits.length > 0 && fs.existsSync(stateMdPath)) {
       const original = fs.readFileSync(stateMdPath, 'utf8');
       if (substituteCrossRefs(original, 'STATE.md', stateEdits) !== original) {
-        snapshotFile(stateMdPath);
         let stateWritten = false;
         try {
           stateWritten = readModifyWriteStateMd(
             stateMdPath,
-            (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
+            (current) => {
+              // #5120 re-review: snapshotted under the STATE.md lock, from the file
+              // this transform rewrites. A snapshot taken before the lock missed a
+              // writer that landed during the lock wait, and the rollback then put
+              // the older bytes back over that writer's content.
+              snapshotFile(stateMdPath);
+              return substituteCrossRefs(current, 'STATE.md', stateEdits);
+            },
             cwd,
             // #5120 review: the seam's atomic mode (temp file + rename, no
             // truncating direct-write fallback; the prune precedent, #5831), so a
