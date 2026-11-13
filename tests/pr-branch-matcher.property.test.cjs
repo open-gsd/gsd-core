@@ -22,14 +22,13 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, runBashFile, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
+const { readWorkflowText, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, runBashFile, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
 const lazy = (f) => { let v; return () => (v === undefined ? (v = f()) : v); };
-const workflowText = lazy(() => fs.readFileSync(WORKFLOW_PATH, 'utf-8'));
+const workflowText = lazy(readWorkflowText);
 const awkProgram = lazy(() => {
   const block = extractBashBlockContaining(workflowText(), 'REWRITE=$(printf');
   const m = block.slice(block.indexOf('REWRITE=$(printf')).match(/awk '([^']*)'/);

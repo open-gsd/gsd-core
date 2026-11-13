@@ -88,7 +88,8 @@ const parseWorkflow = (text) => {
   return { transientDirs, structuralRe };
 };
 
-const readWorkflow = () => parseWorkflow(fs.readFileSync(WORKFLOW_PATH, 'utf-8'));
+const readWorkflowText = () => fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+const readWorkflow = () => parseWorkflow(readWorkflowText());
 
 const BASH_FENCE_OPEN_RE = /^```bash\s*$/;
 const BASH_FENCE_CLOSE_RE = /^```\s*$/;
@@ -180,14 +181,14 @@ const extractFunction = (text, marker, name) => {
 
 // The one owner of "run a shipped bash recipe from a file, not argv" (Windows MSYS2 mis-parses long quote-heavy
 // argv): `script` and `files` (name -> content) go into a fresh dir; bash runs the script in `cwd` (default the
-// fresh dir) under `env(dir)`. Returns the seam result.
-const runBashFile = (script, { prefix, env, cwd, files = {} }) => {
+// fresh dir) under `env(dir)`, bounded by `timeoutMs` when given. Returns the seam result.
+const runBashFile = (script, { prefix, env, cwd, files = {}, timeoutMs }) => {
   const dir = createTempDir(prefix);
   try {
     for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content);
     const file = path.join(dir, 'run.sh');
     fs.writeFileSync(file, `${script}\n`);
-    return runHook(file, [], { interpreter: 'bash', cwd: cwd ?? dir, env: env(dir) });
+    return runHook(file, [], { interpreter: 'bash', cwd: cwd ?? dir, env: env(dir), timeoutMs });
   } finally { cleanup(dir); }
 };
 
@@ -244,6 +245,7 @@ module.exports = {
   WORKFLOW_PATH,
   parseWorkflow,
   readWorkflow,
+  readWorkflowText,
   extractPickLoop,
   extractBashBlockContaining,
   extractDeclarationLines,

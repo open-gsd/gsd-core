@@ -41,6 +41,7 @@ const {
   TRANSIENT_DIRS_MARKER,
   FILTER_PATHS_MARKER,
   PRECONDITIONS_MARKER,
+  runBashFile,
 } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -2771,13 +2772,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
       'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
     ].join('\n');
-    fs.writeFileSync(path.join(repo, 'verify.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'verify.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      env: gitChildEnv(repo),
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const r = runBashFile(script, { prefix: 'gsd-verify-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
     return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }

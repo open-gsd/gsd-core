@@ -15,14 +15,14 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
-const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, refShaOrEmpty, toLegacyResult, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { gitChildEnv } = require('./helpers/isolated-env.cjs');
 
 const {
-  WORKFLOW_PATH,
+  readWorkflowText,
   extractPickLoop,
   extractBashBlockContaining,
   extractDeclarationLines,
@@ -42,7 +42,7 @@ function git(dir, ...args) {
 }
 
 function refkeyFn() {
-  const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+  const text = readWorkflowText();
   return extractDeclarationLines(text, PRECONDITIONS_MARKER, ['refkey() {'])[0];
 }
 
@@ -79,7 +79,7 @@ function commitRound(dir, n, file = 'code.txt') {
 
 // Runs the shipped blocks in workflow order under pr_strict.
 function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh = 'return 1', prelude = '', afterPre = '', cwd = dir } = {}) {
-  const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+  const text = readWorkflowText();
   const b = (marker) => extractBashBlockContaining(text, marker);
   const script = [
     `CURRENT_BRANCH='${branch}'`,
@@ -102,21 +102,17 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
   return runSh(script, cwd);
 }
 
-function runSh(script, cwd) {
-  const r = runBashFile(script, { prefix: 'gsd-prmarker-script-', cwd, env: () => gitChildEnv(cwd) });
-  return { status: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
+// `status` is null for a killed or timed-out run, so a fail-closed test cannot pass on one. Without `cwd` the script
+// runs in the dir that holds `files` (name -> content).
+function runSh(script, cwd, files) {
+  return toLegacyResult(runBashFile(script, { prefix: 'gsd-prmarker-script-', cwd, files, env: (dir) => gitChildEnv(cwd ?? dir) }));
 }
 
 // Keys for `inputs`, one per line, through the shipped refkey function `fn`.
 const refKeys = (fn, inputs) => {
-  const tmp = createTempDir('gsd-refkey-');
-  try {
-    const f = path.join(tmp, 'in.txt');
-    fs.writeFileSync(f, inputs.join('\n') + '\n');
-    const r = runSh(`${fn}\nwhile IFS= read -r l; do refkey "$l"; echo; done < '${f.replace(/\\/g, '/')}'`, tmp);
-    assert.equal(r.status, 0, r.stderr);
-    return r.stdout.split(/\r?\n/).slice(0, inputs.length);
-  } finally { cleanup(tmp); }
+  const r = runSh(`${fn}\nwhile IFS= read -r l; do refkey "$l"; echo; done < in.txt`, undefined, { 'in.txt': inputs.join('\n') + '\n' });
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout.split(/\r?\n/).slice(0, inputs.length);
 };
 
 // Fast-forward the bare target to the published -pr branch (a merged PR).
@@ -127,7 +123,7 @@ function mergePr(dir, target = 'main') {
 
 // The shipped pr_merged (and its _to helper), for calling it directly.
 const prMergedFns = () => {
-  const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+  const text = readWorkflowText();
   const [toFn] = extractDeclarationLines(text, 'pr_merged() {', ['_to() {']);
   return [toFn, extractFunction(text, 'pr_merged() {', 'pr_merged')].join('\n');
 };
@@ -148,6 +144,13 @@ const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
 const builtOf = (dir) => refOf(dir, BUILT);
 // Rounds whose code reached the -pr tree (state, not log text).
+// A rebase-merge of the published -pr onto a moved target: main gains an unrelated commit, then the -pr commits are cherry-picked.
+const rebaseMergePr = (dir) => {
+  git(dir, 'checkout', '-q', 'main');
+  write(dir, 'other.txt', 'x\n');
+  commitAll(dir, 'chore: unrelated');
+  git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+};
 const changed = (dir) => git(dir, 'diff', '--name-only', 'main', 'feature-pr').split(/\r?\n/).sort();
 const replayed = (dir) => changed(dir).filter((f) => /^r\d+\.txt$/.test(f));
 
@@ -194,6 +197,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 2);
     const r = publish(dir, 'main', { afterPre: 'touch OUTWARD' });
     assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /feature-pr exists and is not merged into main/);
     assert.ok(!fs.existsSync(path.join(dir, 'OUTWARD')), 'refusal must precede handle_sub_repos');
   });
 
@@ -314,6 +318,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const before = [refOf(dir, 'refs/heads/feature-pr'), markerOf(dir), pendingOf(dir), builtOf(dir)];
     const r = publish(dir);
     assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /feature-pr exists and is not merged into main/);
     assert.deepEqual([refOf(dir, 'refs/heads/feature-pr'), markerOf(dir), pendingOf(dir), builtOf(dir)], before);
   });
 
@@ -691,14 +696,10 @@ describe('#5469 pr-branch published marker (real git)', () => {
     }
   });
 
-  test('shq round-trips any string through eval (property)', (t) => {
-    const [fn] = extractDeclarationLines(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'shq() {', ['shq() {']);
-    const tmp = createTempDir('gsd-shq-');
-    t.after(() => cleanup(tmp));
-    const f = path.join(tmp, 'in.txt');
+  test('shq round-trips any string through eval (property)', () => {
+    const [fn] = extractDeclarationLines(readWorkflowText(), 'shq() {', ['shq() {']);
     fc.assert(fc.property(fc.array(fc.stringMatching(/^[a' $;`\\()&"%/-]{1,6}$/), { minLength: 1, maxLength: 20 }), (inputs) => {
-      fs.writeFileSync(f, inputs.join('\n') + '\n');
-      const r = runSh(`${fn}\nwhile IFS= read -r l; do eval "printf '%s\\n' $(shq "$l")"; done < '${f.replace(/\\/g, '/')}'`, tmp);
+      const r = runSh(`${fn}\nwhile IFS= read -r l; do eval "printf '%s\\n' $(shq "$l")"; done < in.txt`, undefined, { 'in.txt': inputs.join('\n') + '\n' });
       assert.equal(r.status, 0, r.stderr);
       assert.deepEqual(r.stdout.split(/\r?\n/).slice(0, inputs.length), inputs);
     }), { numRuns: 20 });
@@ -909,10 +910,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     write(dir, 'x1.txt', '1\n');
     commitAll(dir, 'feat: code only 1');
     assert.equal(publish(dir, 'main', { mode: 'false' }).status, 0);
-    git(dir, 'checkout', '-q', 'main');
-    write(dir, 'other.txt', 'x\n');
-    commitAll(dir, 'chore: unrelated');
-    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    rebaseMergePr(dir);
     git(dir, 'checkout', '-q', 'feature');
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
@@ -945,10 +943,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir, 'main', { mode: 'false' }).status, 0);
-    git(dir, 'checkout', '-q', 'main');
-    write(dir, 'other.txt', 'x\n');
-    commitAll(dir, 'chore: unrelated');
-    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    rebaseMergePr(dir);
     git(dir, 'checkout', '-q', 'feature');
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
@@ -964,10 +959,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitAll(dir, 'feat: code only');
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
-    git(dir, 'checkout', '-q', 'main');
-    write(dir, 'other.txt', 'x\n');
-    commitAll(dir, 'chore: unrelated');
-    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    rebaseMergePr(dir);
     git(dir, 'checkout', '-q', 'feature');
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
@@ -984,10 +976,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     write(dir, 'x2.txt', '2\n');
     commitAll(dir, 'feat: code only 2');
     assert.equal(publish(dir).status, 0);
-    git(dir, 'checkout', '-q', 'main');
-    write(dir, 'other.txt', 'x\n');
-    commitAll(dir, 'chore: unrelated');
-    git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+    rebaseMergePr(dir);
     git(dir, 'checkout', '-q', 'feature');
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
