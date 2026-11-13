@@ -129,7 +129,7 @@ describe('pr-branch rewritten-history matcher (property)', () => {
 const pickedFn = lazy(() => extractDeclarationLines(workflowText(), PRECONDITIONS_MARKER, ['picked() {'])[0]);
 // The shipped per-commit counts of analyze_commits, with `git` standing in for `git diff-tree`.
 const countsBlock = lazy(() => extractBashBlockContaining(workflowText(), 'NON_PLANNING=$('));
-// One bash run per mode: for each file list, picked's verdict (1 pick, 0 skip) and the shipped NON_PLANNING count,
+// One bash run per mode: for each file list, picked's verdict (1 pick, 0 skip) and the three shipped counts the arms read,
 // then picked's verdict on a failed lookup.
 function verdicts(lists, strict) {
   const { structuralRe } = readWorkflow();
@@ -140,10 +140,11 @@ function verdicts(lists, strict) {
     `STRUCTURAL_RE='${structuralRe}'`,
     pickedFn(),
     `for i in $(seq 0 ${lists.length - 1}); do`,
-    '  _to() { cat "$i.txt"; }; git() { cat "$i.txt"; }; HASH=x',
+    // A read without -z prints each name quoted, as git does for a non-ASCII path, so dropping -z from a shipped read fails.
+    `  fake() { case " $* " in *" -z "*) cat "$i.txt" ;; *) tr '\\0' '\\n' < "$i.txt" | sed 's/.*/"&"/' ;; esac; }; _to() { fake "$@"; }; git() { fake "$@"; }; HASH=x`,
     '  P=$(picked x && echo 1 || echo 0)',
     countsBlock(),
-    '  echo "$P $NON_PLANNING"',
+    '  echo "$P $NON_PLANNING $STRUCTURAL $PLANNING_COUNT"',
     'done',
     '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
   ].join('\n')).split(/\r?\n/);
@@ -155,14 +156,15 @@ const PATHS = ['-n', 'src/a.js', 'src/é.js', 'README.md', '.planningX/a', '.pla
 
 describe('pr-branch pick rule (property)', () => {
   test('a lone code path named like an echo option is picked and counted', () => {
-    assert.deepEqual(verdicts([['-n'], ['-e'], ['-E']], false), ['1 1', '1 1', '1 1', '1']); // picked, and counted as one non-planning path
+    assert.deepEqual(verdicts([['-n'], ['-e'], ['-E']], false), ['1 1 0 0', '1 1 0 0', '1 1 0 0', '1']); // picked, and counted as one non-planning path
   });
 
   for (const strict of [true, false]) {
     test(`picked agrees with the classification and the shipped count sees the code paths in ${strict ? 'strict' : 'default'} mode; a failed lookup picks`, () => {
       const { structuralRe, transientDirs } = readWorkflow();
       fc.assert(fc.property(fc.array(fc.uniqueArray(fc.constantFrom(...PATHS), { maxLength: 4 }), { minLength: 1, maxLength: 8 }), (lists) => {
-        const want = lists.map((l) => `${classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? 1 : 0} ${l.filter((p) => !p.startsWith('.planning/')).length}`);
+        const structural = new RegExp(structuralRe);
+        const want = lists.map((l) => `${classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? 1 : 0} ${l.filter((p) => !p.startsWith('.planning/')).length} ${l.filter((p) => structural.test(p)).length} ${l.filter((p) => p.startsWith('.planning/')).length}`);
         assert.deepEqual(verdicts(lists, strict), [...want, '1']);
       }), { numRuns: 15 });
     });

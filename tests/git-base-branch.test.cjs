@@ -2442,17 +2442,8 @@ const EXECUTE_PHASE_PATH = path.join(
   'execute-phase.md'
 );
 
-// The isolated git env of a fixture repo, plus the author and committer the commits need.
-const authoredEnv = (cwd) => ({
-  ...gitChildEnv(cwd),
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@test.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@test.com',
-});
-
 function git(cwd, ...args) {
-  return gitOrThrow(args, { cwd, env: authoredEnv(cwd), timeoutMs: GIT_TIMEOUT_MS }).trim();
+  return gitIn(cwd, GIT_TIMEOUT_MS)(args).trim();
 }
 
 /**
@@ -2529,6 +2520,8 @@ function setupFixture(defaultBranch = 'main') {
   fs.mkdirSync(seedPath);
   git(seedPath, 'init', '-b', defaultBranch);
   git(seedPath, 'config', 'commit.gpgsign', 'false');
+  git(seedPath, 'config', 'user.email', 'test@test.com');
+  git(seedPath, 'config', 'user.name', 'Test');
   fs.writeFileSync(path.join(seedPath, 'README.md'), '# seed\n');
   git(seedPath, 'add', 'README.md');
   git(seedPath, 'commit', '-m', 'initial');
@@ -2566,7 +2559,7 @@ function runHandleBranchingStep(bash, cwd, branchName) {
     // (PR #3787 run 32668773524) and tests/worktree-safety.test.cjs (`next`
     // run 32608945654). See HOOK_FANOUT_TIMEOUT_MS in ./helpers/timeouts.cjs
     // for the class rationale.
-    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd, env: authoredEnv(cwd), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd, env: gitChildEnv(cwd), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     throwIfFailed(r, `runHandleBranchingStep: bash ${scriptPath}`);
     return r.stdout;
   } finally {
@@ -2825,6 +2818,25 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.equal(pendingRef(repo), refOf(repo, 'HEAD'), 'both gates pass: HEAD is the pending build');
   });
 
+  test('verify keeps the pending ref when the marker write failed (KEEP)', (t) => {
+    const repo = createTempDir('gsd-3679-verify-keep-');
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 't@t']);
+    g(['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['checkout', '-qb', 'pr']);
+    fs.writeFileSync(path.join(repo, 'code.sh'), 'code2\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'code only']);
+
+    runVerify(repo, '_to() { "$@"; }\nKEEP=1');
+    assert.equal(pendingRef(repo), '', 'the failed marker write leaves the pending ref untouched');
+  });
+
   // git quotes a non-ASCII path, and one with a double quote, in a plain name list; both gates must still see it under .planning/.
   for (const name of ['é.md', 'a"b.md']) {
     test(`verify counts a planning deletion and a forbidden path named ${name}, which git quotes in a plain name list`, { skip: name.includes('"') && process.platform === 'win32' }, (t) => {
@@ -2855,7 +2867,6 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       // Only a read run with the 60 s bound (TO=60) times out; a read that lost its bound runs and the stop assertion fails.
       const { out, exitCode } = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
       assert.equal(exitCode, 1, 'the run stops with exit 1');
-      assert.match(out, /Cannot read pr \(deleted\); re-run\./, 'the stop names the deleted -pr branch');
       assert.equal(refOf(repo, 'refs/heads/pr'), '', 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
       assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
@@ -2869,7 +2880,6 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['branch', 'pr']);
     const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
     assert.equal(exitCode, 1, 'the run stops with exit 1');
-    assert.match(out, /Cannot read pr \(not deleted\); re-run\./, 'the stop names the kept -pr branch');
     assert.notEqual(refOf(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
   });

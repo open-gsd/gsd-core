@@ -71,6 +71,8 @@ const {
   runBashFile,
   extractPickLoop,
   extractBashBlockContaining,
+  extractDeclarationLines,
+  PRECONDITIONS_MARKER,
   forbiddenRegex,
   forbiddenPaths,
   structuralPaths,
@@ -370,7 +372,18 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     // here is deliberately ALL commits `main..feature`; this layer is only
     // proving the filter recipe (rm/checkout/conflict-halt/empty-skip), not
     // `analyze_commits`' include/exclude classification, which L1 covers.
-    function buildRecipeScript(filterPaths) {
+    // With `shippedPickList`, INCLUDED_COMMITS comes from the shipped analyze_commits line and `picked` instead.
+    function buildRecipeScript(filterPaths, { shippedPickList = false } = {}) {
+      const text = readWorkflowText();
+      const pickList = shippedPickList
+        ? [
+          'PR_STRICT=false',
+          '_to() { "$@"; }',
+          ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['picked() {']),
+          'REVS=$(git rev-list --reverse main..feature)',
+          ...extractDeclarationLines(text, 'REVS=$(TO=60', ['INCLUDED_COMMITS=$(']),
+        ]
+        : ['INCLUDED_COMMITS=$(git rev-list --reverse main..feature)'];
       return [
         'set -u',
         'CURRENT_BRANCH=feature',
@@ -383,7 +396,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         // constructs a third-bucket conflict.
         'FORBIDDEN_RE="^\\.planning/NEVER_MATCH_4606_TEST_SENTINEL$"',
         'STRUCTURAL_RE="^\\.planning/NEVER_MATCH_4606_TEST_SENTINEL$"',
-        'INCLUDED_COMMITS=$(git rev-list --reverse main..feature)',
+        ...pickList,
         // Newline-joined (#4605) — the real loop reads $FILTER_PATHS one path
         // per LINE via `while IFS= read -r`, not space-split, so a fixture
         // that space-joined this (the pre-#4605 test-side form) would feed
@@ -393,9 +406,9 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       ].join('\n');
     }
 
-    function runFilterLoop(repoDir, { strict, transientDirs }) {
+    function runFilterLoop(repoDir, { strict, transientDirs, shippedPickList }) {
       const filterPaths = strict ? ['.planning/'] : transientDirs.map((d) => `.planning/${d}/`);
-      const script = buildRecipeScript(filterPaths);
+      const script = buildRecipeScript(filterPaths, { shippedPickList });
       return toLegacyResult(runBashFile(script, { prefix: 'gsd-prbranch-filter-', cwd: repoDir, env: () => gitChildEnv(repoDir), timeoutMs: CHERRY_PICK_RECIPE_TIMEOUT_MS }));
     }
 
@@ -454,6 +467,18 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         assert.strictEqual(count, 2, 'both c1 and c2 must land as commits on prbranch');
         const codeContent = fs.readFileSync(path.join(dir, 'code.txt'), 'utf-8');
         assert.ok(codeContent.includes('line2'), `expected c2's line in code.txt, got: ${codeContent}`);
+      } finally {
+        teardown();
+      }
+    });
+
+    test('22b: the shipped pick list keeps a transient-only planning commit out of the loop', () => {
+      const dir = buildFixture({ planningOnlySecondCommit: true });
+      try {
+        const result = runFilterLoop(dir, { strict: false, transientDirs: currentTransientDirs(), shippedPickList: true });
+        assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
+        const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+        assert.strictEqual(count, 1, 'only c1 lands; the planning-only c2 is not picked');
       } finally {
         teardown();
       }
