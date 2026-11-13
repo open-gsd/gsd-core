@@ -1207,19 +1207,20 @@ function boundaryAfterLine(write, index) {
  *     line up to the next block-comment closer, wherever that is (even inside
  *     another string). Scanning resumes right after that closer, on the
  *     closer's own line (code after it on that line is scanned); the rest of
- *     the file goes unscanned only when no closer follows. Real instance with no raw
- *     write in its span: `src/git-base-branch.cts:479-511`.
- *   - A braceless body that reassigns the name (`if (c) p = 'x';`,
- *     `else p = 'y';`, `} else p = 'y';` on the closer's line,
- *     `} else if (d) p = 'y';`, `for (const x of xs) p = x;`,
- *     `for (const k in o) p = k;`, `while (c) p = x;`, `do p = x; while (c);`,
- *     and an `if (c)` whose body starts on the next line), each after
- *     `p = path.join(dir, 'STATE.md')`: the walk back from the write stops
- *     at the reassignment, whose right-hand side has no boundary, so the
- *     earlier STATE.md assignment is never read. Each of those nine forms has
- *     a test row, and each braced form (`if (c) { p = 'x'; }`) is reported
- *     and has a control. A `switch` case body is not a miss and is not
- *     listed.
+ *     the file goes unscanned only when no closer follows. Real instance
+ *     with no raw write in its span: `src/git-base-branch.cts:479-511`.
+ *   - A reassignment the resolver does not see as a statement boundary hides
+ *     the earlier STATE.md assignment (`p = path.join(dir, 'STATE.md')`):
+ *     the walk back from the write stops at the reassignment, whose
+ *     right-hand side has no boundary, so the earlier assignment is never
+ *     read. The class: any braceless body, on the same line or on the next
+ *     line, after `if`, `else`, `else if`, `for`, `for...in`, `for...of`,
+ *     `while` or `do` (`if (c) p = 'x';`, `} else p = 'y';`,
+ *     `while (c)` with `p = x;` below it), and an assignment inside an
+ *     expression (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The braced
+ *     forms (`if (c) { p = 'x'; }`) are reported. The KNOWN_RESOLUTION_GAPS
+ *     rows pin representative forms, not every form, and each braced form
+ *     has a control. A `switch` case body is not a miss.
  *   - A regex literal in the first argument holding a `)`
  *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
  *     and brackets, not regex literals. The `)` in the literal pops the depth

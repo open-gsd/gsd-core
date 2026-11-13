@@ -1612,6 +1612,12 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [],
     },
     {
+      shape: 'an assignment inside an expression (c && (p = x)) hides the earlier STATE.md assignment',
+      text: W(ASSIGN, "  c && (p = 'x');", WRITE_P),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
       shape: 'a regex literal holding ) in the first argument ends the capture early (after the next comma)',
       text: W("  fs.writeFileSync(x.replace(/\\)/g, '') + statePath, c);"),
       expected: [2],
@@ -1646,6 +1652,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       ['braced do-while reassignment', W(ASSIGN, '  do { p = x; } while (c);', WRITE_P), [4]],
       ['if body on the next line, braced', W(ASSIGN, '  if (c) {', "    p = 'x';", '  }', WRITE_P), [6]],
       ['call on the closer line of a phantom block comment is scanned', "const G = 'src/*';\nfoo(); */ function w(statePath,c){ fs.writeFileSync(statePath, c); }", [2]],
+      ['expression assignment to a different name', W(ASSIGN, "  c && (q = 'x');", WRITE_P), [4]],
       ['no reassignment', W(ASSIGN, WRITE_P), [3]],
       ['regex without a ) in the first argument', W("  fs.writeFileSync(x.replace(/a/g, '') + statePath, c);"), [2]],
       ['regex without a ) at depth 0', W('  fs.writeFileSync(/a/.test(x) ? statePath : y, c);'), [2]],
