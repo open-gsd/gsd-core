@@ -131,9 +131,14 @@ function mergePr(dir, target = 'main') {
 
 // The shipped pr_merged (and its _to helper), for calling it directly.
 const prMergedFns = () => {
-  const block = extractBashBlockContaining(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'pr_merged() {');
-  return [block.match(/^_to\(\) \{.*\}$/m), block.match(/^pr_merged\(\) \{[\s\S]*?^\}$/m)].filter(Boolean).map((m) => m[0]).join('\n');
+  const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+  const [toFn] = extractDeclarationLines(text, 'pr_merged() {', ['_to\\(\\) \\{']);
+  return [toFn, extractBashBlockContaining(text, 'pr_merged() {').match(/^pr_merged\(\) \{[\s\S]*?^\}$/m)[0]].join('\n');
 };
+
+// Runs the shipped pr_merged on feature-pr in `cwd`: MERGED or UNMERGED. `pre` stubs gh and gsd_run.
+const probePrMerged = (cwd, pre = 'gh() { return 1; }') =>
+  runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\n${pre}\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd).stdout.trim();
 
 // The command a refusal prints on its `  <label>: <cmd>` line, so tests run what a user would paste.
 const printedCmd = (stderr, label) => {
@@ -143,7 +148,8 @@ const printedCmd = (stderr, label) => {
 };
 
 const refOf = (dir, ref) => {
-  try { return git(dir, 'rev-parse', '-q', '--verify', ref); } catch { return ''; }
+  // '' only when git ran and found no such ref (exit 1); a timeout or spawn failure rethrows.
+  try { return git(dir, 'rev-parse', '-q', '--verify', ref); } catch (e) { if (e.status === 1) return ''; throw e; }
 };
 const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
@@ -651,9 +657,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const dir = repo();
     commitRound(dir, 1);
     assert.equal(publish(dir).status, 0);
-    const probe = (cwd) => runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd).stdout.trim();
-    assert.equal(probe(dir), 'UNMERGED');
-    assert.equal(probe(path.join(dir, '.planning', 'phases')), 'UNMERGED');
+    assert.equal(probePrMerged(dir), 'UNMERGED');
+    assert.equal(probePrMerged(path.join(dir, '.planning', 'phases')), 'UNMERGED');
   });
 
   test('-pr extended with a commit after the build, then squash-merged: the -pr still holds the built tip, so the build counts as published', () => {
@@ -693,7 +698,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   test('shq round-trips any string through eval (property)', (t) => {
-    const fn = extractBashBlockContaining(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'shq() {').match(/^shq\(\) \{.*\}$/m)[0];
+    const [fn] = extractDeclarationLines(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'shq() {', ['shq\\(\\) \\{']);
     const tmp = createTempDir('gsd-shq-');
     t.after(() => cleanup(tmp));
     const f = path.join(tmp, 'in.txt');
@@ -1053,8 +1058,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitAll(dir, 'feat: lib');
     git(dir, 'branch', 'feature-pr', 'feature');
     git(dir, 'config', 'diff.relative', 'true');
-    const probe = runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, path.join(dir, 'lib')).stdout.trim();
-    assert.equal(probe, 'UNMERGED');
+    assert.equal(probePrMerged(path.join(dir, 'lib')), 'UNMERGED');
   });
 
   test('rebased working branch whose published code commit was conflict-resolved (changed patch): warns, never replays it silently', () => {
@@ -1359,7 +1363,6 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitAll(dir, 'feat: only a');
     git(dir, 'checkout', '-q', 'feature');
     const stub = 'gsd_run() { shift 3; case "$*" in *--name-only*-z*) printf \'a.txt\\0\'; return 124 ;; esac; "$@"; }';
-    const probe = runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\n${stub}\ngh() { return 1; }\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, dir).stdout.trim();
-    assert.equal(probe, 'UNMERGED');
+    assert.equal(probePrMerged(dir, `${stub}\ngh() { return 1; }`), 'UNMERGED');
   });
 });

@@ -27,7 +27,7 @@ const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { WORKFLOW_PATH, extractBashBlockContaining, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
+const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
 const lazy = (f) => { let v; return () => (v === undefined ? (v = f()) : v); };
@@ -161,7 +161,7 @@ describe('pr-branch rewritten-history matcher (property)', () => {
 });
 
 // The shipped `picked` function, with `_to` standing in for the bounded `git diff-tree` read.
-const pickedFn = lazy(() => extractBashBlockContaining(workflowText(), 'PR_BRANCH="${CURRENT_BRANCH}-pr"').match(/^picked\(\) \{.*\}$/m)[0]);
+const pickedFn = lazy(() => extractDeclarationLines(workflowText(), 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['picked\\(\\) \\{'])[0]);
 // The shipped per-commit counts of analyze_commits, with `git` standing in for `git diff-tree`.
 const countsBlock = lazy(() => extractBashBlockContaining(workflowText(), 'NON_PLANNING=$('));
 // The classification arms of analyze_commits, over those counts: 1 INCLUDE, 0 EXCLUDE.
