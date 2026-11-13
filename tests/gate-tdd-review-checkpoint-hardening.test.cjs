@@ -233,6 +233,47 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
     assert.equal(r.payload.rows[0].reason, 'unsealed_summary_unreachable');
     assert.match(r.payload.message, /no TDD-REVIEW-SEAL\.json entry exists/);
+    assert.equal(r.outcome, 'advisory');
+  });
+
+  // A git call that gives no answer is not "squashed": the plan stays an ordinary failure.
+  const GIT_NO_ANSWER = { exitCode: 128, stdout: '', stderr: 'fatal', signal: null, error: null, timedOut: false };
+  function failGit(t, matches, result) {
+    const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const real = shell.execGit;
+    t.mock.method(shell, 'execGit', (args, opts) => (matches(args) ? result : real(args, opts)));
+  }
+
+  test('a timed-out object lookup for a SUMMARY commit is a failure, not "squashed" (#5354)', (t) => {
+    const { dir } = fixture([], { summary: false });
+    w(dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${'a'.repeat(40)}\`\n`);
+    failGit(t, (args) => args.includes('--verify'), { ...GIT_NO_ANSWER, exitCode: 1, signal: 'SIGTERM', timedOut: true });
+    const r = run(dir);
+    assert.equal(r.payload.rows[0].status, 'FAIL');
+    assert.equal(r.payload.violations, 1);
+  });
+
+  test('a subject listing git cannot deliver is a failure, not "squashed" (#5354)', (t) => {
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
+    squash(dir, base);
+    failGit(t, (args) => args[0] === 'log' && args.includes('--no-walk=unsorted') && args.some((a) => a.includes('%P')), GIT_NO_ANSWER);
+    const r = run(dir);
+    assert.equal(r.payload.rows[0].status, 'FAIL');
+    assert.equal(r.payload.violations, 1);
+  });
+
+  test('a sealed pair with red equal to green in a shallow clone is a failure, not "sealed_shallow_history" (#5354)', () => {
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    squash(dir, base);
+    w(dir, SEAL, sealOf(sha('a'), sha('a')));
+    sealGit(dir, 'add', '-A');
+    sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow-equal`);
+    dirs.push(clone);
+    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    const row = run(clone).payload.rows[0];
+    assert.equal(row.status, 'FAIL');
+    assert.deepEqual(row.missing, ['RED', 'GREEN']);
   });
 
   test('two plans in one run probe the shallow-clone state once', (t) => {
@@ -812,6 +853,8 @@ describe('#5354 tdd review checkpoint seal', () => {
     const r = run(dir, '--record');
     assert.equal(r.payload.passed, false);
     assert.equal(r.payload.unreadable.length, 1);
+    assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json .*nothing was sealed/);
+    assert.doesNotMatch(r.payload.message, /was not reviewed/);
   });
 
   test('a failed --record leaves no temp file behind', (t) => {
@@ -926,7 +969,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   // Execute ship.md's seal step against a stubbed `gsd_run`, so the branches (not their text) are what is tested.
-  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, gitExit }) {
+  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, gitExit, statusExit }) {
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf8').replace(/\r\n/g, '\n');
     const from = ship.indexOf('```bash\n', ship.indexOf('<step name="seal_tdd_review">')) + 8;
     const script = ship.slice(from, ship.indexOf('\n```', from));
@@ -939,10 +982,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     // `query commit` stands in for cmdCommit: it commits the seal itself unless COMMIT_OUT is set (then it prints that and commits nothing).
     const stub = real
       ? 'gsd_run() { echo "$*" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
-      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_EXIT+x}" ]; then return "$GIT_EXIT"; fi; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
+      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_EXIT+x}" ]; then return "$GIT_EXIT"; fi; case "$*" in "git status"*) if [ -n "${STATUS_EXIT+x}" ]; then return "$STATUS_EXIT"; fi;; esac; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
     const r = runHook('-c', [stub + script], {
       interpreter: 'bash', cwd: dir, timeoutMs: GIT_TIMEOUT_MS,
-      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitExit === undefined ? {} : { GIT_EXIT: String(gitExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
+      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitExit === undefined ? {} : { GIT_EXIT: String(gitExit) }), ...(statusExit === undefined ? {} : { STATUS_EXIT: String(statusExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
     });
     return { r, dir, before, subject: sealGit(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter((c) => c && !c.startsWith('run-with-timeout ')) };
   }
@@ -986,6 +1029,15 @@ describe('#5354 tdd review checkpoint seal', () => {
       expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: code }), 'gitFailed');
     });
   }
+
+  // `git status` alone fails (the ignore check is clean): each bounded call carries its own branch.
+  test('ship.md seal step warns and commits nothing when only the bounded git status times out', posix, () => {
+    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), statusExit: 124 }), 'gitTimedOut');
+  });
+
+  test('ship.md seal step warns and commits nothing when only the bounded git status fails', posix, () => {
+    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), statusExit: 128 }), 'gitFailed');
+  });
 
   test('ship.md seal step never commits the on-disk seal when --record failed', posix, () => {
     expectBranchWarning(runSealStep({ recordRc: 3, seal: '<<<<<<< conflict' }), 'recordFailed');

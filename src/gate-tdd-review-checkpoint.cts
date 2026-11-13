@@ -159,8 +159,12 @@ interface UnreadableSource {
  * unchanged (`block: false`); the outcome is `unreadable` (exit UNAVAILABLE) and `passed` is false
  * because nothing was certified.
  */
-function unreadableReview(phase: string, tddPlans: number, unreadable: UnreadableSource[]): GateResult {
+function unreadableReview(phase: string, tddPlans: number, unreadable: UnreadableSource[], action: 'read' | 'write' = 'read'): GateResult {
   const names = unreadable.map((u) => `${u.source} (${u.reason})`).join(', ');
+  // A failed `--record` write comes after the review ran, so its message must not say the phase was not reviewed.
+  const message = action === 'read'
+    ? `TDD review could not read: ${names}. Phase ${phase} was not reviewed.`
+    : `TDD review could not write: ${names}. Phase ${phase} was reviewed and nothing was sealed.`;
   return gateUnreadable(false, {
     block: false,
     passed: false,
@@ -169,7 +173,7 @@ function unreadableReview(phase: string, tddPlans: number, unreadable: Unreadabl
     table: '',
     rows: [] as TddPlanRow[],
     unreadable,
-    message: `TDD review could not read: ${names}. Phase ${phase} was not reviewed.`,
+    message,
   });
 }
 
@@ -238,7 +242,7 @@ function planRow(
   // reachable, and sealing it would make the next run read the plan as not squashed and drop the seal's GREEN.
   const redSha = sealedRed ? sealed.red : reds[0];
   const greenSha = (ownOk ? ownGreens[0] : dependentGreens.find((d) => inOrder(d.greens))?.greens[0]) ?? sealed.green;
-  const sealEvidence = verdict.status === 'Pass' && isFullSha(redSha) && isFullSha(greenSha) ? { red: redSha, green: greenSha } : undefined;
+  const sealEvidence = isFullSha(redSha) && isFullSha(greenSha) ? { red: redSha, green: greenSha } : undefined;
 
   // Key order (status, missing, reason, greenFrom) is part of the payload contract.
   const head = { planId, red, green, refactor };
@@ -378,7 +382,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
       writeSeal(phaseDir, evidence, sealRead);
     } catch (err) {
       const e = evidenceFromError(err, SEAL_FILE);
-      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }]);
+      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }], 'write');
     }
   }
 
