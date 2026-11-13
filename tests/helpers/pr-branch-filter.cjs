@@ -40,6 +40,8 @@ const fs = require('fs');
 const path = require('path');
 const { escapeRegex: escapeRe } = require('../../gsd-core/bin/lib/pattern.cjs');
 const { normalizeEol } = require('../../gsd-core/bin/lib/text-lines.cjs');
+const { createTempDir, cleanup } = require('../helpers.cjs');
+const { runHook } = require('./process-seam.cjs');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'pr-branch.md');
 
@@ -95,7 +97,7 @@ const BASH_FENCE_CLOSE_RE = /^```\s*$/;
 const TRANSIENT_DIRS_MARKER = 'TRANSIENT_DIRS="phases';
 const FILTER_PATHS_MARKER = 'FILTER_PATHS=$(for d';
 const PRECONDITIONS_MARKER = 'PR_BRANCH="${CURRENT_BRANCH}-pr"';
-const PICK_LOOP_MARKER ='for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
+const PICK_LOOP_MARKER = 'for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
 
 /**
  * Scans `text` for fenced ```bash blocks and returns the verbatim body
@@ -176,6 +178,19 @@ const extractFunction = (text, marker, name) => {
   return m[0];
 };
 
+// The one owner of "run a shipped bash recipe from a file, not argv" (Windows MSYS2 mis-parses long quote-heavy
+// argv): `script` and `files` (name -> content) go into a fresh dir; bash runs the script in `cwd` (default the
+// fresh dir) under `env(dir)`. Returns the seam result.
+const runBashFile = (script, { prefix, env, cwd, files = {} }) => {
+  const dir = createTempDir(prefix);
+  try {
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content);
+    const file = path.join(dir, 'run.sh');
+    fs.writeFileSync(file, `${script}\n`);
+    return runHook(file, [], { interpreter: 'bash', cwd: cwd ?? dir, env: env(dir) });
+  } finally { cleanup(dir); }
+};
+
 const normalizePaths = (input) => {
   const raw = typeof input === 'string' ? input.split('\n') : input;
   return raw.map((s) => s.replace(/\r$/, '')).filter((s) => s.length > 0);
@@ -233,6 +248,7 @@ module.exports = {
   extractBashBlockContaining,
   extractDeclarationLines,
   extractFunction,
+  runBashFile,
   TRANSIENT_DIRS_MARKER,
   FILTER_PATHS_MARKER,
   PRECONDITIONS_MARKER,

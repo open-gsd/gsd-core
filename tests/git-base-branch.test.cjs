@@ -2828,7 +2828,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
 
     const { out } = runVerify(repo);
     assert.match(out, /GATE_PLANNING_DELETIONS=0/, `clean diff must count zero deletions: ${out.slice(0, 400)}`);
-    assert.equal(pendingRef(repo), gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim(), 'both gates pass: HEAD is the pending build');
+    assert.equal(pendingRef(repo), refSha(repo, 'HEAD'), 'both gates pass: HEAD is the pending build');
   });
 
   // git quotes a non-ASCII path, and one with a double quote, in a plain name list; both gates must still see it under .planning/.

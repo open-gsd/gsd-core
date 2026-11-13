@@ -23,12 +23,9 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
-const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, createTempDir } = require('./helpers.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
+const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, runBashFile, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
 const lazy = (f) => { let v; return () => (v === undefined ? (v = f()) : v); };
@@ -43,14 +40,9 @@ const awkProgram = lazy(() => {
 // The one bash runner: `files` (name -> content) and `script` go into a fresh dir, bash runs the script there
 // under the isolated env and must exit 0; returns the trimmed stdout.
 function runBash(prefix, files, script) {
-  const tmp = createTempDir(prefix);
-  try {
-    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(tmp, name), content);
-    fs.writeFileSync(path.join(tmp, 'run.sh'), `${script}\n`);
-    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp, env: isolatedEnv({ home: tmp }) });
-    assert.equal(r.exitCode, 0, r.stderr);
-    return r.stdout.trim();
-  } finally { cleanup(tmp); }
+  const r = runBashFile(script, { prefix, files, env: (home) => isolatedEnv({ home }) });
+  assert.equal(r.exitCode, 0, r.stderr);
+  return r.stdout.trim();
 }
 
 // Runs the shipped awk over `input` through bash, as the workflow does (input and program via files).

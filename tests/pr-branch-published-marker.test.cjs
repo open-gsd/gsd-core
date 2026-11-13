@@ -15,7 +15,6 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
@@ -28,6 +27,7 @@ const {
   extractBashBlockContaining,
   extractDeclarationLines,
   extractFunction,
+  runBashFile,
   TRANSIENT_DIRS_MARKER,
   FILTER_PATHS_MARKER,
   PRECONDITIONS_MARKER,
@@ -102,15 +102,9 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
   return runSh(script, cwd);
 }
 
-// Script goes through a temp file, not argv (Windows MSYS2 mis-parses long quote-heavy argv).
-function runSh(script, cwd, interpreter = 'bash') {
-  const tmp = createTempDir('gsd-prmarker-script-');
-  try {
-    const file = path.join(tmp, 'recipe.sh');
-    fs.writeFileSync(file, script);
-    const r = runHook(file, [], { interpreter, cwd, env: gitChildEnv(cwd) });
-    return { status: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
-  } finally { cleanup(tmp); }
+function runSh(script, cwd) {
+  const r = runBashFile(script, { prefix: 'gsd-prmarker-script-', cwd, env: () => gitChildEnv(cwd) });
+  return { status: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
 // Keys for `inputs`, one per line, through the shipped refkey function `fn`.
@@ -154,7 +148,8 @@ const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
 const builtOf = (dir) => refOf(dir, BUILT);
 // Rounds whose code reached the -pr tree (state, not log text).
-const replayed = (dir) => git(dir, 'diff', '--name-only', 'main', 'feature-pr').split(/\r?\n/).filter((f) => /^r\d+\.txt$/.test(f)).sort();
+const changed = (dir) => git(dir, 'diff', '--name-only', 'main', 'feature-pr').split(/\r?\n/).sort();
+const replayed = (dir) => changed(dir).filter((f) => /^r\d+\.txt$/.test(f));
 
 describe('#5469 pr-branch published marker (real git)', () => {
   const dirs = [];
@@ -890,7 +885,6 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'checkout', '-q', 'feature');
     return { dir, prelude };
   }
-  const changed = (dir) => git(dir, 'diff', '--name-only', 'main', 'feature-pr').split(/\r?\n/).sort();
   const WARNED = /not an ancestor of feature/;
 
   test('rebased working branch after a published round: the patch-equivalent commit is the base; nothing is replayed, no warning', () => {
