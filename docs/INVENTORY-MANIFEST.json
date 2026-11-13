@@ -745,6 +745,7 @@
       "plan-phase/steps/research-only-modifiers.md",
       "plan-phase/steps/reviews-prerequisite.md",
       "plan-phase/steps/stall-detection-helpers.md",
+      "plan-phase/steps/threat-id-check.md",
       "plan-phase/steps/windows-troubleshooting.md",
       "progress/steps/forensic-audit.md",
       "progress/steps/mvp-display.md",
