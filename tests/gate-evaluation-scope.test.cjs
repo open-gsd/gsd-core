@@ -1652,13 +1652,29 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
-    // Replace the closing time field of each record (`<sha>\x1f<parents>\x1f<subject>\x1f<ct>\x1e`) with a non-number.
-    const garble = (record) => record.split('\x1f').slice(0, 3).concat('x').join('\x1f');
-    const garbled = intercept(gitReporting('2.36.9').runner, (args, run) => {
+    // Replace the closing time field of each record (`<sha>\x1f<parents>\x1f<subject>\x1f<ct>\x1e`) with a non-number, or with nothing.
+    for (const bad of ['x', '']) {
+      const garble = (record) => record.split('\x1f').slice(0, 3).concat(bad).join('\x1f');
+      const garbled = intercept(gitReporting('2.36.9').runner, (args, run) => {
+        const result = run();
+        return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
+      });
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], garbled), null, `time field ${JSON.stringify(bad)}`);
+    }
+  });
+
+  test('[negative] a listing record whose first field is not a full sha is skipped, never read as a commit', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    // The twin's record keeps its subject but loses its sha: it must not count as the plan commit's twin.
+    const headless = intercept(gitReporting('2.37.0').runner, (args, run) => {
       const result = run();
-      return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
+      return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : `zz${r.slice(r.indexOf('\x1f'))}`)).join('\x1e') } : result;
     });
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], garbled), null);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], headless), false);
   });
 
   test('[boundary] a kept twin under a child dated before the window is still found (the date filters, it does not cut the walk)', () => {

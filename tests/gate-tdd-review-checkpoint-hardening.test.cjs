@@ -267,7 +267,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     squash(dir, base);
     w(dir, SEAL, sealOf(sha('a'), sha('a')));
     sealGit(dir, 'add', '-A');
-    sealGit(dir, 'commit', '-m', 'docs(01-01): seal');
+    sealGit(dir, 'commit', '-m', 'docs: seal');
     const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow-equal`);
     dirs.push(clone);
     gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });

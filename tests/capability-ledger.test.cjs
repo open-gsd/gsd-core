@@ -2463,3 +2463,11 @@ test('readSmallRegularFile with strict refuses a symlink and reports a close fai
   assert.throws(() => readSmallRegularFile(path.join(dir, 'target.txt'), 100, { strict: true }), { code: 'EIO' });
   closeMock.mock.restore();
 });
+
+test('readSmallRegularFile strict: a close failure never masks the read error that came first (#5354)', (t) => {
+  const dir = createTempDir('ledger-strict-close-');
+  t.after(() => cleanup(dir));
+  fs.writeFileSync(path.join(dir, 'big.txt'), 'x'.repeat(200));
+  t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
+  assert.throws(() => readSmallRegularFile(path.join(dir, 'big.txt'), 100, { strict: true }), { code: 'EFBIG' });
+});
