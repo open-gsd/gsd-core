@@ -133,7 +133,7 @@ PR_BRANCH_TIP=$(git rev-parse -q --verify "refs/heads/$PR_BRANCH")
 PR_BASE=$TARGET
 for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${TARGET#"$_r"/}; break; }; done
 
-# shq STR — STR shell-quoted for the printed recovery commands (branch names may hold ; $ ( ) & `).
+# shq STR — STR shell-quoted for printed commands (a branch name may hold ; $ ( ) & `).
 shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
 
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout; walks and checkout use TO=60.
@@ -169,12 +169,12 @@ PENDING_VERDICT=
 DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"
 drop_pending() { eval "$DISCARD_PENDING"; }
 if [ -n "$PENDING_TIP" ]; then
-  # The built tip must be merged; the -pr verdict stands in only while the -pr holds the built tip (amended).
+  # The built tip must be merged; the -pr verdict counts only while the -pr holds it (amended).
   PR_BUILT_TIP=$(git rev-parse -q --verify "$PR_TIP_REF")
   BUILT_MERGED=
   if pr_merged "$PR_TIP_REF"; then BUILT_MERGED=1
   elif [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; fi
-  # settle_pending applies the verdict once no refusal can follow; a build not proven merged is dropped.
+  # settle_pending applies the verdict once no refusal can follow; an unproven build is dropped.
   if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
   elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(_to git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
   else PENDING_VERDICT=drop
@@ -182,7 +182,7 @@ if [ -n "$PENDING_TIP" ]; then
 fi
 settle_pending() {
   case $PENDING_VERDICT in
-    promote) if git update-ref "$MARKER_REF" "$PENDING_TIP"; then drop_pending; else echo "WARNING: could not record $MARKER_REF; next run will replay commits." >&2; fi ;;
+    promote) if git update-ref "$MARKER_REF" "$PENDING_TIP"; then drop_pending; else KEEP=1; echo "WARNING: could not record $MARKER_REF; next run will replay commits." >&2; fi ;;
     drop)
       drop_pending
       echo "WARNING: dropped the pending build $PENDING_TIP: its merge into $TARGET is not proven, so its commits will be replayed. If it was merged (squash, rebase, or on a remote $TARGET not yet pulled), update $TARGET, then re-anchor: git update-ref $(shq "$MARKER_REF") $PENDING_TIP" >&2 ;;
@@ -647,7 +647,7 @@ would report itself as failed on every phase that touched STATE.md, which is eve
 # Fail closed: empty lists pass both gates.
 { DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n') &&
   DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n'); } ||
-  { git branch -qD "$PR_BRANCH" && D=deleted || D="not deleted"; echo "Cannot read $PR_BRANCH ($D); re-run." >&2; exit 1; }
+  { git branch -qD "$PR_BRANCH" && D=deleted || D="not deleted; run git branch -D $(shq "$PR_BRANCH") first"; echo "Cannot read $PR_BRANCH ($D); re-run." >&2; exit 1; }
 FORBIDDEN=$(grep -Ec "$FORBIDDEN_RE" <<<"$DIFF_PATHS" || true)
 PLANNING_TOTAL=$(grep -c "^\.planning/" <<<"$DIFF_PATHS" || true)
 ALLOWED=$((PLANNING_TOTAL - FORBIDDEN))
@@ -656,9 +656,8 @@ PR_COMMITS=$(TO=60 _to git rev-list --count "$TARGET_SHA".."$PR_BRANCH")
 
 # #3679: a DELETED planning path is never legitimate — this workflow only ever
 # excludes content a cherry-picked commit ADDED; pre-existing target-tracked
-# planning files must survive byte-identical. Name-only counting cannot see
-# status (a deleted structural/allowed path verifies clean there), so gate on
-# deletions explicitly, across every planning category.
+# planning files must survive byte-identical. The plain $DIFF_PATHS list cannot see
+# status, so gate on the --diff-filter=D read, across every planning category.
 PLANNING_DELETIONS=$(grep -c "^\.planning/" <<<"$DELETED" || true)
 
 # Default mode preserves anything under .planning/ that is neither transient nor
@@ -680,7 +679,7 @@ When both gates pass, record the built tip as pending (`$TIP`, never HEAD) and t
 beside it; the next run promotes pending to published once that tip is merged. A failed write warns; it never aborts:
 
 ```bash
-if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ]; then
+if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ]; then
   git update-ref "$PR_TIP_REF" "$(git rev-parse "$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PENDING_REF; next run will replay commits." >&2
 fi
 ```
@@ -695,7 +694,7 @@ Mode: {PR_MODE}
 Planning paths in diff: {PLANNING_TOTAL} (allowed {ALLOWED}, forbidden {FORBIDDEN} — must be 0)
 Planning deletions: {PLANNING_DELETIONS} (must be 0 — #3679)
 
-Next steps:
+Next steps (names shell-quoted):
   git push origin {PR_BRANCH}
   gh pr create --base {TARGET} --head {PR_BRANCH}
 
