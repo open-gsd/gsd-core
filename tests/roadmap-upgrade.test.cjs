@@ -391,6 +391,57 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(fs.readFileSync(state, 'utf8'), original);
   });
 
+  // #5120 review (m1): the forward STATE.md write is the seam's atomic mode
+  // (atomicWrite, the prune precedent #5831), so a write that fails leaves
+  // STATE.md's previous bytes in place and dropping its snapshot is safe. Without
+  // it, a temp file that cannot be written or renamed falls back to an in-place
+  // write that truncates first; a failure there (ENOSPC) whose own restore also
+  // fails left STATE.md truncated while the migration reported "rolled back".
+  test('a forward STATE.md write that fails mid-write leaves STATE.md as it was, and the rollback says so truthfully (#5120 review)', (t) => {
+    const dir = setup('m13-state-enospc-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+
+    // Every descriptor opened on STATE.md or a STATE.md temp file fails its writes
+    // with ENOSPC, and a rename onto STATE.md fails with EXDEV.
+    const stateFds = new Set();
+    const isStatePath = (p) => String(p) === state || String(p).startsWith(`${state}.tmp.`);
+    const enospc = () => Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeFileSync;
+    const realWriteSync = fs.writeSync;
+    const realRename = fs.renameSync;
+    let failedWrites = 0;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      const fd = realOpen.call(this, file, ...rest);
+      if (isStatePath(file)) stateFds.add(fd);
+      return fd;
+    });
+    mock.method(fs, 'writeFileSync', function (target, ...rest) {
+      if (typeof target === 'number' && stateFds.has(target)) { failedWrites++; throw enospc(); }
+      return realWrite.call(this, target, ...rest);
+    });
+    mock.method(fs, 'writeSync', function (fd, ...rest) {
+      if (stateFds.has(fd)) { failedWrites++; throw enospc(); }
+      return realWriteSync.call(this, fd, ...rest);
+    });
+    mock.method(fs, 'renameSync', function (from, to) {
+      if (String(to) === state) throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' });
+      return realRename.call(this, from, to);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: ENOSPC/);
+    mock.restoreAll();
+    assert.ok(failedWrites >= 1, 'precondition: the injected ENOSPC was hit');
+    assert.equal(fs.readFileSync(state, 'utf8'), original, 'STATE.md holds its previous bytes, as "rolled back" claims');
+    assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released');
+  });
+
   test('rewriteRoadmapLines: identical headings in two milestones stay distinct by line index; heading, checklist and fenced edits', () => {
     const lines = [
       '## v1.0: A', // 0

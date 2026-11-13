@@ -2452,15 +2452,18 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
             stateMdPath,
             (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
             cwd,
-            { resync: false },
+            // #5120 review: the seam's atomic mode (temp file + rename, no
+            // truncating direct-write fallback; the prune precedent, #5831), so a
+            // write that fails leaves STATE.md's previous bytes in place.
+            { resync: false, atomicWrite: true },
           );
         } finally {
           // #5120: the snapshot is kept only for a STATE.md this step wrote. A step
           // that wrote nothing (a no-op under the lock, a lock it never acquired, or
-          // a publish that failed before its rename; platformWriteSync publishes by
-          // tmp-and-rename, so the target keeps its prior bytes) has nothing to roll
-          // back, and the rollback must never put the snapshot over another writer's
-          // content.
+          // a write that failed: atomicWrite publishes by temp file and rename only,
+          // never by an in-place write, so a failed write leaves the target's prior
+          // bytes) has nothing to roll back, and the rollback must never put the
+          // snapshot over another writer's content.
           if (!stateWritten) fileBackups.delete(stateMdPath);
         }
         // Read back right after the write. The STATE.md lock is already released
