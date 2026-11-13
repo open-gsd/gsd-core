@@ -1566,6 +1566,7 @@ describe('isFullSha (#5354)', () => {
     const repo = makeRepo();
     commit(repo, 'a.txt', 'feat(03-01): a');
     const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { commitsOnly: true });
+    assert.equal(scope.commits.length, 1);
     assert.ok(scope.commits.every((c) => isFullSha(c.sha)));
   });
 });
