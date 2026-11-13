@@ -1743,10 +1743,13 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     repo.git('reset', '--hard', base);
     // The fourth call is the HEAD listing (after the id lookup, the commit times and the version probe): a failed git reads as exit 1, a hang as a timeout.
-    const failing = (fourth) => { let n = 0; return (args, opts) => (++n === 4 ? fourth : execGit(args, opts)); };
+    const failing = (fourth, version) => { let n = 0; const { runner } = gitReporting(version); return (args, opts) => (++n === 4 ? fourth : runner(args, opts)); };
     const failed = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(failed)), null);
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...failed, timedOut: true })), null);
+    // On a git before 2.37 the listing is the whole history, so the timeout is what limits that read.
+    for (const version of ['2.37.0', '2.36.9']) {
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(failed, version)), null, `git ${version}, failed listing`);
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...failed, timedOut: true }, version)), null, `git ${version}, timed-out listing`);
+    }
   });
 
   test('[negative] an id named like a working-tree file is read as a revision', () => {
