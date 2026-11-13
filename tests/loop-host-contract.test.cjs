@@ -986,6 +986,7 @@ describe('declared loop points are dispatched (#5848)', () => {
     const handoffIdx = text.indexOf('execute-phase/steps/pre-execute-gate-hooks.md');
     const wavePreIdx = text.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
     assert.ok(handoffIdx !== -1, 'execute:pre hand-off to its step file must exist');
+    assert.equal(text.split('execute-phase/steps/pre-execute-gate-hooks.md').length, 2, 'the hand-off is the only mention');
     assert.ok(handoffIdx < wavePreIdx, 'execute:pre must be handed off before the first wave dispatch site');
     const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name');
     assert.ok(handoffIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
