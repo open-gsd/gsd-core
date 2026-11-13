@@ -2557,9 +2557,12 @@ test('a genuine ack-trailer conflict in the PR\'s own commits still fails after 
 // trek-e's stacked shape (PR #5871 review 5865033613, Major 2): an upper PR P stacked on
 // a lower PR Q, both forked from the stale pin B0. `next` gains B1/B2 (base-only commits
 // declaring one key with two reasons), GitHub builds P's merge ref on B2, and then Q lands
-// on `next` as a merge commit N = merge(B2 <- Q) before the job checks out. Q is dated
-// after B2, so `merge-base --all origin/next HEAD` is {Q, B2}: two best common ancestors,
-// neither an ancestor of the other. Measuring from Q would sweep B1/B2 back into the range
+// on `next` as a merge commit N = merge(B2 <- Q) before the job checks out. Then
+// `merge-base --all origin/next HEAD` is {Q, B2}: two best common ancestors, neither an
+// ancestor of the other, whatever the dates. Which one plain `git merge-base` prints
+// depends on commit-date order; Q is dated after B2, so it prints Q, the pick the pre-fix
+// resolver used (the row asserts that, so a git tie-break change cannot silently stop the
+// row from discriminating the old bug). Measuring from Q would sweep B1/B2 back into the range
 // (Q..HEAD), which is #5797's symptom; the attribution base must be B2, the newest commit
 // on origin/next's FIRST-PARENT chain that HEAD contains.
 function makeStackedPrRepo(t) {
@@ -2607,6 +2610,8 @@ test('a stacked PR whose lower PR landed as a merge commit measures from the fir
     [b2, q].sort(),
     'fixture: origin/next and HEAD must have two best merge bases, Q and B2',
   );
+  assert.equal(gitFixture(root, ['merge-base', 'refs/remotes/origin/next', 'HEAD']), q,
+    'fixture: plain git merge-base must pick Q (dated after B2), the side merge-base the pre-fix resolver used');
 
   const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' }, { cwd: root });
   assert.equal(base.sha, b2,
