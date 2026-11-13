@@ -16,7 +16,9 @@ dispatching it would violate the declared DAG — and report it by name with the
 missing predecessors: "Skipping {plan.id}: incomplete predecessor
 {unresolved_dependencies.join(', ')}". Readiness is transitive: a ready
 plan's own dependencies are already complete, so **a not-ready plan must
-never be dispatched in this run, even when a later wave's plans are ready**.
+never be dispatched before the read that finds its dependencies complete,
+even when a later wave's plans are ready**. In a plain run that read is the
+wave-boundary refresh (`execute-phase/steps/wave-refresh.md`, #5966).
 
 **Waiting is not done (#4628).** In step 1's filtered-out evaluation order,
 after the #2830 blocked condition and before the all-summarized condition,
@@ -29,9 +31,12 @@ insert:
 > dispatch the ready wave, then re-run." → exit. Do not fall through to the
 > completion states; nothing here is a completion state. (The ready plans
 > themselves were already dispatched this run — the executor wave loop
-> dispatches every ready plan of the earliest ready wave onward.)
+> dispatches every ready plan of the earliest ready wave onward, and the
+> wave-boundary refresh adds each plan whose dependencies complete during the
+> run. A refresh that finds nothing ready stops by `wave-refresh.md`'s rule,
+> naming these plans in this report's form.)
 
 This ordering is fail-closed: a later wave is never selected while any
 predecessor is incomplete, because a ready plan's own dependencies are
-complete by construction — anything not ready is reported and the run stops
-at the waiting condition.
+complete by construction — anything not ready is reported, and the run stops
+at the waiting condition when nothing is ready, at step 1 or at a refresh.
