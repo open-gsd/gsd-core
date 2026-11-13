@@ -309,8 +309,9 @@ jobs:
       # diffs that touched nothing related.
       # #5797: the pin is a FLOOR, not proof of what the tree contains. `actions/checkout`
       # tests GitHub's merge ref, built on the newest `next` GitHub saw, which can be
-      # newer than `base.sha`; the attribution base then advances to
-      # `merge-base(origin/<base>, HEAD)` (resolveAttributionBase, emitted-runtime.cjs).
+      # newer than `base.sha`; the attribution base then advances to the newest
+      # `origin/<base>` first-parent commit HEAD contains (advanceToMergedBase,
+      # emitted-runtime.cjs).
       # This must stay equal to CI_REBASE_BASE_SHA; a test asserts that parity.
       GSD_EMITTED_BASE: ${{ github.event.pull_request.base.sha }}
       # #4196: pin the npm-audit baseline the SAME way GSD_EMITTED_BASE pins
@@ -436,8 +437,9 @@ jobs:
       # not committed. This restores what the push-to-next job published, keyed on
       # the PR's base sha — the pin, which is the floor for the base the gate measures
       # from. #5797: the tree can contain a newer `next` than the pin, so the gate
-      # advances to `merge-base(origin/<base>, HEAD)` and rejects this cache entry
-      # (keyed on the pin) in favour of an in-job build when that differs.
+      # advances to the newest `origin/<base>` first-parent commit HEAD contains and
+      # rejects this cache entry (keyed on the pin) in favour of an in-job build when
+      # that differs.
       #
       # #2854: the restore lands on resolveBaseline()'s DEFAULT_CACHE_PATH, so it is
       # found without being announced. There used to be a step that published this
