@@ -254,14 +254,6 @@ function gitReporting(version) {
   return { runner, calls };
 }
 
-/** The call of `subjectsOccurOnHead` that lists HEAD's history: the only one that names HEAD. */
-const isHeadListing = (args) => args.includes('HEAD');
-
-/** Wrap a runner: `onCall(args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
-function intercept(runner, onCall) {
-  return (args, opts) => onCall(args, () => runner(args, opts), opts);
-}
-
 /**
  * phase branch with one task commit, base with `src/base.js`; returns the repo and the task sha. The
  * phase directory is scaffolded ON the phase branch, after the fork point, so `rangeBase` is the fork
@@ -1578,6 +1570,14 @@ describe('isFullSha (#5354)', () => {
   });
 });
 
+/** The call of `subjectsOccurOnHead` that lists HEAD's history: the only one that names HEAD. */
+const isHeadListing = (args) => args.includes('HEAD');
+
+/** Wrap a runner: `onCall(args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
+function intercept(runner, onCall) {
+  return (args, opts) => onCall(args, () => runner(args, opts), opts);
+}
+
 describe('subjectsOccurOnHead (#5354)', () => {
   test('true after an amend, false after a squash, null when git cannot answer', () => {
     const repo = makeRepo();
@@ -1719,10 +1719,18 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const old = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), false, 'the same window applies without the git flag');
     assert.equal(old.some((args) => args.some((arg) => String(arg).startsWith('--since-as-filter'))), false);
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', [])), subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', [])), 'both gits give one answer');
     const current = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
     assert.ok(current.find(isHeadListing).includes(`--since-as-filter=@${T}`));
+  });
+
+  test('[boundary] an original committed before its author time opens the window at the committer time', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 100 });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 50 }, 'twin\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
