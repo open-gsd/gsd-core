@@ -1192,6 +1192,20 @@ function boundaryAfterLine(write, index) {
  *     alias or destructured `writeFileSync`), and a call after a `//` inside a
  *     string or regex literal on its line (`stripComments` does not track
  *     them).
+ *   - A block-comment opener inside a string or regex literal (a glob such
+ *     as `const G = 'src/<star>';`, written slash then star): `stripComments`
+ *     opens a block comment there and blanks EVERY following line until a
+ *     closer appears, so the rest of the file goes unscanned, not one line.
+ *   - A braceless conditional reassignment (`if (c) p = 'x';` after
+ *     `p = path.join(dir, 'STATE.md')`): the walk back from the write stops
+ *     at the reassignment, whose right-hand side has no boundary, so the
+ *     earlier STATE.md assignment is never read. The braced form is reported.
+ *   - A regex literal in the first argument (`x.replace(/\)/g, '') +
+ *     statePath`): `captureFirstArg` tracks quotes and brackets, not regex
+ *     literals, so the `)` inside the literal ends the argument early.
+ *   - A member target assigned in the same function (`o.p = path.join(dir,
+ *     'STATE.md'); fs.writeFileSync(o.p, c);`): `identifiersIn` drops the
+ *     name after the dot and `o` has no assignment.
  * Verified false positives, pinned the same way: a statePath-derived
  * directory joined with another file name (`path.join(path.dirname(
  * statePath), 'ROADMAP.md')`, inline or through a variable), a same-name

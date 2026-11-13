@@ -1534,6 +1534,30 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       expected: [],
       currentBuggyOutput: [2],
     },
+    {
+      shape: 'a /* inside a string literal blinds every later line of the file',
+      text: ["const G = 'src/*';", 'function w(statePath, c) {', '  fs.writeFileSync(statePath, c);', '}'].join('\n'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a braceless conditional reassignment hides the earlier STATE.md assignment',
+      text: ['function w(dir, c) {', "  let p = path.join(dir, 'STATE.md');", "  if (c) p = 'x';", '  fs.writeFileSync(p, c);', '}'].join('\n'),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a regex literal holding ) in the first argument desyncs the argument capture',
+      text: ['function w(c) {', "  fs.writeFileSync(x.replace(/\\)/g, '') + statePath, c);", '}'].join('\n'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a member target assigned in the same function',
+      text: ['function w(o, dir, c) {', "  o.p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(o.p, c);', '}'].join('\n'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
     ...[
       ['fs.promises.writeFile onto statePath', '  await fs.promises.writeFile(statePath, c);'],
       ['fs.appendFileSync onto statePath', '  fs.appendFileSync(statePath, c);'],
