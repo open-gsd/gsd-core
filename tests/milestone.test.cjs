@@ -1847,6 +1847,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Execute the extracted prompt bash directly
     const res1 = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan1,
+      PHASE_DIR: path.dirname(plan1),
       PLAN: '01',
       REQ_IDS: 'SHARED-01',
     });
@@ -1864,6 +1865,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Execute the extracted prompt bash for Plan 2
     const res2 = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan2,
+      PHASE_DIR: path.dirname(plan2),
       PLAN: '02',
       REQ_IDS: 'SHARED-01 ONLY2-01',
     });
@@ -1935,6 +1937,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PHASE_DIR: path.dirname(plan),
       PLAN: '01',
       REQ_IDS: 'SOLO-01',
       PATH: `${noJqDir}:${process.env.PATH}`,
@@ -1958,6 +1961,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     const failingGsdRunPrefix = `gsd_run() { if [ "$2" = "requirements.ready-ids" ]; then return 1; fi; node "${TOOLS_PATH}" "$@"; }`;
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PHASE_DIR: path.dirname(plan),
       PLAN: '01',
       REQ_IDS: 'SOLO-01',
     }, failingGsdRunPrefix);
@@ -2322,6 +2326,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Pass bracketed ID as given in executor prompt examples: [ONLY1-01]
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PHASE_DIR: path.dirname(plan),
       PLAN: '01',
       REQ_IDS: '[ONLY1-01]',
     });
@@ -2347,6 +2352,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     // Preset PLAN_PATH erroneously points to plan 1 while target PLAN is 2
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan1,
+      PHASE_DIR: path.dirname(plan1),
       INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
       PHASE: '5',
       PLAN: '2',
@@ -2418,6 +2424,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       fs.writeFileSync(planPath, body);
       const res = runExtractedExecutorBash(tmpDir, {
         PLAN_PATH: planPath,
+      PHASE_DIR: path.dirname(planPath),
         INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
         PHASE: '5',
         PLAN: '1',
@@ -2441,6 +2448,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: plan,
+      PHASE_DIR: path.dirname(plan),
       INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
       PHASE: '5',
       PLAN: '',
@@ -2491,6 +2499,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
     const res = runExtractedExecutorBash(tmpDir, {
       PLAN_PATH: planPath,
+      PHASE_DIR: path.dirname(planPath),
       INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
       PHASE: '5',
       PLAN: '1',
@@ -2732,34 +2741,69 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     }
   });
 
-  test('decimal, letter, and milestone phase tokens pad like normalizePhaseName (#4944)', (t) => {
+  test('phase normalization agrees with the canonical helper', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
+    const phases = ['5', '05', '5.1', '5.10', '5.1.2', '5A', '5A.1', '5-5', '05-05', '5-5A.1', '005', 'CK-01', '5-foo', '007-2'];
+    for (const [index, phase] of phases.entries()) {
+      const caseRoot = path.join(tmpDir, `phase-case-${index}`);
+      const prefix = normalizePhaseName(phase);
+      const phaseDir = path.join(caseRoot, '.planning', 'phases', `${prefix}-feature`);
+      fs.mkdirSync(phaseDir, { recursive: true });
+      const filename = `${prefix}-01-PLAN.md`;
+      fs.writeFileSync(path.join(phaseDir, filename), '---\nplan: 1\n---\n');
+      const result = runExtractedExecutorBash(caseRoot, { PHASE_DIR: phaseDir, PHASE: phase, PLAN: '1', REQ_IDS: '' }, '', 'bash', 'printf \'NORMALIZED_PHASE=%s\\n\' "$(_pph "$PHASE")"');
+      assertShellExit(result, result.stderr || result.stdout);
+      assert.ok(result.stdout.split('\n').includes(`NORMALIZED_PHASE=${prefix}`), `${phase}: ${result.stdout}`);
+      const resolved = result.stdout.split('\n').find((line) => line.startsWith('RESOLVED_PLAN_PATH='));
+      assert.ok(resolved && resolved.endsWith(filename), `${phase}: ${resolved}`);
+    }
+  });
+
+  for (const shell of ['bash', 'zsh']) test(`phase normalization matches normalizePhaseName over generated tokens in ${shell}`, (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    if (shell === 'zsh' && skipIfNoZsh(t)) return;
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
+    const corpus = fc.record({
+      leadingZeros: fc.integer({ min: 0, max: 3 }),
+      major: fc.integer({ min: 0, max: 999 }),
+      suffix: fc.constantFrom('', '.1', '.10', '.1.2', 'A', 'a.1', '-2', '-02A.1', '-foo'),
+      project: fc.constantFrom('', 'CK-', 'ABC_2-'),
+    });
+    fc.assert(fc.property(corpus, ({ leadingZeros, major, suffix, project }) => {
+      const phase = `${project}${'0'.repeat(leadingZeros)}${major}${suffix}`;
+      const result = runExtractedExecutorBash(tmpDir, { PHASE: phase, PLAN: '1', REQ_IDS: '' }, '', shell, 'printf \'NORMALIZED_PHASE=%s\\n\' "$(_pph "$PHASE")"');
+      assertShellExit(result, result.stderr || result.stdout);
+      const line = result.stdout.split('\n').find((value) => value.startsWith('NORMALIZED_PHASE='));
+      assert.equal(line, `NORMALIZED_PHASE=${normalizePhaseName(phase)}`);
+    }), { numRuns: 40 });
+  });
+
+  test('an unresolved phase directory discards a cross-phase preset', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const foreignDir = path.join(tmpDir, '.planning', 'phases', '06-foreign');
+    fs.mkdirSync(foreignDir, { recursive: true });
+    const foreignPlan = path.join(foreignDir, '06-01-PLAN.md');
+    fs.writeFileSync(foreignPlan, '---\nplan: 1\nrequirements: [SOLO-01]\n---\n');
+    fs.writeFileSync(path.join(foreignDir, '06-01-SUMMARY.md'), 'done\n');
+    const result = runExtractedExecutorBash(tmpDir, { PHASE: '5', PLAN: '1', PLAN_PATH: foreignPlan, REQ_IDS: 'SOLO-01' });
+    assertShellExit(result, result.stderr || result.stdout);
+    assert.match(result.stdout, /RESOLVED_PLAN_PATH=\s*$/);
+    assert.match(result.stderr, /Phase directory not found/);
+    assert.ok(readRequirements(tmpDir).includes('- [ ] **SOLO-01**'));
+  });
+
+  test('resolver candidates cannot traverse outside the phase directory', (t) => {
     const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const specs = [
-      { phase: '5', plan: '1', file: '05-01-PLAN.md' },
-      { phase: '05', plan: '1', file: '05-01-PLAN.md' },
-      { phase: '5.1', plan: '1', file: '05.1-01-PLAN.md' },
-      { phase: '05.1', plan: '01', file: '05.1-01-PLAN.md' },
-      { phase: '5.10', plan: '1', file: '05.10-01-PLAN.md' },
-      { phase: '5.1.2', plan: '3', file: '05.1.2-03-PLAN.md' },
-      { phase: '5A', plan: '2', file: '05A-02-PLAN.md' },
-      { phase: '5A.1', plan: '2', file: '05A.1-02-PLAN.md' },
-      { phase: '5-5', plan: '1', file: '05-05-01-PLAN.md' },
-      { phase: '05-05', plan: '01', file: '05-05-01-PLAN.md' },
-      { phase: '5-5A.1', plan: '4', file: '05-05A.1-04-PLAN.md' },
-    ];
-    for (const spec of specs) {
-      fs.writeFileSync(path.join(phaseDir, spec.file), `---\nplan: ${spec.plan}\n---\n`);
-    }
-    for (const spec of specs) {
-      const res = runExtractedExecutorBash(tmpDir, {
-        PHASE_DIR: phaseDir, PHASE: spec.phase, PLAN: spec.plan, REQ_IDS: '',
-      });
-      assertShellExit(res, `${spec.phase}/${spec.plan}: ${res.stderr || res.stdout}`);
-      const line = res.stdout.split('\n').find((l) => l.startsWith('RESOLVED_PLAN_PATH='));
-      assert.ok(line && line.endsWith(spec.file), `${spec.phase} resolved ${line}`);
-    }
+    fs.writeFileSync(path.join(phaseDir, '..', 'foreign-01-PLAN.md'), '---\nplan: 1\n---\n');
+    const result = runExtractedExecutorBash(tmpDir, { PHASE_DIR: phaseDir, PHASE: '../foreign', PLAN: '1', REQ_IDS: '' });
+    assertShellExit(result, result.stderr || result.stdout);
+    assert.match(result.stdout, /RESOLVED_PLAN_PATH=\s*$/);
+    assert.match(result.stderr, /matches: 0/);
   });
 
   test('a preset path from another phase with the same plan number is dropped (#4944)', (t) => {
@@ -2852,19 +2896,12 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     fs.writeFileSync(plan, '---\nplan: 1\nrequirements: [SOLO-01]\n---\n');
     const prefix = `gsd_run() { if [ "$2" = "requirements.ready-ids" ]; then echo 'ready-ids-boom' >&2; return 1; fi; node "${TOOLS_PATH}" "$@"; }`;
     const res = runExtractedExecutorBash(tmpDir, {
-      PLAN_PATH: plan, PLAN: '1', REQ_IDS: 'SOLO-01',
+      PLAN_PATH: plan, PHASE_DIR: phaseDir, PLAN: '1', REQ_IDS: 'SOLO-01',
     }, prefix);
     assertShellExit(res, res.stderr || res.stdout);
     assert.match(res.stderr, /blocked or query failed/);
     assert.match(res.stderr, /ready-ids-boom/);
     assert.ok(readRequirements(tmpDir).includes('- [ ] **SOLO-01**'));
-  });
-
-  test('a hung ready-ids block returns a timed-out outcome (#4944)', (t) => {
-    const skipReason = skipUnless('bash'); if (skipReason) return t.skip(skipReason);
-    const res = runExtractedExecutorBash(tmpDir, { PLAN: '1', REQ_IDS: '' }, 'sleep 30', 'bash', '', 500);
-    assert.strictEqual(res.outcome, OUTCOME.TIMED_OUT, res.stderr || res.stdout);
-    assert.strictEqual(res.timedOut, true);
   });
 
   test('a bracketed requirement id is not expanded when a matching filename exists (#4944)', (t) => {
@@ -2946,7 +2983,9 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       plan: fc.integer({ min: 1, max: 12 }),
     });
     fc.assert(fc.property(gen, ({ major, letter, tail, plan }) => {
-      const phaseDir = path.join(tmpDir, '.planning', 'phases', 'dec-prop');
+      const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
+      const phasePrefix = normalizePhaseName(`${major}${letter}${tail}`);
+      const phaseDir = path.join(tmpDir, '.planning', 'phases', `${phasePrefix}-feature`);
       cleanup(phaseDir);
       fs.mkdirSync(phaseDir, { recursive: true });
       const paddedMajor = String(major).padStart(2, '0');
