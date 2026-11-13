@@ -388,9 +388,9 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * was built is not in HEAD, so it cannot be chosen. The result never moves BELOW the
  * floor (a chain commit that does not descend from it keeps the floor), and any git
  * failure keeps the floor rather than guessing; when a base branch was named, every floor
- * kept by a guard (unresolved ref, failed lookup, rooted chain, or a result below the
- * floor) tells `diagnostic` why. A walk that simply finds nothing newer than the floor
- * keeps it silently.
+ * kept by a guard (unresolved ref, failed lookup, rooted chain, a chosen commit HEAD does
+ * not contain, or a result below the floor) tells `diagnostic` why. A walk that simply
+ * finds nothing newer than the floor keeps it silently.
  *
  * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
  * @param {object} env base-ref environment.
@@ -454,6 +454,14 @@ function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
     }
     if (!/^[0-9a-f]{40}$/.test(newest)) throw new Error(`not a 40-hex sha: ${JSON.stringify(newest)}`);
     if (newest === floorSha) return floorSha;
+    // The one place an advance is returned, so its invariant is checked here for every way
+    // `newest` was derived: the advanced base must be a commit HEAD contains. A shallow clone
+    // can break that, since the walk reads past a graft to a real parent that may not be
+    // in HEAD.
+    if (!isAncestor(newest, 'HEAD')) {
+      return keep(`the chosen origin/${branch} commit ${newest} is not in HEAD ` +
+        '(a shallow clone boundary can cause this)');
+    }
     if (isAncestor(floorSha, newest)) return newest;
   } catch (err) {
     return keep(`finding the newest origin/${branch} first-parent commit HEAD contains failed: ${err.message}`);
