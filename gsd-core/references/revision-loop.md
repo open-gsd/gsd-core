@@ -144,6 +144,13 @@ so they restate the operative rules inline; this section is the authority they m
    named constraint and apply the hint / amend the constraint itself. Each option resolves the
    conflict. Accepting the output with the blocker still open is NOT offered here — the blocking
    `required_property` still fails, and that choice belongs to the cap escalation.
+   For a `research_resolution` conflict, adopting the alternative means the user rules here: ask
+   each question the conflict names, and record each answer under the checker's CONTEXT.md
+   `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`. The re-spawned planner
+   cites it. With no CONTEXT.md there is nowhere to record, so the user leaves the loop for
+   `/gsd:discuss-phase`, which writes one; with one, the user may still leave for
+   `/gsd:discuss-phase` or `/gsd:plan-phase --research`. Record only what the user said: under `--auto`, where no one is
+   asked, record nothing, so the same conflict returns and the Repeat rule below escalates it.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
    open is a live blocker, never a stale artifact.

@@ -210,7 +210,7 @@ O agente `gsd-plan-checker` avalia cada PLAN.md em 12 dimensões antes do iníci
 | **8 — Conformidade Nyquist** | Quando `workflow.nyquist_validation` está habilitado e RESEARCH.md existe, toda tarefa tem um comando de verificação `<automated>`, nenhuma janela consecutiva de 3 tarefas carece de cobertura, e VALIDATION.md está presente. |
 | **9 — Contratos de Dados Entre Planos** | Quando planos compartilham pipelines de dados, suas transformações são compatíveis — nenhum plano remove dados que outro plano precisa em sua forma original. |
 | **10 — Conformidade com CLAUDE.md** | Os planos respeitam convenções específicas do projeto, padrões proibidos, ferramentas obrigatórias e requisitos de segurança do `./CLAUDE.md`. |
-| **11 — Resolução de Pesquisa** | Quando RESEARCH.md existe, sua seção `## Open Questions` está marcada como `(RESOLVED)` antes de o planejamento prosseguir. |
+| **11 — Resolução de Pesquisa** | Quando RESEARCH.md existe, cada questão em aberto nele, sob qualquer título, cita apenas decisões `D-NN` sob `<decisions>` no CONTEXT.md da fase, fora de Claude's Discretion, e uma delas a responde. Só o discuss-phase, ou o orquestrador ao registrar a resposta do usuário, escreve esse `D-NN`. Uma marca de resolução escrita pelo próprio pesquisador, sufixo `(RESOLVED)` incluído, não resolve nada. |
 | **12 — Conformidade de Padrões** | Quando PATTERNS.md existe, as tarefas referenciam os padrões analógicos corretos para cada arquivo novo ou modificado. |
 
 ---
