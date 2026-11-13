@@ -213,7 +213,9 @@ describe('isolatedEnv: stripped and inherited variables', () => {
 describe('gitChildEnv', () => {
   test('drops the variables that redirect git and the developer\'s git config', (t) => {
     const home = tmp(t, 'gsd-prfleet-gitenv-home-');
-    const hostile = { GIT_DIR: '/hostile/.git', GIT_INDEX_FILE: '/hostile/index', GIT_CONFIG_PARAMETERS: "'core.hooksPath=/hostile'" };
+    // Source of the location list: git itself (`git rev-parse --local-env-vars`), plus the config-injection variable.
+    const listed = gitOrThrow(['rev-parse', '--local-env-vars'], { timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).split('\n').filter(Boolean);
+    const hostile = { ...Object.fromEntries(listed.map((k) => [k, '/hostile'])), GIT_CONFIG_PARAMETERS: "'core.hooksPath=/hostile'" };
     const saved = Object.fromEntries(Object.keys(hostile).map((k) => [k, process.env[k]]));
     t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
     Object.assign(process.env, hostile);

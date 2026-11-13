@@ -83,14 +83,15 @@ const WORKTREE_INFO_TIMEOUT_MS = 5000;
 function createGitRepo(opts = {}) {
   const { prefix = 'gsd-1146-', defaultBranch = 'master' } = opts;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  gitOrThrow(['init', '-b', defaultBranch], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['config', 'user.email', 'test@test.com'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['config', 'user.name', 'Test'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+  const g = (args) => gitOrThrow(args, { cwd: dir, env: gitChildEnv(dir), timeoutMs: GIT_TIMEOUT_MS });
+  g(['init', '-b', defaultBranch]);
+  g(['config', 'user.email', 'test@test.com']);
+  g(['config', 'user.name', 'Test']);
+  g(['config', 'commit.gpgsign', 'false']);
   // Need at least one commit so branches exist
   fs.writeFileSync(path.join(dir, 'README.md'), '# test\n');
-  gitOrThrow(['add', 'README.md'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['commit', '-m', 'init'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+  g(['add', 'README.md']);
+  g(['commit', '-m', 'init']);
   return dir;
 }
 
@@ -2724,7 +2725,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('verify fails when the PR diff deletes target-tracked planning files', (t) => {
     const repo = createTempDir('gsd-3679-verify-fail-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2807,7 +2808,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('verify passes a clean diff with zero deletions', (t) => {
     const repo = createTempDir('gsd-3679-verify-clean-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2878,7 +2879,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('create loop preserves pre-existing transient content (#3720 guarantee pinned)', (t) => {
     const repo = createTempDir('gsd-3679-create-mixed-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2923,12 +2924,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'FILTER_PATHS=".planning/phases/\n.planning/quick/\n.planning/research/\n.planning/threads/\n.planning/todos/\n.planning/debug/\n.planning/seeds/\n.planning/codebase/\n.planning/ui-reviews/"',
       createBash,
     ].join('\n');
-    fs.writeFileSync(path.join(repo, 'create.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'create.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const r = runBashFile(script, { prefix: 'gsd-create-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, `create loop must succeed: ${r.stderr.slice(0, 400)}`);
 
     const status = g(['diff', '--name-status', 'main..feature-pr']);
@@ -2944,7 +2940,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('create loop preserves planning content on pure-code commits', (t) => {
     const repo = createTempDir('gsd-3679-create-pure-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2974,12 +2970,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'FILTER_PATHS=".planning/phases/\n.planning/quick/\n.planning/research/\n.planning/threads/\n.planning/todos/\n.planning/debug/\n.planning/seeds/\n.planning/codebase/\n.planning/ui-reviews/"',
       createBash,
     ].join('\n');
-    fs.writeFileSync(path.join(repo, 'create.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'create.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const r = runBashFile(script, { prefix: 'gsd-create-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, `create loop must succeed: ${r.stderr.slice(0, 400)}`);
     const status = g(['diff', '--name-status', 'main..feature-pr']);
     assert.equal((status.match(/^D/gm) || []).length, 0, `no deletions allowed: ${status}`);

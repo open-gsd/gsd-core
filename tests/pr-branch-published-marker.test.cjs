@@ -143,7 +143,6 @@ const refOf = (dir, ref) => refShaOrEmpty(ref, { cwd: dir, env: gitChildEnv(dir)
 const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
 const builtOf = (dir) => refOf(dir, BUILT);
-// Rounds whose code reached the -pr tree (state, not log text).
 // A rebase-merge of the published -pr onto a moved target: main gains an unrelated commit, then the -pr commits are cherry-picked.
 const rebaseMergePr = (dir) => {
   git(dir, 'checkout', '-q', 'main');
@@ -152,6 +151,7 @@ const rebaseMergePr = (dir) => {
   git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
 };
 const changed = (dir) => git(dir, 'diff', '--name-only', 'main', 'feature-pr').split(/\r?\n/).sort();
+// Rounds whose code reached the -pr tree (state, not log text).
 const replayed = (dir) => changed(dir).filter((f) => /^r\d+\.txt$/.test(f));
 
 describe('#5469 pr-branch published marker (real git)', () => {

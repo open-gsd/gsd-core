@@ -63,10 +63,13 @@ const {
   cleanup, createTempProject, runGsdTools, readFileNormalized,
 } = require('./helpers.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { gitChildEnv } = require('./helpers/isolated-env.cjs');
 const {
   WORKFLOW_PATH,
   parseWorkflow,
   readWorkflow,
+  readWorkflowText,
+  runBashFile,
   extractPickLoop,
   extractBashBlockContaining,
   forbiddenRegex,
@@ -360,10 +363,6 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       }
       git(['checkout', '-q', '-b', 'prbranch', 'main'], dir);
       return dir;
-    }
-
-    function readWorkflowText() {
-      return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
     }
 
     // Builds the exact fixture script L2 executes: fixed shell vars plus the
@@ -918,36 +917,11 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       while (activeDirs.length) cleanup(activeDirs.pop());
     }
 
-    function readWorkflowText() {
-      return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    }
-
-    // Windows: `execFileSync('sh', ['-c', script], ...)` passes a large,
-    // multi-line, quote-heavy `script` as a single argv element. POSIX hands
-    // that straight to execve with no re-parsing, but Windows processes only
-    // ever receive ONE command-line string, so Node's uv layer must serialize
-    // argv into it using the MS CRT backslash-quote quoting convention. Git
-    // for Windows' `sh.exe` is an MSYS2/Cygwin binary: it decodes that
-    // command line with Cygwin's OWN argv parser, not the CRT one Node
-    // assumes, and the two diverge on long arguments containing many nested
-    // double quotes and heredoc markers (test 54's extracted recipe carries
-    // ~9.5KB, 170 lines, 82 double quotes, and 2 heredoc markers vs. test 53's
-    // ~1.4KB/22-line script, the smallest of the three — see investigation
-    // notes). That divergence is exactly what CI observed: an `if`/`fi`
-    // pairing broken mid-script on Windows only, with `bash -n` clean on the
-    // identical LF-only text. Routing the script through the filesystem
-    // instead of argv sidesteps the whole encode/decode mismatch: the only
-    // thing that reaches Windows' command-line serialization is a short
-    // temp-file path with no embedded quotes or newlines to mis-escape.
+    // The recipe goes through a file, not argv (see `runBashFile`, which owns the Windows MSYS2 argv rationale).
     function runShScript(script, cwd) {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-script-'));
-      const scriptPath = path.join(tmpDir, 'recipe.sh');
-      try {
-        fs.writeFileSync(scriptPath, script);
-        return execFileSync('sh', [scriptPath], { cwd, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
-      } finally {
-        cleanup(tmpDir);
-      }
+      const r = runBashFile(script, { prefix: 'gsd-prbranch-script-', cwd, env: () => gitChildEnv(cwd), timeoutMs: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, r.stderr);
+      return r.stdout;
     }
 
     // The canonical declarations block: TRANSIENT_DIRS/STRUCTURAL_RE/

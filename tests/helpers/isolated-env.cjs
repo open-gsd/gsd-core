@@ -28,6 +28,7 @@ const os = require('node:os');
 const path = require('node:path');
 const helpers = require('../helpers.cjs');
 const { isolatedGitEnv: scrubGitEnv } = require('../../scripts/lint-removed-but-needed.cjs');
+const { scrubGitLocationEnv } = require('../../gsd-core/bin/lib/read-only-git-env.cjs');
 
 const { cleanup } = helpers;
 
@@ -242,16 +243,16 @@ function createHermeticRoot(prefix, { parent } = {}) {
 
 /**
  * The env of a test child that runs git: `isolatedEnv` over the base that
- * `scripts/lint-removed-but-needed.cjs` `isolatedGitEnv` owns (no variable that
- * redirects git to another repository, index, object store or config, and no
- * global or system config), so a developer's `commit.gpgsign`, `core.hooksPath`
+ * `scripts/lint-removed-but-needed.cjs` `isolatedGitEnv` owns (no config-redirecting
+ * variable, no global or system config) and `scrubGitLocationEnv` owns (no variable
+ * that points git at another repository, index or object store), so a developer's `commit.gpgsign`, `core.hooksPath`
  * or a hook's `GIT_DIR` stays out.
  *
  * @param {string} home Absolute home dir (see `isolatedEnv`).
  * @returns {Record<string, string>}
  */
 function gitChildEnv(home) {
-  return isolatedEnv({ home, base: scrubGitEnv(home) });
+  return isolatedEnv({ home, base: scrubGitLocationEnv(scrubGitEnv(home)) });
 }
 
 module.exports = { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable };
