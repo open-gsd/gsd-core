@@ -127,6 +127,118 @@ describe('census and classification', () => {
     assert.deepEqual(resolved.unusedResolutions.map((o) => o.file), ['tests/gone.test.cjs']);
   });
 
+  describe('exclusion resolutions', () => {
+    const SPAWNER_FILE = { 'tests/spawner.test.cjs': "const projection = require('../src/shell-command-projection.cjs');\nprojection.execArgvQuarantined('git', [], { timeoutMs: CLASS_A_MS });\n" };
+    const UNDER_TEST = { file: 'tests/spawner.test.cjs', callee: 'projection.execArgvQuarantined', kind: 'UNDER_TEST', reason: 'asserts the spawner outcomes' };
+
+    function buildWith(files, resolutions) {
+      const view = viewOf(files);
+      return script.buildSites(script.censusRepo(view, NAMES), script.createClassifier(view), resolutions);
+    }
+
+    test('an under-test callee is excluded from sites and unresolved sites and reported with its kind and reason', () => {
+      const r = buildWith(SPAWNER_FILE, [UNDER_TEST]);
+      assert.deepEqual(r.sites, []);
+      assert.deepEqual(r.unresolvedSites, []);
+      assert.deepEqual(r.unusedResolutions, []);
+      assert.deepEqual(r.excludedSites.map((x) => [x.file, x.line, x.kind, x.reason]), [['tests/spawner.test.cjs', 2, 'UNDER_TEST', 'asserts the spawner outcomes']]);
+    });
+
+    test('an exempt direct spawn is excluded, not counted as a raw site', () => {
+      const files = { 'tests/raw.test.cjs': "const cp = require('node:child_process');\ncp.spawnSync('git', [], { timeout: CLASS_A_MS });\n" };
+      assert.equal(buildWith(files, []).sites[0].cls, 'DIRECT');
+      const r = buildWith(files, [{ file: 'tests/raw.test.cjs', callee: 'cp.spawnSync', kind: 'EXEMPT', reason: 'deliberate' }]);
+      assert.deepEqual(r.sites, []);
+      assert.deepEqual(r.excludedSites.map((x) => x.kind), ['EXEMPT']);
+    });
+
+    const CLASSIFIED = { file: 'tests/spawner.test.cjs', callee: 'projection.execArgvQuarantined', cls: 'SEAM', resolvedCallee: 'runNode', note: 'forwarded' };
+    const NAMED = /resolution tests\/spawner\.test\.cjs projection\.execArgvQuarantined: /;
+
+    test('rule a: a resolution that sets both kind and cls throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, cls: 'SEAM' }]), new RegExp(NAMED.source + 'sets both kind and cls'));
+    });
+
+    test('rule b: a resolution that sets neither kind nor cls throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ file: UNDER_TEST.file, callee: UNDER_TEST.callee }]), new RegExp(NAMED.source + 'sets neither kind nor cls'));
+    });
+
+    test('rule c: an unknown kind throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, kind: 'BOGUS' }]), new RegExp(NAMED.source + 'unknown kind'));
+    });
+
+    test('rule d: a kind resolution with a missing, empty or blank reason throws, naming file and callee', () => {
+      for (const reason of [undefined, '', '   ']) {
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, reason }]), new RegExp(NAMED.source + 'kind UNDER_TEST requires a non-empty reason'));
+      }
+    });
+
+    test('rule e: an unknown cls throws, naming file and callee', () => {
+      assert.throws(() => buildWith(SPAWNER_FILE, [{ ...CLASSIFIED, cls: 'BOGUS' }]), new RegExp(NAMED.source + 'unknown cls'));
+    });
+
+    test('rule f: a cls resolution with a missing, empty or blank resolvedCallee or note throws, naming file and callee', () => {
+      for (const v of [undefined, '', '   ']) {
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...CLASSIFIED, resolvedCallee: v }]), new RegExp(NAMED.source + 'cls SEAM requires a non-empty resolvedCallee'));
+        assert.throws(() => buildWith(SPAWNER_FILE, [{ ...CLASSIFIED, note: v }]), new RegExp(NAMED.source + 'cls SEAM requires a non-empty note'));
+      }
+    });
+
+    test('a well-formed kind resolution and a well-formed cls resolution both validate', () => {
+      assert.doesNotThrow(() => script.validateResolutions([UNDER_TEST, CLASSIFIED]));
+    });
+
+    test('property: validateResolutions throws exactly when a resolution violates rules a-f', () => {
+      const orUndef = (arb) => fc.oneof(fc.constant(undefined), arb);
+      fc.assert(
+        fc.property(
+          orUndef(fc.constantFrom('UNDER_TEST', 'EXEMPT', 'BOGUS')),
+          orUndef(fc.constantFrom('SEAM', 'DIRECT', 'BOGUS')),
+          orUndef(fc.constantFrom('', '   ', 'why')),
+          orUndef(fc.constantFrom('', '   ', 'runNode')),
+          orUndef(fc.constantFrom('', '   ', 'note')),
+          (kind, cls, reason, resolvedCallee, note) => {
+            const entry = { file: 'tests/p.test.cjs', callee: 'c' };
+            for (const [k, v] of Object.entries({ kind, cls, reason, resolvedCallee, note })) if (v !== undefined) entry[k] = v;
+            const ok = (v) => v !== undefined && v.trim() !== '';
+            let violates;
+            if (kind !== undefined && cls !== undefined) violates = true;
+            else if (kind === undefined && cls === undefined) violates = true;
+            else if (kind !== undefined) violates = !['UNDER_TEST', 'EXEMPT'].includes(kind) || !ok(reason);
+            else violates = !['SEAM', 'DIRECT'].includes(cls) || !ok(resolvedCallee) || !ok(note);
+            if (violates) assert.throws(() => script.validateResolutions([entry]), /resolution tests\/p\.test\.cjs c: /);
+            else assert.doesNotThrow(() => script.validateResolutions([entry]));
+          },
+        ),
+      );
+    });
+
+    test('a resolution whose optionKey no site carries is reported as unused and excludes nothing', () => {
+      const r = buildWith(SPAWNER_FILE, [{ ...UNDER_TEST, optionKey: 'stdio' }]);
+      assert.deepEqual(r.unusedResolutions.map((o) => o.optionKey), ['stdio']);
+      assert.deepEqual(r.excludedSites, []);
+      assert.equal(r.sites.length, 1);
+    });
+
+    test('an under-test resolution that matches nothing is reported as unused', () => {
+      const r = buildWith({ 'tests/other.test.cjs': 'const x = 1;\n' }, [UNDER_TEST]);
+      assert.deepEqual(r.unusedResolutions.map((o) => o.file), ['tests/spawner.test.cjs']);
+      assert.deepEqual(r.excludedSites, []);
+    });
+
+    test('the agent-skills stdio exemption matches exactly one site and leaves the file\'s other direct sites counted', () => {
+      const src = "const { spawnSync } = require('child_process');\n" +
+        "spawnSync('node', [], { timeout: CLASS_A_MS });\n" +
+        "spawnSync('node', [], { stdio: ['ignore', 1, 'pipe'], timeout: CLASS_A_MS });\n" +
+        "spawnSync('node', [], { timeout: CLASS_A_MS });\n";
+      const exemption = script.MANUAL_RESOLUTIONS.find((o) => o.file === 'tests/agent-skills.test.cjs');
+      assert.equal(exemption.kind, 'EXEMPT');
+      const r = buildWith({ 'tests/agent-skills.test.cjs': src }, [exemption]);
+      assert.deepEqual(r.excludedSites.map((x) => x.line), [3]);
+      assert.deepEqual(r.sites.map((x) => [x.line, x.cls]), [[2, 'DIRECT'], [4, 'DIRECT']]);
+    });
+  });
+
   test('constantsFromTimeouts keeps measured, mirror and backstop names and drops fixture data', () => {
     const T = {
       CLASS_A_MS: 1, CLASS_B_MS: 2, CLASS_C_MS: 3, CLASS_D_MS: 4,

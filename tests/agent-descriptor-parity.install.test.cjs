@@ -87,12 +87,36 @@
  * suite).
  */
 
-const { test } = require('node:test');
+const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { cleanup, createTempDir, sandboxHome } = require('./helpers.cjs');
+const { cleanup, createTempDir, sandboxHome, scrubConfigLocationEnv, parseFrontmatter } = require('./helpers.cjs');
+const { createHermeticRoot } = require('./helpers/isolated-env.cjs');
+
+// #6034 (epic #4635 Phase 2; #4613): the real pipeline reads agent_tools from the
+// home (~/.gsd/defaults.json, GSD_HOME) and from a .planning/config.json found by
+// walking up from the target dir. Every test in this file therefore runs against
+// an EMPTY sandboxed HOME with the config-location variables scrubbed, and every
+// target dir is a hermetic root (see buildTargetDir), so no ambient grant can
+// reach one side of the comparison and not the other. A test that needs a grant
+// plants it deliberately. The root hooks use an adapter because sandboxHome needs
+// a test context for t.after and a root hook has none.
+let hookRestorers = [];
+
+beforeEach(() => {
+  hookRestorers = [];
+  const fixtureHome = createTempDir('gsd-agent-parity-home-');
+  sandboxHome({ after: (fn) => hookRestorers.push(fn) }, fixtureHome);
+  hookRestorers.push(scrubConfigLocationEnv());
+  hookRestorers.push(() => cleanup(fixtureHome));
+});
+
+afterEach(() => {
+  for (const restore of hookRestorers.reverse()) restore();
+  hookRestorers = [];
+});
 
 const REPO_ROOT = path.join(__dirname, '..');
 const LIB_DIR = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib');
@@ -159,7 +183,10 @@ function buildSourceTree(agentFiles) {
  *  `commandsGsd` — the same marker findInstallSourceRoot/findAgentsSourceRoot
  *  read (runtime-artifact-layout.cts). */
 function buildTargetDir(commandsGsd) {
-  const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-agent-parity-dest-'));
+  // createHermeticRoot plants a neutral .planning/config.json so the upward
+  // project-config walk stops here (#4613); a test that needs project grants
+  // overwrites it.
+  const targetDir = createHermeticRoot('gsd-agent-parity-dest-');
   fs.writeFileSync(path.join(targetDir, '.gsd-source'), commandsGsd);
   return targetDir;
 }
@@ -223,6 +250,18 @@ function computeExpectedOutput(runtime, agentsDir, ctx, converterNameOverride) {
     content = runtimeArtifactConversion.applyAgentPathRewrites(content, runtime, pathPrefix);
     // Step 2: attribution
     content = runtimeArtifactConversion.processAttribution(content, attribution);
+    // Step 2b (#4032/#4613): validated agent_tools grants, appended after
+    // attribution and before the converter, exactly where the real pipeline
+    // (stageAgentsForRuntimeWithConverter, install-profiles.cts) appends them.
+    // The SAME resolver and appender are called on purpose: the property under
+    // test is converter wiring, not grant resolution, and a re-implementation
+    // of the merge here could only drift from production.
+    const agentTools = installModelOverrideResolver.readGsdEffectiveAgentTools(targetDir);
+    const grants = [
+      ...(agentTools?.['*'] || []),
+      ...(agentTools?.[agentName] || []),
+    ];
+    content = runtimeArtifactConversion.appendAgentTools(content, grants);
     // Step 3: converter — dispatched off the INDEPENDENT expected-name map,
     // never off the descriptor under test.
     if (converterName) {
@@ -330,10 +369,14 @@ function _stageWithModelOverride(runtime, overrideModel) {
   }
 }
 
-function comparePipelines(runtime, scope, converterNameOverride) {
+function comparePipelines(runtime, scope, converterNameOverride, setup) {
   const { commandsGsd, agentsDir, root } = buildSourceTree(SAMPLE_AGENTS);
   const targetDir = buildTargetDir(commandsGsd);
   try {
+    // `setup({ targetDir })` plants a deliberate fixture (agent_tools in the
+    // sandboxed home and/or the target's .planning/config.json) before either
+    // side runs.
+    if (setup) setup({ targetDir });
     const ctx = { pathPrefix: `${targetDir}/`, attribution: undefined, targetDir };
     const expected = computeExpectedOutput(runtime, agentsDir, ctx, converterNameOverride);
     const actual = runRealDescriptorPath(runtime, scope, targetDir, ctx);
@@ -372,6 +415,93 @@ for (const [runtime, scope] of RUNTIME_SCOPE_PAIRS) {
     assertMapsIdentical(expected, actual);
   });
 }
+
+// ---------------------------------------------------------------------------
+// #6034 — the oracle models deliberate agent_tools fixtures (matrix rows 9-12)
+// ---------------------------------------------------------------------------
+
+function plantHomeAgentTools(agentTools) {
+  const gsdDir = path.join(process.env.HOME, '.gsd');
+  fs.mkdirSync(gsdDir, { recursive: true });
+  fs.writeFileSync(path.join(gsdDir, 'defaults.json'), JSON.stringify({ agent_tools: agentTools }));
+}
+
+function plantProjectConfig(targetDir, config) {
+  fs.mkdirSync(path.join(targetDir, '.planning'), { recursive: true });
+  fs.writeFileSync(path.join(targetDir, '.planning', 'config.json'), JSON.stringify(config));
+}
+
+// The granted tools of one generated agent file, as a trimmed list read from its
+// parsed frontmatter `tools` field (an agent with no `tools` line yields []).
+function toolsOf(content) {
+  const { tools } = parseFrontmatter(content);
+  return typeof tools === 'string' ? tools.split(',').map((tool) => tool.trim()).filter(Boolean) : [];
+}
+
+test('agent-descriptor-parity: oracle models agent_tools: home grant', () => {
+  plantHomeAgentTools({ '*': ['mcp__proof__*'] });
+  const { expected, actual } = comparePipelines('claude', 'global');
+  assertMapsIdentical(expected, actual);
+  for (const name of ['gsd-planner.md', 'gsd-plan-checker.md']) {
+    assert.ok(toolsOf(expected.get(name)).includes('mcp__proof__*'), `${name}: the home grant must appear in the oracle output (non-vacuous)`);
+  }
+});
+
+test('agent-descriptor-parity: oracle models agent_tools: home + project merge', () => {
+  plantHomeAgentTools({ '*': ['mcp__proof_home__*'] });
+  const { expected, actual } = comparePipelines('claude', 'global', undefined, ({ targetDir }) => {
+    plantProjectConfig(targetDir, { agent_tools: { 'gsd-plan-checker': ['mcp__proof_project__*'] } });
+  });
+  assertMapsIdentical(expected, actual);
+  assert.ok(
+    toolsOf(expected.get('gsd-plan-checker.md')).includes('mcp__proof_project__*'),
+    'the project grant must appear on the agent it targets (non-vacuous)',
+  );
+  assert.ok(
+    !toolsOf(expected.get('gsd-planner.md')).includes('mcp__proof_project__*'),
+    'the project grant for gsd-plan-checker must not leak onto gsd-planner',
+  );
+});
+
+// CONFIGURATION.md (agent_tools row): "A project selector replaces the corresponding global selector."
+test('agent-descriptor-parity: oracle models agent_tools: project selector replaces the home selector', () => {
+  plantHomeAgentTools({ '*': ['mcp__proof__*'] });
+  const { expected, actual } = comparePipelines('claude', 'global', undefined, ({ targetDir }) => {
+    plantProjectConfig(targetDir, { agent_tools: { '*': [] } });
+  });
+  assertMapsIdentical(expected, actual);
+  for (const [name, content] of expected) {
+    assert.ok(!toolsOf(content).includes('mcp__proof__*'), `${name}: a project "*" selector must replace the home "*" grant`);
+  }
+});
+
+test('agent-descriptor-parity: oracle models agent_tools: an empty project map keeps the home grant', () => {
+  plantHomeAgentTools({ '*': ['mcp__proof__*'] });
+  const { expected, actual } = comparePipelines('claude', 'global', undefined, ({ targetDir }) => {
+    plantProjectConfig(targetDir, { agent_tools: {} });
+  });
+  assertMapsIdentical(expected, actual);
+  for (const name of ['gsd-planner.md', 'gsd-plan-checker.md']) {
+    assert.ok(toolsOf(expected.get(name)).includes('mcp__proof__*'), `${name}: a project map naming no selector must keep the home grant`);
+  }
+});
+
+test('agent-descriptor-parity: an agent with no tools line is unchanged by a grant on both sides', (t) => {
+  const noToolsAgent = ['---', 'name: gsd-notools', 'description: Has no tools line.', '---', '', 'Body.', ''].join('\n');
+  const { commandsGsd, agentsDir, root } = buildSourceTree({ 'gsd-notools.md': noToolsAgent });
+  const targetDir = buildTargetDir(commandsGsd);
+  t.after(() => {
+    cleanup(root);
+    cleanup(targetDir);
+  });
+  plantHomeAgentTools({ '*': ['mcp__proof__*'] });
+  const ctx = { pathPrefix: `${targetDir}/`, attribution: undefined, targetDir };
+  const expected = computeExpectedOutput('claude', agentsDir, ctx);
+  const actual = runRealDescriptorPath('claude', 'global', targetDir, ctx);
+  assert.equal(expected.size, 1, 'fixture must produce one oracle file');
+  assertMapsIdentical(expected, actual);
+  assert.deepEqual(toolsOf(expected.get('gsd-notools.md')), [], 'an agent with no tools line must gain no tools from the grant');
+});
 
 // ---------------------------------------------------------------------------
 // H7 — the harness compares filenames, not only content (meta)
