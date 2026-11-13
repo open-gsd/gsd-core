@@ -63,7 +63,8 @@ function blockAt(doc, anchor) {
   assert.notEqual(at, -1, `missing anchor: ${anchor}`);
   const stop = doc.indexOf('\n\n', at);
   const block = doc.slice(at, stop === -1 ? undefined : stop);
-  assert.ok(block.trim().length > 0, `empty block at anchor: ${anchor}`);
+  // The block must hold more than the anchor itself, so an anchor whose body was deleted fails here.
+  assert.ok(block.length > anchor.length, `empty block at anchor: ${anchor}`);
   return block;
 }
 // lineWith: the first line of a section holding a structural token.
@@ -73,9 +74,16 @@ function lineWith(section, token) {
   assert.ok(line, `no line holds token: ${token}`);
   return line;
 }
+// lineAfter: the text of the first line holding the anchor token, from the end of the anchor on,
+// so the tokens a row then asserts cannot be satisfied by the anchor itself.
+function lineAfter(section, anchor) {
+  const line = lineWith(section, anchor);
+  return line.slice(line.indexOf(anchor) + anchor.length);
+}
 // inOrder: every token appears, each after the previous one.
 function inOrder(text, tokens, label) {
   assert.ok(text.trim().length > 0, `${label || 'text'} must not be empty`);
+  assert.ok(tokens.length > 0, `${label || 'text'}: no tokens to assert`);
   let from = 0;
   for (const token of tokens) {
     const at = text.indexOf(token, from);
@@ -933,8 +941,8 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
     // #5182 replaced the {outputFile} binding (a host transcript that already holds
     // the prompt and definition text) with the GSD-owned receipt.
     const helpersDoc = readStallHelpersDoc();
-    assert.match(helpersDoc, /substitutes the printed absolute path for `\{receipt\}`/, 'stall-detection-helpers.md must explain the {receipt} binding contract');
-    assert.match(helpersDoc, /\*\*Plan-checker receipt:\*\* a checker that PASSES touches no `\*-PLAN\.md`, so its receipt\s+is its only completion signal for this watch/,
+    assert.ok(helpersDoc.includes('substitutes the printed absolute path for `{receipt}`'), 'stall-detection-helpers.md must explain the {receipt} binding contract');
+    inOrder(blockAt(helpersDoc, '**Plan-checker receipt:**'), ['PASSES', 'touches no `*-PLAN.md`', 'only completion signal'],
       'stall-detection-helpers.md must explain why the receipt is load-bearing for the plan-checker spawn specifically');
   });
 
@@ -1274,7 +1282,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // loaded at 7.99); step 11 sends ISSUES FOUND to step 12.
     assert.match(readStallHelpersDoc(), /gsd_return_marker "\{receipt\}"/);
     const step11 = sectionOf(plan, ['## 11. Handle Checker Return', '## 11a.']);
-    inOrder(lineWith(step11, '`marker_received` + `## ISSUES FOUND`'), ['## ISSUES FOUND', 'step 12'], 'ISSUES FOUND must route to step 12');
+    inOrder(lineAfter(step11, '`marker_received` + `## ISSUES FOUND`'), ['proceed to step 12'], 'ISSUES FOUND must route to step 12');
   });
 
   // Review 5692447413 Minor 5: with the toggle off the prompt still carries <return_receipt>,
@@ -1309,9 +1317,9 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const plan = readPlanPhase();
     const para = sectionOf(plan, REVISION_SECTION).split('\n').find((l) => l.includes('(`revision`)'));
     assert.ok(para, 'the revision ORCHESTRATOR RULE paragraph exists');
-    inOrder(para, ['`stalled`', '(receipt case: Retry first)', '1) Accept as revised', '3) Stop'], 'the revision stalled menu must open with the receipt-case note');
+    inOrder(para, ['`stalled`', '(receipt case: Retry first)', '1) Accept as revised', '2) Retry', '3) Stop'], 'the revision stalled menu must open with the receipt-case note');
     const s11a = sectionOf(plan, ['## 11a.', '## 12.']);
-    inOrder(lineWith(s11a, '(receipt case: Retry first)'), ['(receipt case: Retry first)', '1) Accept verification', '3) Stop'], '11a\'s inline menu must open with the receipt-case note');
+    inOrder(lineAfter(s11a, '(receipt case: Retry first)'), ['1) Accept verification', '2) Retry checker', '3) Stop'], '11a\'s inline menu must open with the receipt-case note');
     assert.ok(!plan.includes('3) Stop (receipt case'), 'the note must not read as a qualifier of "Stop"');
   });
 
@@ -1615,7 +1623,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
 
   test('a receipt-routed ## ISSUES FOUND with no issue list fails closed (never counted as 0 issues)', () => {
     const step11 = sectionOf(readPlanPhase(), ['## 11. Handle Checker Return', '## 11a.']);
-    inOrder(lineWith(step11, '`marker_received` + `## ISSUES FOUND`'), ['## ISSUES FOUND', '11a'], 'a missing issue list routes to 11a, never to a zero count');
+    inOrder(lineAfter(step11, '`marker_received` + `## ISSUES FOUND`'), ['step 12', '(no issue list: 11a)'], 'a missing issue list routes to 11a, never to a zero count');
   });
 
   // Review 5563209291 Minor 2: step 12 reads the conflict record's fields (CONFLICT_*) from
@@ -1639,14 +1647,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   // receipt-only PASSED must fail closed like the other body-needing routes instead of reaching step 13.
   test('a receipt-routed ## VERIFICATION PASSED with no body fails closed (step 11 reads its findings, #5578)', () => {
     const step11 = sectionOf(readPlanPhase(), ['## 11. Handle Checker Return', '## 11a.']);
-    const passedLine = lineWith(step11, '`marker_received` + `## VERIFICATION PASSED`');
-    inOrder(passedLine, ['BLOCKER', 'WARNING', '`## ISSUES FOUND`', 'step 12'], 'control: step 11 reads the PASSED body (#5578)');
+    const passedLine = lineAfter(step11, '`marker_received` + `## VERIFICATION PASSED`');
+    inOrder(passedLine, ['If the return lists an entry whose severity is', 'BLOCKER', 'WARNING', '`## ISSUES FOUND`', 'step 12'], 'control: step 11 reads the PASSED body (#5578)');
     const checker = watchCallOf(sectionOf(readPlanPhase(), CHECKER_SECTION));
     assert.ok(checker.markers.includes('## VERIFICATION PASSED'), 'control: the checker watch passes the PASSED marker');
     const failClosed = blockAt(readStallHelpersDoc(), 'fails closed:');
     assert.ok(failClosed.includes('`## VERIFICATION PASSED`'), '## VERIFICATION PASSED is in the fail-closed list');
-    inOrder(failClosed, ['`## VERIFICATION PASSED`', 'step 13', '11a'], 'a body-less PASSED never proceeds to step 13 on the receipt alone');
-    inOrder(step11, ['`marker_received` + `## VERIFICATION PASSED`', 'step 13', '11a'], 'step 11 itself points a body-less PASSED at 11a');
+    inOrder(failClosed, ['`## VERIFICATION PASSED`', 'never proceeds to', 'step 13', '11a'], 'a body-less PASSED never proceeds to step 13 on the receipt alone');
+    inOrder(passedLine, ['proceed to step 13', '(receipt only, no body by the next cycle: 11a)'], 'step 11 itself points a body-less PASSED at 11a');
   });
 
   // The helpers send a body-less receipt-routed PASSED or ISSUES FOUND to 11a "and offer Retry
@@ -1655,7 +1663,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('11a covers a receipt-routed checker marker whose body never arrived: names the marker, Retry before Accept', () => {
     const detail = readFileNormalized(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md'));
     const s11a = sectionOf(detail, ['## § 11a', '## § 11 thinking-partner']);
-    inOrder(lineWith(s11a, 'Fires when'), ['Fires when', 'return receipt', 'next cycle'], '11a\'s trigger covers a receipt-routed marker with no body');
+    inOrder(lineAfter(s11a, 'Fires when'), ['return receipt', 'has not arrived by', 'next cycle'], '11a\'s trigger covers a receipt-routed marker with no body');
     const at = s11a.indexOf('a marker arrived on the receipt without its body');
     assert.notEqual(at, -1, '11a has a case for a marker that arrived on the receipt without its body');
     const receiptCase = s11a.slice(at, s11a.indexOf('**If `DISK_PLANS`', at));
@@ -1682,7 +1690,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.match(tools, /\bBash\b/, 'the checker holds Bash, which writes the receipt');
     const rule = blockAt(checker, '**Return receipt (#5182):**');
     assert.ok(rule.includes("printf '%s\\n' '## ISSUES FOUND' > 'PATH'"), 'the receipt is written with one Bash printf');
-    assert.ok(rule.includes('<return_receipt>PATH</return_receipt>'), 'the rule is keyed on the prompt receipt line');
+    inOrder(rule, ['<return_receipt>PATH</return_receipt>', 'refused', 'in your return'], 'a refused receipt write is noted in the return, never fatal');
     assert.ok(!rule.includes('Write tool'), 'the rule no longer names the Write tool');
     // The limit must hold on spawns that send no receipt (quick, quick-batch, import), so it
     // also lives in <anti_patterns>, outside the receipt-conditional rule.
@@ -2135,8 +2143,13 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       const para = rulePara(section);
       const call = para.search(/gsd_stall_watch\s+"\$TS"\s+"\{receipt\}"/);
       assert.notEqual(call, -1, `${label}: the rule paragraph holds the watch call`);
-      inOrder(para.slice(call), ['stalled', 'Retry', 'rm -f "{receipt}"'],
+      // The site's own cleanup clause, after its watch call and outside any menu item: it must be
+      // its own clause, so success, conflict, stalled, Retry and Stop all reach it.
+      const tail = para.slice(call);
+      inOrder(tail, ['after routing any result', '(stalled/Retry too)', '`rm -f "{receipt}"`'],
         `${label}: the watch rule must end with the receipt cleanup for every route`);
+      assert.ok(tail.includes('; after routing any result (stalled/Retry too): `rm -f "{receipt}"`'),
+        `${label}: the cleanup clause must be its own ;-separated clause, not part of a menu item`);
       ran += 1;
     }
     assert.equal(ran, 5);
@@ -2145,7 +2158,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('helpers doc: a site with no receipt and no fresh artifact can only end stalled at the threshold', () => {
     const doc = readStallHelpersDoc();
     const limit = blockAt(doc, '**Known limit, no receipt and no fresh artifact:**');
-    inOrder(limit, ['checker', 'no receipt', '`PLAN.md`', '`stalled`'], 'the no-receipt limit names the checker, the planner PLAN.md and stalled');
+    inOrder(limit, ['checker', 'no receipt', 'first `PLAN.md`', '`stalled` at the threshold'], 'the no-receipt limit names the checker, the planner PLAN.md and stalled at the threshold');
+    inOrder(blockAt(doc, '**Known limit, kimi-code:**'), ['`plan`', '`explore`', 'no receipt', '`stalled` at the threshold'], 'the kimi-code limit stays pinned');
   });
 
   // gsd_receipt_path fails closed (rc=1, no output); the orchestrator must know what to
@@ -2153,7 +2167,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('a refused receipt (gsd_receipt_path rc=1) drops the prompt line and watches with an empty receipt', (t) => {
     const f = fixture(t);
     const doc = readStallHelpersDoc();
-    inOrder(blockAt(doc, 'If `gsd_receipt_path` prints nothing'), ['If `gsd_receipt_path` prints nothing', '`<return_receipt>`', '`""`'],
+    inOrder(blockAt(doc, 'If `gsd_receipt_path` prints nothing'), ['omit the `<return_receipt>` line', 'pass `""`', "watch's second argument"],
       'the helpers doc states the binding for a refused receipt');
     const checker = watchCallOf(sectionOf(readPlanPhase(), CHECKER_SECTION));
     assert.equal(watch(NOW, '', f.noPlans, checker.markers), 'waiting', 'an empty receipt is no return');
