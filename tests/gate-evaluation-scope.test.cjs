@@ -255,6 +255,9 @@ function gitReporting(version) {
   return { runner, calls };
 }
 
+/** The call of `subjectsOccurOnHead` that lists HEAD's history: the only one that names HEAD. */
+const isHeadListing = (args) => args.includes('HEAD');
+
 /** Wrap a runner: `onCall(args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
 function intercept(runner, onCall) {
   return (args, opts) => onCall(args, () => runner(args, opts), opts);
@@ -1623,7 +1626,8 @@ describe('subjectsOccurOnHead (#5354)', () => {
     repo.git('reset', '--hard', base);
     const seen = [];
     subjectsOccurOnHead(repo.dir, [a], intercept(gitReporting('2.37.0').runner, (args, run, opts) => { seen.push({ args, opts }); return run(); }));
-    const [listing, ...lookups] = [seen.find((call) => call.args.includes('HEAD')), ...seen.filter((call) => !call.args.includes('HEAD'))];
+    const listing = seen.find((call) => isHeadListing(call.args));
+    const lookups = seen.filter((call) => call !== listing);
     assert.equal(lookups.some((call) => 'maxBuffer' in call.opts), false, 'the id lookups keep the default cap');
     assert.ok(listing.args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
     assert.equal(listing.opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
@@ -1652,7 +1656,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const garble = (record) => record.split('\x1f').slice(0, 3).concat('x').join('\x1f');
     const garbled = intercept(gitReporting('2.36.9').runner, (args, run) => {
       const result = run();
-      return args.includes('HEAD') ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
+      return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
     });
     assert.equal(subjectsOccurOnHead(repo.dir, [a], garbled), null);
   });
@@ -1719,7 +1723,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', [])), subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', [])), 'both gits give one answer');
     const current = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
-    assert.ok(current.find((args) => args.includes('HEAD')).includes(`--since-as-filter=@${T}`));
+    assert.ok(current.find(isHeadListing).includes(`--since-as-filter=@${T}`));
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
@@ -1746,7 +1750,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     repo.git('reset', '--hard', base);
     // The HEAD listing is the call that names HEAD: a failed git reads as exit 1, a hang as a timeout.
-    const failing = (listing, version) => intercept(gitReporting(version).runner, (args, run) => (args.includes('HEAD') ? listing : run()));
+    const failing = (listing, version) => intercept(gitReporting(version).runner, (args, run) => (isHeadListing(args) ? listing : run()));
     const failed = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
     // On a git before 2.37 the listing is the whole history, so the timeout is what limits that read.
     for (const version of ['2.37.0', '2.36.9']) {
