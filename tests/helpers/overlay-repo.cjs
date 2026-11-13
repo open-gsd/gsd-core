@@ -224,14 +224,29 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
   const skipped = [];
 
   function place(srcDir, destDir, pending, isTop) {
-    fs.mkdirSync(destDir, { recursive: true });
     const grouped = new Map();
     for (const e of pending) {
       const [head, ...rest] = e.parts;
       if (!grouped.has(head)) grouped.set(head, []);
       grouped.get(head).push({ parts: rest, content: e.content });
     }
-    for (const de of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    // Same TOCTOU window as the stat below, one level down: a directory listed by
+    // its parent can be retired (a sibling test's temp dir inside the walked tree)
+    // before this recursion reads it. The root itself must exist, and a directory
+    // that a caller's override targets must not vanish silently, so only a nested
+    // directory with no pending override is skipped, and it is reported (#5848).
+    let dirents;
+    try {
+      dirents = fs.readdirSync(srcDir, { withFileTypes: true });
+    } catch (err) {
+      if (!isTop && pending.length === 0 && isMissingPath(err)) {
+        skipped.push(srcDir);
+        return;
+      }
+      throw err;
+    }
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const de of dirents) {
       if (isTop && OVERLAY_SKIP_TOP.has(de.name)) {
         fs.symlinkSync(path.join(srcDir, de.name), path.join(destDir, de.name));
         continue;
@@ -284,7 +299,17 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
     }
   }
 
-  place(root, tmpRepo, entries, true);
+  try {
+    place(root, tmpRepo, entries, true);
+  } catch (err) {
+    // The caller never receives tmpRepo when the walk throws, so nothing else can remove it.
+    try {
+      fs.rmSync(tmpRepo, { recursive: true, force: true });
+    } catch {
+      // best-effort: the walk error below is the one worth reporting
+    }
+    throw err;
+  }
 
   if (skipped.length > 0) {
     // Not thrown: a source that left the tree mid-walk is genuinely not part of
@@ -293,7 +318,7 @@ function buildOverlayRepo(fileOverrides, opts = {}) {
     // surface later as a confusing "file missing" in an unrelated assertion, or
     // as nothing at all for a test that never touches it.
     warn(
-      `buildOverlayRepo: ${skipped.length} source file(s) vanished mid-walk and were ` +
+      `buildOverlayRepo: ${skipped.length} source path(s) vanished mid-walk and were ` +
       `omitted from the overlay (likely a concurrent atomic replace, e.g. hooks/dist — ` +
       `run \`npm run build:hooks\` to regenerate it):\n  ` +
       skipped.join('\n  '),
