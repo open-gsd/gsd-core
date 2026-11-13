@@ -1619,10 +1619,10 @@ describe('subjectsOccurOnHead (#5354)', () => {
     repo.git('reset', '--hard', base);
     const seen = [];
     subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push({ args, opts }); return execGit(args, opts); });
-    assert.equal(seen.length, 2);
-    assert.equal('maxBuffer' in seen[0].opts, false, 'the id lookup keeps the default cap');
-    assert.ok(seen[1].args.includes(`--max-age=${T}`), 'the listing starts at the oldest id');
-    assert.equal(seen[1].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
+    assert.equal(seen.length, 3);
+    assert.equal('maxBuffer' in seen[0].opts || 'maxBuffer' in seen[1].opts, false, 'the id lookups keep the default cap');
+    assert.ok(seen[2].args.includes(`--max-age=${T}`), 'the listing starts at the oldest id');
+    assert.equal(seen[2].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
   });
 
   test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are', () => {
@@ -1634,6 +1634,16 @@ describe('subjectsOccurOnHead (#5354)', () => {
       commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T + offset }, 'twin\n');
       assert.equal(subjectsOccurOnHead(repo.dir, [a]), expected, `twin at limit${offset}`);
     }
+  });
+
+  test('[boundary] a kept twin under a child dated before the window is not seen (git drops the parents of a too-old commit)', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), false);
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
@@ -1659,11 +1669,11 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const base = repo.git('rev-parse', 'HEAD');
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     repo.git('reset', '--hard', base);
-    // The second call is the HEAD listing: an overflow reads as exit 1 (spawnSync ENOBUFS), a hang as a timeout.
-    const failing = (second) => { let n = 0; return (args, opts) => (++n === 2 ? second : execGit(args, opts)); };
-    const overflow = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(overflow)), null);
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...overflow, exitCode: 1, timedOut: true })), null);
+    // The third call is the HEAD listing: a failed git reads as exit 1, a hang as a timeout.
+    const failing = (third) => { let n = 0; return (args, opts) => (++n === 3 ? third : execGit(args, opts)); };
+    const failed = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(failed)), null);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...failed, timedOut: true })), null);
   });
 
   test('[negative] an id named like a working-tree file is read as a revision', () => {
