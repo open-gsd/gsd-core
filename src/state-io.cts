@@ -23,11 +23,12 @@
  * one trailing newline, and normalizes spacing where the write changed the
  * document (#5165; a new file is normalized whole), so those bytes are the
  * seam's, not the caller's. An existing STATE.md that is not a regular file
- * (a symlink, live or dangling, a FIFO or a device) is refused with an ENXIO
- * error under the lock and nothing is written (refuseNonRegularStateMd). A
- * path whose directory is missing or is not a directory fails at once with
- * ENOENT or ENOTDIR, and a path ending in a separator with EISDIR, before any
- * lock is attempted (refuseUnwritableStateMdPath).
+ * with a single name (a symlink, live or dangling, a FIFO, a device, a socket,
+ * a directory, or a hard link) is refused with an ENXIO error under the lock
+ * and nothing is written (refuseNonRegularStateMd). A path whose directory is
+ * missing or is not a directory fails at once with ENOENT or ENOTDIR, and a
+ * path ending in a separator with EISDIR, before any lock is attempted
+ * (refuseUnwritableStateMdPath).
  * It is an exact-content write under the lock: it runs no sync or
  * preservation pipeline, so it sits outside ADR-3408 section 8.3's closed
  * exception list (the maintainer's call, recorded in the #5120 PR). The

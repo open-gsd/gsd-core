@@ -193,11 +193,13 @@ no sync or preservation pipeline runs. A STATE.md held by another live writer
 makes the write wait for the lock (up to 30 seconds), and the server answers
 no other request while it waits, since each tool call is handled
 synchronously; a lock that cannot be taken returns a tool error and writes
-nothing. An existing `STATE.md` that
-is not a regular file (a symlink, live or dangling, a FIFO or a device) is
-refused with a tool error and nothing is written, neither the link's target
-nor the link itself, where the raw write used to write through it. Every
-other `path` is written exactly as given.
+nothing. An existing `STATE.md` that is not a regular file with a single
+name (a symlink, live or dangling, a FIFO, a device, a socket, a directory,
+or a hard link) is refused with a tool error and nothing is written, neither
+through it nor over it, where the raw write used to write through it. A
+`STATE.md` path whose directory is missing or is not a directory, or that
+ends in a path separator, returns a tool error at once, before any lock
+wait. Every other `path` is written exactly as given.
 
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.
