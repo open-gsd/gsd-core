@@ -2761,7 +2761,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       // The shipped declarations: the regexes, the mode's projections and the ref names.
       extractBashBlockContaining(workflowText, TRANSIENT_DIRS_MARKER),
       extractBashBlockContaining(workflowText, FILTER_PATHS_MARKER),
-      ...extractDeclarationLines(workflowText, PRECONDITIONS_MARKER, ['refkey() {', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
+      ...extractDeclarationLines(workflowText, PRECONDITIONS_MARKER, ['shq() {', 'refkey() {', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
       'echo "PENDING_REF=$PENDING_REF"',
       extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',

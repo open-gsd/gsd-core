@@ -1185,9 +1185,13 @@ describe('#5469 pr-branch published marker (real git)', () => {
     mergePr(dir);
     git(dir, 'update-ref', 'refs/gsd/pr-published', 'main');
     commitRound(dir, 2, 'two.txt');
+    const pendingRef = 'refs/gsd/pr-built/strict/main/feature';
+    const before = refOf(dir, pendingRef);
+    assert.notEqual(before, '', 'round 1 left a pending build');
     const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-published\/strict\/main\/feature/);
+    assert.equal(refOf(dir, pendingRef), before, 'the unpromoted pending build is kept, not overwritten by the new build');
   });
 
   // The pending write fails the same way; the run warns and records no pending ref.

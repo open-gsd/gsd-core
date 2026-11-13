@@ -331,7 +331,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
      *   prbranch: checked out from main (or from main + a conflicting extra
      *            commit on main, when conflict is true).
      */
-    function buildFixture({ noPlanning = false, conflict = false, planningOnlySecondCommit = false } = {}) {
+    function buildFixture({ noPlanning = false, conflict = false, planningOnlySecondCommit = false, configOnlySecondCommit = false } = {}) {
       const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-')));
       initRepo(dir);
       writeFile(dir, 'code.txt', 'line1\n');
@@ -348,7 +348,10 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       writeFile(dir, '.planning/phases/new.md', 'new plan v1\n');
       commitAll(dir, 'feat: c1');
 
-      if (planningOnlySecondCommit) {
+      if (configOnlySecondCommit) {
+        writeFile(dir, '.planning/config.json', '{}\n'); // neither transient nor structural: the loop never filters it
+        commitAll(dir, 'docs: c2 config-only');
+      } else if (planningOnlySecondCommit) {
         writeFile(dir, '.planning/phases/new.md', 'new plan v2\n');
         commitAll(dir, 'docs: c2 planning-only');
       } else {
@@ -472,13 +475,13 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       }
     });
 
-    test('22b: the shipped pick list keeps a transient-only planning commit out of the loop', (t) => {
+    test('22b: the shipped pick list keeps a config.json-only planning commit out of the loop', (t) => {
       t.after(teardown);
-      const dir = buildFixture({ planningOnlySecondCommit: true });
+      const dir = buildFixture({ configOnlySecondCommit: true });
       const result = runFilterLoop(dir, { strict: false, transientDirs: currentTransientDirs(), shippedPickList: true });
       assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
       const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
-      assert.strictEqual(count, 1, 'only c1 lands; the planning-only c2 is not picked');
+      assert.strictEqual(count, 1, 'only c1 lands; the config-only c2 is not picked');
     });
 
     test('23: default end-to-end — diff carries code + STATE.md, nothing forbidden-default', () => {
