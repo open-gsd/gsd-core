@@ -241,15 +241,22 @@ function toPosixRel(rel) {
  * result stay correct against the original file. Block comments are tracked
  * across lines (`inBlock`); line comments only ever affect their own line.
  *
- * Deliberately does NOT parse string/template literal contents — a `//` or
- * `/*` embedded inside a quoted string is treated exactly like real source,
- * which can occasionally UNDER-strip (leaving a would-be-comment's text
- * live) but never OVER-strips real code into invisibility. Per this guard's
- * header and `lint-state-field-drift.cjs`'s own precedent: over-reporting a
- * documentation paragraph that merely DESCRIBES a call (ADR-3180 Amendment
- * 3's exact false positive) is the failure this exists to prevent; a rare
- * miss on an adversarial one-line string is an accepted, narrower risk in
- * the opposite (safe) direction — under-reporting, never over-reporting.
+ * Deliberately does NOT parse string/template literal contents: a `//` or
+ * `/*` embedded inside a quoted string is treated exactly like real source.
+ * That cuts both ways. A `//` in a string leaves the rest of THAT line out of
+ * the scan. A `/*` in a string or template literal (a glob such as
+ * `` `${dir}/*-PLAN.md` ``) opens a phantom block comment that blanks EVERY
+ * following line until the next block-comment closer, however many lines that
+ * is, so it can over-strip real code into invisibility, including a raw
+ * STATE.md write. A real instance: `src/git-base-branch.cts:479` blanks
+ * through line 511 (the next closer is on line 512); no raw write sits in
+ * that span, so the guard's zero is unaffected today. The header's
+ * known-miss list in `findRawStateWrites` records this shape, a test row pins
+ * it, and the syntax-tree follow-up (#5279) is what closes it. The trade this
+ * function makes is the opposite one: over-reporting a documentation
+ * paragraph that merely DESCRIBES a call (ADR-3180 Amendment 3's exact false
+ * positive) is the failure it exists to prevent, per this guard's header and
+ * `lint-state-field-drift.cjs`'s own precedent.
  */
 function stripComments(text) {
   const lines = text.split('\n');
@@ -1192,17 +1199,26 @@ function boundaryAfterLine(write, index) {
  *     alias or destructured `writeFileSync`), and a call after a `//` inside a
  *     string or regex literal on its line (`stripComments` does not track
  *     them).
- *   - A block-comment opener inside a string or regex literal (a glob such
- *     as `const G = 'src/<star>';`, written slash then star): `stripComments`
- *     opens a block comment there and blanks EVERY following line until a
- *     closer appears, so the rest of the file goes unscanned, not one line.
- *   - A braceless conditional reassignment (`if (c) p = 'x';` after
+ *   - A block-comment opener inside a string or template literal (a glob
+ *     such as `const G = 'src/<star>';`, written slash then star):
+ *     `stripComments` opens a block comment there and blanks EVERY following
+ *     line up to the next block-comment closer, wherever that is (even inside
+ *     another string). Scanning resumes after that line; the rest of the file
+ *     goes unscanned only when no closer follows. Real instance with no raw
+ *     write in its span: `src/git-base-branch.cts:479-511`.
+ *   - A braceless conditional or loop-body reassignment (`if (c) p = 'x';`,
+ *     `else p = 'y';`, `for (const x of xs) p = x;`, each after
  *     `p = path.join(dir, 'STATE.md')`): the walk back from the write stops
  *     at the reassignment, whose right-hand side has no boundary, so the
- *     earlier STATE.md assignment is never read. The braced form is reported.
- *   - A regex literal in the first argument (`x.replace(/\)/g, '') +
- *     statePath`): `captureFirstArg` tracks quotes and brackets, not regex
- *     literals, so the `)` inside the literal ends the argument early.
+ *     earlier STATE.md assignment is never read. The braced forms
+ *     (`if (c) { p = 'x'; }`) are reported, each with a control row.
+ *   - A regex literal in the first argument holding a `)`
+ *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
+ *     and brackets, not regex literals. The `)` in the literal pops the depth
+ *     opened by `.replace(`, so the next top-level `,` ends the captured
+ *     argument at `x.replace(/\)/g`, before `statePath`. With no open paren
+ *     before the literal (`fs.writeFileSync(/\)/.test(x) ? statePath : y,
+ *     c)`) the `)` itself ends the capture at depth 0.
  *   - A member target assigned in the same function (`o.p = path.join(dir,
  *     'STATE.md'); fs.writeFileSync(o.p, c);`): `identifiersIn` drops the
  *     name after the dot and `o` has no assignment.

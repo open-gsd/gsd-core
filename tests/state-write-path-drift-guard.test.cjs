@@ -1515,6 +1515,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
 
   // The axis matches only the literal text `fs.writeFileSync(`, over
   // `stripComments` output, which does not track strings or regex literals.
+  // The /* row is here because stripComments blanks the lines the call sits on.
   const KNOWN_MATCH_GAPS = [
     {
       shape: 'wrapped call after a string holding //',
@@ -1535,26 +1536,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [2],
     },
     {
-      shape: 'a /* inside a string literal blinds every later line of the file',
+      shape: 'a /* inside a string literal blinds every later line up to the next block-comment closer',
       text: ["const G = 'src/*';", 'function w(statePath, c) {', '  fs.writeFileSync(statePath, c);', '}'].join('\n'),
-      expected: [3],
-      currentBuggyOutput: [],
-    },
-    {
-      shape: 'a braceless conditional reassignment hides the earlier STATE.md assignment',
-      text: ['function w(dir, c) {', "  let p = path.join(dir, 'STATE.md');", "  if (c) p = 'x';", '  fs.writeFileSync(p, c);', '}'].join('\n'),
-      expected: [4],
-      currentBuggyOutput: [],
-    },
-    {
-      shape: 'a regex literal holding ) in the first argument desyncs the argument capture',
-      text: ['function w(c) {', "  fs.writeFileSync(x.replace(/\\)/g, '') + statePath, c);", '}'].join('\n'),
-      expected: [2],
-      currentBuggyOutput: [],
-    },
-    {
-      shape: 'a member target assigned in the same function',
-      text: ['function w(o, dir, c) {', "  o.p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(o.p, c);', '}'].join('\n'),
       expected: [3],
       currentBuggyOutput: [],
     },
@@ -1567,6 +1550,68 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     ].map(([shape, body]) => ({ shape, text: W(body), expected: [2], currentBuggyOutput: [] })),
   ];
   gapLoop(KNOWN_MATCH_GAPS, 'call match');
+
+  // Target resolution and argument capture (not call matching): the call is
+  // found, but the variable or argument text that names STATE.md is not read.
+  // Each row has a paired positive control in the next test.
+  const ASSIGN = "  let p = path.join(dir, 'STATE.md');";
+  const WRITE_P = '  fs.writeFileSync(p, c);';
+  const KNOWN_RESOLUTION_GAPS = [
+    {
+      shape: 'a braceless if reassignment hides the earlier STATE.md assignment',
+      text: W(ASSIGN, "  if (c) p = 'x';", WRITE_P),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a braceless else reassignment hides the earlier STATE.md assignment',
+      text: W(ASSIGN, '  if (c) {', '  }', "  else p = 'y';", WRITE_P),
+      expected: [6],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a braceless for-body reassignment hides the earlier STATE.md assignment',
+      text: W(ASSIGN, '  for (const x of xs) p = x;', WRITE_P),
+      expected: [4],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a regex literal holding ) in the first argument ends the capture early (after the next comma)',
+      text: W("  fs.writeFileSync(x.replace(/\\)/g, '') + statePath, c);"),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a regex literal holding ) at depth 0 ends the capture at the )',
+      text: W('  fs.writeFileSync(/\\)/.test(x) ? statePath : y, c);'),
+      expected: [2],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a member target assigned in the same function',
+      text: W("  o.p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(o.p, c);'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+  ];
+  gapLoop(KNOWN_RESOLUTION_GAPS, 'target resolution');
+
+  test('controls: each known-gap shape is reported once the missed feature is removed', () => {
+    const controls = [
+      ['block-comment opener removed from the string', "const G = 'src/';\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [3]],
+      ['/* in a string, closed by a later block-comment closer in a string', "const G = 'src/*';\nconst H = 'a*/b';\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [4]],
+      ['braced if reassignment', W(ASSIGN, "  if (c) { p = 'x'; }", WRITE_P), [4]],
+      ['braced else reassignment', W(ASSIGN, '  if (c) {', '  }', "  else { p = 'y'; }", WRITE_P), [6]],
+      ['braced for-body reassignment', W(ASSIGN, '  for (const x of xs) { p = x; }', WRITE_P), [4]],
+      ['no reassignment', W(ASSIGN, WRITE_P), [3]],
+      ['regex without a ) in the first argument', W("  fs.writeFileSync(x.replace(/a/g, '') + statePath, c);"), [2]],
+      ['regex without a ) at depth 0', W('  fs.writeFileSync(/a/.test(x) ? statePath : y, c);'), [2]],
+      ['plain variable target instead of a member', W("  const p = path.join(dir, 'STATE.md');", '  fs.writeFileSync(p, c);'), [3]],
+    ];
+    for (const [name, text, expected] of controls) {
+      assert.deepStrictEqual(lines(text), expected, name);
+    }
+  });
 
   // Names a generated identifier must not take: JS/TS reserved and keyword-like
   // words, and the names the fixture already uses.
