@@ -65,13 +65,16 @@ function makeRepo({ deferScaffold = false } = {}) {
   return { dir, git, scaffold };
 }
 
-/** Commit one real file; returns the full sha. */
-function commit(repo, rel, message, content = `${rel}\n`) {
+/** Commit one real file (`env` adds git environment such as the author and committer dates); returns the full sha. */
+function commit(repo, rel, message, content = `${rel}\n`, env = {}) {
   write(repo.dir, rel, content);
   repo.git('add', rel);
-  repo.git('commit', '-m', message);
+  gitOrThrow(['commit', '-m', message], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, ...env } });
   return repo.git('rev-parse', 'HEAD');
 }
+
+/** Unix-second author and committer dates as git environment (a rewrite keeps the author time and moves the committer time). */
+const datesAt = (author, committer = author) => ({ GIT_AUTHOR_DATE: `@${author} +0000`, GIT_COMMITTER_DATE: `@${committer} +0000` });
 
 /** Write a SUMMARY whose `## Task Commits` rows name `shas`, and commit it. */
 function summarize(repo, shas, name = '03-01-SUMMARY.md') {
@@ -1595,12 +1598,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
   });
 
   /** Commit with explicit author and committer unix times (a rewrite keeps the author time and moves the committer time). */
-  const commitDated = (repo, rel, message, { author, committer = author }, content = `${rel}\n`) => {
-    write(repo.dir, rel, content);
-    repo.git('add', rel);
-    gitOrThrow(['commit', '-m', message], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, GIT_AUTHOR_DATE: `@${author} +0000`, GIT_COMMITTER_DATE: `@${committer} +0000` } });
-    return repo.git('rev-parse', 'HEAD');
-  };
+  const commitDated = (repo, rel, message, { author, committer = author }, content = `${rel}\n`) => commit(repo, rel, message, content, datesAt(author, committer));
   const T = 1_800_000_000;
 
   test('[negative] a history larger than the default runner buffer still answers', () => {
@@ -1736,7 +1734,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
   test('[negative] an amend keeps the author time and moves the committer time forward: still counts', () => {
     const repo = makeRepo();
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
-    gitOrThrow(['commit', '--amend', '--no-edit', '-m', 'feat(03-01): a'], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, GIT_COMMITTER_DATE: `@${T + 3600} +0000` } });
+    gitOrThrow(['commit', '--amend', '--no-edit', '-m', 'feat(03-01): a'], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, GIT_COMMITTER_DATE: datesAt(T, T + 3600).GIT_COMMITTER_DATE } });
     assert.notEqual(repo.git('rev-parse', 'HEAD'), a, 'the amend made a new commit');
     assert.equal(repo.git('log', '-1', '--format=%at%x20%ct'), `${T} ${T + 3600}`);
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);

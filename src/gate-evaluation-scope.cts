@@ -446,7 +446,7 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   try {
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
-    const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
+    const named = parseLog(git(['log', '--no-walk=unsorted', logFormat('none'), ...ids, '--']), false);
     // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
     // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
     // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
@@ -458,14 +458,8 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
     // test: the failing fourth call) and the same window is applied here, on the committer time each record ends with.
     const filtered = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT);
-    const listing = git(['log', logFormat(false, true), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
-    const inWindow = listing.split('\x1e').filter((record) => {
-      if (filtered || record.trim() === '') return true;
-      const time = recordCommitTime(record, false);
-      if (time === null) throw new ScopeUnreadable('git-malformed:log');
-      return time >= since;
-    });
-    const onHead = new Set(parseLog(inWindow.join('\x1e'), false).map((c) => c.subject));
+    const listing = git(['log', logFormat('time'), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
+    const onHead = new Set(parseLog(listing, false, undefined, filtered ? undefined : since).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
@@ -909,28 +903,33 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
 }
 
 /**
- * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup;
- * `withCommitTime` closes each record with `%ct` (read it back with `recordCommitTime`).
+ * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. The fourth
+ * field is the body (`body`) or the committer time (`time`, read by `parseLog`'s `since`), never both.
  */
-function logFormat(withBody: boolean, withCommitTime = false): string {
-  return `--format=%H%x1f%P%x1f%s${withBody ? '%x1f%b' : ''}${withCommitTime ? '%x1f%ct' : ''}%x1e`;
-}
-
-/** The `%ct` of one record of a `logFormat(withBody, true)` listing; null when the field is not all digits. */
-function recordCommitTime(record: string, withBody: boolean): number | null {
-  return unixSeconds(record.split('\x1f')[withBody ? 4 : 3]);
+function logFormat(fourth: 'none' | 'body' | 'time'): string {
+  const field = { none: '', body: '%x1f%b', time: '%x1f%ct' }[fourth];
+  return `--format=%H%x1f%P%x1f%s${field}%x1e`;
 }
 
 /** Parent shas by commit sha, as read from the logs that listed the commits. */
 type ParentMap = Map<string, string[]>;
 
-function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): ScopeCommit[] {
+/**
+ * With `since`, the listing came from `logFormat('time')`: a record committed before `since` is skipped, and a
+ * record without a numeric time is no answer (`ScopeUnreadable`).
+ */
+function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap, since?: number): ScopeCommit[] {
   const commits: ScopeCommit[] = [];
   for (const record of out.split('\x1e')) {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
     const [sha, parents, subject, body] = trimmed.split('\x1f');
     if (!isFullSha(sha)) continue;
+    if (since !== undefined) {
+      const time = unixSeconds(body);
+      if (time === null) throw new ScopeUnreadable('git-malformed:log');
+      if (time < since) continue;
+    }
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
     if (withBody) commit.body = (body ?? '').trim();
     commits.push(commit);
@@ -942,7 +941,7 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): Scope
 function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
+    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody ? 'body' : 'none'), ...group]), withBody, parentsOut));
   }
   return out;
 }
@@ -1188,7 +1187,7 @@ function resolvePhase(
   scope.source = 'phase-range';
   const max = clampMaxCommits(options.maxCommits);
   scope.commits = parseLog(
-    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max)]),
+    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true ? 'body' : 'none'), '-n', String(max)]),
     options.includeBody === true,
   );
   finalizeFiles(scope, repoRoot, rangeFiles(git, scope.rangeBase, ref));
@@ -1240,7 +1239,7 @@ function lookupSubjectCommits(
     sinceArgs.push(`--since=${options.committedSince}`);
   }
   const out = git(
-    ['log', range, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
+    ['log', range, logFormat(withBody ? 'body' : 'none'), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
   const parentsOf: ParentMap = new Map();
