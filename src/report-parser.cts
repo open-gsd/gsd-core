@@ -1,6 +1,7 @@
 /** Format adapters for RED evidence. Parsing never depends on the runner command. */
 import { Parser, type FinalResults, type Result } from './vendor/tap-parser.cjs';
 import { SaxesParser } from './vendor/saxes.cjs';
+import { load as yamlLoad, YAMLException, FAILSAFE_SCHEMA } from './vendor/js-yaml.cjs';
 
 export const ReportFormat = {
   Tap: 'tap', Junit: 'junit', SwiftTesting: 'swift-testing', Unittest: 'unittest', GoTest: 'go-test', Unknown: 'unknown',
@@ -57,11 +58,145 @@ interface TestReportAdapter {
   parse(output: string): TestReport;
 }
 
+/** The interruption signals a diagnostic block can carry; both the parsed and the #5819 recovered path refuse them. */
+const INTERRUPTING_FAILURE_TYPES = ['cancelledByParent', 'hookFailed', 'testTimeoutFailure'];
+const INTERRUPTION_ISSUE = 'Test run interrupted by cancellation, hook failure, or timeout';
+
+/** Thrown from inside the js-yaml `listener` callback; never surfaces past `recoverDuplicateKeyDiagnostic`. */
+class AnchorDetectedSignal extends Error {}
+
+/**
+ * Decode every top-level mapping write of a diagnostic-block body as (key, value)
+ * pairs, one per segment (#5819 review: key identity is decided by the YAML parser,
+ * never by scanning text; the re-review added that gate-relevant VALUES are judged
+ * per write too, not on the last-wins merge). The body is split into one segment per
+ * top-level key line — the key line at the block's base indent plus every deeper line
+ * belonging to it (values, block scalars, nested maps, explicit-key `: value` lines,
+ * quoted-key continuations) — and each segment is parsed on its own: STRICTLY first
+ * (a segment that only parses with the duplicate-key relaxation — a flow mapping whose
+ * repeated entries collapse to one distinct key, a nested duplicate — carries more
+ * entries than distinct keys and the whole block is refused), then with the tolerant,
+ * anchor-refusing options; the single distinct key of the result IS the decoded key and
+ * its value the decoded value. Spellings a text scan misses — `"\U00000066ailureType"`,
+ * an explicit `? failureType # c` — decode identically here, and `failureType:` inside
+ * a VALUE stays a value. Anything that is not a clean block mapping of single-key
+ * segments — a flow-mapping body, a scalar body, a segment that does not parse, content
+ * shallower than the base indent, a document marker — returns null: a key set the
+ * recovery cannot derive from the parse is an ambiguity it fails closed on.
+ */
+function decodedKeyWrites(body: string, parseSegment: (segment: string) => unknown): Array<{ key: string; value: unknown }> | null {
+  const segments: string[][] = [];
+  let base: number | null = null;
+  for (const line of body.split('\n')) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) {
+      if (segments.length > 0) segments[segments.length - 1].push(line);
+      continue;
+    }
+    const indent = line.length - line.trimStart().length;
+    if (base === null) base = indent;
+    if (indent < base) return null;
+    if (indent === base) {
+      if (/^(?:---|\.\.\.)\s*$/.test(line.trim())) return null;
+      segments.push([line]);
+    } else if (segments.length > 0) {
+      segments[segments.length - 1].push(line);
+    } else {
+      return null;
+    }
+  }
+  const writes: Array<{ key: string; value: unknown }> = [];
+  for (const segment of segments) {
+    let parsed: unknown;
+    try {
+      parsed = parseSegment(`${segment.join('\n')}\n`);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const entries = Object.entries(parsed);
+    if (entries.length !== 1) return null;
+    writes.push({ key: entries[0][0], value: entries[0][1] });
+  }
+  return writes;
+}
+
+/**
+ * #5819: node:test repeats `error` and `stack` in the diagnostic block of a failed
+ * `assert.throws`/`assert.rejects` RegExp assertion, and the vendored tap-parser's YAML
+ * rejects duplicate mapping keys, so the whole block comes back as non-TAP data (an
+ * `extra` event plus a strict-mode `tapError` failure) and a genuine RED is refused.
+ * A block whose ONLY defect is repeated keys is recovered here: a last-key-wins parse
+ * (`json: true`) succeeds exactly where a strict parse fails with `duplicated mapping key`.
+ * Everything else stays non-TAP data — any other YAML error, anchors/aliases (refused from
+ * inside the parse listener, ADR-3473 §8.1 posture), a block truncated before its closing
+ * `...` line (tap-parser emits those without the closer), and a block whose repeated key is
+ * `failureType` itself: the interruption signal must stay unambiguous, so it is never
+ * recovered. Returns the recovered mapping, or null when the block is not recoverable.
+ */
+function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> | null {
+  const lines = extra.split('\n');
+  // Framing: `---`, at least one body line, `...` — the shape tap-parser re-emits for a
+  // diagnostic block its YAML refused (emitExtra may indent the whole block by 4 spaces).
+  if (lines.at(-1) !== '' || lines.length < 4) return null;
+  // No lone-CR guard is needed: tap-parser's own line splitter (`/^.*\r?\n/`) stops
+  // `.*` before a mid-line `\r`, so the line never matches and stays buffered — a
+  // block carrying one never reaches this function from its only caller (#5819
+  // re-review; the earlier guard was unreachable dead code and is removed).
+  lines.pop();
+  const openIndent = /^(\s*)---$/.exec(lines[0] ?? '')?.[1];
+  if (openIndent === undefined || /^(\s*)\.\.\.$/.exec(lines.at(-1) ?? '')?.[1] !== openIndent) return null;
+  const body = `${lines.slice(1, -1).join('\n')}\n`;
+  const refuseAnchors = {
+    listener: (_event: string, state: { anchor?: string | null }): void => {
+      if (state.anchor != null) throw new AnchorDetectedSignal();
+    },
+  };
+  let tolerant: unknown;
+  try {
+    tolerant = yamlLoad(body, { json: true, schema: FAILSAFE_SCHEMA, ...refuseAnchors });
+  } catch {
+    return null;
+  }
+  if (typeof tolerant !== 'object' || tolerant === null || Array.isArray(tolerant)) return null;
+  try {
+    yamlLoad(body, { schema: FAILSAFE_SCHEMA, ...refuseAnchors });
+    // Parses strictly without the duplicate-key relaxation: the block did not come back
+    // for duplicate keys, and recovery must not widen acceptance beyond the known defect.
+    return null;
+  } catch (err) {
+    if (!(err instanceof YAMLException) || !/duplicated mapping key/i.test(err.message)) return null;
+  }
+  // Every gate-relevant signal is judged over its WRITES, not the last-wins merge: the
+  // interruption signal must be unambiguous (failureType written at most once), and the
+  // #5721 load-failure signature must not be maskable by writing a benign value over it.
+  // Each write's key and value are decoded by a strict-then-tolerant parse of its own
+  // segment (see decodedKeyWrites); a body whose key set cannot be derived that way —
+  // flow mappings included — is refused whole rather than counted in text.
+  const writes = decodedKeyWrites(body, (segment) => {
+    yamlLoad(segment, { schema: FAILSAFE_SCHEMA, ...refuseAnchors });
+    return yamlLoad(segment, { json: true, schema: FAILSAFE_SCHEMA, ...refuseAnchors });
+  });
+  if (writes === null) return null;
+  // The interruption signal: `failureType` written twice, in any spelling, is ambiguous.
+  if (writes.filter((write) => write.key === 'failureType').length > 1) return null;
+  // #5721: a `not ok N - <file>` diagnostic whose error is 'test failed' with
+  // ERR_TEST_FAILURE asserted nothing — a file that crashed at load is load failure,
+  // never RED. The assert handler flags that signature from the PARSED diagnostic; a
+  // recovered block bypasses that channel (its diag is null), so ANY error write decoding
+  // to 'test failed' together with ANY code write decoding to ERR_TEST_FAILURE refuses
+  // the recovery — a later benign write cannot mask an earlier signature write.
+  const sawLoadFailureError = writes.some((write) => write.key === 'error' && write.value === 'test failed');
+  const sawLoadFailureCode = writes.some((write) => write.key === 'code' && write.value === 'ERR_TEST_FAILURE');
+  if (sawLoadFailureError && sawLoadFailureCode) return null;
+  return tolerant as Record<string, unknown>;
+}
+
 function parseTap(output: string): TestReport {
   const report: TestReport = { format: ReportFormat.Tap, valid: true, tests: [], issues: [] };
   const parser = new Parser({ strict: true });
   const assertions: { result: Result; owner: Parser }[] = [];
   const openBuffered = new Map<Parser, number>();
+  const recoveredBlocks: string[] = [];
   let completed = false;
   const watch = (p: Parser): void => {
     p.on('child', (child: Parser) => {
@@ -77,17 +212,38 @@ function parseTap(output: string): TestReport {
       if (!result.closingTestPoint) assertions.push({ result, owner: p });
       if (result.buffered && !result.closingTestPoint) report.issues.push('Missing buffered TAP subtest');
       const diag = result.diag as Record<string, unknown> | null;
-      if (diag && ['cancelledByParent', 'hookFailed', 'testTimeoutFailure'].includes(String(diag['failureType']))) {
-        report.issues.push('Test run interrupted by cancellation, hook failure, or timeout');
+      if (diag && INTERRUPTING_FAILURE_TYPES.includes(String(diag['failureType']))) {
+        report.issues.push(INTERRUPTION_ISSUE);
       }
     });
-    p.on('extra', (extra: string) => { if (extra.trim()) report.issues.push('Non-TAP data in report'); });
+    p.on('extra', (extra: string) => {
+      if (!extra.trim()) return;
+      const recovered = recoverDuplicateKeyDiagnostic(extra);
+      if (!recovered) {
+        report.issues.push('Non-TAP data in report');
+        return;
+      }
+      // The tolerant path must still apply the interruption check to the block it accepts.
+      if (INTERRUPTING_FAILURE_TYPES.includes(String(recovered['failureType']))) {
+        report.issues.push(INTERRUPTION_ISSUE);
+      }
+      recoveredBlocks.push(extra);
+    });
     p.on('complete', (summary: FinalResults) => {
       if (p === parser) completed = true;
       const { start, end } = summary.plan;
       if (start !== 1 || end === null || summary.count !== end) report.issues.push('Missing or incomplete TAP plan');
       if (summary.bailout) report.issues.push('TAP bailout');
-      if (summary.failures.some((failure) => failure.tapError)) report.issues.push('Malformed TAP');
+      // A recovered block's strict-mode `tapError` failure carries the block as `data`. A
+      // subtest's failure keeps the block's original indentation while the root `extra`
+      // event is 4-space shifted by emitExtra, so the pairing compares per-line dedented.
+      const dedent = (text: string): string => text.split('\n').map((line) => line.replace(/^\s+/, '')).join('\n');
+      const recoveredKeys = new Set(recoveredBlocks.map(dedent));
+      const malformed = summary.failures.some(
+        (failure) => failure.tapError
+          && !(typeof (failure as { data?: unknown }).data === 'string' && recoveredKeys.has(dedent((failure as { data?: string }).data!))),
+      );
+      if (malformed) report.issues.push('Malformed TAP');
     });
   };
   watch(parser);

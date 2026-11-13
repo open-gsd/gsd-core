@@ -54,6 +54,23 @@ for (const [format, targetTest, verdict, reason] of [
   });
 }
 
+// #5819: node:test repeats error/stack in an assert.throws(fn, /re/) diagnostic
+// block; strict YAML rejected the duplicates and a genuine RED was refused.
+// Captures: node-throws-regexp.tap (root assert.throws), node-rejects-regexp.tap
+// (root await assert.rejects), node-throws-regexp-nested.tap (describe/it, the
+// block arrives indented). Each is the reporter's verbatim stdout (README).
+for (const capture of ['node-throws-regexp.tap', 'node-rejects-regexp.tap', 'node-throws-regexp-nested.tap']) {
+  test(`#5819: a real node:test RegExp-assertion RED (${capture}) proves the target failure`, () => {
+    const result = classifyRedEvidence(
+      input(fixture(capture), { targetTest: 'rejects a malformed token', targetFile: undefined }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.matched_test, 'rejects a malformed token');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.deepEqual([result.evidence.tests, result.evidence.pass, result.evidence.fail], [1, 0, 1]);
+  });
+}
+
 for (const [name, exitCode, reason] of [
   ['vitest-no-tests.tap', 1, 'zero_tests_discovered'],
   ['vitest-load-error.tap', 1, 'fixture_or_load_failure'],

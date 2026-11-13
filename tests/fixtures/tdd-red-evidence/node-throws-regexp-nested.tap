@@ -1,0 +1,62 @@
+TAP version 13
+# Subtest: token validation
+    # Subtest: rejects a malformed token
+    not ok 1 - rejects a malformed token
+      ---
+      duration_ms: 0.9422
+      type: 'test'
+      location: 'C:\\work\\repro\\throws-nested.test.cjs:6:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        The input did not match the regular expression /rejected token/. Input:
+        
+        'Error: boom: token accepted'
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected:
+      actual:
+      error: 'boom: token accepted'
+      stack: |-
+        C:\work\repro\throws-nested.test.cjs:7:33
+        getActual (node:assert:611:5)
+        strict.throws (node:assert:759:24)
+        TestContext.<anonymous> (C:\work\repro\throws-nested.test.cjs:7:12)
+        Test.runInAsyncScope (node:async_hooks:227:14)
+        Test.run (node:internal/test_runner/test:1382:25)
+        Test.start (node:internal/test_runner/test:1242:17)
+        node:internal/test_runner/test:1867:71
+        node:internal/per_context/primordials:504:82
+        new Promise (<anonymous>)
+      operator: 'throws'
+      stack: |-
+        TestContext.<anonymous> (C:\work\repro\throws-nested.test.cjs:7:12)
+        Test.runInAsyncScope (node:async_hooks:227:14)
+        Test.run (node:internal/test_runner/test:1382:25)
+        Test.start (node:internal/test_runner/test:1242:17)
+        node:internal/test_runner/test:1867:71
+        node:internal/per_context/primordials:504:82
+        new Promise (<anonymous>)
+        new SafePromise (node:internal/per_context/primordials:478:3)
+        node:internal/per_context/primordials:504:9
+        Array.map (<anonymous>)
+      ...
+    1..1
+not ok 1 - token validation
+  ---
+  duration_ms: 1.5376
+  type: 'suite'
+  location: 'C:\\work\\repro\\throws-nested.test.cjs:5:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 1
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 65.9807
