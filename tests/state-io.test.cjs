@@ -124,3 +124,43 @@ test('filesystem stateIO: every other destination is written byte-for-byte with 
     assert.equal(fs.existsSync(`${file}.lock`), false, `${name} takes no lock`);
   }
 });
+
+// #5120 re-review (Major-2): a STATE.md whose directory is missing (or is not a
+// directory) fails at once with the filesystem's own error. Before, the lock
+// acquisition retried ENOENT for its whole 30-second budget, and the synchronous
+// MCP server answered nothing meanwhile. A path ending in a separator names a
+// directory, never STATE.md, and is refused with EISDIR, as the raw write was.
+// The rows count lock opens rather than timing the call: no lock is attempted.
+test('filesystem stateIO: a STATE.md path whose directory cannot hold it fails at once, before any lock attempt (#5120 re-review)', (t) => {
+  const dir = createTempDir('state-io-noparent-');
+  t.after(() => cleanup(dir));
+  const aFile = path.join(dir, 'a-file');
+  fs.writeFileSync(aFile, 'x\n');
+  const cases = [
+    { label: 'missing parent directory', file: path.join(dir, 'fresh-project', '.planning', 'STATE.md'), codes: ['ENOENT'] },
+    // ENOTDIR on POSIX; Windows reports a path through a file as ENOENT.
+    { label: 'parent is a regular file', file: path.join(aFile, 'STATE.md'), codes: ['ENOTDIR', 'ENOENT'] },
+    { label: 'trailing separator, nothing there', file: `${path.join(dir, 'gone', 'STATE.md')}${path.sep}`, codes: ['EISDIR'] },
+    { label: 'trailing separator, a STATE.md file there', file: `${path.join(dir, 'STATE.md')}${path.sep}`, codes: ['EISDIR'] },
+  ];
+  fs.writeFileSync(path.join(dir, 'STATE.md'), '# before\n');
+  let lockOpens = 0;
+  const realOpen = fs.openSync;
+  mock.method(fs, 'openSync', function (target, ...rest) {
+    if (String(target).endsWith('.lock')) lockOpens++;
+    return realOpen.call(this, target, ...rest);
+  });
+  t.after(() => mock.restoreAll());
+
+  for (const { label, file, codes } of cases) {
+    assert.throws(
+      () => createStateIO({ io: 'filesystem' }).write(file, '# new\n'),
+      (err) => codes.includes(err.code),
+      `${label}: throws ${codes.join(' or ')}`,
+    );
+  }
+  mock.restoreAll();
+  assert.equal(lockOpens, 0, 'no case attempted the STATE.md lock');
+  assert.equal(fs.readFileSync(path.join(dir, 'STATE.md'), 'utf8'), '# before\n', 'the STATE.md behind a trailing separator is untouched');
+  assert.equal(fs.existsSync(path.join(dir, 'fresh-project')), false, 'no directory is created for a missing parent');
+});

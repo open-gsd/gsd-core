@@ -24,7 +24,10 @@
  * document (#5165; a new file is normalized whole), so those bytes are the
  * seam's, not the caller's. An existing STATE.md that is not a regular file
  * (a symlink, live or dangling, a FIFO or a device) is refused with an ENXIO
- * error under the lock and nothing is written (refuseNonRegularStateMd).
+ * error under the lock and nothing is written (refuseNonRegularStateMd). A
+ * path whose directory is missing or is not a directory fails at once with
+ * ENOENT or ENOTDIR, and a path ending in a separator with EISDIR, before any
+ * lock is attempted (refuseUnwritableStateMdPath).
  * It is an exact-content write under the lock: it runs no sync or
  * preservation pipeline, so it sits outside ADR-3408 section 8.3's closed
  * exception list (the maintainer's call, recorded in the #5120 PR). The
@@ -76,6 +79,7 @@ function writeStateMdThroughSeam(filePath: string, content: string): void {
   const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { platformWriteSync } = require('./shell-command-projection.cjs') as { platformWriteSync: (filePath: string, content: string) => void };
+  refuseUnwritableStateMdPath(filePath);
   withStateLock(filePath, () => {
     refuseNonRegularStateMd(filePath);
     platformWriteSync(filePath, content);
@@ -116,6 +120,29 @@ function refuseNonRegularStateMd(filePath: string): void {
     new Error(`ENXIO: cannot write ${filePath}: STATE.md is not a regular file (it is ${kind}); refusing, so nothing is written through or over it`),
     { code: 'ENXIO' },
   );
+}
+
+/**
+ * #5120 re-review (Major-2): a STATE.md path that no file can be created at fails
+ * at once, before the lock. The lock file sits beside STATE.md, so a missing parent
+ * directory made acquireStateLock retry ENOENT for its whole 30-second budget, and
+ * the MCP server, which handles each tool call synchronously, answered nothing for
+ * that time. The errors are the ones a raw write gave: ENOENT or ENOTDIR from the
+ * parent directory's stat, and EISDIR for a path ending in a separator (it names a
+ * directory, never a file). Nothing is created.
+ */
+function refuseUnwritableStateMdPath(filePath: string): void {
+  if (/[\\/]$/.test(filePath)) {
+    throw Object.assign(
+      new Error(`EISDIR: cannot write ${filePath}: a path ending in a separator names a directory, not STATE.md`),
+      { code: 'EISDIR' },
+    );
+  }
+  const dir = path.dirname(filePath);
+  const st = fs.statSync(dir); // ENOENT / ENOTDIR propagate as they are
+  if (!st.isDirectory()) {
+    throw Object.assign(new Error(`ENOTDIR: cannot write ${filePath}: ${dir} is not a directory`), { code: 'ENOTDIR' });
+  }
 }
 
 export function createStateIO(
