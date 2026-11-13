@@ -454,11 +454,13 @@ describe('planning-inspect — planning root absent', () => {
     assert.deepStrictEqual(result.requirements, []);
     assert.deepStrictEqual(result.progress.accepted_phases, { completed: 0, total: 0, percent: null, scope: 'unreadable' });
     assert.deepStrictEqual(result.progress.completed_plans, { completed: 0, total: 0, percent: null, scope: 'unreadable' });
+    assert.deepStrictEqual(result.progress.halted_plans, { completed: 0, total: 0, percent: null, scope: 'unreadable' });
     assert.strictEqual(result.milestone.scope, 'unreadable');
     assert.deepStrictEqual(diagnosticCodes(result), [
       INSPECT_DIAGNOSTIC.PLANNING_ROOT_ABSENT,
       INSPECT_DIAGNOSTIC.ROADMAP_UNSCOPED,
       INSPECT_DIAGNOSTIC.REQUIREMENTS_ABSENT,
+      INSPECT_DIAGNOSTIC.PERCENT_WITHHELD,
       INSPECT_DIAGNOSTIC.PERCENT_WITHHELD,
       INSPECT_DIAGNOSTIC.PERCENT_WITHHELD,
     ]);
@@ -468,6 +470,7 @@ describe('planning-inspect — planning root absent', () => {
       ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
       ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNREADABLE],
       ['percent_withheld', 'progress.completed_plans', WITHHELD_UNREADABLE],
+      ['percent_withheld', 'progress.halted_plans', WITHHELD_UNREADABLE],
     ]);
   });
 });
@@ -747,7 +750,7 @@ describe('planning-inspect — percent withheld, unreadable plan/summary, comple
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.ROADMAP_UNSCOPED));
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.PHASE_SCOPE_DEGRADED));
     assert.ok(codes.includes(INSPECT_DIAGNOSTIC.REQUIREMENT_COMPLETION_UNKNOWN));
-    assert.strictEqual(codes.filter((c) => c === INSPECT_DIAGNOSTIC.PERCENT_WITHHELD).length, 2);
+    assert.strictEqual(codes.filter((c) => c === INSPECT_DIAGNOSTIC.PERCENT_WITHHELD).length, 3);
 
     assert.deepStrictEqual(diagnosticRows(result, cwd), [
       ['summary_unreadable', '1-01-SUMMARY.md', 'Summary file could not be read; file provenance for this plan is unknown.'],
@@ -759,6 +762,7 @@ describe('planning-inspect — percent withheld, unreadable plan/summary, comple
       ['requirement_completion_unknown', 'AUTH-05', 'Requirement has no checkbox bullet; completion is unknown, not incomplete.'],
       ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNSCOPED],
       ['percent_withheld', 'progress.completed_plans', WITHHELD_UNSCOPED],
+      ['percent_withheld', 'progress.halted_plans', WITHHELD_UNSCOPED],
     ]);
   });
 });
@@ -787,6 +791,7 @@ describe('planning-inspect — UAT unreadable, UAT items, requirements unreadabl
       ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
       ['percent_withheld', 'progress.accepted_phases', WITHHELD_TRUNCATED],
       ['percent_withheld', 'progress.completed_plans', WITHHELD_TRUNCATED],
+      ['percent_withheld', 'progress.halted_plans', WITHHELD_TRUNCATED],
     ]);
   });
 
@@ -1050,6 +1055,7 @@ describe('planning-inspect — containment (#5118)', () => {
       ['phase_scope_degraded', '01-foo', 'Phase evidence is incomplete (scope "unreadable").'],
       ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNREADABLE],
       ['percent_withheld', 'progress.completed_plans', WITHHELD_UNREADABLE],
+      ['percent_withheld', 'progress.halted_plans', WITHHELD_UNREADABLE],
     ]);
     assert.strictEqual(/SECRET/.test(JSON.stringify(result)), false);
   });
@@ -1144,6 +1150,7 @@ describe('planning-inspect — degraded-read diagnostics, verbatim', () => {
       ['phase_scope_degraded', '01-foo', 'Phase evidence is incomplete (scope "truncated").'],
       ['percent_withheld', 'progress.accepted_phases', WITHHELD_TRUNCATED],
       ['percent_withheld', 'progress.completed_plans', WITHHELD_TRUNCATED],
+      ['percent_withheld', 'progress.halted_plans', WITHHELD_TRUNCATED],
     ]);
   });
 
@@ -1166,6 +1173,346 @@ describe('planning-inspect — degraded-read diagnostics, verbatim', () => {
       ['requirements_absent', '<cwd>/.planning/REQUIREMENTS.md', REQUIREMENTS_ABSENT_DETAIL],
       ['percent_withheld', 'progress.accepted_phases', WITHHELD_UNREADABLE],
       ['percent_withheld', 'progress.completed_plans', WITHHELD_UNREADABLE],
+      ['percent_withheld', 'progress.halted_plans', WITHHELD_UNREADABLE],
     ]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// #5823 — halted / blocked_by / halted_count / progress.halted_plans
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * One declared phase (`01-foo`) with the STATE.md and ROADMAP.md shapes the
+ * blocks above use. SUMMARY frontmatter `status: halted` is #2830's marker,
+ * written with the inline comment the shipped summary templates show.
+ */
+function buildHaltPhase(cwd) {
+  writeFile(cwd, '.planning/STATE.md', frontmatterDoc(["gsd_state_version: '1.0'", 'status: executing', 'milestone: v1.0'], []));
+  writeFile(cwd, '.planning/ROADMAP.md', [
+    '## v1.0 Current 🚧', '', '## Phases', '', '- [ ] **Phase 1: Foo** - stub', '',
+    '### Phase 1: Foo', '', 'Ship the foo module.', '',
+  ].join('\n'));
+  const dir = phaseDirOf(cwd, '01-foo');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function writeHaltPlan(dir, name, fmLines) {
+  writeAbs(path.join(dir, name), frontmatterDoc(fmLines, ['<objective>', 'Ship it', '</objective>', '<tasks></tasks>']));
+}
+
+function writeHaltSummary(dir, name, fmLines) {
+  writeAbs(path.join(dir, name), frontmatterDoc(fmLines, ['# Summary']));
+}
+
+/** Each plan row as [id, hasSummary, halted, blocked_by]. */
+function haltRows(phase) {
+  return phase.plans.map((p) => [p.id, p.hasSummary, p.halted, p.blocked_by]);
+}
+
+describe('planning-inspect — halted plans (#5823)', () => {
+  test('flags a halted plan, propagates blocked_by through every resolution tier, and leaves the existing counts alone', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '1-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '1-01-SUMMARY.md', ['status: halted # designed stop']);
+    writeHaltPlan(dir, '1-02-PLAN.md', ['wave: 2', 'depends_on: [1-01]']);
+    // Short-form tier (#3897 rung 4): "02" names 1-02, so 1-03 is blocked
+    // transitively, through a plan that is not itself halted.
+    writeHaltPlan(dir, '1-03-PLAN.md', ['wave: 3', 'depends_on: ["02"]']);
+    writeHaltPlan(dir, '1-04-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '1-04-SUMMARY.md', ['status: complete']);
+    // Superseded: listed, but outside the live DAG — never blocked.
+    writeHaltPlan(dir, '1-05-PLAN.md', ['status: superseded', 'depends_on: [1-01]']);
+    // Live but not canonically named: counted in plan_count, outside
+    // phase-plan-index's node set — never blocked.
+    writeHaltPlan(dir, '1-PLAN-08-legacy.md', ['depends_on: [1-01]']);
+
+    const result = buildPlanningInspect(cwd);
+    const [phase] = result.phases;
+
+    assert.deepStrictEqual(haltRows(phase), [
+      ['1-01', true, true, []],
+      ['1-02', false, false, ['1-01']],
+      ['1-03', false, false, ['1-01']],
+      ['1-04', true, false, []],
+      ['1-05', false, false, []],
+      ['1-PLAN-08-legacy.md', false, false, []],
+    ]);
+    assert.strictEqual(phase.plan_count, 5);
+    // #2830's back-compat: a halted SUMMARY is still a completion record.
+    assert.strictEqual(phase.summary_count, 2);
+    assert.strictEqual(phase.halted_count, 1);
+    assert.deepStrictEqual(result.progress.completed_plans, { completed: 2, total: 5, percent: 40, scope: 'complete' });
+    assert.deepStrictEqual(result.progress.halted_plans, { completed: 1, total: 5, percent: 20, scope: 'complete' });
+    assert.strictEqual(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE), false);
+  });
+
+  test('a superseded plan with a halted SUMMARY is flagged but not counted', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '1-01-PLAN.md', ['status: superseded']);
+    writeHaltSummary(dir, '1-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, '1-02-PLAN.md', ['depends_on: [1-01]']);
+
+    const [phase] = buildPlanningInspect(cwd).phases;
+    assert.deepStrictEqual(haltRows(phase), [
+      ['1-01', true, true, []],
+      ['1-02', false, false, []],
+    ]);
+    assert.strictEqual(phase.halted_count, 0);
+  });
+
+  test('pairs the halt read the way phase-plan-index does on a slug-named plan whose SUMMARY carries the bare id', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '01-06-scaffolding-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '01-06-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, '01-07-PLAN.md', ['wave: 2', 'depends_on: [01-06]']);
+
+    const result = buildPlanningInspect(cwd);
+    const [phase] = result.phases;
+    // hasSummary keeps its older filename rule (false here); halted, like
+    // summary_count and phase-plan-index, pairs by canonical id.
+    assert.deepStrictEqual(haltRows(phase), [
+      ['01-06-scaffolding', false, true, []],
+      ['01-07', false, false, ['01-06-scaffolding']],
+    ]);
+    assert.strictEqual(phase.summary_count, 1);
+    assert.strictEqual(phase.halted_count, 1);
+  });
+
+  test('an unreadable paired SUMMARY reads halted false and is named by one summary_unreadable', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '1-01-PLAN.md', ['wave: 1']);
+    // Directory-in-file-position: unreadable on every platform, no chmod.
+    fs.mkdirSync(path.join(dir, '1-01-SUMMARY.md'), { recursive: true });
+    writeHaltPlan(dir, '1-02-PLAN.md', ['depends_on: [1-01]']);
+    // Positive control: a readable halt in the same phase still reads true.
+    writeHaltPlan(dir, '1-03-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '1-03-SUMMARY.md', ['status: halted']);
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(haltRows(result.phases[0]), [
+      ['1-01', true, false, []],
+      ['1-02', false, false, []],
+      ['1-03', true, true, []],
+    ]);
+    assert.deepStrictEqual(
+      diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
+      [['summary_unreadable', '1-01-SUMMARY.md', 'Summary file could not be read; file provenance for this plan is unknown.']],
+    );
+  });
+
+  test('a SUMMARY only the halt read pairs, when unreadable, gets its own summary_unreadable', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '01-06-scaffolding-PLAN.md', ['wave: 1']);
+    fs.mkdirSync(path.join(dir, '01-06-SUMMARY.md'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(haltRows(result.phases[0]), [['01-06-scaffolding', false, false, []]]);
+    assert.deepStrictEqual(
+      diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
+      [['summary_unreadable', '01-06-SUMMARY.md', 'Summary file could not be read; whether this plan halted is unknown.']],
+    );
+  });
+
+  test('a SUMMARY symlinked outside the planning root is never read for its halt', (t) => {
+    const cwd = mkCwd();
+    const outsideDir = mkCwd();
+    t.after(() => cleanup(cwd));
+    t.after(() => cleanup(outsideDir));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '1-01-PLAN.md', ['wave: 1']);
+    const outside = path.join(outsideDir, 'escaped-SUMMARY.md');
+    writeAbs(outside, frontmatterDoc(['status: halted'], ['# Summary']));
+    fs.symlinkSync(outside, path.join(dir, '1-01-SUMMARY.md'));
+    // Positive control: the same halt, inside the root, reads true.
+    writeHaltPlan(dir, '1-02-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '1-02-SUMMARY.md', ['status: halted']);
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(haltRows(result.phases[0]), [
+      ['1-01', true, false, []],
+      ['1-02', true, true, []],
+    ]);
+    assert.strictEqual(result.phases[0].halted_count, 1);
+    assert.ok(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE));
+  });
+
+  test('an unreadable PLAN still reports its own SUMMARY halt, and its dependents are blocked', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    fs.mkdirSync(path.join(dir, '1-01-PLAN.md'), { recursive: true });
+    writeHaltSummary(dir, '1-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, '1-02-PLAN.md', ['depends_on: [1-01]']);
+
+    const result = buildPlanningInspect(cwd);
+    const [phase] = result.phases;
+    assert.deepStrictEqual(haltRows(phase), [
+      ['1-01', false, true, []],
+      ['1-02', false, false, ['1-01']],
+    ]);
+    assert.strictEqual(phase.halted_count, 1);
+    assert.ok(diagnosticCodes(result).includes(INSPECT_DIAGNOSTIC.PLAN_UNREADABLE));
+  });
+
+  test('a depends_on cycle fails closed rather than failing the read', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '1-01-PLAN.md', ['depends_on: [1-02]']);
+    writeHaltPlan(dir, '1-02-PLAN.md', ['depends_on: [1-01]']);
+    writeHaltPlan(dir, '1-03-PLAN.md', ['wave: 1']);
+
+    const [phase] = buildPlanningInspect(cwd).phases;
+    // computeHaltPropagation's #2830 defect-1 rule: a plan the DAG cannot
+    // order is never reported runnable-by-omission.
+    assert.deepStrictEqual(haltRows(phase), [
+      ['1-01', false, false, ['1-02']],
+      ['1-02', false, false, ['1-01']],
+      ['1-03', false, false, []],
+    ]);
+  });
+
+  test('halted_count sums across phases into progress.halted_plans', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    writeFile(cwd, '.planning/STATE.md', frontmatterDoc(["gsd_state_version: '1.0'", 'status: executing', 'milestone: v1.0'], []));
+    writeFile(cwd, '.planning/ROADMAP.md', [
+      '## v1.0 Current 🚧', '', '## Phases', '',
+      '- [ ] **Phase 1: Foo** - stub', '- [ ] **Phase 2: Bar** - stub', '',
+      '### Phase 1: Foo', '', 'Ship foo.', '', '### Phase 2: Bar', '', 'Ship bar.', '',
+    ].join('\n'));
+    const p1 = phaseDirOf(cwd, '01-foo');
+    const p2 = phaseDirOf(cwd, '02-bar');
+    writeHaltPlan(p1, '1-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(p1, '1-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(p1, '1-02-PLAN.md', ['wave: 1']);
+    writeHaltSummary(p1, '1-02-SUMMARY.md', ['status: complete']);
+    writeHaltPlan(p1, '1-03-PLAN.md', ['wave: 1']);
+    writeHaltPlan(p2, '2-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(p2, '2-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(p2, '2-02-PLAN.md', ['wave: 1']);
+    writeHaltSummary(p2, '2-02-SUMMARY.md', ['status: HALTED']);
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(result.phases.map((p) => [p.dir, p.plan_count, p.summary_count, p.halted_count]), [
+      ['01-foo', 3, 2, 1],
+      ['02-bar', 2, 2, 2],
+    ]);
+    assert.deepStrictEqual(result.progress.completed_plans, { completed: 4, total: 5, percent: 80, scope: 'complete' });
+    assert.deepStrictEqual(result.progress.halted_plans, { completed: 3, total: 5, percent: 60, scope: 'complete' });
+  });
+  test('resolves depends_on tokens in phase-plan-index\'s sorted plan order when two plans share a short form or canonical id', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // Short form "01" names both `x-01` and `plans/PLAN-01.md`. Scan order puts
+    // the root file first; sorted order puts `plans/` first, so the token
+    // resolves to the un-halted nested plan and `x-02` is not blocked.
+    writeHaltPlan(dir, 'x-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'x-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'plans/PLAN-01.md', ['wave: 1']);
+    writeHaltSummary(dir, 'plans/SUMMARY-01.md', ['status: complete']);
+    writeHaltPlan(dir, 'x-02-PLAN.md', ['depends_on: ["01"]']);
+    // Control for the short-form tier itself: "03" names only `y-03`, which
+    // halted, so `y-04` is blocked only if short forms resolve at all.
+    writeHaltPlan(dir, 'y-03-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'y-03-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'y-04-PLAN.md', ['depends_on: ["03"]']);
+
+    const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
+    assert.strictEqual(byId.get('x-01').halted, true);
+    assert.deepStrictEqual(byId.get('x-02').blocked_by, []);
+    assert.deepStrictEqual(byId.get('y-04').blocked_by, ['y-03']);
+  });
+
+  test('a canonical-id collision resolves to the plan that sorts last, as in phase-plan-index', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // Both `z-01-01-PLAN.md` and `plans/PLAN-01-01.md` have canonical id
+    // 01-01; the canonical map is last-write-wins over the sorted list.
+    writeHaltPlan(dir, 'z-01-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'z-01-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'plans/PLAN-01-01.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-02-PLAN.md', ['depends_on: [01-01]']);
+
+    const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
+    assert.deepStrictEqual(byId.get('01-02').blocked_by, ['z-01-01']);
+  });
+
+  test('sorts plan files by UTF-16 code unit, as Array.prototype.sort does, not by locale', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // Canonical id 01-01 twice. Code-unit order puts `B-…` (0x42) before
+    // `a-…` (0x61), so `a-01-01` is written last and wins; a locale-aware
+    // order would put `a-…` first and resolve the token to `B-01-01`.
+    writeHaltPlan(dir, 'a-01-01-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, 'a-01-01-SUMMARY.md', ['status: halted']);
+    writeHaltPlan(dir, 'B-01-01-PLAN.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-02-PLAN.md', ['depends_on: [01-01]']);
+
+    const byId = new Map(buildPlanningInspect(cwd).phases[0].plans.map((p) => [p.id, p]));
+    assert.deepStrictEqual(byId.get('01-02').blocked_by, ['a-01-01']);
+  });
+
+  test('a SUMMARY two plans halt-pair with, when unreadable, is named once', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    writeHaltPlan(dir, '01-06-alpha-PLAN.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-06-beta-PLAN.md', ['wave: 1']);
+    fs.mkdirSync(path.join(dir, '01-06-SUMMARY.md'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(
+      diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
+      [['summary_unreadable', '01-06-SUMMARY.md', 'Summary file could not be read; whether this plan halted is unknown.']],
+    );
+  });
+
+  test('a SUMMARY a row already reported unreadable is not reported again by the halt read', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // `01-06` pairs the SUMMARY by filename (its row read reports it);
+    // `01-06-scaffolding` reaches the same file only through the halt read.
+    writeHaltPlan(dir, '01-06-PLAN.md', ['wave: 1']);
+    writeHaltPlan(dir, '01-06-scaffolding-PLAN.md', ['wave: 1']);
+    fs.mkdirSync(path.join(dir, '01-06-SUMMARY.md'), { recursive: true });
+
+    const result = buildPlanningInspect(cwd);
+    assert.deepStrictEqual(
+      diagnosticRows(result, cwd).filter(([code]) => code === INSPECT_DIAGNOSTIC.SUMMARY_UNREADABLE),
+      [['summary_unreadable', '01-06-SUMMARY.md', 'Summary file could not be read; file provenance for this plan is unknown.']],
+    );
+  });
+
+  test('a halted SUMMARY the completion rule does not pair is never counted as a halt', (t) => {
+    const cwd = mkCwd();
+    t.after(() => cleanup(cwd));
+    const dir = buildHaltPhase(cwd);
+    // `01-06-review-SUMMARY.md` indexes under canonical id 01-06, but no
+    // summary candidate of `01-06-PLAN.md` names it, so `summary_count` does
+    // not count it — and `halted_count` must not either.
+    writeHaltPlan(dir, '01-06-PLAN.md', ['wave: 1']);
+    writeHaltSummary(dir, '01-06-review-SUMMARY.md', ['status: halted']);
+
+    const [phase] = buildPlanningInspect(cwd).phases;
+    assert.deepStrictEqual(haltRows(phase), [['01-06', false, false, []]]);
+    assert.strictEqual(phase.summary_count, 0);
+    assert.strictEqual(phase.halted_count, 0);
   });
 });

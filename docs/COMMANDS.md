@@ -709,8 +709,9 @@ node gsd-tools.cjs phase uat-passed 3 --raw                  # Machine-readable 
 Emit a read-only, schema-versioned JSON snapshot of the whole planning state —
 milestone identity, active phase/plan/status, per-phase verification, roadmap
 acceptance and UAT evidence (kept separate), requirement rows with mapped-phase
-traceability, plan and task rows with planned/changed file provenance, and
-independent `accepted_phases` / `completed_plans` fractions.
+traceability, plan and task rows with planned/changed file provenance, halted
+plans and what they block, and independent `accepted_phases` /
+`completed_plans` / `halted_plans` fractions.
 
 For downstream tools that need planning state without re-parsing GSD's Markdown.
 Mutates nothing. Takes no arguments — a stray positional or unknown flag is a

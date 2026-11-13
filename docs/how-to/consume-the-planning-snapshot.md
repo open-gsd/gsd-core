@@ -100,6 +100,34 @@ render(percent === null ? '—' : `${percent}%`);
 
 `percent: 0` under a `complete` scope is a real 0 and should be rendered.
 
+### Tell a halted plan from a finished one
+
+A plan that stopped at a designed halt (`status: halted` in its SUMMARY) still
+counts toward `completed_plans`, because its SUMMARY is a completion record.
+Read the halt from the fields beside the count rather than calling
+`phase-plan-index` a second time:
+
+```javascript
+const { completed_plans: done, halted_plans: halted } = snapshot.progress;
+if (done.scope === 'complete') {
+  render(`${done.completed - halted.completed} completed, ${halted.completed} halted, of ${done.total}`);
+}
+
+for (const phase of snapshot.phases) {
+  for (const plan of phase.plans) {
+    if (plan.halted) render(`${plan.id}: halted`);
+    else if (plan.blocked_by.length > 0) render(`${plan.id}: waiting on ${plan.blocked_by.join(', ')}`);
+  }
+}
+```
+
+`halted: false` is a real answer only when no `summary_unreadable` diagnostic
+names that plan's SUMMARY, and three SUMMARY shapes read as not halted even
+then. See
+[Halted plans](../CLI-TOOLS.md#halted-plans-counted-as-completed-flagged-beside-the-count-5823)
+for the full rules, including where `planning inspect` and `phase-plan-index`
+differ.
+
 ## 5. Read the three kinds of phase evidence separately
 
 Each entry in `phases[]` reports three independent signals. **They are not

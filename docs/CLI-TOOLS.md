@@ -1176,10 +1176,10 @@ signal absence, because omission is itself something callers come to depend on.
 | `generated_from` | Resolved `cwd` and `.planning/` root (`null` when there is no planning root) |
 | `milestone` | `version`, `name`, and the `scope` of that answer |
 | `active` | `phase`, `plan`, and `status` — three distinct STATE.md facts, each scoped separately |
-| `phases[]` | Per phase: completion, verification (`status`, `next_action`, and the additive `route` — see [`verification status`](#verification-status-the-verification-verdict-5118)), roadmap acceptance, UAT, plan and task rows |
+| `phases[]` | Per phase: completion, verification (`status`, `next_action`, and the additive `route` — see [`verification status`](#verification-status-the-verification-verdict-5118)), roadmap acceptance, UAT, `plan_count`, `summary_count`, the additive `halted_count`, plan and task rows |
 | `orphan_phase_dirs[]` | Directories under `phases/` that the current milestone window does not declare |
 | `requirements[]` | Requirement rows with mapped-phase traceability |
-| `progress` | `accepted_phases` and `completed_plans`, as independent fractions |
+| `progress` | `accepted_phases`, `completed_plans` and the additive `halted_plans`, as independent fractions |
 | `diagnostics[]` | Coded reasons for every non-answer above |
 
 #### Three kinds of evidence, never folded together
@@ -1223,6 +1223,84 @@ and progress surfaces follow, for the same reason. See
 [A non-`COMPLETE` scope withholds the percentage entirely](#a-non-complete-scope-withholds-the-percentage-entirely-3217).
 
 `0` is a real answer under a `complete` scope and is never withheld.
+
+#### Halted plans: counted as completed, flagged beside the count (#5823)
+
+A plan that stops at a designed halt still writes a SUMMARY, with
+`status: halted` in its frontmatter (#2830). That SUMMARY is a completion
+record, so `hasSummary`, `summary_count` and `progress.completed_plans` keep
+counting the plan, exactly as before. Four additive fields report the halt:
+
+| Field | Where | Meaning |
+|---|---|---|
+| `halted` | each plan row | `true` when the SUMMARY paired with this plan declares `status: halted` (which SUMMARY, and the limits, below) |
+| `blocked_by` | each plan row | The halted plan ids upstream of this plan, directly or transitively, over its `depends_on` edges; `[]` when nothing upstream halted. In a `depends_on` cycle it names the plans this one waits on instead (below) |
+| `halted_count` | each phase row, beside `summary_count` | Live (non-superseded) plans whose `halted` is `true` |
+| `progress.halted_plans` | beside `progress.completed_plans` | `{completed, total, percent, scope}`: Σ `halted_count` over Σ `plan_count`, under the same percent rule as the other fractions (a withheld percentage gets its own `percent_withheld` diagnostic) |
+
+`halted` and `blocked_by` are computed the way `phase-plan-index` computes its
+fields of the same name: the same SUMMARY pairing, the same halt predicate
+(`isSummaryFileHalted`), the same `depends_on` resolution over the same plans
+(the live, canonically named ones, in the same sorted order), and the same
+propagation. The two commands give the same answers except in these cases:
+
+- **A SUMMARY that cannot be read, or that resolves outside the planning
+  root.** `planning inspect` does not read it for its halt and names it in a
+  `summary_unreadable` diagnostic, so the plan reads `halted: false` and blocks
+  nothing. `phase-plan-index` reads the file either way.
+- **A PLAN that cannot be read, or that resolves outside the planning root.**
+  `planning inspect` reports `plan_unreadable` and still reads the plan's own
+  SUMMARY for its halt, but the plan's `depends_on` is unknown: its own
+  `blocked_by` is `[]`, and the plans downstream of it are blocked by its own
+  halt but not by one further upstream. `phase-plan-index` fails on an
+  unreadable PLAN and reads one outside the root.
+- **A PLAN with lone-CR (`\r`) line endings.** `planning inspect` normalizes
+  line endings before it reads a document (#3707); `phase-plan-index` does not,
+  so the two can read a different `depends_on` from the same file.
+- **A `depends_on` cycle.** `phase-plan-index` refuses the phase. `planning
+  inspect` still answers: every non-halted plan in or behind the cycle gets a
+  non-empty `blocked_by` naming the plans it waits on (a plan that depends on
+  itself names itself), so nothing the graph cannot order reads as runnable.
+- **Two plan ids that differ only in case** (`A-01-PLAN.md` and
+  `a-01-PLAN.md`). `phase-plan-index` refuses the phase as ambiguous. `planning
+  inspect` answers, and a `depends_on` token naming either resolves to the one
+  that sorts last.
+- **A plan `phase-plan-index` does not list** (superseded, or not canonically
+  named). It still gets its own `halted`, but its `blocked_by` is always `[]`,
+  and, as in `phase-plan-index`, a `depends_on` token never resolves to it. (A
+  token naming a superseded plan can still resolve to a live plan with the
+  same canonical id.)
+
+**Which SUMMARY `halted` reads.** The one the completion rule behind
+`summary_count` pairs with the plan, located by plan id and then by canonical
+id, as `phase-plan-index` locates it. That is usually the plan's own. On a
+slug-named plan whose SUMMARY carries only the bare id
+(`01-06-scaffolding-PLAN.md` with `01-06-SUMMARY.md`) it is that bare-id
+SUMMARY, even when it was written for a superseded `01-06-PLAN.md`.
+`hasSummary` keeps its older filename pairing, so such a row can read
+`hasSummary: false` with `halted: true`. Every plan counted in `halted_count`
+is also counted in `summary_count`, so
+`completed_plans.completed - halted_plans.completed` is the number of completed
+plans not reported as halted.
+
+**`halted: false` is meaningful only when no `summary_unreadable` diagnostic
+names the same SUMMARY file.** `isSummaryFileHalted` runs only on a SUMMARY
+`readDocument` has accepted (a regular file contained in the planning root);
+it then opens that file again by path, as `phase-plan-index` does. An unread
+halt can also be missing from the `blocked_by` of the plans downstream of it.
+
+That condition is necessary, not sufficient. The halt reader `planning inspect`
+shares with `phase-plan-index` reads four SUMMARY shapes as not halted, in both
+commands and with no entry in `diagnostics[]`:
+
+- the nested layout: `plans/PLAN-01.md` with `plans/SUMMARY-01.md`, which the
+  halt lookup never pairs;
+- a second SUMMARY with the same canonical id beside the plan's own, such as
+  `01-06-review-SUMMARY.md` beside `01-06-SUMMARY.md`, which can take the
+  lookup's place;
+- a SUMMARY with lone-CR (`\r`) line endings;
+- frontmatter longer than 64 KiB, of which the predicate reads only the first
+  64 KiB.
 
 #### Large payloads
 
