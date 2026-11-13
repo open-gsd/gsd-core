@@ -1680,12 +1680,12 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a, a.slice(0, 10)]), true);
   });
 
-  test('[boundary] git 2.36 lists the whole history, git 2.37 filters by date (the probe reads `git --version`)', () => {
+  test('[boundary] one date window on git 2.36 (no flag, filtered in code) and git 2.37 (`--since-as-filter`); the probe reads `git --version`', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
-    // A twin dated before the window and under a child that is too old as well: the unfiltered listing still finds it.
+    // A twin dated before the window, under a child that is too old as well: neither git counts it.
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 10 }, 'old twin\n');
     commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
     const withVersion = (version, seen) => (args, opts) => {
@@ -1693,8 +1693,9 @@ describe('subjectsOccurOnHead (#5354)', () => {
       return args[0] === '--version' ? { exitCode: 0, stdout: `git version ${version}\n`, stderr: '', signal: null, error: null, timedOut: false } : execGit(args, opts);
     };
     const old = [];
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), true, 'an unfiltered listing sees the twin');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), false, 'the same window applies without the git flag');
     assert.equal(old.some((args) => args.some((arg) => String(arg).startsWith('--since-as-filter'))), false);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', [])), subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', [])), 'both gits give one answer');
     const current = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
     assert.ok(current.at(-1).includes(`--since-as-filter=@${T}`));

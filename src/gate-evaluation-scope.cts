@@ -455,9 +455,12 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
     if (times.size < named.length) return null;
     const since = Math.min(...times.values());
-    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (the 10 s timeout bounds it), exact but unfiltered.
-    const bound = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT) ? [`--since-as-filter=@${since}`] : [];
-    const onHead = new Set(parseLog(git(['log', logFormat(false), ...bound, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
+    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (the 10 s timeout bounds the walk) and the
+    // same window is applied here, on the committer time each record ends with.
+    const filtered = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT);
+    const listing = git(['log', '--format=%H%x1f%P%x1f%s%x1f%ct%x1e', ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
+    const inWindow = listing.split('\x1e').filter((record) => filtered || Number(record.split('\x1f')[3]) >= since);
+    const onHead = new Set(parseLog(inWindow.join('\x1e'), false).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
