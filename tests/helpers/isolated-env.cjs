@@ -29,6 +29,7 @@ const path = require('node:path');
 const helpers = require('../helpers.cjs');
 const { isolatedGitEnv: scrubGitEnv } = require('../../scripts/lint-removed-but-needed.cjs');
 const { scrubGitLocationEnv } = require('../../gsd-core/bin/lib/read-only-git-env.cjs');
+const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./git-fixture.cjs');
 
 const { cleanup } = helpers;
 
@@ -255,4 +256,20 @@ function gitChildEnv(home) {
   return isolatedEnv({ home, base: scrubGitLocationEnv(scrubGitEnv(home)) });
 }
 
-module.exports = { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable };
+/**
+ * `gitOrThrow` under `gitChildEnv(dir)`: the one runner of fixture git in a test repo.
+ *
+ * @param {string} dir Repository dir (also the isolated home).
+ * @param {number} [timeoutMs] Default: the git fixture class timeout.
+ * @returns {(args: string[]) => string} stdout of the run; throws on any other outcome.
+ */
+function gitIn(dir, timeoutMs = GIT_FIXTURE_TIMEOUT_MS) {
+  return (args) => gitOrThrow(args, { cwd: dir, env: gitChildEnv(dir), timeoutMs });
+}
+
+/** `refShaOrEmpty` of `ref` in `dir` under `gitChildEnv(dir)`. */
+function refOf(dir, ref, timeoutMs = GIT_FIXTURE_TIMEOUT_MS) {
+  return refShaOrEmpty(ref, { cwd: dir, env: gitChildEnv(dir), timeoutMs });
+}
+
+module.exports = { isolatedEnv, gitChildEnv, gitIn, refOf, isolatedPath, createHermeticRoot, linkExecutable };

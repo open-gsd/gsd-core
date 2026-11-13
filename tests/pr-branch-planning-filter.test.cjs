@@ -56,14 +56,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
 const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
   cleanup, createTempProject, runGsdTools, readFileNormalized,
 } = require('./helpers.cjs');
-const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
-const { gitChildEnv } = require('./helpers/isolated-env.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { gitChildEnv, gitIn } = require('./helpers/isolated-env.cjs');
 const {
   WORKFLOW_PATH,
   parseWorkflow,
@@ -99,7 +98,7 @@ const CHERRY_PICK_RECIPE_TIMEOUT_MS = 30000;
 // ── Shared git-fixture primitives (L2 + L4) ────────────────────────────────
 
 function git(args, cwd) {
-  return gitOrThrow(args, { cwd, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+  return gitIn(cwd)(args);
 }
 
 function initRepo(dir) {
@@ -397,16 +396,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     function runFilterLoop(repoDir, { strict, transientDirs }) {
       const filterPaths = strict ? ['.planning/'] : transientDirs.map((d) => `.planning/${d}/`);
       const script = buildRecipeScript(filterPaths);
-      try {
-        const stdout = execFileSync('sh', ['-c', script], { cwd: repoDir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
-        return { status: 0, stdout, stderr: '' };
-      } catch (err) {
-        return {
-          status: typeof err.status === 'number' ? err.status : 1,
-          stdout: err.stdout || '',
-          stderr: err.stderr || '',
-        };
-      }
+      return toLegacyResult(runBashFile(script, { prefix: 'gsd-prbranch-filter-', cwd: repoDir, env: () => gitChildEnv(repoDir), timeoutMs: CHERRY_PICK_RECIPE_TIMEOUT_MS }));
     }
 
     test('19: REGRESSION default — old.md is never staged as deleted', () => {
@@ -1048,7 +1038,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       } catch (err) {
         assert.fail(
           `expected the #4606 third-bucket conflict to resolve via checkout --theirs, not halt: `
-            + `status=${err.status} stdout=${err.stdout} stderr=${err.stderr}`,
+            + err.message,
         );
       } finally {
         teardown();

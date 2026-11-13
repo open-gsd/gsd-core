@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -216,11 +216,13 @@ describe('gitChildEnv', () => {
     // Source of the location list: git itself (`git rev-parse --local-env-vars`), plus the config-injection variable.
     const listed = gitOrThrow(['rev-parse', '--local-env-vars'], { timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).split('\n').filter(Boolean);
     const hostile = { ...Object.fromEntries(listed.map((k) => [k, '/hostile'])), GIT_CONFIG_PARAMETERS: "'core.hooksPath=/hostile'" };
-    const saved = Object.fromEntries(Object.keys(hostile).map((k) => [k, process.env[k]]));
-    t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
-    Object.assign(process.env, hostile);
-    const env = gitChildEnv(home);
+    // The hostile env is the child's own process env, so process.env here is never mutated.
+    const script = `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(__dirname, 'helpers', 'isolated-env.cjs'))}).gitChildEnv(process.argv[1])))`;
+    const env = probe(script, { ...SYSTEM_VARS, ...hostile }, [home]);
     for (const k of Object.keys(hostile)) assert.ok(!(k in env), `${k} leaked`);
+    // Bypass: the raw hostile env reaches a child, so the probe can see the leak.
+    const raw = childView({ ...SYSTEM_VARS, ...hostile }).env;
+    for (const k of Object.keys(hostile)) assert.ok(k in raw, `${k} is not visible without the scrub`);
     assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
     assert.notEqual(env.GIT_CONFIG_GLOBAL, undefined);
     assert.equal(env.HOME, home);

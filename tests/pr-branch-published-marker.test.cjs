@@ -15,11 +15,11 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
-const { gitOrThrow, refShaOrEmpty, toLegacyResult, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { gitChildEnv } = require('./helpers/isolated-env.cjs');
+const { gitChildEnv, gitIn, refOf } = require('./helpers/isolated-env.cjs');
 
 const {
   readWorkflowText,
@@ -38,7 +38,7 @@ const PENDING = 'refs/gsd/pr-built/strict/main/feature';
 const BUILT = 'refs/gsd/pr-built-head/strict/main/feature';
 
 function git(dir, ...args) {
-  return gitOrThrow(args, { cwd: dir, env: gitChildEnv(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
+  return gitIn(dir)(args).trim();
 }
 
 function refkeyFn() {
@@ -58,7 +58,7 @@ function write(dir, rel, content) {
 }
 
 function buildRepo(branch = 'feature') {
-  const dir = createFixture({ prefix: 'gsd-prmarker-', git: true, planning: false, projectDoc: false });
+  const dir = createFixture({ prefix: 'gsd-prmarker-', git: true, planning: false, projectDoc: false, gitEnv: gitChildEnv });
   git(dir, 'branch', '-M', 'main');
   write(dir, 'code.txt', 'v0\n');
   write(dir, '.planning/STATE.md', 's0\n');
@@ -139,7 +139,6 @@ const printedCmd = (stderr, label) => {
   return line.slice(label.length + 4);
 };
 
-const refOf = (dir, ref) => refShaOrEmpty(ref, { cwd: dir, env: gitChildEnv(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
 const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
 const builtOf = (dir) => refOf(dir, BUILT);

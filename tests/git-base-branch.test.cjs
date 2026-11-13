@@ -32,9 +32,9 @@ const path = require('node:path');
 const { runGsdTools, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
-const { gitOrThrow, throwIfFailed, refShaOrEmpty } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { gitChildEnv } = require('./helpers/isolated-env.cjs');
+const { gitChildEnv, gitIn, refOf } = require('./helpers/isolated-env.cjs');
 const {
   extractBashBlockContaining,
   extractDeclarationLines,
@@ -83,7 +83,7 @@ const WORKTREE_INFO_TIMEOUT_MS = 5000;
 function createGitRepo(opts = {}) {
   const { prefix = 'gsd-1146-', defaultBranch = 'master' } = opts;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const g = (args) => gitOrThrow(args, { cwd: dir, env: gitChildEnv(dir), timeoutMs: GIT_TIMEOUT_MS });
+  const g = gitIn(dir, GIT_TIMEOUT_MS);
   g(['init', '-b', defaultBranch]);
   g(['config', 'user.email', 'test@test.com']);
   g(['config', 'user.name', 'Test']);
@@ -2442,8 +2442,9 @@ const EXECUTE_PHASE_PATH = path.join(
   'execute-phase.md'
 );
 
-const GIT_ENV = Object.freeze({
-  ...process.env,
+// The isolated git env of a fixture repo, plus the author and committer the commits need.
+const authoredEnv = (cwd) => ({
+  ...gitChildEnv(cwd),
   GIT_AUTHOR_NAME: 'Test',
   GIT_AUTHOR_EMAIL: 'test@test.com',
   GIT_COMMITTER_NAME: 'Test',
@@ -2451,7 +2452,7 @@ const GIT_ENV = Object.freeze({
 });
 
 function git(cwd, ...args) {
-  return gitOrThrow(args, { cwd, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS }).trim();
+  return gitOrThrow(args, { cwd, env: authoredEnv(cwd), timeoutMs: GIT_TIMEOUT_MS }).trim();
 }
 
 /**
@@ -2565,7 +2566,7 @@ function runHandleBranchingStep(bash, cwd, branchName) {
     // (PR #3787 run 32668773524) and tests/worktree-safety.test.cjs (`next`
     // run 32608945654). See HOOK_FANOUT_TIMEOUT_MS in ./helpers/timeouts.cjs
     // for the class rationale.
-    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd, env: GIT_ENV, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd, env: authoredEnv(cwd), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     throwIfFailed(r, `runHandleBranchingStep: bash ${scriptPath}`);
     return r.stdout;
   } finally {
@@ -2777,10 +2778,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
     return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }
-  // The git runner of a verify test's fixture repo: the isolated env, so the developer's git config and hook variables stay out.
-  const gitIn = (repo) => (args) => gitOrThrow(args, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
-  const refSha = (repo, ref) => refShaOrEmpty(ref, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
-  const pendingRef = (repo) => refSha(repo, PENDING_REF);
+  const pendingRef = (repo) => refOf(repo, PENDING_REF);
 
   // A repo on `pr` whose one commit adds a transient planning file (.planning/phases/PLAN.md) over a code base on main.
   function leakedPhaseRepo(t, prefix) {
@@ -2824,7 +2822,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
 
     const { out } = runVerify(repo);
     assert.match(out, /GATE_PLANNING_DELETIONS=0/, `clean diff must count zero deletions: ${out.slice(0, 400)}`);
-    assert.equal(pendingRef(repo), refSha(repo, 'HEAD'), 'both gates pass: HEAD is the pending build');
+    assert.equal(pendingRef(repo), refOf(repo, 'HEAD'), 'both gates pass: HEAD is the pending build');
   });
 
   // git quotes a non-ASCII path, and one with a double quote, in a plain name list; both gates must still see it under .planning/.
@@ -2858,7 +2856,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       const { out, exitCode } = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
       assert.equal(exitCode, 1, 'the run stops with exit 1');
       assert.match(out, /Cannot read pr \(deleted\); re-run\./, 'the stop names the deleted -pr branch');
-      assert.equal(refSha(repo, 'refs/heads/pr'), '', 'the unchecked -pr is deleted, so a re-run is not refused');
+      assert.equal(refOf(repo, 'refs/heads/pr'), '', 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
       assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
     });
@@ -2872,7 +2870,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
     assert.equal(exitCode, 1, 'the run stops with exit 1');
     assert.match(out, /Cannot read pr \(not deleted\); re-run\./, 'the stop names the kept -pr branch');
-    assert.notEqual(refSha(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
+    assert.notEqual(refOf(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
   });
 
