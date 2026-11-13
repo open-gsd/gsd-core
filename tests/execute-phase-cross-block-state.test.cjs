@@ -22,7 +22,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { runHook, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -59,14 +60,14 @@ function one(file, name) {
 let repo;
 before(() => {
   repo = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4915-'));
-  spawnSync('git', ['init', '-q'], { cwd: repo, timeout: PROBE_TIMEOUT_MS });
+  gitOrThrow(['init', '-q'], { cwd: repo, timeoutMs: PROBE_TIMEOUT_MS });
 });
 after(() => cleanup(repo));
 
 /** Run a script in a fresh bash process: no variable survives into the next call. */
 function runBlock(script) {
-  const res = spawnSync('bash', ['-c', script], { cwd: repo, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-  assert.equal(res.status, 0, `block failed:\n${script}\n${res.stderr}`);
+  const res = runHook('-c', [script], { interpreter: 'bash', cwd: repo, timeoutMs: PROBE_TIMEOUT_MS });
+  assertSeamExit(assert, res, 0, `block failed:\n${script}`);
   return res.stdout;
 }
 
