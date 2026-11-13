@@ -2496,8 +2496,8 @@ test('a base-branch ref on an unrelated history keeps the pin and reports the fa
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
   const { root, b2 } = makeStalePinMergeRefRepo(t);
   const messages = [];
-  // origin/next is at B2, the pin's own merge-base: advanceToMergedBase reaches its
-  // `merged === floorSha` return, the usual PR-lane case.
+  // origin/next is at B2, the pin's own merge-base (the usual PR-lane case). What this row
+  // pins is the observable result: the base stays B2 and no advance diagnostic is emitted.
   const base = resolveAttributionBase({ GSD_EMITTED_BASE: b2, GITHUB_BASE_REF: 'next' },
     { cwd: root, diagnostic: (m) => messages.push(m) });
   assert.equal(base.sha, b2, 'the pin must be kept when it is already the newest base commit HEAD contains');
@@ -2679,23 +2679,26 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
     );
     return;
   }
-  // #5008: `baseSha` is the MERGE-BASE of `base` and HEAD, never the base tip. All three
-  // "before" inputs — the baseline, `resolveChangedPaths` (three-dot) and
-  // `readAckTrailers` (merge-base..HEAD) — are pinned to that ONE commit via
-  // `resolveAttributionInputs`, and pinned to the SHA rather than the ref name so a
-  // fetch landing mid-run cannot move two of them out from under the baseline. A
-  // baseline at the tip instead turns every base-only merge since HEAD forked into
-  // "unattributed" drift here.
+  // #5008/#5797: `baseSha` is the ATTRIBUTION BASE `resolveAttributionBase` returned, never
+  // the base tip: `merge-base(base, HEAD)`, advanced on a pull_request lane to the newest
+  // `origin/<GITHUB_BASE_REF>` first-parent commit HEAD contains when that descends from
+  // it (a release-merge PR keeps its fork point on `next`). All three "before" inputs —
+  // the baseline, `resolveChangedPaths` (three-dot) and `readAckTrailers`
+  // (`baseSha..HEAD`) — are pinned to that ONE commit via `resolveAttributionInputs`, and
+  // pinned to the SHA rather than the ref name so a fetch landing mid-run cannot move two
+  // of them out from under the baseline. A baseline at the tip instead turns every
+  // base-only merge since HEAD forked into "unattributed" drift here.
   const { ref: base, sha: baseSha } = resolved;
   assert.match(baseSha, /^[0-9a-f]{40}$/);
 
   // Phase 4 (#2724): the golden fixtures this used to read via `baselineManifestsAtRef`
   // (git show <base>:<fixture>) are deleted, so the baseline now comes through
-  // `resolveBaseline()`'s documented precedence: GSD_EMITTED_BASELINE env (CI's PR-lane
-  // cache restore) -> the on-disk cache (CI's push-to-next publish step) -> an in-job
-  // build at `base` (a throwaway git worktree + scripts/gen-emitted-baseline.cjs) ->
-  // explicit failure. The build fallback is deliberately the slow path — it exists so a
-  // cache miss degrades rather than fails outright (ADR-2719 §5).
+  // `resolveBaseline()`'s documented precedence: GSD_EMITTED_BASELINE env (an operator
+  // pin) -> the on-disk cache (where CI's PR-lane restore lands, #2854; published by the
+  // push-to-next step) -> an in-job build at the attribution base `baseSha`, not at
+  // `base` (a throwaway git worktree + scripts/gen-emitted-baseline.cjs) -> explicit
+  // failure. The build fallback is deliberately the slow path — it exists so a cache
+  // miss or a stale restore degrades rather than fails outright (ADR-2719 §5).
   const readBaselineJson = (p) => (fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null);
   const { resolvedBaseline, changedPaths, ack } = resolveAttributionInputs(resolved, {
     resolveBaselineFn: resolveBaseline,
