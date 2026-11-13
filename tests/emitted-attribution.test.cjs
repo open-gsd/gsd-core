@@ -2454,9 +2454,43 @@ test('the base advance never moves below the pin when the base-branch ref is old
   const { root, b0, b2, mergeRef } = makeStalePinMergeRefRepo(t);
   // origin/next behind the pin: the pin's merge-base is newer, so it holds.
   gitFixture(root, ['update-ref', 'refs/remotes/origin/next', b0]);
-  assert.equal(resolveAttributionBase({ GSD_EMITTED_BASE: b2, GITHUB_BASE_REF: 'next' }, { cwd: root }).sha, b2,
-    'an origin ref older than the pin must not pull the attribution base backwards');
+  const messages = [];
+  assert.equal(resolveAttributionBase({ GSD_EMITTED_BASE: b2, GITHUB_BASE_REF: 'next' },
+    { cwd: root, diagnostic: (m) => messages.push(m) }).sha, b2,
+  'an origin ref older than the pin must not pull the attribution base backwards');
   assert.equal(gitFixture(root, ['rev-parse', 'HEAD']), mergeRef, 'fixture: HEAD stays the merge ref');
+  // The floor is kept on purpose, and the skip says so, naming both shas.
+  assert.equal(messages.length, 2, `the resolved-base line plus exactly one kept-floor line: ${messages.join(' | ')}`);
+  const kept = messages[1];
+  assert.match(kept, /does not descend from it/);
+  assert.ok(kept.includes(b2), `the kept-floor line must name the pin's merge-base ${b2}: ${kept}`);
+  assert.ok(kept.includes(b0), `the kept-floor line must name the origin/next commit ${b0}: ${kept}`);
+  assert.ok(!messages.some((m) => m.includes('measuring from')), 'no advance diagnostic when the floor is kept');
+});
+
+test('a base-branch ref on an unrelated history keeps the pin and reports the failed lookup', (t) => {
+  const { root, b0, mergeRef } = makeStalePinMergeRefRepo(t);
+  // origin/next on an orphan history: `git merge-base <orphan> HEAD` exits 1 (no common ancestor).
+  gitFixture(root, ['checkout', '-q', '--orphan', 'unrelated']);
+  gitFixture(root, ['rm', '-rq', '--cached', '.']);
+  fs.writeFileSync(path.join(root, 'orphan.txt'), 'orphan\n');
+  gitFixture(root, ['add', 'orphan.txt']);
+  gitFixture(root, ['commit', '-q', '-m', 'an unrelated root']);
+  const orphan = gitFixture(root, ['rev-parse', 'HEAD']);
+  gitFixture(root, ['checkout', '-q', '-f', '--detach', mergeRef]);
+  gitFixture(root, ['update-ref', 'refs/remotes/origin/next', orphan]);
+  assert.throws(() => gitFixture(root, ['merge-base', orphan, 'HEAD']),
+    (err) => err.status === 1, 'fixture: merge-base must exit 1 on unrelated histories');
+
+  const messages = [];
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' },
+    { cwd: root, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, b0, 'an unrelated origin/next must keep the pin\'s merge-base');
+  assert.equal(messages.length, 2, `the resolved-base line plus exactly one kept-floor line: ${messages.join(' | ')}`);
+  assert.match(messages[1], /keeping the pin's merge-base/);
+  assert.ok(messages[1].includes(b0), `the kept-floor line must name the pin's merge-base ${b0}: ${messages[1]}`);
+  assert.match(messages[1], /origin\/next/);
+  assert.match(messages[1], /failed/);
 });
 
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
