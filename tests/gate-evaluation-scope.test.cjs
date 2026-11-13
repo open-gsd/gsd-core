@@ -18,7 +18,6 @@ const fc = require('fast-check');
 
 const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow, growHistoryFastImport } = require('./helpers/git-fixture.cjs');
-const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -1691,7 +1690,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin a\n');
     commitDated(repo, 'b.txt', 'test(03-01): b', { author: T }, 'twin b\n');
     // The commit-time lookup is the call that asks for `%ct` and `%at`; drop one line of its output.
-    const dropping = (drop) => intercept(execGit, (args, run) => {
+    const dropping = (drop) => intercept(realExecGit, (args, run) => {
       const r = run();
       return args.some((arg) => String(arg).includes('%ct%x1f%at')) ? { ...r, stdout: r.stdout.split('\n').filter((l) => !l.startsWith(drop)).join('\n') } : r;
     });
@@ -1765,7 +1764,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     repo.git('reset', '--hard', base);
     commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
-    fs.writeFileSync(path.join(repo.dir, a.slice(0, 40)), 'file named like the id\n');
+    fs.writeFileSync(path.join(repo.dir, a), 'file named like the id\n');
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
   });
 
