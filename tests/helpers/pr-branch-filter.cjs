@@ -94,13 +94,13 @@ const readWorkflow = () => parseWorkflow(readWorkflowText());
 
 const BASH_FENCE_OPEN_RE = /^```bash\s*$/;
 const BASH_FENCE_CLOSE_RE = /^```\s*$/;
-// The first line of each shipped bash block the tests run: the mode's TRANSIENT_DIRS, its FILTER_PATHS
-// projection, and the preconditions (PR_BRANCH and the helpers declared with it).
+// A line that identifies each shipped bash block the tests run: the mode's TRANSIENT_DIRS, its FILTER_PATHS
+// projection, the preconditions (PR_BRANCH and the helpers declared with it), the REVS pick list and the pick loop.
 const TRANSIENT_DIRS_MARKER = 'TRANSIENT_DIRS="phases';
 const FILTER_PATHS_MARKER = 'FILTER_PATHS=$(for d';
 const PRECONDITIONS_MARKER = 'PR_BRANCH="${CURRENT_BRANCH}-pr"';
 const REVS_MARKER = 'REVS=$(TO=60';
-const PICK_LOOP_MARKER ='for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
+const PICK_LOOP_MARKER = 'for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
 
 /**
  * Scans `text` for fenced ```bash blocks and returns the verbatim body

@@ -374,10 +374,11 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     // Builds the exact fixture script L2 executes: fixed shell vars plus the
     // REAL create_pr_branch cherry-pick loop extracted verbatim from
     // pr-branch.md — not a hand-written mirror of it. NOTE: INCLUDED_COMMITS
-    // here is deliberately ALL commits `main..feature`; this layer is only
+    // here is by default ALL commits `main..feature`; this layer is only
     // proving the filter recipe (rm/checkout/conflict-halt/empty-skip), not
     // `analyze_commits`' include/exclude classification, which L1 covers.
-    // With `shippedPickList`, INCLUDED_COMMITS comes from the shipped analyze_commits line, and STRUCTURAL_RE and `picked` from the shipped blocks.
+    // With `shippedPickList`, REVS, INCLUDED_COMMITS, STRUCTURAL_RE and
+    // `picked` come from the shipped blocks instead.
     function buildRecipeScript(filterPaths, { shippedPickList = false } = {}) {
       const text = readWorkflowText();
       const pickList = shippedPickList
@@ -409,7 +410,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         // that space-joined this (the pre-#4605 test-side form) would feed
         // the whole list as a single bogus path.
         `FILTER_PATHS="${filterPaths.join('\n')}"`,
-        extractPickLoop(readWorkflowText()),
+        extractPickLoop(text),
       ].join('\n');
     }
 
