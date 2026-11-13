@@ -26,6 +26,7 @@ const {
   WORKFLOW_PATH,
   extractPickLoop,
   extractBashBlockContaining,
+  extractDeclarationLines,
 } = require('./helpers/pr-branch-filter.cjs');
 
 const MARKER = 'refs/gsd/pr-published/strict/main/feature';
@@ -40,7 +41,7 @@ function git(dir, ...args) {
 
 function refkeyFn() {
   const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-  return extractBashBlockContaining(text, 'PR_BRANCH="${CURRENT_BRANCH}-pr"').match(/^refkey\(\) \{.*\}$/m)[0];
+  return extractDeclarationLines(text, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey\\(\\) \\{'])[0];
 }
 
 function commitAll(dir, msg) {

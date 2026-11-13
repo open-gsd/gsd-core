@@ -148,6 +148,17 @@ const extractBashBlockContaining = (text, marker) => {
 
 const extractPickLoop = (text) => extractBashBlockContaining(text, PICK_LOOP_MARKER);
 
+// The shipped one-line declarations that start with each of `names` (a regex source), taken from the
+// one bash block holding `marker`; throws when a name is missing, so a rename fails the test.
+const extractDeclarationLines = (text, marker, names) => {
+  const block = extractBashBlockContaining(text, marker);
+  return names.map((n) => {
+    const m = block.match(new RegExp(`^${n}.*$`, 'm'));
+    if (!m) throw new Error(`pr-branch.md: no line starting with ${n} in the block holding "${marker}"`);
+    return m[0];
+  });
+};
+
 const normalizePaths = (input) => {
   const raw = typeof input === 'string' ? input.split('\n') : input;
   return raw.map((s) => s.replace(/\r$/, '')).filter((s) => s.length > 0);
@@ -203,6 +214,7 @@ module.exports = {
   readWorkflow,
   extractPickLoop,
   extractBashBlockContaining,
+  extractDeclarationLines,
   normalizePaths,
   forbiddenRegex,
   forbiddenPaths,

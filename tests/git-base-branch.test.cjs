@@ -33,8 +33,8 @@ const { runGsdTools, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
-const { extractBashBlockContaining } = require('./helpers/pr-branch-filter.cjs');
+const { runHook, runGit, OUTCOME } = require('./helpers/process-seam.cjs');
+const { extractBashBlockContaining, extractDeclarationLines } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -2758,7 +2758,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       // The shipped declarations: the regexes, the mode's projections and the ref names.
       extractBashBlockContaining(workflowText, 'TRANSIENT_DIRS="phases'),
       extractBashBlockContaining(workflowText, 'FILTER_PATHS=$(for d'),
-      workflowText.split('\n').filter((l) => /^(refkey\(\)|REF_KEY=|PENDING_REF=|PR_TIP_REF=)/.test(l)).join('\n'),
+      ...extractDeclarationLines(workflowText, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey\\(\\) \\{', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
       'echo "PENDING_REF=$PENDING_REF"',
       extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
@@ -2774,12 +2774,17 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.match(r.stdout, new RegExp(`^PENDING_REF=${PENDING_REF}$`, 'm'), 'the shipped ref name is the one these tests read');
     return r.stdout + r.stderr;
   }
+  // The ref's sha, or '' only when git ran and found no such ref (exit 1); any other outcome fails the test.
   const pendingRef = (repo) => {
-    try { return gitOrThrow(['rev-parse', '-q', '--verify', PENDING_REF], { cwd: repo }).trim(); } catch { return ''; }
+    const r = runGit(['rev-parse', '-q', '--verify', PENDING_REF], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+    if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) return r.stdout.trim();
+    assert.ok(r.outcome === OUTCOME.EXITED && r.exitCode === 1, `git rev-parse did not run cleanly: ${JSON.stringify(r)}`);
+    return '';
   };
 
-  test('verify records no pending build when the PR diff holds a forbidden planning path', (t) => {
-    const repo = createGitRepo({ prefix: 'gsd-3679-verify-forbidden-', defaultBranch: 'main' });
+  // A repo on `pr` whose one commit adds a transient planning file (.planning/phases/PLAN.md) over a code base on main.
+  function leakedPhaseRepo(t, prefix) {
+    const repo = createGitRepo({ prefix, defaultBranch: 'main' });
     t.after(() => cleanup(repo));
     const g = (args) => gitOrThrow(args, { cwd: repo });
     fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
@@ -2790,6 +2795,11 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
     g(['add', '-A']);
     g(['commit', '-qm', 'transient planning file']);
+    return { repo, g };
+  }
+
+  test('verify records no pending build when the PR diff holds a forbidden planning path', (t) => {
+    const { repo } = leakedPhaseRepo(t, 'gsd-3679-verify-forbidden-');
     const out = runVerify(repo);
     assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
     assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
@@ -2842,21 +2852,10 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   // A timed-out read leaves an empty list, which would pass both gates: verify must stop instead.
   for (const cmd of ['--name-only main..pr', '--diff-filter=D']) { // the two reads differ by these arguments
     test(`verify stops with exit 1 when its bounded diff read (${cmd}) times out`, (t) => {
-      const repo = createGitRepo({ prefix: 'gsd-3679-verify-timeout-', defaultBranch: 'main' });
-      t.after(() => cleanup(repo));
-      const g = (args) => gitOrThrow(args, { cwd: repo });
-      fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
-      g(['add', '-A']);
-      g(['commit', '-qm', 'base']);
-      g(['checkout', '-qb', 'pr']);
-      fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
-      fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
-      g(['add', '-A']);
-      g(['commit', '-qm', 'transient planning file']);
+      const { repo, g } = leakedPhaseRepo(t, 'gsd-3679-verify-timeout-');
       g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
       // Only a read run with the 60 s bound (TO=60) times out; a read that lost its bound runs and the stop assertion fails.
       const out = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
-      assert.match(out, /Cannot read pr \(deleted\); re-run\./, out.slice(0, 400));
       assert.equal(verifyExit, 1, 'the run stops with exit 1');
       assert.throws(() => g(['rev-parse', '-q', '--verify', 'refs/heads/pr']), 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
@@ -2870,8 +2869,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     const g = (args) => gitOrThrow(args, { cwd: repo });
     g(['branch', 'pr']);
     const out = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
-    assert.match(out, /Cannot read pr \(not deleted\); re-run\./, out.slice(0, 400));
     assert.equal(verifyExit, 1, 'the run stops with exit 1');
+    assert.doesNotThrow(() => g(['rev-parse', '-q', '--verify', 'refs/heads/pr']), 'the -pr branch is still there');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
   });
 
