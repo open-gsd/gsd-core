@@ -121,8 +121,10 @@
  * `scripts/lint-state-field-drift.cjs`'s own precedent: over-reporting
  * (flagging a comment or a string that merely looks like a call) is safe;
  * under-reporting (missing a real bypass) is the failure this guard exists
- * to prevent. `stripComments` does not track quoted strings for exactly
- * this reason — see its own header.
+ * to prevent. `stripComments` does not track quoted strings, which keeps
+ * documentation text that spells a call visible (the safe direction) but also
+ * lets a `//` or a block-comment opener inside a string hide real code; see
+ * its own header and the known-miss list in `findRawStateWrites`.
  *
  * CORRECTION TO ADR-3473 §8.6's TEXT, RECORDED HERE SO A FUTURE READER
  * COMPARING THE ADR TO THIS FILE DOES NOT CONCLUDE THE FILE DRIFTED:
@@ -1203,15 +1205,21 @@ function boundaryAfterLine(write, index) {
  *     such as `const G = 'src/<star>';`, written slash then star):
  *     `stripComments` opens a block comment there and blanks EVERY following
  *     line up to the next block-comment closer, wherever that is (even inside
- *     another string). Scanning resumes after that line; the rest of the file
- *     goes unscanned only when no closer follows. Real instance with no raw
+ *     another string). Scanning resumes right after that closer, on the
+ *     closer's own line (code after it on that line is scanned); the rest of
+ *     the file goes unscanned only when no closer follows. Real instance with no raw
  *     write in its span: `src/git-base-branch.cts:479-511`.
- *   - A braceless conditional or loop-body reassignment (`if (c) p = 'x';`,
- *     `else p = 'y';`, `for (const x of xs) p = x;`, each after
- *     `p = path.join(dir, 'STATE.md')`): the walk back from the write stops
+ *   - A braceless body that reassigns the name (`if (c) p = 'x';`,
+ *     `else p = 'y';`, `} else p = 'y';` on the closer's line,
+ *     `} else if (d) p = 'y';`, `for (const x of xs) p = x;`,
+ *     `for (const k in o) p = k;`, `while (c) p = x;`, `do p = x; while (c);`,
+ *     and an `if (c)` whose body starts on the next line), each after
+ *     `p = path.join(dir, 'STATE.md')`: the walk back from the write stops
  *     at the reassignment, whose right-hand side has no boundary, so the
- *     earlier STATE.md assignment is never read. The braced forms
- *     (`if (c) { p = 'x'; }`) are reported, each with a control row.
+ *     earlier STATE.md assignment is never read. Each of those nine forms has
+ *     a test row, and each braced form (`if (c) { p = 'x'; }`) is reported
+ *     and has a control. A `switch` case body is not a miss and is not
+ *     listed.
  *   - A regex literal in the first argument holding a `)`
  *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
  *     and brackets, not regex literals. The `)` in the literal pops the depth
