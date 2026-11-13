@@ -377,6 +377,9 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
   // The budget-limit invariant (CONTEXT.md, RULESET.TESTS.property-based-testing):
   // for any tier and cap, adding shards never raises the share, so a count that
   // clears the near-cap line also clears it at every higher count.
+  // This holds algebraically for any non-negative constants, so it can only
+  // catch a negative one. It does not guard the fit: the worst-row coverage
+  // test below is the check that fails on a refit that is too low.
   await t.test('adding shards never raises the projected share of the cap', () => {
     fc.assert(fc.property(
       fc.integer({ min: 1, max: 64 }),
