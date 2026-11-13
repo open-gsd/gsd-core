@@ -41,6 +41,7 @@ const { gitOrThrow, refShaOrEmpty, throwIfFailed, toLegacyResult, DEFAULT_GIT_TI
  */
 const ARBITRARY_OVERRIDE_TIMEOUT_MS = 12345;
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { isolatedGitEnv } = require('./helpers/isolated-env.cjs');
 
 /**
  * Runs `fn`, returning the error it throws. Fails the calling test with a
@@ -265,7 +266,15 @@ describe('git-fixture: refShaOrEmpty', () => {
     assert.equal(refShaOrEmpty('refs/heads/does-not-exist', { cwd: dir }), '');
   });
 
-  test('an exit other than 1 rethrows (an empty string would read as "no ref")', () => {
+  test('a git exit other than 1 (128: not a repository) rethrows, not "no ref"', () => {
+    const notRepo = createTempDir('git-fixture-notrepo-');
+    try {
+      const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: notRepo, env: isolatedGitEnv(notRepo) }));
+      assert.equal(caught.status, 128);
+    } finally { cleanup(notRepo); }
+  });
+
+  test('a spawn failure (status null) rethrows', () => {
     const caught = captureThrown(() => refShaOrEmpty('refs/heads/x', { cwd: path.join(dir, 'no-such-subdirectory') }));
     assert.equal(caught.outcome, OUTCOME.SPAWN_FAILED);
   });

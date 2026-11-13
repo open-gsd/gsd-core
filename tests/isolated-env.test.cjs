@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, isolatedGitEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -207,6 +207,16 @@ describe('isolatedEnv: stripped and inherited variables', () => {
     const base = { ...SYSTEM_VARS, LANG: 'xx_XX.UTF-8' };
     const view = childView(isolatedEnv({ home, base }));
     assert.equal(view.env.LANG, 'xx_XX.UTF-8');
+  });
+});
+
+describe('isolatedGitEnv', () => {
+  test('keeps the developer\'s git config out of a git child', (t) => {
+    const home = tmp(t, 'gsd-prfleet-gitenv-home-');
+    const env = isolatedGitEnv(home);
+    assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+    assert.equal(env.HOME, home);
   });
 });
 

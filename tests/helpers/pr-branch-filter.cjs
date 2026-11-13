@@ -166,7 +166,7 @@ const extractDeclarationLines = (text, marker, names) => {
 // The shipped multi-line function `name`, from its `name() {` line to the closing `}` at column 0, taken from the
 // one bash block holding `marker`; throws when it is missing, so a rename fails the test.
 const extractFunction = (text, marker, name) => {
-  const m = extractBashBlockContaining(text, marker).match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}$`, 'm'));
+  const m = extractBashBlockContaining(text, marker).match(new RegExp(`^${escapeRe(name)}\\(\\) \\{[\\s\\S]*?^\\}$`, 'm'));
   if (!m) throw new Error(`pr-branch.md: no function ${name} in the block holding "${marker}"`);
   return m[0];
 };

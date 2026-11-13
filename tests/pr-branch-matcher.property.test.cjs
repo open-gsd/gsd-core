@@ -40,18 +40,21 @@ const awkProgram = lazy(() => {
   return m[1];
 });
 
-// Runs the shipped awk over `input` through bash, as the workflow does (input and program via files).
-function match(input) {
-  const tmp = createTempDir('gsd-prmatcher-');
+// The one bash runner: `files` (name -> content) and `script` go into a fresh dir, bash runs the script there
+// under the isolated env and must exit 0; returns the trimmed stdout.
+function runBash(prefix, files, script) {
+  const tmp = createTempDir(prefix);
   try {
-    fs.writeFileSync(path.join(tmp, 'in.txt'), input);
-    fs.writeFileSync(path.join(tmp, 'prog.awk'), awkProgram());
-    fs.writeFileSync(path.join(tmp, 'run.sh'), 'awk -f prog.awk < in.txt\n');
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(tmp, name), content);
+    fs.writeFileSync(path.join(tmp, 'run.sh'), `${script}\n`);
     const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp, env: isolatedEnv({ home: tmp }) });
     assert.equal(r.exitCode, 0, r.stderr);
     return r.stdout.trim();
   } finally { cleanup(tmp); }
 }
+
+// Runs the shipped awk over `input` through bash, as the workflow does (input and program via files).
+const match = (input) => runBash('gsd-prmatcher-', { 'in.txt': input, 'prog.awk': awkProgram() }, 'awk -f prog.awk < in.txt');
 
 const hex = (prefix, i) => `${prefix}${i.toString(16).padStart(39, '0')}`;
 // Names that spelled the old section markers, plus ordinary ones.
@@ -146,28 +149,21 @@ const ARMS = [
 // One bash run per mode: for each file list, picked's verdict and the arms' verdict, then picked's verdict on a failed lookup.
 function verdicts(lists, strict) {
   const { structuralRe } = readWorkflow();
-  const tmp = createTempDir('gsd-prpicked-');
-  try {
-    // NUL-terminated, as `git -z --name-only` prints: the shipped `| tr '\0' '\n'` must split it.
-    lists.forEach((l, i) => fs.writeFileSync(path.join(tmp, `${i}.txt`), l.map((p) => `${p}\0`).join('')));
-    const script = [
-      `PR_STRICT=${strict}`,
-      `STRUCTURAL_RE='${structuralRe}'`,
-      pickedFn(),
-      `for i in $(seq 0 ${lists.length - 1}); do`,
-      '  _to() { cat "$i.txt"; }; git() { cat "$i.txt"; }; HASH=x',
-      '  P=$(picked x && echo 1 || echo 0)',
-      countsBlock(),
-      `  A=$(${ARMS})`,
-      '  echo "$P $A"',
-      'done',
-      '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
-    ].join('\n');
-    fs.writeFileSync(path.join(tmp, 'run.sh'), `${script}\n`);
-    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp, env: isolatedEnv({ home: tmp }) });
-    assert.equal(r.exitCode, 0, r.stderr);
-    return r.stdout.trim().split(/\r?\n/);
-  } finally { cleanup(tmp); }
+  // NUL-terminated, as `git -z --name-only` prints: the shipped `| tr '\0' '\n'` must split it.
+  const files = Object.fromEntries(lists.map((l, i) => [`${i}.txt`, l.map((p) => `${p}\0`).join('')]));
+  return runBash('gsd-prpicked-', files, [
+    `PR_STRICT=${strict}`,
+    `STRUCTURAL_RE='${structuralRe}'`,
+    pickedFn(),
+    `for i in $(seq 0 ${lists.length - 1}); do`,
+    '  _to() { cat "$i.txt"; }; git() { cat "$i.txt"; }; HASH=x',
+    '  P=$(picked x && echo 1 || echo 0)',
+    countsBlock(),
+    `  A=$(${ARMS})`,
+    '  echo "$P $A"',
+    'done',
+    '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
+  ].join('\n')).split(/\r?\n/);
 }
 
 const PATHS = ['-n', 'src/a.js', 'src/é.js', 'README.md', '.planningX/a', '.planning/STATE.md', '.planning/STATEX.md', '.planning/ROADMAP.md',

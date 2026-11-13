@@ -239,4 +239,15 @@ function createHermeticRoot(prefix, { parent } = {}) {
   return root;
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable };
+/**
+ * The env of a test child that runs git: `isolatedEnv` plus no global or system
+ * git config, so a developer's `commit.gpgsign` or `core.hooksPath` stays out.
+ *
+ * @param {string} home Absolute home dir (see `isolatedEnv`).
+ * @returns {Record<string, string>}
+ */
+function isolatedGitEnv(home) {
+  return isolatedEnv({ home, override: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+}
+
+module.exports = { isolatedEnv, isolatedGitEnv, isolatedPath, createHermeticRoot, linkExecutable };

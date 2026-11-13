@@ -20,7 +20,7 @@ const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { isolatedGitEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   WORKFLOW_PATH,
@@ -34,7 +34,7 @@ const MARKER = 'refs/gsd/pr-published/strict/main/feature';
 const PENDING = 'refs/gsd/pr-built/strict/main/feature';
 const BUILT = 'refs/gsd/pr-built-head/strict/main/feature';
 
-const ISOLATED_ENV = (home) => isolatedEnv({ home, override: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+const ISOLATED_ENV = isolatedGitEnv;
 
 function git(dir, ...args) {
   return gitOrThrow(args, { cwd: dir, env: ISOLATED_ENV(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();

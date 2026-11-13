@@ -34,7 +34,7 @@ const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed, refShaOrEmpty } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { isolatedGitEnv } = require('./helpers/isolated-env.cjs');
 const { extractBashBlockContaining, extractDeclarationLines } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -2744,7 +2744,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   const PENDING_REF = 'refs/gsd/pr-built/default/main/feature';
   // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
   // The child env of the verify runs and the ref reads: the developer's HOME, git config and BASH_ENV stay out.
-  const verifyEnv = (repo) => isolatedEnv({ home: repo, override: { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } });
+  const verifyEnv = isolatedGitEnv;
   // Returns `{ out, exitCode }`: the run's stdout and stderr, and its exit status.
   function runVerify(repo, to = '_to() { "$@"; }') {
     const workflowText = readFileNormalized(PR_BRANCH_MD); // read here, so a failure fails the named test
@@ -2774,7 +2774,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       env: verifyEnv(repo),
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
-    assert.match(r.stdout, new RegExp(`^PENDING_REF=${PENDING_REF}$`, 'm'), 'the shipped ref name is the one these tests read');
+    assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
     return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }
   const refSha = (repo, ref) => refShaOrEmpty(ref, { cwd: repo, env: verifyEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
