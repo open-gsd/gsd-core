@@ -1621,7 +1621,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push({ args, opts }); return execGit(args, opts); });
     assert.equal(seen.length, 3);
     assert.equal('maxBuffer' in seen[0].opts || 'maxBuffer' in seen[1].opts, false, 'the id lookups keep the default cap');
-    assert.ok(seen[2].args.includes(`--max-age=${T}`), 'the listing starts at the oldest id');
+    assert.ok(seen[2].args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
     assert.equal(seen[2].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
   });
 
@@ -1636,14 +1636,39 @@ describe('subjectsOccurOnHead (#5354)', () => {
     }
   });
 
-  test('[boundary] a kept twin under a child dated before the window is not seen (git drops the parents of a too-old commit)', () => {
+  test('[boundary] a kept twin under a child dated before the window is still found (the date filters, it does not cut the walk)', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
     commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
-    assert.equal(subjectsOccurOnHead(repo.dir, [a]), false);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  });
+
+  test('[boundary] the window opens at the earliest id: a twin of the older id dated between the two ids counts', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const older = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 1000 });
+    const newer = commitDated(repo, 'b.txt', 'test(03-01): b', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 500 }, 'twin a\n');
+    commitDated(repo, 'b.txt', 'test(03-01): b', { author: T }, 'twin b\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [newer, older]), true);
+  });
+
+  test('[negative] a commit time git does not report is no answer, never a wider or narrower window', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    const b = commitDated(repo, 'b.txt', 'test(03-01): b', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin a\n');
+    commitDated(repo, 'b.txt', 'test(03-01): b', { author: T }, 'twin b\n');
+    // The second call lists the commit times; drop one line of its output.
+    const dropping = (drop) => { let n = 0; return (args, opts) => { const r = execGit(args, opts); return ++n === 2 ? { ...r, stdout: r.stdout.split('\n').filter((l) => !l.startsWith(drop)).join('\n') } : r; }; };
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping(b)), null);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping('')), null);
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {

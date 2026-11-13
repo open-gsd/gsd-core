@@ -447,12 +447,14 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
     const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
-    // The listing starts at the oldest id's earlier of committer and author time (the window, not a byte cap, is its bound).
-    // git's `--max-age` reads the committer time and drops a too-old commit together with its parents, so a rewrite
-    // whose committer clock lags the window, or whose child does, reads as a squash (tests: the `[boundary]` twin cases).
+    // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids
+    // (the window, not a byte cap, bounds its output). `--since-as-filter` hides older commits without cutting the walk,
+    // so a kept commit under a too-old child is still listed. A rewrite whose own committer clock is behind that time
+    // reads as a squash (test: the `[boundary]` twin at limit-1).
     const times = commitTimes(git, ids, true);
-    const since = times.size === 0 ? 0 : Math.min(...times.values());
-    const onHead = new Set(parseLog(git(['log', logFormat(false), `--max-age=${since}`, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
+    if (times.size < new Set(ids).size) return null;
+    const since = Math.min(...times.values());
+    const onHead = new Set(parseLog(git(['log', logFormat(false), `--since-as-filter=@${since}`, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
