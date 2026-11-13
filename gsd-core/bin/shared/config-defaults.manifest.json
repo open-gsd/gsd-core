@@ -79,7 +79,8 @@
   },
   "hooks": {
     "context_warnings": true,
-    "workflow_guard": false
+    "workflow_guard": false,
+    "agent_model_guard": "warn"
   },
   "ship": {
     "pr_body_sections": []

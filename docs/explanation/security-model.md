@@ -311,6 +311,31 @@ with the guard enabled, a Bash call that trips an internal error is blocked
 even when it was not a force-add; that is the conservative direction for the
 one hard block this hook owns.
 
+**Runtime hook: `gsd-agent-isolation-guard.js` — model check.** The
+`hooks.agent_model_guard` check (Claude Code only) is advisory,
+defence-in-depth: it warns by default and denies a wrong or an omitted
+model only when set to `"deny"`. Its baseline is recomputed at every
+dispatch, for every workstream an `init --ws` of the same session recorded
+(names only, the newest eight) and for the one `GSD_WORKSTREAM` or the session's pointer
+selects; a model that matches any of them passes. The check allows where it cannot
+establish the workstream `init` used: a session whose record holds an entry older
+than 12 hours, and, where workstreams exist, a dispatch with no session id.
+Each `init` where the guard applies removes this project's record files
+that hold no readable entry from the last 7 days, an empty, unreadable or
+oversized file included.
+The legitimate-escalation record
+`.gsd/model-escalation-<agent>.json` is unauthenticated, so any
+orchestrator that passes a model of the same tier family within its
+10-minute window is allowed; when both the dispatch and the record carry
+a session id, only a record written in that session counts. It is a
+single slot per agent type, and nothing clears it before it expires. The
+check fails open on any inability to verify, so it is not a security
+boundary. `resolve-execution` writes no record, and reports it only as a
+stderr line, when `.gsd` or `.gsd/.gitignore` is a symlink, the directory
+is unwritable, or `--project-dir`/`--cwd` names another project than the
+session's working directory; under `"deny"` the escalated model is then
+blocked.
+
 ---
 
 ## Layer 3 — Repository and dependency integrity

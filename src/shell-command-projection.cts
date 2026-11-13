@@ -1642,19 +1642,21 @@ export function retryRenameSync(fromPath: string, toPath: string): void {
 const MAX_PRIOR_BYTES = 2 * 1024 * 1024;
 
 /**
- * The Markdown document a write replaces, or undefined when there is none worth
- * diffing against: no file, not a regular file (a FIFO or device reports size 0
- * and would block or never end), unreadable, or larger than MAX_PRIOR_BYTES. The
+ * The bounded regular-file reader: the text of `filePath`, or undefined when there is
+ * none worth reading: no file, not a regular file (a FIFO or device reports size 0
+ * and would block or never end), unreadable, or larger than maxBytes (MAX_PRIOR_BYTES unless a caller passes a smaller bound). The
  * bound is enforced on the bytes actually read from one open descriptor, so a
- * file that grows after the check cannot exceed it.
+ * file that grows after the check cannot exceed it. Callers: the scoped Markdown
+ * write's read of the `prior` document it replaces, readCarry's read of the
+ * `init --ws` carry file in active-workstream-store, and readEscalation's read of the escalation record (`noFollow`: a link at the path is refused, O_NOFOLLOW where the platform has it).
  */
-function readPriorMarkdown(filePath: string, encoding: BufferEncoding): string | undefined {
+export function readBoundedRegularFile(filePath: string, encoding: BufferEncoding, maxBytes = MAX_PRIOR_BYTES, noFollow = false): string | undefined {
   let fd: number | undefined;
   try {
     // O_NONBLOCK keeps opening a FIFO from waiting for a writer; it is absent on Windows.
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
+    fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0) | (noFollow ? (fs.constants.O_NOFOLLOW ?? 0) : 0));
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_PRIOR_BYTES) return undefined;
+    if (!stat.isFile() || stat.size > maxBytes) return undefined;
     // One byte of headroom: reading it means the file grew past what was measured.
     const buffer = Buffer.alloc(stat.size + 1);
     let length = 0;
@@ -2212,7 +2214,7 @@ export function platformWriteSync(filePath: string, content: string, opts: Platf
   // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
   let prior = opts.prior;
   if (prior === undefined && opts.verbatim !== true && path.extname(filePath).toLowerCase() === '.md') {
-    prior = readPriorMarkdown(filePath, opts.encoding ?? 'utf-8');
+    prior = readBoundedRegularFile(filePath, opts.encoding ?? 'utf-8');
   }
   const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
   if (opts.allowSpecialTarget === true) {

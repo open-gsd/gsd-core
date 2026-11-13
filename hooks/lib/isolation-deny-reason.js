@@ -34,6 +34,8 @@ const REASON_CODE = Object.freeze({
   // Isolation resolves to "harness-worktree" and the workspace root is
   // confirmed NOT an isolated worktree.
   NOT_ISOLATED_WORKTREE: 'not_isolated_worktree',
+  // #5328: Agent()/Task() model differs from the model GSD resolved for that agent.
+  AGENT_MODEL_MISMATCH: 'agent_model_mismatch',
 });
 
 // #4594 row 15 / F2: values interpolated into a deny reason (sentinel/dispatch

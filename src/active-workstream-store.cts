@@ -13,9 +13,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir, readBoundedRegularFile } from './shell-command-projection.cjs';
 import {
   isValidActiveWorkstreamName,
+  validateActiveWorkstreamName,
   isReservedWorkstreamName,
   reservedWorkstreamNameMessage,
 } from './workstream-name-policy.cjs';
@@ -513,9 +514,101 @@ function applyResolvedWorkstreamEnv(
   env['GSD_WORKSTREAM'] = resolution.ws;
 }
 
+// #5328: the workstreams an `init --ws` of `session` used, kept session-scoped beside the pointer files as lines of
+// "<name> <written at, ms>" (names, never models) so the Agent model guard compares against what `init` reported.
+// A carry with an entry older than INIT_WORKSTREAM_MAX_AGE_MS cannot establish the workstream (the guard allows);
+// `init` prunes a file with no readable entry from the last INIT_WORKSTREAM_PRUNE_AGE_MS. No session id: nothing is kept.
+/** Key prefix of an `init --ws` carry file: the writer and the sweep share it. */
+const INIT_WORKSTREAM_KEY_PREFIX = 'init-ws-';
+
+function initWorkstreamKey(session: string | undefined): string | null {
+  const token = sanitizeWorkstreamSessionToken(session);
+  return token ? `${INIT_WORKSTREAM_KEY_PREFIX}${token}` : null;
+}
+
+/** How long an `init --ws` entry counts: longer than one execute-phase run, yet it expires within a day; every `init --ws` of the same name restarts it. */
+const INIT_WORKSTREAM_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+/** How long a carry file stays after its newest entry. Until then an expired entry reads as "the workstream cannot be established" (the guard allows), not as "no carry". */
+const INIT_WORKSTREAM_PRUNE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** A carry keeps the newest INIT_WORKSTREAM_MAX_ENTRIES entries. */
+const INIT_WORKSTREAM_MAX_ENTRIES = 8;
+
+/** The longest name a carry records: a workstream directory name (255 bytes; the charset is ASCII). */
+const INIT_WORKSTREAM_NAME_MAX_BYTES = 255;
+
+/** The read cap, above which a file is not a carry: every entry at its longest (name, space, the longest text of a Number, 25 bytes as in `-0.0000012345678901234567`, newline). The writer keeps at most INIT_WORKSTREAM_MAX_ENTRIES entries, each with a name that passes the name rule within INIT_WORKSTREAM_NAME_MAX_BYTES, so a file it writes stays within this cap. */
+const INIT_WORKSTREAM_MAX_BYTES = INIT_WORKSTREAM_MAX_ENTRIES * (INIT_WORKSTREAM_NAME_MAX_BYTES + 1 + 25 + 1);
+
+interface InitWorkstreamEntry { name: string; at: number }
+
+function parseInitWorkstream(raw: string | null): InitWorkstreamEntry[] {
+  return (raw ?? '').split('\n').flatMap((line) => {
+    const [name, at] = line.trim().split(' ');
+    return name && Number.isFinite(Number(at)) ? [{ name, at: Number(at) }] : [];
+  });
+}
+
+const withinAge = (at: number, now: number, limit: number): boolean => now - at >= 0 && now - at < limit;
+
+/** The carry file's text, or null when it is missing, not a regular file, unreadable or longer than INIT_WORKSTREAM_MAX_BYTES bytes: the bounded read (O_NONBLOCK, `fstat` on the opened descriptor, refusal on the size before any byte is read) is readBoundedRegularFile's, so a FIFO, a device or an oversized file planted at the path never blocks, streams or is loaded. */
+function readCarry(file: string): string | null {
+  return readBoundedRegularFile(file, 'utf-8', INIT_WORKSTREAM_MAX_BYTES) ?? null;
+}
+
+/** Removes this project's carry files with no readable entry from the last INIT_WORKSTREAM_PRUNE_AGE_MS, an empty, unreadable or oversized one included (best effort, one entry at a time). `init` calls it where the guard applies, so a session that never runs `init --ws` again still sweeps. */
+function pruneInitWorkstreams(cwd: string, now: number): void {
+  try {
+    const { dirPath } = getSessionScopedWorkstreamFile(cwd, INIT_WORKSTREAM_KEY_PREFIX) as SessionScopedWorkstreamFile;
+    for (const f of fs.readdirSync(dirPath)) {
+      if (!f.startsWith(INIT_WORKSTREAM_KEY_PREFIX)) continue;
+      const file = path.join(dirPath, f);
+      try {
+        if (!parseInitWorkstream(readCarry(file)).some((e) => withinAge(e.at, now, INIT_WORKSTREAM_PRUNE_AGE_MS))) fs.rmSync(file, { force: true });
+      } catch { /* an entry that cannot be removed does not stop the sweep */ }
+    }
+  } catch { /* pruning is cleanup only */ }
+}
+
+/** Records `name` for `session` at `now` beside the session's other entries (those older than INIT_WORKSTREAM_PRUNE_AGE_MS go; an expired one stays, so a lapse remains visible); sweeps this project's old carries first; false when nothing was recorded (no session id, an invalid name, or one longer than INIT_WORKSTREAM_NAME_MAX_BYTES). */
+function recordInitWorkstream(cwd: string, session: string | undefined, name: string, now: number): boolean {
+  pruneInitWorkstreams(cwd, now); // before any early return: an init without a session id still sweeps
+  const key = initWorkstreamKey(session);
+  const scoped = key ? getSessionScopedWorkstreamFile(cwd, key) : null;
+  const adapter = key ? createSessionScopedPointerAdapter(cwd, key) : null;
+  const { value } = validateActiveWorkstreamName(name);
+  const recordable = (n: string | null): n is string => n !== null && validateWorkstreamName(n) && n.length <= INIT_WORKSTREAM_NAME_MAX_BYTES;
+  if (!scoped || !adapter || !recordable(value)) return false;
+  const kept = parseInitWorkstream(readCarry(scoped.filePath)).filter((e) => e.name !== value && recordable(e.name) && withinAge(e.at, now, INIT_WORKSTREAM_PRUNE_AGE_MS));
+  kept.push({ name: value, at: now });
+  adapter.write(kept.slice(-INIT_WORKSTREAM_MAX_ENTRIES).map((e) => `${e.name} ${e.at}`).join('\n'));
+  return true;
+}
+
+/** The workstream names `session` recorded, oldest first; null when no carry is readable; [] when one exists and cannot be trusted: no parseable entry, or any entry older than INIT_WORKSTREAM_MAX_AGE_MS (the run it stands for may still dispatch, so the workstream cannot be established). */
+function peekInitWorkstream(cwd: string, session: string | undefined, now: number): string[] | null {
+  const key = initWorkstreamKey(session);
+  const scoped = key ? getSessionScopedWorkstreamFile(cwd, key) : null;
+  const raw = scoped ? readCarry(scoped.filePath) : null;
+  if (raw === null) return null;
+  const entries = parseInitWorkstream(raw);
+  return entries.length > 0 && entries.every((e) => withinAge(e.at, now, INIT_WORKSTREAM_MAX_AGE_MS)) ? entries.map((e) => e.name) : [];
+}
+
 export = {
   validateWorkstreamName,
   getWorkstreamSessionKey,
+  WORKSTREAM_SESSION_ENV_KEYS,
+  recordInitWorkstream,
+  peekInitWorkstream,
+  pruneInitWorkstreams,
+  INIT_WORKSTREAM_KEY_PREFIX,
+  INIT_WORKSTREAM_MAX_AGE_MS,
+  INIT_WORKSTREAM_PRUNE_AGE_MS,
+  INIT_WORKSTREAM_MAX_ENTRIES,
+  INIT_WORKSTREAM_NAME_MAX_BYTES,
+  INIT_WORKSTREAM_MAX_BYTES,
   createSharedPointerAdapter,
   createSessionScopedPointerAdapter,
   createMemoryPointerAdapter,

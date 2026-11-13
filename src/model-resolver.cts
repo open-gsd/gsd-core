@@ -9,10 +9,11 @@
  * the module boundary moved. The core.cjs re-export spine was retired in
  * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
- * Dependencies (leaf modules only):
+ * Dependencies:
  *   - node:path (project config path for the #2297 omit gate; read via config-loader's bounded reader, #5759)
- *   - ./runtime-name-policy.cjs (resolveRuntimeNameFromCandidates — canonicalize the active runtime)
- *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path)
+ *   - ./runtime-name-policy.cjs (canonicalizeRuntimeName, hostBehaviorsFor — the active runtime and its native-alias behaviour)
+ *   - ./runtime-slash.cjs    (resolveActiveRuntime; imports further modules)
+ *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path; imports further modules)
  *   - ./config-loader.cjs    (loadConfig)
  *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
  *   - ./model-profiles.cjs   (MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier)
@@ -522,8 +523,9 @@ function resolveTierInternal(cwd: string, agentType: string): string {
   return resolveTierFromConfig(loadConfig(cwd), agentType);
 }
 
-function resolveModelInternal(cwd: string, agentType: string): string {
-  const config = loadConfig(cwd);
+// `loadOptions` reaches loadConfig: a read-only caller (the #5328 hook) passes `{ persist: false }`.
+function resolveModelInternal(cwd: string, agentType: string, loadOptions: Record<string, unknown> = {}): string {
+  const config = loadConfig(cwd, loadOptions);
 
   // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
   // the claude runtime, mirroring the model_policy path #1144; non-Claude
@@ -871,8 +873,8 @@ function sanitizeProviderEscalation(raw: unknown): string[] {
  *
  * `applicable` is the caller's policy decision (only a quota-exceeded
  * classification should consult this ladder). It is a parameter rather than a
- * class check here so this module keeps depending only on leaf modules, per
- * CONTEXT.md's Model Resolution module contract.
+ * class check here so this module takes no dependency on the failure
+ * classifier (CONTEXT.md's Model Resolver Module entry lists its imports).
  *
  * Attempt 0 — and every non-applicable call — stays on the source model.
  * `exhausted` reports that the ladder is spent so the caller can fail loudly
@@ -1116,6 +1118,7 @@ export = {
   resolveModelInternal,
   resolveTierInternal,
   resolveTierFromConfig,
+  hasNativeModelAliases,
   _resetModelPolicyWarningCacheForTests,
   _resetModelOverrideWarningCacheForTests,
   _setInstallRuntimeMarkerForTests,
