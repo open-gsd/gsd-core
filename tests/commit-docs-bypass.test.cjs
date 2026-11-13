@@ -844,7 +844,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, createTempGitProject, captureFdSync } = require('./helpers.cjs');
+const { cleanup, createTempGitProject, captureFdSync, isolateGitConfigEnv } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -918,9 +918,15 @@ function runConfigSetExpectError(tmpDir, keyPath, value) {
 
 describe('#3587 per-phase commit_docs override', () => {
   let tmpDir;
+  let restoreGitConfig;
 
-  beforeEach(() => { tmpDir = createTempGitProject(); });
-  afterEach(() => cleanup(tmpDir));
+  // A global core.excludesFile that lists `.planning` would gitignore every
+  // fixture's `.planning/` and turn C3's and D3's commits into skips.
+  beforeEach(() => { restoreGitConfig = isolateGitConfigEnv(); tmpDir = createTempGitProject(); });
+  // Restore first: restoreGitConfig() puts every GIT_* variable back before it
+  // removes anything, so a cleanup that throws cannot leave later suites on the
+  // isolated git config.
+  afterEach(() => { restoreGitConfig(); cleanup(tmpDir); });
 
   // ── A: registration — the key must actually exist ──────────────────────
   describe('A: registration', () => {
@@ -1291,5 +1297,350 @@ describe('#3587 per-phase commit_docs override', () => {
     });
   });
 });
+  });
+}
+
+/**
+ * #5470: `config-get commit_docs` is the read every workflow gate runs
+ * (`COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")`).
+ * It walked the literal key path, so after the how-to's
+ * `config-set planning.commit_docs false` it reported "Key not found", the
+ * gate fell back to "true", and the quick task's pre-dispatch step committed
+ * `.planning/`. Both spellings must answer with the runtime's resolved policy.
+ */
+{
+  const { describe, test, beforeEach, afterEach } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('fs');
+  const path = require('path');
+  const { cleanup, createTempGitProject, captureFdSync, runGsdTools, isolateConfigReadEnv } = require('./helpers.cjs');
+  const configCli = require('../gsd-core/bin/lib/config.cjs');
+  const { loadConfigResolved, CONFIG_REASON } = require('../gsd-core/bin/lib/config-loader.cjs');
+
+  function writeConfig(tmpDir, config) {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(config, null, 2));
+  }
+
+  describe('#5470 config-get commit_docs returns the runtime-resolved policy', () => {
+    let tmpDir;
+    let gsdHome;
+    let isolation;
+
+    // A value inherited from the developer's shell or git config would point
+    // every case elsewhere: see isolateConfigReadEnv.
+    beforeEach(() => {
+      isolation = isolateConfigReadEnv();
+      gsdHome = isolation.gsdHome;
+      tmpDir = createTempGitProject();
+    });
+    afterEach(() => {
+      isolation.restore();
+      cleanup(tmpDir);
+    });
+
+    function configGet(keyPath, defaultValue) {
+      return captureFdSync(1, () => configCli.cmdConfigGet(tmpDir, keyPath, true, defaultValue)).trim();
+    }
+
+    function gitignorePlanning() {
+      fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.planning/\n');
+    }
+
+    /** Runs fn with GSD_WORKSTREAM set, restoring the caller's value. */
+    function withWorkstream(ws, fn) {
+      const saved = process.env.GSD_WORKSTREAM;
+      process.env.GSD_WORKSTREAM = ws;
+      try {
+        return fn();
+      } finally {
+        if (saved === undefined) delete process.env.GSD_WORKSTREAM;
+        else process.env.GSD_WORKSTREAM = saved;
+      }
+    }
+
+    test('nested planning.commit_docs: false (the how-to form) reads back false through the flat key', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      assert.strictEqual(configGet('commit_docs'), 'false');
+    });
+
+    test('flat commit_docs: false reads back false through the nested key', () => {
+      writeConfig(tmpDir, { commit_docs: false });
+      assert.strictEqual(configGet('planning.commit_docs'), 'false');
+    });
+
+    test('a gitignored .planning/ with no explicit value reads false through both keys', () => {
+      writeConfig(tmpDir, {});
+      gitignorePlanning();
+      assert.strictEqual(configGet('commit_docs'), 'false');
+      assert.strictEqual(configGet('planning.commit_docs'), 'false');
+    });
+
+    test('--default never outranks the resolved policy', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      assert.strictEqual(configGet('commit_docs', 'true'), 'false');
+    });
+
+    // The loader always resolves commit_docs, so config-get now answers in states
+    // where the literal walk failed. Each such state is pinned to the value the
+    // runtime resolves in it.
+    function runtimeCommitDocs() {
+      return loadConfigResolved(tmpDir, { workstream: null, persist: false }).config.commit_docs;
+    }
+
+    test('with no .planning/ directory, both keys read the default rather than "No config.json"', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      assert.strictEqual(runtimeCommitDocs(), true);
+      assert.strictEqual(configGet('commit_docs'), 'true');
+      assert.strictEqual(configGet('planning.commit_docs'), 'true');
+    });
+
+    test('with no project config, the global defaults file is what reads back', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: false }));
+      assert.strictEqual(runtimeCommitDocs(), false);
+      assert.strictEqual(configGet('commit_docs'), 'false');
+    });
+
+    // `--default` does not apply to these keys: the loader always resolves a value,
+    // so a caller's `--default false` fail-closed guard reads the resolved policy.
+    function writeGlobalDefaults(defaults) {
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(defaults));
+    }
+
+    test('with no .planning/ directory, --default false reads the built-in default true', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      assert.strictEqual(configGet('commit_docs', 'false'), 'true');
+      assert.strictEqual(configGet('planning.commit_docs', 'false'), 'true');
+    });
+
+    test('with no .planning/ directory, --default false reads the global defaults file when it sets commit_docs', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      writeGlobalDefaults({ commit_docs: false });
+      assert.strictEqual(runtimeCommitDocs(), false);
+      assert.strictEqual(configGet('commit_docs', 'false'), 'false');
+      assert.strictEqual(configGet('commit_docs', 'true'), 'false');
+    });
+
+    // `.planning/` present with no config.json is the one state where the loader
+    // resolves built-in defaults without reading ~/.gsd/defaults.json.
+    test('with .planning/ but no config.json, commit_docs reads true and the global defaults file is not consulted', () => {
+      cleanup(path.join(tmpDir, '.planning', 'config.json'));
+      assert.ok(fs.existsSync(path.join(tmpDir, '.planning')), 'the fixture keeps .planning/');
+      assert.strictEqual(configGet('commit_docs'), 'true');
+      assert.strictEqual(configGet('commit_docs', 'false'), 'true');
+      writeGlobalDefaults({ commit_docs: false });
+      assert.strictEqual(runtimeCommitDocs(), true);
+      assert.strictEqual(configGet('commit_docs'), 'true');
+    });
+
+    // An unusable config.json is not an absent one (ADR-1411). The loader discards
+    // it and resolves defaults, so printing its `commit_docs` would report `true`
+    // (commit) as if the user had set it. config-get fails instead, with the reason
+    // the literal walk gives a file it cannot parse. The loader's warning naming
+    // the file comes first on stderr; the JSON error is the last line.
+    function configGetCli(args, env = {}) {
+      return runGsdTools(['query', 'config-get', ...args], tmpDir, { GSD_HOME: gsdHome, GSD_JSON_ERRORS: '1', ...env });
+    }
+    function assertParseFailure(args, env, label) {
+      const result = configGetCli(args, env);
+      assert.strictEqual(result.success, false, `${label}: config-get ${args.join(' ')} must fail`);
+      assert.strictEqual(result.output.trim(), '', `${label}: nothing on stdout`);
+      const lastLine = result.error.trim().split(/\r?\n/).pop();
+      assert.strictEqual(JSON.parse(lastLine).reason, 'config_parse_failed', label);
+    }
+    const LOADER_KEYS = ['commit_docs', 'planning.commit_docs', 'search_gitignored', 'planning.search_gitignored'];
+
+    // Every shape the loader classifies unparseable: not JSON, or JSON that is not an object.
+    for (const [label, body] of [
+      ['invalid JSON', '{ not json'],
+      ['an empty file', ''],
+      ['a JSON array', '[]'],
+      ['a JSON string', '"str"'],
+      ['a JSON number', '123'],
+      ['JSON null', 'null'],
+    ]) {
+      test(`a config.json holding ${label} fails with config_parse_failed for every loader key, --default included`, (t) => {
+        const file = path.join(tmpDir, '.planning', 'config.json');
+        fs.writeFileSync(file, body);
+        t.mock.method(process.stderr, 'write', () => true);
+        assert.strictEqual(loadConfigResolved(tmpDir, { workstream: null, persist: false }).reason, CONFIG_REASON.CONFIG_UNPARSEABLE);
+        for (const key of LOADER_KEYS) assertParseFailure([key, '--raw'], {}, `${label}, ${key}`);
+        assertParseFailure(['commit_docs', '--raw', '--default', 'false'], {}, `${label}, --default false`);
+        assert.strictEqual(fs.readFileSync(file, 'utf-8'), body, 'the read leaves the file as it was');
+      });
+    }
+
+    test('a config.json that cannot be read (a directory) fails with config_parse_failed', (t) => {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'config.json'));
+      t.mock.method(process.stderr, 'write', () => true);
+      assert.strictEqual(loadConfigResolved(tmpDir, { workstream: null, persist: false }).reason, CONFIG_REASON.CONFIG_UNREADABLE);
+      for (const key of LOADER_KEYS) assertParseFailure([key, '--raw'], {}, `directory, ${key}`);
+    });
+
+    test("an unparseable GSD_PROJECT config fails rather than reading the root's value", () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'proj'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'proj', 'config.json'), '{ not json');
+      assertParseFailure(['commit_docs', '--raw'], { GSD_PROJECT: 'proj' }, 'GSD_PROJECT');
+    });
+
+    test('an unparseable workstream config fails rather than reading the root config the loader falls back to', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'), '{ not json');
+      assertParseFailure(['commit_docs', '--raw'], { GSD_WORKSTREAM: 'alpha' }, 'GSD_WORKSTREAM');
+    });
+
+    // Under a workstream the root config is on the resolution path too, and its flat
+    // `commit_docs` outranks the workstream's nested one. With the root discarded the
+    // resolved value is unknowable, so the read fails even though the workstream's own
+    // file sets the key. (`next` walked the workstream's file alone and answered
+    // whichever spelling that file wrote.)
+    for (const [label, wsConfig] of [
+      ['nested', { planning: { commit_docs: false, search_gitignored: true } }],
+      ['flat', { commit_docs: false, search_gitignored: true }],
+    ]) {
+      test(`a corrupt root config fails a read under a workstream whose own config sets the keys (${label})`, () => {
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
+        fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'), JSON.stringify(wsConfig));
+        for (const key of LOADER_KEYS) {
+          assertParseFailure([key, '--raw'], { GSD_WORKSTREAM: 'alpha' }, `corrupt root under a workstream (${label}), ${key}`);
+        }
+      });
+    }
+
+    // With no .planning/, ~/.gsd/defaults.json is the file the loader resolves from, so a
+    // corrupt one is an unusable file on the resolution path. With a project config the
+    // loader may still open it for a diagnostic, but no value is resolved from it.
+    test('with no .planning/, a corrupt ~/.gsd/defaults.json fails the read, --default included', () => {
+      cleanup(path.join(tmpDir, '.planning'));
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{ not json');
+      for (const key of LOADER_KEYS) assertParseFailure([key, '--raw'], {}, `corrupt defaults.json, ${key}`);
+      assertParseFailure(['commit_docs', '--raw', '--default', 'false'], {}, 'corrupt defaults.json, --default false');
+    });
+
+    test('with a project config, a corrupt ~/.gsd/defaults.json is not on the resolution path', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), '{ not json');
+      const result = configGetCli(['commit_docs', '--raw']);
+      assert.strictEqual(result.exitCode, 0, result.error);
+      assert.strictEqual(result.output.trim(), 'false');
+    });
+
+    test("a usable root's flat commit_docs outranks a workstream's nested one", () => {
+      writeConfig(tmpDir, { commit_docs: true });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'),
+        JSON.stringify({ planning: { commit_docs: false } }),
+      );
+      for (const key of ['commit_docs', 'planning.commit_docs']) {
+        const result = configGetCli([key, '--raw'], { GSD_WORKSTREAM: 'alpha' });
+        assert.strictEqual(result.exitCode, 0, result.error);
+        assert.strictEqual(result.output.trim(), 'true', key);
+      }
+    });
+
+    test('a parseable config with a non-object section still answers: only an unusable file fails', () => {
+      writeConfig(tmpDir, { planning: 'not-an-object', commit_docs: false });
+      const result = configGetCli(['commit_docs', '--raw']);
+      assert.strictEqual(result.exitCode, 0, result.error);
+      assert.strictEqual(result.output.trim(), 'false');
+    });
+
+    test('multiRepo: true with detected sub-repos reads false through both keys', () => {
+      for (const name of ['app', 'lib']) fs.mkdirSync(path.join(tmpDir, name, '.git'), { recursive: true });
+      writeConfig(tmpDir, { multiRepo: true });
+      assert.strictEqual(runtimeCommitDocs(), false);
+      assert.strictEqual(configGet('commit_docs'), 'false');
+      assert.strictEqual(configGet('planning.commit_docs'), 'false');
+    });
+
+    test('commit_docs written as null prints the runtime null through both keys, as the flat key did', () => {
+      writeConfig(tmpDir, { commit_docs: null });
+      assert.strictEqual(runtimeCommitDocs(), null);
+      assert.strictEqual(configGet('commit_docs'), 'null');
+      assert.strictEqual(configGet('planning.commit_docs'), 'null');
+    });
+
+    test('without --raw, both keys print the resolved value as JSON', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      for (const key of ['commit_docs', 'planning.commit_docs']) {
+        const out = captureFdSync(1, () => configCli.cmdConfigGet(tmpDir, key, false, undefined));
+        assert.strictEqual(JSON.parse(out), false, key);
+      }
+    });
+
+    test('the CLI exits 0 with the resolved value where the literal walk exited 1', () => {
+      writeConfig(tmpDir, { planning: { commit_docs: false } });
+      const result = runGsdTools(['query', 'config-get', 'commit_docs', '--raw'], tmpDir, { GSD_HOME: gsdHome });
+      assert.strictEqual(result.exitCode, 0);
+      assert.strictEqual(result.output.trim(), 'false');
+    });
+
+    // Every combination of the chain's three inputs. Each case gets a fresh
+    // project because the loader caches isGitIgnored per directory.
+    const explicitValues = [undefined, true, false];
+    for (const flat of explicitValues) {
+      for (const nested of explicitValues) {
+        for (const gitIgnored of [false, true]) {
+          const label = `flat=${flat} nested=${nested} gitignored=${gitIgnored}`;
+          test(`both keys agree with the documented chain and the loader: ${label}`, () => {
+            const config = {};
+            if (flat !== undefined) config.commit_docs = flat;
+            if (nested !== undefined) config.planning = { commit_docs: nested };
+            writeConfig(tmpDir, config);
+            if (gitIgnored) gitignorePlanning();
+
+            const expected = String(flat ?? nested ?? !gitIgnored);
+            const runtime = String(loadConfigResolved(tmpDir, { workstream: null, persist: false }).config.commit_docs);
+            assert.strictEqual(runtime, expected);
+            assert.strictEqual(configGet('commit_docs'), expected);
+            assert.strictEqual(configGet('planning.commit_docs'), expected);
+          });
+        }
+      }
+    }
+
+    test("under GSD_PROJECT, the project's own planning.commit_docs is what reads back", () => {
+      writeConfig(tmpDir, { planning: { commit_docs: true } });
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'proj'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'proj', 'config.json'),
+        JSON.stringify({ planning: { commit_docs: false } }),
+      );
+      process.env.GSD_PROJECT = 'proj';
+      assert.strictEqual(configGet('commit_docs'), 'false');
+    });
+
+    describe('under a workstream', () => {
+      beforeEach(() => {
+        writeConfig(tmpDir, { planning: { commit_docs: false } });
+        fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+      });
+
+      test("a root planning.commit_docs: false shows through a workstream config that doesn't set it", () => {
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'), '{}');
+        assert.strictEqual(withWorkstream('alpha', () => configGet('commit_docs')), 'false');
+      });
+
+      test('a root planning.commit_docs: false shows through a workstream with no config.json', () => {
+        assert.strictEqual(withWorkstream('alpha', () => configGet('commit_docs')), 'false');
+      });
+
+      test("the workstream's own value overrides the root", () => {
+        fs.writeFileSync(
+          path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json'),
+          JSON.stringify({ commit_docs: true }),
+        );
+        assert.strictEqual(withWorkstream('alpha', () => configGet('commit_docs')), 'true');
+      });
+    });
   });
 }
