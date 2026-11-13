@@ -34,6 +34,7 @@ const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
+const { extractBashBlockContaining } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -2739,7 +2740,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   });
 
   // #5486: the pending build is recorded only when both gates pass.
-  const PENDING_REF = 'refs/gsd/pr-built/strict/main/feature';
+  const PENDING_REF = 'refs/gsd/pr-built/default/main/feature';
+  const workflowText = readFileNormalized(PR_BRANCH_MD);
   // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
   let verifyExit; // exit status of the last runVerify run
   function runVerify(repo, to = '_to() { "$@"; }') {
@@ -2748,12 +2750,16 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       to,
       'TARGET=main',
       'TARGET_SHA=main',
+      'CURRENT_BRANCH=feature',
       'PR_BRANCH=pr',
       'TIP=HEAD',
-      `PENDING_REF=${PENDING_REF}`,
-      'PR_TIP_REF=refs/gsd/pr-built-head/strict/main/feature',
-      'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
-      'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
+      'PR_STRICT=false',
+      'PR_MODE=default',
+      // The shipped declarations: the regexes, the mode's projections and the ref names.
+      extractBashBlockContaining(workflowText, 'TRANSIENT_DIRS="phases'),
+      extractBashBlockContaining(workflowText, 'FILTER_PATHS=$(for d'),
+      workflowText.split('\n').filter((l) => /^(refkey\(\)|REF_KEY=|PENDING_REF=|PR_TIP_REF=)/.test(l)).join('\n'),
+      'echo "PENDING_REF=$PENDING_REF"',
       extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
       'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
@@ -2765,6 +2771,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
     verifyExit = r.exitCode;
+    assert.match(r.stdout, new RegExp(`^PENDING_REF=${PENDING_REF}$`, 'm'), 'the shipped ref name is the one these tests read');
     return r.stdout + r.stderr;
   }
   const pendingRef = (repo) => {
@@ -2772,12 +2779,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   };
 
   test('verify records no pending build when the PR diff holds a forbidden planning path', (t) => {
-    const repo = createTempDir('gsd-3679-verify-forbidden-');
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-forbidden-', defaultBranch: 'main' });
     t.after(() => cleanup(repo));
     const g = (args) => gitOrThrow(args, { cwd: repo });
-    g(['init', '-q', '-b', 'main']);
-    g(['config', 'user.email', 't@t']);
-    g(['config', 'user.name', 't']);
     fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
     g(['add', '-A']);
     g(['commit', '-qm', 'base']);
@@ -2816,12 +2820,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   // git quotes a non-ASCII path, and one with a double quote, in a plain name list; both gates must still see it under .planning/.
   for (const name of ['é.md', 'a"b.md']) {
     test(`verify counts a planning deletion and a forbidden path named ${name}, which git quotes in a plain name list`, { skip: name.includes('"') && process.platform === 'win32' }, (t) => {
-      const repo = createTempDir('gsd-3679-verify-quoted-');
+      const repo = createGitRepo({ prefix: 'gsd-3679-verify-quoted-', defaultBranch: 'main' });
       t.after(() => cleanup(repo));
       const g = (args) => gitOrThrow(args, { cwd: repo });
-      g(['init', '-q', '-b', 'main']);
-      g(['config', 'user.email', 't@t']);
-      g(['config', 'user.name', 't']);
       fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
       fs.writeFileSync(path.join(repo, '.planning', `notes-${name}`), 'n\n');
       g(['add', '-A']);
@@ -2839,14 +2840,11 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   }
 
   // A timed-out read leaves an empty list, which would pass both gates: verify must stop instead.
-  for (const cmd of ['--name-only', '--diff-filter=D']) {
+  for (const cmd of ['--name-only main..pr', '--diff-filter=D']) { // the two reads differ by these arguments
     test(`verify stops with exit 1 when its bounded diff read (${cmd}) times out`, (t) => {
-      const repo = createTempDir('gsd-3679-verify-timeout-');
+      const repo = createGitRepo({ prefix: 'gsd-3679-verify-timeout-', defaultBranch: 'main' });
       t.after(() => cleanup(repo));
       const g = (args) => gitOrThrow(args, { cwd: repo });
-      g(['init', '-q', '-b', 'main']);
-      g(['config', 'user.email', 't@t']);
-      g(['config', 'user.name', 't']);
       fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
       g(['add', '-A']);
       g(['commit', '-qm', 'base']);
@@ -2856,7 +2854,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       g(['add', '-A']);
       g(['commit', '-qm', 'transient planning file']);
       g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
-      const out = runVerify(repo, `_to() { [ "$TO" = 60 ] || return 2; case "$*" in *"${cmd}"*) return 124 ;; esac; "$@"; }`);
+      // Only a read run with the 60 s bound (TO=60) times out; a read that lost its bound runs and the stop assertion fails.
+      const out = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
       assert.match(out, /Cannot read pr \(deleted\); re-run\./, out.slice(0, 400));
       assert.equal(verifyExit, 1, 'the run stops with exit 1');
       assert.throws(() => g(['rev-parse', '-q', '--verify', 'refs/heads/pr']), 'the unchecked -pr is deleted, so a re-run is not refused');
@@ -2866,17 +2865,11 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   }
 
   test('verify says the unreadable -pr is not deleted when the delete fails', (t) => {
-    const repo = createTempDir('gsd-3679-verify-nodelete-');
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-nodelete-', defaultBranch: 'main' });
     t.after(() => cleanup(repo));
     const g = (args) => gitOrThrow(args, { cwd: repo });
-    g(['init', '-q', '-b', 'main']);
-    g(['config', 'user.email', 't@t']);
-    g(['config', 'user.name', 't']);
-    fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
-    g(['add', '-A']);
-    g(['commit', '-qm', 'base']);
     g(['branch', 'pr']);
-    const out = runVerify(repo, '_to() { return 124; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
+    const out = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
     assert.match(out, /Cannot read pr \(not deleted\); re-run\./, out.slice(0, 400));
     assert.equal(verifyExit, 1, 'the run stops with exit 1');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
