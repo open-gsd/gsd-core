@@ -731,7 +731,7 @@ describe('conformance tier narrowing (#4641)', () => {
   test('macOS signal set is untouched by the Windows narrowing (#4641)', () => {
     assert.deepEqual(
       MACOS_CATEGORIES.map((c) => c.name),
-      ['darwin-literal', 'zsh-dispatch', 'case-sensitivity', 'chmod-mode-bit', 'symlink-keyword', 'realpath'],
+      ['darwin-literal', 'zsh-dispatch', 'case-sensitivity', 'chmod-mode-bit', 'symlink-keyword', 'realpath', 'canonical-tmpdir'],
     );
   });
 
@@ -1314,6 +1314,18 @@ describe('#6002: detectors match platform behavior, not text', () => {
   test('realpath in code is a macOS signal; in a comment it is not (#6002)', () => {
     assert.ok(classifyMacosContent('fs.realpathSync(os.tmpdir())').signals.includes('realpath'));
     assert.equal(classifyMacosContent('// realpathSync on the tmpdir').needsRealOs, false);
+  });
+
+  test('a call to the canonicalizing tmpdir helpers is a macOS signal (#5798)', () => {
+    assert.ok(classifyMacosContent('const root = canonicalizePath(os.tmpdir());').signals.includes('canonical-tmpdir'));
+    assert.ok(classifyMacosContent('const dir = h.createCanonicalTempDir("x");').signals.includes('canonical-tmpdir'));
+    assert.ok(classifyMacosContent('const out = runGateWithStatFailure(t, dir, "g", "EACCES", opts);').signals.includes('canonical-tmpdir'));
+  });
+
+  test('canonicalizing helper names only count as a call, in code (#5798)', () => {
+    assert.equal(classifyMacosContent('// canonicalizePath(os.tmpdir()) is described here').needsRealOs, false);
+    assert.equal(classifyMacosContent('const { canonicalizePath } = require("./helpers.cjs");').needsRealOs, false);
+    assert.equal(classifyMacosContent('const x = notcanonicalizePath(a);').needsRealOs, false);
   });
 
   // Property: comments never add or remove signals.
