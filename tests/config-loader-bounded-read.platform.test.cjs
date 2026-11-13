@@ -30,9 +30,9 @@ const fc = require('fast-check');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const { cleanup, TOOLS_PATH, installSpawnEnv } = require('./helpers.cjs');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
+const { runNode, runHook, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const LIB_DIR = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
@@ -46,7 +46,7 @@ const SKIP_WIN32 = process.platform === 'win32' ? 'no FIFOs or control-character
 
 function makeFifo(fifoPath) {
   // Throws when mkfifo fails, so on POSIX a row never passes without a real FIFO.
-  execFileSync('mkfifo', [fifoPath], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+  assertSeamExit(assert, runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), 0, 'mkfifo');
 }
 
 /**
@@ -1246,8 +1246,8 @@ describe('#5759 every other rerouted reader returns on a FIFO config.json', { sk
 
   test('roadmap-upgrade applyMigration throws and rolls back on a FIFO config instead of writing to it', () => {
     // A clean working tree is a precondition of applyMigration; the FIFO is excluded from status.
-    const git = (...args) => execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
-      cwd: tmpDir, stdio: 'ignore', timeout: PROBE_TIMEOUT_MS,
+    const git = (...args) => gitOrThrow(['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
+      cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS,
     });
     git('init', '-q', '.');
     fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '.planning/config.json\n');
@@ -2773,44 +2773,41 @@ describe('#5831 state prune refuses a symlinked or FIFO STATE-ARCHIVE.md', { ski
   });
 
   test('a FIFO at STATE-ARCHIVE.md is refused without blocking while the lock is held', () => {
-    const { spawnSync } = require('node:child_process');
-    assert.strictEqual(spawnSync('mkfifo', [archivePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    assertSeamExit(assert, runHook(archivePath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), 0, 'mkfifo');
     const stateBefore = fs.readFileSync(statePath);
     const script = `try { require(${JSON.stringify(STATE_LIB_PATH)})` +
       `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: false, silent: true }, true); console.log('RAN'); }` +
       ` catch (e) { console.log('THREW ' + (e && e.code)); }`;
-    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+    const child = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
 
-    assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
+    assert.strictEqual(child.outcome, OUTCOME.EXITED, `the prune must exit on a FIFO, not hang, die or fail to spawn (${child.summary})`);
     assert.match(child.stdout, /THREW/, 'the prune refuses the FIFO');
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBefore, 'STATE.md unchanged');
   });
 
   for (const dryRun of [false, true]) {
     test(`a FIFO at STATE.md makes state prune${dryRun ? ' --dry-run' : ''} exit non-zero without blocking`, () => {
-      const { spawnSync } = require('node:child_process');
       fs.unlinkSync(statePath);
-      assert.strictEqual(spawnSync('mkfifo', [statePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+      assertSeamExit(assert, runHook(statePath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), 0, 'mkfifo');
       // Uncaught: the child must exit non-zero on its own rather than block on the pipe.
       const script = `require(${JSON.stringify(STATE_LIB_PATH)})` +
         `.cmdStatePrune(${JSON.stringify(tmpDir)}, { keepRecent: '3', dryRun: ${dryRun}, silent: true }, true);`;
-      const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+      const child = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
 
-      assert.strictEqual(child.error, undefined, `the prune must not hang on a FIFO (${child.error && child.error.code})`);
-      assert.notStrictEqual(child.status, 0, 'the prune fails');
+      assert.strictEqual(child.outcome, OUTCOME.EXITED, `the prune must exit on a FIFO, not hang, die or fail to spawn (${child.summary})`);
+      assert.notStrictEqual(child.exitCode, 0, 'the prune fails');
       assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
     });
   }
 
   test('a STATE.md that is a FIFO makes a locked read-modify-write command exit non-zero without blocking', () => {
-    const { spawnSync } = require('node:child_process');
     fs.unlinkSync(statePath);
-    assert.strictEqual(spawnSync('mkfifo', [statePath], { timeout: PROBE_TIMEOUT_MS }).status, 0, 'mkfifo');
+    assertSeamExit(assert, runHook(statePath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), 0, 'mkfifo');
     const script = `require(${JSON.stringify(STATE_LIB_PATH)}).cmdStateUpdate(${JSON.stringify(tmpDir)}, 'Status', 'x');`;
-    const child = spawnSync(process.execPath, ['-e', script], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' });
+    const child = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
 
-    assert.strictEqual(child.error, undefined, `the command must not hang on a FIFO (${child.error && child.error.code})`);
-    assert.notStrictEqual(child.status, 0, 'the command fails');
+    assert.strictEqual(child.outcome, OUTCOME.EXITED, `the command must exit on a FIFO, not hang, die or fail to spawn (${child.summary})`);
+    assert.notStrictEqual(child.exitCode, 0, 'the command fails');
     assert.match(child.stderr, /ENXIO/, 'the FIFO is refused with ENXIO');
   });
 

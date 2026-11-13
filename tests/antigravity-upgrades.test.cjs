@@ -32,8 +32,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
 
 const { installRuntimeFixture, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
@@ -221,14 +220,13 @@ test('UPGRADE 2: gsd-mcp-server companion is reachable — spawn, initialize, to
     JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
   ].join('\n') + '\n';
 
-  const res = spawnSync(process.execPath, [MCP_SERVER_BIN], {
+  const res = runNode([MCP_SERVER_BIN], {
     input: stdin,
-    encoding: 'utf-8',
-    timeout: PROBE_TIMEOUT_MS,
+    timeoutMs: PROBE_TIMEOUT_MS,
     env: { ...process.env, GSD_TEST_MODE: '1' },
   });
 
-  assert.strictEqual(res.status, 0, `gsd-mcp-server must exit cleanly on stdin EOF; stderr: ${res.stderr}`);
+  assertSeamExit(assert, res, 0, `gsd-mcp-server must exit cleanly on stdin EOF; stderr: ${res.stderr}`);
   const lines = res.stdout.trim().split('\n').map((l) => JSON.parse(l));
   assert.strictEqual(lines.length, 2, 'one response per request');
   assert.strictEqual(lines[0].result.protocolVersion, PROTOCOL_VERSION, 'initialize handshake succeeds');
