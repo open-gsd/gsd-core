@@ -2741,6 +2741,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   // #5486: the pending build is recorded only when both gates pass.
   const PENDING_REF = 'refs/gsd/pr-built/strict/main/feature';
   // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
+  let verifyExit; // exit status of the last runVerify run
   function runVerify(repo, to = '_to() { "$@"; }') {
     const script = [
       'set -u',
@@ -2763,6 +2764,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       cwd: repo,
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
+    verifyExit = r.exitCode;
     return r.stdout + r.stderr;
   }
   const pendingRef = (repo) => {
@@ -2856,6 +2858,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
       const out = runVerify(repo, `_to() { [ "$TO" = 60 ] || return 2; case "$*" in *"${cmd}"*) return 124 ;; esac; "$@"; }`);
       assert.match(out, /Cannot read pr \(deleted\); re-run\./, out.slice(0, 400));
+      assert.equal(verifyExit, 1, 'the run stops with exit 1');
       assert.throws(() => g(['rev-parse', '-q', '--verify', 'refs/heads/pr']), 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
       assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
@@ -2875,6 +2878,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['branch', 'pr']);
     const out = runVerify(repo, '_to() { return 124; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
     assert.match(out, /Cannot read pr \(not deleted\); re-run\./, out.slice(0, 400));
+    assert.equal(verifyExit, 1, 'the run stops with exit 1');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
   });
 
