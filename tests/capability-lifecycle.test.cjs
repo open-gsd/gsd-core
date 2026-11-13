@@ -2053,7 +2053,7 @@ test('finding-1: an inode change between the steal-decision and the rename cause
     if (typeof p === 'string' && p.endsWith('.lock')) {
       statCalls += 1;
       const ino = (statCalls % 2 === 1) ? 1 : 2; // decision: 1, recheck: 2 (changed)
-      return { mtimeMs: Date.now() - 11 * 60 * 1000, dev: 1, ino, size: body.length, isFile: () => true };
+      return { mtimeMs: Date.now() - 11 * 60 * 1000, dev: 1n, ino: BigInt(ino), size: body.length, isFile: () => true };
     }
     return realStat(p, ...rest);
   });
@@ -2105,7 +2105,7 @@ test('finding-1: a body `ts` change between the steal-decision and the rename ca
   const realStat = fs.statSync.bind(fs);
   const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
     if (typeof p === 'string' && p.endsWith('.lock')) {
-      return { mtimeMs: oldTs, dev: 7, ino: 7, size: oldBody.length, isFile: () => true };
+      return { mtimeMs: oldTs, dev: 7n, ino: 7n, size: oldBody.length, isFile: () => true };
     }
     return realStat(p, ...rest);
   });
@@ -2182,7 +2182,7 @@ test('finding-3: a body `ts` going NULL between the steal-decision and the renam
   const realStat = fs.statSync.bind(fs);
   const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
     if (typeof p === 'string' && p.endsWith('.lock')) {
-      return { mtimeMs: oldTs, dev: 9, ino: 9, size: oldBody.length, isFile: () => true };
+      return { mtimeMs: oldTs, dev: 9n, ino: 9n, size: oldBody.length, isFile: () => true };
     }
     return realStat(p, ...rest);
   });
@@ -2453,7 +2453,7 @@ test('CONC-2: acquireLock returns null on contention exhaustion WITHOUT a stack 
   const staleMtime = Date.now() - 10 * 60 * 1000;
   const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
     if (typeof p === 'string' && p.endsWith('.lock')) {
-      return { mtimeMs: staleMtime, size: 256, dev: 1, ino: 1, isFile: () => true, isDirectory: () => false };
+      return { mtimeMs: staleMtime, size: 256, dev: 1n, ino: 1n, isFile: () => true, isDirectory: () => false };
     }
     return realStat(p, ...rest);
   });

@@ -44,6 +44,7 @@ import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
 import noVerificationStatusLiteral from './eslint-rules/no-verification-status-literal.cjs';
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
 import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
+import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
@@ -82,6 +83,7 @@ const localPlugin = {
     'no-verification-status-literal': noVerificationStatusLiteral,
     'no-runtime-name-literal': noRuntimeNameLiteral,
     'require-read-only-git-env': requireReadOnlyGitEnv,
+    'named-args-spec-from-registry': namedArgsSpecFromRegistry,
   },
 };
 
@@ -127,6 +129,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
       'gsd-core/bin/lib/capability-ledger.cjs',
+      // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
+      'gsd-core/bin/lib/config-file-read.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
@@ -182,6 +186,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/pr-branch-patterns.cjs',
       // #4984: tsc-generated — lint the src/undo-commit-selection.cts source.
       'gsd-core/bin/lib/undo-commit-selection.cjs',
+      'gsd-core/bin/lib/criterion-baseline.cjs', // #4309: tsc-generated — lint the src/criterion-baseline.cts source.
+      'gsd-core/bin/lib/criterion-replay.cjs', // #4310: tsc-generated — lint the src/criterion-replay.cts source.
       // #5705: tsc-generated — lint the src/milestone-release-tags.cts source.
       'gsd-core/bin/lib/milestone-release-tags.cjs',
       // #4145: tsc-generated runtime artifact — lint the src/pristine-baseline.cts source.
@@ -202,6 +208,8 @@ export default tseslint.config(
       // #3873: tsc-generated runtime artifact — lint the src/state-md-schema.cts source, not this.
       'gsd-core/bin/lib/state-md-schema.cjs',
       'gsd-core/bin/lib/command-arg-projection.cjs',
+      // #6087: tsc-generated runtime artifact — lint the src/cli-surface.cts source.
+      'gsd-core/bin/lib/cli-surface.cjs',
       'gsd-core/bin/lib/clock.cjs',
       'gsd-core/bin/lib/ui-safety-gate.cjs',
       // #3312: tsc-generated runtime artifact — lint the src/ui-frontend-evidence.cts source.
@@ -236,6 +244,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/plan-scan.cjs',
       'gsd-core/bin/lib/fallow-runner.cjs',
       'gsd-core/bin/lib/project-root.cjs',
+      'gsd-core/bin/lib/project-context.cjs',
       'gsd-core/bin/lib/installer-migration-authoring.cjs',
       'gsd-core/bin/lib/update-context.cjs',
       'gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs',
@@ -986,6 +995,16 @@ export default tseslint.config(
         caughtErrors: 'none',
       }],
     },
+  },
+
+  // ── #6087 (ADR-4909 D1, P1a of #6051): flag declarations come only from the CLI surface registry ──
+  // Every gsd-tools host router reads its flags through `parseNamedArgsOrExit(args, specFor('<verb>'),
+  // error)` (src/cli-surface.cts); an inline spec or a hand-written flag read (`indexOf('--x')`,
+  // `=== '--x'`, `startsWith('--x')`) is a lint error. The rule widens to `src/` routers as each
+  // later sub-PR (#6088-#6090) migrates them.
+  {
+    files: ['gsd-core/bin/gsd-tools.cjs'],
+    rules: { 'local/named-args-spec-from-registry': 'error' },
   },
 
   // ── #5139 (epic #5056, ADR-5057 §4 first bullet): a gate returns a GateVerdict ─────────────

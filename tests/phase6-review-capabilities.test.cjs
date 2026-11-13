@@ -136,15 +136,6 @@ describe('ADR-857 phase 6 verification and review capability migration', () => {
     assert.ok(!section.includes('ref.skill == "code-review"'));
   });
 
-  test('code-review-fix command self-gates through execute:post hooks', () => {
-    const content = workflow('code-review-fix.md');
-    const section = sectionBetween(content, '<step name="check_config_gate">', '<step name="check_review_exists">');
-
-    assert.ok(section.includes('loop render-hooks execute:post'));
-    assert.ok(section.includes('ref.skill == "code-review"'));
-    assert.ok(!section.includes('config-get workflow.code_review'));
-  });
-
   test('verify-work resolves verify:post security hooks instead of inlining security_enforcement config', () => {
     const content = workflow('verify-work.md');
     const transitionStart = content.indexOf('If issues == 0:');

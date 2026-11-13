@@ -2973,8 +2973,8 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
 // <cfg>/gsd-core/agents, while <cfg>/agents holds the converted copies (no `tools:` declaration), so
 // reading the latter made every workspace-write role look like it should be read-only.
 describe('validate agents against a real fresh Codex install (#5496)', () => {
-  const { spawnSync } = require('node:child_process');
   const { createTempDir } = require('./helpers.cjs');
+  const { OUTCOME } = require('./helpers/process-seam.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   let codexHome;
   beforeEach(() => {
@@ -2986,12 +2986,13 @@ describe('validate agents against a real fresh Codex install (#5496)', () => {
   const validateAgents = () => {
     const tools = path.join(codexHome, 'gsd-core', 'bin', 'gsd-tools.cjs');
     assert.ok(fs.existsSync(tools), 'the install must ship gsd-tools.cjs');
-    const r = spawnSync(process.execPath, [tools, 'validate', 'agents', '--json'], {
+    const r = runNode([tools, 'validate', 'agents', '--json'], {
       cwd: codexHome,
-      encoding: 'utf8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
       env: { ...process.env, GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, HOME: codexHome, USERPROFILE: codexHome, GSD_HOME: codexHome },
     });
+    // The exit code is not asserted (violations may exit non-zero); a timeout or spawn failure must name itself.
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, `validate agents did not exit: ${r.summary}`);
     return JSON.parse(r.stdout);
   };
 

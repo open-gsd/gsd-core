@@ -70,6 +70,7 @@ const {
   installerEnv,
   stripAnsi,
   runMinimalInstall,
+  installRuntimeFixture,
   walk,
 } = require('./helpers/install-shared.cjs');
 
@@ -481,9 +482,8 @@ describe('installRuntimeArtifacts — durable Runtime Surface corpus (#4132)', (
   });
 
   for (const runtime of ['codex', 'claude']) {
-    test(`full global ${runtime} manifest covers every installed corpus file with its hash`, (t) => {
-      const installed = runMinimalInstall({ runtime, scope: 'global' });
-      t.after(() => cleanup(installed.root));
+    test(`full global ${runtime} manifest covers every installed corpus file with its hash`, () => {
+      const installed = installRuntimeFixture({ runtime, scope: 'global' });
       const corpusRoots = [
         ['gsd-core/commands/gsd/', path.join(installed.configDir, 'gsd-core', 'commands', 'gsd')],
         ['gsd-core/agents/', path.join(installed.configDir, 'gsd-core', 'agents')],
@@ -8435,12 +8435,11 @@ describe('#3719: real global Claude install — agents/*.md @-refs must resolve 
   let projectLocal;
 
   before(() => {
-    claudeGlobal = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    claudeGlobal = installRuntimeFixture({ runtime: 'claude', scope: 'global' });
     projectLocal = runMinimalInstall({ runtime: 'claude', scope: 'local' });
   });
 
   after(() => {
-    cleanup(claudeGlobal.root);
     cleanup(projectLocal.root);
   });
 

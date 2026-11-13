@@ -4,12 +4,20 @@
  * #1143 — adopts Claude Code's Workflow tool (the engine behind `/effort ultracode`)
  * as an optional, runtime-gated parallel-execution backend for the GSD loop.
  *
- * This module is the pure, testable core of the capability. It owns two seams:
+ * This module is the pure, testable core of the capability. It owns three seams:
  *
- *   detectWorkflowBackend({ runtimeId, hostIntegration, config, agentSdkVersion })
+ *   resolveWorkflowAvailability({ env, sources })
+ *     → { disabled: boolean, reason: string }
+ *     Reads Claude Code's documented workflow kill switches (the
+ *     CLAUDE_CODE_DISABLE_WORKFLOWS env var and the `disableWorkflows` /
+ *     `enableWorkflows` settings keys) from precedence-ordered settings sources
+ *     the caller has already read. Fail-closed on unreadable or malformed input.
+ *
+ *   detectWorkflowBackend({ runtimeId, hostIntegration, config, workflowAvailability })
  *     → { available: boolean, backend: 'workflow'|'inline', reason: string }
  *     Fail-closed: every miss degrades to `inline` (today's behaviour), so the
  *     core loop is byte-identical unless every gate opens. This is criteria 3 + 6.
+ *     `workflowAvailability` is the resolveWorkflowAvailability result (#4747).
  *
  *   emitWorkflowScript({ phaseDir, waves, runId, budgetTokens? })
  *     → { ok:true, script, summary } | { ok:false, reason }
@@ -24,6 +32,14 @@
  *         (the same overlap rule execute-phase already applies inline),
  *       resumeFromRunId → wired to the phase run id,
  *       budgetTokens → a shared token pool.
+ *     Runtime caps (#4747): a single parallel() call accepts at most
+ *     WORKFLOW_MAX_ITEMS_PER_CALL items and a run at most
+ *     WORKFLOW_MAX_AGENTS_PER_RUN agents; a manifest over either cap is rejected
+ *     at emit time (`ok:false`) instead of failing inside the Workflow tool.
+ *     Hand-back (#3302 / #4747): worktree plans pass a JSON `schema`
+ *     (WORKTREE_METADATA_SCHEMA) to agent(), so the result is a validated object;
+ *     every agent() call is wrapped so a throw becomes `{ error }` for that plan
+ *     only, and each outcome entry is { plan, expects_worktree, metadata, error }.
  *     The emitted script composes the SAME gsd-executor agent the inline path
  *     uses, with per-plan worktree isolation mirroring the inline path's own
  *     per-plan decision, so it produces the same artifacts/commits (criterion 2).
@@ -37,7 +53,7 @@
  *     barrier/pipeline/budget/resume semantics instead of hand-rolling them.
  *   - Postel's Law: liberal in input (missing fields → inline), conservative in
  *     output (workflow only when every gate opens).
- *   - Fail-closed: an unknown version, a missing descriptor, or a disabled
+ *   - Fail-closed: unknown availability, a missing descriptor, or a disabled
  *     toggle all resolve to `inline`, never to `workflow`.
  *
  * Zero external dependencies. Pure functions. Never throws on bad input.
@@ -50,11 +66,41 @@ const { partitionByFileOverlap } = fileOverlapPartitionerMod;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /**
- * The Agent SDK version that introduced the Workflow tool (#1143 prior art).
- * Used as the default floor when config does not override it. A runtime reporting
- * an agentSdkVersion below this cannot host the Workflow backend.
+ * Documented Workflow-tool runtime caps (code.claude.com/docs/en/workflows):
+ * parallel()/pipeline() reject a list longer than 4,096 items, and one run may
+ * start at most 1,000 agents (#4747).
  */
-const WORKFLOW_TOOL_FLOOR_VERSION = '0.3.149';
+const WORKFLOW_MAX_ITEMS_PER_CALL = 4096;
+const WORKFLOW_MAX_AGENTS_PER_RUN = 1000;
+
+/** Every reason code detectWorkflowBackend can return (#4747; hyrums-law). */
+const DETECT_REASONS: readonly string[] = Object.freeze([
+  'workflow_backend_active', 'capability_disabled', 'runtime_not_claude', 'backend_inline',
+  'workflow_tool_unavailable', 'workflows_disabled_by_env', 'workflows_disabled_by_managed_settings',
+  'workflows_disabled_by_settings', 'workflow_settings_unreadable', 'workflow_availability_unknown',
+]);
+
+/** The subset of DETECT_REASONS a resolveWorkflowAvailability result may carry when disabled. */
+const AVAILABILITY_DISABLE_REASONS = new Set<string>([
+  'workflows_disabled_by_env', 'workflows_disabled_by_managed_settings', 'workflows_disabled_by_settings',
+  'workflow_settings_unreadable', 'workflow_availability_unknown',
+]);
+
+/**
+ * JSON schema a worktree plan's agent() must satisfy: the four fields the
+ * orchestrator records via worktree.record-agent (#3302 / #4747). Deep-frozen so
+ * the exported literal cannot drift from what the emitted script declares.
+ */
+const WORKTREE_METADATA_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: Object.freeze({
+    agent_id: Object.freeze({ type: 'string', minLength: 1 }),
+    worktree_path: Object.freeze({ type: 'string', minLength: 1 }),
+    branch: Object.freeze({ type: 'string', minLength: 1 }),
+    expected_base: Object.freeze({ type: 'string', minLength: 1 }),
+  }),
+  required: Object.freeze(['agent_id', 'worktree_path', 'branch', 'expected_base']),
+});
 
 /** Closed enum for the `claude_orchestration.execution_backend` config key. */
 const BACKEND_VALUES = new Set<string>(['auto', 'workflow', 'inline']);
@@ -62,78 +108,106 @@ const BACKEND_VALUES = new Set<string>(['auto', 'workflow', 'inline']);
 /** Only this runtime can host the Workflow tool (Claude Code / Agent SDK). */
 const WORKFLOW_RUNTIME = 'claude';
 
-// ─── Semver helpers ───────────────────────────────────────────────────────────
+// ─── resolveWorkflowAvailability ──────────────────────────────────────────────
 
-/** Official-ish strict SemVer 2.0.0 numeric triple (+ optional pre/build). */
-const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-
-/** True for a syntactically valid semver string. */
-function isValidSemver(s: unknown): s is string {
-  return typeof s === 'string' && SEMVER_RE.test(s);
+interface AvailabilityResult {
+  disabled: boolean;
+  reason: string;
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+const SETTINGS_SCOPES = new Set<string>(['managed', 'projectLocal', 'project', 'user']);
+const SETTINGS_STATUSES = new Set<string>(['absent', 'ok', 'unreadable']);
+
 /**
- * Compare two semver strings.
- * Returns -1/0/1 in the usual sense. Garbage in either position → -1 (fail-closed:
- * an unparseable version is treated as "less than" any real floor, so detection
- * never accidentally enables the preview backend on an unknown SDK).
+ * Resolve whether a Claude Code workflow kill switch is set (#4747).
  *
- * Pre-release/build metadata are ignored for the comparison — only the numeric
- * major.minor.patch triple participates, matching how the Workflow-tool floor is
- * specified (a plain "0.3.149").
+ * Sources: code.claude.com/docs/en/workflows (kill switches
+ * `CLAUDE_CODE_DISABLE_WORKFLOWS` and `disableWorkflows`/`enableWorkflows`) and
+ * code.claude.com/docs/en/settings (precedence managed > --settings >
+ * project-local > project > user; the highest level that sets a key wins).
+ * `--settings` is not observable and is not read.
+ *
+ * `input.sources` MUST be precedence-ordered, highest first (caller's
+ * responsibility): managed, projectLocal, project, user. Each entry is
+ * `{ scope, status: 'absent'|'ok'|'unreadable', settings? }`.
+ *
+ * Fail-closed: a malformed input, an unreadable source, or a non-boolean kill
+ * switch value disables. A truthy env value other than `0`/`false`/empty disables.
+ *
+ * Never throws.
  */
-function compareSemver(a: string, b: string): number {
-  if (!isValidSemver(a) || !isValidSemver(b)) return -1;
-  // Split numeric triple from pre-release/build metadata.
-  const parseTriple = (s: string): number[] => {
-    const core = s.split('-')[0].split('+')[0].split('.');
-    return [parseInt(core[0], 10), parseInt(core[1], 10), parseInt(core[2], 10)];
-  };
-  const hasPre = (s: string): boolean => s.indexOf('-') !== -1;
-  const preIdentifiers = (s: string): string[] => (s.split('-')[1] || '').split('+')[0].split('.').filter((x) => x.length > 0);
-  const am = parseTriple(a);
-  const bm = parseTriple(b);
-  for (let i = 0; i < 3; i++) {
-    if (am[i] < bm[i]) return -1;
-    if (am[i] > bm[i]) return 1;
+function resolveWorkflowAvailability(input: unknown): AvailabilityResult {
+  if (!isPlainObject(input)) {
+    return { disabled: true, reason: 'workflow_availability_unknown' };
   }
-  // Numeric triple is equal. SemVer 2.0.0 §11 precedence:
-  //   - a version WITH a pre-release tag is LOWER than the same triple WITHOUT one
-  //     (keeps the floor fail-closed for pre-release builds of the GA floor);
-  //   - two pre-releases of the same triple are ordered by their dot-separated
-  //     identifiers (numeric < alphanumeric; numeric compared numerically,
-  //     alphanumeric lexically; fewer identifiers < more).
-  const aPre = hasPre(a);
-  const bPre = hasPre(b);
-  if (aPre && !bPre) return -1;
-  if (!aPre && bPre) return 1;
-  if (aPre && bPre) {
-    const ai = preIdentifiers(a);
-    const bi = preIdentifiers(b);
-    const len = Math.min(ai.length, bi.length);
-    for (let i = 0; i < len; i++) {
-      const ax = ai[i];
-      const bx = bi[i];
-      const aNum = /^\d+$/.test(ax);
-      const bNum = /^\d+$/.test(bx);
-      if (aNum && bNum) {
-        const an = parseInt(ax, 10);
-        const bn = parseInt(bx, 10);
-        if (an < bn) return -1;
-        if (an > bn) return 1;
-      } else if (aNum && !bNum) {
-        return -1; // numeric identifiers always lower than alphanumeric
-      } else if (!aNum && bNum) {
-        return 1;
-      } else {
-        if (ax < bx) return -1;
-        if (ax > bx) return 1;
+  const env = isPlainObject(input['env']) ? input['env'] : {};
+  const raw = env['CLAUDE_CODE_DISABLE_WORKFLOWS'];
+  if (typeof raw === 'string') {
+    const v = raw.trim().toLowerCase();
+    if (v !== '' && v !== '0' && v !== 'false') {
+      return { disabled: true, reason: 'workflows_disabled_by_env' };
+    }
+  }
+
+  const sources = input['sources'];
+  if (!Array.isArray(sources)) {
+    return { disabled: true, reason: 'workflow_availability_unknown' };
+  }
+  for (const s of sources) {
+    if (!isPlainObject(s)
+      || typeof s['scope'] !== 'string' || !SETTINGS_SCOPES.has(s['scope'])
+      || typeof s['status'] !== 'string' || !SETTINGS_STATUSES.has(s['status'])) {
+      return { disabled: true, reason: 'workflow_availability_unknown' };
+    }
+  }
+
+  type OkSource = { scope: string; settings: Record<string, unknown> };
+  const okSources: OkSource[] = [];
+  for (const s of sources as Array<Record<string, unknown>>) {
+    if (s['status'] === 'unreadable') {
+      return { disabled: true, reason: 'workflow_settings_unreadable' };
+    }
+    if (s['status'] === 'ok') {
+      if (!isPlainObject(s['settings'])) {
+        return { disabled: true, reason: 'workflow_settings_unreadable' };
+      }
+      okSources.push({ scope: s['scope'] as string, settings: s['settings'] });
+    }
+  }
+
+  const KEYS = ['disableWorkflows', 'enableWorkflows'] as const;
+  for (const src of okSources) {
+    for (const key of KEYS) {
+      if (Object.prototype.hasOwnProperty.call(src.settings, key) && typeof src.settings[key] !== 'boolean') {
+        return { disabled: true, reason: 'workflow_settings_unreadable' };
       }
     }
-    if (ai.length < bi.length) return -1;
-    if (ai.length > bi.length) return 1;
   }
-  return 0;
+
+  const winner = (key: string): { scope: string; value: boolean } | null => {
+    for (const src of okSources) {
+      if (Object.prototype.hasOwnProperty.call(src.settings, key)) {
+        return { scope: src.scope, value: src.settings[key] as boolean };
+      }
+    }
+    return null;
+  };
+  const reasonFor = (scope: string): string =>
+    scope === 'managed' ? 'workflows_disabled_by_managed_settings' : 'workflows_disabled_by_settings';
+
+  const dis = winner('disableWorkflows');
+  if (dis !== null && dis.value === true) {
+    return { disabled: true, reason: reasonFor(dis.scope) };
+  }
+  const en = winner('enableWorkflows');
+  if (en !== null && en.value === false) {
+    return { disabled: true, reason: reasonFor(en.scope) };
+  }
+  return { disabled: false, reason: 'workflows_available' };
 }
 
 // ─── detectWorkflowBackend ────────────────────────────────────────────────────
@@ -151,7 +225,6 @@ interface HostIntegration {
 interface BackendConfig {
   'claude_orchestration.enabled'?: unknown;
   'claude_orchestration.execution_backend'?: unknown;
-  'claude_orchestration.min_agent_sdk_version'?: unknown;
   [k: string]: unknown;
 }
 
@@ -159,7 +232,8 @@ interface DetectInput {
   runtimeId?: string;
   hostIntegration?: HostIntegration | null;
   config?: BackendConfig | null;
-  agentSdkVersion?: string;
+  /** The resolveWorkflowAvailability result (#4747). Missing/malformed → fail-closed. */
+  workflowAvailability?: unknown;
 }
 
 interface DetectResult {
@@ -181,9 +255,15 @@ function inline(reason: string, available = false): DetectResult {
  *   2. runtime is Claude (the only runtime that exposes the Workflow tool)
  *   3. execution_backend !== 'inline'
  *   4. host descriptor signals nested+background dispatch (Workflow-tool capable)
- *   5. agentSdkVersion is a known, valid semver
- *   6. agentSdkVersion >= the configured floor (default WORKFLOW_TOOL_FLOOR_VERSION)
+ *   5. workflowAvailability is a well-formed resolveWorkflowAvailability result
+ *      (else `workflow_availability_unknown`)
+ *   6. workflowAvailability.disabled is false (else inline with its own reason:
+ *      env / managed settings / settings kill switch, or unreadable settings)
  *   7. execution_backend === 'workflow' OR 'auto' (both reach here; 'inline' exited at 3)
+ *
+ * The `claude_orchestration.min_agent_sdk_version` config key is deprecated and
+ * ignored (#4747): the Agent SDK version does not reflect whether a Claude Code
+ * session has dynamic workflows.
  *
  * Never throws. Destructures defensively.
  */
@@ -238,16 +318,14 @@ function detectWorkflowBackend(input: DetectInput | null | undefined): DetectRes
     return inline('workflow_tool_unavailable');
   }
 
-  // 5. an unknown agentSdkVersion cannot be trusted to meet the floor.
-  if (!isValidSemver(input.agentSdkVersion)) {
-    return inline('agent_sdk_version_unknown');
+  // 5-6. Claude Code's documented workflow kill switches (#4747).
+  const av = input.workflowAvailability;
+  if (av === null || typeof av !== 'object' || Array.isArray(av) || typeof (av as { disabled?: unknown }).disabled !== 'boolean') {
+    return inline('workflow_availability_unknown');
   }
-
-  // 6. version floor (config override > default constant).
-  const floorRaw = cfg['claude_orchestration.min_agent_sdk_version'];
-  const floor = typeof floorRaw === 'string' && isValidSemver(floorRaw) ? floorRaw : WORKFLOW_TOOL_FLOOR_VERSION;
-  if (compareSemver(input.agentSdkVersion, floor) < 0) {
-    return inline('agent_sdk_version_below_floor');
+  if ((av as { disabled: boolean }).disabled) {
+    const r = (av as { reason?: unknown }).reason;
+    return inline(typeof r === 'string' && AVAILABILITY_DISABLE_REASONS.has(r) ? r : 'workflow_availability_unknown');
   }
 
   // 7. auto/workflow both reach the workflow backend once every gate passes.
@@ -397,6 +475,8 @@ function agentOptions(p: Plan, executorModel?: unknown): string {
   // model_overrides / model_policy / model_profile exactly as the inline path.
   const model = emittableModel(executorModel);
   if (model !== undefined) parts.push('model: ' + quoteString(model));
+  // #4747: worktree plans must return the validated metadata object.
+  if (p.use_worktree !== false) parts.push('schema: GSD_WORKTREE_METADATA_SCHEMA');
   return '{ ' + parts.join(', ') + ' }';
 }
 
@@ -501,6 +581,31 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
     ? Math.floor(input.budgetTokens)
     : null;
 
+  // #4747: partition once; enforce the documented Workflow runtime caps at emit
+  // time (per-call first, then per-run) instead of failing inside the tool.
+  const stagesByWave: string[][][] = waves.map((w) => partitionStages(w.plans));
+  for (let wi = 0; wi < waves.length; wi++) {
+    const stages = stagesByWave[wi];
+    for (let si = 0; si < stages.length; si++) {
+      if (stages[si].length > WORKFLOW_MAX_ITEMS_PER_CALL) {
+        return {
+          ok: false,
+          reason: 'wave "' + waves[wi].id + '" stage ' + si + ' has ' + stages[si].length
+            + ' plans — exceeds the Workflow runtime cap of ' + WORKFLOW_MAX_ITEMS_PER_CALL + ' items per parallel() call',
+        };
+      }
+    }
+  }
+  let totalPlans = 0;
+  for (const w of waves) totalPlans += w.plans.length;
+  if (totalPlans > WORKFLOW_MAX_AGENTS_PER_RUN) {
+    return {
+      ok: false,
+      reason: 'manifest has ' + totalPlans + ' plans — exceeds the Workflow runtime cap of '
+        + WORKFLOW_MAX_AGENTS_PER_RUN + ' agents per run',
+    };
+  }
+
   const lines: string[] = [];
   // `export const meta = {…}` MUST be the first statement in the script — the
   // Workflow tool rejects the whole script otherwise (#2590). Leading comments
@@ -561,41 +666,47 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
   }
   lines.push('');
 
-  // #3302: the generated script must hand the per-agent executor results back
-  // to the orchestrator so it can feed the wave merge chain. Emitted right
-  // after the header comments (meta stays the first statement): a helper that
-  // extracts the executor's <worktree_metadata> JSON (agents/gsd-executor.md
-  // <worktree_metadata_capture>) from one agent() result, plus the outcomes
-  // accumulator the stage barriers below push into. `metadata` is null when
-  // the result carried no parseable block — the LOUD-failure input the
-  // orchestrator halts on for expects_worktree plans (never a silent skip).
-  lines.push('// #3302: extract the executor-returned <worktree_metadata> JSON so the');
-  lines.push('// orchestrator can record it into WAVE_WORKTREE_MANIFEST after the run');
+  // #3302 / #4747: the generated script hands the per-agent executor results
+  // back to the orchestrator so it can feed the wave merge chain. Worktree plans
+  // pass GSD_WORKTREE_METADATA_SCHEMA to agent(), so the result is a validated
+  // object; gsdWorktreeMetadata re-checks the four fields and returns null on
+  // any miss (the LOUD-failure input the orchestrator halts on for
+  // expects_worktree plans — never a silent skip). gsdRunAgent catches a throw
+  // (schema retries exhausted, budget hit) so one plan's failure becomes
+  // { error } for that plan only and its siblings still complete.
+  lines.push('// #3302 / #4747: worktree plans return schema-validated metadata (an object);');
+  lines.push('// the orchestrator records it into WAVE_WORKTREE_MANIFEST after the run');
   lines.push('// (worktree.record-agent -> worktree.cleanup-wave, the same manifest-scoped');
-  lines.push('// merge chain inline dispatch feeds). null = absent/unparseable/interrupted.');
+  lines.push('// merge chain inline dispatch feeds). null = absent/invalid/interrupted.');
+  lines.push('const GSD_WORKTREE_METADATA_SCHEMA = ' + JSON.stringify(WORKTREE_METADATA_SCHEMA));
   lines.push('function gsdWorktreeMetadata(agentResult) {');
-  lines.push('  if (typeof agentResult !== \'string\') return null;');
-  lines.push('  const m = agentResult.match(/<worktree_metadata>([\\s\\S]*?)<\\/worktree_metadata>/);');
-  lines.push('  if (m === null) return null;');
+  lines.push('  if (agentResult === null || typeof agentResult !== \'object\' || Array.isArray(agentResult)) return null;');
+  lines.push('  const out = {};');
+  lines.push('  for (const k of GSD_WORKTREE_METADATA_SCHEMA.required) {');
+  lines.push('    const v = agentResult[k];');
+  lines.push('    if (typeof v !== \'string\' || v.length === 0) return null;');
+  lines.push('    out[k] = v;');
+  lines.push('  }');
+  lines.push('  return out;');
+  lines.push('}');
+  lines.push('function gsdAgentError(agentResult) {');
+  lines.push('  return (agentResult !== null && typeof agentResult === \'object\' && typeof agentResult.gsdAgentError === \'string\') ? agentResult.gsdAgentError : null;');
+  lines.push('}');
+  lines.push('async function gsdRunAgent(brief, opts) {');
   lines.push('  try {');
-  lines.push('    const parsed = JSON.parse(m[1]);');
-  lines.push('    return (parsed !== null && typeof parsed === \'object\') ? parsed : null;');
+  lines.push('    return await agent(brief, opts);');
   lines.push('  } catch (e) {');
-  lines.push('    return null;');
+  lines.push('    return { gsdAgentError: (e !== null && typeof e === \'object\' && typeof e.message === \'string\') ? e.message : String(e) };');
   lines.push('  }');
   lines.push('}');
   lines.push('const gsdAgentOutcomes = [];');
   lines.push('');
 
-  const stagesByWave: string[][][] = [];
-  let totalPlans = 0;
   let worktreePlans = 0;
 
   for (let wi = 0; wi < waves.length; wi++) {
     const wave = waves[wi];
-    const stages = partitionStages(wave.plans);
-    stagesByWave.push(stages);
-    totalPlans += wave.plans.length;
+    const stages = stagesByWave[wi];
     for (const p of wave.plans) {
       if (p.use_worktree !== false) worktreePlans += 1;
     }
@@ -620,7 +731,7 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
       // worktree-wf_* branch: the merge chain had no input (#3302).
       lines.push('const gsdStage_' + wi + '_' + si + ' = await parallel([');
       for (const p of stagePlans) {
-        lines.push('  () => agent(' + quoteString(p.brief) + ', ' + agentOptions(p, executorModel) + '),');
+        lines.push('  () => gsdRunAgent(' + quoteString(p.brief) + ', ' + agentOptions(p, executorModel) + '),');
       }
       lines.push('])');
       // Positional tagging is decided at EMIT time from the validated manifest,
@@ -631,7 +742,12 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
       for (let pi = 0; pi < stagePlans.length; pi++) {
         const p = stagePlans[pi];
         const tail = pi < stagePlans.length - 1 ? ',' : '';
-        lines.push('  { plan: ' + quoteString(p.id) + ', expects_worktree: ' + (p.use_worktree !== false) + ', metadata: gsdWorktreeMetadata(gsdStage_' + wi + '_' + si + '[' + pi + ']) }' + tail);
+        const ref = 'gsdStage_' + wi + '_' + si + '[' + pi + ']';
+        if (p.use_worktree !== false) {
+          lines.push('  { plan: ' + quoteString(p.id) + ', expects_worktree: true, metadata: gsdWorktreeMetadata(' + ref + '), error: gsdAgentError(' + ref + ') }' + tail);
+        } else {
+          lines.push('  { plan: ' + quoteString(p.id) + ', expects_worktree: false, metadata: null, error: gsdAgentError(' + ref + ') }' + tail);
+        }
       }
       lines.push(')');
     }
@@ -639,10 +755,11 @@ function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitE
   }
 
   // #3302: the script's top-level return value is what the Workflow tool hands
-  // back to the orchestrator. One { plan, expects_worktree, metadata } entry
-  // per dispatched plan; the orchestrator records every worktree entry via
+  // back to the orchestrator. One { plan, expects_worktree, metadata, error }
+  // entry per dispatched plan; the orchestrator records every worktree entry via
   // `gsd_run query worktree.record-agent` and HALTS on a null metadata entry
-  // for an expects_worktree plan (see the execute:wave:pre fragment) — a
+  // for an expects_worktree plan (see
+  // capabilities/claude-orchestration/docs/workflow-backend-dispatch.md) — a
   // silently-empty manifest is the exact #3302 failure mode.
   lines.push('return gsdAgentOutcomes');
 
@@ -670,7 +787,7 @@ interface ResolveWaveDispatchInput {
   runtimeId?: string;
   hostIntegration?: HostIntegration | null;
   config?: BackendConfig | null;
-  agentSdkVersion?: string;
+  workflowAvailability?: unknown;
   phaseDir: string;
   waves: Wave[];
   runId: string;
@@ -727,7 +844,7 @@ function resolveWaveDispatch(input: ResolveWaveDispatchInput | null | undefined)
     runtimeId: input.runtimeId,
     hostIntegration: input.hostIntegration,
     config: input.config,
-    agentSdkVersion: input.agentSdkVersion,
+    workflowAvailability: input.workflowAvailability,
   });
 
   if (detected.backend !== 'workflow') {
@@ -760,9 +877,11 @@ export = {
   detectWorkflowBackend,
   emitWorkflowScript,
   resolveWaveDispatch,
-  compareSemver,
-  isValidSemver,
-  WORKFLOW_TOOL_FLOOR_VERSION,
+  resolveWorkflowAvailability,
   BACKEND_VALUES,
   WORKFLOW_RUNTIME,
+  DETECT_REASONS,
+  WORKFLOW_MAX_ITEMS_PER_CALL,
+  WORKFLOW_MAX_AGENTS_PER_RUN,
+  WORKTREE_METADATA_SCHEMA,
 };
