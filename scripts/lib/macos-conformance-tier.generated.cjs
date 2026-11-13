@@ -47,6 +47,7 @@ module.exports = {
   "tests/claude-md.test.cjs",
   "tests/claude-orchestration-4747.test.cjs",
   "tests/cline-install.test.cjs",
+  "tests/code-review-fix-pipeline-regression.test.cjs",
   "tests/code-review-pipeline-regression.test.cjs",
   "tests/code-review-tier3-files-override-scoping.test.cjs",
   "tests/code-review.test.cjs",

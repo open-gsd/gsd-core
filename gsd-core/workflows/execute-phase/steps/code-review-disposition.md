@@ -776,7 +776,10 @@ _fix_any=0
 # expands to the literal pattern, which `-f` rejects.
 # $(printf '%s' "$PADDED") per lint-workflow-shellcheck's #4109 remedy: a bare $VAR in a `for x in`
 # splits differently under bash and zsh.
-for _f in "${_pd}/$(printf '%s' "$PADDED")-REVIEW-FIX.iter"*.md; do [ -f "$_f" ] && _fix_any=1; done
+for _f in "${_pd}/$(printf '%s' "$PADDED")-REVIEW-FIX.iter"*.md; do
+  _n=${_f##*/}; _n=${_n#*.iter}; _n=${_n%.md}
+  case "$_n" in ''|*[!0-9]*) ;; *) [ -f "$_f" ] && _fix_any=1 ;; esac
+done
 # The word for an empty status names WHICH empty it is, for the same reason block 1 does: a
 # review that was read and could not be parsed is 'unparsed', an absent one is 'none'.
 _st="${REVIEW_STATUS:-none}"; [ -z "$REVIEW_STATUS" ] && [ "$REVIEW_READ" = "1" ] && _st="unparsed"
