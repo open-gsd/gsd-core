@@ -138,7 +138,7 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout; walks and checkout use TO=60.
 _to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
-# picked SHA — rc 0 when analyze_commits would pick SHA, or its lookup fails.
+# picked SHA — rc 0 when the pick step would pick SHA, or its lookup fails.
 picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | tr '\0' '\n') || return 0; [ -n "$F" ] && { grep -qv '^\.planning/' <<<"$F" || { [ "$PR_STRICT" != true ] && grep -Eq "$STRUCTURAL_RE" <<<"$F"; }; }; }
 
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for each path TIP changed
