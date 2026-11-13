@@ -2584,6 +2584,47 @@ for (const landed of ['a merge commit', 'a plain commit']) {
   });
 }
 
+// Re-review (b80a5ce1a) Nit 1: a shallow clone. origin/next is T = commit(parents B1, B0),
+// so the relatedness check finds B0 through T's second parent, and nothing listed above the
+// floor B0 (T, B1) is in HEAD = merge(B0 <- P). Cloned with --depth 2, B1 is a shallow
+// boundary: `rev-list --parents` reports it as a root, but its real first parent is B0, the
+// floor. Read from the raw commit, the walk keeps B0 silently instead of reporting a root.
+test('a shallow boundary is not mistaken for a root: the real first parent keeps the pin silently', (t) => {
+  const work = createTempDir('gsd-shallow-boundary-');
+  t.after(() => cleanup(work));
+  const src = path.join(work, 'src');
+  fs.mkdirSync(src);
+  const commit = (file, body, message) => {
+    fs.writeFileSync(path.join(src, file), body);
+    gitFixture(src, ['add', file]);
+    gitFixture(src, ['commit', '-q', '-m', message]);
+    return gitFixture(src, ['rev-parse', 'HEAD']);
+  };
+  gitFixture(src, ['init', '-q', '-b', 'next']);
+  const b0 = commit('a.txt', 'b0\n', 'B0: the pin');
+  gitFixture(src, ['checkout', '-q', '-b', 'pr']);
+  commit('p.txt', 'p\n', 'P: the PR');
+  gitFixture(src, ['checkout', '-q', '--detach', b0]);
+  gitFixture(src, ['merge', '-q', '--no-ff', '--no-edit', 'pr']);
+  gitFixture(src, ['branch', '-q', 'mergeref']);
+  gitFixture(src, ['checkout', '-q', 'next']);
+  const b1 = commit('a.txt', 'b1\n', 'B1: lands after the merge ref was built');
+  const tip = gitFixture(src, ['commit-tree', `${b1}^{tree}`, '-p', b1, '-p', b0, '-m', 'T: next, joined to B0 again']);
+  gitFixture(src, ['update-ref', 'refs/heads/next', tip]);
+
+  const clone = path.join(work, 'clone');
+  gitFixture(work, ['clone', '-q', '--depth', '2', '--no-single-branch', `file://${src}`, clone]);
+  gitFixture(clone, ['checkout', '-q', '--detach', 'refs/remotes/origin/mergeref']);
+  assert.equal(gitFixture(clone, ['rev-list', '--parents', '-n', '1', b1]), b1,
+    'fixture: in the shallow clone rev-list must report B1 as a root (a graft)');
+
+  const messages = [];
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' },
+    { cwd: clone, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, b0, 'the pin B0 must be kept');
+  assert.equal(messages.length, 1, `only the resolved-base line is expected: ${messages.join(' | ')}`);
+});
+
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
   const { root, b2 } = makeStalePinMergeRefRepo(t);
   const messages = [];
