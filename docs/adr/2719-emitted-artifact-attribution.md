@@ -142,7 +142,7 @@ A baseline-unavailable path must never be a bare `return`. In `node:test` that i
 
 ## Amendment (2026-11-09): the attribution base is the commit the tested tree contains, and the pin is its floor (#5797)
 
-Recorded here rather than by editing section 5, since accepted ADRs are append-only (`docs/contributor-standards.md`, "Amending an accepted ADR").
+Recorded here rather than by rewriting section 5, since accepted ADRs are append-only (`docs/contributor-standards.md`, "Amending an accepted ADR").
 
 Section 5 says the PR lane's cache is keyed on "the `next` sha the PR was merged with" and that a cache miss "falls back to an in-job build at `origin/next`". Both statements rest on a premise that does not always hold. On a `pull_request` lane `actions/checkout` tests GitHub's merge ref, which is built on the newest `next` GitHub had when it refreshed the ref; `pull_request.base.sha` (the `GSD_EMITTED_BASE` pin, #2854) can be older than that. The "Rebase check" merge of the pin into HEAD is then a no-op, so `merge-base(pin, HEAD)` is the old sha and the ack-trailer and changed-path ranges sweep in `next` commits the PR never authored. PR #5119 went red on four "declared twice" trailer keys from 34 such commits (#5797).
 
