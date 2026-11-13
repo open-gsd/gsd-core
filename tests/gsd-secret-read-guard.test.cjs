@@ -1166,6 +1166,76 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
       { numRuns: 12 },
     );
   });
+
+  // #5441: bash gives `$'gsd-debugger'`, `$'gsd\x2ddebugger'` and
+  // `$"gsd-debugger"` the value `gsd-debugger`, as it does the unquoted name,
+  // so each is a launch. The check reads dollar-quoting the way the secret-read
+  // scan does (#5255): under each shell's reading, then the plain one.
+  const DOLLAR_QUOTED_BLOCKS = [
+    ['ANSI-C quoted agent value', "claude --agent $'gsd-debugger' -p hi"],
+    ['ANSI-C quoted --agent=VALUE', "claude --agent=$'gsd-debugger' -p hi"],
+    ['ANSI-C hex escape in the agent value', "claude --agent $'gsd\\x2ddebugger' -p hi"],
+    ['locale-quoted agent value', 'claude --agent $"gsd-debugger" -p hi'],
+    ['ANSI-C quoted plugin-namespaced name', "claude --agent $'gsd:gsd-debugger' -p hi"],
+    ['ANSI-C quoted binary name', "$'claude' --agent gsd-debugger -p hi"],
+    ['ANSI-C quoted bash -c body', "bash -c $'claude --agent gsd-debugger -p hi'"],
+    ['ANSI-C quoted eval operand', "eval $'claude --agent gsd-debugger -p hi'"],
+    ['ANSI-C quoted value inside $( )', "out=$(claude --agent $'gsd-debugger' -p hi); echo \"$out\""],
+    ['ANSI-C quoted value behind timeout', "timeout 600 claude --agent $'gsd-debugger' -p hi"],
+  ];
+
+  for (const [label, command] of DOLLAR_QUOTED_BLOCKS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+  }
+
+  const DOLLAR_QUOTED_ALLOWS = [
+    ['ANSI-C quoted other agent', "claude --agent $'gsd-planner' -p hi"],
+    ['ANSI-C quoted agent that only starts with the name', "claude --agent $'gsd-debugger-extra' -p hi"],
+    ['the launch text in an ANSI-C quoted echo argument', "echo $'claude --agent gsd-debugger'"],
+  ];
+
+  for (const [label, command] of DOLLAR_QUOTED_ALLOWS) {
+    test(`allows: ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
+
+  test('property: the quoting of the agent value never changes the verdict (#5441)', () => {
+    const spellings = [
+      (a) => a, (a) => `'${a}'`, (a) => `"${a}"`, (a) => `$'${a}'`, (a) => `$"${a}"`,
+      (a) => `$'${a.replace('-', '\\x2d')}'`, (a) => `--agent=$'${a}'`,
+    ];
+    fc.assert(
+      fc.property(fc.integer({ min: 0, max: spellings.length - 1 }), fc.boolean(), (k, isDebugger) => {
+        const value = spellings[k](isDebugger ? 'gsd-debugger' : 'gsd-executor');
+        const command = value.startsWith('--agent=') ? `claude ${value} -p hi` : `claude --agent ${value} -p hi`;
+        const r = runHook(bash(command));
+        return isDebugger ? r.status === 2 : r.status === 0;
+      }),
+      { numRuns: 14 },
+    );
+  });
+
+  // A reading that cannot finish must not be read as "no launch": decoded, this
+  // body is thousands of nested `"$(`, which the bash reading overflows on. The
+  // plain reading takes it as one literal word and finds nothing, so a scan that
+  // dropped the reading's error would answer null.
+  test('a reading that cannot finish is not read as no launch (#5441)', () => {
+    const { scanDebuggerSpawn } = require(HOOK_PATH);
+    const command = `bash -c $'${'\\x22$('.repeat(20000)}'`;
+    let verdict;
+    try {
+      verdict = scanDebuggerSpawn(command);
+    } catch (e) {
+      verdict = e;
+    }
+    assert.ok(
+      verdict instanceof RangeError || (verdict !== null && verdict.code === 'command-too-complex'),
+      `expected a stack overflow or command-too-complex, got ${JSON.stringify(verdict)}`,
+    );
+  });
 });
 
 describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627)', () => {
