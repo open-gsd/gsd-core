@@ -2709,7 +2709,7 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
     // #2854: report the sources actually reached, not a hardcoded list of all three. An
     // early return could claim it "tried an in-job build" it never called, which sent
     // contributors hunting a rebuild that had not run.
-    `no usable emitted baseline measured from ${baseSha.slice(0, 12)} (pin ${base}) (tried ` +
+    `no usable emitted baseline measured from ${baseSha.slice(0, 12)} (resolved from ${base}) (tried ` +
     `${(resolvedBaseline.attempted || []).join(', ') || 'nothing'}):` +
     `\n  ${(resolvedBaseline.errors || []).join('\n  ')}`,
   );
@@ -2768,7 +2768,7 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
 
   assert.ok(
     result.ok,
-    `emitted-attribution failed measured from ${baseSha.slice(0, 12)} (pin ${base}):\n\n${formatReport(result)}`,
+    `emitted-attribution failed measured from ${baseSha.slice(0, 12)} (resolved from ${base}):\n\n${formatReport(result)}`,
   );
 });
 
