@@ -1213,14 +1213,18 @@ function boundaryAfterLine(write, index) {
  *     the earlier STATE.md assignment (`p = path.join(dir, 'STATE.md')`):
  *     the walk back from the write stops at the reassignment, whose
  *     right-hand side has no boundary, so the earlier assignment is never
- *     read. The class: any braceless body, on the same line or on the next
+ *     read. The class: a braceless body, on the same line or on the next
  *     line, after `if`, `else`, `else if`, `for`, `for...in`, `for...of`,
  *     `while` or `do` (`if (c) p = 'x';`, `} else p = 'y';`,
  *     `while (c)` with `p = x;` below it), and an assignment inside an
- *     expression (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The braced
- *     forms (`if (c) { p = 'x'; }`) are reported. The KNOWN_RESOLUTION_GAPS
- *     rows pin representative forms, not every form, and each braced form
- *     has a control. A `switch` case body is not a miss.
+ *     expression (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The miss
+ *     happens only when no line between the reassignment and the write
+ *     holds `{`, `}` or `=>`, and nothing after the value on its own line
+ *     holds one or names the variable (`if (c) p = 'x'; else p = 'y';` and
+ *     `if (c) p = 'x'; else { q(); }` are reported). The braced forms
+ *     (`if (c) { p = 'x'; }`) are reported. The KNOWN_RESOLUTION_GAPS rows
+ *     pin representative forms, not every form, and each braced form has a
+ *     control. A `switch` case body is not a miss.
  *   - A regex literal in the first argument holding a `)`
  *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
  *     and brackets, not regex literals. The `)` in the literal pops the depth
