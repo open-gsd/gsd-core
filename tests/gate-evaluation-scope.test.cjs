@@ -51,7 +51,8 @@ function write(dir, rel, content) {
 function makeRepo({ deferScaffold = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
   dirs.push(dir);
-  const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
+  const gitWith = (env, ...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY, ...env } }).trim();
+  const git = (...args) => gitWith({}, ...args);
   git('init', '--initial-branch=main');
   git('config', 'user.email', 'test@test.io');
   git('config', 'user.name', 'Test');
@@ -62,14 +63,14 @@ function makeRepo({ deferScaffold = false } = {}) {
     git('commit', '-m', 'docs(03): scaffold phase');
   };
   if (!deferScaffold) scaffold();
-  return { dir, git, scaffold };
+  return { dir, git, gitWith, scaffold };
 }
 
 /** Commit one real file (`env` adds git environment such as the author and committer dates); returns the full sha. */
 function commit(repo, rel, message, content = `${rel}\n`, env = {}) {
   write(repo.dir, rel, content);
   repo.git('add', rel);
-  gitOrThrow(['commit', '-m', message], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, ...env } });
+  repo.gitWith(env, 'commit', '-m', message);
   return repo.git('rev-parse', 'HEAD');
 }
 
@@ -1622,7 +1623,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     const seen = [];
-    subjectsOccurOnHead(repo.dir, [a], intercept(execGit, (call, args, run, opts) => { seen.push({ args, opts }); return run(); }));
+    subjectsOccurOnHead(repo.dir, [a], intercept(gitReporting('2.37.0').runner, (call, args, run, opts) => { seen.push({ args, opts }); return run(); }));
     assert.equal(seen.length, 4);
     assert.equal('maxBuffer' in seen[0].opts || 'maxBuffer' in seen[1].opts, false, 'the id lookups keep the default cap');
     assert.ok(seen[3].args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
@@ -1734,7 +1735,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
   test('[negative] an amend keeps the author time and moves the committer time forward: still counts', () => {
     const repo = makeRepo();
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
-    gitOrThrow(['commit', '--amend', '--no-edit', '-m', 'feat(03-01): a'], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, GIT_COMMITTER_DATE: datesAt(T, T + 3600).GIT_COMMITTER_DATE } });
+    repo.gitWith({ GIT_COMMITTER_DATE: datesAt(T, T + 3600).GIT_COMMITTER_DATE }, 'commit', '--amend', '--no-edit', '-m', 'feat(03-01): a');
     assert.notEqual(repo.git('rev-parse', 'HEAD'), a, 'the amend made a new commit');
     assert.equal(repo.git('log', '-1', '--format=%at%x20%ct'), `${T} ${T + 3600}`);
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);

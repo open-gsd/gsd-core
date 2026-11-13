@@ -446,7 +446,7 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   try {
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
-    const named = parseLog(git(['log', '--no-walk=unsorted', logFormat('none'), ...ids, '--']), false);
+    const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
     // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
     // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
     // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
@@ -904,10 +904,10 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
 
 /**
  * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. The fourth
- * field is the body (`body`) or the committer time (`time`, read by `parseLog`'s `since`), never both.
+ * field is the body (`true`), the committer time (`'time'`, read by `parseLog`'s `since`) or absent (`false`).
  */
-function logFormat(fourth: 'none' | 'body' | 'time'): string {
-  const field = { none: '', body: '%x1f%b', time: '%x1f%ct' }[fourth];
+function logFormat(fourth: boolean | 'time'): string {
+  const field = fourth === 'time' ? '%x1f%ct' : fourth ? '%x1f%b' : '';
   return `--format=%H%x1f%P%x1f%s${field}%x1e`;
 }
 
@@ -915,23 +915,23 @@ function logFormat(fourth: 'none' | 'body' | 'time'): string {
 type ParentMap = Map<string, string[]>;
 
 /**
- * With `since`, the listing came from `logFormat('time')`: a record committed before `since` is skipped, and a
- * record without a numeric time is no answer (`ScopeUnreadable`).
+ * With `since` (and `withBody` false), the listing came from `logFormat('time')`: a record committed before `since`
+ * is skipped, and a record without a numeric time is no answer (`ScopeUnreadable`).
  */
 function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap, since?: number): ScopeCommit[] {
   const commits: ScopeCommit[] = [];
   for (const record of out.split('\x1e')) {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
-    const [sha, parents, subject, body] = trimmed.split('\x1f');
+    const [sha, parents, subject, fourth] = trimmed.split('\x1f');
     if (!isFullSha(sha)) continue;
-    if (since !== undefined) {
-      const time = unixSeconds(body);
+    if (since !== undefined && !withBody) {
+      const time = unixSeconds(fourth);
       if (time === null) throw new ScopeUnreadable('git-malformed:log');
       if (time < since) continue;
     }
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
-    if (withBody) commit.body = (body ?? '').trim();
+    if (withBody) commit.body = (fourth ?? '').trim();
     commits.push(commit);
     parentsOut?.set(sha, (parents ?? '').split(' ').filter(Boolean));
   }
@@ -941,7 +941,7 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap, since?
 function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody ? 'body' : 'none'), ...group]), withBody, parentsOut));
+    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
   }
   return out;
 }
@@ -1187,7 +1187,7 @@ function resolvePhase(
   scope.source = 'phase-range';
   const max = clampMaxCommits(options.maxCommits);
   scope.commits = parseLog(
-    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true ? 'body' : 'none'), '-n', String(max)]),
+    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max)]),
     options.includeBody === true,
   );
   finalizeFiles(scope, repoRoot, rangeFiles(git, scope.rangeBase, ref));
@@ -1239,7 +1239,7 @@ function lookupSubjectCommits(
     sinceArgs.push(`--since=${options.committedSince}`);
   }
   const out = git(
-    ['log', range, logFormat(withBody ? 'body' : 'none'), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
+    ['log', range, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
   const parentsOf: ParentMap = new Map();
