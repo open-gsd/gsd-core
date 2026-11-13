@@ -352,18 +352,39 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
- * The newest commit of the base branch that HEAD contains, when it is newer than
- * `floorSha` (a commit HEAD already contains); otherwise `floorSha` unchanged.
+ * The newest commit on the base branch's FIRST-PARENT chain that HEAD contains, when it
+ * descends from `floorSha` (a commit HEAD already contains); otherwise `floorSha` unchanged.
  *
  * Active only when `env.GITHUB_BASE_REF` is set (Actions sets it on pull_request
  * events) and `refs/remotes/origin/<GITHUB_BASE_REF>` resolves. Local runs, release
  * lanes, `merge_group` and the gsd-test container (no `origin/*` refs) keep the pin's
  * merge-base exactly as before.
  *
- * `merge-base(origin/<base>, HEAD)` is stable while the base branch advances mid-run:
- * a commit that lands after the merge ref was built is not in HEAD, so it cannot become
- * the result. The ancestry check keeps the result from ever moving BELOW the floor, and
- * any git failure keeps the floor rather than guessing.
+ * Why the first-parent chain and not `git merge-base origin/<base> HEAD`: with criss-cross
+ * history that command returns ONE of several best common ancestors, and the pick is not
+ * the commit we want. A stacked PR whose lower PR landed on the base branch as a merge
+ * commit after the merge ref was built has two (the lower PR's tip and the base commit the
+ * merge ref was built on); measuring from the lower PR's tip sweeps the base-only commits
+ * between the pin and the merge ref back into range (PR #5871 review, Major 2). The
+ * first-parent chain is the sequence of trees the base branch actually had, so the newest
+ * of them HEAD contains is unique, and a baseline built there agrees with the
+ * `<base>..HEAD` range the trailers and changed paths are read from (#5008).
+ *
+ * Bounded work: `git merge-base` first confirms the two histories are related (its sha is
+ * discarded, not used for selection), so an unrelated base ref fails fast instead of
+ * walking its whole chain. `rev-list --first-parent <tip> ^<floor>` then lists, newest
+ * first, only the chain commits the floor does not already contain. Containment in HEAD
+ * is monotonic along a first-parent chain (a contained commit's first parent is
+ * contained too), so a binary search finds the newest contained one in
+ * ceil(log2(n + 1)) `merge-base --is-ancestor` calls. When none of them is contained,
+ * the newest contained chain commit is the first parent of the oldest listed one (or the
+ * tip itself when nothing is listed), which the floor contains.
+ *
+ * Stable while the base branch advances mid-run: a commit that lands after the merge ref
+ * was built is not in HEAD, so it cannot be chosen. The result never moves BELOW the
+ * floor (a chain commit that does not descend from it keeps the floor), and any git
+ * failure keeps the floor rather than guessing; when a base branch was named, both cases
+ * tell `diagnostic` why.
  *
  * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
  * @param {object} env base-ref environment.
@@ -384,19 +405,38 @@ function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
   } catch {
     return keep(`GITHUB_BASE_REF=${branch} is set but refs/remotes/origin/${branch} does not resolve`);
   }
-  let merged;
+  // `merge-base --is-ancestor` exits 0 (yes) or 1 (no); any other exit is a git failure.
+  const isAncestor = (ancestor, descendant) => {
+    try {
+      git(['merge-base', '--is-ancestor', ancestor, descendant], { cwd });
+      return true;
+    } catch (err) {
+      if (err && err.status === 1) return false;
+      throw err;
+    }
+  };
+  let newest;
   try {
-    merged = git(['merge-base', tip, 'HEAD'], { cwd }).trim();
+    git(['merge-base', tip, 'HEAD'], { cwd });
+    const chain = git(['rev-list', '--first-parent', tip, `^${floorSha}`], { cwd })
+      .split('\n').map((l) => l.trim()).filter(Boolean);
+    let lo = 0;
+    let hi = chain.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (isAncestor(chain[mid], 'HEAD')) hi = mid;
+      else lo = mid + 1;
+    }
+    if (lo < chain.length) newest = chain[lo];
+    else if (chain.length === 0) newest = tip;
+    else newest = git(['rev-parse', '--verify', `${chain[chain.length - 1]}^1^{commit}`], { cwd }).trim();
+    if (!/^[0-9a-f]{40}$/.test(newest)) throw new Error(`not a 40-hex sha: ${JSON.stringify(newest)}`);
+    if (newest === floorSha) return floorSha;
+    if (isAncestor(floorSha, newest)) return newest;
   } catch (err) {
-    return keep(`merge-base(origin/${branch}, HEAD) failed: ${err.message}`);
+    return keep(`finding the newest origin/${branch} first-parent commit HEAD contains failed: ${err.message}`);
   }
-  if (!/^[0-9a-f]{40}$/.test(merged) || merged === floorSha) return floorSha;
-  try {
-    git(['merge-base', '--is-ancestor', floorSha, merged], { cwd });
-  } catch {
-    return keep(`merge-base(origin/${branch}, HEAD) ${merged} does not descend from it`);
-  }
-  return merged;
+  return keep(`the newest origin/${branch} first-parent commit HEAD contains, ${newest}, does not descend from it`);
 }
 
 /**
