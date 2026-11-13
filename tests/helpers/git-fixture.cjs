@@ -172,8 +172,22 @@ function toLegacyResult(result) {
   return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
+/**
+ * The sha of `ref`, or '' only when git ran and found no such ref (exit 1);
+ * a timeout, a kill or a spawn failure rethrows.
+ */
+function refShaOrEmpty(ref, opts) {
+  try {
+    return gitOrThrow(['rev-parse', '-q', '--verify', ref], opts).trim();
+  } catch (e) {
+    if (e.status === 1) return '';
+    throw e;
+  }
+}
+
 module.exports = {
   gitOrThrow,
+  refShaOrEmpty,
   throwIfFailed,
   toLegacyResult,
   DEFAULT_GIT_TIMEOUT_MS,

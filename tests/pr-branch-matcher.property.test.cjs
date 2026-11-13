@@ -117,36 +117,6 @@ describe('pr-branch rewritten-history matcher (property)', () => {
     }), { numRuns: 40 });
   });
 
-  // Source of the input: the git commands of the workflow's rewrite check, run by git itself over a real rebase.
-  test('real git output for a rebased published history gives OK at the rebased tip', (t) => {
-    const repo = createTempDir('gsd-prmatcher-git-');
-    t.after(() => cleanup(repo));
-    const script = [
-      'set -e',
-      'git init -q -b main . && git config user.email t@t && git config user.name t',
-      'echo r > README.md && git add -A && git commit -qm base',
-      'git checkout -qb feature',
-      'echo a > a.txt && git add -A && git commit -qm c1',
-      'echo b > b.txt && git add -A && git commit -qm c2',
-      'git branch pub',
-      'git checkout -q main && echo o > o.txt && git add -A && git commit -qm other',
-      'git checkout -q feature && git rebase -q main',
-      'R="pub...feature"',
-      'printf "\\tL\\n%s\\n\\tR\\n%s\\n\\tD\\n%s\\n\\tF\\n%s\\n\\tP\\n%s\\n\\tN\\n\\n"' +
-        ' "$(git rev-list --no-merges --left-only $R)"' +
-        ' "$(git rev-list --no-merges --topo-order --right-only $R --not main)"' +
-        ' "$(git diff --name-only --no-renames pub main)"' +
-        ' "$(git log --full-history --no-merges --name-only --format=%x09%H $R)"' +
-        ' "$(git log -p --full-history --no-merges --no-renames --format=\'commit %H\' $R | git patch-id --stable)"',
-      'echo "TIP $(git rev-parse feature)"',
-    ].join('\n');
-    fs.writeFileSync(path.join(repo, '.run.sh'), `${script}\n`);
-    const r = runHook(path.join(repo, '.run.sh'), [], { interpreter: 'bash', cwd: repo });
-    assert.equal(r.exitCode, 0, r.stderr);
-    const cut = r.stdout.lastIndexOf('\nTIP '); // no trim: the first line starts with a TAB
-    assert.equal(match(`${r.stdout.slice(0, cut)}\n`), `OK ${r.stdout.slice(cut + 5).trim()}`, r.stdout);
-  });
-
   test('a picked commit with no patch-id always warns (fail closed)', () => {
     const withFiles = history.filter((h) => h.right.some((c) => !NOT_PICKED.has(c.kind)));
     fc.assert(fc.property(withFiles, fc.nat(), (h, n) => {

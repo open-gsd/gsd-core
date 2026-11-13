@@ -32,8 +32,8 @@ const path = require('node:path');
 const { runGsdTools, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
-const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { runHook, runGit, OUTCOME } = require('./helpers/process-seam.cjs');
+const { gitOrThrow, throwIfFailed, refShaOrEmpty } = require('./helpers/git-fixture.cjs');
+const { runHook } =require('./helpers/process-seam.cjs');
 const { extractBashBlockContaining, extractDeclarationLines } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -2734,7 +2734,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['add', '-A']);
     g(['commit', '-qm', 'changes + planning deletion']);
 
-    const out = runVerify(repo);
+    const { out } = runVerify(repo);
     assert.match(out, /GATE_PLANNING_DELETIONS=1/, `deletion count must be non-zero: ${out.slice(0, 400)}`);
     assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
   });
@@ -2742,7 +2742,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   // #5486: the pending build is recorded only when both gates pass.
   const PENDING_REF = 'refs/gsd/pr-built/default/main/feature';
   // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
-  let verifyExit; // exit status of the last runVerify run
+  // Returns `{ out, exitCode }`: the run's stdout and stderr, and its exit status.
   function runVerify(repo, to = '_to() { "$@"; }') {
     const workflowText = readFileNormalized(PR_BRANCH_MD); // read here, so a failure fails the named test
     const script = [
@@ -2770,17 +2770,10 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       cwd: repo,
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
-    verifyExit = r.exitCode;
     assert.match(r.stdout, new RegExp(`^PENDING_REF=${PENDING_REF}$`, 'm'), 'the shipped ref name is the one these tests read');
-    return r.stdout + r.stderr;
+    return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }
-  // The ref's sha, or '' only when git ran and found no such ref (exit 1); any other outcome fails the test.
-  const refSha = (repo, ref) => {
-    const r = runGit(['rev-parse', '-q', '--verify', ref], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
-    if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) return r.stdout.trim();
-    assert.ok(r.outcome === OUTCOME.EXITED && r.exitCode === 1, `git rev-parse did not run cleanly: ${JSON.stringify(r)}`);
-    return '';
-  };
+  const refSha = (repo, ref) => refShaOrEmpty(ref, { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
   const pendingRef = (repo) => refSha(repo, PENDING_REF);
 
   // A repo on `pr` whose one commit adds a transient planning file (.planning/phases/PLAN.md) over a code base on main.
@@ -2801,7 +2794,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
 
   test('verify records no pending build when the PR diff holds a forbidden planning path', (t) => {
     const { repo } = leakedPhaseRepo(t, 'gsd-3679-verify-forbidden-');
-    const out = runVerify(repo);
+    const { out } = runVerify(repo);
     assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
     assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
   });
@@ -2823,7 +2816,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['add', '-A']);
     g(['commit', '-qm', 'code only']);
 
-    const out = runVerify(repo);
+    const { out } = runVerify(repo);
     assert.match(out, /GATE_PLANNING_DELETIONS=0/, `clean diff must count zero deletions: ${out.slice(0, 400)}`);
     assert.equal(pendingRef(repo), gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim(), 'both gates pass: HEAD is the pending build');
   });
@@ -2843,7 +2836,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       fs.writeFileSync(path.join(repo, '.planning', 'phases', name), 'p\n');
       g(['add', '-A']);
       g(['commit', '-qm', 'delete one, leak one']);
-      const out = runVerify(repo);
+      const { out } = runVerify(repo);
       assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
       assert.match(out, /GATE_PLANNING_DELETIONS=1/, out.slice(0, 400));
       assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
@@ -2856,8 +2849,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       const { repo, g } = leakedPhaseRepo(t, 'gsd-3679-verify-timeout-');
       g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
       // Only a read run with the 60 s bound (TO=60) times out; a read that lost its bound runs and the stop assertion fails.
-      const out = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
-      assert.equal(verifyExit, 1, 'the run stops with exit 1');
+      const { out, exitCode } = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
+      assert.equal(exitCode, 1, 'the run stops with exit 1');
+      assert.match(out, /Cannot read pr \(deleted\); re-run\./, 'the stop names the deleted -pr branch');
       assert.equal(refSha(repo, 'refs/heads/pr'), '', 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
       assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
@@ -2869,8 +2863,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     t.after(() => cleanup(repo));
     const g = (args) => gitOrThrow(args, { cwd: repo });
     g(['branch', 'pr']);
-    const out = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
-    assert.equal(verifyExit, 1, 'the run stops with exit 1');
+    const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
+    assert.equal(exitCode, 1, 'the run stops with exit 1');
+    assert.match(out, /Cannot read pr \(not deleted\); re-run\./, 'the stop names the kept -pr branch');
     assert.notEqual(refSha(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
   });

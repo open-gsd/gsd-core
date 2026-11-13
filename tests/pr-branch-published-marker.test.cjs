@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
@@ -27,6 +27,7 @@ const {
   extractPickLoop,
   extractBashBlockContaining,
   extractDeclarationLines,
+  extractFunction,
 } = require('./helpers/pr-branch-filter.cjs');
 
 const MARKER = 'refs/gsd/pr-published/strict/main/feature';
@@ -133,7 +134,7 @@ function mergePr(dir, target = 'main') {
 const prMergedFns = () => {
   const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
   const [toFn] = extractDeclarationLines(text, 'pr_merged() {', ['_to\\(\\) \\{']);
-  return [toFn, extractBashBlockContaining(text, 'pr_merged() {').match(/^pr_merged\(\) \{[\s\S]*?^\}$/m)[0]].join('\n');
+  return [toFn, extractFunction(text, 'pr_merged() {', 'pr_merged')].join('\n');
 };
 
 // Runs the shipped pr_merged on feature-pr in `cwd`: MERGED or UNMERGED. `pre` stubs gh and gsd_run.
@@ -147,10 +148,7 @@ const printedCmd = (stderr, label) => {
   return line.slice(label.length + 4);
 };
 
-const refOf = (dir, ref) => {
-  // '' only when git ran and found no such ref (exit 1); a timeout or spawn failure rethrows.
-  try { return git(dir, 'rev-parse', '-q', '--verify', ref); } catch (e) { if (e.status === 1) return ''; throw e; }
-};
+const refOf = (dir, ref) => refShaOrEmpty(ref, { cwd: dir, env: ISOLATED_ENV(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
 const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
 const builtOf = (dir) => refOf(dir, BUILT);
