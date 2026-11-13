@@ -378,13 +378,15 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * contained too), so a binary search finds the newest contained one in
  * ceil(log2(n + 1)) `merge-base --is-ancestor` calls. When none of them is contained,
  * the newest contained chain commit is the first parent of the oldest listed one (or the
- * tip itself when nothing is listed), which the floor contains.
+ * tip itself when nothing is listed), which the floor contains. When the oldest listed one
+ * is a root (the chain is rooted outside the floor's history), no chain commit is in HEAD
+ * and the floor is kept with a line saying exactly that.
  *
  * Stable while the base branch advances mid-run: a commit that lands after the merge ref
  * was built is not in HEAD, so it cannot be chosen. The result never moves BELOW the
  * floor (a chain commit that does not descend from it keeps the floor), and any git
- * failure keeps the floor rather than guessing; when a base branch was named, both cases
- * tell `diagnostic` why.
+ * failure keeps the floor rather than guessing; when a base branch was named, every kept
+ * floor tells `diagnostic` why.
  *
  * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
  * @param {object} env base-ref environment.
@@ -429,7 +431,17 @@ function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
     }
     if (lo < chain.length) newest = chain[lo];
     else if (chain.length === 0) newest = tip;
-    else newest = git(['rev-parse', '--verify', `${chain[chain.length - 1]}^1^{commit}`], { cwd }).trim();
+    else {
+      // `rev-list --parents -n 1 <sha>` prints the sha, then its parents; a root prints only itself.
+      const oldest = chain[chain.length - 1];
+      const [, firstParent] = git(['rev-list', '--parents', '-n', '1', oldest], { cwd }).trim().split(/\s+/);
+      if (!firstParent) {
+        // The chain is rooted outside the floor's history and HEAD contains none of it: no git
+        // command failed, so say what happened.
+        return keep(`no origin/${branch} first-parent commit is in HEAD (the chain ends at the root ${oldest})`);
+      }
+      newest = firstParent;
+    }
     if (!/^[0-9a-f]{40}$/.test(newest)) throw new Error(`not a 40-hex sha: ${JSON.stringify(newest)}`);
     if (newest === floorSha) return floorSha;
     if (isAncestor(floorSha, newest)) return newest;
