@@ -159,19 +159,25 @@ interface UnreadableSource {
  * unchanged (`block: false`); the outcome is `unreadable` (exit UNAVAILABLE) and `passed` is false
  * because nothing was certified.
  */
-function unreadableReview(phase: string, tddPlans: number, unreadable: UnreadableSource[], action: 'read' | 'write' = 'read'): GateResult {
+function unreadableReview(
+  phase: string,
+  tddPlans: number,
+  unreadable: UnreadableSource[],
+  reviewed?: { rows: TddPlanRow[]; violations: number; table: string },
+): GateResult {
   const names = unreadable.map((u) => `${u.source} (${u.reason})`).join(', ');
-  // A failed `--record` write comes after the review ran, so its message must not say the phase was not reviewed.
-  const message = action === 'read'
-    ? `TDD review could not read: ${names}. Phase ${phase} was not reviewed.`
-    : `TDD review could not write: ${names}. Phase ${phase} was reviewed and nothing was sealed.`;
+  // A failed `--record` write comes after the review ran: it keeps the review result and says nothing was sealed.
+  const { rows, violations, table } = reviewed ?? { rows: [] as TddPlanRow[], violations: 0, table: '' };
+  const message = reviewed
+    ? `TDD review could not write: ${names}. Phase ${phase} was reviewed and nothing was sealed.\n\n${table}`
+    : `TDD review could not read: ${names}. Phase ${phase} was not reviewed.`;
   return gateUnreadable(false, {
     block: false,
     passed: false,
     tddPlans,
-    violations: 0,
-    table: '',
-    rows: [] as TddPlanRow[],
+    violations,
+    table,
+    rows,
     unreadable,
     message,
   });
@@ -382,7 +388,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
       writeSeal(phaseDir, evidence, sealRead);
     } catch (err) {
       const e = evidenceFromError(err, SEAL_FILE);
-      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }], 'write');
+      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }], { rows, violations, table });
     }
   }
 

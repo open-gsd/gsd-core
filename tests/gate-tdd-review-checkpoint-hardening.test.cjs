@@ -845,6 +845,8 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('--record into an unwritable phase directory reports unreadable', (t) => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    // A second TDD plan with no commits fails: the review result must survive the write fault.
+    w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
     const real = fs.openSync;
     t.mock.method(fs, 'openSync', (f, ...rest) => {
       if (String(f).includes('TDD-REVIEW-SEAL.json')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
@@ -855,6 +857,9 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(r.payload.unreadable.length, 1);
     assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json .*nothing was sealed/);
     assert.doesNotMatch(r.payload.message, /was not reviewed/);
+    assert.deepEqual(r.payload.rows.map((row) => row.status), ['Pass', 'FAIL']);
+    assert.equal(r.payload.violations, 1);
+    assert.match(r.payload.table, /### TDD REVIEW/);
   });
 
   test('a failed --record leaves no temp file behind', (t) => {
