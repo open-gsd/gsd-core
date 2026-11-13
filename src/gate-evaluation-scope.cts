@@ -461,7 +461,7 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     const listing = git(['log', logFormat(false, true), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
     const inWindow = listing.split('\x1e').filter((record) => {
       if (filtered || record.trim() === '') return true;
-      const time = unixSeconds(record.split('\x1f')[3]);
+      const time = recordCommitTime(record, false);
       if (time === null) throw new ScopeUnreadable('git-malformed:log');
       return time >= since;
     });
@@ -910,10 +910,15 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
 
 /**
  * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup;
- * `withCommitTime` closes each record with `%ct` (read it back with `unixSeconds`).
+ * `withCommitTime` closes each record with `%ct` (read it back with `recordCommitTime`).
  */
 function logFormat(withBody: boolean, withCommitTime = false): string {
   return `--format=%H%x1f%P%x1f%s${withBody ? '%x1f%b' : ''}${withCommitTime ? '%x1f%ct' : ''}%x1e`;
+}
+
+/** The `%ct` of one record of a `logFormat(withBody, true)` listing; null when the field is not all digits. */
+function recordCommitTime(record: string, withBody: boolean): number | null {
+  return unixSeconds(record.split('\x1f')[withBody ? 4 : 3]);
 }
 
 /** Parent shas by commit sha, as read from the logs that listed the commits. */
