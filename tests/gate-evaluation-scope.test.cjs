@@ -1719,7 +1719,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', [])), subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', [])), 'both gits give one answer');
     const current = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
-    assert.ok(current.at(-1).includes(`--since-as-filter=@${T}`));
+    assert.ok(current.find((args) => args.includes('HEAD')).includes(`--since-as-filter=@${T}`));
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {

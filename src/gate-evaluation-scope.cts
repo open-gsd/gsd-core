@@ -456,7 +456,7 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     if (times.size < named.length) return null;
     const since = Math.min(...times.values());
     // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
-    // test: the failing fourth call) and the same window is applied here, on the committer time each record ends with.
+    // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time each record ends with.
     const filtered = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT);
     const listing = git(['log', logFormat('time'), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
     const onHead = new Set(parseLog(listing, 'time', undefined, filtered ? undefined : since).map((c) => c.subject));
