@@ -157,3 +157,26 @@ test('filesystem stateIO: the STATE.md match is case-sensitive (#5120 review)', 
     assert.deepEqual(fs.readdirSync(sub), [name], `${name} takes no lock`);
   }
 });
+
+// #5120 re-review (Minor-2): a hard-linked STATE.md is refused like a symlink. The
+// seam's atomic rename would replace this name and detach it from the other name,
+// so a shared file would silently stop being shared; the seam's own direct-write
+// fallback refuses a multiply-linked target for the same reason.
+test('filesystem stateIO: a hard-linked STATE.md is refused and both names keep their bytes (#5120 re-review)', (t) => {
+  const dir = createTempDir('state-io-5120-hardlink-');
+  t.after(() => cleanup(dir));
+  const shared = path.join(dir, 'shared.md');
+  fs.writeFileSync(shared, 'shared\n');
+  const file = path.join(dir, 'STATE.md');
+  fs.linkSync(shared, file);
+  assert.equal(fs.lstatSync(file).nlink, 2, 'precondition: STATE.md has two names');
+
+  assert.throws(
+    () => createStateIO({ io: 'filesystem' }).write(file, '# new\n'),
+    (err) => err.code === 'ENXIO' && /STATE\.md is not a regular file \(it is a hard link with 2 names\)/.test(err.message),
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), 'shared\n', 'STATE.md keeps its bytes');
+  assert.equal(fs.readFileSync(shared, 'utf8'), 'shared\n', 'the other name keeps its bytes');
+  assert.equal(fs.lstatSync(file).nlink, 2, 'the two names are still one file');
+  assert.equal(fs.existsSync(`${file}.lock`), false, 'the lock is released');
+});

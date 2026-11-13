@@ -110,12 +110,17 @@ function refuseNonRegularStateMd(filePath: string): void {
     if (code === 'ENOENT') return; // a new STATE.md: the seam creates it
     throw err;
   }
-  if (st.isFile()) return;
-  const kind = st.isSymbolicLink() ? 'a symlink'
-    : st.isFIFO() ? 'a FIFO'
-      : st.isCharacterDevice() || st.isBlockDevice() ? 'a device'
-        : st.isDirectory() ? 'a directory'
-          : 'a special file';
+  // A hard link is refused too (#5120 re-review): the rename would replace this name
+  // and detach it from the others, so a shared file silently stops being shared. The
+  // seam's direct-write fallback refuses a multiply-linked target for the same reason.
+  if (st.isFile() && st.nlink <= 1) return;
+  const kind = st.isFile() ? `a hard link with ${st.nlink} names`
+    : st.isSymbolicLink() ? 'a symlink'
+      : st.isFIFO() ? 'a FIFO'
+        : st.isCharacterDevice() || st.isBlockDevice() ? 'a device'
+          : st.isSocket() ? 'a socket'
+            : st.isDirectory() ? 'a directory'
+              : 'a special file';
   throw Object.assign(
     new Error(`ENXIO: cannot write ${filePath}: STATE.md is not a regular file (it is ${kind}); refusing, so nothing is written through or over it`),
     { code: 'ENXIO' },
