@@ -40,6 +40,7 @@ const { execFileSync } = require('node:child_process');
 const fc = require('fast-check');
 
 const { cleanup, createTempDir } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { BUILD_SCRIPT, buildParityManifest, buildInstallTree, PKG_VERSION } = require('./helpers/install-shared.cjs');
 const {
   resolveChangedPaths,
@@ -2107,13 +2108,21 @@ test('property: reported added/dropped are exactly the set differences', () => {
  * Hermetic git in a throwaway repo: fixed identity, no signing, no global hooks. Shares
  * `FRESH_FIXTURE_GIT_TIMEOUT_MS` with the other from-scratch git fixtures in this file
  * rather than introducing a second timeout constant for the identical shape.
+ *
+ * `date` (git's `<unix-seconds> +0000` form) pins both the author and committer date of
+ * the commit `args` creates, through `isolatedEnv` with the fixture dir as HOME. Only a
+ * fixture whose meaning depends on commit-date order passes it (the stacked-PR row
+ * below); every other call keeps the inherited env.
  */
-function gitFixture(cwd, args) {
+function gitFixture(cwd, args, { date } = {}) {
+  const env = date === undefined
+    ? undefined
+    : isolatedEnv({ home: cwd, override: { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } });
   return execFileSync('git', [
     '-c', 'user.name=gsd-test', '-c', 'user.email=gsd-test@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
     ...safeDirArgs(cwd), ...args,
-  ], { cwd, encoding: 'utf8', timeout: FRESH_FIXTURE_GIT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  ], { cwd, env, encoding: 'utf8', timeout: FRESH_FIXTURE_GIT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
 /**
@@ -2506,6 +2515,82 @@ test('a genuine ack-trailer conflict in the PR\'s own commits still fails after 
   assert.equal(ack.errors.length, 1, 'the PR\'s own conflicting trailers must still be reported');
   assert.match(ack.errors[0], /plan-phase\.md/);
   assert.match(ack.errors[0], /declared twice/);
+});
+
+// trek-e's stacked shape (PR #5871 review 5865033613, Major 2): an upper PR P stacked on
+// a lower PR Q, both forked from the stale pin B0. `next` gains B1/B2 (base-only commits
+// declaring one key with two reasons), GitHub builds P's merge ref on B2, and then Q lands
+// on `next` as a merge commit N = merge(B2 <- Q) before the job checks out. Q is dated
+// after B2, so `merge-base --all origin/next HEAD` is {Q, B2}: two best common ancestors,
+// neither an ancestor of the other. Measuring from Q would sweep B1/B2 back into the range
+// (Q..HEAD), which is #5797's symptom; the attribution base must be B2, the newest commit
+// on origin/next's FIRST-PARENT chain that HEAD contains.
+function makeStackedPrRepo(t) {
+  const root = createTempDir('gsd-stacked-pr-merge-ref-');
+  t.after(() => cleanup(root));
+  const at = (offset) => ({ date: `${1_700_000_000 + offset} +0000` });
+  const commit = (file, body, message, offset, trailer) => {
+    fs.writeFileSync(path.join(root, file), body);
+    gitFixture(root, ['add', '-A']);
+    gitFixture(root, ['commit', '-q', '-m', message, ...(trailer ? ['-m', trailer] : [])], at(offset));
+  };
+  gitFixture(root, ['init', '-q', '-b', 'next']);
+  commit('shared.txt', 'v0\n', 'B0: the base sha the PR event recorded', 0);
+  const b0 = gitFixture(root, ['rev-parse', 'HEAD']);
+  for (const [i, reason] of [[1, 'first reason'], [2, 'a different reason']]) {
+    commit('shared.txt', `v${i}\n`, `B${i}: base-only change`, 10 * i,
+      `Emitted-Drift-Ack-Growth: verify-work.md — ${reason}`);
+  }
+  const b2 = gitFixture(root, ['rev-parse', 'HEAD']);
+
+  gitFixture(root, ['checkout', '-q', '-b', 'lower', b0]);
+  commit('lower-pr.txt', 'q\n', 'Q: the lower PR', 30);
+  const q = gitFixture(root, ['rev-parse', 'HEAD']);
+  gitFixture(root, ['checkout', '-q', '-b', 'upper']);
+  commit('upper-pr.txt', 'p\n', 'P: the upper PR, stacked on Q', 40);
+
+  // GitHub builds P's merge ref on B2, the newest next it has seen ...
+  gitFixture(root, ['checkout', '-q', '--detach', b2]);
+  gitFixture(root, ['merge', '-q', '--no-ff', '--no-edit', 'upper'], at(50));
+  const mergeRef = gitFixture(root, ['rev-parse', 'HEAD']);
+  // ... and Q then lands on next as a merge commit, before this job checks out.
+  gitFixture(root, ['checkout', '-q', 'next']);
+  gitFixture(root, ['merge', '-q', '--no-ff', '--no-edit', 'lower'], at(60));
+  const nextTip = gitFixture(root, ['rev-parse', 'HEAD']);
+  gitFixture(root, ['checkout', '-q', '--detach', mergeRef]);
+  gitFixture(root, ['update-ref', 'refs/remotes/origin/next', nextTip]);
+  gitFixture(root, ['branch', '-q', '-D', 'next', 'lower', 'upper']);
+  return { root, b0, b2, q, mergeRef, nextTip };
+}
+
+test('a stacked PR whose lower PR landed as a merge commit measures from the first-parent base, not the side merge-base', (t) => {
+  const { root, b0, b2, q } = makeStackedPrRepo(t);
+  assert.deepEqual(
+    gitFixture(root, ['merge-base', '--all', 'refs/remotes/origin/next', 'HEAD']).split('\n').sort(),
+    [b2, q].sort(),
+    'fixture: origin/next and HEAD must have two best merge bases, Q and B2',
+  );
+
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' }, { cwd: root });
+  assert.equal(base.sha, b2,
+    'the attribution base must be B2, the newest origin/next first-parent commit HEAD contains, ' +
+    `not the side merge-base Q (${q})`);
+
+  const { changedPaths, ack } = resolveAttributionInputs(base, {
+    cwd: root,
+    resolveBaselineFn: () => ({ ok: true, via: 'build', baseline: {} }),
+    readJson: () => null,
+  });
+  assert.deepEqual([...changedPaths].sort(), ['lower-pr.txt', 'upper-pr.txt'],
+    'only the stack\'s own paths may be in the changed set, never base-only shared.txt');
+  assert.deepEqual(ack.errors, [], 'base-only trailers from B1/B2 must not reach the PR\'s ack range');
+  assert.deepEqual([...ack.growth.entries()], []);
+
+  // A current pin (B2) stays B2 and reports no advance: the base tip HEAD lacks (N) never counts.
+  const messages = [];
+  assert.equal(resolveAttributionBase({ GSD_EMITTED_BASE: b2, GITHUB_BASE_REF: 'next' },
+    { cwd: root, diagnostic: (m) => messages.push(m) }).sha, b2);
+  assert.ok(!messages.some((m) => m.includes('measuring from')), `no advance expected: ${messages.join(' | ')}`);
 });
 
 // ─── The real thing: the law, run against the actual tree ───────────────────
