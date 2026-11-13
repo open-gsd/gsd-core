@@ -704,14 +704,17 @@ copies under `tests/`:
 - an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` on any
   object other than `process.env`, which is the copy `isolatedEnv()` replaces.
 
-Assigning `process.env.HOME` in-process is not flagged; that case uses `sandboxHome()`, above.
-`tests/helpers/isolated-env.cjs` is the one exempt file.
+An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
+`sandboxHome()`, above. `tests/helpers/isolated-env.cjs` is the one exempt file. The rule's header
+(`eslint-rules/no-adhoc-env-isolation.cjs`, "Known gaps") lists the shapes it does not see, such
+as a `HOME=` inside a shell script string.
 
 `eslint-rules/no-adhoc-env-isolation.allowlist.json` lists the files that still carry a copy.
 The waves of #4635 drain it in sorted order and then delete it. It only ratchets down: a listed
 file with no copy left reports its own entry as stale, so delete the line when you migrate a
 file. A new copy in a file the list does not name fails lint. Never add a file to the list. Build
-the env with the helper instead.
+the env with the helper instead. Entries are repository-relative, so run lint from the repository
+root, as `npm run lint` does.
 
 ### Test Structure
 

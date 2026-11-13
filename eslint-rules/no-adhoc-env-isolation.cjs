@@ -44,26 +44,41 @@ const path = require('path');
  * ## Exempt file and allowlist
  *
  * `tests/helpers/isolated-env.cjs` is the implementation and is excluded in
- * `eslint.config.mjs`. `allowlist` (repo-relative POSIX paths) holds the files
- * that still carry a copy: an allowlisted file's violations are counted but
- * not reported, and a listed file with zero violations reports
+ * `eslint.config.mjs`. `allowlist` (repo-relative POSIX paths, resolved against
+ * the lint cwd, so lint runs from the repository root) holds the files that
+ * still carry a copy: an allowlisted file's violations are counted but not
+ * reported, and a listed file with zero violations reports
  * `staleAllowlistEntry` so its entry is deleted. The allowlist only ratchets
- * down; there is no inline marker escape.
+ * down. The rule has no marker comment of its own; an `eslint-disable`
+ * comment naming it still suppresses it, as it does any rule.
  *
  * ## Known gaps (the ratchet is deliberately narrow)
  *
- *   - In-process mutation, `process.env.HOME = x`, is not flagged: the
- *     isolation helper covers the env handed to a CHILD, and in-process
- *     isolation is `sandboxHome()` / `scrubConfigLocationEnv()` in
- *     `tests/helpers.cjs` (CONTRIBUTING.md).
- *   - An object spread of the process env, `{ ...process.env }`, with no
- *     HOME/USERPROFILE key and no PATH filter is not flagged.
+ *   - In-process mutation spelled `process.env.HOME = x` (or `['HOME']`) is
+ *     not flagged: the isolation helper covers the env handed to a CHILD, and
+ *     in-process isolation is `sandboxHome()` / `scrubConfigLocationEnv()` in
+ *     `tests/helpers.cjs` (CONTRIBUTING.md). Other spellings of it are flagged:
+ *     `globalThis.process.env.HOME = x`, `const env = process.env; env.HOME =
+ *     x`, and `Object.assign(process.env, { HOME: x })` (an object literal).
+ *   - A PATH read the alias hop does not follow is not flagged unless its split
+ *     is filtered: `const { PATH } = process.env`, `const env = process.env;
+ *     env.PATH`, `globalThis.process.env.PATH`, and a template literal around
+ *     it. Only a direct `process.env.PATH` read, through `||` / `??` / `?:`,
+ *     `String(...)` or one `const` hop, is followed.
  *   - A PATH filter written as a loop, or over a split held in a variable,
- *     whose receiver does not read `process.env.PATH` directly (a parameter, a
- *     property of another object) is not flagged: only a split consumed
+ *     whose receiver is not such a read is not flagged: only a split consumed
  *     directly by `.filter(...)` is.
- *   - Any split of `process.env.PATH` is flagged, a diagnostic that only counts
- *     its entries included: the rule cannot tell a count from a copy.
+ *   - A split of a direct `process.env.PATH` read is flagged whatever it is
+ *     for, a diagnostic that only counts its entries included; and any
+ *     `*.delimiter` argument counts as a path delimiter. The rule cannot tell a
+ *     count from a copy, or `csv.delimiter` from `path.delimiter`.
+ *   - HOME built without a static key is not flagged: a variable key
+ *     (`env[key]`), `Object.fromEntries([['HOME', x]])`,
+ *     `Object.defineProperty` / `Reflect.set`, a `'HOME=' + x` env array entry,
+ *     or `HOME=` inside a shell script string (`export HOME=...`).
+ *   - An object spread of the process env, `{ ...process.env }`, with no
+ *     HOME/USERPROFILE key and no PATH filter is not flagged; any object with a
+ *     `HOME` key is, whatever it is for.
  *   - Key names match exactly: `Home` or `userprofile` keys are not flagged.
  */
 
