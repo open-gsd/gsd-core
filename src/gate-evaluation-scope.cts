@@ -452,9 +452,19 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // so a kept commit under a too-old child is still listed. A rewrite whose own committer clock is behind that time
     // reads as a squash (test: the `[boundary]` twin at limit-1).
     const times = commitTimes(git, ids, true);
-    if (times.size < new Set(ids).size) return null;
+    // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
+    if (times.size < named.length) return null;
     const since = Math.min(...times.values());
-    const onHead = new Set(parseLog(git(['log', logFormat(false), `--since-as-filter=@${since}`, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
+    const listHead = (bound: string): ScopeCommit[] => parseLog(git(['log', logFormat(false), bound, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false);
+    let listed: ScopeCommit[];
+    try {
+      listed = listHead(`--since-as-filter=@${since}`);
+    } catch (error) {
+      // git before 2.37 has no `--since-as-filter` (usage error 129): `--max-age` bounds the window there, and also drops a too-old child's parents.
+      if (!(error instanceof ScopeUnreadable && error.exitCode === 129)) throw error;
+      listed = listHead(`--max-age=${since}`);
+    }
+    const onHead = new Set(listed.map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;

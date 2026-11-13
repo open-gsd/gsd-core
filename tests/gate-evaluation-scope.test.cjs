@@ -1671,6 +1671,30 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping('')), null);
   });
 
+  test('[negative] two spellings of one commit are one commit, not a missing time', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, a.slice(0, 10)]), true);
+  });
+
+  test('[negative] a git without --since-as-filter (usage error 129) falls back to the --max-age window', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    const seen = [];
+    const oldGit = (args, opts) => {
+      seen.push(args);
+      return args.some((arg) => String(arg).startsWith('--since-as-filter')) ? { exitCode: 129, stdout: '', stderr: 'usage', signal: null, error: null, timedOut: false } : execGit(args, opts);
+    };
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], oldGit), true);
+    assert.ok(seen.at(-1).includes(`--max-age=${T}`), 'the retry bounds by --max-age');
+  });
+
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
@@ -1689,7 +1713,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
   });
 
-  test('[negative] a whole-history listing git cannot deliver is no answer, never a "no"', () => {
+  test('[negative] a date-bounded HEAD listing git cannot deliver is no answer, never a "no"', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
