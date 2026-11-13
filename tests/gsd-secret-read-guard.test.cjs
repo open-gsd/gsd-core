@@ -1182,6 +1182,12 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['ANSI-C quoted eval operand', "eval $'claude --agent gsd-debugger -p hi'"],
     ['ANSI-C quoted value inside $( )', "out=$(claude --agent $'gsd-debugger' -p hi); echo \"$out\""],
     ['ANSI-C quoted value behind timeout', "timeout 600 claude --agent $'gsd-debugger' -p hi"],
+    // The three spellings added on #5441: a span joined to plain text inside one
+    // word, the flag quoted rather than its value, and an octal escape.
+    ['ANSI-C span joined to plain text in the value', "claude --agent gsd-$'debugger' -p hi"],
+    ['ANSI-C quoted flag', "claude $'--agent' gsd-debugger -p hi"],
+    ['ANSI-C octal escape in the agent value', "claude --agent $'gsd\\055debugger' -p hi"],
+    ['ANSI-C quoted --agent=VALUE word', "claude $'--agent=gsd-debugger' -p hi"],
   ];
 
   for (const [label, command] of DOLLAR_QUOTED_BLOCKS) {
