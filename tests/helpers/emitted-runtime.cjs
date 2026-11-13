@@ -387,8 +387,10 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * Stable while the base branch advances mid-run: a commit that lands after the merge ref
  * was built is not in HEAD, so it cannot be chosen. The result never moves BELOW the
  * floor (a chain commit that does not descend from it keeps the floor), and any git
- * failure keeps the floor rather than guessing; when a base branch was named, every kept
- * floor tells `diagnostic` why.
+ * failure keeps the floor rather than guessing; when a base branch was named, every floor
+ * kept by a guard (unresolved ref, failed lookup, rooted chain, or a result below the
+ * floor) tells `diagnostic` why. A walk that simply finds nothing newer than the floor
+ * keeps it silently.
  *
  * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
  * @param {object} env base-ref environment.
