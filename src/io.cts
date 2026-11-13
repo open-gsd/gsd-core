@@ -401,12 +401,21 @@ const ERROR_REASON = Object.freeze({
   // human_needed`) — verification.cts's VerificationStatusError, translated
   // once, centrally, by gsd-tools.cjs. Never read as "no result" at exit 0.
   VERIFICATION_STATUS_INVALID: 'verification_status_invalid',
+  // state planned-phase --plans (#5320): the count cannot be recorded, nothing is written
+  PLANS_NO_LINE: 'plans_no_line',
+  PLANS_BELOW_POSITION: 'plans_below_position',
+  AMBIGUOUS_PLAN_POSITION: 'ambiguous_plan_position',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',
 });
 
 type ErrorReasonValue = typeof ERROR_REASON[keyof typeof ERROR_REASON];
+
+/** The ERROR_REASON member whose wire value is `value`, or `undefined` when it is none (the one narrowing of a string code). */
+function errorReasonOf(value: unknown): ErrorReasonValue | undefined {
+  return Object.values(ERROR_REASON).find((reason) => reason === value);
+}
 
 // setJsonErrorMode / getJsonErrorMode now live in cli-exit.cts (imported above)
 // and are re-exported here for the callers that already import them from io.
@@ -511,6 +520,8 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.PHASE_ID_COLLISION]: 'USAGE',
   [ERROR_REASON.AMBIGUOUS_PHASE_OWNER]: 'USAGE',
   [ERROR_REASON.PHASE_NAMING_NOT_CUSTOM]: 'USAGE',
+  // The --plans count is below the recorded position, or that position is past the safe-integer range: the count or the position line is at fault.
+  [ERROR_REASON.PLANS_BELOW_POSITION]: 'USAGE',
 
   // A specific, named thing does not exist / nothing was there to find —
   // genuine, known emptiness rather than a broken prerequisite.
@@ -558,6 +569,9 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   // No clearly better fit — the honest default, per design.
   [ERROR_REASON.HOOKS_OPT_OUT]: 'FAIL',
   [ERROR_REASON.UNKNOWN]: 'FAIL',
+  // The STATE.md has no plan line, or two that disagree: a document problem, the generic failure.
+  [ERROR_REASON.PLANS_NO_LINE]: 'FAIL',
+  [ERROR_REASON.AMBIGUOUS_PLAN_POSITION]: 'FAIL',
 });
 
 function outcomeForReason(reason: ErrorReasonValue): string {
@@ -594,6 +608,7 @@ export = {
   declineNoOp,
   serializeForOutput,
   ERROR_REASON,
+  errorReasonOf,
   setJsonErrorMode,
   getJsonErrorMode,
   error,

@@ -2454,10 +2454,10 @@ Record state transition after plan-phase completes (Planned/Ready to execute).
 | Flag | Description |
 |------|-------------|
 | `--phase N` | Phase number that was planned |
-| `--plans N` | Number of plans generated |
+| `--plans N` | Number of live PLAN files in the phase, gap-closure plans included (`find-phase` `plan_count`); a non-negative integer up to 9007199254740991 (`state begin-phase --plans` applies the same rule) |
 
-**Prerequisites:** Phase has been planned
-**Produces:** Updated `STATE.md` with post-planning state
+**Prerequisites:** Phase has been planned; with `--plans`, STATE.md has a `Plan:`, `Current Plan:` or `Total Plans in Phase:` line (read where `state advance-plan` reads it)
+**Produces:** Updated `STATE.md` with post-planning state: `Status` becomes `Ready to execute` (a bare `Ready` counts as unedited), and `--plans` is written to `Total Plans in Phase:` and to the `Plan:` / `Current Plan:` line `state advance-plan` reads. A same-phase replan keeps the recorded plan number, `N of M` spelling and trailing text (a bare `N` gains ` of M`; a bare `Current Plan: N` beside `Total Plans in Phase:` stays as written); a replan for a new phase resets the line to `0 of M in current phase` (that `Current Plan:` to `0`). An unreadable line beside a readable one is left as written. Exits non-zero and writes nothing when `--plans` is not a non-negative integer, is below the recorded plan position (the `N` of `Plan: N of M`, or the bare `N` of `Plan: N` / `Current Plan: N`: the first plan still to run, or M once the last plan is done), the `Plan:` and `Current Plan:` lines of a same-phase replan record different positions, the recorded position is above 9007199254740991 (no count can hold it), or there is no line to land on. A `Current Plan:` or `Plan:` value no `N` leads (`Not started`) is left as written when `Total Plans in Phase:` records the count. `--plans 0` reports `0 plans ready` (not `? plans ready`).
 
 ```bash
 node gsd-tools.cjs state planned-phase --phase 3 --plans 2

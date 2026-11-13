@@ -40,6 +40,15 @@ describe('ERROR_REASON', () => {
     assert.ok(Object.isFrozen(io.ERROR_REASON));
   });
 
+  test('errorReasonOf narrows every member by its wire value and nothing else', () => {
+    for (const [key, wire] of Object.entries(io.ERROR_REASON)) {
+      assert.strictEqual(io.errorReasonOf(wire), io.ERROR_REASON[key], key);
+    }
+    for (const notAReason of ['', 'PLANS_NO_LINE', ' usage', 'plans_no_line ', undefined, null, 0, {}]) {
+      assert.strictEqual(io.errorReasonOf(notAReason), undefined, String(notAReason));
+    }
+  });
+
   test('contains expected wire values', () => {
     assert.strictEqual(io.ERROR_REASON.CONFIG_KEY_NOT_FOUND, 'config_key_not_found');
     assert.strictEqual(io.ERROR_REASON.CONFIG_NO_FILE, 'config_no_file');
@@ -701,6 +710,9 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   pick_output_not_json: 'UNAVAILABLE',
   summary_extract_unparseable: 'UNAVAILABLE',
   verification_status_invalid: 'UNAVAILABLE',
+  plans_no_line: 'FAIL',
+  plans_below_position: 'USAGE',
+  ambiguous_plan_position: 'FAIL',
   usage: 'USAGE',
   unknown: 'FAIL',
 };
@@ -713,7 +725,7 @@ function expectedErrorCode3912(reasonValue, version) {
   return CODE_FOR_3912.get(outcome);
 }
 
-describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 32-member enum', () => {
+describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 35-member enum', () => {
   afterEach(() => {
     resolveContractVersion({ argv: ['node', 'x'], env: {} }); // restore v1 default
   });

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON } = ioMod;
+const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON, errorReasonOf } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
@@ -1335,7 +1335,7 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
     // spellings with DIFFERENT numbers. Same posture as the case above — name
     // the candidates and let the caller resolve them. Advancing either one
     // would write a number into the other that nothing derived for it.
-    if (resultData && resultData['reason'] === 'ambiguous_plan_position') {
+    if (resultData && resultData['reason'] === ERROR_REASON.AMBIGUOUS_PLAN_POSITION) {
       output({
         error: 'STATE.md carries two plan positions with different numbers — refusing to advance either. Resolve them to a single current plan and re-run.',
         reason: resultData['reason'],
@@ -6543,6 +6543,10 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
       }
     }
     const result = transitionCore(content, intent, deps);
+    // #5320: --plans cannot be recorded (no line to land on, or below the recorded plan position); exit before the write.
+    if (result.data?.['error']) {
+      error(String(result.data['message']), errorReasonOf(result.data?.['reason']) ?? ERROR_REASON.UNKNOWN);
+    }
     precomputedUpdated = result.updated;
     if (resolvePhaseIdConvention(cwd) === 'bracket') {
       const display = phaseDisplayFor(cwd, phaseNumber as string | number);
@@ -6552,7 +6556,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
           transitioned,
           statePath,
           'Last Activity Description',
-          `${display} planning complete — ${planCount || '?'} plans ready`,
+          `${display} planning complete — ${planCount ?? '?'} plans ready`,
         );
       }
       const today = realClock.localToday();
@@ -6577,7 +6581,13 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
   const updated = reconcileReportedFields(statePath, preWriteState, precomputedUpdated, divergedFields);
 
   const result = updated.length === 0
-    ? { updated, phase: phaseNumber, plan_count: planCount, warning: 'STATE.md Current Position has no recognized labels — transition was a no-op. Verify STATE.md uses the canonical labeled format (Status:, Total Plans in Phase:, etc.).' }
+    ? {
+      updated,
+      phase: phaseNumber,
+      plan_count: planCount,
+      warning: 'No fields changed — STATE.md is already up to date, or its Current Position has no recognized labels. ' +
+        'If the latter, verify the canonical labeled format (Status:, Total Plans in Phase:, etc.).',
+    }
     : { updated, phase: phaseNumber, plan_count: planCount };
   output(result, raw, updated.length > 0 ? 'true' : 'false');
   // #3227 (design doc §40 row 26 / "Not-corruption" rule): gate on
@@ -6588,8 +6598,9 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
   // sync and this command's `authoritativeFm: {current_phase_name}` override
   // both run INSIDE the transform (via `frontmatterMod.reconstructFrontmatter`
   // over `existingFm`), so an unrecognized-format STATE.md — zero fields the
-  // transition could actually apply, `updated: []`, the "transition was a
-  // no-op" warning above — can still make the raw returned string differ
+  // transition could actually apply, `updated: []`, the "No fields changed"
+  // warning above (without --plans only; with --plans such a document errors
+  // in the callback before any write) — can still make the raw returned string differ
   // from the input (frontmatter gets synthesized: `gsd_state_version`,
   // `last_updated`, a zeroed `progress` block, `current_phase_name`), so the
   // RMW guard does NOT fire and a real write happens. That write is not a

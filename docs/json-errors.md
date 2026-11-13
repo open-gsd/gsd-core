@@ -306,6 +306,9 @@ text (unstable).
 | `phase_not_found` | Phase directory lookup returns no match |
 | `summary_no_planning` | Summary operation when no `.planning/` directory exists |
 | `verification_status_invalid` | A phase's `*-VERIFICATION.md` frontmatter `status` is outside the closed set `passed \| gaps_found \| human_needed` (for example `verified`, `Passed`, `stale`, or a non-string value). Emitted, with stdout empty, by every surface that reads the report — `verification status`, `phase uat-passed`, `phase complete`, `roadmap analyze`, `state sync`, `planning inspect`, `init *`, `smart-entry`, `audit-open`, `audit-uat`. The message names the report file, the value, and the accepted values, and states the recovery: set the report's `status:` to an accepted value, or delete the report and re-run the phase's verification. `validate health` reports the file as warning `W030` instead (#5118) |
+| `plans_no_line` | `state planned-phase --plans` when STATE.md has no `Plan:`, `Current Plan:` or `Total Plans in Phase:` line to record the count on; nothing is written (#5320) |
+| `plans_below_position` | `state planned-phase --plans` on a same-phase replan when the count is below the plan position the document records, or that position is above 9007199254740991; nothing is written (#5320) |
+| `ambiguous_plan_position` | `state planned-phase --plans` when `Plan:` and `Current Plan:` record different plan positions on a same-phase replan; nothing is written, exit non-zero (#5320). `state advance-plan` reports the same code in its payload `reason` at exit 0 |
 
 ### Estimate errors
 

@@ -23,10 +23,13 @@ const {
   STATE_MD_SECTIONS,
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
+  parsePlanCount,
   isStatePastPhase,
   readPlanPosition,
   readRecordedPlanTotal,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
+const { routeStateCommand } = require('../gsd-core/bin/lib/state-command-router.cjs');
+const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
 const { STATE_FIELD_SCHEMA } = require('../gsd-core/bin/lib/state-md-schema.cjs');
@@ -5276,6 +5279,223 @@ describe('state.planned-phase progress merge on string-valued frontmatter (#5619
   });
 });
 
+// #5320: the plan-count / plan-position rule has one owner (parsePlanCount, readPlanLines and
+// planLinesForPlanned in state-transition). Parity, on generated inputs at limit-1 / limit / limit+1:
+// parsePlanCount (called directly), the begin-phase --plans parser (through routeStateCommand), and the
+// planned-phase and advance-plan transitions with readRecordedPlanTotal (through transitionCore) agree.
+describe('#5320 plan-count / plan-position owner parity', () => {
+  const MAX = Number.MAX_SAFE_INTEGER;
+  const deps = { clock: fixedClock };
+  const parsed = (v) => {
+    let planArg;
+    const errors = [];
+    const state = { cmdStateBeginPhase: (_cwd, _phase, _name, plans) => { planArg = plans; } };
+    const error = (message, reason) => { errors.push({ message, reason }); };
+    try {
+      routeStateCommand({ state, args: ['state', 'begin-phase', '--phase', '1', ...(v === undefined ? [] : ['--plans', v])], cwd: '/fake/cwd', raw: false, error });
+    } catch {
+      // parseNamedArgsOrExit throws once its error() returns instead of exiting; the recorded rejection is what counts.
+    }
+    return { n: planArg, errors };
+  };
+  const doc = (line) => ['# Project State', '', '## Current Position', '', 'Phase: 19', line, 'Status: Ready', ''].join('\n');
+  const planned = (line, planCount) => transitionCore(doc(line), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount }, deps);
+  const lineOf = (content) => content.split('\n').find((l) => l.startsWith('Plan: '));
+
+  test('parsePlans takes its count from parsePlanCount for every generated string', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(
+          fc.integer({ min: 0, max: MAX }).map(String),
+          fc.bigInt({ min: BigInt(MAX) - 1n, max: BigInt(MAX) + 2n }).map(String),
+          fc.bigInt({ min: 0n, max: 10n ** 30n }).map(String),
+          fc.tuple(fc.nat(4), fc.integer({ min: 0, max: MAX })).map(([zeros, n]) => '0'.repeat(zeros) + n),
+          fc.string(),
+        ),
+        (raw) => {
+          // independent oracle: all ASCII digits and no larger than MAX_SAFE_INTEGER (BigInt compares exactly)
+          const expected = /^[0-9]+$/.test(raw) && BigInt(raw) <= BigInt(MAX) ? Number(raw) : null;
+          const site = parsed(raw);
+          if (expected !== null) return parsePlanCount(raw) === expected && site.n === expected && site.errors.length === 0;
+          return parsePlanCount(raw) === null && site.errors.length > 0 && site.errors.every((e) => e.reason === ERROR_REASON.USAGE);
+        },
+      ),
+      { seed: 5320, numRuns: 300 },
+    );
+    assert.strictEqual(parsePlanCount(String(MAX - 1)), MAX - 1);
+    assert.strictEqual(parsePlanCount(String(MAX)), MAX);
+    assert.strictEqual(parsePlanCount(String(MAX + 1)), null);
+    assert.deepStrictEqual(parsed(undefined), { n: null, errors: [] });
+  });
+
+  test('planned-phase and advance-plan read and write the same position for generated values (limit-1/limit/limit+1)', () => {
+    const rests = ['', ' in current phase', ' - wave 2 done', '.', ',', ')', ';'];
+    const spec = fc.record({
+      kind: fc.constantFrom('N', 'NofM', 'NofQ', 'TBD'),
+      n: fc.integer({ min: 0, max: 9 }),
+      m: fc.integer({ min: 1, max: 9 }),
+      rest: fc.constantFrom(...rests),
+    });
+    const render = (s) => {
+      if (s.kind === 'TBD') return 'TBD';
+      // punctuation tails (`5.`, `5)`) follow only a numeric total: a bare N needs whitespace after it
+      const rest = s.kind === 'NofM' || /^\s|^$/.test(s.rest) ? s.rest : '';
+      if (s.kind === 'N') return `${s.n}${rest}`;
+      return `${s.n} of ${s.kind === 'NofM' ? s.m : '?'}${rest}`;
+    };
+    const readable = (s) => s !== null && s.kind !== 'TBD';
+    const adv0 = (content) => transitionCore(content, { kind: 'advancePlan' }, deps).data;
+    fc.assert(
+      fc.property(
+        fc.record({
+          plan: fc.option(spec, { nil: null }),
+          cur: fc.option(spec, { nil: null }),
+          total: fc.boolean(),
+          newPhase: fc.boolean(),
+          planInSection: fc.boolean(),
+          off: fc.constantFrom(-1, 0, 1),
+        }),
+        ({ plan, cur, total, newPhase, planInSection, off }) => {
+          const lines = ['Phase: ' + (newPhase ? '18' : '19')];
+          if (plan && planInSection) lines.push(`Plan: ${render(plan)}`);
+          if (cur) lines.push(`Current Plan: ${render(cur)}`);
+          if (total) lines.push('Total Plans in Phase: 5');
+          lines.push('Status: Ready');
+          const tail = plan && !planInSection ? ['', '## Session Continuity', '', `Plan: ${render(plan)}`] : [];
+          const content = ['# Project State', '', '## Current Position', '', ...lines, ...tail, ''].join('\n');
+          const reads = [plan, cur].filter(readable);
+          const recorded = Math.max(0, ...reads.map((s) => s.n));
+          const count = recorded + off;
+          fc.pre(count >= 0);
+          // independent oracle
+          let want = null;
+          if (!plan && !cur && !total) want = 'plans_no_line';
+          else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = 'ambiguous_plan_position';
+          else if (!newPhase && recorded > count) want = 'plans_below_position';
+          const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
+          if (r.data?.reason !== (want ?? undefined)) return false;
+          if (want !== null) return r.content === content && r.updated.length === 0;
+          // no readable line and a Total line: planned-phase leaves the lines as written and advance-plan refuses them
+          if (reads.length === 0 && total) return adv0(r.content).error === true;
+          if (readRecordedPlanTotal(r.content) !== count) return false;
+          const adv = adv0(r.content);
+          const position = newPhase ? 0 : recorded;
+          return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
+        },
+      ),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
+  test('plannedPhase unit: a shrinking total keeps its width, an unfilled total is replaced, a legacy position beside Total Plans in Phase is kept, an unsafe recorded position refuses', () => {
+    assert.strictEqual(lineOf(planned('Plan: 1 of 10', 9).content), 'Plan: 1 of 9');
+    assert.strictEqual(lineOf(planned('Plan: 1 of 010', 9).content), 'Plan: 1 of 009');
+    assert.strictEqual(lineOf(planned('Plan: 1 of ?', 3).content), 'Plan: 1 of 3');
+    assert.strictEqual(lineOf(planned('Plan: 1 of B in current phase', 3).content), 'Plan: 1 of 3 in current phase');
+    const beside = (line, phase) => transitionCore(
+      doc(line).replace('Status:', 'Total Plans in Phase: 5\nStatus:').replace('Phase: 19', `Phase: ${phase}`),
+      { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 },
+      deps,
+    ).content.split('\n');
+    // [line, written on the same phase, written on a new phase]: a Plan: line is never left bare, a Current Plan: line stays the legacy pair
+    for (const [line, same, fresh] of [
+      ['Current Plan: 2', 'Current Plan: 2', 'Current Plan: 0'],
+      ['Current Plan: 2 (wave 1)', 'Current Plan: 2 (wave 1)', 'Current Plan: 0'],
+      ['Plan: 2', 'Plan: 2 of 6 in current phase', 'Plan: 0 of 6 in current phase'],
+      ['Plan: 2 - wave 1 done', 'Plan: 2 of 6 - wave 1 done', 'Plan: 0 of 6 in current phase'],
+    ]) {
+      assert.ok(beside(line, 19).includes(same), `${line} is written ${same} on the same phase`);
+      assert.ok(beside(line, 19).includes('Total Plans in Phase: 6'));
+      assert.ok(beside(line, 18).includes(fresh), `${line} is written ${fresh} on a new phase`);
+    }
+    const huge = planned('Plan: 99999999999999999999 of 5', 3);
+    assert.strictEqual(huge.data.reason, 'plans_below_position');
+    assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
+  });
+
+  test('plannedPhase property: a lower-case word after `of` is author text and survives behind the new total', () => {
+    fc.assert(
+      fc.property(
+        fc.stringMatching(/^[a-z]{1,8}$/),
+        fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()),
+        (word, t) => lineOf(planned(`Plan: 2 of ${word}${t}`, 6).content) === `Plan: 2 of 6 of ${word}${t}`,
+      ),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
+  test('#5320 adversarial planning-state fixtures: each is read and written as the README of the fixture directory states', () => {
+    // The input classes (fenced code, duplicate keys, NUL, malformed frontmatter, CRLF and mixed endings) are the parser checklist of CONTRIBUTING.md "Adversarial fixtures".
+    // the fs and path declared near line 3646 are not in scope here (ReferenceError), so they are required locally
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const dir = path.join(__dirname, 'fixtures', 'adversarial', 'planning-state');
+    const plannedLines = (raw, label) => {
+      const r = transitionCore(raw, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 5 }, deps);
+      assert.strictEqual(r.data?.error, undefined, `${label}: ${JSON.stringify(r.data)}`);
+      return r.content.replaceAll('\r\n', '\n').split('\n').filter((l) => l.startsWith('Plan: '));
+    };
+    const written = (name) => plannedLines(fs.readFileSync(path.join(dir, name), 'utf8'), name);
+    assert.deepStrictEqual(written('plan-line-inside-fenced-code.md'), ['Plan: 9 of 9', 'Plan: 1 of 5']);
+    assert.deepStrictEqual(written('duplicate-plan-lines.md'), ['Plan: 1 of 5', 'Plan: 2 of 3']);
+    assert.deepStrictEqual(written('null-byte-plan-line.md'), ['Plan: 1 of 5\0x']);
+    assert.deepStrictEqual(written('unclosed-frontmatter-plan-line.md'), ['Plan: 2 of 5']);
+    // CRLF and mixed LF/CRLF documents are built here: .gitattributes (`eol=lf`) would normalise a stored fixture
+    const lf = doc('Plan: 1 of 3.');
+    assert.deepStrictEqual(plannedLines(lf.replaceAll('\n', '\r\n'), 'crlf'), ['Plan: 1 of 5.']);
+    assert.deepStrictEqual(plannedLines(lf.replace('\n', '\r\n'), 'mixed'), ['Plan: 1 of 5.']);
+  });
+
+  test('plannedPhase property: for any generated tail after the total, a tail that does not continue the number is kept and one that does is never read as a total', () => {
+    // fast-check generates the tails (strings without line breaks or edge whitespace); the oracle is the stated rule, not the regex
+    const continues = (t) => /^[\p{L}\p{N}_]/u.test(t) || /^[^\s\w]\d/u.test(t);
+    fc.assert(
+      fc.property(fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()), (t) => {
+        fc.pre(!/^[0-9]/.test(t)); // ASCII digits extend the total itself
+        const out = lineOf(planned(`Plan: 2 of 5${t}`, 6).content);
+        return continues(t) ? out === `Plan: 2 of 6 of 5${t}` : out === `Plan: 2 of 6${t}`;
+      }),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
+  test('plannedPhase property: only `?` or one capital followed by a boundary is an unfilled total, for any generated word and tail', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('?', 'A', 'B', 'I', 'Z'),
+        fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()),
+        (mark, t) => {
+          const out = lineOf(planned(`Plan: 2 of ${mark}${t}`, 6).content);
+          // independent oracle: the mark is a slot only when whitespace or the end of the line follows it
+          return t === '' || /^\s/.test(t) ? out === `Plan: 2 of 6${t}` : out === `Plan: 2 of 6 of ${mark}${t}`;
+        },
+      ),
+      { seed: 5320, numRuns: 400 },
+    );
+  });
+
+  test('plannedPhase unit: a total followed by punctuation keeps its punctuation and gains no second " of"', () => {
+    for (const tail of ['.', ',', ')', ';', ' - wave 1']) {
+      assert.strictEqual(lineOf(planned(`Plan: 2 of 5${tail}`, 6).content), `Plan: 2 of 6${tail}`, tail);
+    }
+  });
+
+  test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
+    const tbd = planned('Plan: 0 TBD in current phase', 3);
+    assert.strictEqual(lineOf(tbd.content), 'Plan: 0 of 3 in current phase');
+    assert.ok(tbd.updated.includes('Plan'));
+    assert.ok(tbd.content.includes('Status: Ready to execute'));
+    const none = transitionCore(doc('Notes: none'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 3 }, deps);
+    assert.strictEqual(none.data.reason, 'plans_no_line');
+    assert.strictEqual(none.content, doc('Notes: none'));
+    assert.strictEqual(planned('Plan: 3 of 5', 2).data.reason, 'plans_below_position');
+    assert.strictEqual(lineOf(planned('Plan: 3 of 5', 3).content), 'Plan: 3 of 3');
+    // a different phase restarts at plan 0 instead of refusing
+    const other = transitionCore(doc('Plan: 3 of 5').replace('Phase: 19', 'Phase: 18'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 2 }, deps);
+    assert.strictEqual(lineOf(other.content), 'Plan: 0 of 2 in current phase');
+  });
+});
+
 describe('regressions (#5787): state begin-phase plan total', () => {
   const fs = require('node:fs');
   const path = require('node:path');
@@ -5455,6 +5675,12 @@ describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase'
 
   test('#5786 explicit Total (5) beats `Plan: 1 of 2` with no Current Plan line', () => {
     assert.equal(recorded('Plan: 1 of 2', 'Total Plans in Phase: 5'), 5);
+  });
+
+  test('#5320 a total followed by punctuation reads; a separator that continues the number does not', () => {
+    for (const tail of ['.', ',', ')', ';']) assert.equal(recorded(`Plan: 2 of 5${tail}`), 5, tail);
+    for (const bad of ['5\u00e9', '5\u0663']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
+    for (const bad of ['5.5', '5/7', '5,6']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
   });
 
   test('#5786 explicit Total beats `Current Plan: N of M`', () => {
