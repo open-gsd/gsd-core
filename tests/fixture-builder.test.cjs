@@ -6,7 +6,7 @@ const path = require('path');
 const { createFixture, seedPhase, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { gitChildEnv, gitIn } =require('./helpers/isolated-env.cjs');
+const { gitChildEnv, gitIn } = require('./helpers/isolated-env.cjs');
 
 const created = [];
 afterEach(() => {
