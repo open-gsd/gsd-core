@@ -2855,12 +2855,28 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       g(['commit', '-qm', 'transient planning file']);
       g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
       const out = runVerify(repo, `_to() { [ "$TO" = 60 ] || return 2; case "$*" in *"${cmd}"*) return 124 ;; esac; "$@"; }`);
-      assert.match(out, /Cannot read pr; deleted it, re-run\./, out.slice(0, 400));
+      assert.match(out, /Cannot read pr \(deleted\); re-run\./, out.slice(0, 400));
       assert.throws(() => g(['rev-parse', '-q', '--verify', 'refs/heads/pr']), 'the unchecked -pr is deleted, so a re-run is not refused');
       assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
       assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
     });
   }
+
+  test('verify says the unreadable -pr is not deleted when the delete fails', (t) => {
+    const repo = createTempDir('gsd-3679-verify-nodelete-');
+    t.after(() => cleanup(repo));
+    const g = (args) => gitOrThrow(args, { cwd: repo });
+    g(['init', '-q', '-b', 'main']);
+    g(['config', 'user.email', 't@t']);
+    g(['config', 'user.name', 't']);
+    fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['branch', 'pr']);
+    const out = runVerify(repo, '_to() { return 124; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
+    assert.match(out, /Cannot read pr \(not deleted\); re-run\./, out.slice(0, 400));
+    assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
+  });
 
   test('create loop preserves pre-existing transient content (#3720 guarantee pinned)', (t) => {
     const repo = createTempDir('gsd-3679-create-mixed-');

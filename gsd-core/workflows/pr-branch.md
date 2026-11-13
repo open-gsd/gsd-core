@@ -139,7 +139,7 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout; walks and checkout use TO=60.
 _to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
 # picked SHA — rc 0 when analyze_commits would pick SHA, or its lookup fails.
-picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | tr '\0' '\n') || return 0; [ -n "$F" ] && { echo "$F" | grep -qv '^\.planning/' || { [ "$PR_STRICT" != true ] && echo "$F" | grep -Eq "$STRUCTURAL_RE"; }; }; }
+picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | tr '\0' '\n') || return 0; [ -n "$F" ] && { grep -qv '^\.planning/' <<<"$F" || { [ "$PR_STRICT" != true ] && grep -Eq "$STRUCTURAL_RE" <<<"$F"; }; }; }
 
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for each path TIP changed
 # since their fork (squash/rebase), or gh reports $PR_BRANCH merged into it with head TIP.
@@ -459,9 +459,9 @@ For each commit, check what it touches:
 ```bash
 # For each commit hash
 FILES=$(git diff-tree -z --no-commit-id --name-only -r $HASH | tr '\0' '\n')
-NON_PLANNING=$(echo "$FILES" | grep -Ecv '^(\.planning/|$)' || true)
-STRUCTURAL=$(echo "$FILES" | grep -Ec "$STRUCTURAL_RE" || true)
-PLANNING_COUNT=$(echo "$FILES" | grep -c "^\.planning/" || true)
+NON_PLANNING=$(grep -Ecv '^(\.planning/|$)' <<<"$FILES" || true)
+STRUCTURAL=$(grep -Ec "$STRUCTURAL_RE" <<<"$FILES" || true)
+PLANNING_COUNT=$(grep -c "^\.planning/" <<<"$FILES" || true)
 ```
 
 Classify, using `NON_PLANNING`, `STRUCTURAL`, and `PLANNING_COUNT` computed above — every arm's
@@ -647,11 +647,11 @@ would report itself as failed on every phase that touched STATE.md, which is eve
 # Fail closed: empty lists pass both gates.
 { DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n') &&
   DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n'); } ||
-  { git branch -qD "$PR_BRANCH"; echo "Cannot read $PR_BRANCH; deleted it, re-run." >&2; exit 1; }
-FORBIDDEN=$(echo "$DIFF_PATHS" | grep -Ec "$FORBIDDEN_RE" || true)
-PLANNING_TOTAL=$(echo "$DIFF_PATHS" | grep -c "^\.planning/" || true)
+  { git branch -qD "$PR_BRANCH" && D=deleted || D="not deleted"; echo "Cannot read $PR_BRANCH ($D); re-run." >&2; exit 1; }
+FORBIDDEN=$(grep -Ec "$FORBIDDEN_RE" <<<"$DIFF_PATHS" || true)
+PLANNING_TOTAL=$(grep -c "^\.planning/" <<<"$DIFF_PATHS" || true)
 ALLOWED=$((PLANNING_TOTAL - FORBIDDEN))
-TOTAL_FILES=$(echo "$DIFF_PATHS" | grep -c . || true)
+TOTAL_FILES=$(grep -c . <<<"$DIFF_PATHS" || true)
 PR_COMMITS=$(TO=60 _to git rev-list --count "$TARGET_SHA".."$PR_BRANCH")
 
 # #3679: a DELETED planning path is never legitimate — this workflow only ever
@@ -659,12 +659,12 @@ PR_COMMITS=$(TO=60 _to git rev-list --count "$TARGET_SHA".."$PR_BRANCH")
 # planning files must survive byte-identical. Name-only counting cannot see
 # status (a deleted structural/allowed path verifies clean there), so gate on
 # deletions explicitly, across every planning category.
-PLANNING_DELETIONS=$(echo "$DELETED" | grep -c "^\.planning/" || true)
+PLANNING_DELETIONS=$(grep -c "^\.planning/" <<<"$DELETED" || true)
 
 # Default mode preserves anything under .planning/ that is neither transient nor
 # structural — config.json, intel/, workstreams/. That is deliberate and unchanged, but it
 # must not be silent: report it so the user can choose strict mode knowingly.
-OTHER=$(echo "$DIFF_PATHS" | grep "^\.planning/" | grep -Ev "$FORBIDDEN_RE" | grep -Ev "$STRUCTURAL_RE" || true)
+OTHER=$(grep "^\.planning/" <<<"$DIFF_PATHS" | grep -Ev "$FORBIDDEN_RE" | grep -Ev "$STRUCTURAL_RE" || true)
 ```
 
 `$FORBIDDEN` is the pass/fail number — it must be `0`. A non-zero value means the filter
