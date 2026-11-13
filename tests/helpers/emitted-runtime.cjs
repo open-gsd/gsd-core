@@ -436,14 +436,16 @@ function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
     if (lo < chain.length) newest = chain[lo];
     else if (chain.length === 0) newest = tip;
     else {
-      // The first parent comes from the raw commit object, whose header (up to the first blank
-      // line) lists `parent <sha>` lines in order. `rev-list --parents` would honour a shallow
-      // clone's grafts and call the shallow boundary a root; the raw header names the real
-      // parent, and if that object is absent the ancestry check below fails and says so.
+      // The first parent comes from the raw commit object. git reads parents only as the
+      // `parent <sha>` lines directly after the leading `tree` line (commit.c,
+      // parse_commit_buffer), so the read is anchored there: a `parent` line anywhere else (a
+      // stray header after `committer`, or the message) is not a parent and is not read.
+      // `rev-list --parents` would honour a shallow clone's grafts and call the shallow
+      // boundary a root; the raw object names the real parent. If that parent is absent or
+      // not in HEAD, the checks below keep the floor and say so.
       const oldest = chain[chain.length - 1];
       const raw = git(['cat-file', 'commit', oldest], { cwd });
-      const headerEnd = raw.indexOf('\n\n');
-      const parentLine = /^parent ([0-9a-f]{40})$/m.exec(headerEnd === -1 ? raw : raw.slice(0, headerEnd));
+      const parentLine = /^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n/.exec(raw);
       const firstParent = parentLine && parentLine[1];
       if (!firstParent) {
         // The chain is rooted outside the floor's history and HEAD contains none of it: no git
