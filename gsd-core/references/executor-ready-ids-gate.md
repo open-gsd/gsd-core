@@ -19,26 +19,24 @@ _pad() {
   _n=$((10#$1))
   [ "$_n" -lt 10 ] && printf '%02d' "$_n" || printf '%s' "$_n"
 }
-# Pad a phase token the way normalizePhaseName does.
-# Milestone 5-5 and 5-5A.1 pad each dash segment; 05-05 stays 05-05.
-# Standard 5, 5.1, 5.10, 5A, 5.1.2 pad only the leading integer.
-# Anything else, including a 10-digit segment, is returned unchanged (no wrap).
+# Mirrors normalizePhaseName; direct fast-check parity lives in milestone.test.cjs.
+# Phase segments are strings: preserve leading zeros and avoid arithmetic overflow.
 _pph() {
-  if printf '%s' "$1" | grep -Eq '^[0-9]+(-[0-9]+)+[A-Za-z]?(\.[0-9]+)*$'; then
-    _rest="$1"; _out=""; _first=1
-    while [ -n "$_rest" ]; do
-      _seg="${_rest%%[!0-9]*}"; _rest="${_rest#"$_seg"}"
-      _p=$(_pad "$_seg") || { printf '%s' "$1"; return; }
-      if [ "$_first" = 1 ]; then _out="$_p"; _first=0; else _out="${_out}-${_p}"; fi
-      case "$_rest" in -*) _rest="${_rest#-}"; ;; *) printf '%s%s' "$_out" "$_rest"; return;; esac
+  _phase=$(printf '%s' "$1" | sed -E 's/^[A-Z][A-Z0-9_]*-([0-9])/\1/')
+  if printf '%s' "$_phase" | grep -Eq '^[0-9]+(-[0-9]+)+[A-Za-z]?(\.[0-9]+)*$'; then
+    _rest="$_phase"; _normalized=""; _separator=""
+    while :; do
+      _digits="${_rest%%[!0-9]*}"; _rest="${_rest#"$_digits"}"
+      [ "${#_digits}" -ge 2 ] || _digits="0$_digits"
+      _normalized="${_normalized}${_separator}${_digits}"
+      case "$_rest" in -*) _rest="${_rest#-}"; _separator="-";; *) printf '%s%s' "$_normalized" "$_rest"; return;; esac
     done
   fi
-  _l="${1%%[!0-9]*}"
-  _r="${1#"$_l"}"
-  if [ -z "$_r" ]; then _pad "$1" || printf '%s' "$1"; return; fi
-  printf '%s' "$_r" | grep -Eq '^[A-Za-z]?(\.[0-9]+)*$' || { printf '%s' "$1"; return; }
-  _p=$(_pad "$_l") || { printf '%s' "$1"; return; }
-  printf '%s%s' "$_p" "$_r"
+  _parts=$(printf '%s' "$_phase" | sed -nE 's/^([0-9]+)([A-Za-z]?)((\.[0-9]+)*).*/\1|\2\3/p')
+  if [ -z "$_parts" ]; then printf '%s' "$1"; return; fi
+  _digits="${_parts%%|*}"; _suffix="${_parts#*|}"
+  [ "${#_digits}" -ge 2 ] || _digits="0$_digits"
+  printf '%s%s' "$_digits" "$_suffix"
 }
 # First frontmatter block only. CR and a leading UTF-8 BOM are ignored.
 _fm() {
@@ -69,7 +67,7 @@ if [ "$_bad" = 1 ]; then
 else
   D="${PHASE_DIR:-$(printf '%s' "${INIT:-}" | jq -r '.phase_dir // empty' 2>/dev/null)}"
   D="${D%/}"
-  if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && _mp "$PLAN_PATH" && { [ ! -d "$D" ] || _in "$PLAN_PATH" "$D"; }; then
+  if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && _mp "$PLAN_PATH" && [ -d "$D" ] && _in "$PLAN_PATH" "$D"; then
     :
   else
     PLAN_PATH=""
@@ -82,7 +80,7 @@ else
       C=()
       for pfx in "$PHASE" "$PH"; do for pl in "$P" "$PLAN"; do
         for f in "$D/plans/PLAN-${pl}.md" "$D/plans/PLAN-${pl}-"*.md "$D/${pfx}-${pl}-PLAN.md" "$D/${pfx}-${pl}-"*-PLAN.md; do
-          [ -f "$f" ] && { case " ${C[*]} " in *" $f "*) ;; *) _mp "$f" && C+=("$f");; esac; }
+          [ -f "$f" ] && { case " ${C[*]} " in *" $f "*) ;; *) _in "$f" "$D" && _mp "$f" && C+=("$f");; esac; }
         done
       done; done
       if [ -n "${ZSH_VERSION:-}" ]; then [ "$_ng" = 1 ] || unsetopt NULL_GLOB; else [ "$_ng" = 1 ] || shopt -u nullglob; fi
