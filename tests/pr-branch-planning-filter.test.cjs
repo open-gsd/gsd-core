@@ -74,6 +74,7 @@ const {
   extractDeclarationLines,
   PRECONDITIONS_MARKER,
   TRANSIENT_DIRS_MARKER,
+  REVS_MARKER,
   forbiddenRegex,
   forbiddenPaths,
   structuralPaths,
@@ -385,8 +386,9 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           '_to() { "$@"; }',
           ...extractDeclarationLines(text, TRANSIENT_DIRS_MARKER, ['STRUCTURAL_RE=']),
           ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['picked() {']),
-          'REVS=$(git rev-list --reverse main..feature)',
-          ...extractDeclarationLines(text, 'REVS=$(TO=60', ['INCLUDED_COMMITS=$(']),
+          'BASE=main',
+          'TARGET_SHA=main',
+          ...extractDeclarationLines(text, REVS_MARKER, ['REVS=$(TO=60', 'INCLUDED_COMMITS=$(']),
         ]
         : ['INCLUDED_COMMITS=$(git rev-list --reverse main..feature)'];
       return [

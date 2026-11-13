@@ -99,7 +99,8 @@ const BASH_FENCE_CLOSE_RE = /^```\s*$/;
 const TRANSIENT_DIRS_MARKER = 'TRANSIENT_DIRS="phases';
 const FILTER_PATHS_MARKER = 'FILTER_PATHS=$(for d';
 const PRECONDITIONS_MARKER = 'PR_BRANCH="${CURRENT_BRANCH}-pr"';
-const PICK_LOOP_MARKER = 'for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
+const REVS_MARKER = 'REVS=$(TO=60';
+const PICK_LOOP_MARKER ='for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
 
 /**
  * Scans `text` for fenced ```bash blocks and returns the verbatim body
@@ -255,6 +256,7 @@ module.exports = {
   TRANSIENT_DIRS_MARKER,
   FILTER_PATHS_MARKER,
   PRECONDITIONS_MARKER,
+  REVS_MARKER,
   normalizePaths,
   forbiddenRegex,
   forbiddenPaths,
