@@ -389,7 +389,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['picked() {']),
           'BASE=main',
           'TARGET_SHA=main',
-          ...extractDeclarationLines(text, REVS_MARKER, ['REVS=$(TO=60', 'INCLUDED_COMMITS=$(']),
+          ...extractDeclarationLines(text, REVS_MARKER, [REVS_MARKER, 'INCLUDED_COMMITS=$(']),
         ]
         : ['INCLUDED_COMMITS=$(git rev-list --reverse main..feature)'];
       return [
