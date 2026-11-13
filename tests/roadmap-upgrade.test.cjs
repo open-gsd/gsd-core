@@ -415,11 +415,21 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     const realWrite = fs.writeFileSync;
     const realWriteSync = fs.writeSync;
     const realRename = fs.renameSync;
+    const realClose = fs.closeSync;
     let failedWrites = 0;
+    let tempOpens = 0;
     mock.method(fs, 'openSync', function (file, ...rest) {
       const fd = realOpen.call(this, file, ...rest);
       if (isStatePath(file)) stateFds.add(fd);
+      if (String(file).startsWith(`${state}.tmp.`)) tempOpens++;
       return fd;
+    });
+    // #5120 re-review: a closed descriptor number is reused by the next open (the
+    // lock file's, for one), so it leaves the set when it is closed; without this the
+    // row failed the wrong writes and passed even without atomicWrite.
+    mock.method(fs, 'closeSync', function (fd, ...rest) {
+      stateFds.delete(fd);
+      return realClose.call(this, fd, ...rest);
     });
     mock.method(fs, 'writeFileSync', function (target, ...rest) {
       if (typeof target === 'number' && stateFds.has(target)) { failedWrites++; throw enospc(); }
@@ -437,6 +447,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: ENOSPC/);
     mock.restoreAll();
+    assert.ok(tempOpens >= 1, 'precondition: the write went through a STATE.md temp file');
     assert.ok(failedWrites >= 1, 'precondition: the injected ENOSPC was hit');
     assert.equal(fs.readFileSync(state, 'utf8'), original, 'STATE.md holds its previous bytes, as "rolled back" claims');
     assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released');
