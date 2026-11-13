@@ -30,7 +30,7 @@ const { OUTCOME } = processSeam;
 const runGitSpy = mock.method(processSeam, 'runGit');
 after(() => mock.restoreAll());
 
-const { gitOrThrow, throwIfFailed, toLegacyResult, DEFAULT_GIT_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, refShaOrEmpty, throwIfFailed, toLegacyResult, DEFAULT_GIT_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 
 /**
  * Deliberately NOT DEFAULT_GIT_TIMEOUT_MS or any real class norm — chosen
@@ -246,6 +246,45 @@ describe('git-fixture: E — gitOrThrow', () => {
  * process-seam result object, so it is tested directly here with literal
  * result objects — no subprocess needed.
  */
+describe('git-fixture: refShaOrEmpty', () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = initRepo();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  test('an existing ref gives its sha', () => {
+    assert.equal(refShaOrEmpty('HEAD', { cwd: dir }), gitOrThrow(['rev-parse', 'HEAD'], { cwd: dir }).trim());
+  });
+
+  test('a missing ref (git exit 1) gives the empty string', () => {
+    assert.equal(refShaOrEmpty('refs/heads/does-not-exist', { cwd: dir }), '');
+  });
+
+  test('an exit other than 1 rethrows (an empty string would read as "no ref")', () => {
+    const caught = captureThrown(() => refShaOrEmpty('refs/heads/x', { cwd: path.join(dir, 'no-such-subdirectory') }));
+    assert.equal(caught.outcome, OUTCOME.SPAWN_FAILED);
+  });
+
+  test('a TIMED_OUT seam result rethrows', () => {
+    runGitSpy.mock.mockImplementationOnce(() => ({
+      outcome: OUTCOME.TIMED_OUT,
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: true,
+      signal: 'SIGTERM',
+      code: 'ETIMEDOUT',
+    }));
+    const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: dir }));
+    assert.equal(caught.outcome, OUTCOME.TIMED_OUT);
+  });
+});
+
 describe('throwIfFailed', () => {
   /** A minimal clean-exit result, spread over in each test below. */
   const BASE = { stdout: '', stderr: '', signal: null, timedOut: false };

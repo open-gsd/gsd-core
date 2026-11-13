@@ -27,6 +27,7 @@ const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
@@ -46,7 +47,7 @@ function match(input) {
     fs.writeFileSync(path.join(tmp, 'in.txt'), input);
     fs.writeFileSync(path.join(tmp, 'prog.awk'), awkProgram());
     fs.writeFileSync(path.join(tmp, 'run.sh'), 'awk -f prog.awk < in.txt\n');
-    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp });
+    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp, env: isolatedEnv({ home: tmp }) });
     assert.equal(r.exitCode, 0, r.stderr);
     return r.stdout.trim();
   } finally { cleanup(tmp); }
@@ -163,7 +164,7 @@ function verdicts(lists, strict) {
       '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
     ].join('\n');
     fs.writeFileSync(path.join(tmp, 'run.sh'), `${script}\n`);
-    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp });
+    const r = runHook(path.join(tmp, 'run.sh'), [], { interpreter: 'bash', cwd: tmp, env: isolatedEnv({ home: tmp }) });
     assert.equal(r.exitCode, 0, r.stderr);
     return r.stdout.trim().split(/\r?\n/);
   } finally { cleanup(tmp); }
