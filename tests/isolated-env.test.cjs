@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedGitEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -210,12 +210,17 @@ describe('isolatedEnv: stripped and inherited variables', () => {
   });
 });
 
-describe('isolatedGitEnv', () => {
-  test('keeps the developer\'s git config out of a git child', (t) => {
+describe('gitChildEnv', () => {
+  test('drops the variables that redirect git and the developer\'s git config', (t) => {
     const home = tmp(t, 'gsd-prfleet-gitenv-home-');
-    const env = isolatedGitEnv(home);
-    assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null');
+    const hostile = { GIT_DIR: '/hostile/.git', GIT_INDEX_FILE: '/hostile/index', GIT_CONFIG_PARAMETERS: "'core.hooksPath=/hostile'" };
+    const saved = Object.fromEntries(Object.keys(hostile).map((k) => [k, process.env[k]]));
+    t.after(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+    Object.assign(process.env, hostile);
+    const env = gitChildEnv(home);
+    for (const k of Object.keys(hostile)) assert.ok(!(k in env), `${k} leaked`);
     assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+    assert.notEqual(env.GIT_CONFIG_GLOBAL, undefined);
     assert.equal(env.HOME, home);
   });
 });

@@ -135,7 +135,7 @@ describe('pr-branch rewritten-history matcher (property)', () => {
 });
 
 // The shipped `picked` function, with `_to` standing in for the bounded `git diff-tree` read.
-const pickedFn = lazy(() => extractDeclarationLines(workflowText(), 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['picked\\(\\) \\{'])[0]);
+const pickedFn = lazy(() => extractDeclarationLines(workflowText(), 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['picked() {'])[0]);
 // The shipped per-commit counts of analyze_commits, with `git` standing in for `git diff-tree`.
 const countsBlock = lazy(() => extractBashBlockContaining(workflowText(), 'NON_PLANNING=$('));
 // The classification arms of analyze_commits, over those counts: 1 INCLUDE, 0 EXCLUDE.

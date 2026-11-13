@@ -20,7 +20,7 @@ const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers
 const { createFixture } = require('./fixtures/index.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { isolatedGitEnv } = require('./helpers/isolated-env.cjs');
+const { gitChildEnv } = require('./helpers/isolated-env.cjs');
 
 const {
   WORKFLOW_PATH,
@@ -34,15 +34,13 @@ const MARKER = 'refs/gsd/pr-published/strict/main/feature';
 const PENDING = 'refs/gsd/pr-built/strict/main/feature';
 const BUILT = 'refs/gsd/pr-built-head/strict/main/feature';
 
-const ISOLATED_ENV = isolatedGitEnv;
-
 function git(dir, ...args) {
-  return gitOrThrow(args, { cwd: dir, env: ISOLATED_ENV(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
+  return gitOrThrow(args, { cwd: dir, env: gitChildEnv(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
 }
 
 function refkeyFn() {
   const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-  return extractDeclarationLines(text, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey\\(\\) \\{'])[0];
+  return extractDeclarationLines(text, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey() {'])[0];
 }
 
 function commitAll(dir, msg) {
@@ -107,7 +105,7 @@ function runSh(script, cwd, interpreter = 'bash') {
   try {
     const file = path.join(tmp, 'recipe.sh');
     fs.writeFileSync(file, script);
-    const r = runHook(file, [], { interpreter, cwd, env: ISOLATED_ENV(cwd) });
+    const r = runHook(file, [], { interpreter, cwd, env: gitChildEnv(cwd) });
     return { status: r.exitCode ?? 1, stdout: r.stdout, stderr: r.stderr };
   } finally { cleanup(tmp); }
 }
@@ -133,7 +131,7 @@ function mergePr(dir, target = 'main') {
 // The shipped pr_merged (and its _to helper), for calling it directly.
 const prMergedFns = () => {
   const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-  const [toFn] = extractDeclarationLines(text, 'pr_merged() {', ['_to\\(\\) \\{']);
+  const [toFn] = extractDeclarationLines(text, 'pr_merged() {', ['_to() {']);
   return [toFn, extractFunction(text, 'pr_merged() {', 'pr_merged')].join('\n');
 };
 
@@ -148,7 +146,7 @@ const printedCmd = (stderr, label) => {
   return line.slice(label.length + 4);
 };
 
-const refOf = (dir, ref) => refShaOrEmpty(ref, { cwd: dir, env: ISOLATED_ENV(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+const refOf = (dir, ref) => refShaOrEmpty(ref, { cwd: dir, env: gitChildEnv(dir), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
 const markerOf = (dir) => refOf(dir, MARKER);
 const pendingOf = (dir) => refOf(dir, PENDING);
 const builtOf = (dir) => refOf(dir, BUILT);
@@ -696,7 +694,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   test('shq round-trips any string through eval (property)', (t) => {
-    const [fn] = extractDeclarationLines(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'shq() {', ['shq\\(\\) \\{']);
+    const [fn] = extractDeclarationLines(fs.readFileSync(WORKFLOW_PATH, 'utf-8'), 'shq() {', ['shq() {']);
     const tmp = createTempDir('gsd-shq-');
     t.after(() => cleanup(tmp));
     const f = path.join(tmp, 'in.txt');

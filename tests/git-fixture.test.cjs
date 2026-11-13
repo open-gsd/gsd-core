@@ -41,7 +41,7 @@ const { gitOrThrow, refShaOrEmpty, throwIfFailed, toLegacyResult, DEFAULT_GIT_TI
  */
 const ARBITRARY_OVERRIDE_TIMEOUT_MS = 12345;
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { isolatedGitEnv } = require('./helpers/isolated-env.cjs');
+const { gitChildEnv } = require('./helpers/isolated-env.cjs');
 
 /**
  * Runs `fn`, returning the error it throws. Fails the calling test with a
@@ -241,12 +241,6 @@ describe('git-fixture: E — gitOrThrow', () => {
   });
 });
 
-/**
- * `throwIfFailed` is exercised only indirectly above (via `gitOrThrow`) and by
- * six other per-suite wrappers elsewhere in the tree. It takes a plain
- * process-seam result object, so it is tested directly here with literal
- * result objects — no subprocess needed.
- */
 describe('git-fixture: refShaOrEmpty', () => {
   let dir;
 
@@ -266,12 +260,11 @@ describe('git-fixture: refShaOrEmpty', () => {
     assert.equal(refShaOrEmpty('refs/heads/does-not-exist', { cwd: dir }), '');
   });
 
-  test('a git exit other than 1 (128: not a repository) rethrows, not "no ref"', () => {
+  test('a git exit other than 1 (128: not a repository) rethrows, not "no ref"', (t) => {
     const notRepo = createTempDir('git-fixture-notrepo-');
-    try {
-      const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: notRepo, env: isolatedGitEnv(notRepo) }));
-      assert.equal(caught.status, 128);
-    } finally { cleanup(notRepo); }
+    t.after(() => cleanup(notRepo));
+    const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: notRepo, env: gitChildEnv(notRepo) }));
+    assert.equal(caught.status, 128);
   });
 
   test('a spawn failure (status null) rethrows', () => {
@@ -294,6 +287,12 @@ describe('git-fixture: refShaOrEmpty', () => {
   });
 });
 
+/**
+ * `throwIfFailed` is exercised only indirectly above (via `gitOrThrow`) and by
+ * six other per-suite wrappers elsewhere in the tree. It takes a plain
+ * process-seam result object, so it is tested directly here with literal
+ * result objects — no subprocess needed.
+ */
 describe('throwIfFailed', () => {
   /** A minimal clean-exit result, spread over in each test below. */
   const BASE = { stdout: '', stderr: '', signal: null, timedOut: false };

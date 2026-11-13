@@ -34,7 +34,7 @@ const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed, refShaOrEmpty } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { isolatedGitEnv } = require('./helpers/isolated-env.cjs');
+const { gitChildEnv } = require('./helpers/isolated-env.cjs');
 const { extractBashBlockContaining, extractDeclarationLines } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -2743,8 +2743,6 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   // #5486: the pending build is recorded only when both gates pass.
   const PENDING_REF = 'refs/gsd/pr-built/default/main/feature';
   // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
-  // The child env of the verify runs and the ref reads: the developer's HOME, git config and BASH_ENV stay out.
-  const verifyEnv = isolatedGitEnv;
   // Returns `{ out, exitCode }`: the run's stdout and stderr, and its exit status.
   function runVerify(repo, to = '_to() { "$@"; }') {
     const workflowText = readFileNormalized(PR_BRANCH_MD); // read here, so a failure fails the named test
@@ -2761,7 +2759,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       // The shipped declarations: the regexes, the mode's projections and the ref names.
       extractBashBlockContaining(workflowText, 'TRANSIENT_DIRS="phases'),
       extractBashBlockContaining(workflowText, 'FILTER_PATHS=$(for d'),
-      ...extractDeclarationLines(workflowText, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey\\(\\) \\{', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
+      ...extractDeclarationLines(workflowText, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey() {', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
       'echo "PENDING_REF=$PENDING_REF"',
       extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
@@ -2771,13 +2769,13 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     const r = runHook(path.join(repo, 'verify.sh'), [], {
       interpreter: 'bash',
       cwd: repo,
-      env: verifyEnv(repo),
+      env: gitChildEnv(repo),
       timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
     assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
     return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }
-  const refSha = (repo, ref) => refShaOrEmpty(ref, { cwd: repo, env: verifyEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
+  const refSha = (repo, ref) => refShaOrEmpty(ref, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
   const pendingRef = (repo) => refSha(repo, PENDING_REF);
 
   // A repo on `pr` whose one commit adds a transient planning file (.planning/phases/PLAN.md) over a code base on main.
