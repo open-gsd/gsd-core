@@ -459,7 +459,7 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // test: the failing fourth call) and the same window is applied here, on the committer time each record ends with.
     const filtered = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT);
     const listing = git(['log', logFormat('time'), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
-    const onHead = new Set(parseLog(listing, false, undefined, filtered ? undefined : since).map((c) => c.subject));
+    const onHead = new Set(parseLog(listing, 'time', undefined, filtered ? undefined : since).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
@@ -915,23 +915,23 @@ function logFormat(fourth: boolean | 'time'): string {
 type ParentMap = Map<string, string[]>;
 
 /**
- * With `since` (and `withBody` false), the listing came from `logFormat('time')`: a record committed before `since`
- * is skipped, and a record without a numeric time is no answer (`ScopeUnreadable`).
+ * `fourth` is the choice given to `logFormat`. With `'time'` and `since`, a record committed before `since` is
+ * skipped, and a record without a numeric time is no answer (`ScopeUnreadable`).
  */
-function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap, since?: number): ScopeCommit[] {
+function parseLog(out: string, fourth: boolean | 'time', parentsOut?: ParentMap, since?: number): ScopeCommit[] {
   const commits: ScopeCommit[] = [];
   for (const record of out.split('\x1e')) {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
-    const [sha, parents, subject, fourth] = trimmed.split('\x1f');
+    const [sha, parents, subject, field] = trimmed.split('\x1f');
     if (!isFullSha(sha)) continue;
-    if (since !== undefined && !withBody) {
-      const time = unixSeconds(fourth);
+    if (fourth === 'time' && since !== undefined) {
+      const time = unixSeconds(field);
       if (time === null) throw new ScopeUnreadable('git-malformed:log');
       if (time < since) continue;
     }
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
-    if (withBody) commit.body = (fourth ?? '').trim();
+    if (fourth === true) commit.body = (field ?? '').trim();
     commits.push(commit);
     parentsOut?.set(sha, (parents ?? '').split(' ').filter(Boolean));
   }

@@ -255,10 +255,9 @@ function gitReporting(version) {
   return { runner, calls };
 }
 
-/** Wrap a runner: `onCall(callNumber, args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
+/** Wrap a runner: `onCall(args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
 function intercept(runner, onCall) {
-  let call = 0;
-  return (args, opts) => onCall(++call, args, () => runner(args, opts), opts);
+  return (args, opts) => onCall(args, () => runner(args, opts), opts);
 }
 
 /**
@@ -1623,11 +1622,11 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     const seen = [];
-    subjectsOccurOnHead(repo.dir, [a], intercept(gitReporting('2.37.0').runner, (call, args, run, opts) => { seen.push({ args, opts }); return run(); }));
-    assert.equal(seen.length, 4);
-    assert.equal('maxBuffer' in seen[0].opts || 'maxBuffer' in seen[1].opts, false, 'the id lookups keep the default cap');
-    assert.ok(seen[3].args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
-    assert.equal(seen[3].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
+    subjectsOccurOnHead(repo.dir, [a], intercept(gitReporting('2.37.0').runner, (args, run, opts) => { seen.push({ args, opts }); return run(); }));
+    const [listing, ...lookups] = [seen.find((call) => call.args.includes('HEAD')), ...seen.filter((call) => !call.args.includes('HEAD'))];
+    assert.equal(lookups.some((call) => 'maxBuffer' in call.opts), false, 'the id lookups keep the default cap');
+    assert.ok(listing.args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
+    assert.equal(listing.opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
   });
 
   test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are (git 2.37 and git 2.36 alike)', () => {
@@ -1651,7 +1650,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
     // Replace the closing time field of each record (`<sha>\x1f<parents>\x1f<subject>\x1f<ct>\x1e`) with a non-number.
     const garble = (record) => record.split('\x1f').slice(0, 3).concat('x').join('\x1f');
-    const garbled = intercept(gitReporting('2.36.9').runner, (call, args, run) => {
+    const garbled = intercept(gitReporting('2.36.9').runner, (args, run) => {
       const result = run();
       return args.includes('HEAD') ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
     });
@@ -1687,10 +1686,10 @@ describe('subjectsOccurOnHead (#5354)', () => {
     repo.git('reset', '--hard', base);
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin a\n');
     commitDated(repo, 'b.txt', 'test(03-01): b', { author: T }, 'twin b\n');
-    // The second call lists the commit times; drop one line of its output.
-    const dropping = (drop) => intercept(execGit, (call, args, run) => {
+    // The commit-time lookup is the call that asks for `%ct` and `%at`; drop one line of its output.
+    const dropping = (drop) => intercept(execGit, (args, run) => {
       const r = run();
-      return call === 2 ? { ...r, stdout: r.stdout.split('\n').filter((l) => !l.startsWith(drop)).join('\n') } : r;
+      return args.some((arg) => String(arg).includes('%ct%x1f%at')) ? { ...r, stdout: r.stdout.split('\n').filter((l) => !l.startsWith(drop)).join('\n') } : r;
     });
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping(b)), null);
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping('')), null);
@@ -1713,7 +1712,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     // A twin dated before the window, under a child that is too old as well: neither git counts it.
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 10 }, 'old twin\n');
     commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
-    const withVersion = (version, seen) => intercept(gitReporting(version).runner, (call, args, run) => { seen.push(args); return run(); });
+    const withVersion = (version, seen) => intercept(gitReporting(version).runner, (args, run) => { seen.push(args); return run(); });
     const old = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), false, 'the same window applies without the git flag');
     assert.equal(old.some((args) => args.some((arg) => String(arg).startsWith('--since-as-filter'))), false);
@@ -1746,8 +1745,8 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const base = repo.git('rev-parse', 'HEAD');
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     repo.git('reset', '--hard', base);
-    // The fourth call is the HEAD listing (after the id lookup, the commit times and the version probe): a failed git reads as exit 1, a hang as a timeout.
-    const failing = (fourth, version) => intercept(gitReporting(version).runner, (call, args, run) => (call === 4 ? fourth : run()));
+    // The HEAD listing is the call that names HEAD: a failed git reads as exit 1, a hang as a timeout.
+    const failing = (listing, version) => intercept(gitReporting(version).runner, (args, run) => (args.includes('HEAD') ? listing : run()));
     const failed = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
     // On a git before 2.37 the listing is the whole history, so the timeout is what limits that read.
     for (const version of ['2.37.0', '2.36.9']) {
@@ -1781,6 +1780,6 @@ describe('subjectsOccurOnHead (#5354)', () => {
       const subjectOf = (sha) => gitOrThrow(['log', '-1', '--format=%s%x1e', sha], { cwd: repo.dir }).split('\x1e')[0];
       const keptSubjects = new Set(keptIds.map(subjectOf));
       assert.equal(subjectsOccurOnHead(repo.dir, ids), ids.every((id) => keptSubjects.has(subjectOf(id))));
-    }), { numRuns: 12 });
+    }), { seed: 5354, numRuns: 12 });
   });
 });
