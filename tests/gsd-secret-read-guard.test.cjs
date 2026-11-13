@@ -1240,6 +1240,661 @@ describe('gsd-secret-read-guard: nested shell behind a wrapper with flags (#5627
   });
 });
 
+// #5518: bash 5.3's function substitution `${ cmd; }` / `${| cmd; }` runs its
+// body as commands, where earlier bash reads the same text as a parameter
+// expansion that fails only when expanded. Oracle: each block row runs the
+// read under bash 5.3.20 (the official bash:5.3 image), except the pre-5.3
+// rows, which run it under bash 5.2.21 and 3.2.57; no allow row runs it anywhere,
+// except the scan-depth, reach and not-reached rows, which pin where the scan
+// stops while bash still runs it.
+describe('gsd-secret-read-guard: bash 5.3 function substitution (#5518)', () => {
+  const closedChainThenRead = (n) => '${ '.repeat(n) + ':' + '; }'.repeat(n) + '; echo ${ cat .env; }';
+  const funsubChainThenRead = (n) => "echo ${ echo '}' " + '${ : '.repeat(n - 2) + '${ # it"s\n}' + ' ; }'.repeat(n - 1) + '\ncat .env';
+  const pendingChainThenRead = (k) => "false && echo ${ echo '}' " + '${ echo '.repeat(k - 2) + '${ :<<F; }\nF\n: ; }' + '\n: ; }'.repeat(k - 2) + '\ncat .env';
+  // A failed `((` records the state it reached past `""` (index p, one paren
+  // open); the 24th opener, read at depth 23, starts its body at 34p + 1. When
+  // both records shared one map under integer keys, those two keys were equal:
+  // the span lookup read the state's null and threw, and the hook allowed.
+  const failedArithThenDeepChain = () => {
+    const head = 'echo ${ (( (""';
+    const prefix = head + ' ) ) ); cat .env; :';
+    const firstOpener = 34 * head.length - 1 - 3 * 22;
+    return prefix + ' '.repeat(firstOpener - prefix.length) + '${ '.repeat(23) + ':; ' + '}; '.repeat(23) + '}\n';
+  };
+  // Closing the substitution early resumes the double-quoted scan inside its
+  // body, where the `"` before `'` ends the string and the `'` hides the read.
+  const dqTail = `; echo "'"; }"; cat .env`;
+
+  const BLOCKS = [
+    ['unquoted', 'echo ${ cat .env; }'],
+    ['inside double quotes', 'echo "${ cat .env; }"'],
+    ['value substitution', 'echo ${| cat .env; REPLY=x; }'],
+    ['inside a $( )', 'echo "$(echo ${ cat .env; })"'],
+    ['opened by a tab', 'echo ${\tcat .env; }'],
+    ['opened by a newline', 'x=${\ncat .env\n}; echo "$x"'],
+    ['a quote inside a double-quoted one keeps its own quoting', `echo "\${ printf '%s' "'"; cat .env; }"`],
+    ['in an unquoted heredoc body', 'cat <<E\n${ cat .env; }\nE'],
+    // A `}` after `;` closes the first one, so the second sits at depth 3, which is scanned.
+    ['closed by the `}` after `;`, not one past it', 'echo $(echo $(echo ${ :; }; echo ${ cat .env; }))'],
+    // bash 5.2 / 3.2: `${…}` up to the first `}` is one bad word; `&` runs the read anyway.
+    ['read as a pre-5.3 parameter expansion too', "echo ${\n<<'E'\n} & cat .env\n"],
+    // Quote removal makes the opener, so only the script that runs holds one.
+    ['read as a pre-5.3 parameter expansion in a bash -c script', "bash -c 'echo $''{\n<<'\"'E'\"'\n} & cat .env\n'"],
+    ['read as a pre-5.3 parameter expansion in an eval script', "eval 'echo $''{' '\n<<E\n} & cat .env\n'"],
+    // bash 5.3 reads the next lines as the heredoc's body; bash 5.2 and 3.2 fail
+    // the first line's bad word and run the second. The bash 5.3 reading allows it.
+    // A known over-deny under bash 5.3 alone, where `cat .env` is heredoc data: the
+    // deny is the pre-5.3 reading's, and it stays because bash 5.2 and 3.2 run it.
+    ['a read on the line after one left holding a heredoc, read as a pre-5.3 parameter expansion', 'echo ${ cat <<E; }\ncat .env\nE\necho done'],
+    // Each opens a `{ …; }` group, whose `}` does not close the substitution.
+    ['a group after `function NAME`', `echo "\${ function f { :; }${dqTail}`],
+    ['a group after `coproc`', `echo "\${ coproc { :; }${dqTail}`],
+    ['a group after `coproc NAME`', `echo "\${ coproc C { :; }${dqTail}`],
+    ['a group after `time -p`', `echo "\${ time -p { :; }${dqTail}`],
+    ['a group after `time --`', `echo "\${ time -- { :; }${dqTail}`],
+    ['a group after `for ((…))`', `echo "\${ for ((i=0;i<1;i++)) { :; }${dqTail}`],
+    // A `}` inside `[[ … ]]` or in a case pattern is a word.
+    ['a `}` inside `[[ … ]]`', `echo "\${ [[ a && } == } ]]${dqTail}`],
+    ['a `}` case pattern after `;;`', `echo "\${ case x in a) :;; }) :;; esac${dqTail}`],
+    ['a `}` case pattern after a newline', `echo "\${ case x in\n}) :;;\nesac${dqTail}`],
+    // `]]` starts a command, so the `}` after it closes; closing one later would put the read at depth 4, which is not scanned.
+    ['closed by the `}` after `]]`', "echo $(echo $(echo $(echo ${ echo '}'; [[ a ]] }; cat .env)))"],
+    ['closed by the `}` after an arithmetic command', "echo $(echo $(echo $(echo ${ echo '}'; (( 1 )) }; cat .env)))"],
+    // bash 5.3 reads a heredoc still open at the `}` from the next line, then runs the line after it.
+    ['after a heredoc still open at its `}`', "echo ${ cat <<'E'; }\nit's\nE\ncat .env"],
+    // bash reads a substitution's heredocs before the line's own.
+    ['after a heredoc still open at its `}`, behind the line\'s own heredoc', "cat <<A; echo ${ echo \"}it's\"; cat <<B; }\nB\nA\ncat .env #'\n"],
+    ['after a heredoc still open at its `}`, behind a heredoc in the same command', "cat <<A ${ echo \"}it's\"; cat <<B; }\nB\nA\ncat .env #'\n"],
+    // A wrong pending tag would carry the lines after the `}` one nesting level deeper, where depth 4 is not scanned.
+    ['after a here-string in one', "echo ${ echo '}' <<< hi; }\necho $(echo $(echo $(cat .env)))\nhi"],
+    ['after a heredoc tag with a quoted part', "echo ${ cat <<E'x' '}'; }\nbody\nEx\necho $(echo $(echo $(cat .env)))"],
+    ['after a heredoc tag with an escape in double quotes', "echo ${ cat <<\"E\\$\" '}'; }\nbody\nE$\necho $(echo $(echo $(cat .env)))"],
+    ['after a heredoc tag split by a line continuation', "echo ${ cat <<E\\\nX '}'; }\nbody\nEX\necho $(echo $(echo $(cat .env)))"],
+    ['after a heredoc tag holding a `$( )`', "echo ${ cat <<$(x) '}'; }\nbody\n$(x)\necho $(echo $(echo $(cat .env)))"],
+    ['after a heredoc tag holding a backtick part with a blank', "echo ${ cat <<E`echo x`F '}'; }\nbody\nE`echo x`F\necho $(echo $(echo $(cat .env)))"],
+    ['after a heredoc tag holding a `${…}` with a blank, in double quotes', 'echo "${ cat <<E${x:-a b}F; echo "\'"; }"\nbody\nE${x:-a b}F\necho $(echo $(echo $(cat .env)))'],
+    ['after a heredoc tag ending in a carriage return', "echo ${ cat <<E\r '}'; }\nbody\nE\r\necho $(echo $(echo $(cat .env)))"],
+    // bash 3.2 reads the first line as a parameter word and runs the second, whose read only
+    // #5513's bash 3.2 heredoc reading finds; that reading must not read a function substitution.
+    ['a read bash 3.2 runs below a heredoc still open at one\'s `}`', 'echo ${ cat <<\'Z\'; }\necho "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"'],
+    // bash 5.3 also ends a heredoc in one at a line that starts with the tag and holds a `}`, and runs the rest of that line.
+    ['after a heredoc ended by a line that starts with its tag', 'x=${ cat <<E\nbody\nE cat .env; }'],
+    ['after a `<<-` heredoc ended by a line that starts with its tag', 'x=${ cat <<-E\nbody\n\tE cat .env "}"\nE\n}'],
+    // A heredoc body's own pending tag is dropped; carried to the next one it would take the line after it one level deeper.
+    ['after a pending heredoc in a heredoc body\'s one', 'cat <<E\n${ cat <<X; }\nE\necho ${ :; }\necho ${ echo ${ echo ${ cat .env; }; }; }'],
+    // Each of these is skipped whole; reading into it would close early.
+    ['a quoted `; }` in one', `echo "\${ printf '%s' '; }'${dqTail}`],
+    ['a nested one whose body holds a `}`', `echo "\${ echo \${ echo }; }${dqTail}`],
+    ['a `}` line in a heredoc body in one', `echo "\${ cat <<'E'\n}\nE\necho "'"; }"; cat .env`],
+    ['a line continuation before its `}`', 'echo "${ echo \'"\';\\\n}"; cat .env'],
+    ['a `}` after `coproc NAME`', 'echo "${ coproc \'"\' }"; cat .env'],
+    // Read as the end of the case, an `esac` here would let the `}` pattern after it close.
+    ['an `esac` pattern after another pattern', `echo "\${ case x in a|esac|}) :;; esac${dqTail}`],
+    ['an `esac` pattern after `(`', `echo "\${ case x in (esac|}) :;; esac${dqTail}`],
+    ['a comment holding `; }` in one', `echo "\${ : # ; }\necho "'"; }"; cat .env`],
+    ['a parameter expansion holding `; }` in one', `echo "\${ : \${x:-; }${dqTail}`],
+    ['a double-quoted one holding a quoted `"` in one', `echo "\${ x="\${ echo '"'; }"${dqTail}`],
+    // In an arithmetic command `<<` is a shift, not a heredoc; `((cmd) )` is a subshell in a subshell.
+    ['after a shift in an arithmetic command in one', "echo ${ (( x = 1 << 2 )); echo \"}it's\"; }\ncat .env # '\n"],
+    ['after a shift in a `for ((` in one', "echo ${ for (( i = 1 << 2; i < 0; i++ )); do :; done; echo \"}it's\"; }\ncat .env # '\n"],
+    ['in a subshell in a subshell spelled `((` in one', 'echo ${ ((cat .env) ); }'],
+    ['a `}` line in a heredoc body in a subshell spelled `((` in one', `echo "\${ ((cat <<'E') )\n}\nE\necho "'"; }"; cat .env`],
+    // An array's elements are words, so a `}` among them does not close.
+    ['a `}` array element in one', `echo "\${ x=( } )${dqTail}`],
+    ['a `}` array element after `declare -a`', `echo "\${ declare -a a=(})${dqTail}`],
+    ['a `}` array element appended with `+=`', `echo "\${ a+=(})${dqTail}`],
+    ['a `}` array element on its own line', `echo "\${ a=(\n}\n)${dqTail}`],
+    ['a `)` in a comment among array elements', `echo "\${ a=( # )\n} )${dqTail}`],
+    ['opened across a line continuation after `${`', 'echo ${\\\n cat .env; }'],
+    ['opened across a line continuation before `{`', 'echo $\\\n{ cat .env; }'],
+    ['after an escaped backslash in an unquoted heredoc body', 'cat > /dev/null <<EOF\nexport X=\\\\${ cat .env; }\nEOF'],
+    // Past the depth cap the scan reads them as text rather than recursing into a stack overflow.
+    ['a read after 20000 nested ones', closedChainThenRead(20000)],
+    ['a read before 20000 unclosed ones', 'cat .env; ' + '${ '.repeat(20000)],
+    ['a read before 20000 unclosed ones in double quotes', 'cat .env; ' + '${ "'.repeat(20000)],
+    ['a read before a chain whose deepest span shares its position with a failed `((` state', failedArithThenDeepChain()],
+  ];
+  for (const [label, command] of BLOCKS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The #5518 brief's must-allow rows: a parameter expansion stays text, and
+  // `${ x }` runs only `x`. The four after them are twins whose word holds
+  // `;cat .env; `, which every bash reads as text (5.3.20, 5.2.37 and 3.2.57
+  // run no read), so a scan that read a parameter expansion as a function
+  // substitution would deny them.
+  for (const command of ['echo ${HOME}', 'echo ${x:-a b}', 'echo "${#x}"', 'echo ${ x }',
+    'echo ${HOME%;cat .env; }', 'echo ${x:-a b;cat .env; }', 'echo "${x:+;cat .env; }" "${#x}"', 'echo "${x:-;cat .env; }"']) {
+    test(`allows: ${command}`, () => {
+      assertAllowed(runHook(bash(command)), command);
+    });
+  }
+
+  // n double-quoted `${ … }` nested in each other, then a read (#5523 form A).
+  // bash before 5.3 pairs the `"` and `}` inside a `${…}` word as it pairs
+  // them in the word, so the first line is one word that fails as a bad
+  // substitution, and bash 5.2.37 and 3.2.57 run a read on the next line. The
+  // scan as it stood toggled its quoting at each inner `"` and, at an odd
+  // count of them, read the read as quoted text: next allows it at odd n from
+  // 3, and the head before this change at odd n from 5. With every level
+  // closed by `; }` or a newline `}`, bash 5.3.20 runs the read after `;` too.
+  // With a bare ` }` it reads to the end of the input, and bash 5.2 drops the
+  // whole line, so a read after `;` runs nowhere; that case is left out.
+  const nestedDoubleQuoted = (closers, sep) => {
+    let s = 'true;';
+    for (const c of closers) s = '"${ ' + s + c + '"';
+    return ('echo ' + s + sep + 'cat .env').replace(/;; \}/g, '; }');
+  };
+  for (let n = 1; n <= 33; n++) {
+    test(`blocks: a read on the line after ${n} nested double-quoted \`\${ … }\` closed by \` }\``, () => {
+      const command = nestedDoubleQuoted(Array(n).fill(' }'), '\n');
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // More of #5523 form A, each a read every bash runs (the bash 5.3 row aside)
+  // that next allowed and that one part of the parameter-pairing reading
+  // reaches: the tokenizer's double-quoted `${` (a `"` in single quotes in the
+  // word), its top-level `${` (a heredoc tag word holding a blank inside a
+  // nested expansion), the double-quote skipper in findParamClose (a quoted
+  // `"` one level down), and its pass under bash 5.3's reading (a quoted `}`
+  // in a parameter expansion inside a function substitution, read by bash
+  // 5.3.20 only; 5.2 and 3.2 read the whole as one bad word).
+  const PAIRED = [
+    ['a `"` in single quotes in a double-quoted expansion\'s word', `echo "\${x:-'"'}"\ncat .env`],
+    ['a heredoc tag word holding a blank inside a nested expansion', 'cat <<E${x:-${y} z}F\nbody\nE${x:-${y} z}F\ncat .env'],
+    ['a quoted `"` in a double-quoted expansion inside an expansion\'s word', `echo \${x:-"\${y:-'"'}"}\ncat .env`],
+    ['a quoted `}` in an expansion inside a function substitution', "echo ${ echo ${x:-'}'}; cat .env; }"],
+  ];
+  for (const [label, command] of PAIRED) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // `$'…'` is ANSI-C quoting: a backslash escapes the next character, so `\'`
+  // does not end the span, where it ends a plain '…'. The close finders share
+  // one reading of it (skipQuotedOrSubstitution). Read as a plain quote, the
+  // `'` after `\'` opened a quote that hid the rest of the line, so the
+  // substitution or expansion never closed and the read after it was text.
+  // Each row puts the span where a different finder meets it. `echo }` first
+  // keeps the pre-5.3 reading, which ends `${…}` at the first `}`, off the
+  // read. bash 5.3.20 runs the read in every row; 5.2.37 and 3.2.57 run it in
+  // the parameter-expansion row and read the others as one bad substitution.
+  // next allows all six.
+  const ANSI_C = [
+    ['a word of a function substitution', "echo ${ echo }; echo $'\\''; }; cat .env"],
+    ['an arithmetic command in a function substitution', "echo ${ echo }; (( $'\\'' )); }; cat .env"],
+    ['an array element in a function substitution', "echo ${ echo }; a=( $'\\'' ); }; cat .env"],
+    ['a parameter expansion\'s word, before a quoted `}`', "echo ${x:-$'\\'}'}\ncat .env"],
+    // bash 5.3 pairs a run of `$` left to right, `$$` being the PID: the third `$` opens the span.
+    ['a word of a function substitution, after `$$`', "echo ${ echo }; echo $$$'\\''; }; cat .env"],
+    // bash removes a line continuation first, so `$` and `'` still meet.
+    ['a word of a function substitution, split from its `$` by a line continuation', "echo ${ echo }; echo $\\\n'\\''; }; cat .env"],
+  ];
+  for (const [label, command] of ANSI_C) {
+    test(`blocks: a read after a \`$'…'\` span holding \`\\'\` in ${label}`, () => {
+      assertBlocked(runHook(bash(command)), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // A heredoc tag part written `$'…'`, on a heredoc the substitution leaves
+  // open at its `}`: with the tag read wrongly the body never ends and the
+  // read after it is data. bash takes the span's value as that part of the
+  // tag, and a span that holds no backslash is its own value, so the tag
+  // reader (readFunsubHeredocTag) takes its text. A tag is not expanded, so
+  // the other `$` of a run are text: `$$$'E'` is `$$E`, and in `$$'E'$'F'`
+  // only the second quote is a span, which gives `$$EF`. bash 5.3.20 runs the
+  // read in all five; next allows them.
+  const ANSI_C_IN_TAG = [
+    ["`$'E'`", "$'E'", 'E'],
+    ["`A$'B'\"C\"`, a span between two other parts", "A$'B'\"C\"", 'ABC'],
+    ["`$$$'E'`, whose third `$` opens the span", "$$$'E'", '$$E'],
+    ["`$$'E'$'F'`, a plain quote after two `$`, then a span", "$$'E'$'F'", '$$EF'],
+    ["`$'E'` split after its `$` by a line continuation", "$\\\n'E'", 'E'],
+  ];
+  for (const [label, tag, terminator] of ANSI_C_IN_TAG) {
+    test(`blocks: a read after a heredoc whose tag is ${label}`, () => {
+      const command = `echo \${ cat <<${tag}; }\nit's\n${terminator}\ncat .env`;
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // A span that holds an escape is not read as its text: bash's tag here is
+  // `E` and a newline, which no line can match, so the rest is the body and no
+  // bash runs the read. Taken as text, the tag would match the `E\n` line and
+  // the data after it would be denied as a command.
+  test("allows: a heredoc whose `$'…'` tag holds an escape, with a line that spells the tag's text", () => {
+    const command = "echo ${ cat <<$'E\\n'; }\nit's\nE\\n\ncat .env";
+    assertAllowed(runHook(bash(command)), command);
+  });
+  // The same tag on a heredoc that closes inside the substitution: the tag
+  // decides where the body ends, and so which `}` closes the substitution.
+  // With the tag read as `$E` the body ran to the end and the read after the
+  // `}` was data. bash 5.3.20 runs it; next allows it.
+  test("blocks: a read after a function substitution whose heredoc, tagged `$'E'`, closes inside it", () => {
+    const command = "echo ${ cat <<$'E'\nx}\"\nE\n}; cat .env";
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+  // A tag part written `$"…"`, on the same open heredoc. bash removes the `$`
+  // of `$"…"` from a tag and reads the rest as a double-quoted part; in a run
+  // of `$` only an odd run's last one goes, and an even run is text. bash
+  // 5.3.20 runs the read in all six; next allows them, and so did the tag
+  // reader while it kept every `$`.
+  const LOCALE_IN_TAG = [
+    ['`$"E"`', '$"E"', 'E'],
+    ['`x$"E"`, after another part', 'x$"E"', 'xE'],
+    ['`$$"E"$"F"`, an even run kept whole, then a `$"…"` part', '$$"E"$"F"', '$$EF'],
+    ['`$$$"E"`, whose third `$` goes', '$$$"E"', '$$E'],
+    ['`$"E\\""`, holding an escaped quote', '$"E\\""', 'E"'],
+    ['`$"E"` split after its `$` by a line continuation', '$\\\n"E"', 'E'],
+  ];
+  for (const [label, tag, terminator] of LOCALE_IN_TAG) {
+    test(`blocks: a read after a heredoc whose tag is ${label}`, () => {
+      const command = `echo \${ cat <<${tag}; }\nit's\n${terminator}\ncat .env`;
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // The same for `$"E"`, on a heredoc that closes inside the substitution.
+  test('blocks: a read after a function substitution whose heredoc, tagged `$"E"`, closes inside it', () => {
+    const command = 'echo ${ cat <<$"E"\nx}"\nE\n}; cat .env';
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+
+  // Where `$'` is not a span. After `$$` the `'` opens a plain quote, which
+  // the `\'` cannot keep open: read as a span, it would run past the `}` and
+  // put the read a level deeper than MAX_NESTING_DEPTH, where it is not
+  // scanned. The `"}"` keeps the pre-5.3 reading off the read: it ends `${…}`
+  // at that `}`, and the `"` after it opens a string that never closes.
+  // In double-quoted text `$'` is two characters of text (the word of a
+  // `${…}` in it is another matter: bash reads a span there, as the
+  // parameter-expansion row above has it unquoted). bash 5.3.20 runs the read
+  // in both; next allows both.
+  test('blocks: a read after a plain quote that follows `$$` in a function substitution', () => {
+    const command = "echo $(echo $(echo $(echo ${ echo \"}\"; echo $$'\\'; }; cat .env)))";
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+  test('blocks: a read after `$\'` inside double quotes in a function substitution', () => {
+    const command = "echo $(echo $(echo $(echo ${ echo '}'; echo \"$'\"; }; cat .env)))";
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+
+  // Inside double quotes a backslash escapes `"`, `\\`, `$`, a backtick and a
+  // newline, and before any other character it is text. tokenize's word
+  // buffer and the function-substitution heredoc tag reader take that from
+  // one list (DOUBLE_QUOTE_ESCAPABLE), so each member has a row at each
+  // reader, and `\\n`, which is not one, has a row at each too.
+  // A tag row leaves a heredoc open at the substitution's `}` under a
+  // double-quoted tag holding one escape: bash 5.3.20 reads the body up to
+  // the line that matches the tag with the escape applied, then runs the
+  // read. With the tag read wrongly the body never ends and the read is data.
+  const BT = '`';
+  const ESCAPED_IN_TAG = [
+    ['`$`', '$', 'E$'],
+    ['`"`', '"', 'E"'],
+    ['a backslash', '\\', 'E\\'],
+    ['a backtick', BT, `E${BT}`],
+    ['a newline, which is dropped', '\nF', 'EF'],
+    ['`n`, which keeps its backslash', 'nF', 'E\\nF'],
+  ];
+  for (const [label, escaped, terminator] of ESCAPED_IN_TAG) {
+    test(`blocks: a read after a heredoc whose double-quoted tag escapes ${label}`, () => {
+      const command = `echo \${ cat <<"E\\${escaped}"; }\nit's\n${terminator}\ncat .env`;
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+  // The same escapes in a word. Every bash runs the read in the two block
+  // rows, and none runs one in the four allow rows.
+  const ESCAPED_IN_WORD = [
+    ['`$`, so `$(` opens nothing', 'echo "\\$(cat .env)"', false],
+    ['a backtick, so it opens nothing', `echo "\\${BT}cat .env\\${BT}"`, false],
+    ['`"`, so the string goes on', 'echo "\\"; cat .env; echo \\""', false],
+    ['a backslash, so the next `"` closes', 'echo "\\\\"; cat .env', true],
+    ['a newline, which is dropped', 'cat ".e\\\nnv"', true],
+    ['`n`, which keeps its backslash', 'cat ".e\\nv"', false],
+  ];
+  for (const [label, command, blocked] of ESCAPED_IN_WORD) {
+    test(`${blocked ? 'blocks' : 'allows'}: a double-quoted word that escapes ${label}`, () => {
+      const result = runHook(bash(command));
+      if (blocked) assertBlocked(result, command, { tool: 'Bash', path: '.env' });
+      else assertAllowed(result, command);
+    });
+  }
+
+  // The debugger-spawn scan shares the tokenizer, so it takes the same reading.
+  test('blocks a gsd-debugger spawn on the line after 5 nested double-quoted `${ … }`', () => {
+    const command = 'echo "${ "${ "${ "${ "${ true; }" }" }" }" }"\nclaude --agent gsd-debugger -p x';
+    assertBlocked(runHook(bash(command)), command, { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+  test('blocks a read after 1 to 33 nested double-quoted `${ … }` whatever closes each level', () => {
+    const shape = fc.constantFrom('\n', '; ').chain((sep) => fc.integer({ min: 1, max: 33 }).chain((n) =>
+      fc.array(fc.constantFrom(...(sep === '\n' ? [' }', '; }', '\n}'] : ['; }', '\n}'])), { minLength: n, maxLength: n })
+        .map((closers) => nestedDoubleQuoted(closers, sep))));
+    fc.assert(fc.property(shape, (command) => runHook(bash(command)).status === 2), PROPERTY_RUNS);
+  });
+
+  // The scan's reach, pinned as #5478's git config rows pin it: a deny at
+  // the limit and an allow one past it, where bash still runs the read, so
+  // closing a gap flips its allow row. MAX_NESTING_DEPTH (3) bounds every
+  // nested command the scan reads, `$( )` included: `$( $( $( $( cat .env ) ) ) )`
+  // is allowed on next.
+  const reach = (name, rows, build) => {
+    for (const [n, shouldBlock] of rows) {
+      test(`${name}: ${n}`, () => {
+        const command = build(n);
+        const result = runHook(bash(command));
+        if (shouldBlock) assertBlocked(result, command, { tool: 'Bash', path: '.env' });
+        else assertAllowed(result, command);
+      });
+    }
+  };
+  reach('a read n function substitutions deep respects the scan-depth boundary', [[2, true], [3, true], [4, false]],
+    (n) => 'echo ${ '.repeat(n) + 'cat .env; }' + '; }'.repeat(n - 1));
+  // Past MAX_FUNSUB_DEPTH (32) the close finders read a deeper `${ ` as a
+  // parameter expansion. In a chain whose first level holds `'}'`, which keeps
+  // the pre-5.3 reading off the read, and whose innermost holds a comment with
+  // a `"`, that expansion runs to the end of the input and each rescan of a
+  // body goes one level deeper, so a read on the next line is denied up to
+  // MAX_FUNSUB_DEPTH + MAX_NESTING_DEPTH (35) levels; with the cap one lower
+  // the 35 row fails. bash 5.3 runs the read at every depth.
+  reach("the scan's reach, denied to MAX_FUNSUB_DEPTH + MAX_NESTING_DEPTH levels, over a read after a chain n deep", [[34, true], [35, true], [36, false]], funsubChainThenRead);
+  // A heredoc left pending by a substitution k deep, in a chain the shell
+  // never expands (`false &&`): bash runs the lines after the outermost `}`.
+  // bash 5.3, 5.2 and 3.2 run the read. The bash 5.3 reading reads those lines
+  // k - 1 levels deeper (funsubTags) and stops at k = MAX_NESTING_DEPTH + 1,
+  // but the parameter-pairing reading (scanPairingParams) reads the chain as
+  // one pre-5.3 word, as bash 5.2 does, and the read as the next command, so
+  // the read is denied at every k (measured to 40). These are plain deny rows,
+  // not a reach boundary: no k is allowed, and the bash 5.3 reading's own edge
+  // at k = 4 is not visible through the hook.
+  for (const k of [3, 4, 5]) {
+    test(`blocks: a read after a heredoc left pending ${k} function substitutions deep`, () => {
+      const command = pendingChainThenRead(k);
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // #5523 form A, which the parameter-pairing reading closes: the tokenizer's
+  // `${` branch ended a pre-5.3 expansion at the first `}`, here the one in
+  // double quotes. bash 5.2.37 and 3.2.57 run the read and bash 5.3.20 does
+  // not; next allows it, and so did this change until the pairing reading.
+  test('blocks: #5523 form A, a `}` in double quotes that no longer ends the pre-5.3 expansion', () => {
+    const command = 'echo ${ (( x << "${ <<E ; }" ) ) }\nE\ncat .env\n';
+    assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: '.env' });
+  });
+
+  // A gap neither reading reaches, pinned the same way. bash 5.2.37 and 3.2.57
+  // run the read and bash 5.3.20 does not; next allows it. The tokenizer reads
+  // `<<` in a top-level `((` as a heredoc (#5523 form G). A failed `((` once
+  // duplicated the pending heredoc tags, and the copies made the bash 5.3
+  // reading deny it by accident; closing the form flips its row.
+  // The next three rows are `$'…'` spans, which bash 5.3.20 runs and next
+  // allows. Two are read by code that is next's (#5255). The close finders end
+  // the first one's substitution where bash does, but its body is then read by
+  // tokenize, whose `'` is next's plain quote: the read sits inside the body,
+  // behind the quote the `\'` leaves open. Reading the span in tokenize is
+  // #5255's change and flips the row. In the third the span is inside a `$( )`,
+  // which findParenClose skips: that function is next's, byte for byte, and
+  // reads the `\'` as the quote's end, so the `$( )` never closes (a `<( )` or
+  // `>( )` there reads the same way).
+  // The second is read by this change's own tag reader
+  // (readFunsubHeredocTag). bash decodes the tag to `E'`. The reader takes a
+  // span's text as its value, which is right only for a span with no escape
+  // (the rows above); the value of one that holds an escape takes decoding,
+  // which is #5255's change too, so the reader never finds the terminator and
+  // takes the rest as the body. `<<$'\x45'` with the terminator `E` reads the
+  // same way. At the top level next allows `cat <<$'E'` before a read as well.
+  // The tag reader also finds where a heredoc that closes inside the
+  // substitution ends, and so which `}` closes it (the closed-inside rows
+  // above). A read inside that body is read again by tokenize, whose tag
+  // reading is next's: `$'E'` gives it `$E`, so a read after the `E` line
+  // stays body text (also with `cat .env; }` on the `E` line), and a `$"E"`
+  // tag there reads the same way. bash 5.3.20 runs both; next and this change
+  // allow them.
+  // The four rows after them are examples of one gap, not a list of it: the
+  // tag reader keeps a `${…}` or `$( )` tag part as its text, while bash 5.3
+  // rewrites the inside of one in more than one way. In `<<${x:-$'E'}` bash's
+  // tag holds `'E'`, in `<<${x:-$"E"}` it holds `"E"`, in `<<"${x:-$'E'}"`
+  // it holds `E`, and bash prints `<<$(a  b)` again as `$(a b)`. bash 5.3.20
+  // runs the four reads; next and this change allow them.
+  // The last row only bash 3.2.57 runs. bash 3.2 reads a run of `$` before
+  // `'` differently from bash 5 in more than one place: in the word of a
+  // `${…}` an even run's span opens too, and inside `$( )` and `$(( ))` it
+  // differs again. The scan takes bash 5's reading only, and next allows the
+  // line as well.
+  const NOT_REACHED = [
+    ['#5523 form G, a top-level arithmetic shift read as a heredoc', 'x=${ (( ${ <<E ; } ) }; (( y = 1 << 2 ))\nE\ncat .env\n'],
+    ["#5255, a `$'…'` span before a read in a function substitution's body", "echo ${ echo $'\\''; cat .env; }"],
+    ["a heredoc tag whose `$'…'` holds an escape, in a function substitution", "echo ${ echo }; cat <<$'E\\''\nbody\nE'\n}; cat .env"],
+    ["#5255, a `$'…'` span in a `$( )` in a function substitution's body", "echo ${ echo }; echo $(echo $'\\''); }; cat .env"],
+    ["a `$'E'` tag's heredoc closed inside the function substitution, read again by tokenize", "echo ${ cat <<$'E'\nit's\nE\ncat .env\n}"],
+    ['a `$"E"` tag\'s heredoc closed inside the function substitution, read again by tokenize', 'echo ${ cat <<$"E"\nit\'s\nE\ncat .env\n}'],
+    ["a `${…}` tag part holding a `$'…'` span, which bash rewrites", "echo ${ cat <<${x:-$'E'}; }\nit's\n${x:-'E'}\ncat .env"],
+    ['a `${…}` tag part holding a `$"…"` string, which bash rewrites', 'echo ${ cat <<${x:-$"E"}; }\nit\'s\n${x:-"E"}\ncat .env'],
+    ["a double-quoted `${…}` tag part holding a `$'…'` span, which bash rewrites", "echo ${ cat <<\"${x:-$'E'}\"; }\nit's\n${x:-E}\ncat .env"],
+    ['a `$( )` tag part, which bash prints again', "echo ${ cat <<$(a  b); }\nit's\n$(a b)\ncat .env"],
+    ["bash 3.2's span after an even `$` run in a `${…}` word", "echo ${x:-$$'\\'}'}\ncat .env\necho \"'\""],
+  ];
+  for (const [label, command] of NOT_REACHED) {
+    test(`not reached, allows: ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+  }
+
+  // The scan's cost, asserted as a count of steps rather than by the clock
+  // (RULESET.TESTS.no-timing-assertion): in test mode the hook denies as
+  // `scan-step-budget` once its steps pass GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS,
+  // and each row below sets that to STEPS_PER_BYTE times the command's length.
+  // The count covers the whole Bash scan under every reading: the tokenizer,
+  // the close finders, the heredoc body and tag readers, collectSubstitutions,
+  // the span each `$( )` close skips, each span recorded and the tags it copies, and a
+  // token per scanned command (scanStep in the hook). The most any row takes is
+  // 37 steps a byte (the million-paren row, where each `((` reads
+  // MAX_FUNSUB_DEPTH + 2 characters before the cap fails it).
+  const STEPS_PER_BYTE = 64;
+  const runBudgeted = (command, env = {}) => {
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(command)),
+      env: { ...process.env, NODE_V8_COVERAGE: '', GSD_TEST_MODE: '1', GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: String(STEPS_PER_BYTE * command.length), ...env },
+      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    });
+    return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+  };
+
+  // Long inputs the scan must finish and deny inside the step budget. A `((`
+  // that does not end in `))` is read again as subshells, and before the scan
+  // recorded what it had measured (the spans, and the states a failed attempt
+  // reached) that took 19 s at 333 bytes and 356 s at 1 MiB. Each row passes
+  // the budget when a bound it guards is reverted:
+  //  - without the records: the two 31-level rows, the 130000-line row and
+  //    the three 256 MB-heap rows;
+  //  - without findArithClose's depth cap: the 340000-subshell row;
+  //  - without the records, and with an unclosed `((` failing instead of
+  //    reading to the end: also the 170000-attempt row;
+  //  - without the depth cap, and with an unclosed `((` failing: the
+  //    million-paren row, where every later `((` then reads to the end;
+  //  - with a recorded span copying every pending tag rather than its own,
+  //    the per-close copy 855b883ab removed (27 s at 1 MiB): the
+  //    95000-heredoc row;
+  //  - with a failed attempt's tags kept, the tag drop removed: the three
+  //    256 MB-heap rows.
+  // Each fails on the count, in 0.03 to 2.5 s in this file at loads up to 77
+  // on 32 cores; one run inside a loaded full suite took about 9 s. The
+  // spawn's 10 s timeout is a hang backstop, not the assertion: a reversion
+  // that ran past it would still fail, on the timeout instead of the count.
+  // The 95000-heredoc row fails on the count only while recordSpan charges
+  // each tag it copies; no row pins that per-tag part, or knownSpan's charge
+  // for a recorded hit, on its own.
+  // The spawn sets NODE_V8_COVERAGE to '' so the hook runs uninstrumented in
+  // the c8 unit shards, where coverage slows the scan up to ~10x (the
+  // million-paren row: 0.40 s plain, 4.6 s covered). Deleting the key is not
+  // enough: Node puts an inherited NODE_V8_COVERAGE back into a child env that
+  // lacks it.
+  //  - with a run of `$` read again from each `$` in it, rather than once
+  //    (dollarRun, which charges the characters it reads): the 500000-`$` row
+  //    for a word, and the one after it for a heredoc tag.
+  const TIMED = [
+    ['a read before 500000 `$` in one', 'cat .env\necho ${ ' + '$'.repeat(500000) + ' ; }'],
+    ['a read before a heredoc tag of 500000 `$` in one', 'cat .env\necho ${ cat <<' + '$'.repeat(500000) + '; }'],
+    ['a read before 95000 nested ones each holding a pending heredoc', 'cat .env\necho ${ ' + '${ :<<E; } '.repeat(95000) + '; }'],
+    ['a read before an unclosed `((` with 1000000 opening parens in one', 'cat .env\necho ${ (( ' + '('.repeat(1000000) + '}'],
+    ['a read before 340000 nested subshells in one', 'cat .env\necho ${ ' + '('.repeat(340000) + 'a' + ') '.repeat(340000) + '}'],
+    ['a read before 170000 unclosed arithmetic commands each opening one', 'cat .env\necho ${ ' + '(( ${ '.repeat(170000) + '}'],
+    ['a read before 31 nested `((` that each end in `) `', 'cat .env\necho ${ ' + '(( ${ '.repeat(31) + ':' + '; } ) '.repeat(31) + '; }'],
+    ['a read before 31 nested `((` that each end in `) `, in double quotes', 'cat .env\necho ${ ' + '(( "${ '.repeat(31) + ':' + '; }" ) '.repeat(31) + '; }'],
+    ['a read before 130000 `((` lines each opening a parameter expansion', 'cat .env\necho ${ \n' + '((#${x\n'.repeat(130000) + '}'.repeat(130000) + ') }'],
+  ];
+  for (const [label, command] of TIMED) {
+    test(`blocks a long input inside the step budget: ${label}`, () => {
+      assertBlocked(runBudgeted(command), label, { code: 'secret-read', tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('the step budget denies once the scan passes it', () => {
+    const command = 'echo ${ (( ${ :; } ) ); }';
+    assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: '1' }), 'budget of 1', { code: 'scan-step-budget', tool: 'Bash', path: '' });
+  });
+
+  // The count's floor on one input, so the meter cannot quietly stop counting
+  // span records: 512 KiB of unclosed `${`, then a read on the next line,
+  // takes 33 steps a byte, about a quarter of them span records, which cost a
+  // step each even with no heredoc tag pending (recordSpan). The
+  // parameter-pairing reading scans a command holding `${` again, which
+  // doubles this input's count, so the floor is set for both readings: at 29 a
+  // byte the budget denies; with the records uncounted the scan takes 25 and
+  // passes. It catches the charge lost on every record, not on about half of
+  // them (in one reading alone, or only at MAX_FUNSUB_DEPTH): that count stays
+  // above the floor. A legitimate saving above about 12 % of this input's
+  // count turns it red until the floor is set again.
+  // No bash runs the read: bash 3.2.57 reports an unexpected EOF, and 5.2.37
+  // and 5.3.20 overflow their stack at the default 8 MiB (exit 139).
+  test('the step budget counts span records: 512 KiB of unclosed `${` passes 29 steps a byte', () => {
+    const command = '${ '.repeat(33) + '${'.repeat(262000) + '\ncat .env';
+    assertBlocked(runBudgeted(command, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: String(29 * command.length) }), 'unclosed 512 KiB', { code: 'scan-step-budget', tool: 'Bash', path: '' });
+  });
+
+  test('the step budget is no cap outside test mode', () => {
+    const env = { ...process.env, GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: '1' };
+    delete env.GSD_TEST_MODE;
+    const r = runHookSeam(HOOK_PATH, [], { input: JSON.stringify(bash('echo ${ (( ${ :; } ) ); }')), env, timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assertAllowed({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'budget of 1 without GSD_TEST_MODE');
+  });
+
+  // The budget's edge (RULESET.TESTS.boundary-coverage). `echo a` holds no
+  // quote, expansion, substitution or heredoc, so its count can be read off
+  // the command: the secret-read scan and the debugger-spawn scan each read
+  // its 6 characters, and the first adds a step per token and one more
+  // (2 + 1), which makes 15. The hook denies once the steps pass the budget,
+  // so a budget equal to the count allows. A change to what the scan charges
+  // moves the count, and these rows with it.
+  const EDGE_COMMAND = 'echo a';
+  const EDGE_STEPS = 2 * EDGE_COMMAND.length + 2 + 1;
+  const budgetOf = (value) => runBudgeted(EDGE_COMMAND, { GSD_TEST_SECRET_READ_GUARD_SCAN_STEPS: value });
+  const assertCapped = (r, label) => assertBlocked(r, label, { code: 'scan-step-budget', tool: 'Bash', path: '' });
+  test(`the step budget denies a ${EDGE_STEPS}-step scan at ${EDGE_STEPS - 1} and allows it at ${EDGE_STEPS} and ${EDGE_STEPS + 1}`, () => {
+    assertCapped(budgetOf(String(EDGE_STEPS - 1)), 'one under the count');
+    assertAllowed(budgetOf(String(EDGE_STEPS)), 'the count');
+    assertAllowed(budgetOf(String(EDGE_STEPS + 1)), 'one over the count');
+  });
+
+  // The budget's parse: a positive decimal integer and nothing else. Any other
+  // value means no cap, never a cap of 0 or of the digits it holds: the seam
+  // can only deny, so a misread value must not turn into one that does.
+  // `7` is under the count, so each row would deny if its value were read as 7.
+  for (const value of ['0', '-7', '+7', '07', '7.5', ' 7', '7 ', '7e0', '0x7', '7n', 'abc', '']) {
+    test(`the step budget is no cap for the value ${JSON.stringify(value)}`, () => {
+      assertCapped(budgetOf('7'), 'the value 7 caps');
+      assertAllowed(budgetOf(value), `budget ${JSON.stringify(value)}`);
+    });
+  }
+  test('property: a positive decimal integer caps the scan at that many steps', () => {
+    const POSITIVE = fc.oneof(fc.integer({ min: 1, max: 3 * EDGE_STEPS }), fc.bigInt({ min: 1n, max: 10n ** 40n })).map(String);
+    fc.assert(fc.property(POSITIVE, (value) => {
+      const r = budgetOf(value);
+      if (BigInt(value) < BigInt(EDGE_STEPS)) assertCapped(r, value);
+      else assertAllowed(r, value);
+    }), PROPERTY_RUNS);
+  });
+  test('property: any value that is not a positive decimal integer is no cap', () => {
+    const CHAR = fc.constantFrom(...'0123456789 +-.,_eExXn\t');
+    const OTHER = fc.array(CHAR, { maxLength: 8 }).map((chars) => chars.join('')).filter((value) => !/^[1-9][0-9]*$/.test(value));
+    fc.assert(fc.property(OTHER, (value) => {
+      assertAllowed(budgetOf(value), JSON.stringify(value));
+    }), PROPERTY_RUNS);
+  });
+
+  // A `((` that does not end in `))` is read again as subshells, and the
+  // heredoc tags its nested substitution left were once pushed again with
+  // them, doubling at every level: 31 levels aborted a 1 GB heap. Each row
+  // runs in a 256 MB heap, around MAX_FUNSUB_DEPTH (32), and inside the step
+  // budget, which counts each tag pushed again: with the tags kept, all three
+  // pass the budget in about 20 ms, before the heap is reached.
+  for (const depth of [31, 32, 33]) {
+    test(`blocks inside a 256 MB heap and the step budget: a read after ${depth} nested \`(( \${ <<E\` that each end in \`) \``, () => {
+      const command = 'echo ${ ' + '(( ${ <<E '.repeat(depth) + '; } ) '.repeat(depth) + '}\ncat .env';
+      const r = runBudgeted(command, { NODE_OPTIONS: '--max-old-space-size=256' });
+      assertBlocked(r, `${depth} levels`, { code: 'secret-read', tool: 'Bash', path: '.env' });
+    });
+  }
+
+  test('property: a read inside one to three function substitutions is denied, whatever opens them', () => {
+    const OPENER = fc.constantFrom('${ ', '${\t', '${\n', '${| ');
+    const PREFIX = fc.constantFrom('', ': ; ', 'echo a | ', 'true && ', 'x=1 ');
+    const LEVEL = fc.record({ opener: OPENER, prefix: PREFIX, quoted: fc.boolean() });
+    fc.assert(fc.property(fc.array(LEVEL, { minLength: 1, maxLength: 3 }), SECRET, (levels, secret) => {
+      let command = `cat ${secret}`;
+      for (const { opener, prefix, quoted } of levels) {
+        const q = quoted ? '"' : '';
+        command = `echo ${q}${opener}${prefix}${command}; }${q}`;
+      }
+      assertBlocked(runHook(bash(command)), command, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
+  });
+
+  test('property: a parameter expansion stays allowed whatever its word holds, and a read on the next line is still denied', () => {
+    const OPERATOR = fc.constantFrom(':-', '-', ':=', ':+', ':?', '#', '##', '%', '%%', '/', '//', '^', ',');
+    const WORD_PART = fc.constantFrom('a', 'b1', ' ', ';', ' ; ', '|', '&', 'x y', '*', '.txt');
+    fc.assert(fc.property(OPERATOR, fc.array(WORD_PART, { maxLength: 6 }), fc.boolean(), SECRET, (op, parts, hold, secret) => {
+      const word = parts.join('') + (hold ? `; cat ${secret}; ` : '');
+      const command = `echo \${x${op}${word}}`;
+      assertAllowed(runHook(bash(command)), command);
+      assertBlocked(runHook(bash(`${command}\ncat ${secret}`)), command, { tool: 'Bash', path: secret });
+    }), PROPERTY_RUNS);
+  });
+
+  test('blocks: a debugger spawn inside one', () => {
+    assertBlocked(runHook(bash('echo ${ claude --agent gsd-debugger -p x; }')), 'debugger', { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+
+  // The bash 5.3 reading overflows the stack on the chain; reading it as text, the
+  // base reading does not, and finds the spawn on the line before it.
+  test('blocks: a debugger spawn before one holding a 20000-deep `$("` chain', () => {
+    const chain = '$("'.repeat(20000) + 'echo' + '")'.repeat(20000);
+    assertBlocked(runHook(bash('claude --agent gsd-debugger -p x\necho ${ ' + chain + ' ; }')), 'debugger before a chain', { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+
+  // The first three hold the name where reading their opener as a function substitution would deny it.
+  const ALLOWS = [
+    ['a parameter expansion whose word holds a read', 'echo ${x:-; cat .env; }'],
+    ['a pattern removal whose pattern holds a read', 'echo ${x# ; cat .env; }'],
+    ['an indirect expansion in double quotes', 'echo "${!x}; cat .env; }"'],
+    ['a quoted heredoc body', "cat <<'E'\n${ cat .env; }\nE"],
+    ['an escaped opener in an unquoted heredoc body', 'cat > /dev/null <<EOF\nexport X=\\${ cat .env; }\nEOF'],
+    ['a simple command after `coproc` in one', 'echo ${ coproc cat x; }'],
+    ['a commit message from a heredoc in one', "git commit -m \"${ cat <<'EOF'\nfix: stop reading .env twice\nEOF\n}\""],
+    ['a shift in an arithmetic command in one', 'echo ${ (( x = 1 << 2 )); echo ".env"; }'],
+    ['array elements naming the file in one', 'echo ${ files=( .env } ); echo "${files[@]}"; }'],
+    ['a heredoc line that starts with the tag but holds no `}` in one', 'x=${ cat <<E\nbody\nEcat .env\nE\n}'],
+  ];
+  for (const [label, command] of ALLOWS) {
+    test(`allows: ${label}`, () => {
+      assertAllowed(runHook(bash(command)), label);
+    });
+    // A scan that throws allows too (the crash policy), so each also proves the scan read past it.
+    test(`blocks: a read on the line after ${label}`, () => {
+      assertBlocked(runHook(bash(command + '\ncat .env')), label, { tool: 'Bash', path: '.env' });
+    });
+  }
+});
+
 describe('gsd-secret-read-guard: sudo/doas value options the wrapper table missed (#5852)', () => {
   // Oracle: sudo(8) documents `-a type, --auth-type=type` and `-c class,
   // --login-class=class`; doas(1) documents `-a style`. Each takes the next
@@ -1744,6 +2399,18 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertBlocked(run(bash(`rg --pre sh KEY ${pq}`)), 'rg --pre runs a command', { tool: 'Bash', path: p });
   });
 
+  // #5518: the scan reads a Bash line more than one way, and the exemption
+  // holds only where the reading that met the path finds the line read-only.
+  // The plain reading pairs `${x:-'}'}` at its first `}`, so it reads `mv a b`
+  // below as quoted text; bash, and the reading that pairs as bash does, run it.
+  test('Bash exemption requires the line read-only under the reading that met the path', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    const pq = absq('.env.production');
+    assertBlocked(run(bash(`cat ${pq}; cat \${x:-'}'}; mv a b; cat "'"`)), 'mv after a misread expansion', { tool: 'Bash', path: p });
+    assertAllowed(run(bash(`cat ${pq}; cat \${x:-'}'}; cat "'"`)), 'the same line without the mv');
+  });
+
   // Row 13.
   test('ref:path never exempt', () => {
     listed('.env.production');
@@ -1827,6 +2494,27 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assert.notEqual(hinted.reason, plain.reason);
     assert.ok(hinted.reason.includes(KEY), 'configured Bash reason names the key');
     assert.ok(!plain.reason.includes(KEY), 'unconfigured reason is unchanged');
+  });
+
+  // The hint says a listed file is readable from Bash by its absolute path.
+  // That is true only of a read-only line: any other is denied whatever path
+  // names the file, so its reason is the unconfigured one, byte for byte. The
+  // last command is read-only to the plain reading and not to the one that
+  // pairs `${x:-'}'}` as bash does, which is the reading that denies it.
+  test('Bash deny reason on a line that is not read-only carries no exemption hint', () => {
+    const pq = absq('.env.production');
+    for (const cmd of [
+      'mv a b; cat .env.production',
+      `mv a b; cat ${pq}`,
+      'mv a b; cat .env',
+      `cat ${pq}; cat \${x:-'}'}; mv a b; cat "'"`,
+    ]) {
+      configure(undefined);
+      const plain = assertBlocked(run(bash(cmd)), `unconfigured: ${cmd}`, { tool: 'Bash' });
+      listed('.env.production');
+      const configured = assertBlocked(run(bash(cmd)), `configured: ${cmd}`, { tool: 'Bash' });
+      assert.equal(configured.reason, plain.reason, cmd);
+    }
   });
 
   test('Read deny reason is unchanged by configured exemptions', () => {
