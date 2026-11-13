@@ -190,8 +190,10 @@ collapsed) apply only where the write changed the document relative to the
 file it replaces, and to the whole document when the file is new; the
 frontmatter block is kept exactly. The write is the host's content as given:
 no sync or preservation pipeline runs. A STATE.md held by another live writer
-makes the write wait for the lock (up to 30 seconds); a lock that cannot be
-taken returns a tool error and writes nothing. An existing `STATE.md` that
+makes the write wait for the lock (up to 30 seconds), and the server answers
+no other request while it waits, since each tool call is handled
+synchronously; a lock that cannot be taken returns a tool error and writes
+nothing. An existing `STATE.md` that
 is not a regular file (a symlink, live or dangling, a FIFO or a device) is
 refused with a tool error and nothing is written, neither the link's target
 nor the link itself, where the raw write used to write through it. Every

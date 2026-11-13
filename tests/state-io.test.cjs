@@ -115,6 +115,8 @@ test('filesystem stateIO: every other destination is written byte-for-byte with 
   t.after(() => cleanup(dir));
   const io = createStateIO({ io: 'filesystem' });
   const crlf = '# Title\r\nline\r\n\r\n\r\n- a\r\ntext\r\n\r\n\r\n';
+  // `state.md` is a different file from STATE.md only on a case-sensitive filesystem; the
+  // match is case-sensitive by design (tests/state-io.platform.test.cjs, src/state-io.cts).
   for (const name of ['PROJECT.md', 'config.json', 'STATE.md.bak', 'state.md', 'ROADMAP.md']) {
     const file = path.join(dir, name);
     io.write(file, crlf);

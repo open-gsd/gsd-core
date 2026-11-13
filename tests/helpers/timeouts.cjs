@@ -419,11 +419,6 @@ const HARNESS_SOURCE = 'local harness through the process seam, 50 spawns per en
 const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.2; win32 not measured';
 
 /**
- * Evidence for every numeric constant in this module, checked by
- * tests/timeout-evidence.test.cjs against tests/helpers/timeout-evidence.cjs.
- * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
- */
-/**
  * One `scripts/run-tests.cjs` invocation over a one-file GSD_TEST_DIR fixture, spawned
  * through the process seam: the runner's incremental tsc build, one node --test chunk
  * and the post-run reports. A heavier class than `PROBE_TIMEOUT_MS` (the build alone is
@@ -443,6 +438,11 @@ const RUN_TESTS_HARNESS_TIMEOUT_MS = 120000;
 const RUN_TESTS_HARNESS_SOURCE = 'local harness through the process seam: tests/raw-state-write-guard.test.cjs, the three runner rows (a one-file GSD_TEST_DIR fixture each), node --test durations';
 const RUN_TESTS_HARNESS_WINDOW = 'run 2026-11-09: linux (WSL2) node v24; win32 and darwin not measured';
 
+/**
+ * Evidence for every numeric constant in this module, checked by
+ * tests/timeout-evidence.test.cjs against tests/helpers/timeout-evidence.cjs.
+ * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
+ */
 const TIMEOUT_EVIDENCE = Object.freeze({
   RUN_TESTS_HARNESS_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 1510, worstPlatform: 'linux', p50Ms: 1283, p99Ms: 1510, samples: { linux: 15 }, unmeasuredPlatforms: ['win32', 'darwin'], unseenSites: 0, source: RUN_TESTS_HARNESS_SOURCE, window: RUN_TESTS_HARNESS_WINDOW },
   PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 12, darwin: 516, linux: 407 }, lanes: { win32: 585, darwin: 195, linux: 567 }, unmeasuredPlatforms: [], unseenSites: 62, unseenSitesTrackedBy: '#6059', source: CI_SOURCE, window: PROBE_CI_WINDOW },

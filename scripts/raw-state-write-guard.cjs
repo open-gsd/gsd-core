@@ -209,7 +209,7 @@ function formatStateWriteReport({ entries, installs = 0, preloadInstalls = 0, to
   const lines = [
     `run-tests: raw STATE.md writes in product code: ${violations.length} ` +
       `(seam writes onto STATE.md: ${seamWrites.length}, of which without the STATE.md lock: ${unlocked}${torn}); ` +
-      `the check loaded in ${preloadInstalls} processes` +
+      `the check loaded in ${preloadInstalls} process${preloadInstalls === 1 ? '' : 'es'}` +
       (installs > preloadInstalls ? ` (and in ${installs - preloadInstalls} more by a direct require)` : ''),
   ];
   const neverLoaded = Number.isInteger(chunksRun) && preloadInstalls < chunksRun;

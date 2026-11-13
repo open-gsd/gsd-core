@@ -463,6 +463,45 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.ok(fs.readFileSync(state).equals(original), 'STATE.md restored to the snapshot bytes exactly');
   });
 
+  // #5120 review (N3): STATE.md is reported as edited only when this migration
+  // wrote it. A writer that applied the same edit first makes the transform a
+  // no-op under the lock, so nothing is written and STATE.md is not listed.
+  test('editedFiles names STATE.md only when the migration wrote it (#5120 review)', (t) => {
+    // The other writer's STATE.md: what this migration itself would leave behind.
+    const twin = setup('m13-state-twin-', ROADMAP);
+    t.after(() => cleanup(twin));
+    const original = '# Project State\n\n**Current Phase:** Phase 2: Bar\n';
+    fs.writeFileSync(path.join(twin, '.planning', 'STATE.md'), original);
+    const twinResult = applyMigration(twin, computeMigrationPlan(twin), { dryRun: false });
+    assert.ok(twinResult.editedFiles.includes('STATE.md'), 'precondition: a migration that writes STATE.md lists it');
+    const migrated = fs.readFileSync(path.join(twin, '.planning', 'STATE.md'), 'utf8');
+
+    const dir = setup('m13-state-noop-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, original);
+    const plan = computeMigrationPlan(dir);
+    // The other writer lands just before this migration takes the STATE.md lock.
+    let injected = false;
+    const realOpen = fs.openSync;
+    const realWrite = fs.writeFileSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
+      if (!injected && String(file) === `${state}.lock`) {
+        injected = true;
+        realWrite.call(fs, state, migrated);
+      }
+      return realOpen.call(this, file, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    const result = applyMigration(dir, plan, { dryRun: false });
+    mock.restoreAll();
+    assert.equal(injected, true, 'precondition: the other writer ran');
+    assert.equal(result.applied, true);
+    assert.equal(result.editedFiles.includes('STATE.md'), false, 'STATE.md is not reported as edited by this migration');
+    assert.equal(fs.readFileSync(state, 'utf8'), migrated, 'the other writer\'s STATE.md is untouched');
+  });
+
   test('rewriteRoadmapLines: identical headings in two milestones stay distinct by line index; heading, checklist and fenced edits', () => {
     const lines = [
       '## v1.0: A', // 0

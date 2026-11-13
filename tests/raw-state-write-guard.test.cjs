@@ -394,7 +394,7 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
     // A sentinel from a direct require of the guard (NEW-1) is counted and shown, never compared.
     const direct = formatStateWriteReport({ entries: [], installs: 2, preloadInstalls: 1, tornLines: 0 }, where);
     assert.equal(direct.failed, true);
-    assert.equal(direct.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0); the check loaded in 1 processes (and in 1 more by a direct require)');
+    assert.equal(direct.lines[0], 'run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: 0, of which without the STATE.md lock: 0); the check loaded in 1 process (and in 1 more by a direct require)');
     assert.match(direct.lines[1], /only 1 process recorded the preload \(1 more installed it by a direct require, which does not vouch for a chunk\)/);
   });
 
@@ -478,6 +478,6 @@ test('passes', () => { fs.writeFileSync(path.join(${JSON.stringify(dir)}, 'STATE
     assert.match(r.stderr, /run-tests: raw STATE\.md writes in product code: 0 \(/);
     // The install sentinel survived the runner end to end: the preload loaded in the chunk
     // process at least (#5120 audit: an empty ledger alone is not evidence the check ran).
-    assert.match(r.stderr, /lock: 0\); the check loaded in [1-9]\d* processes/);
+    assert.match(r.stderr, /lock: 0\); the check loaded in [1-9]\d* process(es)?\b/);
   });
 });

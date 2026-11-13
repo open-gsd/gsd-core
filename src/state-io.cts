@@ -132,6 +132,12 @@ export function createStateIO(
       io: 'filesystem',
       read(filePath: string) { return fs.readFileSync(filePath, 'utf-8'); },
       write(filePath: string, content: string) {
+        // Case-sensitive, like the rest of the STATE.md write path: the engine
+        // only ever names it path.join(planningDir, 'STATE.md'), the drift lint
+        // matches /STATE\.md/ (targetsStatePath, scripts/lint-state-write-path-drift.cjs)
+        // and the test-time guard matches the basename exactly
+        // (scripts/raw-state-write-guard.cjs). On a case-insensitive filesystem
+        // a host spelling it `state.md` reaches the same file without the lock.
         if (path.basename(filePath) === 'STATE.md') {
           writeStateMdThroughSeam(filePath, content);
           return;

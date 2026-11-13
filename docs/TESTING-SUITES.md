@@ -454,6 +454,8 @@ After the last chunk the runner prints one line, on every run:
 run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: N, of which without the STATE.md lock: M); the check loaded in P processes
 ```
 
+(`P process` when P is 1.)
+
 The zero is never printed alone (ADR-3408 Decision 5): the seam-write count
 and the count of seam writes made without the STATE.md lock stand beside it,
 and so does the count of ledger lines a killed process left unreadable, when

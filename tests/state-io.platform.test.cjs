@@ -7,7 +7,7 @@
  * live here; tests/state-io.test.cjs stays signal-free.
  *
  * #5120 review (M1): the filesystem stateIO adapter's STATE.md branch is documented
- * (src/state-io.cts header, docs/how-to/connect-gsd-mcp-server.md) to refuse a
+ * (the src/state-io.cts header and the connect-gsd-mcp-server how-to) to refuse a
  * STATE.md that is a symlink, a FIFO or a device with a tool error. The write seam
  * it calls does not: its atomic path replaces whatever sits at the target by rename,
  * so a symlinked STATE.md was silently replaced by a regular file while the link's
@@ -18,6 +18,8 @@
  * Rows and why each lives here:
  * - the symlink rows: `fs.symlinkSync` needs privileges on Windows (process-platform).
  *   Without them the row records a skip and asserts the platform is win32.
+ * - the case row: the STATE.md match is case-sensitive, and whether `state.md` is a different
+ *   file from STATE.md depends on the filesystem (case-sensitivity; macOS and Windows fold case).
  * - the FIFO row: there is no FIFO on Windows; `mkfifo` is a child process
  *   (process-platform, raw-child-process). On win32 it skips with a counted assertion
  *   that the platform is win32, so it can never pass on POSIX with zero assertions.
@@ -112,7 +114,7 @@ test('filesystem stateIO: a FIFO STATE.md is refused without blocking and stays 
   assert.equal(fs.existsSync(`${file}.lock`), false, 'the lock is released');
 });
 
-// The how-to (docs/how-to/connect-gsd-mcp-server.md) promises a tool error, not a
+// The connect-gsd-mcp-server how-to promises a tool error, not a
 // protocol error and not ok:true, for a symlinked STATE.md written through MCP.
 test('tools/call gsd_write_state: a symlinked STATE.md returns a tool error and the link target keeps its bytes (#5120 review M1)', (t) => {
   const { handleMessage } = require('../gsd-core/bin/lib/mcp-server.cjs');
@@ -133,4 +135,25 @@ test('tools/call gsd_write_state: a symlinked STATE.md returns a tool error and 
   assert.match(res.result.content[0].text, /^Tool error: ENXIO: .*STATE\.md is not a regular file \(it is a symlink\)/);
   assert.equal(kindOf(file), 'symlink', 'STATE.md is still the symlink');
   assert.equal(fs.readFileSync(target, 'utf8'), 'shared\n', 'the shared file keeps its bytes');
+});
+
+// #5120 review (N4): the STATE.md match is case-sensitive, like the rest of the
+// STATE.md write path (the engine only names it path.join(planningDir, 'STATE.md');
+// targetsStatePath in scripts/lint-state-write-path-drift.cjs matches /STATE\.md/;
+// scripts/raw-state-write-guard.cjs matches the basename exactly). Another spelling
+// is written as given with no lock. It is a different file only on a
+// case-sensitive filesystem; on a case-insensitive one it reaches STATE.md itself,
+// unlocked, which src/state-io.cts states beside the match.
+test('filesystem stateIO: the STATE.md match is case-sensitive (#5120 review)', (t) => {
+  const dir = createTempDir('state-io-case-');
+  t.after(() => cleanup(dir));
+  const io = createStateIO({ io: 'filesystem' });
+  const crlf = '# Title\r\nline\r\n';
+  for (const name of ['state.md', 'State.md', 'STATE.MD']) {
+    const sub = fs.mkdtempSync(path.join(dir, 'case-'));
+    const file = path.join(sub, name);
+    io.write(file, crlf);
+    assert.equal(fs.readFileSync(file, 'utf8'), crlf, `${name} is written exactly as given, not through the seam`);
+    assert.deepEqual(fs.readdirSync(sub), [name], `${name} takes no lock`);
+  }
 });

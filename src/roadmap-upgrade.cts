@@ -2473,8 +2473,12 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         // is not told apart from this migration's own write; the gap is a few
         // microseconds and the read is the only post-write view available
         // without re-deriving the pipeline (ADR-3408 section 8.3).
-        try { stateMdWrittenContent = fs.readFileSync(stateMdPath, 'utf8'); } catch { stateMdWrittenContent = null; }
-        editedFiles.push('STATE.md');
+        // #5120 review: read back and listed only when this migration wrote it; a
+        // transform that was a no-op under the lock wrote nothing.
+        if (stateWritten) {
+          try { stateMdWrittenContent = fs.readFileSync(stateMdPath, 'utf8'); } catch { stateMdWrittenContent = null; }
+          editedFiles.push('STATE.md');
+        }
       }
     }
 
