@@ -694,6 +694,25 @@ on purpose. Without the fixture, the result depends on which runtimes the develo
 If the code under test also searches upward for `.planning/config.json`, start it inside a
 `createHermeticRoot()` directory as well (#4613).
 
+#### The lint rule that enforces it
+
+`local/no-adhoc-env-isolation` (`eslint-rules/no-adhoc-env-isolation.cjs`) fails two hand-written
+copies under `tests/`:
+
+- a split of `process.env.PATH`, or any `X.split(path.delimiter).filter(...)`, which is the copy
+  `isolatedPath()` replaces;
+- an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` on any
+  object other than `process.env`, which is the copy `isolatedEnv()` replaces.
+
+Assigning `process.env.HOME` in-process is not flagged; that case uses `sandboxHome()`, above.
+`tests/helpers/isolated-env.cjs` is the one exempt file.
+
+`eslint-rules/no-adhoc-env-isolation.allowlist.json` lists the files that still carry a copy.
+The waves of #4635 drain it in sorted order and then delete it. It only ratchets down: a listed
+file with no copy left reports its own entry as stale, so delete the line when you migrate a
+file. A new copy in a file the list does not name fails lint. Never add a file to the list. Build
+the env with the helper instead.
+
 ### Test Structure
 
 ```javascript
