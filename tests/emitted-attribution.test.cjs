@@ -2491,6 +2491,9 @@ test('a base-branch ref on an unrelated history keeps the pin and reports the fa
   assert.ok(messages[1].includes(b0), `the kept-floor line must name the pin's merge-base ${b0}: ${messages[1]}`);
   assert.match(messages[1], /origin\/next/);
   assert.match(messages[1], /failed/);
+  // The failing command is the relatedness check itself, not a later step of the walk.
+  assert.ok(messages[1].includes(`merge-base ${orphan} HEAD`),
+    `the failed line must name the relatedness check \`merge-base ${orphan} HEAD\`: ${messages[1]}`);
 });
 
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
