@@ -1588,11 +1588,21 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, []), null);
   });
 
+  /** Commit with explicit author and committer unix times (a rewrite keeps the author time and moves the committer time). */
+  const commitDated = (repo, rel, message, { author, committer = author }, content = `${rel}\n`) => {
+    write(repo.dir, rel, content);
+    repo.git('add', rel);
+    gitOrThrow(['commit', '-m', message], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, GIT_AUTHOR_DATE: `@${author} +0000`, GIT_COMMITTER_DATE: `@${committer} +0000` } });
+    return repo.git('rev-parse', 'HEAD');
+  };
+  const T = 1_800_000_000;
+
   test('[negative] a history larger than the default runner buffer still answers', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
-    const a = commit(repo, 'a.txt', 'feat(03-01): a');
-    const b = commit(repo, 'b.txt', 'test(03-01): b');
+    // The originals are older than every filler commit, so the date bound keeps the whole filler in the listing.
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: 1_699_999_990 });
+    const b = commitDated(repo, 'b.txt', 'test(03-01): b', { author: 1_699_999_991 });
     repo.git('reset', '--hard', base);
     // 9000 commits of about 180 bytes of log record each are over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
     const filler = 'x'.repeat(100);
@@ -1602,16 +1612,46 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from the whole history is no');
   });
 
-  test('[happy] only the whole-history listing asks the runner for a larger buffer', () => {
+  test('[happy] the HEAD listing is bounded by date and has no output cap of its own', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
-    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     const seen = [];
-    subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push(opts); return execGit(args, opts); });
+    subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push({ args, opts }); return execGit(args, opts); });
     assert.equal(seen.length, 2);
-    assert.equal('maxBuffer' in seen[0], false, 'the id lookup keeps the default cap');
-    assert.ok(Number.isFinite(seen[1].maxBuffer) && seen[1].maxBuffer > 1024 * 1024, 'the listing has a finite cap over the default');
+    assert.equal('maxBuffer' in seen[0].opts, false, 'the id lookup keeps the default cap');
+    assert.ok(seen[1].args.includes(`--max-age=${T}`), 'the listing starts at the oldest id');
+    assert.equal(seen[1].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
+  });
+
+  test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are', () => {
+    for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
+      const repo = makeRepo();
+      const base = repo.git('rev-parse', 'HEAD');
+      const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+      repo.git('reset', '--hard', base);
+      commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T + offset }, 'twin\n');
+      assert.equal(subjectsOccurOnHead(repo.dir, [a]), expected, `twin at limit${offset}`);
+    }
+  });
+
+  test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 100, committer: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 100, committer: T - 50 }, 'rebased on a slow clock\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  });
+
+  test('[negative] an amend keeps the author time and moves the committer time forward: still counts', () => {
+    const repo = makeRepo();
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    gitOrThrow(['commit', '--amend', '--no-edit', '-m', 'feat(03-01): a'], { cwd: repo.dir, env: { ...process.env, ...IDENTITY, GIT_COMMITTER_DATE: `@${T + 3600} +0000` } });
+    assert.notEqual(repo.git('rev-parse', 'HEAD'), a, 'the amend made a new commit');
+    assert.equal(repo.git('log', '-1', '--format=%at%x20%ct'), `${T} ${T + 3600}`);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
   });
 
   test('[negative] a whole-history listing git cannot deliver is no answer, never a "no"', () => {

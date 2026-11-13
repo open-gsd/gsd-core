@@ -83,6 +83,8 @@ export interface ScopeCommit {
   subject: string;
   body?: string;
   files?: string[];
+  /** The earlier of the commit's committer and author time (unix seconds); absent when the listing did not carry them. */
+  time?: number;
 }
 
 export type ScopeSource = 'task-commits' | 'plan-subjects' | 'quick-subjects' | 'phase-range' | 'none';
@@ -133,8 +135,6 @@ export const SCOPE_EXCLUSION_PATHSPECS: readonly string[] = Object.freeze([
 
 /** 41 chars per sha; 400 of them stay well under the 28K Windows-safe argv chunk. */
 const SHA_CHUNK = 400;
-/** Stdout cap of the one whole-history listing of `subjectsOccurOnHead`; past it git cannot answer (`null`), never a "no". */
-const HISTORY_LISTING_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_COMMITS = 200;
 const MAX_PATHSPECS = 20;
 const MAX_SUB_REPOS = 64;
@@ -449,8 +449,10 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
     const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
-    // The listing is the whole history after a squash: it outgrows the runner's 1 MiB default, so it gets its own cap.
-    const onHead = new Set(parseLog(git(['log', logFormat(false), 'HEAD', '--not', ...ids, '--'], undefined, HISTORY_LISTING_MAX_BYTES), false).map((c) => c.subject));
+    // A rewrite keeps the author time and never commits before it, so no kept commit is older than the oldest id.
+    // That date bounds the listing (the window, not a byte cap, is its bound); a commit without times reads as time 0.
+    const since = named.length === 0 ? 0 : Math.min(...named.map((c) => c.time ?? 0));
+    const onHead = new Set(parseLog(git(['log', logFormat(false), `--max-age=${since}`, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
@@ -872,9 +874,12 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
   scope.missingOnDisk = missing;
 }
 
-/** `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. */
+/**
+ * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup; `%ct` and `%at`
+ * close each record so a caller can bound a later listing by date.
+ */
 function logFormat(withBody: boolean): string {
-  return withBody ? '--format=%H%x1f%P%x1f%s%x1f%b%x1e' : '--format=%H%x1f%P%x1f%s%x1e';
+  return withBody ? '--format=%H%x1f%P%x1f%s%x1f%b%x1f%ct%x1f%at%x1e' : '--format=%H%x1f%P%x1f%s%x1f%ct%x1f%at%x1e';
 }
 
 /** Parent shas by commit sha, as read from the logs that listed the commits. */
@@ -885,10 +890,13 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): Scope
   for (const record of out.split('\x1e')) {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
-    const [sha, parents, subject, body] = trimmed.split('\x1f');
+    const fields = trimmed.split('\x1f');
+    const [sha, parents, subject] = fields;
     if (!isFullSha(sha)) continue;
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
-    if (withBody) commit.body = (body ?? '').trim();
+    if (withBody) commit.body = (fields[3] ?? '').trim();
+    const times = fields.slice(withBody ? 4 : 3).map((t) => (/^[0-9]+$/.test(t.trim()) ? Number(t) : NaN));
+    if (times.length === 2 && times.every(Number.isFinite)) commit.time = Math.min(...times);
     commits.push(commit);
     parentsOut?.set(sha, (parents ?? '').split(' ').filter(Boolean));
   }
