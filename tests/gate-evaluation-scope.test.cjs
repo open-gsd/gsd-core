@@ -251,10 +251,10 @@ function gitReporting(version) {
   return { runner, calls };
 }
 
-/** Wrap a runner: `onCall(callNumber, args, run)` answers each call (`run()` is the wrapped runner's answer). */
+/** Wrap a runner: `onCall(callNumber, args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
 function intercept(runner, onCall) {
   let call = 0;
-  return (args, opts) => onCall(++call, args, () => runner(args, opts));
+  return (args, opts) => onCall(++call, args, () => runner(args, opts), opts);
 }
 
 /**
@@ -1624,8 +1624,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     const seen = [];
-    subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push({ args, opts }); return execGit(args, opts); });
-    // (the recorder keeps the options too, so it stays inline)
+    subjectsOccurOnHead(repo.dir, [a], intercept(execGit, (call, args, run, opts) => { seen.push({ args, opts }); return run(); }));
     assert.equal(seen.length, 4);
     assert.equal('maxBuffer' in seen[0].opts || 'maxBuffer' in seen[1].opts, false, 'the id lookups keep the default cap');
     assert.ok(seen[3].args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
