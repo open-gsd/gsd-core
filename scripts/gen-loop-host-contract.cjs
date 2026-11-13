@@ -43,7 +43,9 @@ const STEP_WORKFLOWS = [
     // #5118: execute:post's step AND gate dispatch (code_review_gate with
     // its TDD escalation) lives in the ONE shared verification step that
     // execute-phase includes (and verify-work includes too) — no per-caller copy.
+    // #5848: execute:pre's whole dispatch lives in its step file (host byte ceiling, #1168).
     auxiliaryHosts: [
+      { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] },
       { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['step', 'gate'] },
     ],
   },

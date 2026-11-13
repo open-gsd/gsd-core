@@ -98,6 +98,14 @@ function makeValidWorkflowFiles() {
       ['SUMMARY.md'], ['PLAN.md'],
       'gsd-executor gsd-verifier',
     ),
+    // #5848: execute:pre's dispatch lives in its step file.
+    'execute-phase/steps/pre-execute-gate-hooks.md': [
+      'EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)',
+      'For each active entry where `kind == "contribution"`: inject.',
+      'For each active entry where `kind == "step"`: dispatch.',
+      'For each active entry where `kind == "gate"`: evaluate.',
+      '',
+    ].join('\n'),
     // #5118: the shared verification step hosts execute:post step/gate dispatch.
     'execute-phase/steps/verify-phase-goal.md': [
       'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
@@ -963,7 +971,7 @@ describe('--check full-content comparison (FIX 4)', () => {
 
 const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
 const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
-const { scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
+const { scanWiredPoints, scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
 
 describe('declared loop points are dispatched (#5848)', () => {
   // Acceptance criterion (#5848): every declared point of a workflow has a dispatch site. The
@@ -973,14 +981,21 @@ describe('declared loop points are dispatched (#5848)', () => {
     assert.doesNotThrow(() => buildContract(WORKFLOWS_ROOT));
   });
 
-  test('execute:pre is rendered before the first wave and dispatches contribution, step and gate', () => {
+  test('execute:pre is handed off before the first wave and before STATE.md records the phase start', () => {
     const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
-    const preIdx = text.indexOf('EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre');
+    const handoffIdx = text.indexOf('execute-phase/steps/pre-execute-gate-hooks.md');
     const wavePreIdx = text.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
-    assert.ok(preIdx !== -1, 'execute:pre call site must exist');
-    assert.ok(preIdx < wavePreIdx, 'execute:pre must be rendered before the first wave dispatch site');
+    assert.ok(handoffIdx !== -1, 'execute:pre hand-off to its step file must exist');
+    assert.ok(handoffIdx < wavePreIdx, 'execute:pre must be handed off before the first wave dispatch site');
     const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name');
-    assert.ok(preIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
+    assert.ok(handoffIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
+  });
+
+  test('the execute:pre auxiliary host renders the point and dispatches contribution, step and gate', () => {
+    const aux = STEP_WORKFLOWS.find((w) => w.step === 'execute').auxiliaryHosts.find((h) => h.point === 'execute:pre');
+    assert.deepEqual(aux, { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] });
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, aux.file), 'utf8');
+    assert.ok(scanWiredPoints(text).has('execute:pre'), 'step file must render execute:pre');
     const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
     assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
   });
@@ -1020,6 +1035,7 @@ describe('declared loop points are dispatched (#5848)', () => {
       ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
       ['execute:wave:pre', 'execute:wave:post', 'execute:post'],
     );
+    delete files['execute-phase/steps/pre-execute-gate-hooks.md'];
     const tmpDir = makeTempWorkflowsDir(files);
     try {
       assert.throws(

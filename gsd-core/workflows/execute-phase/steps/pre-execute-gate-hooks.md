@@ -1,6 +1,19 @@
-# Execute:pre Gate Hook Evaluation (execute:pre)
+# Execute:pre Capability Dispatch (execute:pre)
 
-Detail for the `kind == "gate"` dispatch at the execute:pre hook point, extracted from the host's `discover_and_group_plans` step (#5848 — the host file carries a frozen pre-phase-6 byte ceiling, #1168; evaluation detail lives here). Mirrors `wave-post-gate-hooks.md`; the difference is what a block stops: here it stops the whole phase before any plan is dispatched and before STATE.md records the phase start.
+The whole execute:pre dispatch, extracted from the host's `discover_and_group_plans` step (#5848; the host file carries a frozen pre-phase-6 byte ceiling, #1168, so dispatch lives here). The host reaches this step once, after plan discovery and before STATE.md records the phase start. For gates it mirrors `wave-post-gate-hooks.md`. The difference is what a block stops: here it stops the whole phase before any plan is dispatched and before STATE.md records the phase start.
+
+```bash
+# same shell as the host step: gsd_run is already defined by its preamble
+EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)
+```
+
+Read `activeHooks` in-context. When it is empty, return to the host step silently.
+
+**Contribution dispatch:** inject every `kind == "contribution"` fragment per @gsd-core/references/loop-hook-dispatch.md (skip when none).
+
+**Step dispatch:** dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md. A step never blocks. ⚠ Validate `ref.command` in-context before any shell use.
+
+## Gate evaluation
 
 ⚠ **Validate `check` before shell use** (third-party manifest input; wherever `${hook.check.query}` appears, write the dot-normalized query, each `.` as `-`, and validate and pass that same value) — `gsd-core/references/loop-hook-dispatch.md` § `gate`.
 
