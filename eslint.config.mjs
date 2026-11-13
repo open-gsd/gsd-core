@@ -45,8 +45,10 @@ import noVerificationStatusLiteral from './eslint-rules/no-verification-status-l
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
 import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
 import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
+import noAdhocEnvIsolation from './eslint-rules/no-adhoc-env-isolation.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
+const adhocEnvIsolationAllowlist = require('./eslint-rules/no-adhoc-env-isolation.allowlist.json');
 
 const localPlugin = {
   rules: {
@@ -84,6 +86,7 @@ const localPlugin = {
     'no-runtime-name-literal': noRuntimeNameLiteral,
     'require-read-only-git-env': requireReadOnlyGitEnv,
     'named-args-spec-from-registry': namedArgsSpecFromRegistry,
+    'no-adhoc-env-isolation': noAdhocEnvIsolation,
   },
 };
 
@@ -824,6 +827,23 @@ export default tseslint.config(
       // `no-unbounded-spawn`, the allowlist is seeded empty and stays empty — this
       // epic migrated every call site, so the rule runs with no exemption surface.
       'local/no-unconfined-path-join': ['error', { allowlist: unconfinedPathJoinAllowlist }],
+    },
+  },
+
+  // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635 Phase 3) ─────────
+  // Its own block so the one exempt file can be excluded by exact path:
+  // tests/helpers/isolated-env.cjs IS the implementation the rule points to. The
+  // allowlist holds the files that still carry a hand-written copy; Phases 4-7
+  // drain it in sorted order and Phase 8 deletes it. A listed file with no copy
+  // left reports its own entry as stale, so the list only ratchets down.
+  {
+    files: ['tests/**/*.cjs'],
+    ignores: ['tests/helpers/isolated-env.cjs'],
+    plugins: {
+      local: localPlugin,
+    },
+    rules: {
+      'local/no-adhoc-env-isolation': ['error', { allowlist: adhocEnvIsolationAllowlist }],
     },
   },
 

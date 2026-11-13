@@ -180,6 +180,7 @@ module.exports = {
   "tests/model-resolver.test.cjs",
   "tests/mutation-workflow-base-ref.test.cjs",
   "tests/new-milestone-clear-phases.test.cjs",
+  "tests/no-adhoc-env-isolation.rule.test.cjs",
   "tests/no-bare-npm-exec.rule.test.cjs",
   "tests/no-exact-case-env-access.rule.test.cjs",
   "tests/no-path-literal-in-assert.rule.test.cjs",
