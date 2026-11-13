@@ -434,9 +434,15 @@ function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
     if (lo < chain.length) newest = chain[lo];
     else if (chain.length === 0) newest = tip;
     else {
-      // `rev-list --parents -n 1 <sha>` prints the sha, then its parents; a root prints only itself.
+      // The first parent comes from the raw commit object, whose header (up to the first blank
+      // line) lists `parent <sha>` lines in order. `rev-list --parents` would honour a shallow
+      // clone's grafts and call the shallow boundary a root; the raw header names the real
+      // parent, and if that object is absent the ancestry check below fails and says so.
       const oldest = chain[chain.length - 1];
-      const [, firstParent] = git(['rev-list', '--parents', '-n', '1', oldest], { cwd }).trim().split(/\s+/);
+      const raw = git(['cat-file', 'commit', oldest], { cwd });
+      const headerEnd = raw.indexOf('\n\n');
+      const parentLine = /^parent ([0-9a-f]{40})$/m.exec(headerEnd === -1 ? raw : raw.slice(0, headerEnd));
+      const firstParent = parentLine && parentLine[1];
       if (!firstParent) {
         // The chain is rooted outside the floor's history and HEAD contains none of it: no git
         // command failed, so say what happened.
