@@ -2625,6 +2625,100 @@ test('a shallow boundary is not mistaken for a root: the real first parent keeps
   assert.equal(messages.length, 1, `only the resolved-base line is expected: ${messages.join(' | ')}`);
 });
 
+// Final re-review (3b73800e0) Major 1: a shallow boundary whose real first parent is PRESENT
+// but not in HEAD. `next` is B0 <- P <- B1, then T = commit(parents B1, B0); the merge ref is
+// merge(B0 <- PR) and a branch x points at P. A --depth 2 clone of all branches fetches P
+// through x but grafts B1 (its parent is cut), so nothing listed above the floor B0 is in HEAD
+// and B1's raw first parent is P, which descends from B0 but HEAD lacks. The single advance
+// postcondition (the chosen commit must be in HEAD) keeps the floor and says why.
+test('a shallow boundary whose real parent HEAD lacks keeps the pin: an advance must land in HEAD', (t) => {
+  const work = createTempDir('gsd-shallow-parent-outside-head-');
+  t.after(() => cleanup(work));
+  const src = path.join(work, 'src');
+  fs.mkdirSync(src);
+  const commit = (file, body, message) => {
+    fs.writeFileSync(path.join(src, file), body);
+    gitFixture(src, ['add', file]);
+    gitFixture(src, ['commit', '-q', '-m', message]);
+    return gitFixture(src, ['rev-parse', 'HEAD']);
+  };
+  gitFixture(src, ['init', '-q', '-b', 'next']);
+  const b0 = commit('a.txt', 'b0\n', 'B0: the pin');
+  gitFixture(src, ['checkout', '-q', '-b', 'pr']);
+  commit('p.txt', 'p\n', 'PR: the PR');
+  gitFixture(src, ['checkout', '-q', '--detach', b0]);
+  gitFixture(src, ['merge', '-q', '--no-ff', '--no-edit', 'pr']);
+  gitFixture(src, ['branch', '-q', 'mergeref']);
+  gitFixture(src, ['checkout', '-q', 'next']);
+  const pSha = commit('a.txt', 'P\n', 'P: lands after the merge ref was built');
+  gitFixture(src, ['branch', '-q', 'x', pSha]);
+  const b1 = commit('a.txt', 'b1\n', 'B1');
+  const tip = gitFixture(src, ['commit-tree', `${b1}^{tree}`, '-p', b1, '-p', b0, '-m', 'T: next, joined to B0 again']);
+  gitFixture(src, ['update-ref', 'refs/heads/next', tip]);
+
+  const clone = path.join(work, 'clone');
+  gitFixture(work, ['clone', '-q', '--depth', '2', '--no-single-branch', `file://${src}`, clone]);
+  gitFixture(clone, ['checkout', '-q', '--detach', 'refs/remotes/origin/mergeref']);
+  assert.equal(gitFixture(clone, ['rev-list', '--parents', '-n', '1', b1]), b1, 'fixture: B1 must be a shallow boundary');
+  gitFixture(clone, ['cat-file', '-e', pSha]); // fixture: P is present (fetched through x)
+  assert.throws(() => gitFixture(clone, ['merge-base', '--is-ancestor', pSha, 'HEAD']),
+    (err) => err.status === 1, 'fixture: HEAD must not contain P');
+
+  const messages = [];
+  const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' },
+    { cwd: clone, diagnostic: (m) => messages.push(m) });
+  assert.equal(base.sha, b0, `the pin B0 must be kept, never P ${pSha}, which HEAD lacks`);
+  assert.equal(messages.length, 2, `the resolved-base line plus exactly one kept-floor line: ${messages.join(' | ')}`);
+  assert.ok(messages[1].includes(pSha), `the kept-floor line must name P ${pSha}: ${messages[1]}`);
+  assert.match(messages[1], /is not in HEAD/);
+  assert.match(messages[1], /shallow/);
+});
+
+// A rooted chain (as the row above it) whose root R1 carries a decoy `parent <PR tip>` that
+// git does not treat as a parent: in the commit MESSAGE, or as a stray header after
+// `committer` (written with hash-object --literally). git reads parents only from the lines
+// directly after `tree`, so R1 is a root and the floor is kept with the rooted-chain line.
+for (const decoy of ['in its message', 'as a header after committer']) {
+  test(`a root with a decoy parent line ${decoy} is still a root: the pin is kept`, (t) => {
+    const root = createTempDir('gsd-decoy-parent-root-');
+    t.after(() => cleanup(root));
+    const commit = (file, body, message) => {
+      fs.writeFileSync(path.join(root, file), body);
+      gitFixture(root, ['add', file]);
+      gitFixture(root, ['commit', '-q', '-m', message]);
+      return gitFixture(root, ['rev-parse', 'HEAD']);
+    };
+    gitFixture(root, ['init', '-q', '-b', 'other']);
+    commit('c.txt', 'r2\n', 'R2: a root');
+    const c1 = commit('c.txt', 'c1\n', 'C1: the pin');
+    const prTip = commit('p.txt', 'p\n', 'PR on C1');
+    const tree = gitFixture(root, ['rev-parse', `${c1}^{tree}`]);
+    let r1;
+    if (decoy === 'in its message') {
+      r1 = gitFixture(root, ['commit-tree', tree, '-m', 'R1: next\'s first-parent root', '-m', `parent ${prTip}`]);
+    } else {
+      const objectFile = path.join(root, '.git', 'r1-object');
+      fs.writeFileSync(objectFile, `tree ${tree}\nauthor t <t@example.invalid> 1700000000 +0000\n` +
+        `committer t <t@example.invalid> 1700000000 +0000\nparent ${prTip}\n\nR1: a stray parent header\n`);
+      r1 = gitFixture(root, ['hash-object', '-t', 'commit', '-w', '--literally', objectFile]);
+    }
+    assert.equal(gitFixture(root, ['rev-list', '--parents', '-n', '1', r1]), r1, 'fixture: git must read R1 as a root');
+    const a1 = gitFixture(root, ['commit-tree', tree, '-p', r1, '-m', 'A1']);
+    const j = gitFixture(root, ['commit-tree', tree, '-p', a1, '-p', c1, '-m', 'J: next merges the C1 line']);
+    const tip = gitFixture(root, ['commit-tree', tree, '-p', j, '-m', 'B: next']);
+    gitFixture(root, ['checkout', '-q', '--detach', prTip]);
+    gitFixture(root, ['update-ref', 'refs/remotes/origin/next', tip]);
+
+    const messages = [];
+    const base = resolveAttributionBase({ GSD_EMITTED_BASE: c1, GITHUB_BASE_REF: 'next' },
+      { cwd: root, diagnostic: (m) => messages.push(m) });
+    assert.equal(base.sha, c1, `the pin C1 must be kept, never the PR tip ${prTip}`);
+    assert.equal(messages.length, 2, `the resolved-base line plus exactly one kept-floor line: ${messages.join(' | ')}`);
+    assert.match(messages[1], /no origin\/next first-parent commit is in HEAD/);
+    assert.ok(messages[1].includes(r1), `the kept-floor line must name the root R1 ${r1}: ${messages[1]}`);
+  });
+}
+
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
   const { root, b2 } = makeStalePinMergeRefRepo(t);
   const messages = [];
