@@ -442,6 +442,27 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released');
   });
 
+  // #5120 review (m2): the STATE.md snapshot is held as bytes, not decoded text,
+  // so a byte sequence that is not valid UTF-8 comes back unchanged.
+  test('the rollback restores a STATE.md holding invalid UTF-8 byte for byte (#5120 review)', (t) => {
+    const dir = setup('m13-state-bytes-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    const original = Buffer.concat([
+      Buffer.from('# Project State\n\n**Current Phase:** Phase 2: Bar\n\nLegacy note: '),
+      Buffer.from([0xff, 0xfe, 0x80]),
+      Buffer.from('\n'),
+    ]);
+    fs.writeFileSync(state, original);
+    assert.notDeepEqual(Buffer.from(original.toString('utf8'), 'utf8'), original, 'precondition: the bytes do not survive a UTF-8 round-trip');
+    const plan = computeMigrationPlan(dir);
+    assert.ok(plan.crossRefEdits.some((edit) => edit.file === 'STATE.md'), 'precondition: STATE.md has planned edits');
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: config\.json cannot be updated/);
+    assert.ok(fs.readFileSync(state).equals(original), 'STATE.md restored to the snapshot bytes exactly');
+  });
+
   test('rewriteRoadmapLines: identical headings in two milestones stay distinct by line index; heading, checklist and fenced edits', () => {
     const lines = [
       '## v1.0: A', // 0

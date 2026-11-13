@@ -2332,7 +2332,9 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // rewriting it, then undo precisely those on failure — correct whether
   // `.planning/` is git-tracked or ignored.
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
-  const fileBackups = new Map<string, { existed: boolean; content: string }>();
+  // #5120 review: snapshots are held as bytes, so a restore puts back exactly the
+  // bytes the file had, including a sequence that is not valid UTF-8.
+  const fileBackups = new Map<string, { existed: boolean; content: Buffer }>();
   const stateMdPath = path.join(pDir, 'STATE.md');
   // #5120: the STATE.md content this migration wrote, read back after the write,
   // so the rollback restores STATE.md only while it still holds that content.
@@ -2340,9 +2342,9 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   const snapshotFile = (filePath: string): void => {
     if (fileBackups.has(filePath)) return;
     try {
-      fileBackups.set(filePath, { existed: true, content: fs.readFileSync(filePath, 'utf8') });
+      fileBackups.set(filePath, { existed: true, content: fs.readFileSync(filePath) });
     } catch {
-      fileBackups.set(filePath, { existed: false, content: '' });
+      fileBackups.set(filePath, { existed: false, content: Buffer.alloc(0) });
     }
   };
 
@@ -2403,7 +2405,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
               );
             }
             if (!fileBackups.has(originalPath)) {
-              fileBackups.set(originalPath, { existed: true, content: rewrite.from });
+              fileBackups.set(originalPath, { existed: true, content: Buffer.from(rewrite.from, 'utf8') });
             }
             fs.writeFileSync(currentPath, rewrite.to, 'utf8');
             editedFiles.push(path.join('phases', phaseEntry.newDir, rewrite.finalName));
@@ -2550,10 +2552,10 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
               stateLeftAsFound = true;
               return;
             }
-            platformRestoreFileSync(stateMdPath, Buffer.from(backup.content, 'utf8'));
+            platformRestoreFileSync(stateMdPath, backup.content);
           });
         }
-        else if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
+        else if (backup.existed) fs.writeFileSync(filePath, backup.content);
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       } catch {
         // Best-effort, but named: the STATE.md lock wait can time out, and a
