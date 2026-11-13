@@ -148,7 +148,7 @@ describe('execute-mvp-tdd.md — load condition decoupled from MVP (#4011)', () 
 
 describe('#5106: test-file conventions are one definition', () => {
   const { isBehaviorAddingTaskContent } = require('../gsd-core/bin/lib/task-command-router.cjs');
-  const { TEST_FILE_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+  const { TEST_FILE_GLOBS, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
   const task = (...files) => `<task tdd="true"><behavior>It does the thing</behavior><files>\n${files.map(f => `- ${f}`).join('\n')}\n</files></task>`;
@@ -178,11 +178,55 @@ describe('#5106: test-file conventions are one definition', () => {
     const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
     assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
       'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
-    // And every entry means the same thing to the router: a path built from the spec is a test file.
-    for (const spec of TEST_FILE_PATHSPECS) {
-      const sample = spec.endsWith('/') ? `${spec}x.js` : spec.replace(/\*/g, 'sample');
-      assert.equal(isTestFilePath(sample), true, `${spec} (as ${sample}) must be recognised as a test file`);
+    // The reference doc's "Create first test file" list names every glob of the owner list
+    // (a directory glob as `name/`). Read the list alone: other paragraphs mention `tests/` too.
+    const ref = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
+    const listStart = ref.indexOf('**5. Create first test file:**');
+    const listEnd = ref.indexOf('**Cost of the broad pathspec', listStart);
+    assert.ok(listStart >= 0 && listEnd > listStart,
+      'references/tdd.md has no "Create first test file" list');
+    const list = ref.slice(listStart, listEnd);
+    // A list names a glob only before a note: ` — ` (English) or `（…）` (zh-CN).
+    const namedIn = (lines) => new Set(lines.flatMap((l) => {
+      const head = l.split(' — ')[0].replace(/（[^）]*）/g, '');
+      return [...head.matchAll(/`([^`]{1,80})`/g)].map(m => m[1]);
+    }));
+    const documentedName = (glob) => (glob.endsWith('/**') ? glob.slice(0, -2) : glob);
+    const named = namedIn(list.split(/\r?\n/).filter(l => l.startsWith('- `')));
+    for (const glob of TEST_FILE_GLOBS) {
+      const documented = documentedName(glob);
+      assert.ok(named.has(documented), `references/tdd.md list bullets must name ${documented}`);
     }
-    assert.equal(isTestFilePath('placement.go'), false);
+    // The other docs that restate the list name every glob too: read each list paragraph alone.
+    const restated = [
+      ['docs/FEATURES.md', 'Which paths count as test files'],
+      ['docs/features/tdd-pipeline-mode.md', 'Which paths count as test files'],
+      ['docs/zh-CN/references/tdd.md', '**5. 创建第一个测试文件：**'],
+    ];
+    for (const [rel, marker] of restated) {
+      const doc = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+      const start = doc.indexOf(marker);
+      assert.ok(start >= 0, `${rel} has no "${marker}" list`);
+      const end = doc.slice(start).search(/\r?\n\r?\n/);
+      assert.ok(end > 0, `${rel} list has no end`);
+      const para = doc.slice(start, start + end);
+      // The list is the first sentence of a prose paragraph; later sentences may mention globs too.
+      const names = namedIn(para.slice(marker.length).split(/\.\s/)[0].split(/\r?\n/));
+      for (const glob of TEST_FILE_GLOBS) {
+        const documented = documentedName(glob);
+        assert.ok(names.has(documented), `${rel} list must name ${documented}`);
+      }
+    }
+    // Every glob has a root and a nested sample; the property and real-git rows read them.
+    const { SAMPLES_BY_GLOB: samples } = require('./helpers/tdd-test-paths.cjs');
+    assert.deepEqual(Object.keys(samples).sort(), [...TEST_FILE_GLOBS].sort(),
+      'one sample entry per TEST_FILE_GLOBS entry, keyed by glob');
+    for (const [glob, paths] of Object.entries(samples)) {
+      // `tests/x.js` is the root form of a directory glob
+      const rootSlashes = glob.endsWith('/**') ? 1 : 0;
+      const slashes = paths.map(p => p.split('/').length - 1);
+      assert.ok(slashes.includes(rootSlashes), `${glob} needs a root sample`);
+      assert.ok(slashes.some(n => n > rootSlashes), `${glob} needs a nested sample`);
+    }
   });
 });

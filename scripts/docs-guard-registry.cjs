@@ -262,6 +262,12 @@ const DOCS_GUARD_TESTS = {
     'docs/COMMANDS.md',
   ],
   'tests/effort-surface-axis.test.cjs': ['docs/reference/host-integration-capability-matrix.md'],
+  // #5181: pins the test-file list that these docs restate to TEST_FILE_GLOBS.
+  'tests/execute-mvp-tdd-gate.test.cjs': [
+    'docs/FEATURES.md',
+    'docs/features/tdd-pipeline-mode.md',
+    'docs/zh-CN/references/tdd.md',
+  ],
   'tests/execute-phase-active-flags.test.cjs': [
     'docs/reference/host-integration-capability-matrix.md',
   ],

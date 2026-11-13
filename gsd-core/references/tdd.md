@@ -187,27 +187,27 @@ cargo test    # Rust
 **5. Create first test file:**
 Follow project conventions for test location. The RED-commit gate
 (`workflows/execute-phase.md`) recognises the patterns below at any depth, repo root
-included. Note the gate's pathspec is deliberately **wider than the project types the
+included, and ignores case (`Tests/` in a SwiftPM project counts). A `*` never crosses a `/`.
+Note the gate's pathspec is deliberately **wider than the project types the
 detection step above enumerates** — it costs nothing to recognise a convention the
 onboarding flow does not yet auto-detect, and a project using one should not have its
 RED commits go unseen:
 - `*.test.*` / `*.spec.*` next to source — JS/TS and anything sharing the convention
-- `__tests__/` directory
-- `tests/` directory at root
+- `tests/` / `test/` / `__tests__/` directory
 - `*_test.go` — Go
-- `test_*.py` / `*_test.py` — Python (in addition to `tests/`)
+- `test_*.py` / `*_test.py` — Python (in addition to `tests/`); `test_*.py` matches the file
+  name only, so `src/test_utils/factory.py` is not a test
 - `*_test.exs` — Elixir
 - `*_spec.rb` / `*_test.rb` — Ruby
 
-**Cost of the broad pathspec (#4379).** `*.spec.*` can match a non-test file that happens to carry
-the word — `api.spec.json`, `openapi.spec.yaml` — which lets the RED gate pass on a commit touching
-only that. This is not new: the previous `**/*.spec.*` already matched those at any nested path, so
-dropping the `**/` prefix only extends the same false-positive class to the repo root. It is
-accepted rather than narrowed, because narrowing it is a behaviour change to the
-currently-supported case and not part of making other languages visible.
+**Cost of the broad pathspec (#4379).** `*.spec.*` also matches a non-test file that carries the
+word, such as `api.spec.json` or `openapi.spec.yaml`, so a commit touching only that file satisfies
+the RED gate. The file globs match base names only, because `*` never crosses `/` under
+`:(glob,icase)`.
 
-**Known gap — Rust (#4379).** `#[test]` conventionally lives inside the implementation file, so a
-Rust RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
+**Known gap — Rust inline unit tests (#4379).** Rust integration tests under `tests/` (including
+`crates/*/tests/`) match. An inline `#[test]` conventionally lives inside the implementation file, so
+such a RED commit touches `src/*.rs` and no path-based gate can distinguish it from ordinary source.
 Widening the pathspec to cover it would match all source and make the gate meaningless. `cargo test`
 works; the RED-*commit* gate cannot see it, so a Rust project using `workflow.tdd_mode` should
 expect the gate to trip.
