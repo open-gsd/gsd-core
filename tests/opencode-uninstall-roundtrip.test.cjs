@@ -72,10 +72,10 @@ function stageOpencode(home, version) {
   return bin;
 }
 
-function run(args, home, bin) {
+function run(args, home, bin, extraEnv = {}) {
   const PATH = bin ? `${bin}${path.delimiter}${process.env.PATH}` : process.env.PATH;
   const result = runNode([INSTALL_SCRIPT, ...args], {
-    env: installerEnv({ HOME: home, USERPROFILE: home, PATH }),
+    env: installerEnv({ HOME: home, USERPROFILE: home, PATH, ...extraEnv }),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(result.exitCode, 0, `installer failed: ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
@@ -105,6 +105,38 @@ for (const [label, version] of GENERATIONS) {
     const after = snapshot(cfgDir);
     assert.deepEqual(diff(before, after), { added: [], removed: [], changed: [] }, 'the config dir is exactly as it was');
     assert.equal(fs.existsSync(path.join(home, '.gsd')), false, 'machine-wide defaults written by the install are reverted');
+  });
+}
+
+// #5948: the empty settings.json cleanup removes only the `{}` placeholder the install wrote. A symlinked
+// settings.json belongs to the user's own layout, so it stays in place whatever its target holds, with or without
+// GSD_ALLOW_SYMLINKED_DEST. The roundtrip tests above cover the regular `{}` file, which is still removed.
+for (const [content, optIn] of [['{}\n', false], ['{}\n', true], ['{"theme":"x"}\n', false]]) {
+  test(`uninstall leaves a symlinked settings.json holding ${content.trim()} in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'})`, (t) => {
+    const home = createTempDir('gsd-oc-settings-link-');
+    t.after(() => cleanup(home));
+    const cfgDir = path.join(home, '.config', 'opencode');
+    run(['--opencode', '--global', '--config-dir', cfgDir], home, null);
+    const settingsPath = path.join(cfgDir, 'settings.json');
+    assert.ok(fs.lstatSync(settingsPath).isFile(), 'setup: the install wrote its settings.json placeholder');
+    const targetPath = path.join(home, 'dotfiles', 'settings.json');
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, content);
+    fs.unlinkSync(settingsPath);
+    try {
+      fs.symlinkSync(targetPath, settingsPath, 'file');
+    } catch {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+
+    run(['--opencode', '--global', '--config-dir', cfgDir, '--uninstall'], home, null,
+      optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {});
+
+    assert.equal(fs.existsSync(path.join(cfgDir, 'gsd-core')), false, 'the uninstall removed gsd-core/');
+    assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+    assert.equal(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), content, 'the link target must be unchanged');
   });
 }
 

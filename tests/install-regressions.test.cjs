@@ -37,7 +37,7 @@ const { INSTALL_TIMEOUT_MS, FIXTURE_HOOK_TIMEOUT_SECONDS } = require('./helpers/
 // (120000ms), so kept as its own constant rather than raised to that bound.
 const SCOPED_INSTALL_TIMEOUT_MS = 60_000;
 
-const { createTempDir, cleanup, mockPartialWriteThenThrow } = require('./helpers.cjs');
+const { createTempDir, cleanup, mockPartialWriteThenThrow, installSpawnEnv } = require('./helpers.cjs');
 const {
   loadSkillsManifest,
   resolveProfile,
@@ -2146,6 +2146,479 @@ describe('#1874 F6 adjacent: malformed settings.local.json does not crash the in
       malformedLocal,
       'the unparseable file must be left intact'
     );
+  });
+});
+
+// ─── #5037: a symlinked settings.json is never replaced with a plain file ───
+// A dotfiles setup links settings.json to a file kept elsewhere. Every install
+// used to replace that link with a plain file and leave the target stale. Both
+// installer writes of the file, the primary settings write and the #338
+// local-install migration, must refuse the link without GSD_ALLOW_SYMLINKED_DEST
+// and write through to its target with it. Uninstall rewrites settings.json
+// through the same writer, so it refuses or writes through the same way.
+//
+// Each refusal case has an opt-in twin that runs the same layout to exit 0,
+// so the only thing that differs between the two runs is the opt-in. The
+// install cases also require gsd-core/VERSION, which is written before either
+// settings write, so a run that failed earlier for some other reason cannot
+// pass as a refusal. Every refusal must also put its SYMLINKED_LEAF_REFUSAL
+// code on stderr, so a different failure that exits 1 cannot pass either.
+
+describe('#5037: the installer never replaces a symlinked settings.json', () => {
+  const USER_SETTINGS = { env: { MY_TOKEN: 'keep-me' } };
+  const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  // The installer lets a refusal escape uncaught, and Node prints an uncaught
+  // error's own properties after its stack, so the refusal's `code` reaches
+  // stderr. The check looks for the frozen code value only, never the message.
+  function assertRefusedWith(result, code, why) {
+    assert.ok(typeof code === 'string' && code !== '', `unknown refusal code: ${code}`);
+    // 1, not merely non-zero: a timed-out or killed installer reports null.
+    assert.strictEqual(result.exitCode, 1, `${why}\n${result.stdout}\n${result.stderr}`);
+    assert.ok(result.stderr.includes(code), `stderr must carry the refusal code ${code}\n${result.stderr}`);
+  }
+
+  // The read-only cases make the link target's directory read-only with chmod.
+  const READ_ONLY_DIR_SKIP = process.platform === 'win32'
+    ? 'chmod does not make a directory read-only on Windows'
+    : (process.getuid && process.getuid() === 0)
+      ? 'root ignores directory write permissions, so chmod cannot make the directory read-only'
+      : false;
+
+  function runInstaller(root, args, { optIn }) {
+    const env = installSpawnEnv({
+      HOME: root,
+      USERPROFILE: root,
+      ...(optIn ? { GSD_ALLOW_SYMLINKED_DEST: '1' } : {}),
+    });
+    delete env.GSD_TEST_MODE;
+    return runNode([INSTALL_SCRIPT, ...args], { cwd: root, env, timeoutMs: SCOPED_INSTALL_TIMEOUT_MS });
+  }
+
+  // Writes `content` to <root>/dotfiles/<targetName> and links `linkPath` to it.
+  // Returns null when this platform or account cannot create symlinks.
+  function linkSettings(root, linkPath, content, targetName = 'settings.json') {
+    const targetPath = path.join(root, 'dotfiles', targetName);
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.writeFileSync(targetPath, content);
+    try {
+      fs.symlinkSync(targetPath, linkPath, 'file');
+    } catch {
+      return null;
+    }
+    return targetPath;
+  }
+
+  // Whether SessionStart holds a GSD-managed hook, decided by the installer's own
+  // recognizer rather than by matching the command text.
+  const { isManagedHookCommand } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+  function hasGsdSessionStartHook(settings) {
+    const sessionStart = (settings.hooks && settings.hooks.SessionStart) || [];
+    return sessionStart.some(
+      entry => entry && Array.isArray(entry.hooks) &&
+        entry.hooks.some(h => h && isManagedHookCommand(h.command, { surface: 'settings-json', args: h.args }))
+    );
+  }
+
+  describe('primary settings write (global install)', () => {
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 the install writes through and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST the install refuses and leaves the link and its target unchanged', (t) => {
+        const root = createTempDir('gsd-5037-global-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        const settingsPath = path.join(claudeDir, 'settings.json');
+        const before = JSON.stringify(USER_SETTINGS, null, 2) + '\n';
+        const targetPath = linkSettings(root, settingsPath, before);
+        if (!targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+
+        const result = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn });
+
+        assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+        assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          const after = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+          assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive the write-through');
+          assert.ok(hasGsdSessionStartHook(after), 'GSD hooks must land in the link target');
+        } else {
+          assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, 'a refused settings write must fail the install');
+          assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
+            'the install must have reached the settings write before failing');
+          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+        }
+      });
+    }
+  });
+
+  describe('#338 migration write (local install with GSD entries in settings.json and either file linked)', () => {
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 the GSD entries move out of the link target and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST the install refuses before writing either settings file', (t) => {
+        const root = createTempDir('gsd-5037-local-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        const sharedSettingsPath = path.join(claudeDir, 'settings.json');
+        const sharedBefore = JSON.stringify({
+          ...USER_SETTINGS,
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: 'command', command: `${process.execPath} ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` }] },
+            ],
+          },
+        }, null, 2) + '\n';
+        const targetPath = linkSettings(root, sharedSettingsPath, sharedBefore);
+        if (!targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        const localSettingsPath = path.join(claudeDir, 'settings.local.json');
+        const localBefore = JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }, null, 2) + '\n';
+        fs.writeFileSync(localSettingsPath, localBefore);
+
+        const result = runInstaller(root, ['--claude', '--local'], { optIn });
+
+        assert.ok(fs.lstatSync(sharedSettingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+        assert.strictEqual(fs.readlinkSync(sharedSettingsPath), targetPath, 'the link must still point at the same target');
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          const sharedAfter = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+          assert.deepStrictEqual(sharedAfter.env, USER_SETTINGS.env, 'user settings must survive in the link target');
+          assert.strictEqual(hasGsdSessionStartHook(sharedAfter), false, 'GSD entries must be stripped from the link target');
+          const localAfter = JSON.parse(fs.readFileSync(localSettingsPath, 'utf8'));
+          assert.ok(hasGsdSessionStartHook(localAfter), 'GSD entries must be relocated to settings.local.json');
+          assert.ok(localAfter.permissions.allow.includes('Bash(npm test)'),
+            'user permissions in settings.local.json must survive');
+        } else {
+          assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, 'a refused settings write must fail the install');
+          assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
+            'the install must have reached the settings write before failing');
+          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
+          assert.strictEqual(fs.readFileSync(localSettingsPath, 'utf8'), localBefore,
+            'settings.local.json must not be half-migrated when the shared write is refused');
+        }
+      });
+    }
+
+    // With the opt-in, the shared write puts a temp file beside the link's
+    // target, so a read-only target directory would fail it after
+    // settings.local.json was already written. The check before the local
+    // write catches that too. The opt-in twin above is the passing control.
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 a linked settings.json in a read-only directory is refused before writing either settings file', {
+      skip: READ_ONLY_DIR_SKIP,
+    }, (t) => {
+      const root = createTempDir('gsd-5037-local-readonly-');
+      // linkSettings puts the link target in <root>/dotfiles, which this test
+      // makes read-only. t.after hooks run in the order they are added, so the
+      // write bit goes back in the same hook, just before the root is removed.
+      const dotfilesDir = path.join(root, 'dotfiles');
+      t.after(() => {
+        if (fs.existsSync(dotfilesDir)) fs.chmodSync(dotfilesDir, 0o755);
+        cleanup(root);
+      });
+      const claudeDir = path.join(root, '.claude');
+      const sharedSettingsPath = path.join(claudeDir, 'settings.json');
+      const sharedBefore = JSON.stringify({
+        ...USER_SETTINGS,
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: `${process.execPath} ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` }] },
+          ],
+        },
+      }, null, 2) + '\n';
+      const targetPath = linkSettings(root, sharedSettingsPath, sharedBefore);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const localSettingsPath = path.join(claudeDir, 'settings.local.json');
+      const localBefore = JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }, null, 2) + '\n';
+      fs.writeFileSync(localSettingsPath, localBefore);
+
+      fs.chmodSync(dotfilesDir, 0o555);
+      const result = runInstaller(root, ['--claude', '--local'], { optIn: true });
+
+      assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.TARGET_NOT_WRITABLE, 'a refused settings write must fail the install');
+      assert.ok(fs.lstatSync(sharedSettingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(sharedSettingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), sharedBefore, 'the link target must be byte-for-byte unchanged');
+      assert.strictEqual(fs.readFileSync(localSettingsPath, 'utf8'), localBefore,
+        'settings.local.json must not be half-migrated when the shared write cannot happen');
+    });
+
+    // The migration writes settings.local.json through writeSettings too, so
+    // a symlinked settings.local.json gets the same policy. The opt-in twin
+    // shows the migration runs on this layout, and the shared file is only
+    // stripped after the local write, so a refusal must leave it as it was.
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 the GSD entries move into a linked settings.local.json and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST a linked settings.local.json is refused and neither file changes', (t) => {
+        const root = createTempDir('gsd-5037-local-link-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        fs.mkdirSync(claudeDir, { recursive: true });
+        const sharedSettingsPath = path.join(claudeDir, 'settings.json');
+        const sharedBefore = JSON.stringify({
+          ...USER_SETTINGS,
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: 'command', command: `${process.execPath} ${path.join(claudeDir, 'hooks', 'gsd-check-update.js')}` }] },
+            ],
+          },
+        }, null, 2) + '\n';
+        fs.writeFileSync(sharedSettingsPath, sharedBefore);
+        const localSettingsPath = path.join(claudeDir, 'settings.local.json');
+        const localBefore = JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } }, null, 2) + '\n';
+        const targetPath = linkSettings(root, localSettingsPath, localBefore, 'settings.local.json');
+        if (!targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+
+        const result = runInstaller(root, ['--claude', '--local'], { optIn });
+
+        assert.ok(fs.lstatSync(localSettingsPath).isSymbolicLink(), 'settings.local.json must still be a symlink');
+        assert.strictEqual(fs.readlinkSync(localSettingsPath), targetPath, 'the link must still point at the same target');
+        assert.ok(fs.lstatSync(sharedSettingsPath).isFile(), 'the shared settings.json must stay a regular file');
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `installer exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          const localAfter = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+          assert.ok(hasGsdSessionStartHook(localAfter), 'GSD entries must be relocated to the link target');
+          assert.ok(localAfter.permissions.allow.includes('Bash(npm test)'),
+            'user permissions in the link target must survive');
+          const sharedAfter = JSON.parse(fs.readFileSync(sharedSettingsPath, 'utf8'));
+          assert.deepStrictEqual(sharedAfter.env, USER_SETTINGS.env, 'user settings must survive in settings.json');
+          assert.strictEqual(hasGsdSessionStartHook(sharedAfter), false, 'GSD entries must be stripped from settings.json');
+        } else {
+          assertRefusedWith(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, 'a refused settings write must fail the install');
+          assert.ok(fs.existsSync(path.join(claudeDir, 'gsd-core', 'VERSION')),
+            'the install must have reached the settings write before failing');
+          assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), localBefore, 'the link target must be byte-for-byte unchanged');
+          assert.strictEqual(fs.readFileSync(sharedSettingsPath, 'utf8'), sharedBefore,
+            'settings.json must keep its GSD entries when the local write is refused');
+        }
+      });
+    }
+  });
+
+  // Uninstall rewrites settings.json only after it removes GSD's files, so
+  // when it would rewrite a symlinked settings.json it checks the link before
+  // the first removal. A refusal must leave every installed file in place,
+  // not just the link. A settings.json it would not rewrite (no GSD entries,
+  // unparseable, or a dangling link) must not block the uninstall.
+  describe('uninstall', () => {
+    function installClaudeGlobal(root) {
+      const claudeDir = path.join(root, '.claude');
+      const installed = runInstaller(root, ['--claude', '--global', '--config-dir', claudeDir], { optIn: false });
+      assert.strictEqual(installed.exitCode, 0, `setup install exited ${installed.exitCode}\n${installed.stdout}\n${installed.stderr}`);
+      const gsdCoreDir = path.join(claudeDir, 'gsd-core');
+      assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
+      return { claudeDir, settingsPath: path.join(claudeDir, 'settings.json'), gsdCoreDir };
+    }
+
+    // Every entry under `dir` except settings.json (the link, which has its
+    // own asserts), as sorted [path, kind, size, mtimeMs] rows, so a
+    // before/after comparison shows any file removed, added or rewritten.
+    function snapshotTree(dir) {
+      return fs.readdirSync(dir, { recursive: true }).map(String)
+        .filter((rel) => rel !== 'settings.json')
+        .sort()
+        .map((rel) => {
+          const st = fs.lstatSync(path.join(dir, rel));
+          const kind = st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : 'file';
+          // A directory's mtime moves whenever an entry is added or removed,
+          // which the path list already shows, so only files carry size and mtime.
+          return kind === 'file' ? [rel, kind, st.size, st.mtimeMs] : [rel, kind];
+        });
+    }
+
+    // Asserts a refused uninstall exited 1 with refusal `code` and changed
+    // nothing in the config dir, and that the link and its target are as they were.
+    function assertRefusedUnchanged(result, code, l, before) {
+      assertRefusedWith(result, code, 'a refused settings write must fail the uninstall');
+      assert.deepStrictEqual(snapshotTree(l.claudeDir), before.tree, 'the config dir must be left unchanged');
+      assert.ok(fs.lstatSync(l.settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(l.settingsPath), l.targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(l.targetPath, 'utf8'), before.target,
+        'the link target must be byte-for-byte unchanged');
+    }
+
+    for (const optIn of [false, true]) {
+      test(optIn
+        ? 'with GSD_ALLOW_SYMLINKED_DEST=1 uninstall cleans the link target and the link survives'
+        : 'without GSD_ALLOW_SYMLINKED_DEST uninstall refuses before removing anything', (t) => {
+        const root = createTempDir('gsd-5037-uninstall-');
+        t.after(() => cleanup(root));
+        const claudeDir = path.join(root, '.claude');
+        fs.mkdirSync(claudeDir, { recursive: true });
+        fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify(USER_SETTINGS, null, 2) + '\n');
+        const l = installClaudeGlobal(root);
+
+        // Move the installed settings.json into a dotfiles dir and link it back.
+        const installedSettings = fs.readFileSync(l.settingsPath, 'utf8');
+        fs.unlinkSync(l.settingsPath);
+        l.targetPath = linkSettings(root, l.settingsPath, installedSettings);
+        if (!l.targetPath) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        assert.ok(hasGsdSessionStartHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
+        const before = { tree: snapshotTree(l.claudeDir), target: installedSettings };
+
+        const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
+
+        if (optIn) {
+          assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+          assert.strictEqual(fs.existsSync(l.gsdCoreDir), false, 'uninstall must remove gsd-core/');
+          assert.ok(fs.lstatSync(l.settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+          assert.strictEqual(fs.readlinkSync(l.settingsPath), l.targetPath, 'the link must still point at the same target');
+          const after = JSON.parse(fs.readFileSync(l.targetPath, 'utf8'));
+          assert.deepStrictEqual(after.env, USER_SETTINGS.env, 'user settings must survive in the link target');
+          assert.strictEqual(hasGsdSessionStartHook(after), false, 'GSD hooks must be removed from the link target');
+        } else {
+          assertRefusedUnchanged(result, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED, l, before);
+        }
+      });
+    }
+
+    // With the opt-in, step 6 puts a temp file beside the link's target, so a
+    // read-only target directory would fail it after GSD's files were removed.
+    // The check before the first removal catches that too. The opt-in twin
+    // above is the passing control.
+    test('with GSD_ALLOW_SYMLINKED_DEST=1 uninstall refuses a link into a read-only directory before removing anything', {
+      skip: READ_ONLY_DIR_SKIP,
+    }, (t) => {
+      const root = createTempDir('gsd-5037-uninstall-readonly-');
+      // linkSettings puts the link target in <root>/dotfiles, which this test
+      // makes read-only. t.after hooks run in the order they are added, so the
+      // write bit goes back in the same hook, just before the root is removed.
+      const dotfilesDir = path.join(root, 'dotfiles');
+      t.after(() => {
+        if (fs.existsSync(dotfilesDir)) fs.chmodSync(dotfilesDir, 0o755);
+        cleanup(root);
+      });
+      const l = installClaudeGlobal(root);
+      const installedSettings = fs.readFileSync(l.settingsPath, 'utf8');
+      fs.unlinkSync(l.settingsPath);
+      l.targetPath = linkSettings(root, l.settingsPath, installedSettings);
+      if (!l.targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      assert.ok(hasGsdSessionStartHook(JSON.parse(installedSettings)), 'setup: the link target must hold GSD hooks');
+      const before = { tree: snapshotTree(l.claudeDir), target: installedSettings };
+
+      fs.chmodSync(dotfilesDir, 0o555);
+      const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', l.claudeDir], { optIn: true });
+
+      assertRefusedUnchanged(result, SYMLINKED_LEAF_REFUSAL.TARGET_NOT_WRITABLE, l, before);
+    });
+
+    test('without GSD_ALLOW_SYMLINKED_DEST uninstall succeeds over a linked settings.json with no GSD entries and leaves it untouched', (t) => {
+      const root = createTempDir('gsd-5037-uninstall-clean-');
+      t.after(() => cleanup(root));
+      const { claudeDir, settingsPath, gsdCoreDir } = installClaudeGlobal(root);
+      const before = JSON.stringify(USER_SETTINGS, null, 2) + '\n';
+      fs.unlinkSync(settingsPath);
+      const targetPath = linkSettings(root, settingsPath, before);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn: false });
+
+      assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+      assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+    });
+
+    // Step 6 skips a settings.json it cannot parse, so it never writes one,
+    // and an unparseable link must not block the uninstall either.
+    test('without GSD_ALLOW_SYMLINKED_DEST uninstall succeeds over an unparseable linked settings.json and leaves it untouched', (t) => {
+      const root = createTempDir('gsd-5037-uninstall-unparseable-');
+      t.after(() => cleanup(root));
+      const { claudeDir, settingsPath, gsdCoreDir } = installClaudeGlobal(root);
+      const before = '{ not json';
+      fs.unlinkSync(settingsPath);
+      const targetPath = linkSettings(root, settingsPath, before);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn: false });
+
+      assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+      assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+    });
+
+    // pi keeps its own settings in the settings.json beside GSD's files, and
+    // GSD writes no entries there, so uninstalling GSD from pi never rewrites
+    // it and a linked one must not block the uninstall.
+    test('without GSD_ALLOW_SYMLINKED_DEST a pi global uninstall succeeds over a linked settings.json with no GSD entries', (t) => {
+      const root = createTempDir('gsd-5037-uninstall-pi-');
+      t.after(() => cleanup(root));
+      const piDir = path.join(root, '.pi', 'agent');
+      const installed = runInstaller(root, ['--pi', '--global', '--config-dir', piDir], { optIn: false });
+      assert.strictEqual(installed.exitCode, 0, `setup install exited ${installed.exitCode}\n${installed.stdout}\n${installed.stderr}`);
+      const gsdCoreDir = path.join(piDir, 'gsd-core');
+      assert.ok(fs.existsSync(gsdCoreDir), 'setup: the install must have created gsd-core/');
+      const settingsPath = path.join(piDir, 'settings.json');
+      assert.strictEqual(fs.existsSync(settingsPath), false, 'setup: the pi install must not have written settings.json');
+      const before = JSON.stringify({ defaultModel: 'x' }, null, 2) + '\n';
+      const targetPath = linkSettings(root, settingsPath, before);
+      if (!targetPath) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      const result = runInstaller(root, ['--pi', '--global', '--uninstall', '--config-dir', piDir], { optIn: false });
+
+      assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+      assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+      assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'settings.json must still be a symlink');
+      assert.strictEqual(fs.readlinkSync(settingsPath), targetPath, 'the link must still point at the same target');
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), before, 'the link target must be byte-for-byte unchanged');
+    });
+
+    // existsSync reports a dangling link as missing, so neither the check nor
+    // step 6 looks at it, and the uninstall completes with or without the opt-in.
+    for (const optIn of [false, true]) {
+      test(`uninstall succeeds over a dangling settings.json link and leaves it in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ? '1' : 'unset'})`, (t) => {
+        const root = createTempDir('gsd-5037-uninstall-dangling-');
+        t.after(() => cleanup(root));
+        const { claudeDir, settingsPath, gsdCoreDir } = installClaudeGlobal(root);
+        const missingTarget = path.join(root, 'dotfiles', 'settings.json');
+        fs.unlinkSync(settingsPath);
+        try {
+          fs.symlinkSync(missingTarget, settingsPath, 'file');
+        } catch {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+
+        const result = runInstaller(root, ['--claude', '--global', '--uninstall', '--config-dir', claudeDir], { optIn });
+
+        assert.strictEqual(result.exitCode, 0, `uninstall exited ${result.exitCode}\n${result.stdout}\n${result.stderr}`);
+        assert.strictEqual(fs.existsSync(gsdCoreDir), false, 'uninstall must remove gsd-core/');
+        assert.ok(fs.lstatSync(settingsPath).isSymbolicLink(), 'the dangling link must survive');
+        assert.strictEqual(fs.readlinkSync(settingsPath), missingTarget, 'the link must still point at the same target');
+        assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing may be created at the missing target');
+      });
+    }
   });
 });
 
