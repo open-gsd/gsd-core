@@ -2539,6 +2539,51 @@ test('a first-parent chain rooted outside HEAD keeps the pin and says no base co
   assert.doesNotMatch(messages[1], /failed/, 'no git command failed, so the line must not say one did');
 });
 
+// Re-review (b80a5ce1a) Minor 1: the walk's fallthrough. The pin B0 is the merged base and
+// origin/next has since gained a commit HEAD lacks, landed either as a merge M = merge(B0 <- S)
+// or as a plain commit B1. Nothing listed above the floor is in HEAD, so the newest contained
+// chain commit is the FIRST parent of the oldest listed one, B0. Taking any other parent (S,
+// which HEAD lacks) would break "never lands on a commit HEAD lacks".
+for (const landed of ['a merge commit', 'a plain commit']) {
+  test(`a merged-base pin is kept silently when origin/next gained ${landed} HEAD lacks`, (t) => {
+    const root = createTempDir('gsd-fallthrough-first-parent-');
+    t.after(() => cleanup(root));
+    const commit = (file, body, message) => {
+      fs.writeFileSync(path.join(root, file), body);
+      gitFixture(root, ['add', file]);
+      gitFixture(root, ['commit', '-q', '-m', message]);
+      return gitFixture(root, ['rev-parse', 'HEAD']);
+    };
+    gitFixture(root, ['init', '-q', '-b', 'next']);
+    const b0 = commit('a.txt', 'b0\n', 'B0: the pin, which the merge ref is built on');
+    gitFixture(root, ['checkout', '-q', '-b', 'pr']);
+    commit('p.txt', 'p\n', 'P: the PR');
+    gitFixture(root, ['checkout', '-q', '--detach', b0]);
+    gitFixture(root, ['merge', '-q', '--no-ff', '--no-edit', 'pr']);
+    const mergeRef = gitFixture(root, ['rev-parse', 'HEAD']);
+    gitFixture(root, ['checkout', '-q', 'next']);
+    let side = null;
+    if (landed === 'a merge commit') {
+      gitFixture(root, ['checkout', '-q', '-b', 'side', b0]);
+      side = commit('s.txt', 's\n', 'S: a side commit');
+      gitFixture(root, ['checkout', '-q', 'next']);
+      gitFixture(root, ['merge', '-q', '--no-ff', '--no-edit', 'side']);
+    } else {
+      commit('a.txt', 'b1\n', 'B1: lands after the merge ref was built');
+    }
+    const tip = gitFixture(root, ['rev-parse', 'HEAD']);
+    gitFixture(root, ['checkout', '-q', '--detach', mergeRef]);
+    gitFixture(root, ['update-ref', 'refs/remotes/origin/next', tip]);
+
+    const messages = [];
+    const base = resolveAttributionBase({ GSD_EMITTED_BASE: b0, GITHUB_BASE_REF: 'next' },
+      { cwd: root, diagnostic: (m) => messages.push(m) });
+    assert.equal(base.sha, b0,
+      `the pin B0 must be kept${side ? `, never the side commit S ${side} that HEAD lacks` : ''}`);
+    assert.equal(messages.length, 1, `only the resolved-base line is expected: ${messages.join(' | ')}`);
+  });
+}
+
 test('a pin that is already the merged base is kept and says nothing about an advance', (t) => {
   const { root, b2 } = makeStalePinMergeRefRepo(t);
   const messages = [];
