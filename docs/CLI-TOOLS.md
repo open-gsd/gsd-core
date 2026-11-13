@@ -32,6 +32,43 @@ node gsd-tools.cjs <command> [args] [--raw] [--cwd <path>]
 | `--ws <name>`       | Workstream context for `.planning/workstreams/<name>` paths |
 | `--pick <field>`    | Extract one field from a command's JSON output — see [`--pick <field>` contract](#--pick-field-contract) below |
 
+These global flags are read once, before the command runs, and are never passed on to the command. The full global set is recorded under `global` in [`CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json). Besides the flags above, it includes `--project-dir`, `--default`, `--json-errors` and `--exit-contract=<v>`.
+
+---
+
+### Command flags and the CLI surface manifest
+
+Each command declares its flags in one place, `src/cli-surface.cts` ([ADR-4909](adr/4909-shipped-surface-contract-seam.md) D1). [`docs/CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json) is generated from those declarations. For each command it lists:
+- the command name and its aliases;
+- how many positional words it takes, and whether further words may appear among the flags (`freePositionals`), and whether a short flag such as `-n` is refused instead of read as a word (`rejectShortFlags`);
+- each flag and its kind;
+- the flags it requires;
+- whether the command reads the active workstream.
+
+Regenerate the manifest with `npm run gen:cli-surface-manifest`. `npm run lint:generated-sync` fails when it is stale.
+
+| Flag kind in the manifest | Accepted form |
+| --- | --- |
+| `value` | `--name <value>`. If the next token is missing or starts with `--`, the flag counts as absent. |
+| `value-or-bare` | As `value`, but a bare `--name` means "present and empty". |
+| `boolean` | `--name` |
+| `optional-value` | `--name` with or without a value |
+| `repeatable` | `--name <value>` any number of times; every non-empty value is kept, in order. An empty value counts as none. |
+| `list` | `--name a b c`. The values run until the command's next list flag, and repeated runs merge. |
+| `multiword` | `--name some words`. The words run until the next `--` token and are joined with spaces. |
+
+A command whose manifest entry lists `eq` also accepts those flags as `--name=<value>`. The flags listed under `nonEmpty` must have a value whenever they are passed; `emptyValue` and `emptyEq` name the ones for which a literal empty value (`--name ''`, `--name=`) still counts as a value. When a flag is repeated, the first occurrence wins. A command with `passthroughAfter: "--"` does not check anything after a literal `--`.
+
+A declared command rejects bad arguments before it does any work. Each rejection exits non-zero with reason `usage`, which `--json-errors` reports as `reason: "usage"`:
+
+| Input | Message names |
+| --- | --- |
+| A flag the command does not declare | the flag, and the flags it accepts |
+| A required flag missing, or given an empty value | `missing required flag --name` |
+| A flag that must not be empty given without a value | `Missing value for --name` |
+| A positional word the command does not take | the word |
+
+Commands listed under `undeclared` in the manifest still parse their own flags. Their declarations land in [#6088](https://github.com/open-gsd/gsd-core/issues/6088), [#6089](https://github.com/open-gsd/gsd-core/issues/6089) and [#6090](https://github.com/open-gsd/gsd-core/issues/6090); the last one removes the `undeclared` list.
 
 ---
 
