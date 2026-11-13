@@ -73,6 +73,7 @@ const {
   extractBashBlockContaining,
   extractDeclarationLines,
   PRECONDITIONS_MARKER,
+  TRANSIENT_DIRS_MARKER,
   forbiddenRegex,
   forbiddenPaths,
   structuralPaths,
@@ -375,13 +376,14 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
     // here is deliberately ALL commits `main..feature`; this layer is only
     // proving the filter recipe (rm/checkout/conflict-halt/empty-skip), not
     // `analyze_commits`' include/exclude classification, which L1 covers.
-    // With `shippedPickList`, INCLUDED_COMMITS comes from the shipped analyze_commits line and `picked` instead.
+    // With `shippedPickList`, INCLUDED_COMMITS comes from the shipped analyze_commits line, and STRUCTURAL_RE and `picked` from the shipped blocks.
     function buildRecipeScript(filterPaths, { shippedPickList = false } = {}) {
       const text = readWorkflowText();
       const pickList = shippedPickList
         ? [
           'PR_STRICT=false',
           '_to() { "$@"; }',
+          ...extractDeclarationLines(text, TRANSIENT_DIRS_MARKER, ['STRUCTURAL_RE=']),
           ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['picked() {']),
           'REVS=$(git rev-list --reverse main..feature)',
           ...extractDeclarationLines(text, 'REVS=$(TO=60', ['INCLUDED_COMMITS=$(']),
