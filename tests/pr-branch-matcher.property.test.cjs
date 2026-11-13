@@ -16,7 +16,7 @@
  *   (b) file names that spell the section markers or a `commit <sha>` line never change
  *       the verdict;
  *   (c) a picked commit that has no patch-id (a failed or empty patch walk) always gives WARN;
- *   (d) `picked`, the per-commit counts and arms of analyze_commits, and `classifyCommit`
+ *   (d) `picked`, the per-commit count of analyze_commits, and `classifyCommit`
  *       agree on any file list, in both modes.
  */
 
@@ -28,7 +28,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
+const { WORKFLOW_PATH, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
 const lazy = (f) => { let v; return () => (v === undefined ? (v = f()) : v); };
@@ -135,18 +135,11 @@ describe('pr-branch rewritten-history matcher (property)', () => {
 });
 
 // The shipped `picked` function, with `_to` standing in for the bounded `git diff-tree` read.
-const pickedFn = lazy(() => extractDeclarationLines(workflowText(), 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['picked() {'])[0]);
+const pickedFn = lazy(() => extractDeclarationLines(workflowText(), PRECONDITIONS_MARKER, ['picked() {'])[0]);
 // The shipped per-commit counts of analyze_commits, with `git` standing in for `git diff-tree`.
 const countsBlock = lazy(() => extractBashBlockContaining(workflowText(), 'NON_PLANNING=$('));
-// The classification arms of analyze_commits, over those counts: 1 INCLUDE, 0 EXCLUDE.
-const ARMS = [
-  'if [ "$NON_PLANNING" -gt 0 ]; then echo 1', // code commits, mixed code+planning commits (both modes)
-  'elif [ "$PR_STRICT" = true ]; then echo 0', // strict mode has no structural carve-out
-  'elif [ "$PLANNING_COUNT" -gt 0 ] && [ "$STRUCTURAL" -gt 0 ]; then echo 1', // structural-only and mixed planning commits
-  'else echo 0; fi', // transient-only and other planning commits, empty commits
-].join('\n');
-
-// One bash run per mode: for each file list, picked's verdict and the arms' verdict, then picked's verdict on a failed lookup.
+// One bash run per mode: for each file list, picked's verdict (1 pick, 0 skip) and the shipped NON_PLANNING count,
+// then picked's verdict on a failed lookup.
 function verdicts(lists, strict) {
   const { structuralRe } = readWorkflow();
   // NUL-terminated, as `git -z --name-only` prints: the shipped `| tr '\0' '\n'` must split it.
@@ -159,8 +152,7 @@ function verdicts(lists, strict) {
     '  _to() { cat "$i.txt"; }; git() { cat "$i.txt"; }; HASH=x',
     '  P=$(picked x && echo 1 || echo 0)',
     countsBlock(),
-    `  A=$(${ARMS})`,
-    '  echo "$P $A"',
+    '  echo "$P $NON_PLANNING"',
     'done',
     '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
   ].join('\n')).split(/\r?\n/);
@@ -172,14 +164,14 @@ const PATHS = ['-n', 'src/a.js', 'src/é.js', 'README.md', '.planningX/a', '.pla
 
 describe('pr-branch pick rule (property)', () => {
   test('a lone code path named like an echo option is picked and counted', () => {
-    assert.deepEqual(verdicts([['-n'], ['-e'], ['-E']], false), ['1 1', '1 1', '1 1', '1']);
+    assert.deepEqual(verdicts([['-n'], ['-e'], ['-E']], false), ['1 1', '1 1', '1 1', '1']); // picked, and counted as one non-planning path
   });
 
   for (const strict of [true, false]) {
-    test(`picked, the analyze_commits arms and the classification agree in ${strict ? 'strict' : 'default'} mode; a failed lookup picks`, () => {
+    test(`picked agrees with the classification and the shipped count sees the code paths in ${strict ? 'strict' : 'default'} mode; a failed lookup picks`, () => {
       const { structuralRe, transientDirs } = readWorkflow();
       fc.assert(fc.property(fc.array(fc.uniqueArray(fc.constantFrom(...PATHS), { maxLength: 4 }), { minLength: 1, maxLength: 8 }), (lists) => {
-        const want = lists.map((l) => (classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? '1 1' : '0 0'));
+        const want = lists.map((l) => `${classifyCommit(l, { strict, structuralRe, transientDirs }) === 'include' ? 1 : 0} ${l.filter((p) => !p.startsWith('.planning/')).length}`);
         assert.deepEqual(verdicts(lists, strict), [...want, '1']);
       }), { numRuns: 15 });
     });

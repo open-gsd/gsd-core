@@ -90,7 +90,12 @@ const readWorkflow = () => parseWorkflow(fs.readFileSync(WORKFLOW_PATH, 'utf-8')
 
 const BASH_FENCE_OPEN_RE = /^```bash\s*$/;
 const BASH_FENCE_CLOSE_RE = /^```\s*$/;
-const PICK_LOOP_MARKER = 'for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
+// The first line of each shipped bash block the tests run: the mode's TRANSIENT_DIRS, its FILTER_PATHS
+// projection, and the preconditions (PR_BRANCH and the helpers declared with it).
+const TRANSIENT_DIRS_MARKER = 'TRANSIENT_DIRS="phases';
+const FILTER_PATHS_MARKER = 'FILTER_PATHS=$(for d';
+const PRECONDITIONS_MARKER = 'PR_BRANCH="${CURRENT_BRANCH}-pr"';
+const PICK_LOOP_MARKER ='for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
 
 /**
  * Scans `text` for fenced ```bash blocks and returns the verbatim body
@@ -228,6 +233,9 @@ module.exports = {
   extractBashBlockContaining,
   extractDeclarationLines,
   extractFunction,
+  TRANSIENT_DIRS_MARKER,
+  FILTER_PATHS_MARKER,
+  PRECONDITIONS_MARKER,
   normalizePaths,
   forbiddenRegex,
   forbiddenPaths,

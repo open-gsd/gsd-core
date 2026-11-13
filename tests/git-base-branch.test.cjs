@@ -35,7 +35,13 @@ const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed, refShaOrEmpty } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { gitChildEnv } = require('./helpers/isolated-env.cjs');
-const { extractBashBlockContaining, extractDeclarationLines } = require('./helpers/pr-branch-filter.cjs');
+const {
+  extractBashBlockContaining,
+  extractDeclarationLines,
+  TRANSIENT_DIRS_MARKER,
+  FILTER_PATHS_MARKER,
+  PRECONDITIONS_MARKER,
+} = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -2757,9 +2763,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'PR_STRICT=false',
       'PR_MODE=default',
       // The shipped declarations: the regexes, the mode's projections and the ref names.
-      extractBashBlockContaining(workflowText, 'TRANSIENT_DIRS="phases'),
-      extractBashBlockContaining(workflowText, 'FILTER_PATHS=$(for d'),
-      ...extractDeclarationLines(workflowText, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey() {', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
+      extractBashBlockContaining(workflowText, TRANSIENT_DIRS_MARKER),
+      extractBashBlockContaining(workflowText, FILTER_PATHS_MARKER),
+      ...extractDeclarationLines(workflowText, PRECONDITIONS_MARKER, ['refkey() {', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
       'echo "PENDING_REF=$PENDING_REF"',
       extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
@@ -2775,6 +2781,8 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
     return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }
+  // The git runner of a verify test's fixture repo: the isolated env, so the developer's git config and hook variables stay out.
+  const gitIn = (repo) => (args) => gitOrThrow(args, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
   const refSha = (repo, ref) => refShaOrEmpty(ref, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_TIMEOUT_MS });
   const pendingRef = (repo) => refSha(repo, PENDING_REF);
 
@@ -2782,7 +2790,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   function leakedPhaseRepo(t, prefix) {
     const repo = createGitRepo({ prefix, defaultBranch: 'main' });
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
     g(['add', '-A']);
     g(['commit', '-qm', 'base']);
@@ -2828,7 +2836,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     test(`verify counts a planning deletion and a forbidden path named ${name}, which git quotes in a plain name list`, { skip: name.includes('"') && process.platform === 'win32' }, (t) => {
       const repo = createGitRepo({ prefix: 'gsd-3679-verify-quoted-', defaultBranch: 'main' });
       t.after(() => cleanup(repo));
-      const g = (args) => gitOrThrow(args, { cwd: repo });
+      const g = gitIn(repo);
       fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
       fs.writeFileSync(path.join(repo, '.planning', `notes-${name}`), 'n\n');
       g(['add', '-A']);
@@ -2863,7 +2871,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('verify stops with exit 1 and keeps the -pr branch when the delete fails', (t) => {
     const repo = createGitRepo({ prefix: 'gsd-3679-verify-nodelete-', defaultBranch: 'main' });
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['branch', 'pr']);
     const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
     assert.equal(exitCode, 1, 'the run stops with exit 1');

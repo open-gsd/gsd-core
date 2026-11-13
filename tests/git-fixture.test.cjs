@@ -253,17 +253,20 @@ describe('git-fixture: refShaOrEmpty', () => {
   });
 
   test('an existing ref gives its sha', () => {
-    assert.equal(refShaOrEmpty('HEAD', { cwd: dir }), gitOrThrow(['rev-parse', 'HEAD'], { cwd: dir }).trim());
+    const env = gitChildEnv(dir);
+    assert.equal(refShaOrEmpty('HEAD', { cwd: dir, env }), gitOrThrow(['rev-parse', 'HEAD'], { cwd: dir, env }).trim());
   });
 
   test('a missing ref (git exit 1) gives the empty string', () => {
-    assert.equal(refShaOrEmpty('refs/heads/does-not-exist', { cwd: dir }), '');
+    assert.equal(refShaOrEmpty('refs/heads/does-not-exist', { cwd: dir, env: gitChildEnv(dir) }), '');
   });
 
   test('a git exit other than 1 (128: not a repository) rethrows, not "no ref"', (t) => {
     const notRepo = createTempDir('git-fixture-notrepo-');
     t.after(() => cleanup(notRepo));
-    const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: notRepo, env: gitChildEnv(notRepo) }));
+    // The ceiling keeps git from finding a repository above a TMPDIR that sits inside one.
+    const env = { ...gitChildEnv(notRepo), GIT_CEILING_DIRECTORIES: path.dirname(notRepo) };
+    const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: notRepo, env }));
     assert.equal(caught.status, 128);
   });
 

@@ -28,6 +28,9 @@ const {
   extractBashBlockContaining,
   extractDeclarationLines,
   extractFunction,
+  TRANSIENT_DIRS_MARKER,
+  FILTER_PATHS_MARKER,
+  PRECONDITIONS_MARKER,
 } = require('./helpers/pr-branch-filter.cjs');
 
 const MARKER = 'refs/gsd/pr-published/strict/main/feature';
@@ -40,7 +43,7 @@ function git(dir, ...args) {
 
 function refkeyFn() {
   const text = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-  return extractDeclarationLines(text, 'PR_BRANCH="${CURRENT_BRANCH}-pr"', ['refkey() {'])[0];
+  return extractDeclarationLines(text, PRECONDITIONS_MARKER, ['refkey() {'])[0];
 }
 
 function commitAll(dir, msg) {
@@ -85,9 +88,9 @@ function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh =
     `gsd_run() { if [ "$1" = run-with-timeout ]; then echo "$*" >> .git/rwt.log; shift 3; "$@"; else echo ${mode}; fi; }`,
     prelude || `gh() { ${gh}; }`, // hermetic: no network lookup unless a test supplies one
     b('PR_STRICT=$(gsd_run query config-get'), // the mode and the filter projections come first; the preconditions read them
-    b('TRANSIENT_DIRS="phases'),
-    b('FILTER_PATHS=$(for d'),
-    b('PR_BRANCH="${CURRENT_BRANCH}-pr"'),
+    b(TRANSIENT_DIRS_MARKER),
+    b(FILTER_PATHS_MARKER),
+    b(PRECONDITIONS_MARKER),
     afterPre, // stands in for the outward steps (handle_sub_repos) that run between the preconditions and the build
     b('git log --oneline'),
     b('# Create PR branch from target'),
