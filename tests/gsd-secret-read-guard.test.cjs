@@ -1188,6 +1188,12 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['ANSI-C quoted flag', "claude $'--agent' gsd-debugger -p hi"],
     ['ANSI-C octal escape in the agent value', "claude --agent $'gsd\\055debugger' -p hi"],
     ['ANSI-C quoted --agent=VALUE word', "claude $'--agent=gsd-debugger' -p hi"],
+    // Unquoting at one level brings dollar-quoting to the next: the operand is
+    // read under the readings once the plain reading has removed the backslashes.
+    ['dollar-quoting that appears once an eval operand is unquoted', "eval claude --agent \\$\\'gsd-debugger\\' -p hi"],
+    // A launch only zsh runs: zsh 5.9 drops the backslash of `\-`, bash keeps it.
+    // The check denies what any reading finds, as the secret-read scan does.
+    ['a launch only the zsh reading decodes', "claude --agent $'gsd\\-debugger' -p hi"],
   ];
 
   for (const [label, command] of DOLLAR_QUOTED_BLOCKS) {
