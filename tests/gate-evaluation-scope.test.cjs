@@ -1619,10 +1619,10 @@ describe('subjectsOccurOnHead (#5354)', () => {
     repo.git('reset', '--hard', base);
     const seen = [];
     subjectsOccurOnHead(repo.dir, [a], (args, opts) => { seen.push({ args, opts }); return execGit(args, opts); });
-    assert.equal(seen.length, 3);
+    assert.equal(seen.length, 4);
     assert.equal('maxBuffer' in seen[0].opts || 'maxBuffer' in seen[1].opts, false, 'the id lookups keep the default cap');
-    assert.ok(seen[2].args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
-    assert.equal(seen[2].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
+    assert.ok(seen[3].args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
+    assert.equal(seen[3].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
   });
 
   test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are', () => {
@@ -1680,19 +1680,24 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a, a.slice(0, 10)]), true);
   });
 
-  test('[negative] a git without --since-as-filter (usage error 129) falls back to the --max-age window', () => {
+  test('[boundary] git 2.36 lists the whole history, git 2.37 filters by date (the probe reads `git --version`)', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
-    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
-    const seen = [];
-    const oldGit = (args, opts) => {
+    // A twin dated before the window and under a child that is too old as well: the unfiltered listing still finds it.
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 10 }, 'old twin\n');
+    commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
+    const withVersion = (version, seen) => (args, opts) => {
       seen.push(args);
-      return args.some((arg) => String(arg).startsWith('--since-as-filter')) ? { exitCode: 129, stdout: '', stderr: 'usage', signal: null, error: null, timedOut: false } : execGit(args, opts);
+      return args[0] === '--version' ? { exitCode: 0, stdout: `git version ${version}\n`, stderr: '', signal: null, error: null, timedOut: false } : execGit(args, opts);
     };
-    assert.equal(subjectsOccurOnHead(repo.dir, [a], oldGit), true);
-    assert.ok(seen.at(-1).includes(`--max-age=${T}`), 'the retry bounds by --max-age');
+    const old = [];
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), true, 'an unfiltered listing sees the twin');
+    assert.equal(old.some((args) => args.some((arg) => String(arg).startsWith('--since-as-filter'))), false);
+    const current = [];
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
+    assert.ok(current.at(-1).includes(`--since-as-filter=@${T}`));
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
@@ -1718,8 +1723,8 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const base = repo.git('rev-parse', 'HEAD');
     const a = commit(repo, 'a.txt', 'feat(03-01): a');
     repo.git('reset', '--hard', base);
-    // The third call is the HEAD listing: a failed git reads as exit 1, a hang as a timeout.
-    const failing = (third) => { let n = 0; return (args, opts) => (++n === 3 ? third : execGit(args, opts)); };
+    // The fourth call is the HEAD listing (after the id lookup, the commit times and the version probe): a failed git reads as exit 1, a hang as a timeout.
+    const failing = (fourth) => { let n = 0; return (args, opts) => (++n === 4 ? fourth : execGit(args, opts)); };
     const failed = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
     assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(failed)), null);
     assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...failed, timedOut: true })), null);

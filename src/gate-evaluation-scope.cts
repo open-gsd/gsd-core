@@ -455,16 +455,9 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
     if (times.size < named.length) return null;
     const since = Math.min(...times.values());
-    const listHead = (bound: string): ScopeCommit[] => parseLog(git(['log', logFormat(false), bound, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false);
-    let listed: ScopeCommit[];
-    try {
-      listed = listHead(`--since-as-filter=@${since}`);
-    } catch (error) {
-      // git before 2.37 has no `--since-as-filter` (usage error 129): `--max-age` bounds the window there, and also drops a too-old child's parents.
-      if (!(error instanceof ScopeUnreadable && error.exitCode === 129)) throw error;
-      listed = listHead(`--max-age=${since}`);
-    }
-    const onHead = new Set(listed.map((c) => c.subject));
+    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (the 10 s timeout bounds it), exact but unfiltered.
+    const bound = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT) ? [`--since-as-filter=@${since}`] : [];
+    const onHead = new Set(parseLog(git(['log', logFormat(false), ...bound, 'HEAD', '--not', ...ids, '--'], undefined, Infinity), false).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
@@ -811,6 +804,8 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
 
 /** First git release with `show --remerge-diff` (#5751). */
 const REMERGE_DIFF_MIN_GIT: readonly [number, number] = [2, 36];
+/** First git release with `log --since-as-filter` (#5354). */
+const SINCE_AS_FILTER_MIN_GIT: readonly [number, number] = [2, 37];
 
 /**
  * The first `<major>.<minor>` in `git --version` output ("git version 2.45.1.windows.1",
@@ -821,34 +816,43 @@ export function parseGitVersion(output: string): { major: number; minor: number 
   return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
 }
 
-/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
-export function remergeDiffSupported(output: string): boolean {
+/** Whether `git --version` output names a git at or after `min`; unparseable reads as no. */
+function versionAtLeast(output: string, min: readonly [number, number]): boolean {
   const version = parseGitVersion(output);
   if (version === null) return false;
-  return version.major > REMERGE_DIFF_MIN_GIT[0]
-    || (version.major === REMERGE_DIFF_MIN_GIT[0] && version.minor >= REMERGE_DIFF_MIN_GIT[1]);
+  return version.major > min[0] || (version.major === min[0] && version.minor >= min[1]);
+}
+
+/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
+export function remergeDiffSupported(output: string): boolean {
+  return versionAtLeast(output, REMERGE_DIFF_MIN_GIT);
 }
 
 /** Per-resolve cache of the `git --version` probe, keyed by the bound git function. */
-const remergeSupportCache = new WeakMap<Git, boolean>();
+const gitVersionCache = new WeakMap<Git, string>();
 
 /**
- * Whether this git can report a merge's own changes (`--remerge-diff`, git >= 2.36). Detected from
- * `git --version`, never from error output: an unknown option exits 128 or 129 depending on where
- * it is parsed. An unparseable version reads as unsupported, the safe side. A timeout still
- * rethrows (unresolvable); any other probe failure reads as unsupported.
+ * Whether this git is at or after `min`. Detected from `git --version`, never from error output: an
+ * unknown option exits 128 or 129 depending on where it is parsed. An unparseable version reads as
+ * older, the safe side. A timeout still rethrows (unresolvable); any other probe failure reads as older.
  */
-function supportsRemergeDiff(git: Git): boolean {
-  const cached = remergeSupportCache.get(git);
-  if (cached !== undefined) return cached;
-  let supported = false;
-  try {
-    supported = remergeDiffSupported(git(['--version']));
-  } catch (error) {
-    if (error instanceof ScopeUnreadable && error.reason === 'git-timeout') throw error;
+function gitAtLeast(git: Git, min: readonly [number, number]): boolean {
+  let output = gitVersionCache.get(git);
+  if (output === undefined) {
+    output = '';
+    try {
+      output = git(['--version']);
+    } catch (error) {
+      if (error instanceof ScopeUnreadable && error.reason === 'git-timeout') throw error;
+    }
+    gitVersionCache.set(git, output);
   }
-  remergeSupportCache.set(git, supported);
-  return supported;
+  return versionAtLeast(output, min);
+}
+
+/** Whether this git can report a merge's own changes (`--remerge-diff`, git >= 2.36). */
+function supportsRemergeDiff(git: Git): boolean {
+  return gitAtLeast(git, REMERGE_DIFF_MIN_GIT);
 }
 
 /**
