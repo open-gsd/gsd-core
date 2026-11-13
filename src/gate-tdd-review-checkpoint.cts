@@ -329,7 +329,8 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   const sealRead = phaseDir ? readSeal(phaseDir) : evidenceNone<SealPlans>();
   if (sealRead.kind === 'unreadable') return unreadableReview(phase, tddPlanFiles.length, [{ source: sealRead.span ?? SEAL_FILE, reason: sealRead.reason }]);
   const seal: SealPlans = sealRead.kind === 'found' ? sealRead.value : {};
-  const evidence: Record<string, SealEntry> = {};
+  // No prototype: a plan named `__proto__` must be its own key, as the seal read (`Object.hasOwn`) takes it.
+  const evidence = Object.create(null) as Record<string, SealEntry>;
   // One shallow-clone probe per run: history completeness is the same for every plan.
   let complete: boolean | undefined;
   const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);

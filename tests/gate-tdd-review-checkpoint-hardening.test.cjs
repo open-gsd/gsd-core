@@ -855,11 +855,23 @@ describe('#5354 tdd review checkpoint seal', () => {
     const r = run(dir, '--record');
     assert.equal(r.payload.passed, false);
     assert.equal(r.payload.unreadable.length, 1);
-    assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json .*nothing was sealed/);
+    assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json \(EACCES\)\. .*nothing was sealed/);
     assert.doesNotMatch(r.payload.message, /was not reviewed/);
     assert.deepEqual(r.payload.rows.map((row) => row.status), ['Pass', 'FAIL']);
     assert.equal(r.payload.violations, 1);
     assert.match(r.payload.table, /### TDD REVIEW/);
+  });
+
+  test('--record names the error text when the write fails with a code that means "absent" (ENOENT)', (t) => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const real = fs.openSync;
+    t.mock.method(fs, 'openSync', (f, ...rest) => {
+      if (String(f).includes('TDD-REVIEW-SEAL.json')) throw Object.assign(new Error('phase dir vanished'), { code: 'ENOENT' });
+      return real(f, ...rest);
+    });
+    const r = run(dir, '--record');
+    assert.equal(r.outcome, 'unreadable');
+    assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json \(Error: phase dir vanished\)\./);
   });
 
   test('a failed --record leaves no temp file behind', (t) => {
@@ -964,6 +976,17 @@ describe('#5354 tdd review checkpoint seal', () => {
     w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
     w(dir, SEAL, `{"plans":{"__proto__":{"red":"${sha('a')}","green":"${sha('b')}"}}}`);
     assert.equal(run(dir).payload.rows[0].status, 'Pass');
+  });
+
+  test('--record seals a passing plan named __proto__ as its own entry', () => {
+    const { dir } = fixture(['test(__proto__): red', 'feat(__proto__): green'], { summary: false, plan: false });
+    w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+    sealGit(dir, 'add', '-A'); sealGit(dir, 'commit', '-m', 'docs: plan');
+    assert.equal(run(dir, '--record').payload.violations, 0);
+    const sealed = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans;
+    assert.deepEqual(Object.keys(sealed), ['__proto__']);
+    assert.match(sealed.__proto__.red, /^[0-9a-f]{40}$/);
+    assert.match(sealed.__proto__.green, /^[0-9a-f]{40}$/);
   });
 
   test('the no-TDD skip is keyed on the picked tddPlans field', () => {
