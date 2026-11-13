@@ -361,8 +361,8 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * merge-base exactly as before.
  *
  * Why the first-parent chain and not `git merge-base origin/<base> HEAD`: with criss-cross
- * history that command returns ONE of several best common ancestors, and the pick is not
- * the commit we want. A stacked PR whose lower PR landed on the base branch as a merge
+ * history that command returns ONE of several best common ancestors, and which one it
+ * picks depends on commit-date order, so it need not be the commit we want. A stacked PR whose lower PR landed on the base branch as a merge
  * commit after the merge ref was built has two (the lower PR's tip and the base commit the
  * merge ref was built on); measuring from the lower PR's tip sweeps the base-only commits
  * between the pin and the merge ref back into range (PR #5871 review, Major 2). The
@@ -371,9 +371,11 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * `<base>..HEAD` range the trailers and changed paths are read from (#5008).
  *
  * Bounded work: `git merge-base` first confirms the two histories are related (its sha is
- * discarded, not used for selection), so an unrelated base ref fails fast instead of
- * walking its whole chain. `rev-list --first-parent <tip> ^<floor>` then lists, newest
- * first, only the chain commits the floor does not already contain. Containment in HEAD
+ * discarded, not used for selection), so an unrelated base ref costs one history walk and
+ * keeps the floor with a line naming that failed command, instead of a rev-list plus about
+ * log2(n) `--is-ancestor` walks that never say the histories are unrelated.
+ * `rev-list --first-parent <tip> ^<floor>` then lists, newest first, only the chain
+ * commits the floor does not already contain. Containment in HEAD
  * is monotonic along a first-parent chain (a contained commit's first parent is
  * contained too), so a binary search finds the newest contained one in
  * ceil(log2(n + 1)) `merge-base --is-ancestor` calls. When none of them is contained,
