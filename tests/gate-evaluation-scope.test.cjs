@@ -1724,13 +1724,15 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.ok(current.find(isHeadListing).includes(`--since-as-filter=@${T}`));
   });
 
-  test('[boundary] an original committed before its author time opens the window at the committer time', () => {
-    const repo = makeRepo();
-    const base = repo.git('rev-parse', 'HEAD');
-    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 100 });
-    repo.git('reset', '--hard', base);
-    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 50 }, 'twin\n');
-    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  test('[boundary] an original committed before its author time opens the window at the committer time (limit-1, limit, limit+1)', () => {
+    for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
+      const repo = makeRepo();
+      const base = repo.git('rev-parse', 'HEAD');
+      const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 100 });
+      repo.git('reset', '--hard', base);
+      commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 100 + offset }, 'twin\n');
+      assert.equal(subjectsOccurOnHead(repo.dir, [a]), expected, `twin committed at limit${offset}`);
+    }
   });
 
   test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
