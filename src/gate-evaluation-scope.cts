@@ -447,19 +447,24 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
     // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
     const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
-    // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids
-    // (the window, not a byte cap, bounds its output). `--since-as-filter` hides older commits without cutting the walk,
-    // so a kept commit under a too-old child is still listed. A rewrite whose own committer clock is behind that time
-    // reads as a squash (test: the `[boundary]` twin at limit-1).
+    // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
+    // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
+    // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
+    // twin at limit-1).
     const times = commitTimes(git, ids, true);
     // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
     if (times.size < named.length) return null;
     const since = Math.min(...times.values());
-    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (the 10 s timeout bounds the walk) and the
-    // same window is applied here, on the committer time each record ends with.
+    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
+    // test: the failing fourth call) and the same window is applied here, on the committer time each record ends with.
     const filtered = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT);
-    const listing = git(['log', '--format=%H%x1f%P%x1f%s%x1f%ct%x1e', ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
-    const inWindow = listing.split('\x1e').filter((record) => filtered || Number(record.split('\x1f')[3]) >= since);
+    const listing = git(['log', logFormat(false, true), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
+    const inWindow = listing.split('\x1e').filter((record) => {
+      if (filtered || record.trim() === '') return true;
+      const time = unixSeconds(record.split('\x1f')[3]);
+      if (time === null) throw new ScopeUnreadable('git-malformed:log');
+      return time >= since;
+    });
     const onHead = new Set(parseLog(inWindow.join('\x1e'), false).map((c) => c.subject));
     return named.every((c) => onHead.has(c.subject));
   } catch (error) {
@@ -598,12 +603,17 @@ function commitTimes(git: Git, shas: readonly string[], earliest = false): Map<s
   for (const group of chunk(shas, SHA_CHUNK)) {
     for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct%x1f%at', ...group, '--']).split('\n')) {
       const [sha, committed, authored] = line.split('\x1f');
-      if (!sha || committed === undefined || !/^[0-9]+$/.test(committed)) continue;
-      const author = authored !== undefined && /^[0-9]+$/.test(authored) ? Number(authored) : Infinity;
-      times.set(sha, earliest ? Math.min(Number(committed), author) : Number(committed));
+      const commit = unixSeconds(committed);
+      if (!sha || commit === null) continue;
+      times.set(sha, earliest ? Math.min(commit, unixSeconds(authored) ?? Infinity) : commit);
     }
   }
   return times;
+}
+
+/** The one reader of a unix-seconds field (`%ct`, `%at`) of a git log record; null when it is not all digits. */
+function unixSeconds(field: string | undefined): number | null {
+  return field !== undefined && /^[0-9]+$/.test(field.trim()) ? Number(field) : null;
 }
 
 interface SinceSplit {
@@ -898,9 +908,12 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
   scope.missingOnDisk = missing;
 }
 
-/** `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. */
-function logFormat(withBody: boolean): string {
-  return withBody ? '--format=%H%x1f%P%x1f%s%x1f%b%x1e' : '--format=%H%x1f%P%x1f%s%x1e';
+/**
+ * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup;
+ * `withCommitTime` closes each record with `%ct` (read it back with `unixSeconds`).
+ */
+function logFormat(withBody: boolean, withCommitTime = false): string {
+  return `--format=%H%x1f%P%x1f%s${withBody ? '%x1f%b' : ''}${withCommitTime ? '%x1f%ct' : ''}%x1e`;
 }
 
 /** Parent shas by commit sha, as read from the logs that listed the commits. */

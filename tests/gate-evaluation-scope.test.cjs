@@ -1625,15 +1625,33 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(seen[3].opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
   });
 
-  test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are', () => {
-    for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
-      const repo = makeRepo();
-      const base = repo.git('rev-parse', 'HEAD');
-      const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
-      repo.git('reset', '--hard', base);
-      commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T + offset }, 'twin\n');
-      assert.equal(subjectsOccurOnHead(repo.dir, [a]), expected, `twin at limit${offset}`);
+  test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are (git 2.37 and git 2.36 alike)', () => {
+    for (const version of ['2.37.0', '2.36.9']) {
+      for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
+        const repo = makeRepo();
+        const base = repo.git('rev-parse', 'HEAD');
+        const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+        repo.git('reset', '--hard', base);
+        commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T + offset }, 'twin\n');
+        assert.equal(subjectsOccurOnHead(repo.dir, [a], gitReporting(version).runner), expected, `git ${version}, twin at limit${offset}`);
+      }
     }
+  });
+
+  test('[negative] a listing record without a numeric commit time on a git without the filter is no answer', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    const { runner } = gitReporting('2.36.9');
+    const garbled = (args, opts) => {
+      const result = runner(args, opts);
+      // Replace the closing time field of each record (`<sha>\x1f<parents>\x1f<subject>\x1f<ct>\x1e`) with a non-number.
+      const garble = (record) => record.split('\x1f').slice(0, 3).concat('x').join('\x1f');
+      return args.includes('HEAD') ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
+    };
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], garbled), null);
   });
 
   test('[boundary] a kept twin under a child dated before the window is still found (the date filters, it does not cut the walk)', () => {
@@ -1688,9 +1706,9 @@ describe('subjectsOccurOnHead (#5354)', () => {
     // A twin dated before the window, under a child that is too old as well: neither git counts it.
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 10 }, 'old twin\n');
     commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
-    const withVersion = (version, seen) => (args, opts) => {
-      seen.push(args);
-      return args[0] === '--version' ? { exitCode: 0, stdout: `git version ${version}\n`, stderr: '', signal: null, error: null, timedOut: false } : execGit(args, opts);
+    const withVersion = (version, seen) => {
+      const { runner } = gitReporting(version);
+      return (args, opts) => { seen.push(args); return runner(args, opts); };
     };
     const old = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), false, 'the same window applies without the git flag');
