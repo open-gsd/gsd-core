@@ -154,7 +154,7 @@ import { updateTableCell, updateTraceabilityCell, deleteTableRow, escapeCell, sp
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
-import { PHASE_STATUS, WIRE_STATUS, parseRoadmapStatusCell, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
+import { PHASE_STATUS, WIRE_STATUS, parseRoadmapStatusCell, rewriteRoadmapStatusCell, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
 const { buildPhaseHeadingRegex, findPhaseTableHeader, editProgressTableSlice, foldPhaseId, insideOpenDetails, checklistEntrySrc } = roadmapMod;
@@ -7173,10 +7173,16 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
             // #5165: a Status cell that already reads Complete is left untouched —
             // re-padding it rewrote a cell the re-run had no business editing.
-            const statusResult = updateTableCell(text, rowMatch, 'Status', (current) =>
-              parseRoadmapStatusCell(current) === WIRE_STATUS.COMPLETE
-                ? current
-                : ` ${toRoadmapStatusCell(PHASE_STATUS.COMPLETE).padEnd(11)} `);
+            // #6170: any other cell keeps its prose. A leading status token (Deferred
+            // included) is rewritten to Complete and its tail kept, by the rule
+            // `roadmap update-plan-progress` shares (`rewriteRoadmapStatusCell`); prose
+            // with no token becomes `Complete - <prose>` so the leading-token counters
+            // (#4967) read Complete. `Completed`, in any case, already counts as Complete.
+            const statusResult = updateTableCell(text, rowMatch, 'Status', (current) => {
+              if (/^completed(?!\w)/i.test(current)) return current;
+              const complete = toRoadmapStatusCell(PHASE_STATUS.COMPLETE);
+              return rewriteRoadmapStatusCell(current, complete) ?? ` ${escapeCell(`${complete} - ${current}`)} `;
+            });
             if (statusResult.ok) text = statusResult.value;
 
             // Preserve only a valid ISO date (#1161: idempotent; self-heal
