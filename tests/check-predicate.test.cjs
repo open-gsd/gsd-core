@@ -404,34 +404,32 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
     test(`phase directory ${name} reaches argv literally without substitution side effects`, (t) => {
       const dir = createTempProject('gate-phase-env-');
       t.after(() => cleanup(dir));
-      {
-        const phaseDir = path.join(dir, '.planning', 'phases', name);
-        fs.mkdirSync(phaseDir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'check.cjs'), `
-          const fs = require('node:fs');
-          const expected = [process.env.EXPECTED_DIR, process.env.EXPECTED_NUMBER, process.env.EXPECTED_IDS, process.env.INHERITED_GATE_SENTINEL];
-          const actual = process.argv.slice(2);
-          process.exitCode = JSON.stringify(actual) === JSON.stringify(expected)
-            && fs.statSync(actual[0]).isDirectory()
-            && process.env.INHERITED_GATE_SENTINEL === 'inherited' ? 0 : 8;
-        `);
-        const phaseNumber = '11-$(touch NUMBER_PWNED)-\'"';
-        const phaseReqIds = 'R-1 `touch IDS_PWNED` $(touch IDS_PWNED2) \'"';
-        const command = 'node check.cjs "$GSD_GATE_PHASE_DIR" "$GSD_GATE_PHASE_NUMBER" "$GSD_GATE_PHASE_REQ_IDS" "${INHERITED_GATE_SENTINEL}"';
-        const result = runGsdTools([
-          'check', 'predicate', '--predicate', JSON.stringify({ kind: 'command-exit-zero', command }),
-          '--phase-dir', path.relative(dir, phaseDir), '--phase-number', phaseNumber, '--phase-req-ids', phaseReqIds,
-        ], dir, {
-          EXPECTED_DIR: fs.realpathSync(phaseDir), EXPECTED_NUMBER: phaseNumber, EXPECTED_IDS: phaseReqIds,
-          INHERITED_GATE_SENTINEL: 'inherited', GSD_GATE_PHASE_DIR: 'ambient-wrong-value',
-        });
-        assert.equal(result.exitCode, 0, result.output);
-        const payload = JSON.parse(result.output);
-        assert.equal(payload.block, false, JSON.stringify(payload));
-        assert.equal(payload.details.exitCode, 0);
-        for (const marker of ['PWNED', 'PWNED2', 'NUMBER_PWNED', 'IDS_PWNED', 'IDS_PWNED2']) {
-          assert.equal(fs.existsSync(path.join(dir, marker)), false, marker);
-        }
+      const phaseDir = path.join(dir, '.planning', 'phases', name);
+      fs.mkdirSync(phaseDir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'check.cjs'), `
+        const fs = require('node:fs');
+        const expected = [process.env.EXPECTED_DIR, process.env.EXPECTED_NUMBER, process.env.EXPECTED_IDS, process.env.INHERITED_GATE_SENTINEL];
+        const actual = process.argv.slice(2);
+        process.exitCode = JSON.stringify(actual) === JSON.stringify(expected)
+          && fs.statSync(actual[0]).isDirectory()
+          && process.env.INHERITED_GATE_SENTINEL === 'inherited' ? 0 : 8;
+      `);
+      const phaseNumber = '11-$(touch NUMBER_PWNED)-\'"';
+      const phaseReqIds = 'R-1 `touch IDS_PWNED` $(touch IDS_PWNED2) \'"';
+      const command = 'node check.cjs "$GSD_GATE_PHASE_DIR" "$GSD_GATE_PHASE_NUMBER" "$GSD_GATE_PHASE_REQ_IDS" "${INHERITED_GATE_SENTINEL}"';
+      const result = runGsdTools([
+        'check', 'predicate', '--predicate', JSON.stringify({ kind: 'command-exit-zero', command }),
+        '--phase-dir', path.relative(dir, phaseDir), '--phase-number', phaseNumber, '--phase-req-ids', phaseReqIds,
+      ], dir, {
+        EXPECTED_DIR: fs.realpathSync(phaseDir), EXPECTED_NUMBER: phaseNumber, EXPECTED_IDS: phaseReqIds,
+        INHERITED_GATE_SENTINEL: 'inherited', GSD_GATE_PHASE_DIR: 'ambient-wrong-value',
+      });
+      assert.equal(result.exitCode, 0, result.output);
+      const payload = JSON.parse(result.output);
+      assert.equal(payload.block, false, JSON.stringify(payload));
+      assert.equal(payload.details.exitCode, 0);
+      for (const marker of ['PWNED', 'PWNED2', 'NUMBER_PWNED', 'IDS_PWNED', 'IDS_PWNED2']) {
+        assert.equal(fs.existsSync(path.join(dir, marker)), false, marker);
       }
     });
   }
@@ -439,66 +437,58 @@ describe('check predicate — literal phase data through the CLI', { skip: NO_SH
   test('absent context overwrites inherited gate values with empty data', (t) => {
     const dir = createTempProject('gate-phase-empty-');
     t.after(() => cleanup(dir));
-    {
-      const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
-        kind: 'command-exit-zero', command: 'test "$GSD_GATE_PHASE_DIR$GSD_GATE_PHASE_NUMBER$GSD_GATE_PHASE_REQ_IDS" = ""',
-      })], dir, { GSD_GATE_PHASE_DIR: 'old-dir', GSD_GATE_PHASE_NUMBER: 'old-number', GSD_GATE_PHASE_REQ_IDS: 'old-ids' });
-      assert.equal(result.exitCode, 0);
-      assert.equal(JSON.parse(result.output).block, false);
-    }
+    const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
+      kind: 'command-exit-zero', command: 'test "$GSD_GATE_PHASE_DIR$GSD_GATE_PHASE_NUMBER$GSD_GATE_PHASE_REQ_IDS" = ""',
+    })], dir, { GSD_GATE_PHASE_DIR: 'old-dir', GSD_GATE_PHASE_NUMBER: 'old-number', GSD_GATE_PHASE_REQ_IDS: 'old-ids' });
+    assert.equal(result.exitCode, 0);
+    assert.equal(JSON.parse(result.output).block, false);
   });
 
   test('real command failures and shell spawn errors remain blocking predicate results', (t) => {
     const dir = createTempProject('gate-phase-outcome-');
     t.after(() => cleanup(dir));
-    {
-      const predicate = JSON.stringify({ kind: 'command-exit-zero', command: 'exit 3' });
-      const failed = runGsdTools(['check', 'predicate', '--predicate', predicate], dir);
-      assert.equal(failed.exitCode, 0, 'a negative verdict is a successful check dispatch');
-      assert.equal(JSON.parse(failed.output).block, true);
-      assert.equal(JSON.parse(failed.output).details.exitCode, 3);
-      const missing = runGsdTools(['check', 'predicate', '--predicate', predicate], dir, { PATH: '' });
-      assert.equal(missing.exitCode, 0);
-      assert.equal(JSON.parse(missing.output).block, true);
-      assert.equal(JSON.parse(missing.output).details.exitCode, 127);
-    }
+    const predicate = JSON.stringify({ kind: 'command-exit-zero', command: 'exit 3' });
+    const failed = runGsdTools(['check', 'predicate', '--predicate', predicate], dir);
+    assert.equal(failed.exitCode, 0, 'a negative verdict is a successful check dispatch');
+    assert.equal(JSON.parse(failed.output).block, true);
+    assert.equal(JSON.parse(failed.output).details.exitCode, 3);
+    const missing = runGsdTools(['check', 'predicate', '--predicate', predicate], dir, { PATH: '' });
+    assert.equal(missing.exitCode, 0);
+    assert.equal(JSON.parse(missing.output).block, true);
+    assert.equal(JSON.parse(missing.output).details.exitCode, 127);
   });
 
   test('actual timeout is distinguished from a command terminating itself', (t) => {
     const dir = createTempProject('gate-phase-timeout-');
     t.after(() => cleanup(dir));
-    {
-      const timedOut = evaluatePredicate(
-        { kind: 'command-exit-zero', command: 'while :; do :; done' },
-        { cwd: dir },
-        { runBoundedShell: () => ({ exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true }) },
-      );
-      assert.equal(timedOut.block, true);
-      assert.equal(timedOut.details.timedOut, true);
-      const deps = buildPredicateDeps();
-      const terminated = evaluatePredicate({ kind: 'command-exit-zero', command: 'kill -TERM $$' }, { cwd: dir }, deps);
-      assert.equal(terminated.block, true);
-      assert.equal(terminated.details.exitCode, 1, 'execTool maps a signal-only termination to exit 1');
-      assert.equal(terminated.details.signal, 'SIGTERM');
-      assert.equal(terminated.details.timedOut, undefined);
-    }
+    const timedOut = evaluatePredicate(
+      { kind: 'command-exit-zero', command: 'while :; do :; done' },
+      { cwd: dir },
+      { runBoundedShell: () => ({ exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true }) },
+    );
+    assert.equal(timedOut.block, true);
+    assert.equal(timedOut.details.timedOut, true);
+    const deps = buildPredicateDeps();
+    const terminated = evaluatePredicate({ kind: 'command-exit-zero', command: 'kill -TERM $$' }, { cwd: dir }, deps);
+    assert.equal(terminated.block, true);
+    assert.equal(terminated.details.exitCode, 1, 'execTool maps a signal-only termination to exit 1');
+    assert.equal(terminated.details.signal, 'SIGTERM');
+    assert.equal(terminated.details.timedOut, undefined);
   });
 });
 
 test('check predicate rejects old context spellings as usage errors before shell side effects', (t) => {
   const dir = createTempProject('gate-phase-legacy-');
   t.after(() => cleanup(dir));
-  {
-    for (const variable of ['GSD_GATE_PHASE_DIR', 'GSD_GATE_PHASE_NUMBER', 'GSD_GATE_PHASE_REQ_IDS']) {
-      const name = variable.slice('GSD_GATE_'.length);
-      const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
-        kind: 'command-exit-zero', command: 'touch SHOULD_NOT_RUN; echo "${' + name + '}"',
-      })], dir, { GSD_JSON_ERRORS: '1', GSD_EXIT_CONTRACT: 'v2' });
-      assert.equal(result.exitCode, 64);
-      const diagnostic = JSON.parse(result.error);
-      assert.equal(diagnostic.reason, 'usage');
-      assert.ok(diagnostic.message.includes('$GSD_GATE_' + name));
-      assert.equal(fs.existsSync(path.join(dir, 'SHOULD_NOT_RUN')), false);
-    }
+  for (const variable of ['GSD_GATE_PHASE_DIR', 'GSD_GATE_PHASE_NUMBER', 'GSD_GATE_PHASE_REQ_IDS']) {
+    const name = variable.slice('GSD_GATE_'.length);
+    const result = runGsdTools(['check', 'predicate', '--predicate', JSON.stringify({
+      kind: 'command-exit-zero', command: 'touch SHOULD_NOT_RUN; echo "${' + name + '}"',
+    })], dir, { GSD_JSON_ERRORS: '1', GSD_EXIT_CONTRACT: 'v2' });
+    assert.equal(result.exitCode, 64);
+    const diagnostic = JSON.parse(result.error);
+    assert.equal(diagnostic.reason, 'usage');
+    assert.ok(diagnostic.message.includes('$GSD_GATE_' + name));
+    assert.equal(fs.existsSync(path.join(dir, 'SHOULD_NOT_RUN')), false);
   }
 });

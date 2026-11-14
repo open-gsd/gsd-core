@@ -86,14 +86,10 @@ values; missing context is set to the empty string, so ambient variables cannot
 supply stale phase context. Other environment variables remain inherited and
 available to the shell as usual.
 
-**Breaking migration.** The old GSD placeholders `${PHASE_NUMBER}`,
-bare `$PHASE_NUMBER`, `$PHASE_DIR`, `$PHASE_REQ_IDS`, and their braced parameter
-expansions (including length `${#PHASE_DIR}` and indirect `${!PHASE_DIR}` forms),
-`${PHASE_DIR}` and `${PHASE_REQ_IDS}` are rejected before execution, including
-inside quotes, with a diagnostic naming the corresponding
-`"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or
-`"$GSD_GATE_PHASE_REQ_IDS"` replacement. Update capability manifests; neither
-single-quoting an old placeholder nor escaping phase data restores that contract.
+**Breaking migration.** For each reserved name (`PHASE_NUMBER`, `PHASE_DIR`, `PHASE_REQ_IDS`), the guard rejects bare `$NAME`, braced `${NAME}`, other braced parameter expansions, length `${#NAME}` and indirect `${!NAME}` spellings, including quoted and manifest-owned references. Every rejection names the corresponding `"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or `"$GSD_GATE_PHASE_REQ_IDS"` replacement.
+
+The guard checks literal spellings; it does not parse arithmetic expansions such as `$((PHASE_NUMBER + 1))` or join shell backslash-newline continuations. Migrate those references to the corresponding `GSD_GATE_PHASE_*` variables too: otherwise they can read inherited or manifest-defined reserved values instead of the injected phase context.
+
 The replacement is ordinary shell expansion of environment data, not a GSD
 placeholder syntax. GSD does not provide a command-text substitution language.
 
@@ -126,7 +122,7 @@ ADR-2008 "Trust model".
 
 - Missing, non-string, empty, or whitespace-only `command`.
 - `command` longer than 4096 chars.
-- Any retired `PHASE_NUMBER`, `PHASE_DIR` or `PHASE_REQ_IDS` shell expansion in `command`, including bare, braced, length and indirect forms, even when a manifest declares its own variable of that name.
+- Literal retired `$PHASE_*`, `${PHASE_*}`, other braced parameter, length and indirect spellings listed under "Breaking migration", even when a manifest declares its own variable of that name. Arithmetic and backslash-newline spellings are outside this literal guard.
 - `timeout` present but not a positive finite number.
 - Unknown `kind`.
 

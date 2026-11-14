@@ -190,18 +190,9 @@ performs its ordinary expansion. Capability authors pass them as quoted data:
 }
 ```
 
-This is a **breaking manifest change**. The old `${PHASE_NUMBER}`,
-bare `$PHASE_*` references and all braced parameter expansions of the three
-reserved names (including `${#PHASE_DIR}` and `${!PHASE_DIR}`) are rejected,
-even when a manifest declares its own variable with that name. The
-`${PHASE_DIR}` and `${PHASE_REQ_IDS}` spellings are rejected as malformed
-command predicates before any subprocess runs. Each diagnostic names the
-matching `"$GSD_GATE_PHASE_NUMBER"`, `"$GSD_GATE_PHASE_DIR"` or
-`"$GSD_GATE_PHASE_REQ_IDS"` replacement. Rejection also applies inside quotes;
-there is no escaping or quoting compatibility mode and no alternative GSD
-placeholder language whose spelling could collide with a shell's syntax.
-A malformed declaration remains a Step-1 check-command failure routed by
-`onError`, rather than a successful negative gate verdict.
+For each reserved name (`PHASE_NUMBER`, `PHASE_DIR`, `PHASE_REQ_IDS`), the guard rejects bare `$NAME`, braced `${NAME}`, other braced parameter expansions, length `${#NAME}` and indirect `${!NAME}` spellings, including quoted and manifest-owned references.
+
+The guard checks literal spellings; it does not parse arithmetic expansions such as `$((PHASE_NUMBER + 1))` or join shell backslash-newline continuations. Migrate those references to the corresponding `GSD_GATE_PHASE_*` variables too: otherwise they can read inherited or manifest-defined reserved values instead of the injected phase context.
 
 The capability-authored command remains trusted `sh -c` code under the original
 opt-in install trust model. This amendment protects **phase context data**; it
