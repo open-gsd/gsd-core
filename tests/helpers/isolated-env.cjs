@@ -253,7 +253,21 @@ function createHermeticRoot(prefix, { parent } = {}) {
  * @returns {Record<string, string>}
  */
 function gitChildEnv(home) {
-  return isolatedEnv({ home, base: scrubGitLocationEnv(scrubGitEnv(home)) });
+  return isolatedEnv({ home, base: { ...scrubGitLocationEnv(scrubGitEnv(home)), GIT_CONFIG_GLOBAL: nullGitConfig() } });
+}
+
+/**
+ * The path `GIT_CONFIG_GLOBAL` takes to read no config: `os.devNull`, except on Windows, where
+ * that is `\\.\nul` and git cannot open it ("unable to access '\\.\nul'"), so an empty file in the temp dir stands in.
+ *
+ * @param {string} [platform] Default: this process's platform.
+ * @returns {string}
+ */
+function nullGitConfig(platform = process.platform) {
+  if (platform !== 'win32') return os.devNull;
+  const empty = path.join(os.tmpdir(), 'gsd-empty-gitconfig');
+  fs.writeFileSync(empty, '', { flag: 'a' });
+  return empty;
 }
 
 /**
@@ -272,4 +286,4 @@ function refOf(dir, ref, timeoutMs = GIT_FIXTURE_TIMEOUT_MS) {
   return refShaOrEmpty(ref, { cwd: dir, env: gitChildEnv(dir), timeoutMs });
 }
 
-module.exports = { isolatedEnv, gitChildEnv, gitIn, refOf, isolatedPath, createHermeticRoot, linkExecutable };
+module.exports = { isolatedEnv, gitChildEnv, nullGitConfig, gitIn, refOf, isolatedPath, createHermeticRoot, linkExecutable };

@@ -22,7 +22,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, gitChildEnv, nullGitConfig, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -226,6 +226,15 @@ describe('gitChildEnv', () => {
     assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
     assert.notEqual(env.GIT_CONFIG_GLOBAL, undefined);
     assert.equal(env.HOME, home);
+  });
+
+  test('GIT_CONFIG_GLOBAL is a path git can open on every platform: the null device, or an empty file on Windows', (t) => {
+    assert.equal(nullGitConfig('linux'), os.devNull);
+    assert.equal(nullGitConfig('darwin'), os.devNull);
+    const win = nullGitConfig('win32');
+    assert.notEqual(win, os.devNull, 'on Windows the null device is `\\\\.\\nul`, which git cannot open');
+    assert.ok(fs.existsSync(win) && fs.readFileSync(win, 'utf-8') === '', 'an existing empty file');
+    assert.equal(gitChildEnv(tmp(t, 'gsd-6033-nullcfg-home-')).GIT_CONFIG_GLOBAL, nullGitConfig());
   });
 
   test('gitIn and refOf run git under gitChildEnv: a hostile GIT_DIR in the parent env does not reach them', (t) => {
