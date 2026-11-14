@@ -120,6 +120,19 @@
       "workstreamScoped": false
     },
     {
+      "verb": "config-ensure-section",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false,
+      "rejectedGlobalFlags": [
+        "default",
+        "pick"
+      ],
+      "rejectShortFlags": true
+    },
+    {
       "verb": "config-new-project",
       "aliases": [],
       "positionals": 1,
@@ -148,6 +161,19 @@
       },
       "required": [],
       "workstreamScoped": false
+    },
+    {
+      "verb": "config-set-model-profile",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false,
+      "rejectedGlobalFlags": [
+        "default",
+        "pick"
+      ],
+      "rejectShortFlags": true
     },
     {
       "verb": "context-predicates",
@@ -451,6 +477,10 @@
       "flags": {},
       "required": [],
       "workstreamScoped": false,
+      "rejectedGlobalFlags": [
+        "default",
+        "pick"
+      ],
       "rejectShortFlags": true
     },
     {
@@ -1197,9 +1227,7 @@
     "check.decision-coverage-plan",
     "check.decision-coverage-verify",
     "claude-orchestration",
-    "config-ensure-section",
     "config-get",
-    "config-set-model-profile",
     "docs-init",
     "estimate-calibrate",
     "estimate-calibration",

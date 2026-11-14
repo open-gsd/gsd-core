@@ -1605,6 +1605,14 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
     { command: 'config-set-model-profile', positionals: ['quality'] },
     { command: 'migrate-config', positionals: [] },
   ];
+  test('the registry declares the actual guarded mutation routes', () => {
+    const { CLI_SURFACE } = require('../gsd-core/bin/lib/cli-surface.cjs');
+    assert.deepEqual(Object.keys(CLI_SURFACE).filter((verb) => CLI_SURFACE[verb].rejectedGlobalFlags).sort(), verbs.map(({ command }) => command).sort());
+    for (const { command, positionals } of verbs) {
+      assert.equal(CLI_SURFACE[command].positionals, positionals.length + 1);
+      assert.deepEqual(CLI_SURFACE[command].rejectedGlobalFlags, ['pick', 'default']);
+    }
+  });
   const unsupportedFlags = ['--json', '--force', '--workstream', '--dry-run', '--bogus-flag', '--dry-run=', '--raw=true', '---dry-run', '--5', '--', '-1', '-'];
   // Noncanonical bytes and a real legacy key expose both rewriting and migration.
   const legacyBytes = '{ "depth" : "comprehensive", "model_profile" : "balanced", "commit_docs" : false }\n';
@@ -1626,14 +1634,14 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
 
   const seamStrays = new Set(['-1', '-']);
 
-  function assertUsage(result, command, flag) {
+  function assertUsage(result, command, flag, profileSlot = false) {
     assert.equal(result.success, false, 'an unsupported flag must fail');
     assert.equal(result.exitCode, 1);
     assert.equal(result.output, '', 'refusal must not print a success payload');
     assert.deepEqual(JSON.parse(result.error), {
       ok: false,
       reason: ERROR_REASON.USAGE,
-      message: command === 'migrate-config' && seamStrays.has(flag)
+      message: !profileSlot && seamStrays.has(flag)
         ? `unexpected positional argument ${formatDiagnosticToken(flag)}`
         : `Unknown flag for ${command}: ${flag}`,
     });
@@ -1666,7 +1674,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
                 homeSandboxEnv(f.dir),
               );
               assertUnchanged(f);
-              assertUsage(result, command, flag);
+              assertUsage(result, command, flag, true);
             });
           }
         }
@@ -1756,9 +1764,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         assert.equal(result.exitCode, 1);
         assert.deepEqual(JSON.parse(result.error), {
           ok: false, reason: ERROR_REASON.USAGE,
-          message: command === 'migrate-config'
-            ? `unexpected positional argument ${formatDiagnosticToken(extra)}`
-            : `Unexpected argument for ${command}: ${extra}`,
+          message: `unexpected positional argument ${formatDiagnosticToken(extra)}`,
         });
         assert.equal(result.output, '');
       });
@@ -1802,22 +1808,25 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
       }),
       ({ suffix, short, leading, query, raw, existing, adjacent, beforeCommand }) => {
         const flag = `${short ? '-' : '--'}unknown-${suffix.join('')}`;
-        const globalPrefix = adjacent === '--default' && beforeCommand;
+        const globalPrefix = adjacent !== null && beforeCommand;
         for (const { command, positionals } of verbs) {
           const f = fixture(existing);
           fixtures.push(f.dir);
-            const result = runGsdTools([
-              ...(globalPrefix ? [adjacent, flag] : []), ...(query ? ['query'] : []), command,
-              ...(leading && !globalPrefix ? [...(adjacent ? [adjacent] : []), flag] : []), ...positionals,
-              ...(raw ? ['--raw'] : []), ...(leading || globalPrefix ? [] : [...(adjacent ? [adjacent] : []), flag]), '--json-errors',
-            ], f.dir, homeSandboxEnv(f.dir));
-            assertUnchanged(f);
-            assertUsage(result, command, adjacent ?? flag);
+          const result = runGsdTools([
+            ...(globalPrefix ? [adjacent, flag] : []), ...(query ? ['query'] : []), command,
+            ...(leading && !globalPrefix ? [...(adjacent ? [adjacent] : []), flag] : []), ...positionals,
+            ...(raw ? ['--raw'] : []), ...(leading || globalPrefix ? [] : [...(adjacent ? [adjacent] : []), flag]), '--json-errors',
+          ], f.dir, homeSandboxEnv(f.dir));
+          assertUnchanged(f);
+          assertUsage(result, command, adjacent ?? flag);
         }
       },
     ), { seed: 5286, numRuns: 12, examples: [[{
       suffix: ['a'], short: false, leading: false, query: true, raw: false,
       existing: true, adjacent: '--default', beforeCommand: true,
+    }], [{
+      suffix: ['b'], short: true, leading: false, query: true, raw: true,
+      existing: false, adjacent: '--pick', beforeCommand: true,
     }]] });
   });
 });
