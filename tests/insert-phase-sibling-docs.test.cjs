@@ -99,8 +99,7 @@ describe('#5583 insert-phase --sibling', () => {
       ['15.2 --ws feature --sibling x', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['--ws feature 15.2 x --sibling', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['15.2 x --ws', ['[15.2]', '[x]']],
-      // a quoted --ws value: init_context's sed does not read it either, so both steps use the default workstream
-      ['15.2 --ws "feature" x', ['[15.2]', '[x]']],
+      ['15.2 --ws "feature" x', ['[--ws=feature]', '[15.2]', '[x]']],
       ['5 -5 degrees', ['[5]', '[-5 degrees]']],
       ['5 -h flag', ['[5]', '[-h flag]']],
       ['  --insert 15.2 x', ['[15.2]', '[x]']],
@@ -153,18 +152,20 @@ describe('#5583 insert-phase --sibling', () => {
     }
   });
 
-  // The init step and the insert fence each read --ws from the typed text: both must pick the same workstream.
+  // The init step, the insert fence and the state block each read --ws from the typed text: all must pick the same workstream.
   describe('init step and insert fence read the same --ws', { skip: SKIP }, () => {
     const WS_ROWS = [
       '15.2 --ws feature x',
       '--ws feature 15.2 x --sibling',
       '15.2 x --ws',
       '15.2 --ws "feature" x',
+      "15.2 --ws 'feature' x",
       '15.2 y --ws=x',
       '15.2 --ws a.b-c_1 x',
       '15.2 --ws -bad x',
     ];
     const blocks = (text) => text.split('```').filter((f, i) => i % 2 && f.includes('GSD_WS=$('));
+    const STATE_CALLS = 2; // state.patch and state.add-roadmap-evolution
     // the workstream argument the block hands to gsd_run, or '' when it hands none
     const wsOf = (block, args, probe) => {
       const lines = block.split('\n').slice(1).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n')
@@ -178,19 +179,20 @@ describe('#5583 insert-phase --sibling', () => {
       return r.stdout.split('\n').filter((l) => l.startsWith('[--ws=')).join('');
     };
     const wsPair = (text, args) => {
-      const [init, fence] = blocks(text);
-      return [wsOf(init, args, 'printf "%s\\n" "$INIT"'), wsOf(fence, args, 'printf "%s\\n" "$RESULT"')];
+      const [init, fence, state] = blocks(text);
+      return [wsOf(init, args, 'printf "%s\\n" "$INIT"'), wsOf(fence, args, 'printf "%s\\n" "$RESULT"'), wsOf(state, args, 'true')];
     };
 
-    test('the workflow has exactly the init block and the insert fence', () => assert.equal(blocks(read(WF)).length, 2));
+    test('the workflow has exactly the init block, the insert fence and the state block', () => assert.equal(blocks(read(WF)).length, 3));
     for (const args of WS_ROWS) {
       test('same workstream for "' + args + '"', () => {
-        const [a, b] = wsPair(read(WF), args);
+        const [a, b, c] = wsPair(read(WF), args);
         assert.equal(a, b);
+        assert.equal(c, b.repeat(STATE_CALLS), 'both state queries get the same --ws');
       });
     }
     test('a table row reads a workstream in both blocks', () => {
-      assert.deepEqual(wsPair(read(WF), '15.2 --ws feature x'), ['[--ws=feature]', '[--ws=feature]']);
+      assert.deepEqual(wsPair(read(WF), '15.2 --ws feature x'), ['[--ws=feature]', '[--ws=feature]', '[--ws=feature][--ws=feature]']);
     });
     test('a mutated sed in one block makes the two disagree', () => {
       const text = read(WF);
@@ -198,6 +200,14 @@ describe('#5583 insert-phase --sibling', () => {
       const mutated = text.replace(fenceSed, () => fenceSed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*'));
       const [a, b] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
       assert.notEqual(a, b);
+    });
+    test('a mutated sed in the state block makes it disagree with the fence', () => {
+      const text = read(WF);
+      const stateSed = blocks(text)[2].split('\n').find((l) => l.startsWith('GSD_WS=$('));
+      const at = text.lastIndexOf(stateSed); // the sed lines are identical: mutate the last one, in the state block
+      const mutated = text.slice(0, at) + stateSed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*') + text.slice(at + stateSed.length);
+      const [, b, c] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
+      assert.notEqual(c, b.repeat(STATE_CALLS));
     });
   });
 
