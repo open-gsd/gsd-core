@@ -3243,13 +3243,19 @@ function readEachWay(command, depth, ctx, rescan = false) {
 }
 
 // A secret read outranks a word with no value to check, so which block a
-// command gets does not hang on which reading reported first.
+// command gets does not hang on which reading reported first. Each reading
+// counts the git alias invocations it reaches from the same start, and the
+// most any reading counted stands, so reading a script four ways does not
+// spend MAX_ALIAS_EXPANSIONS four times.
 function scanEachWay(command, depth, ctx, rescan) {
   if (!readsEachWay(command)) return scanCommand(command, depth, false, ctx, rescan);
   readingsRan = true;
   let unreadable = null;
+  const start = ctx.aliasExpansions;
+  let most = start;
   for (const shell of READINGS) {
     let hit = null;
+    ctx.aliasExpansions = start;
     try {
       hit = scanCommand(command, depth, shell, ctx, rescan);
     } catch (e) {
@@ -3265,8 +3271,12 @@ function scanEachWay(command, depth, ctx, rescan) {
     }
     if (hit !== null && hit.code === 'secret-read') return hit;
     if (unreadable === null) unreadable = hit;
+    most = Math.max(most, ctx.aliasExpansions);
   }
-  return scanCommand(command, depth, false, ctx, rescan) || unreadable;
+  ctx.aliasExpansions = start;
+  const hit = scanCommand(command, depth, false, ctx, rescan);
+  ctx.aliasExpansions = Math.max(most, ctx.aliasExpansions);
+  return hit || unreadable;
 }
 
 // Whether `command` holds a form the readings are for (findSecretRead).
