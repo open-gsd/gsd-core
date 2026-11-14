@@ -11,13 +11,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { refOf } = require('./helpers/isolated-env.cjs');
-const { cleanup } = require('./helpers.cjs');
-const { createTempDir } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 const { git, commitAll, write, commitRound, publish, runSh, mergePr, probePrMerged, markerOf, pendingOf, builtOf, refsOf, changed, buildRepo, squashMerge, ghPrelude, publishedWhileMainMoves, WARNED, noRefs, useRepos } = require('./helpers/pr-branch-published-fixture.cjs');
 
 describe('#5469 pr-branch published marker (real git): failures', () => {
   const repo = useRepos();
 
+  // Root files named like the matcher's old section markers.
   test('files named L, R, D, F, P and `commit <sha>` do not shift the matcher sections', () => {
     const dir = repo();
     for (const f of ['L', 'R', 'D', 'F', 'P', `commit ${'a'.repeat(40)}`]) write(dir, f, `${f}\n`);

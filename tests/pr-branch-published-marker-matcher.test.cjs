@@ -365,6 +365,4 @@ describe('#5469 pr-branch published marker (real git): matcher', () => {
     assert.doesNotMatch(r.stderr, WARNED);
     assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
   });
-
-  // Root files named like the matcher's old section markers.
 });

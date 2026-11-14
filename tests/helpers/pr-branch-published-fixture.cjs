@@ -257,7 +257,6 @@ module.exports = {
   runSh,
   refKeys,
   mergePr,
-  prMergedFns,
   probePrMerged,
   printedCmd,
   markerOf,
