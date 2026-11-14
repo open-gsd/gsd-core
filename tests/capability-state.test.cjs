@@ -14,9 +14,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const fc = require('fast-check');
 
-const { cleanup, runGsdTools } = require('./helpers.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { cleanup, runGsdTools, installSpawnEnv } = require('./helpers.cjs');
+const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
+const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   resolveCapabilityState,
@@ -777,19 +779,15 @@ describe('resolveCapabilityState — prototype pollution guard', () => {
 //
 // Because cmdCapabilityState destructures `output` at module load time, patching
 // core.cjs after the fact is ineffective. We instead invoke gsd-tools via
-// spawnSync so each test gets a fresh process with stdout captured.
-
-const { spawnSync } = require('node:child_process');
+// the process seam so each test gets a fresh process with stdout captured.
 
 const gsdToolsPath = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function runCapabilityState(cwd, configDir) {
-  const result = spawnSync(
-    process.execPath,
+  return runNode(
     [gsdToolsPath, 'capability', 'state', '--config-dir', configDir, '--raw', '--cwd', cwd],
-    { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+    { timeoutMs: PROBE_TIMEOUT_MS },
   );
-  return result;
 }
 
 describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
@@ -826,7 +824,7 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 
   test('emits envelope with runtimeConfigDir and capabilities array', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDir);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.ok(typeof envelope === 'object' && envelope !== null, 'envelope must be an object');
     assert.ok('runtimeConfigDir' in envelope, 'envelope must have runtimeConfigDir');
@@ -836,7 +834,7 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 
   test('with core profile marker: capabilities present (profile resolution does not throw)', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDirCore);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.ok(Array.isArray(envelope.capabilities));
     // ui capability should appear; installed=false because core profile doesn't include ui-phase/ui-review
@@ -847,14 +845,14 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 
   test('runtimeConfigDir is echoed in the envelope', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDir);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     assert.strictEqual(envelope.runtimeConfigDir, tmpConfigDir);
   });
 
   test('surface-disabled UI capability reports enabled=false and inactive hooks', () => {
     const result = runCapabilityState(tmpProjectDir, tmpConfigDirUiDisabled);
-    assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}: ${result.stderr}`);
+    assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout);
     const uiCap = envelope.capabilities.find((c) => c.id === 'ui');
     assert.ok(uiCap, 'ui capability should be present in output');
@@ -1104,6 +1102,110 @@ describe('regressions: flat commands/gsd-<stem>.md layout (#1858)', () => {
   });
 });
 
+describe('installed-runtime agent manifest parity (#5356)', () => {
+  const repoRoot = path.resolve(__dirname, '..');
+  const { loadSkillsManifest } = require('../gsd-core/bin/lib/install-profiles.cjs');
+  const { resolveSurface } = require('../gsd-core/bin/lib/surface.cjs');
+
+  test('#5356: source and installed manifests recover identical dependencies from the command corpus', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-agent-parity-'));
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, 'custom', 'runtime');
+    const source = loadSkillsManifest(path.join(repoRoot, 'commands', 'gsd'));
+    fs.cpSync(path.join(repoRoot, 'gsd-core', 'workflows'), path.join(configDir, 'gsd-core', 'workflows'), { recursive: true });
+    for (const stem of source.keys()) {
+      if (stem.startsWith('_calls_agents_')) continue;
+      const skillDir = path.join(configDir, 'skills', `gsd-${stem}`);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.copyFileSync(path.join(repoRoot, 'commands', 'gsd', `${stem}.md`), path.join(skillDir, 'SKILL.md'));
+    }
+    const installed = _resolveManifest(path.join(root, 'absent', 'commands', 'gsd'), configDir);
+    assert.deepEqual([...installed.keys()].sort(), [...source.keys()].sort());
+    for (const [key, refs] of source) {
+      assert.deepEqual([...installed.get(key)].sort(), [...refs].sort(), `installed dependency parity: ${key}`);
+    }
+  });
+
+  test('#5356 property: installed refs are the union of direct, workflow, and recursive fragment refs', async () => {
+    const agentNames = fc.array(fc.constantFrom('alpha', 'beta', 'gamma', 'delta'), { minLength: 1, maxLength: 4 });
+    await fc.assert(fc.property(
+      agentNames, agentNames, agentNames, agentNames, agentNames, fc.constantFrom('\n', '\r\n'),
+      (direct, parent, steps, modes, templates, eol) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-agent-property-'));
+        try {
+          const configDir = path.join(root, 'custom', 'runtime');
+          const sourceDir = path.join(root, 'commands', 'gsd');
+          const sourceWorkflows = path.join(root, 'workflows');
+          const installedWorkflows = path.join(configDir, 'gsd-core', 'workflows');
+          const skillDir = path.join(configDir, 'skills', 'gsd-probe-skill');
+          fs.mkdirSync(sourceDir, { recursive: true });
+          fs.mkdirSync(skillDir, { recursive: true });
+          fs.mkdirSync(sourceWorkflows, { recursive: true });
+          const groups = { direct, parent, steps, modes, templates };
+          const refsFor = (kind) => groups[kind].map((name) => `gsd-${kind}-${name}`);
+          const skill = ['---', 'requires: [dep-a, dep-b]', '---', ...refsFor('direct'), '@./workflows/probe.md', ''].join(eol);
+          fs.writeFileSync(path.join(sourceDir, 'probe-skill.md'), skill);
+          fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skill);
+          fs.writeFileSync(path.join(sourceWorkflows, 'probe.md'), refsFor('parent').join(eol));
+          for (const kind of ['steps', 'modes', 'templates']) {
+            const fragmentDir = path.join(sourceWorkflows, 'probe', kind, 'nested');
+            fs.mkdirSync(fragmentDir, { recursive: true });
+            fs.writeFileSync(path.join(fragmentDir, 'spawn.md'), refsFor(kind).join(eol));
+          }
+          fs.cpSync(sourceWorkflows, installedWorkflows, { recursive: true });
+          const source = loadSkillsManifest(sourceDir, sourceWorkflows);
+          const installed = _loadInstalledSkillsManifest(configDir);
+          const expected = [...new Set(Object.keys(groups).flatMap(refsFor))].sort();
+          assert.deepEqual([...installed.get('_calls_agents_probe-skill')].sort(), expected);
+          assert.deepEqual([...installed.get('_calls_agents_probe-skill')].sort(), [...source.get('_calls_agents_probe-skill')].sort());
+          assert.deepEqual(installed.get('probe-skill'), source.get('probe-skill'));
+        } finally {
+          cleanup(root);
+        }
+      },
+    ), { seed: 5356, numRuns: 30 });
+  });
+
+  for (const runtime of ['claude', 'opencode']) {
+  test(`#5356: ${runtime} installed capability enable preserves applicable agents and prunes disabled-only agents`, (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-agent-materialize-'));
+    t.after(() => cleanup(home));
+    const configDir = path.join(home, 'custom', `${runtime}-config`);
+    const cwd = path.join(home, 'project');
+    fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{}');
+    const env = installSpawnEnv({ HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: configDir, GSD_HOME: home });
+    const install = runNode([path.join(repoRoot, 'bin', 'install.js'), `--${runtime}`, '--global', '--config-dir', configDir], {
+      cwd, env, timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(install.exitCode, 0, `scratch install failed: ${install.stderr}\n${install.stdout}`);
+    const source = loadSkillsManifest(path.join(repoRoot, 'commands', 'gsd'));
+    const sourceAgents = new Set(fs.readdirSync(path.join(repoRoot, 'agents')).filter((file) => file.endsWith('.md')).map((file) => file.slice(0, -3)));
+    const installedAgents = () => fs.readdirSync(path.join(configDir, 'agents')).filter((file) => sourceAgents.has(file.slice(0, -3))).map((file) => file.slice(0, -3)).sort();
+    const state = { baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] };
+    const applicableAgents = (surface) => [...resolveSurface(configDir, source, undefined, realRegistry, surface).agents].filter((agent) => sourceAgents.has(agent)).sort();
+    const full = applicableAgents(state);
+    assert.ok(full.length > 0, 'the source closure must have applicable agents');
+    assert.ok(full.every((agent) => installedAgents().includes(agent)), 'fresh install must contain the source closure');
+    assert.equal(fs.existsSync(path.join(configDir, 'commands', 'gsd')), false, 'the installed CLI must use the installed-skills fallback');
+    const installedCli = path.join(configDir, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    for (const disabledClusters of [['ns_meta'], ['ai_eval']]) {
+      const surface = { ...state, disabledClusters };
+      fs.writeFileSync(path.join(configDir, '.gsd-surface.json'), JSON.stringify(surface));
+      const enabled = runNode([installedCli, 'capability', 'enable', 'live-dom-uat', '--runtime', runtime, '--config-dir', configDir, '--cwd', cwd, '--raw'], {
+        cwd, env, timeoutMs: INSTALL_TIMEOUT_MS,
+      });
+      assert.equal(enabled.exitCode, 0, `capability enable failed: ${enabled.stderr}\n${enabled.stdout}`);
+      assert.deepEqual(JSON.parse(enabled.stdout).errors, []);
+      assert.deepEqual(installedAgents(), applicableAgents(surface), `installed agents must match source closure with ${disabledClusters} disabled`);
+    }
+    const disabledOnly = full.filter((agent) => !applicableAgents({ ...state, disabledClusters: ['ai_eval'] }).includes(agent));
+    assert.ok(disabledOnly.length > 0, 'the disabled-cluster control must remove real agents');
+    assert.ok(disabledOnly.every((agent) => !installedAgents().includes(agent)), 'disabled-only agents must still be pruned');
+  });
+  }
+});
+
 describe('regressions: installed-runtime capability surface (#1160)', () => {
   // Minimal valid SKILL.md content (frontmatter only — matches what install emits)
   function makeSkillMd(stem) {
@@ -1208,8 +1310,10 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
   });
 
   test('_resolveManifest: falls back to installed skills when commandsGsdDir absent', () => {
-    const nonExistentDir = path.join(os.tmpdir(), 'cap-rm-nonexistent-' + Date.now());
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-installed-'));
+    // Keep both source branches inside the fixture. A path directly under
+    // os.tmpdir() lets unrelated gsd-*.md scratch files claim the flat branch.
+    const nonExistentDir = path.join(tmpDir, 'commands', 'gsd');
     try {
       // Create installed skill layout under tmpDir
       const secureDir = path.join(tmpDir, 'skills', 'gsd-secure-phase');
@@ -1296,7 +1400,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
 
     test('security capability: enabled=true in installed runtime with security_enforcement=true', () => {
       const result = runCapabilityState(tmpInstalledProjectDir, tmpInstalledConfigDir);
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
       const secCap = envelope.capabilities.find((c) => c.id === 'security');
       assert.ok(secCap, 'security capability must be present in output');
@@ -1307,7 +1411,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
 
     test('nyquist capability: enabled=true in installed runtime with nyquist_validation=true', () => {
       const result = runCapabilityState(tmpInstalledProjectDir, tmpInstalledConfigDir);
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
       const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
       assert.ok(nyqCap, 'nyquist capability must be present in output');
@@ -1317,17 +1421,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('security hook at verify:post is active in installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           gsdToolsPath,
           'loop', 'render-hooks', 'verify:post',
           '--config-dir', tmpInstalledConfigDir,
           '--cwd', tmpInstalledProjectDir,
         ],
-        { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+        { timeoutMs: PROBE_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
       assert.strictEqual(envelope.point, 'verify:post');
       assert.ok(Array.isArray(envelope.activeHooks), 'activeHooks must be an array');
@@ -1346,17 +1449,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('nyquist hook at verify:post is active in installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           gsdToolsPath,
           'loop', 'render-hooks', 'verify:post',
           '--config-dir', tmpInstalledConfigDir,
           '--cwd', tmpInstalledProjectDir,
         ],
-        { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+        { timeoutMs: PROBE_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
       const nyquistHook = envelope.activeHooks.find(
         (h) => h.capId === 'nyquist' && h.kind === 'step',
@@ -1454,8 +1556,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('capability state: security & nyquist enabled in true installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           installedGsdTools,
           'capability', 'state',
@@ -1463,9 +1564,9 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--cwd', installedProjectDir,
           '--raw',
         ],
-        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+        { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
       const secCap = envelope.capabilities.find((c) => c.id === 'security');
       const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
@@ -1477,17 +1578,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
     });
 
     test('loop render-hooks verify:post: includes security & nyquist in true installed runtime', () => {
-      const result = spawnSync(
-        process.execPath,
+      const result = runNode(
         [
           installedGsdTools,
           'loop', 'render-hooks', 'verify:post',
           '--config-dir', installedConfigDir,
           '--cwd', installedProjectDir,
         ],
-        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+        { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
       );
-      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
       assert.strictEqual(envelope.point, 'verify:post');
       assert.ok(Array.isArray(envelope.activeHooks), 'activeHooks must be an array');
@@ -1512,17 +1612,16 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           JSON.stringify({ workflow: { security_enforcement: false, nyquist_validation: false } }),
           'utf8',
         );
-        const result = spawnSync(
-          process.execPath,
+        const result = runNode(
           [
             installedGsdTools,
             'loop', 'render-hooks', 'verify:post',
             '--config-dir', installedConfigDir,
             '--cwd', disabledProj,
           ],
-          { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+          { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
         );
-        assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstderr: ${result.stderr}`);
+        assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstderr: ${result.stderr}`);
         const envelope = JSON.parse(result.stdout.trim());
         const sec = (envelope.activeHooks || []).find((h) => h.capId === 'security' && h.kind === 'step');
         const nyq = (envelope.activeHooks || []).find((h) => h.capId === 'nyquist' && h.kind === 'step');

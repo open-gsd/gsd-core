@@ -163,6 +163,73 @@ describe('reviewer lane parity — descriptor vs registry (ADR-2782 Phase 5b)', 
   });
 });
 
+const FC_AVAIL = { seed: 20260729, numRuns: 100 };
+
+describe('reviewer lane parity — availability fallback rows', () => {
+  test('the shipped fallback names exactly the first-party openai-http lanes', () => {
+    assert.deepStrictEqual(
+      check().violations.filter((v) => v.reason === PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH),
+      [],
+    );
+  });
+
+  test('a stale fallback row and a dropped lane are both violations', () => {
+    const wf = WORKFLOW_TEXT.replace('llama_cpp:missing', 'ghost:missing');
+    const r = reasons(check({ workflowText: wf }));
+    assert.ok(r.includes(`${PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH}:ghost`));
+    assert.ok(r.includes(`${PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH}:llama_cpp`));
+  });
+  test('an availability call without its || fallback is a violation', () => {
+    const wf = WORKFLOW_TEXT.replace('review-lane availability ||', 'review-lane availability #');
+    assert.ok(reasons(check({ workflowText: wf })).includes(`${PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH}:no-fallback`));
+  });
+
+  const AVAIL = PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH;
+  const availViolations = (r) => r.violations.filter((v) => v.reason === AVAIL).map((v) => v.subject);
+  /** Descriptor with the shipped lanes plus extra openai-http lanes, and a workflow whose fallback names `slugs`. */
+  function withHttpSlugs(slugs, fallbackSlugs = slugs) {
+    const descriptor = [...REVIEWER_LANES.filter((l) => l.transport !== 'openai-http'), ...slugs.map((x) => ({ ...fakeLane(x), transport: 'openai-http' }))];
+    const rows = fallbackSlugs.map((x) => `${x}:missing\\n`).join('');
+    const workflowText = WORKFLOW_TEXT.replace(/printf '[^']{0,200}:missing[^']{0,200}'/, `printf '${rows}'`);
+    return { descriptor, workflowText };
+  }
+
+  test('a slug with digits and hyphens is matched in the fallback (not permanently red)', () => {
+    assert.deepStrictEqual(availViolations(check(withHttpSlugs(['llama-3_cpp2', 'ollama']))), []);
+  });
+
+  test('slug length bound: 31 and 32 match, 33 cannot and is reported', () => {
+    for (const n of [31, 32]) {
+      assert.deepStrictEqual(availViolations(check(withHttpSlugs(['a'.repeat(n)]))), [], `length ${n}`);
+    }
+    assert.deepStrictEqual(availViolations(check(withHttpSlugs(['a'.repeat(33)]))), ['a'.repeat(33)]);
+  });
+
+  test('property: fallback rows match the http lanes iff every lane slug is present', () => {
+    const slugs = fc.uniqueArray(fc.stringMatching(/^[a-z0-9][a-z0-9_-]{0,31}$/), { minLength: 1, maxLength: 4 });
+    fc.assert(fc.property(slugs, (xs) => {
+      assert.deepStrictEqual(availViolations(check(withHttpSlugs(xs))), []);
+      assert.deepStrictEqual(availViolations(check(withHttpSlugs(xs, xs.slice(1)))), [xs[0]]);
+    }), FC_AVAIL);
+  });
+
+  test('a comment or prose mention before the real call does not shadow it', () => {
+    const wf = WORKFLOW_TEXT.replace('gsd_run review-lane availability', '# the review-lane availability probe follows\nsee review-lane availability docs\ngsd_run review-lane availability');
+    assert.deepStrictEqual(availViolations(check({ workflowText: wf })), []);
+    const stale = wf.replace('llama_cpp:missing', 'ghost:missing');
+    assert.ok(availViolations(check({ workflowText: stale })).includes('ghost'), 'the real call is still checked');
+  });
+
+  test('a removed availability call is a violation, not a skipped check', () => {
+    const wf = WORKFLOW_TEXT.replace(/^gsd_run review-lane availability.*$/m, '');
+    assert.deepStrictEqual(availViolations(check({ workflowText: wf })), ['no-call']);
+  });
+
+  test('a CRLF checkout parses the availability call', () => {
+    assert.deepStrictEqual(availViolations(check({ workflowText: asCrlf(WORKFLOW_TEXT) })), []);
+  });
+});
+
 describe('reviewer lane parity — anti-parity: no bespoke leg may return', () => {
   test('a re-added per-CLI leg marker is a violation', () => {
     // The regex flipped polarity in Phase 5b: matching a leg marker is now the failure. Without
@@ -386,6 +453,8 @@ describe('reviewer lane parity — properties', () => {
     const heads = sections.map((s) => `## ${s} Review`).join('\n\n');
     const body = [
       '<step name="invoke_reviewers">',
+      // The availability call is required; spawn-only lanes have an empty fallback.
+      "gsd_run review-lane availability || true",
       ...noise,
       legs,
       '</step>',
@@ -462,7 +531,7 @@ describe('reviewer lane parity — properties', () => {
           descriptor: [lane],
           roster: [bad],
           registry: [bad],
-          workflowText: '<step name="invoke_reviewers">\n</step>',
+          workflowText: '<step name="invoke_reviewers">\ngsd_run review-lane availability || true\n</step>',
         });
         return r.violations.map((v) => v.reason).includes(PARITY_VIOLATION.INVALID_SLUG);
       }),
@@ -481,13 +550,13 @@ describe('reviewer lane parity — properties', () => {
           descriptor: [lane],
           roster: [name],
           registry: [name],
-          workflowText: '<step name="invoke_reviewers">\n</step>',
+          workflowText: '<step name="invoke_reviewers">\ngsd_run review-lane availability || true\n</step>',
         });
         const absent = checkReviewerLaneParity({
           descriptor: [lane],
           roster: [name],
           registry: [],
-          workflowText: '<step name="invoke_reviewers">\n</step>',
+          workflowText: '<step name="invoke_reviewers">\ngsd_run review-lane availability || true\n</step>',
         });
         return (
           declared.ok &&
@@ -552,7 +621,7 @@ describe('reviewer lane parity — properties', () => {
           descriptor: lanes,
           roster: lanes.map((l) => l.slug),
           registry: lanes.filter((l) => l.slug !== victim.slug).map((l) => l.slug),
-          workflowText: '<step name="invoke_reviewers">\n</step>',
+          workflowText: '<step name="invoke_reviewers">\ngsd_run review-lane availability || true\n</step>',
         });
         const missing = r.violations.filter(
           (v) => v.reason === PARITY_VIOLATION.DESCRIPTOR_LANE_NOT_IN_REGISTRY,
@@ -698,6 +767,7 @@ describe('reviewer lane descriptor — declared shape (ADR-2782 D1/D2/D6/D7)', (
     // Adding a reason is three coordinated changes: enum, emitting site, and
     // this assertion.
     assert.deepStrictEqual(Object.keys(PARITY_VIOLATION).sort(), [
+      'AVAILABILITY_FALLBACK_MISMATCH',
       'BESPOKE_LEG_PRESENT',
       'DESCRIPTOR_LANE_NOT_IN_REGISTRY',
       'DESCRIPTOR_LANE_NOT_IN_ROSTER',
@@ -1114,6 +1184,76 @@ describe('#4255 — every lane declares where its review effort comes from', () 
     // default it would be a second spelling for `null` and split one behaviour across two shapes.
     for (const lane of REVIEWER_LANES) {
       assert.notEqual(lane.defaultEffort, 'inherit', `${lane.slug}: use null, not 'inherit'`);
+    }
+  });
+});
+
+// #4559 — a lane declares the context window its default prompt cap derives from.
+describe('reviewer lane descriptor — declared context window (#4559)', () => {
+  /** Declared floors: slug -> contextWindowTokens. Every other lane declares null. */
+  const DECLARED_WINDOWS = { claude: 200000, codex: 272000, qwen: 131072, 'kimi-code': 262144 };
+
+  /** The registry capability shipping the reviewer body for `slug`. */
+  function manifestFor(slug) {
+    return Object.values(CAPABILITY_REGISTRY.capabilities || {}).find(
+      (c) => c && c.reviewer && c.reviewer.slug === slug,
+    );
+  }
+
+  test('descriptor declares the agreed window floor per lane and null elsewhere', () => {
+    for (const lane of REVIEWER_LANES) {
+      const expected = Object.prototype.hasOwnProperty.call(DECLARED_WINDOWS, lane.slug)
+        ? DECLARED_WINDOWS[lane.slug]
+        : null;
+      assert.strictEqual(lane.contextWindowTokens, expected, `${lane.slug}: contextWindowTokens`);
+    }
+  });
+
+  test('descriptor declares review.context_window_tokens.<slug> for every lane except coderabbit', () => {
+    for (const lane of REVIEWER_LANES) {
+      const expected = lane.slug === 'coderabbit' ? null : `review.context_window_tokens.${lane.slug}`;
+      assert.strictEqual(lane.contextWindowConfigKey, expected, `${lane.slug}: contextWindowConfigKey`);
+    }
+  });
+
+  test('descriptor and capability manifest agree on contextWindowTokens and contextWindowConfigKey per lane', () => {
+    for (const lane of REVIEWER_LANES) {
+      const cap = manifestFor(lane.slug);
+      assert.ok(cap, `${lane.slug}: no capability manifest ships this lane`);
+      assert.strictEqual(
+        cap.reviewer.contextWindowTokens, lane.contextWindowTokens,
+        `${lane.slug}: manifest contextWindowTokens diverges from the descriptor`,
+      );
+      assert.strictEqual(
+        cap.reviewer.contextWindowConfigKey, lane.contextWindowConfigKey,
+        `${lane.slug}: manifest contextWindowConfigKey diverges from the descriptor`,
+      );
+    }
+  });
+
+  test('a manifest declares its context-window config key (number, default -1) iff contextWindowConfigKey is non-null', () => {
+    for (const lane of REVIEWER_LANES) {
+      const cap = manifestFor(lane.slug);
+      assert.ok(cap, `${lane.slug}: no capability manifest ships this lane`);
+      const key = `review.context_window_tokens.${lane.slug}`;
+      const entry = (cap.config || {})[key];
+      if (lane.contextWindowConfigKey === null) {
+        assert.strictEqual(entry, undefined, `${lane.slug}: must not own ${key}`);
+        continue;
+      }
+      assert.ok(entry, `${lane.slug}: manifest config block must declare ${key}`);
+      assert.strictEqual(entry.type, 'number', `${lane.slug}: ${key} type`);
+      assert.strictEqual(entry.default, -1, `${lane.slug}: ${key} default is the -1 unset sentinel`);
+    }
+  });
+
+  test('the registry config schema attributes each context-window key to its owning lane', () => {
+    for (const lane of REVIEWER_LANES) {
+      if (lane.contextWindowConfigKey === null) continue;
+      const entry = (CAPABILITY_REGISTRY.configSchema || {})[lane.contextWindowConfigKey];
+      assert.ok(entry, `${lane.contextWindowConfigKey} missing from the registry config schema`);
+      assert.strictEqual(entry.type, 'number');
+      assert.strictEqual(entry.default, -1);
     }
   });
 });

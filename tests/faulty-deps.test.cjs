@@ -25,7 +25,7 @@ const {
   isSpawnTimeout,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
-const worktreeSafety = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-safety.cjs'));
+const { resolveProjectContext } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'project-context.cjs'));
 const { trySymbolicRef } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'git-base-branch.cjs'));
 const { evaluateWorktreeBaseDegrade } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-base-ref.cjs'));
 const { defaultPhaseCleanCommitTimesMs } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'verification.cjs'));
@@ -58,11 +58,37 @@ describe('A. execGit normalization (#3071)', () => {
   });
 
   test('2. every exec* result carries timedOut', () => {
+    // #5498: this test is about the SHAPE of the result, not how fast a real
+    // npm starts. `timedOut` is true only when the child outlives the seam's
+    // default bound, so asserting `=== false` on a real `npm --version` failed on
+    // a slow Windows runner (15 063 ms against the 15 000 ms default) with no
+    // fault in the code under test. Whether the field is a boolean is what
+    // matters; the field's value is pinned deterministically by test 2b
+    // (a completed mocked spawn), test 3 (ENOENT) and test 4 (a 1 ms bound).
     const npmResult = execNpm(['--version']);
     const toolResult = execTool(process.execPath, ['--version']);
     assert.strictEqual(typeof npmResult.timedOut, 'boolean');
-    assert.strictEqual(npmResult.timedOut, false);
     assert.strictEqual(typeof toolResult.timedOut, 'boolean');
+  });
+
+  test('2b. a completed execNpm/execTool call reports timedOut:false (mocked spawn, speed-independent)', (t) => {
+    // Replaces the `=== false` half of test 2 deterministically: a spawn that
+    // finished (status 0, no ETIMEDOUT error) must never be reported as a
+    // timeout by either wrapper, whatever speed the runner starts npm at.
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: 0,
+      stdout: '1.0.0\n',
+      stderr: '',
+      signal: null,
+      error: null,
+    }));
+    t.after(() => mock.restoreAll());
+
+    const npmResult = execNpm(['--version']);
+    const toolResult = execTool(process.execPath, ['--version']);
+    assert.strictEqual(npmResult.exitCode, 0);
+    assert.strictEqual(npmResult.timedOut, false);
+    assert.strictEqual(toolResult.exitCode, 0);
     assert.strictEqual(toolResult.timedOut, false);
   });
 
@@ -154,23 +180,19 @@ describe('A. execGit normalization (#3071)', () => {
     // accepted everywhere, not what any one fault produces.
     const sharedStub = makeFaultyGit();
 
-    // worktree-safety.cts:33 — via resolveWorktreeContext, the exported
-    // entry point that threads deps.execGit. Derived: existsSync:()=>false
-    // skips the has_local_planning shortcut, so resolveWorktreeLinkage runs;
-    // the shared stub's benign passthrough (exitCode:0, empty stdout) for
-    // both --git-dir and --git-common-dir makes them resolve to the SAME
-    // path (tmpDir), which is the main_worktree branch
-    // (src/worktree-safety.cts:196-200) — a `typeof === 'string'` check
-    // would still pass if a shape regrowth returned e.g. reason:'not_a_git_repo'.
-    const wsResult = worktreeSafety.resolveWorktreeContext(tmpDir, {
-      execGit: sharedStub,
-      existsSync: () => false,
-    });
-    assert.deepStrictEqual(wsResult, {
-      effectiveRoot: tmpDir,
-      mode: 'current_directory',
-      reason: 'main_worktree',
-    });
+    // project-context.cts — resolveProjectContext threads deps.execGit into
+    // every git query it makes. Derived: the shared stub's benign passthrough
+    // (exitCode:0, empty stdout) makes `rev-parse --show-toplevel` answer an
+    // empty path, which the resolver reads as "not a git repository" and
+    // degrades to the lexical start directory without throwing — a
+    // `typeof === 'string'` check would still pass if a shape regrowth returned
+    // some other reason.
+    const ctx = resolveProjectContext(tmpDir, { deps: { execGit: sharedStub } });
+    assert.strictEqual(ctx.worktreeRoot, tmpDir);
+    assert.strictEqual(ctx.repoRoot, tmpDir);
+    assert.strictEqual(ctx.gitCommonDir, null);
+    assert.strictEqual(ctx.isLinkedWorktree, false);
+    assert.strictEqual(ctx.provenance.reason, 'not_git_repo');
 
     // git-base-branch.cts:32 — trySymbolicRef takes execGit directly as its
     // second positional argument (no deps wrapper). Derived: the stub

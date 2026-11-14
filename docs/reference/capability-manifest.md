@@ -148,6 +148,8 @@ The 12 loop extension points are a **closed, additive-only vocabulary**. Every `
 
 A valid point is necessary but not sufficient: each host workflow decides, per point, which hook **kinds** its dispatch text handles, and a point may dispatch a subset. The registry build derives the real answer from the host workflows (`getWiredKinds()` in `scripts/gen-loop-host-contract.cjs`) and rejects a manifest declaring a kind the point does not dispatch — so an unsupported combination is a build-time error naming the point, the kind, and the kinds that point does cover. It is never a hook that renders and is then silently dropped.
 
+`execute:pre` dispatches all three kinds, once per `/gsd-execute-phase` run, after plan discovery and before STATE.md records the phase start; it is not reached when no plan will be dispatched. A step there is **advisory** and never blocks — a precondition that must stop execution before any plan runs is a `gate` with `blocking: true`.
+
 `verify:pre` dispatches all three kinds. A step there is **advisory**: it runs before UAT begins and never blocks it — a precondition that must halt verification is a `gate`. Its `produces` artefact names are consumed **additively** by the verify workflow's `extract_tests` step, which can deepen what UAT covers but cannot suppress a checkpoint. See [Develop a capability](../how-to/develop-a-capability.md#check-the-point-dispatches-your-kind) for the authoring workflow.
 
 | Point | Phase | Position |
@@ -219,6 +221,7 @@ Install and hook code does not compare a runtime id to a literal; it reads one o
 | `skipRuntimeDefaultsStamp` | boolean | `claude` | Skip the non-Claude runtime-identity stamp. |
 | `skipCompactAgents` | boolean | `claude` | Do not stage `*.compact.md` agent variants. |
 | `omitBashRunnerOnWindows` | boolean | `claude` | Emit a shell hook as the bare script path on Windows. |
+| `powershellHooksOnWindows` | boolean | `claude` | On Windows, emit managed JS hooks as PowerShell commands with an explicit `shell: "powershell"`, whether or not Git Bash is installed. |
 | `specRootSkillPass` | boolean | `claude` | Run the global spec-root reference pass over staged skills. |
 | `restoreAtRefTildeInAgents` / `restoreAtRefTildeInSpecTree` | boolean | `claude` | Restore `@~/` include references in agent bodies / the spec tree. |
 | `legacyFlatSkillsCleanup`, `bareStemSkillsCleanup`, `categoryContainerCleanup` | boolean | `hermes` | The Hermes pre-nesting cleanups on install and uninstall. |
@@ -272,7 +275,9 @@ All 12 shipped lane declarations carry all 14 fields below.
 | `reviewsSection` | string | The `REVIEWS.md` heading this lane renders under. Must be unique across the merged roster. |
 | `evidenceClass` | closed enum | `source-grounded` \| `diff-only` (diff-only findings are down-weighted in consensus). |
 | `requiresBinaries` | string[] | Extra binaries the lane needs beyond `invoke.binary`. |
-| `promptBudgetKey` | string or `null` | Federated config key bounding prompt size. |
+| `promptBudgetKey` | string or `null` | Federated config key holding this lane's explicit prompt cap. A prompt over the resolved cap refuses the lane (`prompt_exceeds_context`); it is never trimmed. |
+| `contextWindowTokens` | positive number or `null` | Optional. The context window of the lane's default model, in tokens. When no explicit cap applies, the lane's cap is 65% of this. Omit it, or set `null`, when the model is chosen outside GSD and so cannot be known. Any value that is not a positive finite number is treated as `null`. |
+| `contextWindowConfigKey` | string or `null` | Optional. Federated config key, `review.context_window_tokens.<slug>`, that overrides `contextWindowTokens`: `-1` = use the declared window, `0` = no derived cap. `null` for a lane that is sent no prompt. |
 | `modelConfigKey` | string or `null` | Federated config key naming the model, e.g. `review.models.kimi-code`. |
 | `handler` | closed enum or `null` | `antigravity` \| `openai-compatible` \| `opencode` \| `null`. |
 

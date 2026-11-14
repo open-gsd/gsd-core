@@ -6044,3 +6044,241 @@ describe('#4683 review repairs — fence blindness and deterministic ordering', 
     ], 'claiming-plan lists must be sorted, never readdir order');
   });
 });
+
+// #5629: the phase SPEC is one fact, resolved by one predicate (planning-workspace `findPhaseSpecIn`) and
+// reported on every init payload the SPEC-consuming workflows parse, so no workflow globs for it itself.
+describe('init: the phase SPEC (#5629)', () => {
+  const { findPhaseSpecIn } = require('../gsd-core/bin/lib/planning-workspace.cjs');
+  const INIT_VERBS = ['phase-op', 'plan-phase', 'discuss-phase-assumptions'];
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createFixture());
+  });
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function seedSpecs(names) {
+    seedPhase(tmpDir, '03-api', Object.fromEntries(names.map((n) => [n, '# SPEC\n'])));
+  }
+  function initPayload(verb) {
+    const result = runGsdTools(`init ${verb} 03`, tmpDir);
+    assert.ok(result.success, `init ${verb} failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  for (const verb of INIT_VERBS) {
+    test(`init ${verb} reports the phase SPEC (#5629)`, () => {
+      seedSpecs(['03-SPEC.md', '03-UI-SPEC.md', '03-AI-SPEC.md']);
+      const out = initPayload(verb);
+      assert.equal(out.has_spec, true);
+      assert.equal(out.spec_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-SPEC.md'));
+    });
+
+    test(`init ${verb} does not treat a UI-SPEC or AI-SPEC as the phase SPEC (#5629)`, () => {
+      for (const names of [['03-UI-SPEC.md'], ['03-AI-SPEC.md'], ['03-UI-SPEC.md', '03-AI-SPEC.md'], []]) {
+        cleanup(tmpDir);
+        tmpDir = fs.realpathSync(createFixture());
+        seedSpecs(names);
+        const out = initPayload(verb);
+        assert.equal(out.has_spec, false, names.join(',') || '(none)');
+        assert.equal(out.spec_path ?? null, null, names.join(',') || '(none)');
+      }
+    });
+  }
+
+  test('every consumer resolves the phase SPEC through the same predicate (#5629)', () => {
+    // [files in the phase directory, the one file every consumer must call the phase SPEC]
+    const scenarios = [
+      [['03-SPEC.md'], '03-SPEC.md'],
+      [['03-UI-SPEC.md', '03-SPEC.md', '03-AI-SPEC.md'], '03-SPEC.md'],
+      [['03-UI-SPEC.md'], null],
+      [['03-AI-SPEC.md'], null],
+      [['03-SPEC.md.bak', '03-NOTES.md'], null],
+      // a misfiled cross-phase SPEC sorts first but belongs to phase 02
+      [['02-SPEC.md', '03-SPEC.md'], '03-SPEC.md'],
+      [['02-SPEC.md'], null],
+    ];
+    for (const [names, expected] of scenarios) {
+      cleanup(tmpDir);
+      tmpDir = fs.realpathSync(createFixture());
+      seedSpecs(names);
+      const phaseDir = path.join(tmpDir, '.planning', 'phases', '03-api');
+      const old = new Date(Date.now() - 3_600_000);
+      for (const n of names) fs.utimesSync(path.join(phaseDir, n), old, old);
+      fs.writeFileSync(path.join(phaseDir, '03-CONTEXT.md'), '# Context\n');
+      assert.equal(findPhaseSpecIn(fs.readdirSync(phaseDir).filter((f) => f.startsWith('03-'))), expected, 'the predicate agrees with the scenario');
+
+      for (const verb of INIT_VERBS) {
+        const out = initPayload(verb);
+        assert.equal(out.has_spec, expected !== null, `${verb}: ${names.join(',')}`);
+        assert.equal(out.spec_path ? path.basename(out.spec_path) : null, expected, `${verb}: ${names.join(',')}`);
+      }
+      const drift = runGsdTools('verify context-drift 03', tmpDir);
+      assert.ok(drift.success, `verify context-drift failed: ${drift.error}`);
+      const stale = JSON.parse(drift.output).stale_artifacts;
+      assert.deepEqual(stale, expected === null ? [] : [expected], `context-drift gate: ${names.join(',')}`);
+    }
+  });
+});
+
+describe('#5676: init progress and init manager under milestone-prefixed', () => {
+  function buildFixture(t) {
+    const tmp = createTempProject('gsd-5676-init-');
+    t.after(() => cleanup(tmp));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    put('.planning/config.json', [JSON.stringify({ phase_id_convention: 'milestone-prefixed' })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      'phase_id_convention: milestone-prefixed',
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      '- [x] **Phase 3-01: Alpha**',
+      '- [ ] **Phase 3-02: Beta**',
+      '',
+      '### Phase 3-01: Alpha',
+      '**Goal:** A',
+      '**Plans**: 1 plans',
+      '',
+      '### Phase 3-02: Beta',
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+    ]);
+    put('.planning/phases/03-01-alpha/03-01-01-PLAN.md', ['# Plan', '']);
+    put('.planning/phases/03-01-alpha/03-01-01-SUMMARY.md', ['# Summary', '']);
+    put('.planning/phases/03-01-alpha/03-01-VERIFICATION.md', ['---', 'status: passed', '---', '', '# Verification', '']);
+    put('.planning/phases/03-02-beta/03-02-01-PLAN.md', ['# Plan', '']);
+    put('.planning/STATE.md', ['---', 'milestone: v1.0', 'current_phase: 3-02', 'status: executing', '---', '', '# State', '']);
+    return tmp;
+  }
+  const bare = (n) => String(n).replace(/^0+/, '');
+
+  test('#5676: init progress keeps the M-NN id whole and the slug as the name', (t) => {
+    const result = runGsdTools(['init', 'progress', '--raw'], buildFixture(t));
+    assert.ok(result.success, `init progress failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.name]), [['3-01', 'alpha'], ['3-02', 'beta']]);
+  });
+
+  test('#5676: init manager reads M-NN headings, checkboxes and directories', (t) => {
+    const result = runGsdTools(['init', 'manager', '--raw'], buildFixture(t));
+    assert.ok(result.success, `init manager failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.name]), [['3-01', 'Alpha'], ['3-02', 'Beta']]);
+    assert.strictEqual(phases[0].disk_status, 'complete');
+  });
+
+  // The completed-phase fallback must read a checked `- [x] **Phase 3-02: Beta**`
+  // as phase `3-02`; the legacy token read it as `3` and never satisfied 3-02.
+  function buildDependencyFixture(t, ids, dirs) {
+    const tmp = createTempProject('gsd-5676-deps-');
+    t.after(() => cleanup(tmp));
+    const put = (rel, lines) => {
+      const file = path.join(tmp, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, lines.join('\n'));
+    };
+    const convention = ids[0].includes('-') ? 'milestone-prefixed' : 'legacy';
+    put('.planning/config.json', [JSON.stringify(convention === 'legacy' ? {} : { phase_id_convention: convention })]);
+    put('.planning/ROADMAP.md', [
+      '---',
+      `phase_id_convention: ${convention}`,
+      '---',
+      '',
+      '# Roadmap',
+      '',
+      '## [GSD] v1.0 — Core',
+      '',
+      `- [x] **Phase ${ids[0]}: Alpha**`,
+      `- [x] **Phase ${ids[1]}: Beta**`,
+      `- [ ] **Phase ${ids[2]}: Gamma**`,
+      '',
+      `### Phase ${ids[0]}: Alpha`,
+      '**Goal:** A',
+      '**Plans**: 1 plans',
+      '',
+      `### Phase ${ids[1]}: Beta`,
+      '**Goal:** B',
+      '**Plans**: 1 plans',
+      '',
+      `### Phase ${ids[2]}: Gamma`,
+      '**Goal:** C',
+      `**Depends on**: Phase ${ids[1]}`,
+      '**Plans**: 1 plans',
+      '',
+    ]);
+    put('.planning/STATE.md', ['---', 'milestone: v1.0', 'status: executing', '---', '', '# State', '']);
+    dirs.forEach(({ dir, prefix, complete }) => {
+      put(`.planning/phases/${dir}/${prefix}-01-PLAN.md`, ['# Plan', '']);
+      if (!complete) return;
+      put(`.planning/phases/${dir}/${prefix}-01-SUMMARY.md`, ['# Summary', '']);
+      put(`.planning/phases/${dir}/${prefix}-VERIFICATION.md`, ['---', 'status: passed', '---', '', '# Verification', '']);
+    });
+    return tmp;
+  }
+
+  test('#5676: init manager keeps the legacy dependency read on an integer phase', (t) => {
+    const tmp = buildDependencyFixture(t, ['1', '2', '3'], [
+      { dir: '01-alpha', prefix: '01', complete: true },
+      { dir: '02-beta', prefix: '02', complete: true },
+      { dir: '03-gamma', prefix: '03', complete: false },
+    ]);
+    const result = runGsdTools(['init', 'manager', '--raw'], tmp);
+    assert.ok(result.success, `init manager failed: ${result.error}`);
+    const phases = JSON.parse(result.output).phases;
+    assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.deps_satisfied]), [['1', true], ['2', true], ['3', true]]);
+  });
+});
+
+describe('init --validate plan-count check (#5786)', () => {
+  const MISMATCH = (says) => `Plan count mismatch: STATE.md says ${says}, disk has 2`;
+  const ROWS = [
+    ['#5786 row 1: compound `Plan: 1 of 5` warns', ['Plan: 1 of 5'], [MISMATCH(5)]],
+    ['#5786 row 2: compound `Plan: 2 of 2` matches, no warning', ['Plan: 2 of 2'], []],
+    ['#5786 row 3: hybrid `Current Plan: 1 of 5` warns', ['Current Plan: 1 of 5'], [MISMATCH(5)]],
+    ['#5786 row 4: lone `Total Plans in Phase: 5` keeps its warning', ['Total Plans in Phase: 5'], [MISMATCH(5)]],
+    ['#5786 row 5: `Current Plan: 1` + `Total Plans in Phase: 5` warns', ['Current Plan: 1', 'Total Plans in Phase: 5'], [MISMATCH(5)]],
+    ['#5786 row 6: explicit Total (2) beats `Plan: 1 of 5`', ['Current Plan: 1', 'Total Plans in Phase: 2', 'Plan: 1 of 5'], []],
+    ['#5786 row 7: explicit Total (5) beats `Plan: 1 of 2`', ['Current Plan: 1', 'Total Plans in Phase: 5', 'Plan: 1 of 2'], [MISMATCH(5)]],
+    ['#5786 row 7a: explicit Total (2) beats `Plan: 1 of 5` with no Current Plan, no warning', ['Plan: 1 of 5', 'Total Plans in Phase: 2'], []],
+    ['#5786 row 7b: explicit Total (5) beats `Plan: 1 of 2` with no Current Plan, warns', ['Plan: 1 of 2', 'Total Plans in Phase: 5'], [MISMATCH(5)]],
+    ['#5786 row 8: no recorded count, no warning', [], []],
+    ['#5786 row 9: `Plan: 1 of ?` has no readable count, no warning', ['Plan: 1 of ?'], []],
+    ['#5786 row 10: trailing prose after `of 5` still reads 5', ['Plan: 1 of 5 in current phase'], [MISMATCH(5)]],
+    ['#5786 row 11: `Total Plans in Phase: TBD`, no warning', ['Total Plans in Phase: TBD'], []],
+    ['#5786 boundary limit-1: `Plan: 1 of 1` says 1', ['Plan: 1 of 1'], [MISMATCH(1)]],
+    ['#5786 boundary limit: `Plan: 1 of 2` matches', ['Plan: 1 of 2'], []],
+    ['#5786 boundary limit+1: `Plan: 1 of 3` says 3', ['Plan: 1 of 3'], [MISMATCH(3)]],
+    ['#5786 unconvertible Total beside `Current Plan: 1 of 2` falls back to 2, no warning', ['Current Plan: 1 of 2', 'Total Plans in Phase: 9007199254740993'], []],
+    ['#5786 unconvertible Total beside `Current Plan: 1 of 5` falls back to 5, warns', ['Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'], [MISMATCH(5)]],
+  ];
+
+  for (const sub of ['execute-phase', 'plan-phase']) {
+    for (const [name, positionLines, expected] of ROWS) {
+      test(`${sub} ${name}`, (t) => {
+        const tmp = fs.realpathSync(createFixture());
+        t.after(() => cleanup(tmp));
+        seedPhase(tmp, '03-api', { '03-01-PLAN.md': '# Plan', '03-02-PLAN.md': '# Plan' });
+        fs.writeFileSync(
+          path.join(tmp, '.planning', 'STATE.md'),
+          ['# Project State', '', '## Current Position', '', 'Phase: 3', ...positionLines, ''].join('\n'),
+        );
+        const result = runGsdTools(`init ${sub} 3 --validate`, tmp);
+        assert.ok(result.success, `Command failed: ${result.error}`);
+        const output = JSON.parse(result.output);
+        assert.strictEqual(output.state_validation_ran, true);
+        assert.deepStrictEqual(output.state_warnings, expected);
+      });
+    }
+  }
+});

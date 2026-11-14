@@ -52,6 +52,7 @@ import userArtifactStaging = require('./user-artifact-staging.cjs');
 // module-level doc comment on `isGlobalScope` for why the projection is
 // centralized rather than eliminated).
 import { isGlobalScope, type InstallScope } from './install-scope.cjs';
+import { stampInstalledContent } from './args-terminator.cjs';
 
 const { processAttribution } = runtimeArtifactConversion;
 // resolveRuntimeArtifactLayout: accessed via module ref (not destructured) so
@@ -68,8 +69,6 @@ const { getDirName, hostBehaviorsFor } = runtimeNamePolicy;
 // ---------------------------------------------------------------------------
 
 type ResolveAttribution = (runtime: string) => any;
-
-type RuntimeSurfaceSourceClass = 'commands' | 'agents';
 
 function withInstallerPackageSource<T>(
   configDir: string,
@@ -143,7 +142,7 @@ function pruneEmptyCorpusParents(start: string, stop: string): void {
 function syncRuntimeSurfaceCorpus(source: string, destination: string, configDir: string, manifestPrefix: string): void {
   if (hasExistingSymlinkBetween(path.resolve(configDir), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `syncRuntimeSurfaceCorpus: destination "${destination}" contains a symlink the install root "${configDir}" does not trust — refusing to write.`,
+      runtimeArtifactInstallPlan.syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination, configDir),
     );
   }
   assertCorpusTreeHasNoSymlinks(destination);
@@ -187,13 +186,7 @@ function provisionRuntimeSurfaceCorpus(
   configDir: string,
   scope: string,
 ): void {
-  const required = new Set<RuntimeSurfaceSourceClass>();
-  if (isGlobalScope(scope as InstallScope)) {
-    for (const kind of layout.kinds) {
-      if (kind.kind === 'commands' || kind.kind === 'skills') required.add('commands');
-      if (kind.kind === 'agents' || kind.kind === 'kimi-agents') required.add('agents');
-    }
-  }
+  const required = runtimeArtifactInstallPlan.requiredRuntimeSurfaceSources(layout, scope);
   if (required.size === 0) return;
 
   const corpusRoot = path.join(configDir, 'gsd-core');
@@ -259,12 +252,10 @@ const USER_OWNED_ARTIFACTS: string[] = ['USER-PROFILE.md'];
  * with the computed pathPrefix for the install.
  */
 function applyOpencodeFamilyPathPrefix(content: string, runtime: string, pathPrefix: string): string {
-  content = content.replace(/~\/\.claude\//g, pathPrefix);
-  content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-  content = content.replace(/\.\/\.claude\//g, `./${getDirName(runtime)}/`);
-  content = content.replace(/~\/\.opencode\//g, pathPrefix);
-  content = content.replace(/~\/\.kilo\//g, pathPrefix);
-  return content;
+  // #5715: one pass with literal replacement (see rewriteOpencodeFamilyConfigDirForms).
+  content = (runtimeArtifactConversion as any)._rewriteOpencodeFamilyConfigDirForms(content, pathPrefix, getDirName(runtime));
+  // #5637: the typed-text capture heredoc ends at a terminator the typed text cannot know.
+  return stampInstalledContent(content);
 }
 
 /**
@@ -606,7 +597,7 @@ function _resolveDevPreferencesSkillTarget(targetDir: string, runtime?: string, 
     // legacy dev-preferences migration lands in the SAME tree the installer
     // and surface-apply use. Runtimes with no `home` override are unaffected.
     hasHomeOverride = skillsKindEntry.home != null;
-    installRoot = skillsKindEntry.home ?? targetDir;
+    installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(targetDir, skillsKindEntry);
     skillDir = path.join(runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, skillsKindEntry.destSubpath), stemName);
   } else {
     // Legacy fallback for callers that have not yet been updated to pass runtime
@@ -726,7 +717,7 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
   // that case this defense-in-depth check must confine against the resolved
   // alternate root instead, matching the upstream gate's own root selection in
   // createRuntimeArtifactInstallPlan.
-  const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
+  const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(configDir, kind);
   // Strict-subpath + NUL containment via the canonical gate (shared with the
   // layout-driven install plan); throws if destDir escapes the install root.
   // destDir here is an absolute path; path.resolve(installRoot, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to installRoot.
@@ -1398,7 +1389,7 @@ function installRuntimeArtifacts(
     // previously lived inline in bin/install.js.
     const behaviors = hostBehaviorsFor(runtime);
     const projectDir = scope === 'global' ? process.cwd() : configDir;
-    if (behaviors.combinedFamilyInstall) {
+    if (runtimeArtifactInstallPlan.shouldInstallCombinedFamily(behaviors)) {
       // #2329: combined-family runtimes (OpenCode/Kilo) bypass
       // _runLegacyInstallMigrations below entirely (early return), so their
       // legacy-directory cleanup needs its own pre-materialization hook here.
@@ -1489,13 +1480,13 @@ function installRuntimeArtifacts(
         // A fake adapter can change what those probes observe for paths that
         // were never real to begin with; it cannot make this `if` pass for a
         // path the real filesystem would refuse.
-        const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
+        const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(configDir, kind);
         // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
         // Threat model from #1704 / ADR-1239 Phase B preserved: path-traversal and
         // resolved-target-equals-root still refuse regardless of opt-in.
         if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
           throw new Error(
-            `installRuntimeArtifacts: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to create. If this is an intentional user-owned symlink layout (e.g. externalized skills/hooks dir, multi-account configHome, or a dotfiles-managed configHome), re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+            runtimeArtifactInstallPlan.installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot),
           );
         }
         // #2875 defect fix (--minimal regression closed): a restricted profile
@@ -1702,6 +1693,7 @@ function installOpencodeFamilySkills(
   const layout: any = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, targetDir);
   const skillsKindEntry = layout.kinds.find((k: any) => k.kind === 'skills');
   if (!skillsKindEntry) return 0;
+  const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(targetDir, skillsKindEntry);
   // #3712: combined-family runtimes take installRuntimeArtifacts' early return
   // BEFORE its guard runs, and this writer honors `skillsKindEntry.home` below and
   // then prunes that destination. opencode/kilo declare no `home` today, so there
@@ -1731,14 +1723,13 @@ function installOpencodeFamilySkills(
   // OpenCode/Kilo writer lands in the SAME tree the installer and surface-apply use.
   // Runtimes with no `home` override (opencode, kilo today) are unaffected. Must stay
   // in lockstep with the sibling writers — the destination-parity test enforces it.
-  const installRoot: string = skillsKindEntry.home ?? targetDir;
   const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, skillsKindEntry.destSubpath);
   // Symlink-escape guard: reject if any path component between installRoot and
   // dest is a symlink that would redirect writes outside the install root.
   // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
   if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `installOpencodeFamilySkills: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      runtimeArtifactInstallPlan.installOpencodeFamilySkillsSymlinkRefusalMessage(dest, installRoot),
     );
   }
   installFs().mkdirSync(dest, { recursive: true });
@@ -1785,7 +1776,8 @@ function installOpencodeFamilySkills(
     let content = installFs().readFileSync(path.join(rawDir, entry.name), 'utf8');
     content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
     content = processAttribution(content, resolveAttribution(runtime));
-    content = converter(content, skillName);
+    // #5715: the converter runs after the prefix pass; shield the emitted prefix from it.
+    content = (runtimeArtifactConversion as any)._shieldEmittedPrefix(content, pathPrefix, (c: string) => converter(c, skillName));
     const skillDir = path.join(dest, skillName);
     installFs().mkdirSync(skillDir, { recursive: true });
     installFs().writeFileSync(path.join(skillDir, 'SKILL.md'), content);
@@ -1944,7 +1936,7 @@ function installAgentsKindStandalone(
     ? installFs().readdirSync(stagedDir).filter((f: string) => f.endsWith('.md'))
     : [];
 
-  const installRoot: string = (typeof agentsKindEntry.home === 'string' && agentsKindEntry.home !== '') ? agentsKindEntry.home : targetDir;
+  const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(targetDir, agentsKindEntry);
   const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, agentsKindEntry.destSubpath);
   // Symlink-escape guard — same gate _copyStaged/installOpencodeFamilySkills apply
   // to their own writes (#2393 GSD_ALLOW_SYMLINKED_DEST opt-in preserved). Runs
@@ -1952,7 +1944,7 @@ function installAgentsKindStandalone(
   // (`_removeGsdEntries`) still touches `dest` whenever it already exists.
   if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `installAgentsKindStandalone: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+      runtimeArtifactInstallPlan.installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot),
     );
   }
 
@@ -2036,9 +2028,11 @@ function installOpencodeFamilyCommands(
       // already satisfies the fold-to-descriptor requirement. Only the SKILLS
       // converter site above (installOpencodeFamilySkills) has a real
       // `converter` string to key on via SKILLS_CONVERTER_REGISTRY.
-      content = hostBehaviorsFor(runtime).frontmatterDialect === 'kilo'
-        ? (runtimeArtifactConversion as any).convertClaudeToKiloFrontmatter(content)
-        : (runtimeArtifactConversion as any).convertClaudeToOpencodeFrontmatter(content);
+      // #5715: the converter runs after the prefix pass; shield the emitted prefix from it.
+      const frontmatterConverter = hostBehaviorsFor(runtime).frontmatterDialect === 'kilo'
+        ? (c: string) => (runtimeArtifactConversion as any).convertClaudeToKiloFrontmatter(c)
+        : (c: string) => (runtimeArtifactConversion as any).convertClaudeToOpencodeFrontmatter(c);
+      content = (runtimeArtifactConversion as any)._shieldEmittedPrefix(content, pathPrefix, frontmatterConverter);
       installFs().writeFileSync(path.join(destDir, destName), content);
     }
   }

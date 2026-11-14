@@ -33,7 +33,11 @@ Inject `fragment.inline` verbatim into the context for the role named in `into`
 
 Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.command` is set.
 
-- `ref.skill` present → dispatch via the Skill tool with skill id `gsd-<ref.skill>`.
+- `ref.skill` present → keep `activeHooks[].ref.skill` bare and dispatch it as
+  `Skill(skill="gsd-" + ref.skill)`. The rendered `### Step N: skill:gsd-<name>` heading already
+  displays that prefixed id. For example, in `### Step N: skill:gsd-<name> (<capId>)`, the
+  invocable id is `gsd-<name>`; the `skill:` label and capability id are not part of it. Never
+  apply another prefix to the rendered heading text.
 - `ref.agent` present → dispatch via the Agent tool with `subagent_type` = `ref.agent`.
   Before dispatching an agent, print the canonical liveness banner so users know silence
   is expected and do not kill a healthy agent:
@@ -91,12 +95,19 @@ not one shape of one.
 capability manifest, which may be third-party — and `gates[].check` is **not** one of the
 executable surfaces the install consent prompt discloses (`hooks`, command modules,
 `mcpServers`, reviewer lanes), so a capability can be consented to as declarative-only and
-still reach a shell through a gate. Check the query value you read from `activeHooks` against
-`^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$` yourself, IN-CONTEXT — **never** by pasting it into a
-shell command to be tested there, because a value carrying a quote, `;`, a `` ` ``, `$(`, or a
-newline would terminate the assignment and run as its own statement before any shell-side
-check could execute. A value that fails is a malformed manifest: record a warning, route it
-per the gate's `onError`, and do not run it. Pass `check.predicate` as a **single argv
+still reach a shell through a gate. Normalize first, then validate: the registry declares query
+ids in dotted form (`ui.plan-gate`, `verify.codebase-drift`) and `gsd_run check` accepts them by
+turning each `.` into `-`, so replace every `.` with `-` in the query value you read from
+`activeHooks`, then check that normalized value against
+`^[a-z][a-z0-9]*(-[a-z0-9]+)*( [a-z][a-z0-9]*(-[a-z0-9]+)*)*$` yourself, IN-CONTEXT — **never** by
+pasting it into a shell command to be tested there, because a value carrying a quote, `;`, a
+`` ` ``, `$(`, or a newline would terminate the assignment and run as its own statement before
+any shell-side check could execute. The normalized value is the one value you validate and the
+one value you pass: wherever a workflow shows `${hook.check.query}`, write the normalized value.
+A leading dot, a trailing dot or consecutive dots become a leading, trailing or doubled hyphen,
+which the pattern rejects. A value that fails — or that passes but names no known check, which
+`gsd_run check` rejects as an unknown check subcommand — is a malformed manifest: record a
+warning, route it per the gate's `onError`, and do not run it. Pass `check.predicate` as a **single argv
 element** for the same reason — never re-quote it into a shell string, where an apostrophe
 would close the literal. This is the identical requirement `step` → `ref.command` carries
 above; it was stated there and omitted here, which is the gap #3559 closed.

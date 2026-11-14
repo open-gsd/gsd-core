@@ -2,7 +2,8 @@
 // The workflow .md IS the product: its embedded bash/node snippets are loaded
 // and executed verbatim by the agent host at runtime. Testing that the deployed
 // commit-fix step exports the env var its own inline `node -e` body reads, and
-// that the docs commit stages the converged REVIEW.md alongside REVIEW-FIX.md,
+// that the docs commit stages the converged REVIEW.md alongside REVIEW-FIX.md
+// (#3190), and alone when the fix report is invalid or missing (#5527),
 // asserts the deployed contract — not an implementation detail. There is no
 // runtime API that exposes these inlined snippets; the text IS the spec.
 //
@@ -17,7 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Same gate the shipped fences carry everywhere in this suite: bash is not assumed on win32.
 const HAS_BASH = process.platform !== 'win32';
 
@@ -38,7 +39,8 @@ function stepFence(src, name) {
   }
   assert.fail(`step "${name}" carries no bash fence`);
 }
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, createTempGitProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review-fix.md');
@@ -266,5 +268,220 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     // An unreadable or unparseable review is not evidence of convergence — retain.
     const unknown = drive('');
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
+  });
+
+  // Shared by T7/T8: strict-mode header, `head` lines (cd/stub), the step's input vars, the
+  // workflow fence, then `trailer` lines.
+  const fenceScript = (fence, vars, head, trailer = []) => [
+    'set -uo pipefail',
+    ...head,
+    ...Object.entries(vars).map(([k, v]) => k + '=' + v),
+    fence,
+    ...trailer,
+  ].join('\n');
+
+  // #5527: the converged REVIEW.md must be committed even when the fix report is invalid or
+  // missing, else a tracked rewritten REVIEW.md stays dirty and /gsd-ship asks to commit or
+  // stash. The fence is EXECUTED with a stub gsd_run that records its argv.
+  test('T7 — commit_fix_report EXECUTED: --auto REVIEW.md committed when fix report is invalid/missing/valid', { skip: !HAS_BASH }, (t) => {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const fence = stepFence(src, 'commit_fix_report');
+
+    const drive = ({ report, auto = 'true', docs = 'true' }) => {
+      const dir = createTempDir('gsd-5527-');
+      t.after(() => cleanup(dir));
+      const reviewPath = path.join(dir, '01-REVIEW.md');
+      const fixPath = path.join(dir, '01-REVIEW-FIX.md');
+      const log = path.join(dir, 'argv.log');
+      fs.writeFileSync(reviewPath, '---\nstatus: clean\n---\n');
+      if (report !== null) fs.writeFileSync(fixPath, report);
+      const script = fenceScript(fence, {
+        AUTO_MODE: auto,
+        COMMIT_DOCS: docs,
+        PADDED_PHASE: '01',
+        REVIEW_PATH: '"' + reviewPath + '"',
+        FIX_REPORT_PATH: '"' + fixPath + '"',
+      }, ['gsd_run() { { printf "%s\\n" "$@"; echo "--"; } >> "' + log + '"; }']);
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
+      const calls = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('--\n').filter(Boolean);
+      assert.ok(calls.length <= 1, 'at most one query commit call');
+      return { argv: calls.length ? calls[0].split('\n') : null, reviewPath, fixPath };
+    };
+
+    // AC1: fix report lacks status => REVIEW.md still committed, the malformed report is not (AC3).
+    const invalid = drive({ report: '---\nfoo: bar\n---\n' });
+    assert.ok(invalid.argv, 'invalid frontmatter in --auto must still commit REVIEW.md');
+    assert.ok(invalid.argv.includes(invalid.reviewPath), 'REVIEW.md staged');
+    assert.ok(!invalid.argv.includes(invalid.fixPath), 'malformed fix report must NOT be staged');
+    assert.ok(invalid.argv.includes('docs(01): update code review report'), 'invalid: report-only message');
+
+    // AC2: fix report absent.
+    const missing = drive({ report: null });
+    assert.ok(missing.argv, 'missing fix report in --auto must still commit REVIEW.md');
+    assert.ok(missing.argv.includes(missing.reviewPath), 'REVIEW.md staged');
+    assert.ok(!missing.argv.includes(missing.fixPath), 'absent fix report must NOT be staged');
+    assert.ok(missing.argv.includes('docs(01): update code review report'), 'missing: report-only message');
+
+    // Valid path unchanged: both staged.
+    const valid = drive({ report: VALID_FIX_REPORT });
+    assert.ok(valid.argv.includes(valid.fixPath) && valid.argv.includes(valid.reviewPath), 'valid: both staged');
+    assert.ok(valid.argv.includes('docs(01): add code review fix report'), 'valid keeps its message');
+
+    // Out of scope stays out: non-auto and COMMIT_DOCS=false commit no REVIEW.md.
+    assert.ok(!drive({ report: '---\nfoo: bar\n---\n', auto: 'false' }).argv, 'non-auto invalid commits nothing');
+    assert.ok(!drive({ report: null, docs: 'false' }).argv, 'COMMIT_DOCS=false commits nothing');
+  });
+
+  // #5527 observable: run the fence against a real repo and the real `query commit`, then read
+  // `git status`. A stubbed argv proves the call, not that REVIEW.md lands or what stays dirty.
+  test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; only a malformed report stays', { skip: !HAS_BASH }, (t) => {
+    const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'commit_fix_report');
+    const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+    const REVIEW = '.planning/01-REVIEW.md';
+    const FIX = '.planning/01-REVIEW-FIX.md';
+
+    const drive = (report, { ignored = false } = {}) => {
+      const dir = createTempGitProject('gsd-5527-');
+      t.after(() => cleanup(dir));
+      if (ignored) fs.writeFileSync(path.join(dir, '.gitignore'), '.planning/\n');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{"commit_docs": true}\n');
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: issues_found\n---\n');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'seed');
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: clean\n---\n'); // the --auto re-review rewrite
+      fs.writeFileSync(path.join(dir, FIX), report);
+      const script = fenceScript(fence, {
+        AUTO_MODE: 'true',
+        COMMIT_DOCS: 'true',
+        PADDED_PHASE: '01',
+        REVIEW_PATH: REVIEW,
+        FIX_REPORT_PATH: FIX,
+      }, [
+        'cd ' + JSON.stringify(dir),
+        'gsd_run() { ' + JSON.stringify(process.execPath) + ' ' + JSON.stringify(TOOLS_PATH) + ' "$@"; }',
+      ], [
+        // Typed seam: the value the dirty-tree warning is gated on, not the warning's wording.
+        'printf "\\n@@DIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}"',
+      ]);
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
+      return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*)@@/.exec(res.stdout)[1] };
+    };
+
+    const invalid = drive('---\nfoo: bar\n---\n');
+    assert.strictEqual(invalid.dirty, '?? ' + FIX, 'git sees the malformed report: the warning gate is set');
+    assert.strictEqual(invalid.status.trim(), '?? ' + FIX, 'REVIEW.md committed; only the malformed report remains');
+
+    const ignoredRun = drive('---\nfoo: bar\n---\n', { ignored: true });
+    assert.strictEqual(ignoredRun.status, '', 'gitignored .planning/: tree stays clean');
+    assert.strictEqual(ignoredRun.dirty, '', 'git ignores the report: the warning gate is empty');
+
+    const valid = drive(VALID_FIX_REPORT);
+    assert.strictEqual(valid.status, '', 'valid report: both committed, tree clean');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #4100 — `--auto` converges when nothing is left in fix scope.
+//
+// Before: the loop stopped only on a re-review returning `status: clean`. A review whose remaining
+// findings were all out of scope (Info, or Necessity without --all) never reaches clean, so the
+// loop re-spawned the fixer with zero in-scope findings until MAX_ITERATIONS and printed the
+// degradation warning over a run that had nothing left to do. The fixer's own `findings_in_scope`
+// is the scope authority; `_gsd_fix_scope_empty` reads it strictly — only a frontmatter value of 0
+// proves zero scope, and anything unusable keeps the old behavior.
+// ---------------------------------------------------------------------------
+describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
+  const fc = require('./helpers/fast-check-setup.cjs');
+
+  function scopeHelper() {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const lines = stepRegion(src, 'auto_iteration_loop').replace(/\r\n/g, '\n').split('\n');
+    const start = lines.findIndex((l) => l === '  _gsd_fix_scope_empty() {');
+    assert.notStrictEqual(start, -1, '_gsd_fix_scope_empty helper must exist in auto_iteration_loop');
+    const end = lines.findIndex((l, i) => i > start && l === '  }');
+    assert.notStrictEqual(end, -1, '_gsd_fix_scope_empty helper must close');
+    return lines.slice(start, end + 1).join('\n');
+  }
+
+  function probe(reportBody, { name = '01-REVIEW-FIX.md', write = true } = {}) {
+    const dir = createTempDir('gsd-4100-scope-');
+    try {
+      const report = path.join(dir, name);
+      if (write) fs.writeFileSync(report, reportBody);
+      const script = [
+        'set -euo pipefail',
+        scopeHelper(),
+        'if _gsd_fix_scope_empty "$P"; then echo yes; else echo no; fi',
+      ].join('\n');
+      const res = runHook('-c', [script], {
+        interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, P: report },
+      });
+      assert.strictEqual(res.exitCode, 0, 'the helper must never abort the loop: ' + res.stderr);
+      return { verdict: res.stdout.trim(), pwned: fs.existsSync(path.join(dir, 'pwned')) };
+    } finally { cleanup(dir); }
+  }
+
+  const report = (value, eol = '\n') =>
+    ['---', 'status: all_fixed', `findings_in_scope: ${value}`, 'fixed: 0', 'skipped: 0', '---', '', 'body'].join(eol);
+
+  test('boundary: 0 proves zero scope, 1 and -1 do not, 00 is zero, CRLF is honored', { skip: !HAS_BASH }, () => {
+    assert.strictEqual(probe(report('0')).verdict, 'yes', 'limit: 0 in scope');
+    assert.strictEqual(probe(report('1')).verdict, 'no', 'limit+1: 1 in scope');
+    assert.strictEqual(probe(report('-1')).verdict, 'no', 'limit-1: a negative count is malformed, not zero');
+    assert.strictEqual(probe(report('00')).verdict, 'yes', 'a zero-padded zero is still zero');
+    assert.strictEqual(probe(report('0', '\r\n')).verdict, 'yes', 'a CRLF report is read the same');
+  });
+
+  test('never proves zero from unusable input', { skip: !HAS_BASH }, () => {
+    assert.strictEqual(probe(report('')).verdict, 'no', 'blank value');
+    assert.strictEqual(probe(report('none')).verdict, 'no', 'non-numeric value');
+    assert.strictEqual(probe(['---', 'status: all_fixed', '---'].join('\n')).verdict, 'no', 'absent key');
+    assert.strictEqual(probe('findings_in_scope: 0\n').verdict, 'no', 'no frontmatter');
+    assert.strictEqual(probe(['---', 'status: partial', '---', 'findings_in_scope: 0'].join('\n')).verdict, 'no',
+      'the key in the body is not the frontmatter');
+    assert.strictEqual(probe('', { write: false }).verdict, 'no', 'missing report');
+    const hostile = probe(report('0'), { name: 'a;$(touch pwned)`touch pwned`.md' });
+    assert.strictEqual(hostile.verdict, 'yes', 'a hostile path is data');
+    assert.strictEqual(hostile.pwned, false, 'and is never executed');
+  });
+
+  test('property: zero scope iff findings_in_scope is zero', { skip: !HAS_BASH }, () => {
+    fc.assert(
+      fc.property(fc.nat({ max: 5000 }), (n) => probe(report(String(n))).verdict === (n === 0 ? 'yes' : 'no')),
+      { numRuns: 25 },
+    );
+  });
+
+  test('the loop consults the helper before iterating and after every fixer pass', () => {
+    const region = stepRegion(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'auto_iteration_loop');
+    const calls = region.split('_gsd_fix_scope_empty "${FIX_REPORT_PATH}"').length - 1;
+    assert.ok(calls >= 2, 'helper must gate the loop entry and each iteration: found ' + calls);
+    assert.ok(region.includes('while [ "$NO_SCOPE_LEFT" = false ] && [ $ITERATION -lt $MAX_ITERATIONS ]; do'),
+      'the loop must not start once nothing is in scope');
+    assert.ok(region.includes('if [ "$NO_SCOPE_LEFT" = false ] && [ $ITERATION -ge $MAX_ITERATIONS ]; then'),
+      'the degradation warning must not fire on a zero-scope stop');
+  });
+
+  test('the fix summary does not claim resolution when nothing was in scope', { skip: !HAS_BASH }, () => {
+    const region = stepRegion(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'present_results').replace(/\r\n/g, '\n');
+    const lines = region.split('\n');
+    const marker = lines.findIndex((l) => l.includes('All issues resolved.'));
+    assert.notStrictEqual(marker, -1);
+    let start = marker;
+    while (start > 0 && !/^```bash\s*$/.test(lines[start])) start--;
+    let end = marker;
+    while (end < lines.length && !/^```\s*$/.test(lines[end])) end++;
+    const fence = lines.slice(start + 1, end).join('\n');
+    const run = (inScope) => runHook('-c', [fence], {
+      interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS,
+      env: { ...process.env, FIX_STATUS: 'all_fixed', FINDINGS_IN_SCOPE: inScope, FIX_SCOPE: 'critical_warning',
+        FIX_REPORT_PATH: 'x', REVIEW_PATH: 'y', PHASE_NUMBER: '1' },
+    }).stdout;
+    const zero = run('0');
+    assert.ok(zero.includes('No findings were in fix scope'), 'zero scope says so');
+    assert.ok(!zero.includes('All issues resolved.'), 'and does not claim resolution');
+    assert.ok(run('2').includes('All issues resolved.'), 'a real all_fixed run is unchanged');
   });
 });

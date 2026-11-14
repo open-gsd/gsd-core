@@ -16,6 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 import { realClock } from './clock.cjs';
 import type { Clock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -181,7 +184,11 @@ const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, v
 function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedConfigValue {
   let node: unknown;
   try {
-    node = JSON.parse(String(fs.readFileSync(configPath, 'utf8')));
+    // Bounded read (#5759): null (absent) and any throw (FIFO, device, directory, oversized,
+    // errno) both mean this file sets nothing — never a block.
+    const raw = readConfigFileBounded(configPath);
+    if (raw === null) return CONFIG_VALUE_ABSENT;
+    node = JSON.parse(raw);
   } catch {
     return CONFIG_VALUE_ABSENT;
   }
@@ -211,11 +218,11 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
  * that shape resolves to "not present".
  */
-function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]]): ScopedConfigValue {
+function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd), 'config.json'), keyPath);
+    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
     if (scoped.present) return scoped;
-    if (resolveEnvWorkstream() !== null) {
+    if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
       return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
     }
   } catch {
@@ -293,10 +300,11 @@ function worktreesOptedOut(cwd: string): boolean {
  */
 function resolvePhaseIdConvention(cwd: string, ws?: string | null): string | null {
   const readFrom = (dir: string): string | null => {
-    const configPath = path.join(dir, 'config.json');
-    if (!fs.existsSync(configPath)) return null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      // Bounded read (#5759): null is an absent file, a throw is an unreadable one; both mean "unset".
+      const raw = readConfigFileBounded(path.join(dir, 'config.json'));
+      if (raw === null) return null;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
       const value = parsed['phase_id_convention'];
       return typeof value === 'string' && value !== '' ? value : null;
     } catch {
@@ -491,7 +499,8 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
         // written atomically (writeFileSync …{flag:'wx'}) so there is no empty-body
         // create window here — only the double-steal needs hardening.
         try {
-          const decisionStat = fs.statSync(lockPath);
+          // Exact 64-bit (dev, ino): an NTFS file id does not fit a JS number (never serialized).
+          const decisionId = fs.statSync(lockPath, { bigint: true });
           // Snapshot the decision-time body too: (dev, ino) alone is defeated by inode
           // REUSE (a racer's unlink+recreate can land on the same inode), so the body
           // content binds the identity as well — mirrors capability-lock.cts's (dev,
@@ -503,7 +512,7 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
             // Verified-live, but recover anyway once the lock crosses the absolute
             // deadman ceiling — defeats a pid-reuse false-alive that would otherwise
             // block forever (R4-FIX; mtime age is from lock creation, not this call).
-            const age = clock.now() - decisionStat.mtimeMs;
+            const age = clock.now() - Number(decisionId.mtimeMs);
             stealable = age > deadmanCeilingMs;
           }
           if (stealable) {
@@ -511,17 +520,17 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
             // Identity re-confirm immediately before the steal: a racer that stole +
             // recreated a fresh lock in the decision→steal gap changes (dev, ino) → do
             // NOT delete the replacement; back off and re-evaluate.
-            let confirmStat: fs.Stats;
+            let confirmStat: fs.BigIntStats;
             try {
-              confirmStat = fs.statSync(lockPath);
+              confirmStat = fs.statSync(lockPath, { bigint: true });
             } catch {
               continue; // vanished between decision and steal — retry the create.
             }
             let confirmBody: string | null;
             try { confirmBody = fs.readFileSync(lockPath, 'utf-8'); } catch { confirmBody = null; }
             const sameInstance =
-              typeof decisionStat.dev === 'number' && typeof decisionStat.ino === 'number' &&
-              confirmStat.dev === decisionStat.dev && confirmStat.ino === decisionStat.ino &&
+              typeof decisionId.dev === 'bigint' && typeof decisionId.ino === 'bigint' &&
+              confirmStat.dev === decisionId.dev && confirmStat.ino === decisionId.ino &&
               decisionBody !== null && confirmBody === decisionBody;
             if (!sameInstance) {
               clock.sleep(100); // a racer won the steal + recreated — re-evaluate, don't delete it.
@@ -705,6 +714,24 @@ function findContextMdIn(
   }
 }
 
+/**
+ * Is `name` the phase's requirements SPEC (#5629)? A plain `NN-SPEC.md`: the `-AI-SPEC.md` (AI design
+ * contract) and `-UI-SPEC.md` (UI design contract) variants have other purposes and never lock requirements.
+ * The one definition behind the init payloads' `has_spec` / `spec_path`, the discuss and plan-phase workflows
+ * (which read those fields) and the context-drift gate, so they cannot disagree about which file is "the SPEC".
+ */
+function isPhaseSpecFile(name: string): boolean {
+  return name.endsWith('-SPEC.md') && !name.endsWith('-AI-SPEC.md') && !name.endsWith('-UI-SPEC.md');
+}
+
+/**
+ * The phase SPEC in an already-read directory listing, or `null`. The lexically first match, so the answer
+ * does not depend on the filesystem's readdir order. The caller's array is not reordered.
+ */
+function findPhaseSpecIn(files: readonly string[]): string | null {
+  return files.filter(isPhaseSpecFile).sort()[0] ?? null;
+}
+
 export = {
   worktreesOptedOut,
   readScopedConfigValue,
@@ -730,6 +757,8 @@ export = {
   diagnoseUnresolvedActiveWorkstream,
   describeUnresolvedWorkstreamReason,
   findContextMdIn,
+  isPhaseSpecFile,
+  findPhaseSpecIn,
   // Test seam (audit M1): inject a deterministic isPidAlive so the liveness-gated
   // steal decision is exercised without real pids. Mirrors capability-lock.cts.
   _setLockProbes(probes: Partial<{ isPidAlive: (pid: number) => boolean }>): void {

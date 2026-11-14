@@ -520,22 +520,62 @@ describe('enhancement #4570 config contract — planner stall detection has a ty
     const configPath = path.join(tmp, '.planning', 'config.json');
     const before = fs.readFileSync(configPath, 'utf8');
     const printable = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789[]{}._- ';
+    // Dispatcher help tokens (HELP_FLAGS in gsd-tools.cjs, #3019) are a help request wherever they appear in
+    // argv, not a value that reaches config-set; the generator must not draw them (#5507). Pinned by the
+    // fixed examples below. `-v`/`--version` are rejected with a non-zero exit, so they stay in the domain.
+    const helpTokens = ['-h', '--h', '--help', '-?', '--usage'];
     const invalidValue = fc.array(fc.constantFrom(...printable), { minLength: 1, maxLength: 16 })
       .map((chars) => chars.join(''))
-      .filter((value) => !['true', 'false', 'null'].includes(value));
+      .filter((value) => !['true', 'false', 'null', ...helpTokens].includes(value));
 
-    fc.assert(
-      fc.property(invalidValue, (value) => {
-        const result = runGsdTools(
-          ['config-set', 'planner.stall_detection_enabled', value],
-          tmp,
-          { HOME: tmp, USERPROFILE: tmp },
-        );
-        return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
-      }),
-      { numRuns: 20 },
-    );
+    const rejectedWithoutWrite = fc.property(invalidValue, (value) => {
+      const result = runGsdTools(
+        ['config-set', 'planner.stall_detection_enabled', value],
+        tmp,
+        { HOME: tmp, USERPROFILE: tmp },
+      );
+      return result.success === false && fs.readFileSync(configPath, 'utf8') === before;
+    });
+
+    fc.assert(rejectedWithoutWrite, { numRuns: 20 });
+    // #5507: the seed/path of the run that drew "-h" (a dispatcher help token that exits 0). Now that the
+    // generator excludes help tokens this draws a different value, so it is a deterministic one-run smoke replay
+    // of that seed, not the regression pin — the fixed help-token examples below are the contract.
+    fc.assert(rejectedWithoutWrite, { seed: -1201433058, path: '3', endOnFailure: true, numRuns: 1 });
   });
+
+  // #5507: the dispatcher treats a help token ANYWHERE in argv as a help request (#3019): usage, exit 0, the
+  // command never runs. That is why the property above must not draw those tokens; this states the contract.
+  for (const token of ['-h', '--h', '--help', '-?', '--usage']) {
+    test(`config-set with the dispatcher help token ${token} prints usage and leaves config byte-identical`, (t) => {
+      const tmp = makeProject(t, { planner: { stall_detection_enabled: true }, sentinel: 'preserve' });
+      const configPath = path.join(tmp, '.planning', 'config.json');
+      const before = fs.readFileSync(configPath, 'utf8');
+      const result = runGsdTools(
+        ['config-set', 'planner.stall_detection_enabled', token],
+        tmp,
+        { HOME: tmp, USERPROFILE: tmp },
+      );
+      assert.equal(result.success, true, `${token} is a help request, not a config write: ${result.error}`);
+      assert.match(result.output, /^Usage: gsd-tools/m, 'prints the dispatcher usage');
+      assert.equal(fs.readFileSync(configPath, 'utf8'), before, 'config.json stays byte-identical');
+    });
+  }
+
+  for (const value of ['-v', '--version', '-x', '--x', '-', 'abc', '1', 'yes', '[]']) {
+    test(`config-set with the non-boolean, non-help value ${JSON.stringify(value)} is still rejected without a write`, (t) => {
+      const tmp = makeProject(t, { planner: { stall_detection_enabled: true }, sentinel: 'preserve' });
+      const configPath = path.join(tmp, '.planning', 'config.json');
+      const before = fs.readFileSync(configPath, 'utf8');
+      const result = runGsdTools(
+        ['config-set', 'planner.stall_detection_enabled', value],
+        tmp,
+        { HOME: tmp, USERPROFILE: tmp },
+      );
+      assert.equal(result.success, false, `${JSON.stringify(value)} must be rejected`);
+      assert.equal(fs.readFileSync(configPath, 'utf8'), before, 'config.json stays byte-identical');
+    });
+  }
 
   test('hand-edited non-booleans fail safely to true on both config-get and Config Loader reads', (t) => {
     const tmp = makeProject(t, { planner: { stall_detection_enabled: 'false' } });
@@ -647,6 +687,48 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
       );
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout.trim(), expected, `stored ${JSON.stringify(stored)} resolved incorrectly`);
+    }
+  });
+
+  test('#3923: stored interval/threshold resolve to a positive integer, or the default', (t) => {
+    // Driven through the real config-get seam with the shape `config-set` and
+    // `/gsd-config --advanced` write (JSON numbers), plus hand-edited shapes.
+    // limit-1 (0) / limit (1) / limit+1 (2) for both keys.
+    const helpersBash = extractStallHelpersBash();
+    const cases = [
+      [undefined, '5', '10'],
+      [0, '5', '10'],
+      [1, '1', '1'],
+      [2, '2', '2'],
+      [30, '30', '30'],
+      // 9-digit cap so `* 60` cannot overflow: limit-1 / limit / limit+1.
+      [99999999, '99999999', '99999999'], [999999999, '999999999', '999999999'], [1000000000, '5', '10'],
+      [-1, '5', '10'],
+      ['abc', '5', '10'],
+      [null, '5', '10'],
+    ];
+    for (const [stored, expectedInterval, expectedThreshold] of cases) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3923-resolve-'));
+      t.after(() => cleanup(tmp));
+      fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+      const config = stored === undefined
+        ? {}
+        : { planner: { stall_detect_interval_minutes: stored, stall_threshold_minutes: stored } };
+      fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), `${JSON.stringify(config)}\n`);
+      const result = runBashScript(
+        `${helpersBash}\nprintf '%s %s\\n' "$PLANNER_STALL_INTERVAL_MINUTES" "$PLANNER_STALL_THRESHOLD_MINUTES"\n`,
+        [],
+        {
+          cwd: tmp,
+          env: { ...process.env, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, RUNTIME_DIR: REPO_ROOT, GSD_PROJECT: '', GSD_WORKSTREAM: '' },
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        result.stdout.trim(),
+        `${expectedInterval} ${expectedThreshold}`,
+        `stored ${JSON.stringify(stored)} resolved incorrectly`,
+      );
     }
   });
 

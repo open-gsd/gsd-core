@@ -402,12 +402,7 @@ Pacotes com `[SLOP]` são removidos do RESEARCH.md inteiramente e nunca chegam a
 | `[SUS]` | Sinais suspeitos | Sinalizado; o planejador adiciona `checkpoint:human-verify` |
 | `[SLOP]` | Alucinação de alta confiança | Removido do RESEARCH.md; nunca chega ao planejador |
 
-Para instalar o slopcheck manualmente:
-
-```bash
-pip install slopcheck
-# verify: slopcheck install express --json
-```
+Os veredictos são calculados a partir de APIs de registro ativas (npm, PyPI, crates.io) — não há nenhuma ferramenta separada para instalar. `slopcheck` é um adaptador opcional que só escala veredictos e que nenhuma configuração distribuída ativa; a ausência dele não altera o portão.
 
 ---
 

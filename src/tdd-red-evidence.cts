@@ -124,12 +124,19 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
   if (report.tests.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.Empty, evidence };
   if (failures.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.NoFailure, evidence };
   const targetBase = baseOf(input?.targetFile);
-  const distinctlyNamed = failures.filter((test) => !targetBase || baseOf(test.name) !== targetBase);
+  const distinctlyNamed = failures.filter((test) => !test.loadFailure && (!targetBase || baseOf(test.name) !== targetBase));
   if (distinctlyNamed.length === 0) return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.LoadFailure, evidence };
   // Class targets can intentionally match multiple methods in a JUnit report.
   // Other identities must resolve uniquely, including passing/skipped siblings.
-  const exact = report.tests.filter((test) => test.identities.includes(targetTest));
-  const grouped = report.tests.filter((test) => test.groupIdentities.includes(targetTest));
+  // A load-failure entry (#5721) asserted nothing: it is never a target candidate. A target that
+  // names only such entries is refused as the load failure it is, not as a missing target.
+  const real = report.tests.filter((test) => !test.loadFailure);
+  const exact = real.filter((test) => test.identities.includes(targetTest));
+  const grouped = real.filter((test) => test.groupIdentities.includes(targetTest));
+  if (exact.length === 0 && grouped.length === 0 && report.tests.some((test) => test.loadFailure
+    && (test.identities.includes(targetTest) || test.groupIdentities.includes(targetTest)))) {
+    return { verdict: RedEvidenceVerdict.Invalid, reason: RedEvidenceReason.LoadFailure, evidence };
+  }
   const targets = exact.length > 0 ? exact : grouped;
   const unambiguous = exact.length > 0 ? exact.length === 1 : new Set(grouped.map((test) => test.group)).size === 1;
   const targetFailure = distinctlyNamed.find((test) => targets.includes(test));

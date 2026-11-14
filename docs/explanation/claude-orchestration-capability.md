@@ -18,7 +18,7 @@ silently drops wave parallelism, the plan-checker, and the verifier — on the o
 runtime most GSD users run.
 
 Claude Code ships an orchestration primitive that sidesteps exactly this: the
-**Workflow tool** (the engine behind `/effort ultracode`, Agent SDK ≥ v0.3.149).
+**Workflow tool** (Claude Code's dynamic workflows, the engine behind `/effort ultracode`).
 A Workflow script *is* the orchestrator — it runs from the main loop and spawns
 subagents itself via `agent()`, `parallel()` (barrier), `pipeline()`, and
 `phase()`, with `isolation: 'worktree'`. Two related capabilities are **tool
@@ -61,10 +61,21 @@ Workflow backend activates only when *every* gate passes; any miss degrades to
 4. The host descriptor advertises `dispatch.nested` **and** `dispatch.background`
    (the nesting-capable Claude-Code shape — a proxy for Workflow-tool presence,
    meaningful only after gate 2).
-5. The Agent SDK reports a valid semver version.
-6. That version is `>= claude_orchestration.min_agent_sdk_version`
-   (default `0.3.149`). A pre-release of the floor (e.g. `0.3.149-rc.1`) compares
-   *below* the GA release per SemVer, so the preview backend stays off.
+5. No Claude Code workflow kill switch is set: `CLAUDE_CODE_DISABLE_WORKFLOWS`,
+   or `disableWorkflows: true` / `enableWorkflows: false` in managed, project-local,
+   project or user settings, resolved with Claude Code's own precedence. A settings
+   file GSD cannot read counts as "on" — it cannot prove the switch is off.
+
+Why kill switches and not a version number: Claude Code documents workflows as
+available by plan (all paid plans, plus API, Bedrock, Google Cloud and Foundry
+access) with a per-user toggle on Pro. Neither the plan nor the toggle is visible
+to a tool outside Claude Code, and the version of the installed Agent SDK package
+says nothing about either, so the earlier SDK-version floor was gating on the wrong
+thing ([#4747]). What a tool *can* see is the documented way to turn workflows off,
+so that is what detection reads. A session without workflow access can still pass
+detection; the Workflow tool then refuses the run and dispatch falls back to inline.
+The `claude_orchestration.min_agent_sdk_version` key is kept so old configs load,
+and ignored.
 
 ## What the executor runs when the backend is active
 
@@ -73,7 +84,7 @@ Workflow backend activates only when *every* gate passes; any miss degrades to
 | GSD concept | Workflow primitive |
 |---|---|
 | Wave | `parallel()` stage barrier |
-| Plan (`use_worktree` not `false`) | `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree' })` |
+| Plan (`use_worktree` not `false`) | `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree', schema })` — the schema makes the executor return its worktree metadata as validated JSON |
 | Plan (`use_worktree: false`) | `agent(brief, { agentType: 'gsd-executor' })` (no isolation) |
 | `files_modified` overlap | forces the plans into separate sequential stages |
 | Wave | a `phase("Wave <id>")` group, matching a `meta.phases` entry |
@@ -88,10 +99,22 @@ mirrors execute-phase.md step 2.5's per-plan submodule safety gate exactly: a
 plan that touches a submodule path is never forced into worktree isolation,
 whichever backend dispatches it ([#2772]).
 
+The script hands each plan's result back as `{ plan, expects_worktree, metadata,
+error }`. The worktree metadata used to be pulled out of the executor's prose with a
+regular expression, so a reply that missed the expected block simply produced
+`null`. Passing a JSON Schema on `agent()` moves that check into Claude Code, which
+validates the reply and asks the executor to retry (up to five times). Each agent
+call also catches its own failure, so one executor that fails leaves its error
+text in `error` while the others in the same `parallel()` barrier still return.
+
+Emission refuses a manifest Claude Code would refuse anyway — more than 4,096
+plans in one `parallel()` call or more than 1,000 agents in one run — and says
+which cap, rather than letting the run fail with an opaque error.
+
 ## The fallback contract
 
 On any runtime lacking the Workflow tool — or when the capability is disabled,
-the SDK is too old, or detection fails for any reason — execute-phase proceeds
+workflows are turned off, or detection fails for any reason — execute-phase proceeds
 with the standard inline wave dispatch. This is a release gate, not a nicety: a
 regression test asserts the inline fallback on every non-capable combination, so
 the capability is default-off and low-risk by construction.
@@ -112,3 +135,4 @@ own runtime gate continues to no-op on non-Claude runtimes.
 [#2772]: https://github.com/open-gsd/gsd-core/issues/2772
 [#2285]: https://github.com/open-gsd/gsd-core/issues/2285
 [#4740]: https://github.com/open-gsd/gsd-core/issues/4740
+[#4747]: https://github.com/open-gsd/gsd-core/issues/4747

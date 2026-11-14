@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 const { evaluateLint, LINT_REASON, findPrFieldDrift, DEFAULT_BASE: CHANGESET_DEFAULT_BASE } = require(path.join(__dirname, '..', 'scripts', 'changeset', 'lint.cjs'));
+const { RELEASE_PIPELINE_PR_KIND } = require(path.join(__dirname, '..', 'scripts', 'release-pipeline-pr.cjs'));
 const { DEFAULT_BASE: DOCS_DEFAULT_BASE } = require(path.join(__dirname, '..', 'scripts', 'lint-docs-required.cjs'));
 
 const ROOT = path.join(__dirname, '..');
@@ -112,6 +113,37 @@ function runLintWithPrEvent(repoDir, prNumber) {
   return { status: result.exitCode, report };
 }
 
+const THIS_REPO = 'open-gsd/gsd-core';
+
+/**
+ * Like runLintWithPrEvent, but with a full pull_request payload (head/base
+ * refs, head repo) and GITHUB_REPOSITORY, for the release-pipeline exemption.
+ * @param {string} repoDir
+ * @param {{ headRef: string, baseRef: string, headRepo: ({full_name: string}|null) }} pr
+ */
+function runLintWithRefs(repoDir, { headRef, baseRef, headRepo }) {
+  const eventPath = path.join(repoDir, 'event.json');
+  fs.writeFileSync(eventPath, JSON.stringify({
+    pull_request: {
+      number: 5854,
+      labels: [],
+      head: { ref: headRef, repo: headRepo },
+      base: { ref: baseRef },
+    },
+  }));
+  const result = runNode(
+    [LINT_SCRIPT, '--json'],
+    {
+      cwd: repoDir,
+      env: { ...process.env, GITHUB_BASE_REF: 'main', GITHUB_EVENT_PATH: eventPath, GITHUB_REPOSITORY: THIS_REPO },
+      timeoutMs: PROBE_TIMEOUT_MS,
+    },
+  );
+  let report = {};
+  try { report = JSON.parse(result.stdout); } catch { /* leave as empty object */ }
+  return { status: result.exitCode, report };
+}
+
 // evaluateLint is a pure function over file lists + label list — no fs, no git.
 // Tests assert on the structured verdict: { ok: bool, reason: LINT_REASON.X }.
 
@@ -122,6 +154,7 @@ describe('changeset lint: pure verdict (#2975)', () => {
       [
         'OK_FRAGMENT_PRESENT', 'OK_NO_USER_FACING_CHANGES', 'OK_OPT_OUT_LABEL',
         'FAIL_MISSING_FRAGMENT', 'FAIL_INVALID_FRAGMENT', 'FAIL_PR_FIELD_DRIFT',
+        'OK_RELEASE_PIPELINE',
       ].sort(),
     );
   });
@@ -466,4 +499,130 @@ describe('changeset lint: PR-field-drift end-to-end wiring', () => {
     assert.equal(status, 0, `expected exit 0, got ${status}: ${JSON.stringify(report)}`);
     assert.equal(report.reason, LINT_REASON.OK_FRAGMENT_PRESENT);
   });
+});
+
+// ---------------------------------------------------------------------------
+// #5903: the release pipeline's own PRs consume every fragment into
+// CHANGELOG.md, so they carry no fragment by design.
+// ---------------------------------------------------------------------------
+describe('changeset lint: release-pipeline PRs (#5903) — pure verdict', () => {
+  const files = ['CHANGELOG.md', 'src/x.cts'];
+
+  for (const kind of Object.values(RELEASE_PIPELINE_PR_KIND)) {
+    test(`OK_RELEASE_PIPELINE for kind ${kind} with CHANGELOG.md + source and no fragment`, () => {
+      const verdict = evaluateLint({ changedFiles: files, labels: [], releasePipelineKind: kind });
+      assert.equal(verdict.ok, true);
+      assert.equal(verdict.reason, LINT_REASON.OK_RELEASE_PIPELINE);
+      assert.equal(verdict.releasePipelineKind, kind);
+    });
+  }
+
+  test('null kind is judged as today: FAIL_MISSING_FRAGMENT', () => {
+    const verdict = evaluateLint({ changedFiles: files, labels: [], releasePipelineKind: null });
+    assert.deepEqual(verdict, { ok: false, reason: LINT_REASON.FAIL_MISSING_FRAGMENT });
+  });
+
+  test('omitted kind is judged as today: FAIL_MISSING_FRAGMENT', () => {
+    const verdict = evaluateLint({ changedFiles: files, labels: [] });
+    assert.deepEqual(verdict, { ok: false, reason: LINT_REASON.FAIL_MISSING_FRAGMENT });
+  });
+
+  test('a malformed fragment on a release PR is still FAIL_INVALID_FRAGMENT', () => {
+    const verdict = evaluateLint({
+      changedFiles: ['.changeset/bad.md'],
+      labels: [],
+      fragmentFailures: [{ file: '.changeset/bad.md', reason: 'invalid_pr', detail: '0' }],
+      releasePipelineKind: RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE,
+    });
+    assert.equal(verdict.reason, LINT_REASON.FAIL_INVALID_FRAGMENT);
+  });
+
+  test('PR-field drift on a release PR is still FAIL_PR_FIELD_DRIFT', () => {
+    const verdict = evaluateLint({
+      changedFiles: ['.changeset/good.md'],
+      labels: [],
+      prFieldDrift: [{ file: '.changeset/good.md', found: 1, expected: 2 }],
+      releasePipelineKind: RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE,
+    });
+    assert.equal(verdict.reason, LINT_REASON.FAIL_PR_FIELD_DRIFT);
+  });
+});
+
+describe('changeset lint: release-pipeline PRs (#5903) — event-payload wiring', () => {
+  const sameRepo = { full_name: THIS_REPO };
+
+  function repoWithChangelogOnly(t) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-lint-e2e-'));
+    t.after(() => cleanup(tmpDir));
+    buildTempRepo(tmpDir, [
+      { file: 'CHANGELOG.md', content: '# changelog\n' },
+      { file: 'src/x.cts', content: '// x\n' },
+    ]);
+    return tmpDir;
+  }
+
+  test('same-repo release/1.2.0 -> main passes as OK_RELEASE_PIPELINE', (t) => {
+    const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+      headRef: 'release/1.2.0', baseRef: 'main', headRepo: sameRepo,
+    });
+    assert.equal(status, 0, JSON.stringify(report));
+    assert.equal(report.reason, LINT_REASON.OK_RELEASE_PIPELINE);
+    assert.equal(report.releasePipelineKind, RELEASE_PIPELINE_PR_KIND.RELEASE_MERGE);
+  });
+
+  test('head repo full_name matches GITHUB_REPOSITORY case-insensitively', (t) => {
+    const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+      headRef: 'release/1.2.0', baseRef: 'main', headRepo: { full_name: THIS_REPO.toUpperCase() },
+    });
+    assert.equal(status, 0, JSON.stringify(report));
+    assert.equal(report.reason, LINT_REASON.OK_RELEASE_PIPELINE);
+  });
+
+  test('the same branch from a fork fails with FAIL_MISSING_FRAGMENT', (t) => {
+    const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+      headRef: 'release/1.2.0', baseRef: 'main', headRepo: { full_name: 'attacker/gsd-core' },
+    });
+    assert.equal(status, 1);
+    assert.equal(report.reason, LINT_REASON.FAIL_MISSING_FRAGMENT);
+  });
+
+  test('an ordinary head branch editing CHANGELOG.md fails with FAIL_MISSING_FRAGMENT', (t) => {
+    const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+      headRef: 'fix/123-thing', baseRef: 'main', headRepo: sameRepo,
+    });
+    assert.equal(status, 1);
+    assert.equal(report.reason, LINT_REASON.FAIL_MISSING_FRAGMENT);
+  });
+
+  test('a deleted fork (head.repo null) fails with FAIL_MISSING_FRAGMENT', (t) => {
+    const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+      headRef: 'release/1.2.0', baseRef: 'main', headRepo: null,
+    });
+    assert.equal(status, 1);
+    assert.equal(report.reason, LINT_REASON.FAIL_MISSING_FRAGMENT);
+  });
+
+  test('a release branch aimed at the wrong base fails with FAIL_MISSING_FRAGMENT', (t) => {
+    const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+      headRef: 'release/1.2.0', baseRef: 'next', headRepo: sameRepo,
+    });
+    assert.equal(status, 1);
+    assert.equal(report.reason, LINT_REASON.FAIL_MISSING_FRAGMENT);
+  });
+
+  // limit-1 / limit / limit+1 on the release branch grammar X.Y.0
+  const boundaries = [
+    ['release/1.2', false],
+    ['release/1.2.0', true],
+    ['release/1.2.0.0', false],
+  ];
+  for (const [headRef, exempt] of boundaries) {
+    test(`boundary ${headRef} -> main is ${exempt ? 'exempt' : 'not exempt'}`, (t) => {
+      const { status, report } = runLintWithRefs(repoWithChangelogOnly(t), {
+        headRef, baseRef: 'main', headRepo: sameRepo,
+      });
+      assert.equal(status, exempt ? 0 : 1, JSON.stringify(report));
+      assert.equal(report.reason, exempt ? LINT_REASON.OK_RELEASE_PIPELINE : LINT_REASON.FAIL_MISSING_FRAGMENT);
+    });
+  }
 });

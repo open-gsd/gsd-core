@@ -1549,6 +1549,52 @@ describe('canonicalAgentSourceDir (#5496)', () => {
     assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
   });
 
+  // #5636: "holds agent sources" means a recognized agent file (`gsd-<name>.md`, not a `.compact.md`
+  // variant), not any markdown file. A stray README in the nested dir must not hide the real agents.
+  const nestedWith = (...names) => {
+    const nested = path.join(root, 'gsd-core', 'agents');
+    fs.mkdirSync(nested, { recursive: true });
+    for (const name of names) fs.writeFileSync(path.join(nested, name), 'x');
+    return nested;
+  };
+
+  test('a nested dir holding only a README is not canonical (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    nestedWith('README.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a README beside a gsd-*.md does not stop the nested dir winning (#5636)', () => {
+    dirWithAgent('agents');
+    const nested = nestedWith('README.md', 'gsd-executor.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), nested);
+  });
+
+  test('a nested dir holding only non-agent markdown is not canonical (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    nestedWith('notes.md', 'AGENTS.md', 'executor.md', 'gsd-.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a nested dir holding a README and only compact variants is not canonical (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    nestedWith('README.md', 'gsd-executor.compact.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
+  test('a compact variant beside a real agent does not disqualify the nested dir (#5636)', () => {
+    dirWithAgent('agents');
+    const nested = nestedWith('gsd-executor.compact.md', 'gsd-planner.md');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), nested);
+  });
+
+  test('a nested path that is a file, not a directory, falls back to the root-level path (#5636)', () => {
+    const agents = dirWithAgent('agents');
+    fs.mkdirSync(path.join(root, 'gsd-core'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'gsd-core', 'agents'), 'not a directory');
+    assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), agents);
+  });
+
   test('with neither present it still returns the root-level path (the caller reports nothing found)', () => {
     assert.strictEqual(agentInstallCheck.canonicalAgentSourceDir(root), path.join(root, 'agents'));
   });

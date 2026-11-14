@@ -1775,8 +1775,8 @@ describe('#2695: the core profile enables the hook feature and wires SessionStar
   });
 });
 
-describe('#2695: the core profile still installs no agent files (negative space)', () => {
-  test('--profile=core delivers hooks but no gsd-* agent files', (t) => {
+describe('#2695: the core profile installs only the agents its skills spawn (negative space)', () => {
+  test('--profile=core delivers hooks and only the core-spawned gsd-* agent files', (t) => {
     const { configDir } = runCodexInstall({ profile: 'core' });
     t.after(() => cleanup(configDir));
 
@@ -1784,24 +1784,31 @@ describe('#2695: the core profile still installs no agent files (negative space)
     for (const name of CODEX_HOOK_FILES) {
       assert.ok(fs.existsSync(path.join(hooksDirOf(configDir), name)), `${name} delivered for core`);
     }
-    // …but the full agent surface is still absent (core stays minimal). Codex agents
-    // are .toml ([agents.gsd-*] in config.toml + agents/gsd-*.toml), so check both
-    // extensions — a .md-only filter would miss a Codex agent-surface regression.
-    const agentsDir = path.join(configDir, 'agents');
-    if (fs.existsSync(agentsDir)) {
-      const gsdAgents = fs.readdirSync(agentsDir).filter(
-        (f) => f.startsWith('gsd-') && (f.endsWith('.md') || f.endsWith('.toml')),
-      );
-      assert.deepStrictEqual(gsdAgents, [], 'core must not install the full agent surface');
+    // …#5503: the core skills spawn named agents, so those are installed; the rest of the
+    // agent surface stays a wider-profile concern. Codex agents are .toml (agents/gsd-*.toml),
+    // so check both extensions — a .md-only filter would miss a Codex agent-surface regression.
+    const { PROFILES: _P, loadSkillsManifest: _load } = require('../gsd-core/bin/lib/install-profiles.cjs');
+    const manifest = _load();
+    const allAgents = fs.readdirSync(path.join(__dirname, '..', 'agents'))
+      .filter((f) => f.startsWith('gsd-') && f.endsWith('.md') && !f.endsWith('.compact.md'))
+      .map((f) => f.slice(0, -3));
+    const coreAgents = new Set();
+    for (const stem of _P.core) {
+      for (const a of manifest.get(`_calls_agents_${stem}`) || []) if (allAgents.includes(a)) coreAgents.add(a);
     }
-    // And config.toml must carry no agent role sections.
+    const agentsDir = path.join(configDir, 'agents');
+    assert.ok(fs.existsSync(agentsDir), 'core installs the agents its skills spawn');
+    const installed = new Set(
+      fs.readdirSync(agentsDir)
+        .filter((f) => f.startsWith('gsd-') && (f.endsWith('.md') || f.endsWith('.toml')))
+        .map((f) => f.replace(/\.(md|toml)$/, '')),
+    );
+    assert.deepStrictEqual([...installed].sort(), [...coreAgents].sort(), 'core installs exactly the core-spawned agents, not the full surface');
+    // config.toml still carries no inline agent role sections (roles are the agents/*.toml files).
     const configPath = path.join(configDir, 'config.toml');
     if (fs.existsSync(configPath)) {
       const config = fs.readFileSync(configPath, 'utf8');
-      assert.ok(
-        !/^\[agents\.gsd-/m.test(config),
-        'core config.toml must not declare [agents.gsd-*] roles (full agent surface stays a full-profile concern)',
-      );
+      assert.ok(!/^\[agents\.gsd-/m.test(config), 'config.toml declares no [agents.gsd-*] role sections');
     }
   });
 });

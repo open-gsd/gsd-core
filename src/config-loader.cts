@@ -16,14 +16,18 @@
  *   - ./unusable-input.cjs   (warnUnusableInput, UNUSABLE_REASON — #3760)
  *   - ./config-schema.cjs    (VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS)
  *   - ./planning-workspace.cjs (planningDir, planningRoot)
- *   - ./shell-command-projection.cjs (execGit, platformWriteSync, platformReadSync)
+ *   - ./shell-command-projection.cjs (execGit, platformWriteSync)
+ *   - ./config-file-read.cjs (CONFIG_MAX_BYTES, readConfigFileBounded — bounded regular-file read, #5759)
  *   - ./core-utils.cjs       (detectSubRepos)
  *   - ./model-catalog.cjs    (KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+import { execGit, platformWriteSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configFileReadMod = require('./config-file-read.cjs');
+const { CONFIG_MAX_BYTES, readConfigFileBounded, printablePath } = configFileReadMod;
 // #4717: runtime-identity fill — env rung + per-install marker rung.
 import { readInstallRuntimeMarker } from './runtime-slash.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -167,6 +171,16 @@ const CONFIG_DEFAULTS = {
 };
 
 /**
+ * Resolve `git.repo_tagging` (#5706) from hand-edited configuration. Only the
+ * two documented enum members are honored; any other stored value (a number,
+ * null, an unknown string, a wrong-case spelling) reads as the default `single`
+ * and never throws, so a bad hand edit cannot enable per-repository tagging.
+ */
+function resolveRepoTagging(value: unknown): 'single' | 'per_repo' {
+  return value === 'per_repo' ? 'per_repo' : 'single';
+}
+
+/**
  * Resolve the planner watchdog policy from hand-edited configuration.
  * Only a real JSON boolean may override the default; strings/numbers/null
  * fail safe to the manifest-owned default-on behavior (#4570).
@@ -226,15 +240,15 @@ interface ParsedConfig {
 
 const _gitIgnoredCache = new Map<string, boolean>();
 
-function isGitIgnored(cwd: string, targetPath: string): boolean {
+function isGitIgnored(cwd: string, targetPath: string, env?: Record<string, string>): boolean {
   // #2206: strip trailing slashes — `git check-ignore` has a quirk where a
   // CRLF .gitignore with blank lines falsely reports a trailing-slash path
   // (e.g. `.planning/`) as ignored. Normalizing here protects every call site.
   const normalized = targetPath.replace(/\/+$/, '');
-  const key = cwd + '::' + normalized;
+  const key = cwd + '::' + normalized + (env ? '::env:' + JSON.stringify(Object.entries(env).sort()) : '');
   if (_gitIgnoredCache.has(key)) return _gitIgnoredCache.get(key)!;
   // --no-index checks .gitignore rules regardless of whether the file is tracked.
-  const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd });
+  const result = execGit(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env });
   const ignored = result.exitCode === 0;
   _gitIgnoredCache.set(key, ignored);
   return ignored;
@@ -588,10 +602,15 @@ interface ConfigResolution {
   reason: ConfigReason;
 }
 
+// CONFIG_MAX_BYTES and readConfigFileBounded live in ./config-file-read.cjs (#5759), the leaf
+// every config.json reader shares; they are re-exported below for existing importers.
+
 /**
  * Read + JSON-parse a config file, keeping *absent* distinguishable from
- * *unusable*. `platformReadSync` returns null on ENOENT and re-throws every
- * other errno, which is the seam that makes this separable at all.
+ * *unusable*. `readConfigFileBounded` returns null on ENOENT and throws an error
+ * carrying `.code` for every other condition — a FIFO/device (ENXIO), a directory
+ * (EISDIR), an oversized file (EFBIG) or an errno — which is the seam that makes
+ * this separable at all.
  */
 function _readConfigFile(filePath: string):
   | { kind: 'ok'; data: Record<string, unknown> }
@@ -599,7 +618,7 @@ function _readConfigFile(filePath: string):
   | { kind: 'fault'; fault: ConfigFault } {
   let raw: string | null;
   try {
-    raw = platformReadSync(filePath);
+    raw = readConfigFileBounded(filePath);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code ?? 'EUNKNOWN';
     return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNREADABLE, path: filePath, code } };
@@ -636,8 +655,16 @@ const _warnedUnusableConfig = new Set<string>();
  * `.config` alone and would never surface it. Without this diagnostic the field
  * is unreachable to almost every consumer, and the user whose config was
  * silently discarded still gets no signal. That was the whole defect in #1880.
+ *
+ * `fallback` says what replaces the unusable file: 'defaults' (built-in defaults apply), 'root'
+ * (a workstream config is unusable and the root config applies), or null (unknown at report
+ * time — the root config of a workstream resolution — so no replacement is claimed). The path
+ * is printed through printablePath, so a control character in a directory name cannot reach
+ * the terminal raw.
  */
-function _warnUnusableConfig(fault: ConfigFault): void {
+type ConfigFallback = 'defaults' | 'root' | null;
+
+function _warnUnusableConfig(fault: ConfigFault, fallback: ConfigFallback = 'defaults'): void {
   // The NUL separators are load-bearing: without them `path`+`reason`+`code` is bare
   // concatenation and two distinct faults can key alike. They are written as escapes rather
   // than literal 0x00 bytes because a literal NUL makes the whole file binary to file(1) and
@@ -650,8 +677,11 @@ function _warnUnusableConfig(fault: ConfigFault): void {
   const what = fault.reason === CONFIG_REASON.CONFIG_UNPARSEABLE
     ? 'is not valid JSON'
     : `could not be read (${fault.code})`;
+  const instead = fallback === 'root' ? '; using the root config instead'
+    : fallback === 'defaults' ? '; using defaults instead'
+      : '';
   process.stderr.write(
-    `gsd-tools: warning: ${fault.path} ${what} — its settings were NOT applied; using defaults instead\n`,
+    `gsd-tools: warning: ${printablePath(fault.path)} ${what} — its settings were NOT applied${instead}\n`,
   );
 }
 
@@ -738,7 +768,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       const rootRead = _readConfigFile(rootConfigPath);
       if (rootRead.kind === 'fault') {
         configFault = rootRead.fault;
-        _warnUnusableConfig(rootRead.fault);
+        // The workstream config below may still apply, so no replacement is claimed.
+        _warnUnusableConfig(rootRead.fault, null);
       }
       if (rootRead.kind !== 'ok') throw new Error('root config absent or unusable');
       rootParsed = rootRead.data;
@@ -787,7 +818,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // The workstream/root config that ACTUALLY governs this resolution is
       // unusable. This outranks any earlier root-config fault for reporting.
       configFault = read.fault;
-      _warnUnusableConfig(read.fault);
+      // With a workstream active and a usable root config, the root config is what applies.
+      _warnUnusableConfig(read.fault, ws && rootParsed ? 'root' : 'defaults');
     }
     if (read.kind !== 'ok') throw new Error('config absent or unusable');
     const fileData: ParsedConfig = read.data;
@@ -920,6 +952,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       base_branch: get('base_branch', { section: 'git', field: 'base_branch' }),
       protected_branches: getNested('git', 'protected_branches'),
       allow_default_branch_commits: getNested('git', 'allow_default_branch_commits'),
+      repo_tagging: resolveRepoTagging(getNested('git', 'repo_tagging')),
       phase_branch_template: get('phase_branch_template', { section: 'git', field: 'phase_branch_template' }) ?? defaults.phase_branch_template,
       milestone_branch_template: get('milestone_branch_template', { section: 'git', field: 'milestone_branch_template' }) ?? defaults.milestone_branch_template,
       quick_branch_template: get('quick_branch_template', { section: 'git', field: 'quick_branch_template' }) ?? defaults.quick_branch_template,
@@ -1203,6 +1236,8 @@ export = {
   loadConfig,
   loadConfigResolved,
   CONFIG_REASON,
+  CONFIG_MAX_BYTES,
+  readConfigFileBounded,
   _warnedUnusableConfig,
   isGitIgnored,
   CONFIG_DEFAULTS,

@@ -1,7 +1,8 @@
 /**
  * Worktree Safety Policy Module
  *
- * Owns worktree-root resolution and non-destructive prune policy decisions.
+ * Owns worktree lifecycle safety and non-destructive prune policy decisions.
+ * Root resolution moved to the Project Context Module (#6043, ADR-4908).
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/worktree-safety.cjs
  * collapsed to a TypeScript source of truth. Behaviour is preserved
@@ -77,6 +78,8 @@ interface WorktreeEntry {
    * operator but must not stand in for the errno.
    */
   prunable: string | null;
+  /** #6043: the porcelain marks a bare repository entry with a bare `bare` line. */
+  bare: boolean;
 }
 
 function parseWorktreePorcelain(porcelain: string): WorktreeBranchEntry[] {
@@ -104,7 +107,8 @@ function parseWorktreeEntries(porcelain: string): WorktreeEntry[] {
     const prunable = prunableLine
       ? (prunableLine.slice('prunable'.length).trim() || 'prunable')
       : null;
-    entries.push({ path: worktreePath, branch, prunable });
+    const bare = lines.some((l) => l === 'bare');
+    entries.push({ path: worktreePath, branch, prunable, bare });
   }
   return entries;
 }
@@ -176,86 +180,6 @@ function readWorktreeList(repoRoot: string, deps: WorktreeDeps = {}): WorktreeLi
     porcelain: listResult.stdout,
     entries: parseWorktreeEntries(listResult.stdout),
   };
-}
-
-interface WorktreeContextResult {
-  effectiveRoot: string;
-  mode: string;
-  reason: string;
-}
-
-/**
- * Shortcut-free git-dir-vs-git-common-dir comparison: the actual primitive
- * that distinguishes a linked worktree from the main worktree.
- *
- * Deliberately factored out of `resolveWorktreeContext` (#3045). That
- * function's `has_local_planning` shortcut answers a DIFFERENT question ("is
- * there already a usable project root right here") and must NOT be consulted
- * for isolation detection: a git worktree created specifically to isolate an
- * executor is a full checkout, so it normally has its OWN checked-out
- * `.planning/` too. A caller that ran the shortcut first would read that
- * correctly-isolated worktree as `current_directory`/`has_local_planning` —
- * i.e. "not isolated" — a false positive that defeats the very isolation
- * guard that needs this check (see `hooks/gsd-cursor-subagent-start.js`,
- * #3045). `resolveWorktreeLinkage` always performs the real git-dir
- * comparison, independent of whether `.planning` exists locally.
- */
-function resolveWorktreeLinkage(cwd: string, deps: WorktreeDeps = {}): WorktreeContextResult {
-  const execGit = deps.execGit || execGitDefault;
-
-  const gitDir = execGit(['rev-parse', '--git-dir'], { cwd });
-  const commonDir = execGit(['rev-parse', '--git-common-dir'], { cwd });
-  // A TIMEOUT means the command never completed — it is not evidence of "not a
-  // git repository" (which completes fast, with a clean non-zero exit). Surface
-  // it under a distinct reason so callers can tell "genuinely not a repo" apart
-  // from "could not determine" (#3050). effectiveRoot still degrades to cwd
-  // (there is no safer default without a resolved git-dir), but the reason is
-  // no longer indistinguishable from the benign case.
-  if (gitDir.timedOut || commonDir.timedOut) {
-    return {
-      effectiveRoot: cwd,
-      mode: 'current_directory',
-      reason: 'git_timed_out',
-    };
-  }
-  if (gitDir.exitCode !== 0 || commonDir.exitCode !== 0) {
-    return {
-      effectiveRoot: cwd,
-      mode: 'current_directory',
-      reason: 'not_git_repo',
-    };
-  }
-
-  const gitDirResolved = path.resolve(cwd, gitDir.stdout);
-  const commonDirResolved = path.resolve(cwd, commonDir.stdout);
-  if (gitDirResolved !== commonDirResolved) {
-    return {
-      effectiveRoot: path.dirname(commonDirResolved),
-      mode: 'linked_worktree_root',
-      reason: 'linked_worktree',
-    };
-  }
-
-  return {
-    effectiveRoot: cwd,
-    mode: 'current_directory',
-    reason: 'main_worktree',
-  };
-}
-
-function resolveWorktreeContext(cwd: string, deps: WorktreeDeps = {}): WorktreeContextResult {
-  const existsSync = deps.existsSync || fs.existsSync;
-
-  // Local .planning takes precedence over linked-worktree remapping.
-  if (existsSync(path.join(cwd, '.planning'))) {
-    return {
-      effectiveRoot: cwd,
-      mode: 'current_directory',
-      reason: 'has_local_planning',
-    };
-  }
-
-  return resolveWorktreeLinkage(cwd, deps);
 }
 
 interface WorktreePrunePlan {
@@ -3053,25 +2977,6 @@ void parseWorktreeListPaths;
 // ─── Moved from core.cjs (ADR-857 T0 #1268 rehome-core-squatters) ─────────────
 
 /**
- * Resolve the main worktree root when running inside a git worktree, along
- * with the `reason` that produced it (#3050). Callers MUST inspect `reason`
- * before trusting `root` unconditionally — a `reason` of `git_timed_out`
- * means the git subprocess used to distinguish "linked worktree" from
- * "not a repo" never completed, so `root` is a best-effort fallback (cwd),
- * not a confirmed worktree root. Degrading to cwd rather than throwing is
- * intentional (return degraded result on timeout; do not throw) — but the
- * reason must still reach the caller so it can surface the risk instead of
- * silently trusting the wrong root.
- */
-function resolveWorktreeRoot(cwd: string, deps: WorktreeDeps = {}): { root: string; reason: string } {
-  const context = resolveWorktreeContext(cwd, {
-    existsSync: deps.existsSync || fs.existsSync,
-    execGit: deps.execGit,
-  });
-  return { root: context.effectiveRoot, reason: context.reason };
-}
-
-/**
  * Clear stale worktree metadata references via `git worktree prune`.
  *
  * Destructive linked-worktree removal is disabled by default for safety.
@@ -3110,8 +3015,10 @@ export = {
   // Re-exported for the codebase-drift gate's --name-status parser (#4081):
   // single owner of git C-quoted-path decoding.
   decodeGitQuotedPath,
-  resolveWorktreeContext,
-  resolveWorktreeLinkage,
+  // #6043: the project-context seam reads the porcelain through this parser and
+  // shares the one subprocess timeout, so neither is re-derived there.
+  DEFAULT_GIT_TIMEOUT_MS,
+  parseWorktreeEntries,
   parseWorktreePorcelain,
   planWorktreePrune,
   executeWorktreePrunePlan,
@@ -3137,6 +3044,5 @@ export = {
   cmdWorktreeWorkerRecord,
   cmdWorktreeWorkerStatus,
   cmdWorktreeWorkerComplete,
-  resolveWorktreeRoot,
   pruneOrphanedWorktrees,
 };

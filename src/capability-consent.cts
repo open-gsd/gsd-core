@@ -58,8 +58,8 @@ const ledgerMod = require('./capability-ledger.cjs') as {
 // shared primitive never stale-steals a verified-live same-host holder (pid + start-time identity) and
 // only reclaims a provably-dead/unverifiable holder (dead-pid fast path or the hard deadman).
 const lockMod = require('./capability-lock.cjs') as {
-  acquireLock: (lockPath: string, opts?: { maxAttempts?: number; waitForFresh?: boolean }) => { path: string; token: string; dev: number | null; ino: number | null } | null;
-  releaseLock: (handle: { path: string; token: string; dev: number | null; ino: number | null } | null) => void;
+  acquireLock: (lockPath: string, opts?: { maxAttempts?: number; waitForFresh?: boolean }) => { path: string; token: string; dev: bigint | null; ino: bigint | null } | null;
+  releaseLock: (handle: { path: string; token: string; dev: bigint | null; ino: bigint | null } | null) => void;
   _setLockProbes: (probes: Partial<{ isPidAlive: (pid: number) => boolean; getProcessStartTime: (pid: number) => string | null }>) => void;
   _resetLockProbes: () => void;
 };
@@ -686,7 +686,7 @@ function hasProjectConsent(args: {
 // Cross-process mutual exclusion (CONSENT-CONCURRENCY-1) — via the SHARED lock primitive
 // ---------------------------------------------------------------------------
 
-type ConsentLock = { path: string; token: string; dev: number | null; ino: number | null };
+type ConsentLock = { path: string; token: string; dev: bigint | null; ino: bigint | null };
 
 /** The consent-store lock path — keyed on the consent store DIRECTORY (one lock per machine store). */
 function consentLockPath(gsdHome?: string): string {

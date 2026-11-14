@@ -265,9 +265,12 @@ These govern the system as it stands. Cite these.
 | [ADR-3574](3574-install-materialization-primitives.md) | Install materialization shares primitives, not one writer | Accepted | — |
 | [ADR-3625](3625-vetted-spawn-library-evaluation.md) | The platform seam keeps its own Windows binary resolution rather than adopting a spawn library | Accepted | — |
 | [ADR-3626](3626-context-md-seam-claim-gate.md) | CONTEXT.md seam claims carry a checkable enforcement pointer | Accepted | — |
+| [ADR-3628](3628-milestone-release-mapping.md) | Milestone release mapping — a GSD milestone version is not a repository release version | Accepted | — |
 | [ADR-3660](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted | [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) |
 | [ADR-3806](3806-review-dispositions-ledger.md) | Review Dispositions Ledger canonizes where and how reviews-mode records incorporate/defer decisions in PLAN.md | Accepted | — |
 | [ADR-4139](4139-compact-content-seam.md) | The compact-content seam — shrink the eager window, never the guarantee | Accepted | — |
+| [ADR-4309](4309-criterion-baseline-notation.md) | Criterion baseline notation for quantitative acceptance criteria | Accepted | — |
+| [ADR-4310](4310-criterion-replay.md) | Opt-in replay of recorded criterion baselines | Accepted | — |
 | [ADR-4593](4593-macos-conformance-tier-architecture.md) | A macOS-specific conformance-tier classifier, separate from the Windows-oriented one | Accepted | — |
 | [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md) | One Canonical Dispatch-Identity Owner and a Recorded Isolation Decision | Accepted | — |
 | [ADR-4641](4641-windows-selector-consolidation.md) | One Windows test selector, and a proportional ceiling on the conformance tier | Accepted | — |
@@ -296,7 +299,10 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
 | [ADR-4650](4650-path-containment-and-filename-classification-seam.md) | One path-containment predicate and one filename-classification helper | Proposed | — |
+| [ADR-4908](4908-project-context.md) | One resolved ProjectContext — which checkout a process acts in is decided once | Proposed | — |
+| [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
 | [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) | OpenCode 2.x support as a version-gated target of the `opencode` runtime, and sunset of OpenCode 1.x support | Proposed | — |
+| [ADR-5812](5812-worktree-residue-removal-guards.md) | Residue-removal guard standard for `worktree.reap-orphans` | Proposed | — |
 
 ### Superseded, Retired, and Legacy
 

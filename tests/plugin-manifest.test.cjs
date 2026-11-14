@@ -47,7 +47,8 @@ const HOOKS_JSON_PATH  = path.join(ROOT, 'hooks', 'hooks.json');
 const CLAUDE_VERSION_PROBE_TIMEOUT_MS = 5000;
 
 // #4860: `claude plugin details` loads the whole plugin tree (72 skills, 64 agents,
-// hooks) before printing, so it is a heavier class of subprocess than the
+// hooks) before printing (#5504: the same bound covers the `claude -p` loader-listing run in
+// the registers-once test), so it is a heavier class of subprocess than the
 // `--version` probe above or PROBE_TIMEOUT_MS; measured at a few seconds locally.
 const CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS = 60000;
 
@@ -105,12 +106,21 @@ describe('A: .claude-plugin/plugin.json', () => {
     );
   });
 
-  test('#4860: commands field is ABSENT — the skills/ surface is the one workflow surface; commands/gsd/ stays as the generator source', (t) => {
+  test('#5504: commands is declared as an empty array so the default commands/ scan is disabled; commands/gsd/ stays as the generator source', (t) => {
     if (!manifest) { t.skip('manifest could not be parsed'); return; }
+    // A `commands` key REPLACES Claude Code's default `commands/` scan; with the key absent the
+    // default scan runs and descends into the nested commands/gsd/, registering every workflow a
+    // second time as `<plugin>:gsd:<stem>` next to the skills/ entry (#4860 renamed the duplicate,
+    // #5504 removes it). Neither absent nor the old path string is acceptable.
     assert.ok(
-      !Object.prototype.hasOwnProperty.call(manifest, 'commands'),
-      'plugin.json must NOT declare "commands": commands/gsd/ and skills/ hold the same workflows, so declaring both registers every action twice (#4860)'
+      Object.prototype.hasOwnProperty.call(manifest, 'commands'),
+      'plugin.json must declare "commands": [] — when the key is absent Claude Code scans commands/ (including commands/gsd/) and registers every workflow twice (#5504)'
     );
+    assert.deepEqual(
+      manifest.commands, [],
+      'plugin.json "commands" must be exactly [] so the skills/ surface is the one workflow surface (a path string re-registers commands/gsd/)'
+    );
+    assert.equal(manifest.skills, './skills/', 'the skills/ surface stays declared');
     // commands/gsd/ is still the source skills/ is generated from and what the file-copy installer ships.
     const sourceDir = path.resolve(path.dirname(PLUGIN_JSON_PATH), '..', 'commands', 'gsd');
     assert.ok(fs.existsSync(sourceDir), `commands/gsd/ must still exist as the skill generator source: ${sourceDir}`);
@@ -1304,28 +1314,34 @@ describe('H: skills surface projection (#1596)', () => {
   // listed 144 skills (each action once as `<stem>`, once as `gsd-<stem>`).
   // This asks the real loader — Claude Code is the owner of what a manifest
   // registers — and skips when the CLI is not on PATH, like Section C2.
-  test('#4860: the Claude Code loader registers each workflow exactly once (opportunistic — skip when claude is not on PATH)', (t) => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4860-home-'));
+  // #5504: `claude plugin details` reports `Skills (72)` whether or not the command-surface
+  // duplicates load, so it cannot see this defect. The loader's own `system init` event lists
+  // every registered slash command (`<plugin>:<name>`), emitted before any model call, so it is
+  // read here without authentication or a network round trip.
+  test('#5504: the Claude Code loader registers each workflow exactly once (opportunistic — skip when claude is not on PATH)', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5504-home-'));
     t.after(() => cleanup(home));
     const env = { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') };
     const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
     if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
-    const res = spawnSync('claude', ['--plugin-dir', ROOT, 'plugin', 'details', 'gsd-core'], {
-      encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT,
-    });
-    if (res.status !== 0 || !/Component inventory/.test(res.stdout)) {
-      t.skip(`this claude CLI cannot print plugin details (exit ${res.status})`);
+    const res = spawnSync('claude', [
+      '-p', '--plugin-dir', ROOT, '--output-format', 'stream-json', '--verbose', '--max-turns', '1', '--model', 'haiku', 'reply ok',
+    ], { encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT, input: '' });
+    const init = (res.stdout || '').split('\n').map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).find((event) => event && event.type === 'system' && event.subtype === 'init');
+    if (!init || !Array.isArray(init.slash_commands)) {
+      t.skip(`this claude CLI did not emit a system init event with slash_commands (exit ${res.status})`);
       return;
     }
-    const line = res.stdout.split('\n').find(l => /^\s*Skills \(\d+\)/.test(l));
-    assert.ok(line, `plugin details must list a Skills line:\n${res.stdout}`);
-    const count = Number(line.match(/Skills \((\d+)\)/)[1]);
-    const names = line.replace(/^\s*Skills \(\d+\)\s*/, '').split(',').map(n => n.trim()).filter(Boolean);
+    const mine = init.slash_commands.filter((name) => name.startsWith('gsd-core:'));
     const commandFiles = fs.readdirSync(path.resolve(ROOT, 'commands', 'gsd')).filter(f => f.endsWith('.md'));
-    assert.equal(count, commandFiles.length, `each of the ${commandFiles.length} workflows must register once, got ${count} skills`);
-    assert.equal(new Set(names).size, names.length, 'no skill name may be listed twice');
-    const bare = names.filter(n => !n.startsWith('gsd-'));
-    assert.deepEqual(bare, [], `every workflow must appear only under its gsd-<stem> skill name, not a bare command stem: ${bare.join(', ')}`);
+    assert.equal(new Set(mine).size, mine.length, 'no entry may be listed twice');
+    const nested = mine.filter((name) => name.startsWith('gsd-core:gsd:'));
+    assert.deepEqual(nested, [], `commands/gsd/ must not register a gsd:<stem> command entry (default commands/ scan, #5504): ${nested.slice(0, 5).join(', ')}`);
+    const bare = mine.filter((name) => !name.startsWith('gsd-core:gsd-'));
+    assert.deepEqual(bare, [], `every workflow must appear only under its gsd-<stem> skill name: ${bare.slice(0, 5).join(', ')}`);
+    assert.equal(mine.length, commandFiles.length, `each of the ${commandFiles.length} workflows must register once, got ${mine.length} entries`);
   });
 
   test('parity: one skill dir per command file (DEFECT.GENERATIVE-FIX)', () => {

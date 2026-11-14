@@ -43,6 +43,8 @@ import noRenderedTextLengthAssert from './eslint-rules/no-rendered-text-length-a
 import noUnconfinedPathJoin from './eslint-rules/no-unconfined-path-join.cjs';
 import noVerificationStatusLiteral from './eslint-rules/no-verification-status-literal.cjs';
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
+import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
+import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
@@ -80,6 +82,8 @@ const localPlugin = {
     'no-unconfined-path-join': noUnconfinedPathJoin,
     'no-verification-status-literal': noVerificationStatusLiteral,
     'no-runtime-name-literal': noRuntimeNameLiteral,
+    'require-read-only-git-env': requireReadOnlyGitEnv,
+    'named-args-spec-from-registry': namedArgsSpecFromRegistry,
   },
 };
 
@@ -116,6 +120,8 @@ export default tseslint.config(
       // #2874 (epic #2866 Phase 5): tsc-generated runtime artifact — lint the
       // src/install-fs-adapter.cts source, not this.
       'gsd-core/bin/lib/install-fs-adapter.cjs',
+      // #5683: tsc-generated runtime artifact — lint src/install-manifest-record.cts, not this.
+      'gsd-core/bin/lib/install-manifest-record.cjs',
       // #2875 (epic #2866 Phase 6): tsc-generated runtime artifact — lint the
       // src/user-artifact-staging.cts source, not this.
       'gsd-core/bin/lib/user-artifact-staging.cjs',
@@ -123,6 +129,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
       'gsd-core/bin/lib/capability-ledger.cjs',
+      // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
+      'gsd-core/bin/lib/config-file-read.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
@@ -178,6 +186,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/pr-branch-patterns.cjs',
       // #4984: tsc-generated — lint the src/undo-commit-selection.cts source.
       'gsd-core/bin/lib/undo-commit-selection.cjs',
+      'gsd-core/bin/lib/criterion-baseline.cjs', // #4309: tsc-generated — lint the src/criterion-baseline.cts source.
+      'gsd-core/bin/lib/criterion-replay.cjs', // #4310: tsc-generated — lint the src/criterion-replay.cts source.
+      // #5705: tsc-generated — lint the src/milestone-release-tags.cts source.
+      'gsd-core/bin/lib/milestone-release-tags.cjs',
       // #4145: tsc-generated runtime artifact — lint the src/pristine-baseline.cts source.
       'gsd-core/bin/lib/pristine-baseline.cjs',
       'gsd-core/bin/lib/ui-consideration-probe.cjs',
@@ -189,12 +201,15 @@ export default tseslint.config(
       // issue #1953: tsc-generated runtime artifact — lint the src/refactor-trigger-command-router.cts source.
       'gsd-core/bin/lib/refactor-trigger-command-router.cjs',
       'gsd-core/bin/lib/api-coverage.cjs',
+      'gsd-core/bin/lib/args-terminator.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
       'gsd-core/bin/lib/assumption-delta.cjs',
       'gsd-core/bin/lib/state-transition.cjs',
       // #3873: tsc-generated runtime artifact — lint the src/state-md-schema.cts source, not this.
       'gsd-core/bin/lib/state-md-schema.cjs',
       'gsd-core/bin/lib/command-arg-projection.cjs',
+      // #6087: tsc-generated runtime artifact — lint the src/cli-surface.cts source.
+      'gsd-core/bin/lib/cli-surface.cjs',
       'gsd-core/bin/lib/clock.cjs',
       'gsd-core/bin/lib/ui-safety-gate.cjs',
       // #3312: tsc-generated runtime artifact — lint the src/ui-frontend-evidence.cts source.
@@ -229,6 +244,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/plan-scan.cjs',
       'gsd-core/bin/lib/fallow-runner.cjs',
       'gsd-core/bin/lib/project-root.cjs',
+      'gsd-core/bin/lib/project-context.cjs',
       'gsd-core/bin/lib/installer-migration-authoring.cjs',
       'gsd-core/bin/lib/update-context.cjs',
       'gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs',
@@ -250,6 +266,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/token-scanner.cjs',
       // #3311: tsc-generated runtime artifact — lint src/milestone-lock.cts, not this.
       'gsd-core/bin/lib/milestone-lock.cjs',
+      // #5551: tsc-generated runtime artifact — lint src/git-info-exclude.cts, not this.
+      'gsd-core/bin/lib/git-info-exclude.cjs',
       'gsd-core/bin/lib/health-diagnostic-types.cjs',
       'gsd-core/bin/lib/health-diagnostic.cjs',
       'gsd-core/bin/lib/health-diagnostic-rules/root-existence.cjs',
@@ -304,6 +322,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/installer-migrations.cjs',
       'gsd-core/bin/lib/worktree-safety.cjs',
       'gsd-core/bin/lib/worktree-base-ref.cjs',
+      'gsd-core/bin/lib/gsd-tool-dir.cjs',
       'gsd-core/bin/lib/planning-workspace.cjs',
       'gsd-core/bin/lib/planning-scope.cjs',
       'gsd-core/bin/lib/command-roster.cjs',
@@ -339,6 +358,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/quick-batch-dispatch.cjs',
       'gsd-core/bin/lib/quick-batch-command-router.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
+      'gsd-core/bin/lib/roadmap-progress.cjs',
       'gsd-core/bin/lib/drift.cjs',
       'gsd-core/bin/lib/cjs-command-router-adapter.cjs',
       'gsd-core/bin/lib/phase-command-router.cjs',
@@ -370,6 +390,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/commands.cjs',
       'gsd-core/bin/lib/state.cjs',
       'gsd-core/bin/lib/milestone.cjs',
+      // #5706: tsc-generated runtime artifact — lint src/milestone-release-map.cts, not this.
+      'gsd-core/bin/lib/milestone-release-map.cjs',
+      // #5763: tsc-generated runtime artifact — lint src/phase-entry-grammar.cts, not this.
+      'gsd-core/bin/lib/phase-entry-grammar.cjs',
       'gsd-core/bin/lib/phase.cjs',
       'gsd-core/bin/lib/verify.cjs',
       'gsd-core/bin/lib/init.cjs',
@@ -415,6 +439,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/model-adapter.cjs',
       'gsd-core/bin/lib/hook-bus.cjs',
       'gsd-core/bin/lib/state-io.cjs',
+      // #5048: tsc-generated runtime artifact — lint the src/read-only-git-env.cts source.
+      'gsd-core/bin/lib/read-only-git-env.cjs',
       'gsd-core/bin/lib/external-descriptor-trust.cjs',
       'gsd-core/bin/lib/mcp-server.cjs',
       // #3072: tsc-generated runtime artifact — lint the src/mcp-catalog.cts source.
@@ -542,6 +568,11 @@ export default tseslint.config(
       // runtime-specific fact; comparing a runtime identifier to a registered
       // runtime-id literal re-derives one. Exempts the owner by path.
       'local/no-runtime-name-literal': 'error',
+      // #5048: a direct git spawn takes its env from readOnlyGitEnv() so a
+      // read-only call never contends for the optional index lock. A git
+      // command that never opens the index suppresses with
+      // `// allow-index-refresh: <reason>`.
+      'local/require-read-only-git-env': 'error',
     },
   },
 
@@ -560,6 +591,9 @@ export default tseslint.config(
     },
     rules: {
       'local/no-runtime-name-literal': 'error',
+      // #5048: see the src/**/*.cts block above. The rule scopes itself to
+      // hooks/**/*.js by path, so bin/install.js is untouched.
+      'local/require-read-only-git-env': 'error',
     },
   },
 
@@ -961,6 +995,16 @@ export default tseslint.config(
         caughtErrors: 'none',
       }],
     },
+  },
+
+  // ── #6087 (ADR-4909 D1, P1a of #6051): flag declarations come only from the CLI surface registry ──
+  // Every gsd-tools host router reads its flags through `parseNamedArgsOrExit(args, specFor('<verb>'),
+  // error)` (src/cli-surface.cts); an inline spec or a hand-written flag read (`indexOf('--x')`,
+  // `=== '--x'`, `startsWith('--x')`) is a lint error. The rule widens to `src/` routers as each
+  // later sub-PR (#6088-#6090) migrates them.
+  {
+    files: ['gsd-core/bin/gsd-tools.cjs'],
+    rules: { 'local/named-args-spec-from-registry': 'error' },
   },
 
   // ── #5139 (epic #5056, ADR-5057 §4 first bullet): a gate returns a GateVerdict ─────────────

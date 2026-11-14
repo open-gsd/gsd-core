@@ -104,7 +104,7 @@ jobs:
       # SELECTS only the guards that read the docs/ paths actually changed in
       # this PR, instead of always running the entire registry — a one-line
       # typo fix in an unrelated doc should not pay for tests/install.test.cjs
-      # (7840 lines) just because it reads docs/AGENTS.md. It lives in THIS
+      # (7840 lines) just because it reads docs/reference/agents.md. It lives in THIS
       # job rather than a dedicated `paths:`-filtered workflow specifically
       # because this job has no `paths:` filter and therefore ALWAYS reports
       # a status, which is what lets it supply the already-required

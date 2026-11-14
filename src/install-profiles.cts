@@ -40,7 +40,9 @@ const {
   deriveAgentName: _deriveAgentName,
   applyAgentFrontmatterExtensions: _applyAgentFrontmatterExtensions,
   appendAgentTools: _appendAgentTools,
+  _shieldAgentConverterPrefix,
 } = conversionModule as {
+  _shieldAgentConverterPrefix: (content: string, runtime: string, pathPrefix: string, convert: (shielded: string) => string) => string;
   applyAgentPathRewrites: (content: string, runtime: string, pathPrefix: string) => string;
   processAttribution: (content: string, attribution: string | null | undefined) => string;
   normalizeAgentBodyForRuntime: (content: string, runtime: string, cmdNames: string[]) => string;
@@ -289,6 +291,11 @@ interface ResolveProfileOpts {
   /** ADR-857 phase 4c: optional capability registry; when present, capability
    *  skills are unioned into the base set for each resolved mode before closure. */
   registry?: CapabilityRegistry;
+  /** #5503: manifest the agent set is derived from (`_calls_agents_<stem>` keys).
+   *  Defaults to `manifest`. The core profile passes an empty `manifest` so its skill set
+   *  is not widened by the `requires:` closure, and the real manifest here so the agents
+   *  its skills spawn are still staged. */
+  agentManifest?: Map<string, string[]>;
 }
 
 /**
@@ -323,7 +330,7 @@ function _capabilitySkillsForMode(mode: string, registry: CapabilityRegistry): s
 /**
  * Resolve a profile (or composed profiles) to a typed result object.
  */
-function resolveProfile({ modes, manifest, _profilesOverride, registry }: ResolveProfileOpts = {}): ResolvedProfile {
+function resolveProfile({ modes, manifest, _profilesOverride, registry, agentManifest }: ResolveProfileOpts = {}): ResolvedProfile {
   const profiles: Record<string, string | readonly string[]> = _profilesOverride || PROFILES;
   const activeModes = (modes && modes.length > 0) ? modes : ['full'];
   const normalizedModes = activeModes
@@ -362,10 +369,13 @@ function resolveProfile({ modes, manifest, _profilesOverride, registry }: Resolv
 
   // Derive agents: union of all agent names referenced in the body text of
   // every skill in unionSkills. Agent names are stored in the manifest under
-  // _calls_agents_<stem> keys (populated by loadSkillsManifest).
+  // _calls_agents_<stem> keys (populated by loadSkillsManifest). #5503: read from
+  // `agentManifest` when given, so a profile that skips the skill closure still
+  // stages the agents its own skills spawn.
+  const agentMan = agentManifest || man;
   const unionAgents = new Set<string>();
   for (const skillStem of unionSkills) {
-    const agentRefs = man.get(`_calls_agents_${skillStem}`) || [];
+    const agentRefs = agentMan.get(`_calls_agents_${skillStem}`) || [];
     for (const agentStem of agentRefs) {
       unionAgents.add(agentStem);
     }
@@ -986,7 +996,7 @@ interface AgentCtx {
 function stageAgentsForRuntimeWithConverter(
   srcAgentsDir: string,
   resolvedProfile: ResolvedProfile,
-  converter: (content: string, isGlobal?: boolean, meta?: { agentName: string }) => string,
+  converter: (content: string, isGlobal?: boolean, meta?: { agentName: string; pathPrefix?: string }) => string,
   isGlobal = false,
   agentCtx?: AgentCtx,
   excludeSuffixes?: readonly string[],
@@ -1053,7 +1063,9 @@ function stageAgentsForRuntimeWithConverter(
         // Step 3: validated canonical grants, before host conversion.
         content = _appendAgentTools(content, grants);
         // Step 4: converter (runtime-specific frontmatter/body transform)
-        content = converter(content, isGlobal, { agentName });
+        // #5715: the converter runs after the prefix pass above; shield the emitted prefix
+        // from it, except where the runtime declares no path rewrite (nothing was emitted).
+        content = _shieldAgentConverterPrefix(content, agentCtx.runtime, agentCtx.pathPrefix, (shielded) => converter(shielded, isGlobal, { agentName, pathPrefix: agentCtx.pathPrefix }));
         // Step 5: frontmatter extensions (effort/disallowedTools; no-op unless
         // the runtime declares hostBehaviors.agentFrontmatterExtensions)
         content = _applyAgentFrontmatterExtensions(content, { runtime: agentCtx.runtime, agentName, targetDir: agentCtx.targetDir });

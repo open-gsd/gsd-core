@@ -86,21 +86,19 @@ FIX_REPORT_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW-FIX.md"
 </step>
 
 <step name="check_config_gate">
-Check if code review is active via the capability registry:
+Check if code review is active via `workflow.code_review` (the capability's on/off toggle — independent of `workflow.code_review_point`, the loop-point selector; a manual invocation must work regardless of which automatic point is currently configured):
 
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
+CODE_REVIEW_ENABLED=$(gsd_run query config-get workflow.code_review --raw 2>/dev/null || echo "true")
 ```
 
-Resolve active step hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "code-review"`.
-
-If no active code-review step hook exists:
+If `CODE_REVIEW_ENABLED` is not `"true"`:
 ```
 Code review fix skipped (code-review capability inactive)
 ```
 Exit workflow.
 
-Default is active through the Capability Registry schema — only skip when the registry resolves no active code-review step hook. This check runs AFTER phase validation so invalid phase errors are shown first.
+Default is active (`workflow.code_review` schema default is `true`) — only skip when explicitly disabled. This check runs AFTER phase validation so invalid phase errors are shown first.
 
 Note: This reuses the code-review capability activation rather than introducing a separate code-review-fix capability. Rationale: fixes are meaningless without review, so a single activation boundary makes sense. If independent control is needed later, a separate key can be added in v2.
 </step>
@@ -270,7 +268,32 @@ if [ "$AUTO_MODE" = "true" ]; then
   # It is re-derived there from the final REVIEW.md's status, which is exactly the condition the
   # `break` below fires on. A variable set here and read nowhere would just be a decoy.
 
-  while [ $ITERATION -lt $MAX_ITERATIONS ]; do
+  # #4100: the loop used to stop only on a re-review returning `status: clean`. A review whose
+  # remaining findings are all OUTSIDE the fix scope (Info, or necessity findings without --all)
+  # never reaches clean, so the loop re-spawned the fixer with nothing to fix until the cap and then
+  # printed the degradation warning over a run with no work left. The fixer is the scope authority:
+  # its REVIEW-FIX.md `findings_in_scope` is read strictly — only a frontmatter value of 0 proves
+  # zero scope; a missing report or an unusable value keeps the old behaviour.
+  _gsd_fix_scope_empty() {
+    [ -f "$1" ] || return 1
+    _gsd_n=$(FIX_REPORT_PATH="$1" node -e "
+      const fs = require('fs');
+      try {
+        const content = fs.readFileSync(process.env.FIX_REPORT_PATH, 'utf-8');
+        const m = content.replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---/);
+        const v = m && m[1].match(/^findings_in_scope:[ \t]*([0-9]+)[ \t]*$/m);
+        process.stdout.write(v ? String(Number(v[1])) : '');
+      } catch (e) {}
+    " 2>/dev/null || true)
+    [ "$_gsd_n" = "0" ]
+  }
+  NO_SCOPE_LEFT=false
+  if _gsd_fix_scope_empty "${FIX_REPORT_PATH}"; then
+    NO_SCOPE_LEFT=true
+    echo "No findings in fix scope (${FIX_SCOPE}) — skipping the re-review loop. Out-of-scope findings remain in ${REVIEW_PATH}."
+  fi
+
+  while [ "$NO_SCOPE_LEFT" = false ] && [ $ITERATION -lt $MAX_ITERATIONS ]; do
     ITERATION=$((ITERATION + 1))
     
     echo ""
@@ -361,6 +384,12 @@ ${AGENT_SKILLS_FIXER}")
       echo "Warning: Iteration ${ITERATION} fixer failed to produce fix report. Stopping auto-loop."
       break
     fi
+    if _gsd_fix_scope_empty "${FIX_REPORT_PATH}"; then
+      NO_SCOPE_LEFT=true
+      echo ""
+      echo "✓ No in-scope findings remain after iteration ${ITERATION} (scope: ${FIX_SCOPE}). Out-of-scope findings remain in ${REVIEW_PATH}."
+      break
+    fi
   done
   
   # After loop completes. The iteration COUNTER alone does not distinguish degradation from success:
@@ -369,7 +398,7 @@ ${AGENT_SKILLS_FIXER}")
   # every finding was fixed — telling the operator the opposite of what happened, on the one path
   # where the cap and convergence coincide. Convergence is re-derived from the review the loop left
   # behind, the same signal cleanup_iteration_backups reads, so the two cannot disagree.
-  if [ $ITERATION -ge $MAX_ITERATIONS ]; then
+  if [ "$NO_SCOPE_LEFT" = false ] && [ $ITERATION -ge $MAX_ITERATIONS ]; then
     LOOP_END_STATUS=$(REVIEW_PATH="${REVIEW_PATH}" node -e "
       const fs = require('fs');
       try {
@@ -401,13 +430,14 @@ Key design decisions for --auto (addresses ALL review HIGH concerns):
 1. **Re-review scope**: Uses REVIEW_FILES_ARRAY from original REVIEW.md frontmatter, falling back to full phase scope. Scope is NOT lost between iterations. Uses portable while-read loop (bash 3.2+ compatible, handles spaces in paths).
 2. **Artifact semantics**: REVIEW.md is overwritten by each re-review (latest review state). REVIEW-FIX.md is overwritten by each fixer iteration (latest fix state with iteration count). There is ONE final version of each artifact, not per-iteration copies.
    Backup files (.iterN.md) preserve history for post-mortem analysis if iterations degrade. On successful convergence (#3190) the backups are spent scratch and removed; on degradation (hit MAX_ITERATIONS / fixer failure) they are retained for post-mortem. The removal happens in `cleanup_iteration_backups`, after `record_disposition` has read them — they are the only surviving record of what an earlier iteration fixed, since this artifact keeps one final version rather than per-iteration copies.
-3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration.
+3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration. In --auto, REVIEW.md is also committed when the fix report is invalid or missing (#5527); the malformed report is never staged.
 </step>
 
 <step name="commit_fix_report">
 After ALL iterations complete (or single pass in non-auto mode), validate and commit REVIEW-FIX.md:
 
 ```bash
+HAS_STATUS=invalid
 if [ -f "${FIX_REPORT_PATH}" ]; then
   # Validate REVIEW-FIX.md has valid YAML frontmatter with status field
   # #3190: export FIX_REPORT_PATH (the var the body reads), not REVIEW_PATH.
@@ -420,30 +450,42 @@ if [ -f "${FIX_REPORT_PATH}" ]; then
   
   if [ "$HAS_STATUS" = "valid" ]; then
     echo "REVIEW-FIX.md created at ${FIX_REPORT_PATH}"
-    
-    if [ "$COMMIT_DOCS" = "true" ]; then
-      # #3190: --auto's re-review loop overwrote REVIEW.md each iteration
-      # (auto_iteration_loop), but the only prior REVIEW.md commit is the
-      # initial code-review pass (iteration-1 content). Stage the converged
-      # REVIEW.md alongside REVIEW-FIX.md in this single docs commit so the two
-      # committed artifacts agree. Non-auto single-pass runs never rewrite
-      # REVIEW.md, so it is left untouched (guarded on AUTO_MODE).
-      COMMIT_FILES=("${FIX_REPORT_PATH}")
-      if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
-        COMMIT_FILES+=("${REVIEW_PATH}")
-      fi
-      gsd_run query commit \
-        "docs(${PADDED_PHASE}): add code review fix report" \
-        --files "${COMMIT_FILES[@]}"
-    fi
   else
-    echo "Warning: REVIEW-FIX.md has invalid frontmatter (no status field). Not committing."
+    echo "Warning: REVIEW-FIX.md has invalid frontmatter (no status field). Not committing REVIEW-FIX.md."
     echo "Agent may have produced malformed output. Review manually: ${FIX_REPORT_PATH}"
+    # Only when git sees the report.
+    FIX_REPORT_DIRTY=$(git status --porcelain -- "${FIX_REPORT_PATH}" 2>/dev/null)
+    if [ -n "$FIX_REPORT_DIRTY" ]; then
+      echo "The working tree stays dirty: /gsd:ship will ask you to commit or stash until ${FIX_REPORT_PATH} is fixed and committed, or deleted."
+    fi
   fi
 else
   echo "Warning: REVIEW-FIX.md not found at ${FIX_REPORT_PATH}."
   echo "Agent may have failed before writing report."
   echo "Check git log for any fix(${PADDED_PHASE}) commits that were applied."
+fi
+
+if [ "$COMMIT_DOCS" = "true" ]; then
+  # #3190: --auto's re-review loop overwrote REVIEW.md each iteration
+  # (auto_iteration_loop), but the only prior REVIEW.md commit is the
+  # initial code-review pass (iteration-1 content). Stage the converged
+  # REVIEW.md alongside REVIEW-FIX.md in this single docs commit so the two
+  # committed artifacts agree. Non-auto single-pass runs never rewrite
+  # REVIEW.md, so it is left untouched (guarded on AUTO_MODE).
+  # #5527: stage REVIEW.md even when the fix report is invalid/missing, else the
+  # rewritten tracked REVIEW.md stays dirty. A malformed report is never staged.
+  COMMIT_FILES=()
+  COMMIT_MSG="docs(${PADDED_PHASE}): update code review report"
+  if [ "$HAS_STATUS" = "valid" ]; then
+    COMMIT_FILES+=("${FIX_REPORT_PATH}")
+    COMMIT_MSG="docs(${PADDED_PHASE}): add code review fix report"
+  fi
+  if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
+    COMMIT_FILES+=("${REVIEW_PATH}")
+  fi
+  if [ "${#COMMIT_FILES[@]}" -gt 0 ]; then
+    gsd_run query commit "$COMMIT_MSG" --files "${COMMIT_FILES[@]}"
+  fi
 fi
 ```
 
@@ -491,8 +533,9 @@ which is the one distinction #3829 exists to make.
 Convergence is re-derived here rather than carried. Shell state does not survive the loop's fence, so
 a flag set there would be gone by this step — and once nothing in the loop consumed it, keeping it
 would have left a variable set in one place and read in none. The loop breaks on exactly one
-condition, a re-review returning clean, and that leaves `REVIEW.md` at `status: clean`: the final
-review's status IS the converged case. Hitting `MAX_ITERATIONS` leaves the last re-review non-clean,
+condition that counts as convergence, a re-review returning clean, and that leaves `REVIEW.md` at
+`status: clean`: the final review's status IS the converged case. Its other stop, nothing left in
+fix scope (#4100), leaves out-of-scope findings in a non-clean review, so the backups are kept. Hitting `MAX_ITERATIONS` leaves the last re-review non-clean,
 and the backups are kept.
 
 ```bash
@@ -586,7 +629,16 @@ echo ""
 
 If status is "all_fixed":
 ```bash
-if [ "$FIX_STATUS" = "all_fixed" ]; then
+if [ "${FINDINGS_IN_SCOPE:-}" = "0" ]; then
+  # #4100: a vacuous all_fixed (nothing was in scope) must not claim the review is resolved.
+  echo "○ No findings were in fix scope (${FIX_SCOPE}). Out-of-scope findings (Info, and necessity unless --all) remain in ${REVIEW_PATH}."
+  echo ""
+  if [ "${FIX_SCOPE}" != "all" ]; then
+    echo "Next step:"
+    echo "  /gsd:code-review ${PHASE_NUMBER} --fix --all  — Include them in the fix scope"
+    echo ""
+  fi
+elif [ "$FIX_STATUS" = "all_fixed" ]; then
   echo "✓ All issues resolved."
   echo ""
   echo "Full report: ${FIX_REPORT_PATH}"
@@ -625,7 +677,7 @@ echo "════════════════════════�
 
 <success_criteria>
 - [ ] Phase validated before config gate check
-- [ ] Capability gate checked (execute:post code-review hook)
+- [ ] Capability gate checked (`workflow.code_review` config key)
 - [ ] REVIEW.md existence verified (error if missing)
 - [ ] REVIEW.md status checked (skip if clean/skipped)
 - [ ] Agent spawned with correct config (review_path, fix_scope, fix_report_path)

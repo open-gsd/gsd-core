@@ -15,7 +15,7 @@
  *
  *   1. build_prompt's plan-copy block — must derive a `.plans-manifest.md`
  *      (plan ids + total count) from the `*-PLAN.md` filenames and append it
- *      to both gsd-review-instructions.md and gsd-review-prompt.md.
+ *      to gsd-review-prompt.md (#4559: the per-section run-dir copies are gone).
  *   2. write_reviews' plan-coverage-check block — must grade each dispatched
  *      lane's review file against that manifest, honoring two named regex
  *      traps (escaped ids, hyphen-boundary exclusion) and skipping stub/empty/
@@ -67,24 +67,22 @@ const SHELLS = detectShells();
  * tests/review-build-prompt-optional-sections.test.cjs.
  */
 function extractPlanCopyBlock() {
+  // #4559: the per-section run-dir copies (instructions, roadmap, plan-N, project, context, research,
+  // requirements) existed only to feed per-lane trimming and are gone. The block is now anchored on
+  // what it still owns: deriving `.plans-manifest.md` from the `*-PLAN.md` filenames and appending
+  // it to the combined prompt every lane reads.
   const content = readWorkflowCombined(REVIEW_WORKFLOW);
-  const anchorIdx = content.indexOf('gsd-review-context.md');
-  assert.notEqual(anchorIdx, -1, 'gsd-review-context.md no longer appears in review.md (+steps)');
-  const before = content.slice(0, anchorIdx);
-  const fenceOpenRe = /```bash\r?\n/g;
-  let lastOpen = -1;
-  let m;
-  while ((m = fenceOpenRe.exec(before)) !== null) lastOpen = m.index + m[0].length;
-  assert.notEqual(lastOpen, -1, 'gsd-review-context.md is not inside a ```bash fence of review.md (+steps)');
-  const after = content.slice(lastOpen);
-  const closeIdx = after.indexOf('\n```');
-  assert.notEqual(closeIdx, -1, 'unterminated ```bash fence around gsd-review-context.md');
-  const body = after.slice(0, closeIdx);
+  const lines = content.split(/\r?\n/);
+  const block = scanFencedBlocks(lines)
+    .filter((b) => b.closeLineIdx !== -1 && (b.infoString || '').trim() === 'bash')
+    .map((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'))
+    .find((body) => body.includes('> "${RUN_DIR}/.plans-manifest.md"') && body.includes('-PLAN.md'));
+  assert.ok(block, 'no ```bash fence of review.md (+steps) derives .plans-manifest.md from *-PLAN.md — anchor drifted');
   assert.ok(
-    body.includes('gsd-review-instructions.md'),
-    'extracted block writes gsd-review-context.md but not gsd-review-instructions.md — wrong block',
+    block.includes('gsd-review-prompt.md'),
+    'the manifest-deriving block must append the manifest to gsd-review-prompt.md — wrong block',
   );
-  return body;
+  return block;
 }
 
 /**
@@ -145,6 +143,13 @@ function runScript(shell, body, root, runDir, env, cwd = root) {
 }
 
 const readIfPresent = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+
+/**
+ * #4559: the stub `review-lane invoke` writes when a lane's prompt exceeds its cap
+ * (`renderPromptRefusalStub`). The workflow keys on the marker `review did not run: prompt exceeds`.
+ */
+const REFUSED_STUB = (slug) =>
+  `${slug} review did not run: prompt exceeds this lane's context cap (estimated 130001 tokens > cap 130000 from the declared context window; raise review.context_window_tokens.${slug} or set review.max_prompt_tokens_per_reviewer.${slug} to 0).\n`;
 
 /**
  * Fixture for the plan-copy block: a PHASE_DIR with the given *-PLAN.md
@@ -254,10 +259,7 @@ function buildGateCheckFixture(slugs, skippedSlugs) {
   fs.mkdirSync(runDir);
   for (const slug of slugs) {
     if (skippedSlugs.includes(slug)) {
-      fs.writeFileSync(
-        path.join(runDir, `gsd-review-${slug}.md`),
-        `${slug} review skipped: prompt budget (500 tokens) too small for the minimum review set.\n`,
-      );
+      fs.writeFileSync(path.join(runDir, `gsd-review-${slug}.md`), REFUSED_STUB(slug));
     }
   }
   return {
@@ -325,7 +327,7 @@ describe('#3301 build_prompt derives and appends a plan coverage manifest', () =
       assert.match(manifest, /^- 12\.6-02$/m);
     });
 
-    test(`[${shell.name}] manifest is appended to both gsd-review-instructions.md and gsd-review-prompt.md`, (t) => {
+    test(`[${shell.name}] manifest is appended to gsd-review-prompt.md and no trim-only section copy is written (#4559)`, (t) => {
       const fx = buildPlanCopyFixture(['01-PLAN.md']);
       t.after(() => cleanup(fx.root));
       // gsd-review-prompt.md is written earlier in build_prompt (the fenced
@@ -333,10 +335,17 @@ describe('#3301 build_prompt derives and appends a plan coverage manifest', () =
       fs.writeFileSync(path.join(fx.runDir, 'gsd-review-prompt.md'), '# prompt\n');
       const res = runScript(shell, extractPlanCopyBlock(), fx.root, fx.runDir, fx.env);
       assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
-      const instructions = readIfPresent(path.join(fx.runDir, 'gsd-review-instructions.md'));
       const prompt = readIfPresent(path.join(fx.runDir, 'gsd-review-prompt.md'));
-      assert.match(instructions, /Plan Coverage Manifest/);
       assert.match(prompt, /Plan Coverage Manifest/);
+      assert.match(prompt, /^- 01$/m);
+      // Lanes are no longer trimmed, so the per-section files that only fed the trimmer are not written.
+      for (const name of [
+        'gsd-review-instructions.md', 'gsd-review-roadmap.md', 'gsd-review-plan-01.md',
+        'gsd-review-project.md', 'gsd-review-context.md', 'gsd-review-research.md',
+        'gsd-review-requirements.md',
+      ]) {
+        assert.strictEqual(readIfPresent(path.join(fx.runDir, name)), null, `${name} must not be written`);
+      }
     });
   }
 
@@ -426,14 +435,14 @@ describe('#3301 write_reviews grades each lane against the plan coverage manifes
       assert.strictEqual(cov.complete, true);
     });
 
-    test(`[${shell.name}] coverage check: a budget-skipped stub is not graded`, (t) => {
+    test(`[${shell.name}] coverage check: a prompt-cap refusal stub is not graded (#4559)`, (t) => {
       const fx = buildCoverageFixture(['01'], {
-        ollama: 'ollama review skipped: prompt budget (500 tokens) too small for the minimum review set.\n',
+        ollama: REFUSED_STUB('ollama'),
       });
       t.after(() => cleanup(fx.root));
       const res = runScript(shell, extractCoverageCheckBlock(), fx.root, fx.runDir, fx.env, REPO_ROOT);
       assert.strictEqual(res.status, 0, `block exited ${res.status}: ${res.stderr}`);
-      assert.strictEqual(readCoverageJson(fx.runDir, 'ollama'), null, 'a budget-skip stub must not be graded');
+      assert.strictEqual(readCoverageJson(fx.runDir, 'ollama'), null, 'a refusal stub must not be graded');
     });
 
     test(`[${shell.name}] coverage check: an empty review file is not graded`, (t) => {
