@@ -120,7 +120,8 @@ The preconditions below read the filter projections above, so they come first.
 case $TARGET in -*) echo "Refusing target $TARGET: it starts with -." >&2; exit 1 ;; esac
 TARGET_SHA=$(git rev-parse -q --verify "$TARGET^{commit}") || { echo "Unknown target: $TARGET" >&2; exit 1; }
 PR_BRANCH="${CURRENT_BRANCH}-pr"
-TIP=$(git rev-parse "$CURRENT_BRANCH")
+CUR=refs/heads/$CURRENT_BRANCH # a tag of the same name must not shadow the branch
+TIP=$(git rev-parse "$CUR")
 # Keyed by mode (strict skips what default publishes). refkey STR: one valid ref component, injective, never a
 # key prefix: %, /, control, non-ASCII and git-forbidden bytes become %XX.
 refkey() { printf %s "$1" | od -An -v -tu1 | LC_ALL=C awk 'BEGIN{ORS=""}{for(i=1;i<=NF;i++){b=$i;c=sprintf("%c",b);if(b<32||b>126||index("%/ ~^:?*[\\.@",c))printf "%%%02X",b;else printf "%s",c}}'; }
@@ -131,7 +132,7 @@ PR_TIP_REF="refs/gsd/pr-built-head/$REF_KEY"
 PR_BRANCH_TIP=$(git rev-parse -q --verify "refs/heads/$PR_BRANCH")
 # gh --base: TARGET without its leading remote name (any configured remote).
 PR_BASE=$TARGET
-for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && { PR_BASE=${TARGET#"$_r"/}; break; }; done
+for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && PR_BASE=${TARGET#"$_r"/}; done
 
 # shq STR — STR shell-quoted for printed commands (a branch name may hold ; $ ( ) & `).
 shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
@@ -194,7 +195,7 @@ BASE="$TARGET_SHA"
 MARKER_TIP=$(git rev-parse -q --verify "$MARKER_REF")
 [ "$PENDING_VERDICT" = promote ] && MARKER_TIP=$PENDING_TIP
 if [ -n "$MARKER_TIP" ]; then
-  _to git merge-base --is-ancestor "$MARKER_TIP" "$CURRENT_BRANCH"; _a=$?
+  _to git merge-base --is-ancestor "$MARKER_TIP" "$CUR"; _a=$?
   [ $_a -gt 1 ] && { echo "Cannot check $MARKER_REF; re-run." >&2; exit 1; }
   if [ $_a = 0 ]; then
     BASE="$MARKER_TIP"
@@ -213,12 +214,12 @@ RW_PATHS_EOF
     }
     REWRITE=WARN
     # Section and F commit lines start with a TAB; git quotes any path holding one, so none can match.
-    if RW_L=$(TO=60 _to git rev-list --no-merges --left-only "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
-      RW_R=$(TO=60 _to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET_SHA" 2>/dev/null) &&
+    if RW_L=$(TO=60 _to git rev-list --no-merges --left-only "$MARKER_TIP...$CUR" 2>/dev/null) &&
+      RW_R=$(TO=60 _to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CUR" --not "$TARGET_SHA" 2>/dev/null) &&
       RW_N=$(for H in $(printf '%s\n%s' "$RW_L" "$RW_R"); do picked "$H" || echo "$H"; done) &&
       RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET_SHA" 2>/dev/null) &&
-      RW_F=$(rw_git log --full-history --name-only --format='%x09%H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
-      RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" | TO=60 _to git patch-id --stable); then
+      RW_F=$(rw_git log --full-history --name-only --format='%x09%H' "$MARKER_TIP...$CUR" 2>/dev/null) &&
+      RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --format='commit %H' "$MARKER_TIP...$CUR" | TO=60 _to git patch-id --stable); then
       REWRITE=$(printf '\tL\n%s\n\tR\n%s\n\tD\n%s\n\tF\n%s\n\tP\n%s\n\tN\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" "$RW_N" |
         awk '/^\t[LRDFPN]$/{s=index("LRDFPN",substr($0,2));next}
           s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&$0!=""{dif[$0]=1}
@@ -268,7 +269,7 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   exit 1
 fi
 settle_pending
-AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA")
+AHEAD=$(_to git rev-list --count "$CUR" --not "$BASE" "$TARGET_SHA")
 if [ "$AHEAD" = "0" ]; then
   echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
   exit 0
@@ -449,8 +450,8 @@ Classify commits:
 
 ```bash
 # Get all commits ahead of the base: these are the only candidates to pick
-TO=60 _to git log --oneline --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA"
-REVS=$(TO=60 _to git rev-list --reverse --no-merges "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA") || { echo "Cannot list the commits to pick; re-run." >&2; exit 1; }
+TO=60 _to git log --oneline --no-merges "$CUR" --not "$BASE" "$TARGET_SHA"
+REVS=$(TO=60 _to git rev-list --reverse --no-merges "$CUR" --not "$BASE" "$TARGET_SHA") || { echo "Cannot list the commits to pick; re-run." >&2; exit 1; }
 INCLUDED_COMMITS=$(for H in $(printf '%s' "$REVS"); do picked "$H" && echo "$H"; done)
 ```
 
