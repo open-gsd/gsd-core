@@ -1877,6 +1877,17 @@ describe('commit command', () => {
     assert.strictEqual(output.reason, 'skipped_commit_docs_false');
   });
 
+  test('#5096: an explicit flat commit_docs true commits under planning null', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ planning: null, commit_docs: true }));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'flat-setting.md'), '# Explicit flat setting\n');
+    const result = runGsdTools(['commit', 'test(#5096): preserve explicit flat commit setting', '--files', '.planning/flat-setting.md'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    const output = JSON.parse(result.output);
+    assert.equal(output.committed, true);
+    assert.equal(output.reason, 'committed');
+    assert.equal(gitOrThrow(['show', 'HEAD:.planning/flat-setting.md'], { cwd: tmpDir }), '# Explicit flat setting\n');
+  });
+
   test('skips when .planning is gitignored', () => {
     // Add .planning/ to .gitignore and commit it so git recognizes the ignore
     fs.writeFileSync(path.join(tmpDir, '.gitignore'), '.planning/\n');

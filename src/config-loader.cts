@@ -169,7 +169,11 @@ function _removeBlockedSectionDefaults(
   for (const [section, projections] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
     if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
     for (const projection of projections) {
-      if (!BARRIER_FAIL_SAFE_PROJECTIONS.has(projection)) delete assembled[projection];
+      if (BARRIER_FAIL_SAFE_PROJECTIONS.has(projection)) continue;
+      // A flat value in this file outranks the blocked nested alias. The section
+      // container itself is not a flat alias and must still be removed.
+      if (projection !== section && Object.hasOwn(parsed, projection)) continue;
+      delete assembled[projection];
     }
   }
 }

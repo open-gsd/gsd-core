@@ -11,6 +11,9 @@ const { resolveConfigValue } = require('../gsd-core/bin/lib/config-value-resolve
 const { loadConfigResolved, BLOCKED_SECTION_PROJECTIONS, BARRIER_FAIL_SAFE_PROJECTIONS } = require('../gsd-core/bin/lib/config-loader.cjs');
 const { _unusableInputEmissionCountForTests } = require('../gsd-core/bin/lib/unusable-input.cjs');
 const { parseJsonc } = require('../gsd-core/bin/lib/settings-jsonc.cjs');
+const { isDeepStrictEqual } = require('node:util');
+const declaredDefaults = require('../gsd-core/bin/shared/config-defaults.manifest.json');
+const { VALID_CONFIG_KEYS, getCapabilityConfigSchema } = require('../gsd-core/bin/lib/config-schema.cjs');
 
 function withLayers(run) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-config-value-'));
@@ -518,7 +521,79 @@ describe('Config Value Resolution Module (#5096)', () => {
     });
   });
 
-  test('every assembled section projection obeys the barrier on project and global-defaults paths', () => {
+  test('section sentinels independently discover the assembled projections a null parent must remove', () => {
+    const overrides = {
+      'git.repo_tagging': 'per_repo',
+      'git.protected_branches': ['sentinel-protected'],
+      'git.allow_default_branch_commits': true,
+      'git.base_branch': 'sentinel-base',
+      'git.quick_branch_template': 'sentinel/{slug}',
+      'review.max_prompt_tokens': 7319,
+    };
+    for (const source of ['root', 'global-defaults']) {
+      for (const section of ['workflow', 'git', 'planning', 'planner', 'review']) {
+        withLayers((cwd) => {
+          const schema = getCapabilityConfigSchema(cwd);
+          const defaults = declaredDefaults[section];
+          const fields = new Set(Object.keys(defaults));
+          for (const key of [...VALID_CONFIG_KEYS, ...Object.keys(schema)]) {
+            const segments = key.split('.');
+            if (segments.length === 2 && segments[0] === section) fields.add(segments[1]);
+          }
+          const sentinels = {};
+          for (const field of fields) {
+            const key = `${section}.${field}`;
+            const value = defaults[field];
+            const alternatives = schema[key]?.enum;
+            if (Object.hasOwn(overrides, key)) sentinels[field] = overrides[key];
+            else if (Array.isArray(alternatives) && alternatives.some((candidate) => !isDeepStrictEqual(candidate, value))) {
+              sentinels[field] = alternatives.find((candidate) => !isDeepStrictEqual(candidate, value));
+            } else if (typeof value === 'boolean') sentinels[field] = !value;
+            else if (typeof value === 'number') sentinels[field] = value + 7319;
+            else if (Array.isArray(value)) sentinels[field] = [`sentinel-${field}`];
+            else sentinels[field] = `sentinel-${section}-${field}`;
+          }
+          writeLayer(cwd, source, {});
+          const empty = loadConfigResolved(cwd, { persist: false }).config;
+          writeLayer(cwd, source, { [section]: sentinels });
+          const configured = loadConfigResolved(cwd, { persist: false }).config;
+          // Discover dependencies from changed consumer output BEFORE consulting
+          // the barrier policy. A new projection omitted by the table still changes.
+          const dependentKeys = [...new Set([...Object.keys(empty), ...Object.keys(configured)])]
+            .filter((key) => !isDeepStrictEqual(empty[key], configured[key]));
+          assert.ok(dependentKeys.length > 0, `${source} ${section} sentinel must reach the loader`);
+          writeLayer(cwd, source, { [section]: null });
+          const blocked = loadConfigResolved(cwd, { persist: false }).config;
+          for (const key of dependentKeys) {
+            if (BARRIER_FAIL_SAFE_PROJECTIONS.has(key)) assert.deepEqual(blocked[key], empty[key]);
+            else {
+              assert.equal(Object.hasOwn(blocked, key), false, `${source} ${section}.${key} discovered by sentinel`);
+              assert.ok(BLOCKED_SECTION_PROJECTIONS[section].includes(key), `${key} needs a barrier policy entry`);
+            }
+          }
+        });
+      }
+    }
+  });
+
+  test('a same-file flat value wins over its blocked nested alias', () => {
+    for (const [section, values] of [
+      ['planning', { commit_docs: true, search_gitignored: true }],
+      ['git', { branching_strategy: 'phase' }],
+      ['workflow', { research: false, text_mode: true }],
+    ]) {
+      withLayers((cwd) => {
+        writeLayer(cwd, 'root', { [section]: null, ...values });
+        const assembled = loadConfigResolved(cwd, { persist: false }).config;
+        for (const [key, value] of Object.entries(values)) {
+          assert.deepEqual(assembled[key], value);
+          assert.deepEqual(resolveConfigValue(key, { cwd }).value, value);
+        }
+      });
+    }
+  });
+
+  test('declared projection removals retain their empty/object controls on both loader paths', () => {
     for (const source of ['root', 'global-defaults']) {
       for (const [section, keys] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
         withLayers((cwd) => {
@@ -528,8 +603,8 @@ describe('Config Value Resolution Module (#5096)', () => {
           const object = loadConfigResolved(cwd, { persist: false }).config;
           writeLayer(cwd, source, { [section]: null });
           const blocked = loadConfigResolved(cwd, { persist: false }).config;
-          // Derive the actual disappearing keys from assembled output, including
-          // keys outside the policy table, then compare against the policy.
+          // This secondary check pins the declared policy on both loader shapes;
+          // the sentinel test above independently discovers its required keys.
           const disappeared = Object.keys(empty).filter((key) => !Object.hasOwn(blocked, key));
           const expected = keys.filter((key) => !BARRIER_FAIL_SAFE_PROJECTIONS.has(key));
           // Some section containers are materialized only when explicitly set.

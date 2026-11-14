@@ -172,6 +172,8 @@ absent gate flags as `false`. An explicit `review: null`
 removes the prompt-budget default, so reviewer lanes run without default prompt trimming.
 Use an object with explicit settings when those safeguards should remain enabled.
 
+An explicit `planning: null` removes planning defaults, including `commit_docs`, so planning commits are skipped unless a same-file flat `commit_docs: true` explicitly enables them. An explicit `git: null` removes inherited/default branching strategy, base branch and branch templates. Explicit flat keys in that same file retain precedence over their blocked nested aliases.
+
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
 
