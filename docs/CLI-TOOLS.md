@@ -172,7 +172,12 @@ node gsd-tools.cjs state begin-phase --phase N --name SLUG --plans COUNT
 # Agent-discoverable blocker signalling (used by discuss-phase / UI flows)
 node gsd-tools.cjs state signal-waiting --type TYPE --question "..." --options "A|B" --phase P
 node gsd-tools.cjs state signal-resume
+
+# Reset STATE.md for a new milestone cycle (new-milestone workflow, step 5)
+node gsd-tools.cjs state milestone-switch --milestone <version> --name <name>
 ```
+
+`state milestone-switch` resets `milestone`, `milestone_name`, `status` (`planning`), `last_updated`, `last_activity` and the zeroed `progress` block in the frontmatter, and the four template lines (Phase, Plan, Status, Last activity) of `## Current Position`. Frontmatter keys STATE.md does not define, such as a custom `team_owner`, keep their values. Any other line in `## Current Position` (for example `Blocked on:` or `Carry-over:`) is moved, once and in its original order, to the top of `## Accumulated Context` (the section is created when it is missing) and listed in the JSON result under `moved_current_position_lines`; the key is absent when nothing moved. `milestone complete` handles `## Current Position` the same way (#6174).
 
 `state update`, `state patch` and `state record-session` take single-line values: a value containing a line break — CR, LF, U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR, each of which starts a new line for the STATE.md readers — is refused with an error naming the field or flag, before anything is written.
 
@@ -1364,6 +1369,8 @@ node gsd-tools.cjs requirements mark-complete <ids>
 | `--release-map <file>` | Opt-in (#5706): archive a per-repository release map. `<file>` is a JSON array of `{ repo, release, reference, environment, status, tag }` entries (fields and limits in [Per-repository release mapping](CONFIGURATION.md#per-repository-release-mapping)). The map is validated before anything is written; any problem fails the command with every error listed and changes nothing. On success the map is written to `.planning/milestones/<version>-RELEASE-MAP.json`, a `**Release mapping:**` table is added to the MILESTONES.md entry, and the JSON result carries `release_map: { path, entries }`. The file must be a regular file of at most 1 MiB. A later run for the same version never overwrites an archived map that differs. Without the flag, output and files are unchanged. |
 | `--force` | Override the unstarted-phase guard (see below). |
 | `--dry-run` | Print the archive plan (roadmap, requirements, phases, and — when `--archive-quick` is also passed — quick-task dirs to move) without mutating anything. With `--release-map`, the map is validated and reported under `would_archive.release_map`. |
+
+**Operator lines in `## Current Position` (#6174).** The close-out resets `## Current Position` to its four template lines. Every other line in that section is moved, once and in its original order, to the top of `## Accumulated Context` (created when missing), and the JSON result lists them under `moved_current_position_lines` (absent when nothing moved). `state milestone-switch` treats them identically.
 
 **Unstarted-phase guard.** Before archiving, the command scans the ROADMAP scoped for `<version>` and refuses if any `### Phase N:` heading in that slice has no matching phase directory on disk (`disk_status: no_directory`). Phase 0 (pre-milestone) and Phase 999 (backlog) sentinels are excluded. The guard runs whenever `--force` is absent, independent of `STATE.md`'s `milestone:` field — if that field is present but does not match `<version>`, a WARNING naming both values is emitted to stderr and the scan still runs (#2946). Pass `--force --confirm` to override (`--confirm` is required for any mutating run — #3726; `--force` alone does not imply it).
 
