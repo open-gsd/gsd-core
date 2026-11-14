@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const { have, skipUnless } = require('./helpers/bash-probe.cjs');
 const { runBash } = require('./helpers/doc-bash-span.cjs');
 const path = require('node:path');
-const fc = require('fast-check');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const ROOT = path.join(__dirname, '..');
 // allow-test-rule: source-text-is-the-product (#5583) — the workflow, routers and help modes are the prompt text the
@@ -80,13 +80,14 @@ describe('#5583 insert-phase --sibling', () => {
       assert.equal(r.status, 0, r.stderr);
       return r.stdout.split('\n').slice(2, -1);
     };
-    // The CLI reads a first description word that looks like a flag (-h, --raw, --cwd=...) as a flag.
-    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x']) {
-      test('refuses a description starting with "-": ' + args, () => {
+    // The CLI reads a one-word description such as -h or --raw, and any argument starting with
+    // --cwd=, --project-dir= or --exit-contract=, as a flag.
+    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x', '5 --exit-contract=1 y']) {
+      test('refuses the description of: ' + args, () => {
         const r = runFence(args);
         assert.notEqual(r.status, 0);
         assert.equal(r.stdout, '', 'phase.insert never runs');
-        assert.match(r.stderr, /must not start with '-'/);
+        assert.match(r.stderr, /the CLI reads it as a flag/);
       });
     }
     // [typed text, the arguments phase.insert receives after `query phase.insert`]
@@ -98,7 +99,10 @@ describe('#5583 insert-phase --sibling', () => {
       ['15.2 --ws feature --sibling x', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['--ws feature 15.2 x --sibling', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['15.2 x --ws', ['[15.2]', '[x]']],
-      ['15.2 --ws "feature" x', ['[--ws=feature]', '[15.2]', '[x]']],
+      // a quoted --ws value: init_context's sed does not read it either, so both steps use the default workstream
+      ['15.2 --ws "feature" x', ['[15.2]', '[x]']],
+      ['5 -5 degrees', ['[5]', '[-5 degrees]']],
+      ['5 -h flag', ['[5]', '[-h flag]']],
       ['  --insert 15.2 x', ['[15.2]', '[x]']],
       ['15.2 x\ny', ['[15.2]', '[x y]']],
       ['5 fix "" x', ['[5]', '[fix x]']],

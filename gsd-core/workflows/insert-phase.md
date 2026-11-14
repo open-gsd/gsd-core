@@ -13,7 +13,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
-- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description, like `--ws <name>`. The insert_phase step drops a leading `--insert`, splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh) and drops double quotes around each word (single quotes stay). It passes the after-phase, `--sibling` and `--ws=<name>` as their own arguments and the other words, in order and joined by single spaces, as ONE description argument, so a description word such as `-h`, `--raw` or `--cwd` inside the description is never read as a CLI flag. The step refuses a description that itself starts with `-`, because the CLI reads such a first word as a flag
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description, like `--ws <name>`. The insert_phase step drops a leading `--insert`, splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh) and drops double quotes around each word (single quotes stay). It passes the after-phase, `--sibling` and `--ws=<name>` (read with the same `sed` as the init_context step) as their own arguments and the other words, in order and joined by single spaces, as ONE description argument, so a description word such as `-h`, `--raw` or `--cwd` inside the description is never read as a CLI flag. The step refuses a description that is a single word starting with `-`, or starts with `--cwd=`, `--project-dir=` or `--exit-contract=`, because the CLI reads those as flags
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
@@ -65,18 +65,20 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 GSD_L=$(printf '%s\n' "$GSD_ARGS" | tr -s '[:space:]' '\n')
-GSD_F=1; GSD_A=; GSD_S=; GSD_W=; GSD_P=; GSD_D=
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_F=1; GSD_A=; GSD_S=; GSD_P=; GSD_D=
 while IFS= read -r GSD_T; do
   GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue
   if [ "$GSD_F$GSD_T" = 1--insert ]; then GSD_F=; continue; fi; GSD_F=
-  if [ -n "$GSD_P" ]; then GSD_W=$GSD_T; GSD_P=
+  if [ -n "$GSD_P" ]; then GSD_P=
   elif [ "$GSD_T" = --sibling ]; then GSD_S=1
   elif [ "$GSD_T" = --ws ]; then GSD_P=1
   elif [ -z "$GSD_A" ]; then GSD_A=$GSD_T
   else GSD_D="${GSD_D:+$GSD_D }$GSD_T"; fi
 done <<<"$GSD_L"
-case "$GSD_D" in -*) echo "ERROR: the description must not start with '-' (the CLI would read it as a flag)" >&2; exit 1;; esac
-RESULT=$(gsd_run query phase.insert ${GSD_W:+--ws="$GSD_W"} "$GSD_A" ${GSD_S:+--sibling} "$GSD_D")
+GSD_B=; case "$GSD_D" in --cwd=*|--project-dir=*|--exit-contract=*) GSD_B=1;; -*" "*) ;; -*) GSD_B=1;; esac
+[ -z "$GSD_B" ] || { echo "ERROR: the description must not be a single word starting with '-', nor start with --cwd=, --project-dir= or --exit-contract= (the CLI reads it as a flag)" >&2; exit 1; }
+RESULT=$(gsd_run query phase.insert ${GSD_WS:+--ws=${GSD_WS##* }} "$GSD_A" ${GSD_S:+--sibling} "$GSD_D")
 ```
 
 The CLI handles:
