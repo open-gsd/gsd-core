@@ -1068,6 +1068,48 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(r.stderr, WARNED);
   });
 
+  // The side commit and the line commit add the same file, so the merge equals its first parent and a path-limited
+  // log without --full-history leaves the side commit out of the patch-id input.
+  test('a side branch merged into the working branch: every picked commit still has a patch-id, so no warning', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    git(dir, 'checkout', '-q', '-b', 'side');
+    write(dir, 's.txt', 'X\n');
+    commitAll(dir, 'feat: side');
+    git(dir, 'checkout', '-q', 'feature');
+    write(dir, 's.txt', 'X\n');
+    commitAll(dir, 'feat: same file on the line');
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+  });
+
+  // The recorded tip is a merge whose side commit adds only a file the line commit adds too (so the merge equals its
+  // first parent); that side commit is published, unmatched and changed on the target, so the rewrite must warn.
+  test('a recorded tip with a merged side commit: the side commit is still judged, so the rewrite warns', () => {
+    const dir = repo();
+    write(dir, 't.txt', 'X\n');
+    write(dir, 'u.txt', 'U\n');
+    commitAll(dir, 'feat: t and u again'); // the oldest commit of the branch: same patch as the line commit below
+    commitRound(dir, 1);
+    git(dir, 'checkout', '-q', '-b', 'old', 'main');
+    git(dir, 'checkout', '-q', '-b', 'side2');
+    write(dir, 't.txt', 'X\n');
+    commitAll(dir, 'feat: side only t');
+    git(dir, 'checkout', '-q', 'old');
+    write(dir, 't.txt', 'X\n');
+    write(dir, 'u.txt', 'U\n');
+    commitAll(dir, 'feat: line t and u');
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'merge side2', 'side2');
+    git(dir, 'update-ref', MARKER, 'old');
+    git(dir, 'checkout', '-q', 'feature');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
   // Squash-merged, then the target renamed a file the published commit changed: the old name is gone from the target.
   test('published file renamed on the target after a squash of two commits: the rewrite warns instead of trusting the rename', () => {
     const dir = repo();
