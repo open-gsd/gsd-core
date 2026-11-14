@@ -8,8 +8,12 @@
  * exists to delete, and would double the rate `next` advances.
  *
  * ── The load-bearing part ────────────────────────────────────────────────────
- * ADR-2719 §5: "keyed on the `next` sha the PR was merged with. That key discipline is
- * the one thing that has to be exactly right — a stale baseline silently mis-attributes."
+ * ADR-2719 §5 says: "That key discipline is load-bearing — a stale baseline
+ * mis-attributes silently." As amended for #5797, the PR lane's cache key stays the pin
+ * (`emitted-baseline-<pull_request.base.sha>`), so on a stale pin the restore still hits
+ * whenever the push lane cached the pin's sha. The gate needs a baseline built at the
+ * attribution base, so `validateBaseline` below refuses a restored artifact built at any
+ * other sha and `resolveBaseline` sends the run to the in-job build at that base.
  *
  * Note the asymmetry that makes staleness worse than absence: a MISSING baseline fails
  * loudly and gets fixed. A STALE one produces a confident wrong answer — it attributes
@@ -117,7 +121,7 @@ function validateBaseline(doc, expectedSha, source) {
  *
  *   1. `GSD_EMITTED_BASELINE` — an operator pin; a mismatch here is a HARD STOP
  *   2. the on-disk cache, validated against the expected sha — a mismatch RECOVERS
- *   3. an in-job build at the expected sha — merge-base(base, HEAD), #5008 (slow fallback)
+ *   3. an in-job build at the expected sha — the attribution base (#5008, #5797), slow fallback
  *   4. none → explicit failure (NEVER a silent pass)
  *
  * #2854: steps 1 and 2 differ only in what a mismatch means, so which door a given
@@ -208,10 +212,10 @@ function resolveBaseline({
     try {
       built = buildFallback();
     } catch (err) {
-      attempts.push(`in-job build at merge-base(base, HEAD) failed: ${err.message}`);
+      attempts.push(`in-job build at the expected sha failed: ${err.message}`);
       return { ok: false, via: 'build', attempted, errors: attempts };
     }
-    const v = validateBaseline(built, expectedSha, 'in-job build at merge-base(base, HEAD)');
+    const v = validateBaseline(built, expectedSha, 'in-job build at the expected sha');
     if (v.ok) return { ok: true, via: 'build', attempted, ...v };
     attempts.push(...v.errors);
     return { ok: false, via: 'build', attempted, errors: attempts };

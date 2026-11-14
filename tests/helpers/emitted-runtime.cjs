@@ -352,6 +352,128 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
+ * The newest commit on the base branch's FIRST-PARENT chain that HEAD contains, when it
+ * descends from `floorSha` (a commit HEAD already contains); otherwise `floorSha` unchanged.
+ *
+ * Active only when `env.GITHUB_BASE_REF` is set (Actions sets it on pull_request
+ * events) and `refs/remotes/origin/<GITHUB_BASE_REF>` resolves. Local runs, release
+ * lanes, `merge_group` and the gsd-test container (no `origin/*` refs) keep the pin's
+ * merge-base exactly as before.
+ *
+ * Why the first-parent chain and not `git merge-base origin/<base> HEAD`: with criss-cross
+ * history that command returns ONE of several best common ancestors, and which one it
+ * picks depends on commit-date order, so it need not be the commit we want. A stacked PR whose lower PR landed on the base branch as a merge
+ * commit after the merge ref was built has two (the lower PR's tip and the base commit the
+ * merge ref was built on); measuring from the lower PR's tip sweeps the base-only commits
+ * between the pin and the merge ref back into range (PR #5871 review, Major 2). The
+ * first-parent chain is the sequence of trees the base branch actually had, so the newest
+ * of them HEAD contains is unique, and a baseline built there agrees with the
+ * `<base>..HEAD` range the trailers and changed paths are read from (#5008).
+ *
+ * Bounded work: `git merge-base` first confirms the two histories are related (its sha is
+ * discarded, not used for selection), so an unrelated base ref costs one history walk and
+ * keeps the floor with a line naming that failed command, instead of a rev-list plus about
+ * log2(n) `--is-ancestor` walks that never say the histories are unrelated.
+ * `rev-list --first-parent <tip> ^<floor>` then lists, newest first, only the chain
+ * commits the floor does not already contain. Containment in HEAD
+ * is monotonic along a first-parent chain (a contained commit's first parent is
+ * contained too), so a binary search finds the newest contained one in
+ * ceil(log2(n + 1)) `merge-base --is-ancestor` calls. When none of them is contained,
+ * the newest contained chain commit is the first parent of the oldest listed one (or the
+ * tip itself when nothing is listed); in a complete clone the floor contains it. In a
+ * shallow clone that parent can be missing or outside HEAD, and the check at the advance's
+ * return keeps the floor instead of returning it. When the oldest listed one
+ * is a root (the chain is rooted outside the floor's history), no chain commit is in HEAD
+ * and the floor is kept with a line saying exactly that.
+ *
+ * Stable while the base branch advances mid-run: a commit that lands after the merge ref
+ * was built is not in HEAD, so it cannot be chosen. The result never moves BELOW the
+ * floor (a chain commit that does not descend from it keeps the floor), and any git
+ * failure keeps the floor rather than guessing; when a base branch was named, every floor
+ * kept by a guard (unresolved ref, failed lookup, rooted chain, a chosen commit HEAD does
+ * not contain, or a result below the floor) tells `diagnostic` why. A walk that simply
+ * finds nothing newer than the floor keeps it silently.
+ *
+ * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
+ * @param {object} env base-ref environment.
+ * @param {{cwd: string, diagnostic?: function}} options repository to resolve against; an
+ *   optional `diagnostic` hears why the floor was kept when the base branch was named.
+ * @returns {string} a 40-hex sha HEAD contains.
+ */
+function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
+  const branch = env.GITHUB_BASE_REF;
+  if (!branch) return floorSha;
+  const keep = (why) => {
+    if (diagnostic) diagnostic(`emitted-attribution: keeping the pin's merge-base ${floorSha}: ${why}`);
+    return floorSha;
+  };
+  let tip;
+  try {
+    tip = git(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`], { cwd }).trim();
+  } catch {
+    return keep(`GITHUB_BASE_REF=${branch} is set but refs/remotes/origin/${branch} does not resolve`);
+  }
+  // `merge-base --is-ancestor` exits 0 (yes) or 1 (no); any other exit is a git failure.
+  const isAncestor = (ancestor, descendant) => {
+    try {
+      git(['merge-base', '--is-ancestor', ancestor, descendant], { cwd });
+      return true;
+    } catch (err) {
+      if (err && err.status === 1) return false;
+      throw err;
+    }
+  };
+  let newest;
+  try {
+    git(['merge-base', tip, 'HEAD'], { cwd });
+    const chain = git(['rev-list', '--first-parent', tip, `^${floorSha}`], { cwd })
+      .split('\n').map((l) => l.trim()).filter(Boolean);
+    let lo = 0;
+    let hi = chain.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (isAncestor(chain[mid], 'HEAD')) hi = mid;
+      else lo = mid + 1;
+    }
+    if (lo < chain.length) newest = chain[lo];
+    else if (chain.length === 0) newest = tip;
+    else {
+      // The first parent comes from the raw commit object. git reads parents only as the
+      // `parent <sha>` lines directly after the leading `tree` line (commit.c,
+      // parse_commit_buffer), so the read is anchored there: a `parent` line anywhere else (a
+      // stray header after `committer`, or the message) is not a parent and is not read.
+      // `rev-list --parents` would honour a shallow clone's grafts and call the shallow
+      // boundary a root; the raw object names the real parent. If that parent is absent or
+      // not in HEAD, the checks below keep the floor and say so.
+      const oldest = chain[chain.length - 1];
+      const raw = git(['cat-file', 'commit', oldest], { cwd });
+      const parentLine = /^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n/.exec(raw);
+      const firstParent = parentLine && parentLine[1];
+      if (!firstParent) {
+        // The chain is rooted outside the floor's history and HEAD contains none of it: no git
+        // command failed, so say what happened.
+        return keep(`no origin/${branch} first-parent commit is in HEAD (the chain ends at the root ${oldest})`);
+      }
+      newest = firstParent;
+    }
+    if (!/^[0-9a-f]{40}$/.test(newest)) throw new Error(`not a 40-hex sha: ${JSON.stringify(newest)}`);
+    if (newest === floorSha) return floorSha;
+    // The one place an advance is returned, so its invariant is checked here for every way
+    // `newest` was derived: the advanced base must be a commit HEAD contains. A shallow clone
+    // can break that, since the walk reads past a graft to a real parent that may not be
+    // in HEAD.
+    if (!isAncestor(newest, 'HEAD')) {
+      return keep(`the chosen origin/${branch} commit ${newest} is not in HEAD ` +
+        '(a shallow clone boundary can cause this)');
+    }
+    if (isAncestor(floorSha, newest)) return newest;
+  } catch (err) {
+    return keep(`finding the newest origin/${branch} first-parent commit HEAD contains failed: ${err.message}`);
+  }
+  return keep(`the newest origin/${branch} first-parent commit HEAD contains, ${newest}, does not descend from it`);
+}
+
+/**
  * True iff the running pull request is a release-merge PR (`release/X.Y.0` or
  * `hotfix/X.Y.Z` -> `main`, same repository), classified by `releasePipelinePrKind` from
  * the Actions environment (#5902).
@@ -409,13 +531,29 @@ function resolveNextRef({ cwd = REPO_ROOT } = {}) {
  * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
  * baseline built at the `next` TIP attributed that merge to the release branch.
  *
- * Ordinary PR lanes merge the tree onto `pull_request.base.sha` first, so there the
- * merge-base IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * PR lanes are NOT always merged onto `pull_request.base.sha`, the job's
+ * `GSD_EMITTED_BASE` pin. `actions/checkout` checks out GitHub's merge ref
+ * (`refs/pull/N/merge`), built on the base tip GitHub last saw, and `base.sha` can be
+ * older: on PR #5119 it was 34 `next` commits behind the merge ref's first parent. The
+ * "Rebase check" merge of the pin is then a no-op, `merge-base(pin, HEAD)` is the old
+ * sha, and the measured range sweeps in base-branch commits the PR never authored, with
+ * their ack trailers. So on a lane that names its base branch (`GITHUB_BASE_REF`) the
+ * merge-base is advanced to `advanceToMergedBase`'s result: the invariant is that the
+ * attribution base is always a commit HEAD contains, the pin bounds it from below and
+ * the tree bounds it from above. The baseline cache key stays the pin
+ * (`emitted-baseline-<base.sha>`, `.github/workflows/test.yml`), so the restore hits
+ * whenever the push lane cached the pin's sha, stale pin or not. When the pin is the
+ * merged base (the usual case) the restored artifact is built at the attribution base and
+ * is used. When the pin is stale the artifact was built at the pin, not at the advanced
+ * sha, so `validateBaseline` refuses it as stale and `resolveBaseline` falls through to
+ * the in-job build at the advanced sha (ADR-2719 §5, as amended for #5797).
+ *
  * A release-merge PR (`release/X.Y.0` or `hotfix/X.Y.Z` -> `main`, #5902) is the exception:
  * its base is the fork point on `next` (`origin/next`, `upstream/next`, `next`; first that
- * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, and that sha is not
- * `base.sha`, so the `emitted-baseline-<base.sha>` cache key misses and the baseline is
- * built in-job.
+ * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, so that fork point is never
+ * advanced, and that sha is normally not `base.sha`: the `emitted-baseline-<base.sha>`
+ * restore then normally misses, or returns a baseline not built at the fork point, which
+ * `validateBaseline` refuses, and the baseline is built in-job.
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
@@ -461,6 +599,17 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   }
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     throw new Error(`emitted-attribution: merge-base of "${resolved.ref}" and HEAD is not a 40-hex sha: ${JSON.stringify(sha)}`);
+  }
+  // #5902: a release-merge PR's GITHUB_BASE_REF is `main`, which this base deliberately ignores.
+  const merged = releaseMerge ? sha : advanceToMergedBase(sha, env, { cwd, diagnostic });
+  if (merged !== sha) {
+    if (diagnostic) {
+      diagnostic(
+        `emitted-attribution: HEAD already contains origin/${env.GITHUB_BASE_REF} up to ${merged}, newer than ` +
+        `merge-base(${resolved.ref}, HEAD)@${sha}; measuring from ${merged} so base-only commits stay out of range`,
+      );
+    }
+    sha = merged;
   }
   return { ref: resolved.ref, tipSha: resolved.sha, sha };
 }
