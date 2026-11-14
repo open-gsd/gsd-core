@@ -441,7 +441,7 @@ function computeProfileTier(config: Record<string, unknown>, agentType: string):
  *
  * Why this is not just "look at the resolved model": on every runtime the installer
  * configures with `resolve_model_ids: "omit"` — which is every non-Claude runtime, see
- * docs/CONFIGURATION.md — resolveModelInternal deliberately returns '' below. A guard
+ * docs/CONFIGURATION.md — resolveModelInternal returns '' below unless the runtime declares native tier aliases (#3703). A guard
  * keyed on the model id therefore cannot tell a budget-tier run from a top-tier one
  * there, while the tier itself is computed ABOVE that early-return and stays knowable.
  *
@@ -649,6 +649,21 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // returned its own model id at step 3 above, before this gate — for those the
   // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
   if (omitApplies) {
+    // #3703: "omit" means "emit no concrete model id", not "emit nothing". On a
+    // runtime whose descriptor declares native tier aliases
+    // (hostBehaviors.nativeModelAliases — the Agent tool takes `opus`/`sonnet`/
+    // `haiku` directly), a blank hands the choice to the host instead of the
+    // profile: Claude Code then spawns on CLAUDE_CODE_SUBAGENT_MODEL when set,
+    // or the session model, and a mapper profiled cheap runs on the
+    // orchestrator's tier. So those runtimes get the tier alias. It sits ahead
+    // of steps 4.5/4.75 on purpose: a model_profile_overrides.claude pin and a
+    // dynamic_routing tier model both name concrete models, which omit rules out.
+    // Every other runtime keeps "" and the #2517 omit-`model=` rule, because a
+    // tier alias there fails the spawn. `inherit` and a tierless (unknown) agent
+    // stay "" too: neither has an alias the profile can name.
+    if (tier && tier !== 'inherit' && VALID_TIERS.has(tier) && hasNativeModelAliases(activeRuntime)) {
+      return tier;
+    }
     return '';
   }
 
