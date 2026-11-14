@@ -81,8 +81,8 @@ describe('#5583 insert-phase --sibling', () => {
       return r.stdout.split('\n').slice(2, -1);
     };
     // The CLI reads a one-word description such as -h or --raw, and any argument starting with
-    // --cwd=, --project-dir= or --exit-contract=, as a flag.
-    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x', '5 --exit-contract=1 y']) {
+    // --cwd=, --project-dir=, --exit-contract= or --ws=, as a flag.
+    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x', '5 --exit-contract=1 y', '5 --ws=feature x']) {
       test('refuses the description of: ' + args, () => {
         const r = runFence(args);
         assert.notEqual(r.status, 0);
