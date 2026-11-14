@@ -1562,6 +1562,17 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(!fs.existsSync(pwned), 'git wrote no file');
   });
 
+  // The guard refuses a leading dash only: a dash inside the name is a normal target.
+  test('a bare - target is refused; a target with a dash inside is accepted and records its pending build', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir, '-').status, 1);
+    git(dir, 'branch', 'release-1', 'main');
+    const r = publish(dir, 'release-1');
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(refOf(dir, 'refs/gsd/pr-built/strict/release-1/feature'), git(dir, 'rev-parse', 'feature'));
+  });
+
   // A merged -pr reset to the target holds no built tip; the build is dropped with its WARNING.
   test('merged -pr reset to the target after a promoted round: the next build is dropped with a WARNING naming the fix', () => {
     const dir = repo();
