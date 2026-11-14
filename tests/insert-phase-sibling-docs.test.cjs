@@ -15,6 +15,8 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const ROOT = path.join(__dirname, '..');
+// allow-test-rule: source-text-is-the-product (#5583) — the workflow, routers and help modes are the prompt text the
+// runtime loads; the four docs pages are pinned as docs-parity with the same flag
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 
 const SKIP = skipUnless('bash');
