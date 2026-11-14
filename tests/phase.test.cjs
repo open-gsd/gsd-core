@@ -7003,6 +7003,118 @@ describe('letter-suffix phase sorting', () => {
 // milestone-scoped next-phase in phase complete
 // ─────────────────────────────────────────────────────────────────────────────
 
+// #6170: `phase complete` keeps the prose in the Progress table's Status cell. It rewrites a leading
+// status token to Complete and keeps the tail, prefixes token-less prose with `Complete - `, and leaves
+// a cell that already reads Complete (or Completed) byte-identical. `roadmap update-plan-progress` shares
+// the token rewrite, so the two verbs agree on the same cell.
+describe('#6170: phase complete keeps the Status cell prose', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-6170-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const roadmapWith = (statusCell) => [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 1: Foundation',
+    '',
+    '### Phase 1: Foundation',
+    '**Goal:** Setup',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '| --- | --- | --- | --- |',
+    `| 1. Foundation | 0/1 | ${statusCell} | - |`,
+    '',
+  ].join('\n');
+
+  function seed(statusCell) {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmapWith(statusCell));
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '# State\n\n**Current Phase:** 01\n**Status:** In progress\n');
+    const p1 = path.join(planning, 'phases', '01-foundation');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+  }
+
+  const statusCellOf = (roadmapText) => {
+    const row = roadmapText.split('\n').find((l) => l.startsWith('| 1. Foundation'));
+    return row.split(/(?<!\\)\|/)[3];
+  };
+  const rawStatusAfterComplete = (statusCell) => {
+    seed(statusCell);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return statusCellOf(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8'));
+  };
+  const statusAfterComplete = (statusCell) => rawStatusAfterComplete(statusCell).trim();
+
+  const SHAPES = [
+    ['In Progress - waiting on sign-off (decided 2026-11-01)', 'Complete - waiting on sign-off (decided 2026-11-01)'],
+    ['Waiting on sign-off', 'Complete - Waiting on sign-off'],
+    ['-', 'Complete'],
+    ['In Progress', 'Complete'],
+    ['Complete - signed off by reviewer', 'Complete - signed off by reviewer'],
+    // Addendum (maintainer ruling 2026-11-13).
+    ['Completed', 'Completed'],
+    ['COMPLETED - signed off', 'COMPLETED - signed off'],
+    ['Deferred - x', 'Complete - x'],
+    ['complete - x', 'Complete - x'],
+  ];
+  for (const [before, after] of SHAPES) {
+    test(`Status cell "${before}" becomes "${after}"`, () => {
+      assert.equal(statusAfterComplete(before), after);
+    });
+  }
+
+  test('an empty Status cell becomes Complete, padded as before', () => {
+    assert.equal(rawStatusAfterComplete(''), ' Complete    ');
+  });
+
+  test('a cell already reading Complete stays byte-identical, padding included (#5165)', () => {
+    assert.equal(rawStatusAfterComplete('Complete'), ' Complete ');
+  });
+
+  test('prose containing a pipe stays escaped', () => {
+    assert.equal(statusAfterComplete('Planned - waiting on the A \\| B crate decision'), 'Complete - waiting on the A \\| B crate decision');
+    assert.equal(statusAfterComplete('A \\| B pending'), 'Complete - A \\| B pending');
+  });
+
+  test('re-running phase complete leaves the Status cell as the first run wrote it', () => {
+    seed('In Progress - waiting on sign-off');
+    assert.ok(runVerifiedPhaseComplete('phase complete 1', tmpDir).success);
+    const first = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(runVerifiedPhaseComplete('phase complete 1', tmpDir).success);
+    const second = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.equal(statusCellOf(second), statusCellOf(first));
+  });
+
+  // Parity: for a cell with a token, a dash or nothing, both verbs reach the same Status cell.
+  for (const cell of ['In Progress - waiting on sign-off', 'Planned', 'Not started - blocked', '-', '']) {
+    test(`parity: phase complete and roadmap update-plan-progress agree on "${cell}"`, () => {
+      seed(cell);
+      const viaComplete = statusAfterComplete(cell);
+
+      seed(cell);
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '01-foundation', '01-VERIFICATION.md'), '---\nstatus: passed\n---\n# V\n');
+      const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      assert.equal(JSON.parse(result.output).status, 'Complete', 'fixture: update-plan-progress reports Complete');
+      const viaProgress = statusCellOf(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8')).trim();
+
+      assert.equal(viaComplete, viaProgress);
+    });
+  }
+});
+
 describe('phase complete milestone-scoped next-phase', () => {
   let tmpDir;
 

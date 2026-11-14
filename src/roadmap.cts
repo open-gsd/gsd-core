@@ -36,7 +36,7 @@ const { stripShippedMilestones, extractCurrentMilestone, extractCurrentMilestone
 /** Every phase-list entry line, any phase: the rows between two of them belong to the first. */
 const ANY_PHASE_ENTRY_LINE = phaseEntryRegExp('Phase[ \\t][^\\r\\n]*$', 'gi');
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
-import { escapeCell, findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
+import { findTableWithColumns, parseMarkdownTable, updateTableCell } from './markdown-table.cjs';
 import { clampPercent } from './phase-lifecycle.cjs';
 import { normalizeMilestoneToken, editRoadmapProgress } from './roadmap-progress.cjs';
 import { platformWriteSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
@@ -63,7 +63,7 @@ const { isPhaseComplete, failOnVerificationStatusError, firstStatusError } = ver
 // seam, mirroring phase.cts's already-migrated `writePlansField` site.
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 // #5060: the Phase Status Module owns the ladder; roadmap.cts is a consumer.
-import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, parseRoadmapStatusCell, ROADMAP_STATUS_TOKEN, DISK_STATUS, WIRE_STATUS } from './phase-status.cjs';
+import { phaseStatus, phaseStatusFromFacts, toDiskStatus, toRoadmapStatusCell, matchRoadmapStatusCell, parseRoadmapStatusCell, rewriteRoadmapStatusCell, ROADMAP_STATUS_TOKEN, DISK_STATUS, WIRE_STATUS } from './phase-status.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1442,11 +1442,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // all, so a Deferred cell fell through to arm 3 unchanged) — the DEFERRED
       // guard below preserves that same "leave it alone" outcome explicitly.
       const statusResult = updateTableCell(text, rowMatch, 'Status', (current) => {
-        if (current === '' || /^[-–—]$/.test(current)) return ` ${status.padEnd(11)} `;
-        const m = matchRoadmapStatusCell(current);
-        if (!m || m.token === ROADMAP_STATUS_TOKEN.DEFERRED || m.text === status) return current;
-        const rest = current.slice(m.text.length);
-        return rest === '' ? ` ${status.padEnd(11)} ` : ` ${escapeCell(status + rest)} `;
+        if (matchRoadmapStatusCell(current)?.token === ROADMAP_STATUS_TOKEN.DEFERRED) return current;
+        // #6170: the token rewrite is the Phase Status Module's, shared with `phase complete`;
+        // null is token-less prose, which this verb leaves alone (arm 3).
+        return rewriteRoadmapStatusCell(current, status) ?? current;
       });
       if (statusResult.ok) { text = statusResult.value; tableRowFound = true; }
 
