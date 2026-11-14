@@ -6,8 +6,8 @@
  * A gate that reads a file has a third answer besides "found" and "none": the read FAILED
  * (EACCES, EIO, EISDIR ...). These tests need that failure on demand, on every platform. They
  * never `chmod`: mode bits do not bind a root process (root Docker, CI), so a chmod-based test
- * passes without exercising the failure at all. A method is monkeypatched instead and always
- * restored in `finally`.
+ * passes without exercising the failure at all. Standalone utilities restore their patches in `finally`;
+ * context-aware helpers use the test mock scope.
  */
 
 const fs = require('node:fs');
@@ -82,7 +82,8 @@ function writeMethodFailurePreload(dir, method, suffix, code = 'EACCES', fileNam
  * compared canonically (`canonicalizePath`), so the failure fires whichever spelling the gate stats:
  * the gate realpaths the directory before it stats (#5798), and on macOS `/var` and `/tmp` resolve
  * to `/private/...`. Every other path falls through to the real `statSync`, and stdout (fd 1) is
- * captured instead of printed. Both mocks are restored in `finally`.
+ * captured instead of printed. Only this helper's mocks are restored before it returns; if the gate
+ * throws, the test context restores them when that test scope ends.
  *
  * The failure is injected, never produced by removing permission bits: root bypasses them and
  * Windows ignores them. `cwd` and `contextPath` are the gate's working directory and CONTEXT.md path.
@@ -94,7 +95,7 @@ function runGateWithStatFailure(t, phaseDirOrAlias, subcommand, code, { cwd, con
 
   const realStatSync = fs.statSync;
   const resolvedPhaseDir = canonicalizePath(phaseDirOrAlias);
-  t.mock.method(fs, 'statSync', (p, ...rest) => {
+  const statMock = t.mock.method(fs, 'statSync', (p, ...rest) => {
     if (typeof p === 'string') {
       let resolvedPath;
       try {
@@ -109,7 +110,7 @@ function runGateWithStatFailure(t, phaseDirOrAlias, subcommand, code, { cwd, con
   });
   let captured = '';
   const realWriteSync = fs.writeSync;
-  t.mock.method(fs, 'writeSync', (fd, ...args) => {
+  const writeMock = t.mock.method(fs, 'writeSync', (fd, ...args) => {
     if (fd === 1) {
       const buf = args[0];
       captured += Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
@@ -117,11 +118,9 @@ function runGateWithStatFailure(t, phaseDirOrAlias, subcommand, code, { cwd, con
     }
     return realWriteSync.call(fs, fd, ...args);
   });
-  try {
-    routeCheckCommand({ args: ['check', subcommand, phaseDirOrAlias, contextPath], cwd, raw: false });
-  } finally {
-    t.mock.restoreAll();
-  }
+  routeCheckCommand({ args: ['check', subcommand, phaseDirOrAlias, contextPath], cwd, raw: false });
+  statMock.mock.restore();
+  writeMock.mock.restore();
   return JSON.parse(captured || '{}');
 }
 

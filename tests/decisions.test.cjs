@@ -33,7 +33,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { parseDecisions, extractDecisions } = require('../gsd-core/bin/lib/decisions.cjs');
 const { iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
-const { writeMethodFailurePreload, runGateWithStatFailure: runStatFailureGate } = require('./helpers/fs-failure.cjs');
+const { writeMethodFailurePreload, runGateWithStatFailure } = require('./helpers/fs-failure.cjs');
 const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 
 // ─── Regression #1364: markdown-header fallback ───────────────────────────────
@@ -3350,12 +3350,43 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   // named as such, not reported as a missing directory. The failure is injected
   // in-process by mocking fs.statSync for the phase dir alone, not by removing
   // permission bits: root bypasses them and Windows ignores them.
-  function runGateWithStatFailure(t, subcommand, code) {
-    return runStatFailureGate(t, phaseDir, subcommand, code, { cwd: tmpDir, contextPath });
+  function gateWithStatFailure(t, subcommand, code) {
+    return runGateWithStatFailure(t, phaseDir, subcommand, code, { cwd: tmpDir, contextPath });
   }
 
+  test('shared stat-failure helper preserves caller-owned mocks', (testContext) => {
+    const caller = { read: () => 'original' };
+    testContext.mock.method(caller, 'read', () => 'caller mock');
+    const parsed = runGateWithStatFailure(testContext, phaseDir, 'decision-coverage-plan', 'EACCES', { cwd: tmpDir, contextPath });
+    assert.strictEqual(caller.read(), 'caller mock');
+    assert.strictEqual(parsed.reason, 'phase directory unreadable');
+  });
+
+  test('shared stat-failure helper restores its own mocks before returning', (testContext) => {
+    const originalStat = fs.statSync;
+    const originalWrite = fs.writeSync;
+    runGateWithStatFailure(testContext, phaseDir, 'decision-coverage-plan', 'EACCES', { cwd: tmpDir, contextPath });
+    assert.strictEqual(fs.statSync, originalStat);
+    assert.strictEqual(fs.writeSync, originalWrite);
+  });
+
+  test('throwing stat-failure gates propagate errors and restore mocks at test scope end', async (testContext) => {
+    const originalStat = fs.statSync;
+    const originalWrite = fs.writeSync;
+    const router = require('../gsd-core/bin/lib/check-command-router.cjs');
+    const originalRoute = router.routeCheckCommand;
+    const failure = new Error('injected gate failure');
+    await testContext.test('gate error reaches its caller', (scope) => {
+      scope.mock.method(router, 'routeCheckCommand', () => { throw failure; });
+      assert.throws(() => runGateWithStatFailure(scope, phaseDir, 'decision-coverage-plan', 'EACCES', { cwd: tmpDir, contextPath }), failure);
+    });
+    assert.strictEqual(fs.statSync, originalStat);
+    assert.strictEqual(fs.writeSync, originalWrite);
+    assert.strictEqual(router.routeCheckCommand, originalRoute);
+  });
+
   test('#4939: plan gate — an ENOENT stat failure is named as a missing directory', (t) => {
-    const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'ENOENT');
+    const parsed = gateWithStatFailure(t, 'decision-coverage-plan', 'ENOENT');
 
     assert.strictEqual(parsed.passed, false, 'the gate must still block');
     assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
@@ -3363,7 +3394,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   });
 
   test('#4939: verify gate — an ENOENT stat failure is named as a missing directory', (t) => {
-    const parsed = runGateWithStatFailure(t, 'decision-coverage-verify', 'ENOENT');
+    const parsed = gateWithStatFailure(t, 'decision-coverage-verify', 'ENOENT');
 
     assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
     assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
@@ -3372,7 +3403,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   });
 
   test('#4939: plan gate — an ENOTDIR stat failure is named as a missing directory', (t) => {
-    const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'ENOTDIR');
+    const parsed = gateWithStatFailure(t, 'decision-coverage-plan', 'ENOTDIR');
 
     assert.strictEqual(parsed.passed, false, 'the gate must still block');
     assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
@@ -3380,7 +3411,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   });
 
   test('#4939: verify gate — an ENOTDIR stat failure is named as a missing directory', (t) => {
-    const parsed = runGateWithStatFailure(t, 'decision-coverage-verify', 'ENOTDIR');
+    const parsed = gateWithStatFailure(t, 'decision-coverage-verify', 'ENOTDIR');
 
     assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
     assert.strictEqual(parsed.reason, 'phase directory not found', `got: ${JSON.stringify(parsed)}`);
@@ -3389,7 +3420,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   });
 
   test('#4939: plan gate — an EACCES stat failure is named as unreadable, not as a missing directory', (t) => {
-    const parsed = runGateWithStatFailure(t, 'decision-coverage-plan', 'EACCES');
+    const parsed = gateWithStatFailure(t, 'decision-coverage-plan', 'EACCES');
 
     assert.strictEqual(parsed.passed, false, 'the gate must still block');
     assert.strictEqual(parsed.reason, 'phase directory unreadable', `got: ${JSON.stringify(parsed)}`);
@@ -3401,7 +3432,7 @@ describe('#4939: decision-coverage answers a caller error for a phase directory 
   });
 
   test('#4939: verify gate — an EACCES stat failure is named as unreadable, not as a missing directory', (t) => {
-    const parsed = runGateWithStatFailure(t, 'decision-coverage-verify', 'EACCES');
+    const parsed = gateWithStatFailure(t, 'decision-coverage-verify', 'EACCES');
 
     assert.strictEqual(parsed.blocking, false, 'verify stays non-blocking');
     assert.strictEqual(parsed.reason, 'phase directory unreadable', `got: ${JSON.stringify(parsed)}`);
