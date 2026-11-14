@@ -10,6 +10,8 @@ const path = require('path');
 
 const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
 const REF = path.join(__dirname, '..', 'gsd-core', 'references', 'execute-mvp-tdd.md');
+const STATE_UPDATES_REL = 'gsd-core/workflows/execute-plan/steps/executor-state-updates.md';
+const STATE_UPDATES = path.join(__dirname, '..', STATE_UPDATES_REL);
 
 describe('gsd-executor — MVP+TDD gate section', () => {
   const content = fs.readFileSync(AGENT, 'utf-8');
@@ -47,7 +49,9 @@ describe('gsd-executor — state.* calls use the named-only router form (#1863 r
   // throws its required-arg error and metrics/decisions/blockers/session continuity
   // are never recorded. Each invocation in the executor agent must therefore pass
   // the named flags the router expects (mirrors gsd-core/workflows/execute-plan.md).
-  const content = fs.readFileSync(AGENT, 'utf-8');
+  const agent = fs.readFileSync(AGENT, 'utf-8');
+  assert.ok(agent.includes(STATE_UPDATES_REL), 'executor must delegate STATE writes to the shipped part');
+  const content = `${agent}\n${fs.readFileSync(STATE_UPDATES, 'utf-8')}`;
 
   // Capture a `gsd_run query state.<cmd> ...` invocation, including backslash-continued lines.
   function invocation(cmd) {
