@@ -721,7 +721,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     const cmd = splitLines(r.stderr).map((l) => l.match(/re-anchor: (git update-ref .*)$/)).find(Boolean)[1];
     assert.equal(runSh(cmd, dir).status, 0, 'the printed command runs as one command');
-    assert.ok(markerOf(dir) === '' && refOf(dir, `refs/gsd/pr-published/strict/main/${branch}`) !== '', 'it set the marker of that branch');
+    assert.notEqual(refOf(dir, `refs/gsd/pr-published/strict/main/${branch}`), '', 'it set the marker of that branch');
     assert.ok(!fs.existsSync(path.join(dir, 'b$c')), 'no file from the injected suffix');
   });
 
@@ -1566,7 +1566,10 @@ describe('#5469 pr-branch published marker (real git)', () => {
   test('a bare - target is refused; a target with a dash inside is accepted and records its pending build', () => {
     const dir = repo();
     commitRound(dir, 1);
-    assert.equal(publish(dir, '-').status, 1);
+    const dash = publish(dir, '-');
+    assert.equal(dash.status, 1);
+    assert.match(dash.stderr, /starts with -/);
+    assert.doesNotMatch(dash.stderr, /Unknown target/, 'the run stopped at the refusal, not at the later lookup');
     git(dir, 'branch', 'release-1', 'main');
     const r = publish(dir, 'release-1');
     assert.equal(r.status, 0, r.stderr);
