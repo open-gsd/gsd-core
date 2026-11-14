@@ -177,6 +177,7 @@ module.exports = {
   "tests/milestone-release-tags.test.cjs",
   "tests/milestone-window-single-owner.test.cjs",
   "tests/milestone.test.cjs",
+  "tests/model-omit-tier-alias.test.cjs",
   "tests/model-resolver.test.cjs",
   "tests/mutation-workflow-base-ref.test.cjs",
   "tests/new-milestone-clear-phases.test.cjs",
