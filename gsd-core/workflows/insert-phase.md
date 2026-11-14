@@ -70,7 +70,7 @@ GSD_F=1; GSD_A=; GSD_S=; GSD_P=; GSD_D=
 while IFS= read -r GSD_T; do
   GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue
   if [ -n "$GSD_F" ] && [ "$GSD_T" = --insert ]; then GSD_F=; continue; fi; GSD_F=
-  if [ -n "$GSD_P" ]; then GSD_P=; case $GSD_T in [A-Za-z0-9]*) continue;; esac; fi
+  if [ -n "$GSD_P" ]; then GSD_P=; [ -n "$GSD_WS" ] && [ "$GSD_T" = "${GSD_WS##* }" ] && continue; fi
   if [ "$GSD_T" = --sibling ]; then GSD_S=1
   elif [ "$GSD_T" = --ws ]; then GSD_P=1
   elif [ -z "$GSD_A" ]; then GSD_A=$GSD_T
