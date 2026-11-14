@@ -1,0 +1,1329 @@
+{
+  "schema": 1,
+  "global": {
+    "flags": {
+      "cwd": "value",
+      "default": "value",
+      "json-errors": "boolean",
+      "pick": "value",
+      "project-dir": "value",
+      "raw": "boolean",
+      "ws": "value"
+    },
+    "eq": [
+      "cwd",
+      "exit-contract",
+      "project-dir"
+    ],
+    "help": [
+      "-h",
+      "--help",
+      "-?",
+      "--h",
+      "--usage"
+    ],
+    "rejected": [
+      "--version",
+      "-v"
+    ]
+  },
+  "verbs": [
+    {
+      "verb": "agent-skills",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "json": "boolean",
+        "skills-only": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": true,
+      "freePositionals": true
+    },
+    {
+      "verb": "assumption-delta.scan",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "json": "boolean",
+        "terms": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "check-commit",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "classify-confidence",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "ecosystem": "value",
+        "package": "value",
+        "provider": "value",
+        "verified": "boolean"
+      },
+      "required": [
+        "provider"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "commit",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "amend": "boolean",
+        "files": "list",
+        "files-removed": "list",
+        "no-verify": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "commit-docs-guard.disable",
+      "aliases": [
+        "commit-docs-guard disable"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "commit-docs-guard.enable",
+      "aliases": [
+        "commit-docs-guard enable"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "commit-to-subrepo",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "files": "list"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "config-new-project",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "dry-run": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true,
+      "rejectShortFlags": true
+    },
+    {
+      "verb": "config-path",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "config-set",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "dry-run": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "context-predicates",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "class": "value",
+        "contains": "value",
+        "prefix": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "eq": [
+        "class",
+        "contains",
+        "prefix"
+      ],
+      "nonEmpty": [
+        "class",
+        "contains",
+        "prefix"
+      ]
+    },
+    {
+      "verb": "current-timestamp",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "detect-custom-files",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "config-dir": "value"
+      },
+      "required": [
+        "config-dir"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "dispatch-capacity",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "json": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "dispatch-isolation",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "cwd-target": "value",
+        "force-isolation": "value",
+        "json": "boolean",
+        "phase": "value",
+        "plan": "value",
+        "prompt": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "dispatch-should-flatten",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "json": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "drift-guard.authority",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "drift-guard.phase-status",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "phase": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "drift-guard.severity",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "authority": "value",
+        "status": "value"
+      },
+      "required": [
+        "status"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "effort.sync",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "apply": "boolean",
+        "config-dir": "value",
+        "dry-run": "boolean",
+        "runtime": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "eq": [
+        "config-dir",
+        "runtime"
+      ],
+      "nonEmpty": [
+        "config-dir",
+        "runtime"
+      ],
+      "emptyEq": [
+        "config-dir",
+        "runtime"
+      ]
+    },
+    {
+      "verb": "frontmatter.get",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "field": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "frontmatter.merge",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "data": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "frontmatter.set",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "field": "value",
+        "value": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "frontmatter.validate",
+      "aliases": [
+        "frontmatter validate"
+      ],
+      "positionals": 3,
+      "flags": {
+        "schema": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "history-digest",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "inspect-dispatch-isolation",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "cwd-target": "value",
+        "force-isolation": "value-or-bare",
+        "json": "boolean",
+        "phase": "value-or-bare",
+        "plan": "value-or-bare",
+        "prompt": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "learnings.copy",
+      "aliases": [
+        "learnings copy"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "learnings.delete",
+      "aliases": [
+        "learnings delete"
+      ],
+      "positionals": 3,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "learnings.list",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "learnings.prune",
+      "aliases": [
+        "learnings prune"
+      ],
+      "positionals": 2,
+      "flags": {
+        "older-than": "value"
+      },
+      "required": [
+        "older-than"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "learnings.query",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "tag": "value"
+      },
+      "required": [
+        "tag"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "list-seeds",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "list-todos",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "loop.render-hooks",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "active-cap": "value",
+        "after-fingerprint": "value",
+        "config-dir": "value",
+        "runtime": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "eq": [
+        "active-cap",
+        "after-fingerprint",
+        "config-dir",
+        "runtime"
+      ],
+      "nonEmpty": [
+        "active-cap",
+        "after-fingerprint",
+        "config-dir",
+        "runtime"
+      ]
+    },
+    {
+      "verb": "migrate-config",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "milestone.archive-quick",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "dry-run": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "milestone.complete",
+      "aliases": [
+        "milestone complete"
+      ],
+      "positionals": 3,
+      "flags": {
+        "archive-phases": "boolean",
+        "archive-quick": "boolean",
+        "confirm": "boolean",
+        "dry-run": "boolean",
+        "force": "boolean",
+        "name": "multiword",
+        "no-archive-phases": "boolean",
+        "release-map": "value-or-bare"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "normalize-test-command",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "package-legitimacy.check",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "ecosystem": "value"
+      },
+      "required": [
+        "ecosystem"
+      ],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "phase-plan-index",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "json": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "pr-subrepo",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "branch": "value",
+        "repo": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "progress.bar",
+      "aliases": [
+        "progress bar"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "project-context",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "project-instruction-file",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "runtime": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true,
+      "eq": [
+        "runtime"
+      ]
+    },
+    {
+      "verb": "prompt-budget",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "budget": "value",
+        "context-file": "value",
+        "instructions-file": "value",
+        "output-metadata": "value",
+        "output-prompt": "value",
+        "plan-file": "repeatable",
+        "project-file": "value",
+        "project-md-head-lines": "value",
+        "requirements-file": "value",
+        "research-file": "value",
+        "roadmap-file": "value",
+        "safety-margin-pct": "value"
+      },
+      "required": [
+        "budget",
+        "instructions-file",
+        "output-metadata",
+        "output-prompt",
+        "plan-file",
+        "roadmap-file"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "quick-tasks-append",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "directory": "value",
+        "quick-id": "value",
+        "slug": "value",
+        "status": "value",
+        "task": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "quick-tasks-migrate",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "record-dispatch-isolation",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "harness-flag": "value",
+        "isolation": "value",
+        "json": "boolean",
+        "phase": "value",
+        "plan": "value",
+        "worktree": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "eq": [
+        "harness-flag"
+      ]
+    },
+    {
+      "verb": "research-plan",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "input": "value"
+      },
+      "required": [
+        "input"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "research-store.get",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "kind": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "research-store.put",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "confidence": "value",
+        "content": "value",
+        "kind": "value",
+        "provider": "value",
+        "source": "value"
+      },
+      "required": [
+        "confidence",
+        "content",
+        "kind",
+        "provider",
+        "source"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "resolve-agent",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "json": "boolean",
+        "name": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "resolve-dispatch-type",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "json": "boolean",
+        "requested": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "resolve-execution",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "attempt": "value",
+        "effort": "value",
+        "failure-class": "value",
+        "fast-mode": "value",
+        "host": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true,
+      "rejectShortFlags": true,
+      "eq": [
+        "attempt",
+        "effort",
+        "failure-class",
+        "fast-mode"
+      ],
+      "nonEmpty": [
+        "attempt",
+        "effort",
+        "failure-class",
+        "fast-mode",
+        "host"
+      ],
+      "emptyValue": [
+        "attempt",
+        "effort",
+        "failure-class",
+        "fast-mode",
+        "host"
+      ],
+      "emptyEq": [
+        "attempt",
+        "effort",
+        "failure-class",
+        "fast-mode"
+      ]
+    },
+    {
+      "verb": "resolve-granularity",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "granularity": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true
+    },
+    {
+      "verb": "resolve-model",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "resolve-package-manager",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "restore-custom-files",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "apply": "boolean",
+        "config-dir": "repeatable"
+      },
+      "required": [
+        "config-dir"
+      ],
+      "workstreamScoped": false,
+      "nonEmpty": [
+        "config-dir"
+      ]
+    },
+    {
+      "verb": "review-lane.availability",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "review-lane.dispatch-step",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "base-sha": "value",
+        "cap-id": "value",
+        "depth": "value",
+        "explicit": "value",
+        "point": "value",
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "review-lane.explicit-from-argv",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "passthroughAfter": "--"
+    },
+    {
+      "verb": "review-lane.flags",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "review-lane.invoke",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "agent": "value",
+        "as": "value",
+        "explicit": "boolean",
+        "json": "boolean",
+        "model": "value",
+        "prompt-file": "value",
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value",
+        "slug": "value"
+      },
+      "required": [
+        "slug"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "review-lane.plan",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "review-lane.sections",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "repo-root": "value",
+        "run-dir": "value",
+        "selected": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "runtime-identity",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "scaffold",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "name": "multiword",
+        "phase": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "select-revert-commits",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "phase": "value",
+        "plan": "value",
+        "range": "value"
+      },
+      "required": [
+        "range"
+      ],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "skills-root",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "stamp-codebase-map",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "files": "value-or-bare"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "state-snapshot",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "stats.json",
+      "aliases": [
+        "stats json"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "summary-extract",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "fields": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "teams-status",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "active": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "template.fill",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {
+        "fields": "value",
+        "name": "value",
+        "phase": "value",
+        "plan": "value",
+        "type": "value",
+        "wave": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "template.select",
+      "aliases": [
+        "template select"
+      ],
+      "positionals": 3,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "todo.complete",
+      "aliases": [
+        "todo complete"
+      ],
+      "positionals": 3,
+      "flags": {
+        "dry-run": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "freePositionals": true,
+      "rejectShortFlags": true
+    },
+    {
+      "verb": "todo.match-phase",
+      "aliases": [
+        "todo match-phase"
+      ],
+      "positionals": 3,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "uat.classify-coverage",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "file": "value",
+        "summary": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "uat.complete-session",
+      "aliases": [
+        "uat complete-session"
+      ],
+      "positionals": 3,
+      "flags": {
+        "message": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "uat.render-checkpoint",
+      "aliases": [
+        "uat render-checkpoint"
+      ],
+      "positionals": 2,
+      "flags": {
+        "file": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "update-context",
+      "aliases": [],
+      "positionals": 1,
+      "flags": {
+        "config-dir": "value",
+        "json": "boolean",
+        "runtime": "value"
+      },
+      "required": [],
+      "workstreamScoped": false,
+      "eq": [
+        "config-dir",
+        "runtime"
+      ],
+      "nonEmpty": [
+        "config-dir",
+        "runtime"
+      ],
+      "emptyValue": [
+        "config-dir",
+        "runtime"
+      ],
+      "emptyEq": [
+        "config-dir",
+        "runtime"
+      ]
+    },
+    {
+      "verb": "user-story.validate",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "story": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "verify-path-exists",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "verify-summary",
+      "aliases": [
+        "verify summary",
+        "verify.summary"
+      ],
+      "positionals": 2,
+      "flags": {
+        "check-count": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "websearch",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "freshness": "value",
+        "limit": "value"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.complete",
+      "aliases": [
+        "workstream complete"
+      ],
+      "positionals": 3,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.create",
+      "aliases": [
+        "workstream create"
+      ],
+      "positionals": 3,
+      "flags": {
+        "migrate-name": "value",
+        "no-migrate": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.get",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.list",
+      "aliases": [
+        "workstream list"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.progress",
+      "aliases": [
+        "workstream progress"
+      ],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.set",
+      "aliases": [
+        "workstream set"
+      ],
+      "positionals": 3,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "workstream.status",
+      "aliases": [],
+      "positionals": 3,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    }
+  ],
+  "undeclared": [
+    "agent",
+    "agent.classify-failure",
+    "audit-open",
+    "audit-uat",
+    "capability",
+    "check",
+    "check.decision-coverage-plan",
+    "check.decision-coverage-verify",
+    "claude-orchestration",
+    "config-ensure-section",
+    "config-get",
+    "config-set-model-profile",
+    "docs-init",
+    "estimate-calibrate",
+    "estimate-calibration",
+    "estimate-check",
+    "eval",
+    "eval.score",
+    "extract-messages",
+    "find-phase",
+    "from-gsd2",
+    "gap-analysis",
+    "generate-claude-md",
+    "generate-claude-profile",
+    "generate-dev-preferences",
+    "generate-slug",
+    "git",
+    "graphify",
+    "init",
+    "init.autonomous",
+    "init.code-review",
+    "init.complete-milestone",
+    "init.debug",
+    "init.discuss-phase-assumptions",
+    "init.docs-update",
+    "init.execute-phase",
+    "init.ingest-docs",
+    "init.list-workspaces",
+    "init.manager",
+    "init.map-codebase",
+    "init.milestone-op",
+    "init.new-milestone",
+    "init.new-project",
+    "init.new-workspace",
+    "init.onboard",
+    "init.phase-op",
+    "init.plan-phase",
+    "init.progress",
+    "init.quick",
+    "init.quick-batch",
+    "init.remove-workspace",
+    "init.resume",
+    "init.review",
+    "init.todos",
+    "init.transition",
+    "init.update",
+    "init.verify-work",
+    "intel",
+    "milestone.release-tags",
+    "phase",
+    "phase.add",
+    "phase.add-batch",
+    "phase.complete",
+    "phase.insert",
+    "phase.list-plans",
+    "phase.mvp-mode",
+    "phase.next-decimal",
+    "phase.remove",
+    "phase.scaffold",
+    "phase.uat-passed",
+    "phases",
+    "phases.archive",
+    "phases.clear",
+    "phases.list",
+    "planning",
+    "profile-questionnaire",
+    "profile-sample",
+    "quick-batch",
+    "refactor",
+    "requirements",
+    "requirements.mark-complete",
+    "requirements.ready-ids",
+    "requirements.revert-phase",
+    "roadmap",
+    "roadmap.analyze",
+    "roadmap.annotate-dependencies",
+    "roadmap.get-phase",
+    "roadmap.milestone-scope",
+    "roadmap.update-plan-progress",
+    "roadmap.upgrade",
+    "roadmap.validate",
+    "scan-sessions",
+    "skill-manifest",
+    "smart-entry",
+    "state",
+    "state.add-blocker",
+    "state.add-decision",
+    "state.add-roadmap-evolution",
+    "state.advance-plan",
+    "state.begin-phase",
+    "state.get",
+    "state.json",
+    "state.load",
+    "state.milestone-switch",
+    "state.patch",
+    "state.planned-phase",
+    "state.prune",
+    "state.rebuild",
+    "state.record-metric",
+    "state.record-session",
+    "state.resolve-blocker",
+    "state.signal-resume",
+    "state.signal-waiting",
+    "state.sync",
+    "state.update",
+    "state.update-progress",
+    "state.validate",
+    "task",
+    "task.is-behavior-adding",
+    "validate",
+    "validate.agents",
+    "validate.consistency",
+    "validate.context",
+    "validate.health",
+    "verification",
+    "verify",
+    "verify.artifacts",
+    "verify.codebase-drift",
+    "verify.commits",
+    "verify.context-drift",
+    "verify.key-links",
+    "verify.phase-completeness",
+    "verify.plan-structure",
+    "verify.references",
+    "verify.schema-drift",
+    "windows",
+    "worktree",
+    "write-profile"
+  ]
+}
