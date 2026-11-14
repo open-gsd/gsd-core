@@ -767,20 +767,29 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
     assert.match(diagnostics[0].remedy.args.command, /state prune/);
     assert.match(diagnostics[0].remedy.args.command, /milestone archive-quick <version>/);
     // The remedy must not promise more than the tools do (#5830 review):
-    // state prune never touches Quick Tasks, archive-quick needs a task
-    // directory, and its reset drops EVERY data row (resetQuickTaskRows never
-    // reads the Directory cell), so directory-less /gsd-fast rows in a mixed
-    // table must be copied out before it runs (#5882 review).
-    assert.match(diagnostics[0].remedy.args.command, /does not touch the Quick Tasks table/);
-    assert.match(diagnostics[0].remedy.args.command, /only when at least one task directory exists/);
+    // state prune never touches Quick Tasks; archive-quick resets the table
+    // whenever ANY directory exists under .planning/quick/ (rows linking to it
+    // or not), and its reset drops EVERY data row (resetQuickTaskRows never
+    // reads the Directory cell), so directory-less /gsd-fast rows must be
+    // copied out before it runs (#5882 review). The behavior these sentences
+    // describe is pinned in tests/milestone-archive.test.cjs
+    // (quickArchiveResetDependsOnDirectoriesNotRows).
+    const remedy = diagnostics[0].remedy.args.command;
+    assert.match(remedy, /does not touch the Quick Tasks table/);
     assert.ok(
-      diagnostics[0].remedy.args.command.includes(
-        'In a mixed table, the reset after archival also deletes rows without a task directory (logged by /gsd-fast), ' +
+      remedy.includes(
+        'The reset runs whenever at least one directory exists under .planning/quick/, whether or not a row links to it, ' +
+        'and it deletes every row, including rows without a task directory (logged by /gsd-fast), ' +
         'so copy them out (or trim them) before running archive-quick.',
       ),
-      'remedy warns that archive-quick deletes directory-less rows in a mixed table',
+      'remedy states the directory-on-disk trigger and that directory-less rows are deleted',
     );
-    assert.doesNotMatch(diagnostics[0].remedy.args.command, /have no archive command/);
+    assert.ok(
+      remedy.includes('When .planning/quick/ holds no directory, archive-quick leaves the table alone'),
+      'remedy states the no-op case in terms of directories on disk',
+    );
+    assert.doesNotMatch(remedy, /have no archive command/);
+    assert.doesNotMatch(remedy, /no row has a task directory/);
   });
 
   test('W031 counts CRLF lines the same as LF lines', (t) => {

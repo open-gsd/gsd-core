@@ -410,11 +410,14 @@ const RULE_W026: Rule = {
  * acts. The remedy names what each tool really covers: `state prune` archives
  * Decisions/Recently Completed but never the Quick Tasks table, and
  * `milestone archive-quick <version>` (#2142, the command `/gsd-cleanup`
- * calls, opt-in) resets that table only when it moves at least one
- * `.planning/quick/` task directory. That reset (`resetQuickTaskRows`)
- * drops every data row, so in a mixed table it also deletes the rows with
- * no directory (`/gsd-fast`), whose text is archived nowhere; the remedy
- * says to copy them out (or trim them) BEFORE running `archive-quick`.
+ * calls, opt-in) resets that table whenever it moves at least one directory
+ * from `.planning/quick/`. The trigger is the directories on disk, not the
+ * rows: `listQuickTaskDirsForArchive` never checks whether a row links to a
+ * directory. That reset (`resetQuickTaskRows`) drops every data row without
+ * reading the Directory cell, so it also deletes the rows with no directory
+ * (`/gsd-fast`), whose text is archived nowhere, even when no row links to
+ * any of the moved directories; the remedy says to copy them out (or trim
+ * them) BEFORE running `archive-quick`.
  * Fires only when the file is MORE than 3x the target, so a file modestly
  * over the target stays quiet.
  */
@@ -437,11 +440,12 @@ const RULE_W031: Rule = {
           `${STATE_MD_LINE_TARGET}-line target — it is a digest, not an archive`,
         remedy: adviseRemedy(
           'Run `gsd-tools state prune` to archive old Decisions/Recently Completed entries (it does not touch the Quick Tasks table). ' +
-          'For the Quick Tasks table, `gsd-tools milestone archive-quick <version>` moves the .planning/quick/ task directories into ' +
-          'milestones/<version>-quick/ and resets the table, but only when at least one task directory exists. ' +
-          'In a mixed table, the reset after archival also deletes rows without a task directory (logged by /gsd-fast), ' +
+          'For the Quick Tasks table, `gsd-tools milestone archive-quick <version>` moves every directory under .planning/quick/ into ' +
+          'milestones/<version>-quick/ and then resets the table. ' +
+          'The reset runs whenever at least one directory exists under .planning/quick/, whether or not a row links to it, ' +
+          'and it deletes every row, including rows without a task directory (logged by /gsd-fast), ' +
           'so copy them out (or trim them) before running archive-quick. ' +
-          'When no row has a task directory, archive-quick leaves the table alone, so trim it by hand',
+          'When .planning/quick/ holds no directory, archive-quick leaves the table alone, so trim it by hand',
         ),
       },
     ];
