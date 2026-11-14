@@ -2039,7 +2039,7 @@ describe('regressions: workflows forward the started workstream to agent-skills 
   // predates this and keeps its own persisted GSD_WS_ARG file; its calls are
   // held to the same forwarding rule through the `viaFile` branch below.)
   const CANONICAL_PARSE =
-    'GSD_WS=$(echo " $GSD_ARGS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
+    'GSD_WS=$(echo " $GSD_ARGS" | sed -nE \'s/.* --ws +"?([A-Za-z0-9][A-Za-z0-9._-]*)"?.*/--ws \\1/p\' | head -n 1)';
   // The single-token call-site expansion: `--ws=<name>` or nothing. One token
   // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
   const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';

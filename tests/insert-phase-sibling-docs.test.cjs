@@ -194,21 +194,18 @@ describe('#5583 insert-phase --sibling', () => {
     test('a table row reads a workstream in both blocks', () => {
       assert.deepEqual(wsPair(read(WF), '15.2 --ws feature x'), ['[--ws=feature]', '[--ws=feature]', '[--ws=feature][--ws=feature]']);
     });
-    test('a mutated sed in one block makes the two disagree', () => {
-      const text = read(WF);
-      const fenceSed = blocks(text)[1].split('\n').find((l) => l.startsWith('GSD_WS=$('));
-      const mutated = text.replace(fenceSed, () => fenceSed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*'));
-      const [a, b] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
-      assert.notEqual(a, b);
-    });
-    test('a mutated sed in the state block makes it disagree with the fence', () => {
-      const text = read(WF);
-      const stateSed = blocks(text)[2].split('\n').find((l) => l.startsWith('GSD_WS=$('));
-      const at = text.lastIndexOf(stateSed); // the sed lines are identical: mutate the last one, in the state block
-      const mutated = text.slice(0, at) + stateSed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*') + text.slice(at + stateSed.length);
-      const [, b, c] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
-      assert.notEqual(c, b.repeat(STATE_CALLS));
-    });
+    // the three sed lines are identical: mutate the nth one (init block, insert fence, state block)
+    for (const [n, name] of [[0, 'init block'], [1, 'insert fence'], [2, 'state block']]) {
+      test('a mutated sed in the ' + name + ' makes the blocks disagree', () => {
+        const text = read(WF);
+        const sed = blocks(text)[n].split('\n').find((l) => l.startsWith('GSD_WS=$('));
+        let at = -1;
+        for (let i = 0; i <= n; i++) at = text.indexOf(sed, at + 1);
+        const mutated = text.slice(0, at) + sed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*') + text.slice(at + sed.length);
+        const [a, b, c] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
+        assert.ok(!(a === b && c === b.repeat(STATE_CALLS)), 'the parity table must catch it');
+      });
+    }
   });
 
   test('workflow documents nest-by-default and the top-level fallback', () => {
