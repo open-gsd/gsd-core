@@ -1149,9 +1149,32 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
       const fm = extractFrontmatter(content, safeFilePath);
       // #5118: the owner's report reader judges `status` — exact match, no
       // case folding; an out-of-set value throws VerificationStatusError.
-      const status = reportStatusOf(fm, safeFilePath);
+      //
+      // #6172: that refusal (ADR-5057) belongs to the ACTIVE phases root,
+      // where the author can fix the report. An archived milestone's report
+      // is history: one stale status there must not abort the whole audit
+      // (and with it /gsd-complete-milestone's pre-close gate), so for an
+      // archived target the out-of-set value becomes ONE open item carrying
+      // the raw status, and the scan moves on. The closed-set reader itself
+      // is unchanged.
+      let status: string | null;
+      let outOfSet = false;
+      try {
+        status = reportStatusOf(fm, safeFilePath);
+      } catch (err) {
+        if (!(err instanceof VerificationStatusError) || target.milestone === undefined) throw err;
+        outOfSet = true;
+        // Raw, not the reader's trimmed value, and lowercased: this is the
+        // exact value `cmdAuditAcknowledge` snapshots for verification_gaps
+        // (`fm.status.toLowerCase()`), so an acknowledged item matches.
+        // `fm.status` may be a non-string (list/map/number): JSON keeps it a
+        // displayable string rather than throwing on `.toLowerCase`.
+        const rawStatus = fm['status'];
+        status = (typeof rawStatus === 'string' ? rawStatus : JSON.stringify(rawStatus)).toLowerCase();
+      }
 
-      if (status !== VERIFICATION_STATUS.GAPS_FOUND && status !== VERIFICATION_STATUS.HUMAN_NEEDED) continue;
+      if (status === null) continue;
+      if (!outOfSet && status !== VERIFICATION_STATUS.GAPS_FOUND && status !== VERIFICATION_STATUS.HUMAN_NEEDED) continue;
 
       if (isAuditItemAcknowledged(fm, { snapshotKey: 'status', currentValue: status })) {
         acknowledged++;
@@ -1161,7 +1184,9 @@ function scanVerificationGaps(planDir: string, cwd: string): ScanOutcome<Verific
       const item: VerificationGapItem = {
         phase: sanitizeLabel(phaseNum),
         file: sanitizeLabel(file),
-        status: sanitizeForDisplay(status),
+        // An out-of-set status is raw, author-controlled content that lands in
+        // a one-line report: escape control bytes (ESC, CR, LF) visibly first.
+        status: sanitizeForDisplay(outOfSet ? sanitizeLabel(status) : status),
       };
       if (target.milestone !== undefined) item.archived_milestone = sanitizeLabel(target.milestone);
       results.push(item);
