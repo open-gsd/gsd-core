@@ -2172,7 +2172,9 @@ The intent is the same as the Claude profile tiers -- use a stronger model for p
 |-------|----------|----------|
 | `false` (default) | Returns Claude aliases (`opus`, `sonnet`, `haiku`) | Claude Code with native Anthropic API |
 | `true` | Maps aliases to full Claude model IDs (`claude-opus-4-8`) | Claude Code with API that requires full IDs |
-| `"omit"` | Claude protection: yields an empty string when no runtime identity is known (or the value fails recognition); a runtime identified by its install marker resolves its own tier map instead | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo) |
+| `"omit"` | Never emits a full model ID. A runtime whose descriptor declares native tier aliases (`hostBehaviors.nativeModelAliases` — Claude Code) gets the profile's tier alias (`opus` / `sonnet` / `haiku`); a runtime identified by config, environment, or install marker that has a tier map resolves that map; every other runtime gets an empty string, and spawn sites omit `model=` | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo), or mixed-runtime projects that must not carry Claude model IDs |
+
+**`"omit"` on Claude Code.** An explicit project `resolve_model_ids: "omit"` still keeps full model IDs out of the result, but every agent is spawned on its profile tier: `resolve-model gsd-codebase-mapper` under `model_profile: "quality"` returns `{"model":"sonnet",…,"tier":"sonnet"}`, not a blank. A blank `model` would leave the choice to Claude Code — `CLAUDE_CODE_SUBAGENT_MODEL` when it is set, otherwise the session model — so the profile's routing would be lost. Under `"omit"` the tier alias takes precedence over `model_profile_overrides.claude.<tier>` pins and `dynamic_routing.tier_models`, because both name concrete models. `model_profile: "inherit"` and agents with no catalog entry still resolve to an empty string. A `"omit"` that comes only from the shared `~/.gsd/defaults.json` is ignored on Claude Code, as before.
 
 #### OpenCode 1.x and 2.x
 
@@ -2201,7 +2203,7 @@ commas, so annotations survive install, update and uninstall. It writes the `mcp
 
 `node gsd-tools.cjs query resolve-model <agent> --pick tier` returns the tier GSD resolved for that agent, independent of `resolve_model_ids`: `opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`. It is also emitted as a `tier` key in the command's full JSON output.
 
-`tier` is computed above the `resolve_model_ids: "omit"` gate, so it stays meaningful exactly where `model` does not — every non-Claude install (blank under `"omit"`) and any install where the runtime's tier map substitutes a name (e.g. `gpt-5.6-luna` for the haiku tier on Codex).
+`tier` is computed above the `resolve_model_ids: "omit"` gate, so it stays meaningful exactly where `model` does not — every runtime without native tier aliases or a tier map (blank under `"omit"`) and any install where the runtime's tier map substitutes a name (e.g. `gpt-5.6-luna` for the haiku tier on Codex).
 
 `tier` accounts for every step that can change which tier runs, including a `model_policy` preset — a preset resolves after the profile tier and can dispatch a different one, so `model_policy: {provider: anthropic, budget: low}` under a `balanced` profile reports `haiku`, not `sonnet`.
 
@@ -2275,7 +2277,7 @@ On the Claude runtime, tier resolution stays on Claude Code's adaptive tier alia
 
 1. `model_overrides[<agent>]` — explicit per-agent ID always wins.
 2. **Runtime-aware tier resolution** (this section) — when `runtime` is set and profile is not `inherit`. On non-Claude runtimes this is the built-in tier map merged with your `model_profile_overrides`; on the Claude runtime it applies only the `model_profile_overrides.claude.<tier>` entry you set (#4192) — never the built-in defaults, so unpinned installs keep resolving aliases.
-3. `resolve_model_ids: "omit"` — an explicit project-level `"omit"` yields an empty string unless the runtime identity (config, environment, or install marker) names a recognized non-Claude runtime, whose own tier map then applies.
+3. `resolve_model_ids: "omit"` — when the runtime identity (config, environment, or install marker) names a recognized non-Claude runtime, its own tier map applies. Otherwise an explicit project-level `"omit"` yields the profile's tier alias on a runtime with native tier aliases (Claude Code), and an empty string everywhere else.
 4. Claude-native default — `model_profile` tier as alias (current default).
 5. `inherit` — propagates literal `inherit` for `Task(model="inherit")` semantics.
 
