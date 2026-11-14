@@ -69,7 +69,7 @@ GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/
 GSD_F=1; GSD_A=; GSD_S=; GSD_P=; GSD_D=
 while IFS= read -r GSD_T; do
   GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue
-  if [ "$GSD_F$GSD_T" = 1--insert ]; then GSD_F=; continue; fi; GSD_F=
+  if [ -n "$GSD_F" ] && [ "$GSD_T" = --insert ]; then GSD_F=; continue; fi; GSD_F=
   if [ -n "$GSD_P" ]; then GSD_P=
   elif [ "$GSD_T" = --sibling ]; then GSD_S=1
   elif [ "$GSD_T" = --ws ]; then GSD_P=1

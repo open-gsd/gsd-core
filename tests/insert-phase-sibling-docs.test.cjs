@@ -109,6 +109,7 @@ describe('#5583 insert-phase --sibling', () => {
       ['15.2 x', ['[15.2]', '[x]']],
       ['--insert 15.2 --sibling x', ['[15.2]', '[--sibling]', '[x]']],
       ['--insert 5 fix --insert flag', ['[5]', '[fix --insert flag]']],
+      ['5 fix 1--insert', ['[5]', '[fix 1--insert]']],
       ['15.2 --sibling "x"', ['[15.2]', '[--sibling]', '[x]']],
       ['5 "Critical security fix"', ['[5]', '[Critical security fix]']],
       ["5 don't 'stop'", ['[5]', "[don't 'stop']"]],
