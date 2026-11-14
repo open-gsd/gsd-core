@@ -28,11 +28,13 @@ const { runGsdTools, cleanup } = require('./helpers.cjs');
 const {
   resolveModelInternal,
   resolveModelForTier,
+  resolveProviderEscalation,
   resolveTierInternal,
   _resetInstallRuntimeMarkerCacheForTests,
 } = require('../gsd-core/bin/lib/model-resolver.cjs');
-const { MODEL_PROFILES, RUNTIME_PROFILE_MAP, VALID_PROFILES, AGENT_TO_PHASE_TYPE, VALID_TIERS } =
+const { MODEL_PROFILES, RUNTIME_PROFILE_MAP, VALID_PROFILES, AGENT_TO_PHASE_TYPE, VALID_TIERS, catalog } =
   require('../gsd-core/bin/lib/model-catalog.cjs');
+const { AGENT_DEFAULT_TIERS, nextTier } = require('../gsd-core/bin/lib/model-profiles.cjs');
 const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const { runtimes: REGISTRY_RUNTIMES } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
@@ -246,8 +248,7 @@ describe('#3703: spawn-site payloads carry the alias (the issue reproduction)', 
   });
 
   test('resolve-model --pick model is the alias even with CLAUDE_CODE_SUBAGENT_MODEL set', () => {
-    // Guards a future read: the env var is host-side (Claude Code), the profile alias must not depend on it.
-    dir =mkProject({ model_profile: 'quality', resolve_model_ids: 'omit' });
+    dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit' });
     const model = cli(dir, 'query resolve-model gsd-planner --pick model', { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }).trim();
     assert.strictEqual(model, 'opus');
   });
@@ -316,6 +317,9 @@ describe('#3703: dynamic_routing under omit escalates by tier alias', () => {
     dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DR });
     // #3703: under omit on claude, routing escalates by tier alias.
     assert.strictEqual(resolveForTierIn(dir, MAPPER, 'claude', 0), 'haiku');
+    for (const agent of AGENTS) {
+      assert.strictEqual(resolveForTierIn(dir, agent, 'claude', 0), resolveIn(dir, agent, 'claude'), agent);
+    }
   });
 
   test('escalation at max_escalations-1, max_escalations, max_escalations+1 (default 1)', () => {
@@ -340,6 +344,23 @@ describe('#3703: dynamic_routing under omit escalates by tier alias', () => {
     dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: { ...DR, escalate_on_failure: false } });
     // #3703: under omit on claude, routing escalates by tier alias.
     assert.strictEqual(resolveForTierIn(dir, MAPPER, 'claude', 1), 'haiku');
+  });
+
+  test('max_escalations 0 pins the first routed alias', () => {
+    dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: { ...DR, max_escalations: 0 } });
+    assert.deepStrictEqual(
+      [0, 1].map((a) => resolveForTierIn(dir, MAPPER, 'claude', a)),
+      ['haiku', 'haiku'],
+    );
+  });
+
+  test('an omit only in the shared defaults is ignored on claude, so routing returns tier_models ids', () => {
+    dir = mkProject({ model_profile: 'quality', dynamic_routing: DR });
+    // loadConfig reads <GSD_HOME>/.gsd/defaults.json; withEnv points GSD_HOME at dir.
+    fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
+    assert.strictEqual(resolveIn(dir, MAPPER, 'claude'), 'claude-haiku-4-5');
+    assert.strictEqual(resolveForTierIn(dir, MAPPER, 'claude', 1), 'claude-sonnet-4-5');
   });
 
   test('a heavy-routed agent stays opus on escalation', () => {
@@ -395,7 +416,7 @@ describe('#3703: property — under omit on a native runtime, no attempt yields 
 
   const DR = { enabled: true, tier_models: { light: 'claude-haiku-4-5', standard: 'claude-sonnet-4-5', heavy: 'claude-opus-4-8' } };
 
-  test('fc: under omit on a native runtime, no attempt ever yields a tier_models id', () => {
+  test('fc: under omit on a native runtime, the result is exactly the escalated tier alias', () => {
     fc.assert(fc.property(
       fc.constantFrom(...VALID_PROFILES),
       fc.constantFrom(...AGENTS),
@@ -409,9 +430,69 @@ describe('#3703: property — under omit on a native runtime, no attempt yields 
           dynamic_routing: { ...DR, max_escalations: maxEscalations },
         });
         const result = resolveForTierIn(dir, agent, runtime, attempt);
-        assert.ok(result === '' || ALIAS_TIERS.has(result), `${agent}/${profile}: got ${JSON.stringify(result)}`);
+        // The config has no models.<phase> override, so tierIn is the profile tier.
+        const profileTier = tierIn(dir, agent, runtime);
+        let expected;
+        if (!ALIAS_TIERS.has(profileTier)) {
+          expected = '';
+        } else if (AGENT_DEFAULT_TIERS[agent] === undefined) {
+          expected = profileTier;
+        } else {
+          let walked = AGENT_DEFAULT_TIERS[agent];
+          for (let i = 0; i < Math.min(attempt, maxEscalations); i += 1) {
+            const next = nextTier(walked);
+            if (!next || next === walked) break;
+            walked = next;
+          }
+          expected = catalog.adaptiveTierMap[walked];
+        }
+        assert.strictEqual(result, expected, `${agent}/${profile}/${runtime} attempt ${attempt} max ${maxEscalations}`);
         assert.ok(!Object.values(DR.tier_models).includes(result), `${agent}: leaked a tier_models id ${result}`);
       },
     ));
+  });
+});
+
+describe('#3703: provider_escalation under omit', () => {
+  let dir;
+  afterEach(() => { if (dir) cleanup(dir); dir = null; });
+
+  const DR = { enabled: true, tier_models: { light: 'claude-haiku-4-5', standard: 'claude-sonnet-4-5', heavy: 'claude-opus-4-8' } };
+  const PE = { ...DR, provider_escalation: ['gpt-x', 'gemini-y'] };
+  const MAPPER = 'gsd-codebase-mapper';
+
+  function ladder(cwd, runtime, attempt) {
+    return withEnv(cwd, runtime, {}, () => resolveProviderEscalation(cwd, MAPPER, attempt, true));
+  }
+
+  test('claude + omit keeps the tier alias and does not swap providers', () => {
+    dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: PE });
+    const r = ladder(dir, 'claude', 1);
+    assert.strictEqual(r.to, 'haiku');
+    assert.strictEqual(r.escalated, false);
+  });
+
+  test('every non-native runtime without a tier map stays blank under omit', () => {
+    dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: PE });
+    for (const rt of NON_NATIVE_NO_MAP) {
+      const r = ladder(dir, rt, 1);
+      assert.strictEqual(r.to, '', rt);
+      assert.strictEqual(r.escalated, false, rt);
+    }
+  });
+
+  test('control: claude without omit walks the ladder (boundary at the cap)', () => {
+    dir = mkProject({ model_profile: 'quality', dynamic_routing: PE });
+    const first = ladder(dir, 'claude', 1);
+    assert.strictEqual(first.to, 'gpt-x');
+    assert.strictEqual(first.escalated, true);
+    writeProjectConfig(dir, { model_profile: 'quality', dynamic_routing: { ...PE, max_escalations: 2 } });
+    assert.strictEqual(ladder(dir, 'claude', 2).to, 'gemini-y');
+  });
+
+  test('the resolve-execution CLI keeps the alias on a quota-exceeded failure under omit', () => {
+    dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: PE });
+    const parsed = JSON.parse(cli(dir, `resolve-execution ${MAPPER} --attempt 1 --failure-class quota-exceeded`));
+    assert.strictEqual(parsed.model, 'haiku');
   });
 });
