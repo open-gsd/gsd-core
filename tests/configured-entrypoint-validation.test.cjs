@@ -980,10 +980,9 @@ test('#5888 the #5100 win32 install probe is independent of a WSL host', (t) => 
     else process.env.WSL_DISTRO_NAME = saved;
   });
   const probe = gsd5100RunWin32InstallProbe(t, 'claude', { preamble: GSD_5888_FAKE_WSL_HOST });
-  assert.ok(
-    probe.unresolvedBash > 0,
-    `the win32 install probe must reach install() on a WSL host; got ${JSON.stringify(probe)}`,
-  );
+  // Reaching install() at all is the point; since #5850 claude registers PowerShell hooks there.
+  assert.ok(probe.total > 0, `the win32 install probe must reach install() on a WSL host; got ${JSON.stringify(probe)}`);
+  assert.equal(probe.unresolvedBash, 0, `claude portable hooks must not require bash; got ${JSON.stringify(probe)}`);
 });
 
 // #5888 positive control: without the probe's isolation stubs, the faked-win32
