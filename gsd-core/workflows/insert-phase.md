@@ -13,7 +13,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
-- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description; the insert_phase step drops a leading `--insert`, word-splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh), drops the double quotes around each word and forwards every word as typed; the CLI router owns `--sibling` and `--ws <name>`
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description, like `--ws <name>`. The insert_phase step drops a leading `--insert`, splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh) and drops double quotes around each word (single quotes stay). It passes the after-phase, `--sibling` and `--ws=<name>` as their own arguments and the other words, in order and joined by single spaces, as ONE description argument, so a description word such as `-h`, `--raw` or `--cwd` is never read as a CLI flag
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
@@ -64,8 +64,18 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_F=1; set --; while IFS= read -r GSD_T; do GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue; [ "$GSD_F$GSD_T" = 1--insert ] || set -- "$@" "$GSD_T"; GSD_F=; done <<<"$(printf '%s\n' "$GSD_ARGS" | tr -s '[:space:]' '\n')"
-RESULT=$(gsd_run query phase.insert "$@")
+GSD_L=$(printf '%s\n' "$GSD_ARGS" | tr -s '[:space:]' '\n')
+GSD_F=1; GSD_A=; GSD_S=; GSD_W=; GSD_P=; GSD_D=
+while IFS= read -r GSD_T; do
+  GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue
+  if [ "$GSD_F$GSD_T" = 1--insert ]; then GSD_F=; continue; fi; GSD_F=
+  if [ -n "$GSD_P" ]; then GSD_W=$GSD_T; GSD_P=
+  elif [ "$GSD_T" = --sibling ]; then GSD_S=1
+  elif [ "$GSD_T" = --ws ]; then GSD_P=1
+  elif [ -z "$GSD_A" ]; then GSD_A=$GSD_T
+  else GSD_D="${GSD_D:+$GSD_D }$GSD_T"; fi
+done <<<"$GSD_L"
+RESULT=$(gsd_run query phase.insert ${GSD_W:+--ws="$GSD_W"} "$GSD_A" ${GSD_S:+--sibling} "$GSD_D")
 ```
 
 The CLI handles:

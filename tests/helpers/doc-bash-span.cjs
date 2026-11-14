@@ -33,7 +33,7 @@ function span(relFile, from, through) {
 }
 
 /**
- * Run `lines` under bash with `gsd_run` stubbed to print `stdout` and return `rc`. `setE` runs them
+ * Run `lines` under `shell` (default bash) with `gsd_run` stubbed to print `stdout` and return `rc`. `setE` runs them
  * under `set -e`; `preamble` lines (variable seeds) run first; `probe` runs last (read variables).
  */
 function runBash(lines, { stdout, rc }, { setE = true, preamble = [], probe = '', shell = 'bash' } = {}) {
