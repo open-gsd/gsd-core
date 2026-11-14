@@ -3318,7 +3318,7 @@ including license notices, so installed runtimes need no `node_modules`.
 
 **Composition:** `model_overrides` always wins; `dynamic_routing.tier_models[<tier>]` resolves above `models.<phase_type>` and `model_profile`.
 
-Under an explicit project `resolve_model_ids: "omit"` on Claude Code, routing still picks and escalates the tier, but the resolver returns that tier's alias (`haiku` / `sonnet` / `opus`) rather than the `tier_models` value (#3703). On a runtime without native tier aliases or a tier map, an applied `"omit"` stays blank on every attempt.
+Under an explicit project `resolve_model_ids: "omit"` on Claude Code, routing still picks and escalates the tier, but the resolver returns that tier's alias (`haiku` / `sonnet` / `opus`) rather than the `tier_models` value (#3703). On a runtime without native tier aliases or a tier map, an applied `"omit"` stays blank on every attempt. `provider_escalation` is skipped in both cases.
 
 **Requirements:**
 - REQ-DYNROUTE-01: `dynamic_routing.enabled` acts as a master switch; when `false` or block is absent, zero behavior change.
