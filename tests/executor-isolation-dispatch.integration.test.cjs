@@ -133,8 +133,12 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const root = path.join(tempDir(t), 'orch');
     const prompt = `${GUARDED}aÿb\n`;
     fs.writeFileSync(create(root), prompt);
-    // GNU tr cannot show the macOS fault, so the stubs fail unless the call carries LC_ALL=C, as BSD tr does on such a byte.
-    const stubs = ['tr', 'wc'].map((cmd) => `${cmd}() { [ "\${LC_ALL:-}" = C ] || return 1; command ${cmd} "$@"; }`).join('\n');
+    // GNU tr cannot show the macOS fault, so the stubs misbehave unless the call carries LC_ALL=C, as BSD tr does on such a byte: tr stops
+    // after two bytes, wc reports one byte too few. A failing stub would not do: an empty count skips the compare, so the test would stay green.
+    const stubs = [
+      'tr() { if [ "${LC_ALL:-}" = C ]; then command tr "$@"; else command tr "$@" | command head -c 2; fi; }',
+      'wc() { if [ "${LC_ALL:-}" = C ]; then command wc "$@"; else echo $(( $(command wc "$@") - 1 )); fi; }',
+    ].join('\n');
     const r = runBlock(root, `${stubs}\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.exitCode, 0, r.stderr);
     assert.equal(r.stdout, prompt, 'the prompt must reach the executor unchanged');
