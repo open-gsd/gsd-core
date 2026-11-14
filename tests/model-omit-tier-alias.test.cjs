@@ -82,7 +82,7 @@ function resolveIn(dir, agent, runtime, extra = {}) {
 }
 
 function cli(dir, args, env = {}) {
-  const r = runGsdTools(args, dir, { HOME: dir, USERPROFILE: dir, GSD_HOME: dir,GSD_RUNTIME: 'claude', CLAUDE_CODE_SUBAGENT_MODEL: '', ...env });
+  const r = runGsdTools(args, dir, { HOME: dir, USERPROFILE: dir, GSD_HOME: dir, GSD_RUNTIME: 'claude', CLAUDE_CODE_SUBAGENT_MODEL: '', ...env });
   assert.ok(r.success, `${args} failed: ${r.error}`);
   return r.output;
 }
