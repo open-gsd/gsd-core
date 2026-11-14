@@ -243,10 +243,10 @@ function toPosixRel(rel) {
  * result stay correct against the original file. Block comments are tracked
  * across lines (`inBlock`); line comments only ever affect their own line.
  *
- * Deliberately does NOT parse string/template literal contents: a `//` or
- * `/*` embedded inside a quoted string is treated exactly like real source.
- * That cuts both ways. A `//` in a string leaves the rest of THAT line out of
- * the scan. A `/*` in a string or template literal (a glob such as
+ * Deliberately does NOT parse string, template or regex literal contents: a
+ * `//` or `/*` inside one is treated exactly like real source. That cuts
+ * both ways. A `//` in one leaves the rest of THAT line out of the scan. A
+ * `/*` in a string, template or regex literal (a glob such as
  * `` `${dir}/*-PLAN.md` ``) opens a phantom block comment that blanks EVERY
  * following line until the next block-comment closer, however many lines that
  * is, so it can over-strip real code into invisibility, including a raw
@@ -1201,8 +1201,9 @@ function boundaryAfterLine(write, index) {
  *     alias or destructured `writeFileSync`), and a call after a `//` inside a
  *     string or regex literal on its line (`stripComments` does not track
  *     them).
- *   - A block-comment opener inside a string or template literal (a glob
- *     such as `const G = 'src/<star>';`, written slash then star):
+ *   - A block-comment opener inside a string, template or regex literal (a
+ *     glob such as `const G = 'src/<star>';` or a regex such as
+ *     `s.replace(/^\/<star>/, '')`, each written slash then star):
  *     `stripComments` opens a block comment there and blanks EVERY following
  *     line up to the next block-comment closer, wherever that is (even inside
  *     another string). Scanning resumes right after that closer, on the
@@ -1216,15 +1217,17 @@ function boundaryAfterLine(write, index) {
  *     read. The class: a braceless body, on the same line or on the next
  *     line, after `if`, `else`, `else if`, `for`, `for...in`, `for...of`,
  *     `while` or `do` (`if (c) p = 'x';`, `} else p = 'y';`,
- *     `while (c)` with `p = x;` below it), and an assignment inside an
- *     expression (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The miss
- *     happens only when no line between the reassignment and the write
- *     holds `{`, `}` or `=>`, and nothing after the value on its own line
- *     holds one or names the variable (`if (c) p = 'x'; else p = 'y';` and
- *     `if (c) p = 'x'; else { q(); }` are reported). The braced forms
- *     (`if (c) { p = 'x'; }`) are reported. The KNOWN_RESOLUTION_GAPS rows
- *     pin representative forms, not every form, and each braced form has a
- *     control. A `switch` case body is not a miss.
+ *     `while (c)` with `p = x;` below it), a `switch` clause body
+ *     (`case 1: p = 'x'; break;`, or `p = 'x';` on the line below a `case`
+ *     or `default` label, with the write under a later clause), and an
+ *     assignment inside an expression (`c && (p = 'x');`,
+ *     `c ? (p = 'x') : null;`). A `{`, `}` or `=>` in the reassignment's
+ *     right-hand side, or on a line between it and the write, sends the
+ *     search on to the earlier assignment (the boundary rule,
+ *     `resolvesToStatePath`), so `if (c) p = 'x'; else { q(); }` and the
+ *     braced forms (`if (c) { p = 'x'; }`) are reported. The
+ *     KNOWN_RESOLUTION_GAPS rows pin representative forms, not every form,
+ *     and each braced form has a control.
  *   - A regex literal in the first argument holding a `)`
  *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
  *     and brackets, not regex literals. The `)` in the literal pops the depth
@@ -1252,7 +1255,9 @@ function boundaryAfterLine(write, index) {
  * target computed from the state file, a longer name such as `STATE.md.bak`,
  * a word in a template literal's text that names a statePath variable (the
  * template is read whole), a right-hand side that runs past its own `;` into
- * a later statement on that line, and a string that spells the call.
+ * a later statement on that line (`if (c) p = 'x'; else p = 'y';` is
+ * reported this way, though `p` is not STATE.md at the write), and a string
+ * that spells the call.
  *
  * Cost: the file's lines are read once per name across every write (the
  * `bindings` cache) and each write's own line once per name it resolves. A

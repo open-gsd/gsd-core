@@ -1297,6 +1297,15 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [3],
     },
     {
+      // False positive, same cause: the first branch's right-hand side runs on
+      // into the `else` and names `p`, so the scan goes back to the STATE.md
+      // assignment although both branches reassign `p`.
+      shape: 'a one-line if/else that reassigns the variable on both branches',
+      text: W("  let p = path.join(dir, 'STATE.md');", "  if (c) p = 'x'; else p = 'y';", '  fs.writeFileSync(p, c);'),
+      expected: [],
+      currentBuggyOutput: [4],
+    },
+    {
       // Missed: `p += x` is not read as an assignment, so the scan reaches `let p = dir`.
       shape: 'a += that adds the STATE.md segment',
       text: W('  let p = dir;', "  p += '/STATE.md';", '  fs.writeFileSync(p, c);'),
@@ -1541,6 +1550,12 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       expected: [3],
       currentBuggyOutput: [],
     },
+    {
+      shape: 'a /* inside a regex literal blinds every later line up to the next block-comment closer',
+      text: ["const strip = (s) => s.replace(/^\\/*/, '');", 'function w(statePath, c) {', '  fs.writeFileSync(statePath, c);', '}'].join('\n'),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
     ...[
       ['fs.promises.writeFile onto statePath', '  await fs.promises.writeFile(statePath, c);'],
       ['fs.appendFileSync onto statePath', '  fs.appendFileSync(statePath, c);'],
@@ -1618,6 +1633,24 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [],
     },
     {
+      shape: 'a braceless if reassignment hides the earlier STATE.md assignment from a write on the same line',
+      text: W(ASSIGN, "  if (c) p = 'x'; fs.writeFileSync(p, c);"),
+      expected: [3],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a switch clause reassignment hides the earlier STATE.md assignment from a write under a later clause',
+      text: W(ASSIGN, '  switch (c) {', "    case 1: p = 'x'; break;", '    case 2: fs.writeFileSync(p, c);', '  }'),
+      expected: [5],
+      currentBuggyOutput: [],
+    },
+    {
+      shape: 'a reassignment on the line below a case label hides the earlier STATE.md assignment from a write under default',
+      text: W(ASSIGN, '  switch (c) {', '    case 1:', "      p = 'x';", '    default:', '      fs.writeFileSync(p, c);', '  }'),
+      expected: [7],
+      currentBuggyOutput: [],
+    },
+    {
       shape: 'a regex literal holding ) in the first argument ends the capture early (after the next comma)',
       text: W("  fs.writeFileSync(x.replace(/\\)/g, '') + statePath, c);"),
       expected: [2],
@@ -1652,6 +1685,11 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       ['braced do-while reassignment', W(ASSIGN, '  do { p = x; } while (c);', WRITE_P), [4]],
       ['if body on the next line, braced', W(ASSIGN, '  if (c) {', "    p = 'x';", '  }', WRITE_P), [6]],
       ['call on the closer line of a phantom block comment is scanned', "const G = 'src/*';\nfoo(); */ function w(statePath,c){ fs.writeFileSync(statePath, c); }", [2]],
+      ['switch clause reassignment, write after the switch closes', W(ASSIGN, '  switch (c) {', "    case 1: p = 'x'; break;", '  }', WRITE_P), [6]],
+      ['switch clause reassignment in a braced clause body', W(ASSIGN, '  switch (c) {', "    case 1: { p = 'x'; break; }", '    case 2: fs.writeFileSync(p, c);', '  }'), [5]],
+      ['regex literal without a block-comment opener', "const strip = (s) => s.replace(/^\\/+/, '');\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [3]],
+      ['braceless if with an else block on its line (a boundary in the right-hand side)', W(ASSIGN, "  if (c) p = 'x'; else { q(); }", WRITE_P), [4]],
+      ['switch clause reassignment with a braced clause on a line before the write', W(ASSIGN, '  switch (c) {', "    case 1: p = 'x'; break;", '    case 3: { q(); }', '    case 2: fs.writeFileSync(p, c);', '  }'), [6]],
       ['expression assignment to a different name', W(ASSIGN, "  c && (q = 'x');", WRITE_P), [4]],
       ['no reassignment', W(ASSIGN, WRITE_P), [3]],
       ['regex without a ) in the first argument', W("  fs.writeFileSync(x.replace(/a/g, '') + statePath, c);"), [2]],
