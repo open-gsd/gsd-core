@@ -240,6 +240,17 @@ describe('gitChildEnv', () => {
     assert.equal(gitChildEnv(tmp(t, 'gsd-6033-nullcfg-home-')).GIT_CONFIG_GLOBAL, nullGitConfig());
   });
 
+  test('the Windows empty git config is one file per process, emptied on every call and removed at exit', (t) => {
+    const first = nullGitConfig('win32');
+    assert.equal(nullGitConfig('win32'), first, 'one file per process');
+    fs.writeFileSync(first, '[user]\n\tname = leaked\n');
+    assert.equal(fs.readFileSync(nullGitConfig('win32'), 'utf-8'), '', 'a write between two calls does not reach the next one');
+    const script = `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'lint-removed-but-needed.cjs'))}).nullGitConfig('win32')))`;
+    const childFile = probe(script, { ...SYSTEM_VARS });
+    assert.ok(!fs.existsSync(path.dirname(childFile)), 'the child removed its private dir when it exited');
+    assert.notEqual(path.dirname(childFile), path.dirname(first), 'each process has its own dir');
+  });
+
   test('gitIn and refOf run git under gitChildEnv: a hostile GIT_DIR in the parent env does not reach them', (t) => {
     const repo = tmp(t, 'gsd-6033-gitin-home-');
     const hostileDir = tmp(t, 'gsd-6033-gitin-hostile-');
