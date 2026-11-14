@@ -530,8 +530,8 @@ describe('Config Value Resolution Module (#5096)', () => {
       'git.quick_branch_template': 'sentinel/{slug}',
       'review.max_prompt_tokens': 7319,
     };
-    for (const source of ['root', 'global-defaults']) {
-      for (const section of ['workflow', 'git', 'planning', 'planner', 'review']) {
+    for (const section of ['workflow', 'git', 'planning', 'planner', 'review']) {
+      const samples = ['root', 'global-defaults'].map((source) =>
         withLayers((cwd) => {
           const schema = getCapabilityConfigSchema(cwd);
           const defaults = declaredDefaults[section];
@@ -557,21 +557,26 @@ describe('Config Value Resolution Module (#5096)', () => {
           const empty = loadConfigResolved(cwd, { persist: false }).config;
           writeLayer(cwd, source, { [section]: sentinels });
           const configured = loadConfigResolved(cwd, { persist: false }).config;
-          // Discover dependencies from changed consumer output BEFORE consulting
-          // the barrier policy. A new projection omitted by the table still changes.
-          const dependentKeys = [...new Set([...Object.keys(empty), ...Object.keys(configured)])]
-            .filter((key) => !isDeepStrictEqual(empty[key], configured[key]));
-          assert.ok(dependentKeys.length > 0, `${source} ${section} sentinel must reach the loader`);
           writeLayer(cwd, source, { [section]: null });
           const blocked = loadConfigResolved(cwd, { persist: false }).config;
-          for (const key of dependentKeys) {
-            if (BARRIER_FAIL_SAFE_PROJECTIONS.has(key)) assert.deepEqual(blocked[key], empty[key]);
-            else {
-              assert.equal(Object.hasOwn(blocked, key), false, `${source} ${section}.${key} discovered by sentinel`);
-              assert.ok(BLOCKED_SECTION_PROJECTIONS[section].includes(key), `${key} needs a barrier policy entry`);
-            }
+          return { source, empty, configured, blocked };
+        }),
+      );
+      // Discover producer dependencies BEFORE consulting the policy or blocked
+      // output. The two loaders expose different projections; use their union.
+      const dependentKeys = new Set(samples.flatMap(({ empty, configured }) =>
+        [...new Set([...Object.keys(empty), ...Object.keys(configured)])]
+          .filter((key) => !isDeepStrictEqual(empty[key], configured[key]))));
+      assert.ok(dependentKeys.size > 0, `${section} sentinels must reach a loader`);
+      for (const { source, empty, configured, blocked } of samples) {
+        for (const key of dependentKeys) {
+          if (!Object.hasOwn(empty, key) && !Object.hasOwn(configured, key)) continue;
+          if (BARRIER_FAIL_SAFE_PROJECTIONS.has(key)) assert.deepEqual(blocked[key], empty[key]);
+          else {
+            assert.equal(Object.hasOwn(blocked, key), false, `${source} ${section}.${key} discovered by sentinel`);
+            assert.ok(BLOCKED_SECTION_PROJECTIONS[section].includes(key), `${key} needs a barrier policy entry`);
           }
-        });
+        }
       }
     }
   });
@@ -587,7 +592,9 @@ describe('Config Value Resolution Module (#5096)', () => {
         const assembled = loadConfigResolved(cwd, { persist: false }).config;
         for (const [key, value] of Object.entries(values)) {
           assert.deepEqual(assembled[key], value);
-          assert.deepEqual(resolveConfigValue(key, { cwd }).value, value);
+          // C1's public per-key API accepts declared keys, not every legacy
+          // flat loader alias (e.g. branching_strategy or text_mode).
+          if (VALID_CONFIG_KEYS.has(key)) assert.deepEqual(resolveConfigValue(key, { cwd }).value, value);
         }
       });
     }
