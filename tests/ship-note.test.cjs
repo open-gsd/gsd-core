@@ -9,11 +9,11 @@
  * the source branch and never reached the default branch — STATE's ship-status
  * was silently lost.
  *
- * The fix pushes the ship-note commit onto the PR branch with a `[ci skip]`
- * trailer (honored by GitHub) so it lands on merge without triggering a redundant
- * pipeline. This test is a source-text regression guard: ship.md IS the product
- * the runtime loads, so asserting its track_shipping step pushes (with [ci skip])
- * guards the deployed contract.
+ * The fix pushes the ship-note commit onto the PR branch so it lands on merge.
+ * (#6173 later removed the CI skip token this commit once carried; the no-token
+ * contract is pinned in tests/ship-notes-wedged-pr.test.cjs.) This test is a
+ * source-text regression guard: ship.md IS the product the runtime loads, so
+ * asserting its track_shipping step pushes guards the deployed contract.
  */
 
 const { describe, test } = require('node:test');
@@ -42,22 +42,6 @@ describe('#2138 ship.md track_shipping pushes the ship-note onto the PR branch',
     assert.ok(
       /git push origin \$\{CURRENT_BRANCH\}/.test(step),
       'track_shipping must push the ship-note commit onto the PR branch so it survives merge (#2138)',
-    );
-  });
-
-  test('the ship-note commit carries a [ci skip] trailer to avoid a redundant pipeline', () => {
-    // GitHub honors `[ci skip]` / `[skip ci]`; the trailer suppresses the second
-    // pipeline the post-create_pr push would otherwise trigger.
-    assert.ok(
-      /\[ci skip\]|\[skip ci\]/.test(step),
-      'track_shipping ship-note commit must include a [ci skip] trailer',
-    );
-  });
-
-  test('the ship-note step handles wedged PRs caused by skip-token or required status checks', () => {
-    assert.ok(
-      /mergeStateStatus|BLOCKED|trigger CI/.test(step),
-      'track_shipping must include self-healing or check handling for wedged PRs (#2783)',
     );
   });
 
