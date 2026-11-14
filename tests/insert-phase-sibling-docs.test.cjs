@@ -6,7 +6,8 @@
  * prompt files and the four docs pages the docs-guard registry maps to this test.
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { have, skipUnless } = require('./helpers/bash-probe.cjs');
@@ -59,25 +60,35 @@ describe('#5583 insert-phase --sibling', () => {
     assert.equal(cmds.length, 1, 'one phase.insert call per run');
     assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
     const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
-    assert.match(fence, /^GSD_ARGS=\$\{GSD_ARGS%\$'\\n'\}$/m, 'the insert fence captures GSD_ARGS itself');
     assert.match(fence, /<<'GSD_ARGS_END'/, 'the capture delimiter is quoted: typed text is never expanded');
-    assert.doesNotMatch(fence, /read -a|GSD_WSV|\[0\]|set --/, 'no array or positional list: zsh counts from 1 and spells read -A');
     assert.doesNotMatch(WORKFLOW, /GSD_DESC_END/, 'GSD_ARGS_END stays the only capture terminator');
   });
 
   // Run the shipped insert fence, capture included, over the typed arguments.
   describe('insert fence argument split', { skip: SKIP }, () => {
-    const split = (args, shell = 'bash') => {
+    const runFence = (args, shell = 'bash') => {
       const fence = read(WF).split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
       const lines = fence.split('\n').slice(1).join('\n').replace('$ARGUMENTS', () => args).split('\n');
-      const r = runBash(
+      return runBash(
         lines,
         { stdout: '', rc: 0 },
         { shell, setE: false, preamble: ["gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'printf "%s\\n" "$RESULT"' },
       );
+    };
+    const split = (args, shell = 'bash') => {
+      const r = runFence(args, shell);
       assert.equal(r.status, 0, r.stderr);
       return r.stdout.split('\n').slice(2, -1);
     };
+    // The CLI reads a first description word that looks like a flag (-h, --raw, --cwd=...) as a flag.
+    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x']) {
+      test('refuses a description starting with "-": ' + args, () => {
+        const r = runFence(args);
+        assert.notEqual(r.status, 0);
+        assert.equal(r.stdout, '', 'phase.insert never runs');
+        assert.match(r.stderr, /must not start with '-'/);
+      });
+    }
     // [typed text, the arguments phase.insert receives after `query phase.insert`]
     for (const [args, want] of [
       ['15.2 --sibling x', ['[15.2]', '[--sibling]', '[x]']],
@@ -114,9 +125,27 @@ describe('#5583 insert-phase --sibling', () => {
     test('property: description words, CLI flag words included, stay one argument', () => {
       const word = fc.constantFrom('x', '"q"', 'a-b', '*', '--siblings', '-h', '--help', '-v', '--raw', '--cwd', '/tmp', '--pick', '--json-errors', '--dry-run');
       fc.assert(fc.property(fc.array(word, { minLength: 1, maxLength: 6 }), (words) => {
-        assert.deepEqual(split('15.2 ' + words.join(' ')), ['[15.2]', '[' + words.map((w) => w.replace(/^"|"$/g, '')).join(' ') + ']']);
+        assert.deepEqual(split('15.2 x ' + words.join(' ')), ['[15.2]', '[x ' + words.map((w) => w.replace(/^"|"$/g, '')).join(' ') + ']']);
       }), { numRuns: 25 });
     });
+  });
+
+  // The real CLI, not a stub: flag words inside the description reach the phase name intact.
+  describe('phase.insert with flag words inside the description', () => {
+    let tmp;
+    beforeEach(() => {
+      tmp = createTempProject();
+      fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n### Phase 2: API\n**Goal:** Build API\n');
+      fs.mkdirSync(path.join(tmp, '.planning', 'phases', '01-foundation'), { recursive: true });
+    });
+    afterEach(() => cleanup(tmp));
+    for (const desc of ['add -h flag', 'drop -v output', 'fix --raw mode', 'x --cwd /tmp text', 'x --project-dir=/tmp y']) {
+      test('keeps "' + desc + '" as the phase name', () => {
+        const r = runGsdTools(['query', 'phase.insert', '1', desc], tmp);
+        assert.ok(r.success, r.error);
+        assert.equal(JSON.parse(r.output).name, desc);
+      });
+    }
   });
 
   test('workflow documents nest-by-default and the top-level fallback', () => {

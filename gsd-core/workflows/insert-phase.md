@@ -13,7 +13,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 <step name="parse_arguments">
 Parse the command arguments:
 - First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
-- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description, like `--ws <name>`. The insert_phase step drops a leading `--insert`, splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh) and drops double quotes around each word (single quotes stay). It passes the after-phase, `--sibling` and `--ws=<name>` as their own arguments and the other words, in order and joined by single spaces, as ONE description argument, so a description word such as `-h`, `--raw` or `--cwd` is never read as a CLI flag
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description, like `--ws <name>`. The insert_phase step drops a leading `--insert`, splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh) and drops double quotes around each word (single quotes stay). It passes the after-phase, `--sibling` and `--ws=<name>` as their own arguments and the other words, in order and joined by single spaces, as ONE description argument, so a description word such as `-h`, `--raw` or `--cwd` inside the description is never read as a CLI flag. The step refuses a description that itself starts with `-`, because the CLI reads such a first word as a flag
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
@@ -75,6 +75,7 @@ while IFS= read -r GSD_T; do
   elif [ -z "$GSD_A" ]; then GSD_A=$GSD_T
   else GSD_D="${GSD_D:+$GSD_D }$GSD_T"; fi
 done <<<"$GSD_L"
+case "$GSD_D" in -*) echo "ERROR: the description must not start with '-' (the CLI would read it as a flag)" >&2; exit 1;; esac
 RESULT=$(gsd_run query phase.insert ${GSD_W:+--ws="$GSD_W"} "$GSD_A" ${GSD_S:+--sibling} "$GSD_D")
 ```
 
