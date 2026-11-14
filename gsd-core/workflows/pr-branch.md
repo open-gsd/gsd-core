@@ -165,6 +165,7 @@ PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
 # One verdict for the leftover -pr branch (each lookup may call gh); the refusal below reads it.
 PR_BRANCH_MERGED=
 PENDING_VERDICT=
+KEEP=
 [ -n "$PR_BRANCH_TIP" ] && pr_merged "$PR_BRANCH_TIP" && PR_BRANCH_MERGED=1
 # drop_pending runs the printed discard command.
 DISCARD_PENDING="git update-ref -d $(shq "$PENDING_REF") && git update-ref -d $(shq "$PR_TIP_REF")"

@@ -204,6 +204,14 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(!fs.existsSync(path.join(dir, 'OUTWARD')), 'refusal must precede handle_sub_repos');
   });
 
+  test('a KEEP left over from an earlier run does not stop the pending build from being recorded', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const r = publish(dir, 'main', { prelude: 'KEEP=1\ngh() { return 1; }' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(pendingOf(dir), git(dir, 'rev-parse', 'feature'));
+  });
+
   test('a first publish prints no git error (the ref lookups are quiet)', () => {
     const dir = repo();
     commitRound(dir, 1);
