@@ -72,7 +72,7 @@ describe('#5583 insert-phase --sibling', () => {
       return runBash(
         lines,
         { stdout: '', rc: 0 },
-        { shell, setE: false, preamble: ["gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'printf "%s\\n" "$RESULT"' },
+        { shell, setE: false, preamble: ["gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'true' },
       );
     };
     const split = (args, shell = 'bash') => {
@@ -177,7 +177,7 @@ describe('#5583 insert-phase --sibling', () => {
     };
     const wsPair = (text, args) => {
       const [init, fence, state] = blocks(text);
-      return [wsOf(init, args, 'printf "%s\\n" "$INIT"'), wsOf(fence, args, 'printf "%s\\n" "$RESULT"'), wsOf(state, args, 'true')];
+      return [wsOf(init, args, 'printf "%s\\n" "$INIT"'), wsOf(fence, args, 'true'), wsOf(state, args, 'true')];
     };
 
     test('the workflow has exactly the init block, the insert fence and the state block', () => assert.equal(blocks(read(WF)).length, 3));

@@ -79,6 +79,7 @@ done <<<"$GSD_L"
 GSD_B=; case "$GSD_D" in --cwd=*|--project-dir=*|--exit-contract=*|--ws=*) GSD_B=1;; -*" "*) ;; -*) GSD_B=1;; esac
 [ -z "$GSD_B" ] || { echo "ERROR: the description must not be a single word starting with '-', nor start with --cwd=, --project-dir=, --exit-contract= or --ws= (the CLI reads it as a flag)" >&2; exit 1; }
 RESULT=$(gsd_run query phase.insert ${GSD_WS:+--ws=${GSD_WS##* }} "$GSD_A" ${GSD_S:+--sibling} "$GSD_D")
+printf '%s\n' "$RESULT"
 ```
 
 The CLI handles:
