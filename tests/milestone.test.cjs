@@ -50,7 +50,6 @@ function makePhaseDir(parentDir) {
   return dir;
 }
 
-
 function writeState(tmpDir, extra = '') {
   fs.writeFileSync(
     path.join(tmpDir, '.planning', 'STATE.md'),
@@ -1789,7 +1788,6 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-
   function extractExecutorReadyIdsBash() {
     const executorPath = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
     const executor = fs.readFileSync(executorPath, 'utf-8');
@@ -1815,19 +1813,26 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       'echo "RESOLVED_PLAN_PATH=$PLAN_PATH"',
     ].filter(Boolean).join('\n');
 
+    const baseEnv = {
+      ...process.env,
+      ...TEST_ENV_BASE,
+      PLAN: '',
+      PHASE: '',
+      PHASE_DIR: '',
+      INIT: '',
+      PLAN_PATH: '',
+      ...envOverrides,
+    };
+    for (const k of Object.keys(envOverrides)) {
+      if (envOverrides[k] === undefined) {
+        delete baseEnv[k];
+      }
+    }
+
     return runHook('-c', [fullScript], {
       interpreter: shell,
       cwd,
-      env: {
-        ...process.env,
-        ...TEST_ENV_BASE,
-        PLAN: '',
-        PHASE: '',
-        PHASE_DIR: '',
-        INIT: '',
-        PLAN_PATH: '',
-        ...envOverrides,
-      },
+      env: baseEnv,
       timeoutMs,
     });
   }
@@ -1983,8 +1988,8 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
         INIT: JSON.stringify({ phase_dir: '.planning/phases/05-05-feature' }),
         PHASE: '05-05',
         REQ_IDS: 'SOLO-01',
+        PLAN: emptyVal,
       };
-      if (emptyVal !== undefined) env.PLAN = emptyVal;
 
       const res = runExtractedExecutorBash(tmpDir, env);
       assertShellExit(res, `must exit 0 on unset/empty PLAN: ${res.stderr || res.stdout}`);
@@ -1992,6 +1997,28 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       assert.match(res.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/, 'Must warn on unambiguous resolution failure');
       assert.match(res.stdout, /(^|\n)RESOLVED_PLAN_PATH=(\n|$)/, 'PLAN_PATH must be cleared');
     }
+  });
+
+  test('caller set -u with unset PLAN does not abort and warns (#4944)', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const plan = path.join(phaseDir, '05-01-PLAN.md');
+    fs.writeFileSync(plan, '---\nphase: 5\nplan: 1\nrequirements: [SOLO-01]\n---\nPlan\n');
+    fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), 'done\n');
+
+    const res = runExtractedExecutorBash(tmpDir, {
+      PLAN_PATH: plan,
+      PHASE_DIR: phaseDir,
+      PHASE: '5',
+      PLAN: undefined,
+      REQ_IDS: 'SOLO-01',
+    }, 'set -u');
+    assertShellExit(res, `caller set -u with unset PLAN must exit 0: ${res.stderr || res.stdout}`);
+    assert.doesNotMatch(res.stderr, /unbound variable|parameter not set/, 'Must not abort under set -u');
+    assert.match(res.stderr, /WARN: Could not resolve unambiguous PLAN_PATH/);
+    assert.match(res.stdout, /(^|\n)RESOLVED_PLAN_PATH=(\n|$)/, 'PLAN_PATH must be cleared when PLAN is unset');
   });
 
   test('behavioral: extracted executor bash resolves nested plans layout from INIT JSON', (t) => {
@@ -2405,6 +2432,38 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     }
   });
 
+  test('behavioral: parity between executor ready-ids gate and orchestrator requirements step (#4944)', () => {
+    const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
+    const workflowContent = fs.readFileSync(workflowPath, 'utf-8');
+    const refPath = path.join(__dirname, '..', 'gsd-core', 'references', 'executor-ready-ids-gate.md');
+    const refContent = fs.readFileSync(refPath, 'utf-8');
+
+    // Neither surface may pass --raw (prints prose instead of JSON, #4956)
+    assert.ok(!workflowContent.includes('requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} --raw'), 'execute-plan.md must not pass --raw');
+    assert.ok(!workflowContent.includes('requirements.ready-ids --raw'), 'execute-plan.md must not mention ready-ids --raw');
+    assert.ok(!refContent.includes('--raw'), 'executor-ready-ids-gate.md must not pass --raw');
+
+    // Both surfaces must query ready-ids with the same argument pattern
+    const readyIdsPattern = /requirements\.ready-ids\s+"?\$\{PLAN_PATH\}"?\s+\$\{REQ_IDS\}/;
+    assert.match(workflowContent, readyIdsPattern, 'execute-plan.md must invoke ready-ids with "${PLAN_PATH}" ${REQ_IDS}');
+    assert.match(refContent, readyIdsPattern, 'executor-ready-ids-gate.md must invoke ready-ids with "${PLAN_PATH}" ${REQ_IDS}');
+
+    // Both surfaces must extract ready IDs using jq -r '.ready[]'
+    const jqExtractionPattern = /jq\s+-r\s+['"]\.ready\[\]['"]/;
+    assert.match(workflowContent, jqExtractionPattern, 'execute-plan.md must extract ready IDs via jq -r \'.ready[]\'');
+    assert.match(refContent, jqExtractionPattern, 'executor-ready-ids-gate.md must extract ready IDs via jq -r \'.ready[]\'');
+
+    // Both surfaces must guard mark-complete with non-empty check on READY_IDS
+    const guardPattern = /if\s+\[\s+-n\s+"?\$\(printf\s+['"]%s['"]\s+"?\$(\{READY_IDS\}|READY_IDS)"?\s+\|\s+tr\s+-d\s+['"]\[:space:\]['"]\)"?\s+\];\s*then/;
+    assert.match(workflowContent, guardPattern, 'execute-plan.md must check READY_IDS is non-empty before mark-complete');
+    assert.match(refContent, guardPattern, 'executor-ready-ids-gate.md must check READY_IDS is non-empty before mark-complete');
+
+    // Both surfaces must invoke requirements.mark-complete ${READY_IDS}
+    const markCompletePattern = /requirements\.mark-complete\s+\$\{READY_IDS\}/;
+    assert.match(workflowContent, markCompletePattern, 'execute-plan.md must mark complete only ${READY_IDS}');
+    assert.match(refContent, markCompletePattern, 'executor-ready-ids-gate.md must mark complete only ${READY_IDS}');
+  });
+
   test('negative control: preset PLAN_PATH with missing or empty plan frontmatter fails closed (#4944)', (t) => {
     const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);
@@ -2424,7 +2483,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
       fs.writeFileSync(planPath, body);
       const res = runExtractedExecutorBash(tmpDir, {
         PLAN_PATH: planPath,
-      PHASE_DIR: path.dirname(planPath),
+        PHASE_DIR: path.dirname(planPath),
         INIT: JSON.stringify({ phase_dir: '.planning/phases/05-feature' }),
         PHASE: '5',
         PLAN: '1',
@@ -2481,7 +2540,29 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     const on = runExtractedExecutorBash(tmpDir, env, 'shopt -s nullglob', 'bash', bashProbe);
     assertShellExit(on, on.stderr || on.stdout);
     assert.match(on.stdout, /NULLGLOB=on/, 'nullglob that started on must stay on');
+  });
 
+  test('caller failglob survives the gate and plan resolves under bash (#4944)', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const plan = path.join(phaseDir, '05-01-PLAN.md');
+    fs.writeFileSync(plan, '---\nphase: 5\nplan: 1\nrequirements: [SOLO-01]\n---\nPlan\n');
+    fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), 'done\n');
+
+    const probe = 'shopt -q failglob && echo FAILGLOB=on || echo FAILGLOB=off';
+    const res = runExtractedExecutorBash(tmpDir, {
+      PHASE_DIR: phaseDir,
+      PHASE: '5',
+      PLAN: '1',
+      REQ_IDS: 'SOLO-01',
+    }, 'shopt -s failglob', 'bash', probe);
+    assertShellExit(res, res.stderr || res.stdout);
+    assert.match(res.stdout, /RESOLVED_PLAN_PATH=.*05-01-PLAN\.md/);
+    assert.match(res.stdout, /FAILGLOB=on/, 'failglob must remain enabled after the gate completes');
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **SOLO-01**'), 'SOLO-01 must be marked complete when caller had failglob enabled');
   });
 
   test('behavioral: ready-ids gate splits requirement IDs and marks multiple complete under zsh (#4944)', (t) => {
@@ -2673,13 +2754,15 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     const plan = path.join(phaseDir, '05-01-PLAN.md');
     fs.writeFileSync(plan, '---\nplan: 1\n---\n');
-    const env = { PLAN_PATH: plan, PHASE: '5', PLAN: '1', REQ_IDS: 'ONLY1-01' };
+    const env = { PLAN_PATH: plan, PHASE_DIR: phaseDir, PHASE: '5', PLAN: '1', REQ_IDS: 'ONLY1-01' };
     const probe = '[[ -o norcs ]] && echo NORCS=on || echo NORCS=off';
     const off = runExtractedExecutorBash(tmpDir, env, '', 'zsh', probe);
     assertShellExit(off, off.stderr || off.stdout);
+    assert.match(off.stdout, /RESOLVED_PLAN_PATH=.*05-01-PLAN\.md/);
     assert.match(off.stdout, /NORCS=off/);
     const on = runExtractedExecutorBash(tmpDir, env, 'set -f', 'zsh', probe);
     assertShellExit(on, on.stderr || on.stdout);
+    assert.match(on.stdout, /RESOLVED_PLAN_PATH=.*05-01-PLAN\.md/);
     assert.match(on.stdout, /NORCS=on/, 'set -f means NO_RCS in zsh and must stay as the caller left it');
   });
 
@@ -2804,6 +2887,29 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assertShellExit(result, result.stderr || result.stdout);
     assert.match(result.stdout, /RESOLVED_PLAN_PATH=\s*$/);
     assert.match(result.stderr, /matches: 0/);
+  });
+
+  test('a symlinked plan candidate pointing outside the phase directory is rejected (#4944)', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    writeRequirements(tmpDir, REQUIREMENTS);
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '06-b');
+    const otherDir = path.join(tmpDir, '.planning', 'other');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(otherDir, { recursive: true });
+    const targetPlan = path.join(otherDir, '06-01-PLAN.md');
+    fs.writeFileSync(targetPlan, '---\nphase: 6\nplan: 1\nrequirements: [SOLO-01]\n---\nTarget\n');
+    const symlinkPlan = path.join(phaseDir, '06-01-PLAN.md');
+    try {
+      fs.symlinkSync(path.join('..', '..', 'other', '06-01-PLAN.md'), symlinkPlan);
+    } catch (err) {
+      return t.skip(`symlink not permitted: ${err.code || err.message}`);
+    }
+    const result = runExtractedExecutorBash(tmpDir, { PHASE_DIR: phaseDir, PHASE: '6', PLAN: '1', REQ_IDS: 'SOLO-01' });
+    assertShellExit(result, result.stderr || result.stdout);
+    assert.match(result.stdout, /(^|\n)RESOLVED_PLAN_PATH=(\n|$)/, 'Symlinked plan candidate must not resolve');
+    assert.match(result.stderr, /matches: 0/, 'Symlinked candidate must be rejected by containment check');
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SOLO-01**'), 'SOLO-01 must stay unchecked when plan is a symlink');
   });
 
   test('a preset path from another phase with the same plan number is dropped (#4944)', (t) => {
