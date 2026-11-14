@@ -158,6 +158,22 @@ replaced your entire configuration with built-in defaults, and nothing said so (
 
 The warning is printed once per file per run, so a repeated command will not spam it.
 
+A section that is present but is not an object (for example, `"git": null`) is an explicit
+inheritance barrier. GSD does not silently recreate that section's flattened values from lower
+files or built-in defaults. This applies to project and global-defaults loading. The planner
+watchdog is the fail-safe exception: `"planner": null` still leaves
+`planner_stall_detection_enabled` enabled, while the raw per-key resolver reports
+`planner.stall_detection_enabled` as not configured.
+
+An explicit `workflow: null` removes every `workflow.*` default, including research,
+plan-checker, verifier, Nyquist validation, TDD, subagent timeout and the security settings
+`security_enforcement`, `security_asvs_level` and `security_block_on`. Init payloads report
+absent gate flags as `false`. An explicit `review: null`
+removes the prompt-budget default, so reviewer lanes run without default prompt trimming.
+Use an object with explicit settings when those safeguards should remain enabled.
+
+An explicit `planning: null` removes planning defaults, including `commit_docs`, so planning commits are skipped unless a same-file flat `commit_docs: true` explicitly enables them. An explicit `git: null` removes inherited/default branching strategy, base branch and branch templates. Explicit flat keys in that same file retain precedence over their blocked nested aliases.
+
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
 
