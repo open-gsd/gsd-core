@@ -478,9 +478,22 @@ preload did not load.
 Limits, stated plainly: it sees only code paths the suite executes; it wraps
 the `fs` write, append, rename, copy and cp entry points in their sync and
 callback forms and the promise forms of write, append, rename and copyFile
-(`fs.promises.cp` is seen through the `fs.promises.copyFile` it calls), not
+(`fs.promises.cp` is seen through the `fs.promises.copyFile` it calls, except
+in the ES module case below), not
 `fs.openSync` + `fs.writeSync`, file handles, write streams or native addons (the seam's own direct fallback writes through a
-descriptor, so it is not counted among the seam writes); a test that replaces
+descriptor, so it is not counted among the seam writes); the promise forms are
+wrapped on first reach, through `fs.promises`, a CommonJS `require` of
+`fs/promises` or `node:fs/promises`, or `process.getBuiltinModule` of either,
+so loading the check does not load `node:os`, whose tmpdir branch is fixed when
+it loads; an ES module import of `fs/promises` is not such a reach: a write
+through that import is not seen until one of those routes has run in the
+process, a named binding taken from it before then stays unwrapped after, and
+if a cp runs through it before then, a later `fs.promises.cp` in that process
+is not seen (`fs.cp`, wrapped itself, still is); these hold when the runner's
+shim is the first preload, which the runner arranges by prepending it to
+`NODE_OPTIONS`, and a preload ordered before the shim that keeps the
+`fs.promises` object or a promise function holds an unwrapped reference whose
+writes are not seen; a test that replaces
 `NODE_OPTIONS` runs its child unguarded, and leaves no sentinel and no record,
 so it is unseen; a write made under a JS mock of an fs function is attributed
 to the mock's frame; and the install sentinels prove the check loaded in at

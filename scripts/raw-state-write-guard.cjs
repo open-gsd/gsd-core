@@ -46,10 +46,18 @@
 //
 // Limits, stated plainly. It sees only code paths the suite executes. It wraps the fs entry points
 // listed in WRAPPED and WRAPPED_PROMISES (fs.promises.cp is seen through the fs.promises.copyFile
-// it calls). The promise functions are wrapped on first reach, through fs.promises or a CommonJS
-// require of `fs/promises`, so loading the check does not load node:os (whose tmpdir branch is
-// fixed at load); an ES module import or process.getBuiltinModule of `fs/promises` before either
-// is not seen. A write
+// it calls, except in the ES module case below). The promise functions are wrapped on first reach:
+// through fs.promises, a CommonJS require of `fs/promises` or `node:fs/promises`, or
+// process.getBuiltinModule of either, so loading the check does not load node:os (whose tmpdir
+// branch is fixed at load). An ES module import of `fs/promises` is not such a reach. A write
+// through that import is not seen until one of those routes has run in the process; a named binding
+// taken from it before then stays unwrapped after; and if a cp runs through it before then, node's
+// cp module keeps the unwrapped copyFile it took when it loaded, so a later fs.promises.cp in that
+// process is not seen (fs.cp, wrapped itself, still is). These hold when the runner's shim is the
+// first preload, which run-tests.cjs arranges by prepending it to NODE_OPTIONS
+// (nodeOptionsWithRequire, called at scripts/run-tests.cjs:2126): a preload ordered before the shim
+// that keeps the fs.promises object or a promise function holds an unwrapped reference, and a write
+// through it is not seen. A write
 // through fs.openSync + fs.writeSync, a FileHandle,
 // a write stream, or a native addon is not seen (the seam's own direct fallback writes through a
 // descriptor, so a fallback write is not counted among the seam writes). A test that replaces
@@ -92,7 +100,8 @@ const WRAPPED = Object.freeze({
   cp: 1,
 });
 // fs.promises.cp is not wrapped: it copies through fs.promises.copyFile, which is, so a cp onto
-// STATE.md is recorded once, as promises.copyFile.
+// STATE.md is recorded once, as promises.copyFile (not after a cp through an ES module import of
+// fs/promises ran first; see the header's limits).
 const WRAPPED_PROMISES = Object.freeze({ writeFile: 0, appendFile: 0, rename: 1, copyFile: 1 });
 
 const toPosix = (p) => String(p).replace(/\\/g, '/');
@@ -340,8 +349,11 @@ function install(ledger) {
   // internal/fs/promises, which loads node:os, and node:os picks its win32 or POSIX tmpdir branch
   // once, when it loads. Loaded from this preload, that branch was fixed before the process's own
   // code ran, so a child that presents itself as win32 (the #5848 install probe) read the TMPDIR it
-  // inherited instead of its TEMP/TMP. Both CommonJS routes to the one promises object wrap it:
-  // the fs.promises getter and a require of `fs/promises` or `node:fs/promises`.
+  // inherited instead of its TEMP/TMP. Three routes to the one promises object wrap it: the
+  // fs.promises getter, a CommonJS require of `fs/promises` or `node:fs/promises`, and
+  // process.getBuiltinModule of either. The last two reach it through the real fs.promises getter,
+  // so the object wrapped is the one fs.promises returns, even when a require hook installed
+  // earlier hands back a stand-in for `fs/promises`.
   let promisesWrapped = false;
   const wrapPromises = (promises) => {
     if (promisesWrapped || !promises) return promises;
@@ -362,12 +374,22 @@ function install(ledger) {
   } else {
     wrapPromises(fs.promises);
   }
+  const isPromisesId = (id) => id === 'fs/promises' || id === 'node:fs/promises';
   const Module = require('module');
   const originalLoad = Module._load;
   Module._load = function rawStateWriteGuardLoad(request) {
     const loaded = originalLoad.apply(this, arguments);
-    return request === 'fs/promises' || request === 'node:fs/promises' ? wrapPromises(loaded) : loaded;
+    if (isPromisesId(request)) void fs.promises;
+    return loaded;
   };
+  if (typeof process.getBuiltinModule === 'function') {
+    const originalGetBuiltinModule = process.getBuiltinModule;
+    process.getBuiltinModule = function rawStateWriteGuardGetBuiltinModule(id) {
+      const loaded = originalGetBuiltinModule.apply(this, arguments);
+      if (isPromisesId(id)) void fs.promises;
+      return loaded;
+    };
+  }
 
   // One install sentinel per process, written after the wrappers are in place. The runner
   // counts these against the chunks it spawned: a chunk whose preload never loaded leaves no
