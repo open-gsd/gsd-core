@@ -4344,7 +4344,6 @@ describe('#3861 round 1 — fence closers and one-letter prefixes', () => {
 // normalizer rather than asserting it.
 // ---------------------------------------------------------------------------
 describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phase without a shell re-pad', () => {
-  const { execFileSync } = require('node:child_process');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
 
@@ -4366,18 +4365,19 @@ describe('#3829 — the step\'s REVIEW.md lookup resolves a letter-suffixed phas
 
   /** Run `script` in bash with `env` merged in; never throws — returns { status, stdout, stderr }. */
   function runBash(script, env) {
-    try {
-      const stdout = execFileSync('bash', [], {
-        input: script,
-        encoding: 'utf8',
-        timeout: PROBE_TIMEOUT_MS,
-        env: { ...process.env, ...env },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      return { status: 0, stdout: stdout.trim(), stderr: '' };
-    } catch (e) {
-      return { status: e.status, stdout: String(e.stdout || '').trim(), stderr: String(e.stderr || '').trim() };
+    // `bash -s` reads the script from stdin, matching the former argv-less `bash` + input.
+    const r = runHook('-s', [], {
+      interpreter: 'bash',
+      input: script,
+      env: { ...process.env, ...env },
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    // A timeout, kill or spawn failure has no status; reject it rather than return a null status.
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    if (r.exitCode === 0) {
+      return { status: 0, stdout: r.stdout.trim(), stderr: '' };
     }
+    return { status: r.exitCode, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
   }
 
   const stepLines = splitLines(fs.readFileSync(DISPOSITION_STEP_PATH, 'utf8'));

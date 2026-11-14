@@ -133,6 +133,39 @@ and measured-`updated[]` already catch them.
   declared with no plan files (#4210 case C, the direct test of (a)). Reads 33 today; MUST still read 33
   after any composition change.
 
+**§8.6 Declared subject and expected prior — *Required — Phase 2b* (Amendment 1)**
+- **Question.** Which phase or milestone is a write *about*, and what did the caller believe was on disk
+  when it decided to write?
+- **Owner.** `StateWriteIntent` (`src/state-transition.cts`) and the verifying executor
+  `applyStateWriteIntent` (`src/state.cts`).
+- **Rule.**
+  1. **The intent declares its subject.** Every `kind:'open'` intent names the phase or milestone it is
+     about. The subject comes from the caller (its argument, its plan, its working phase), never from
+     STATE.md's global position (`current_phase`, `Current Position`). An intent that writes per-phase
+     content and declares no subject is a construction failure, like an absent `snapshot` (ADR-3473 §8.6).
+  2. **Content is labelled from the declared subject.** A write that records something about a phase (a
+     decision, a blocker, a session record) labels it with the declared subject. A subject that differs from
+     the global pointer is **not** a refusal for these writes: parallel multi-phase execution is a supported
+     state, and refusing on every mismatch would block it.
+  3. **Refusal applies only when the subject is the pointer being written.** A write whose target is the
+     global pointer itself (`advance-plan`, a `current_phase` / `Current Position` transition) and whose
+     declared subject is not the phase that pointer names is refused, naming both.
+  4. **The caller's snapshot is the expected prior, compared within the declared scope.** The executor
+     compares the caller's pre-write view (the frontmatter `snapshot`, and each declared section's
+     `bodyDeltas[…].pre`) with the copy it reads under the lock, **limited to the intent's declared scope
+     (§8.3)**. A mismatch inside the scope refuses the write and names the field or section that differs and
+     both values. A difference outside the scope is not a conflict: a whole-document compare would refuse
+     every write that races an unrelated one on a shared `.planning/`.
+  5. **The landed subject is verified.** §8.2's achieved == intended check includes the subject: content the
+     write labelled must name the declared subject on re-read.
+- **Not covered.** A subject resolved wrongly *upstream* of the intent (e.g. #4854's slug-for-name minted in
+  `init`) is not prevented by this rule; it becomes detectable where the intent's subject and the name it
+  carries come from different resolutions. `kind:'rebuild'` writes declare no subject (§8.3 residual).
+- **Failure signal.** A per-phase record labelled with a phase other than the one the caller worked on; a
+  write that silently replaces a record the caller never saw (#4763: a concurrent session's "Stopped at"
+  overwritten with success).
+- **Acceptance targets (C3+ migration).** #4763 (both halves), #4901, #4824.
+
 ## Scan surface (declared — ADR-3180 Decision 4(d))
 
 Every **authored** surface that can express the derivation, never the emitted output: `src/**/*.cts`, plus
@@ -154,7 +187,7 @@ inflates the "N found by the guard" census, so it is **excluded**.
 
 `get_impact` rated `readModifyWriteStateMd` CRITICAL. Per ADR-3408 §6: (1) extend the terminal Axis-2 guard +
 `StateTransaction`/`StateWriteIntent` type surface (no behavior change); (2) the bounded-mutation verify with
-its positive control; (3) migrate residual writers in batches, each with its failing-first regression;
+its positive control; (2b) the declared subject and scoped expected-prior check (§8.6, Amendment 1); (3) migrate residual writers in batches, each with its failing-first regression;
 (4) the §8.5 composition, pinned by the literal control. Sequential — each batch sits inside one CRITICAL
 blast radius.
 
@@ -218,7 +251,15 @@ write seam + report contract this extends); ADR-3473 §8.6 (successor precedent 
 
 ## Amendments
 
-*(none yet — stub per convention; amendments to §8 land here.)*
+**Amendment 1 (2026-11-08) — §8.6 declared subject and expected prior (Phase 2b).** Six open
+`confirmed-bug` issues (#4763, #4901, #4890, #4824, #4854, #4757; maintainer sweep on #4629, 2026-09-21)
+are writes whose transform is applied correctly to the wrong phase, milestone or record. An intent of shape
+`{ field, value }` verifies those writes as correct, because what it said was wrong. The maintainer accepted
+the C2b proposal (#4629, davesienkowski 2026-09-23; ruling 2026-11-08): the intent declares its subject, and
+the caller's snapshot is the expected prior within the declared scope. No new field is added for the prior,
+because every `StateWriteIntent` already carries the caller's `snapshot` and `bodyDeltas`, which the executor
+previously ignored by re-snapshotting under the lock. Phase 2b lands between C2 (the verifying executor) and
+C3+ (caller migration), so no residual caller migrates twice.
 
 ## Citation notes (symbol anchors, for the child issues)
 

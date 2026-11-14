@@ -28,7 +28,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { runGsdTools, cleanup } = require('./helpers.cjs');
-const { spawnSync } = require('node:child_process');
+const { runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { skipUnless } = require('./helpers/bash-probe.cjs');
 const { span } = require('./helpers/doc-bash-span.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -211,8 +211,10 @@ function runFence({ configPoint = 'execute:post', configFails = false, envelopes
     '}',
   ].join('\n');
   const script = `${stub}\n${reviewerContributionFence()}\nprintf '%s' "$REVIEWER_CONTRIBUTIONS"\n`;
-  const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-  return { stdout: r.stdout, stderr: r.stderr, status: r.status };
+  const r = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+  // A timeout must not pass as an empty-output run: fail with the outcome named.
+  assert.equal(r.outcome === OUTCOME.TIMED_OUT || r.outcome === OUTCOME.SPAWN_FAILED, false, `fence run did not complete: ${r.summary}`);
+  return { stdout: r.stdout, stderr: r.stderr, status: r.exitCode };
 }
 
 const hook = (into, inline, kind = 'contribution') => ({ kind, into, capId: 'x', fragment: { inline } });
@@ -285,8 +287,8 @@ describe('delivery of reviewer contributions inside code-review.md (#4790)', { s
     const bad = path.join(dir, 'bad.json');
     fs.writeFileSync(bad, '{ not json');
     const script = `gsd_run() { if [ "$2" = config-get ]; then printf execute:post; else cat "${bad}"; fi; }\n${reviewerContributionFence()}\nprintf '%s' "$REVIEWER_CONTRIBUTIONS"\n`;
-    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    assert.equal(r.status, 0);
+    const r = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+    assertSeamExit(assert, r, 0);
     assert.equal(r.stdout, '');
   });
 
