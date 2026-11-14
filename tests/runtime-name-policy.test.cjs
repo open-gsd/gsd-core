@@ -33,6 +33,15 @@ describe('runtime-name-policy canonical runtime ids', () => {
   });
 });
 
+describe('runtime-name-policy alias manifest covers the capability registry (#3703)', () => {
+  test('every registry runtime canonicalizes to itself (alias manifest parity)', () => {
+    const { runtimes } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+    for (const id of Object.keys(runtimes)) {
+      assert.strictEqual(canonicalizeRuntimeName(id), id, id);
+    }
+  });
+});
+
 describe('runtime-name-policy windsurf alias parity — manifest vs FALLBACK_ALIASES (#792)', () => {
   // DEFECT.GENERATIVE-FIX: manifest and FALLBACK_ALIASES are manually mirrored;
   // this test fails if they diverge for the windsurf key.
