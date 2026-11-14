@@ -230,16 +230,24 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
 
   test('#5531: the read-and-check block halts (exit 69) when a byte count fails instead of skipping the NUL check, and when the removal fails', (t) => {
     const dir = tempDir(t);
-    // A failing `wc` leaves a count empty; a failing `rm` leaves the file. Neither may let the prompt through.
-    const cases = { count: ['wc() { return 1; }', /could not count the bytes/], remove: ['rm() { return 1; }', /could not remove the executor prompt file/] };
-    for (const [name, [stub, message]] of Object.entries(cases)) {
+    // A failing `wc` leaves one count empty (the first count reads a file, the second reads a pipe); a failing `rm` leaves the file.
+    // Neither may let the prompt through.
+    const wcFailsWhen = (test) => `wc() { if ${test}; then return 1; fi; command wc "$@"; }`;
+    const counting = /could not count the bytes/;
+    const cases = {
+      bytes: [wcFailsWhen('[ ! -p /dev/stdin ]'), counting, true],
+      nonnul: [wcFailsWhen('[ -p /dev/stdin ]'), counting, true],
+      remove: ['rm() { return 1; }', /could not remove the executor prompt file/, false],
+    };
+    for (const [name, [stub, message, removed]] of Object.entries(cases)) {
       const root = path.join(dir, name);
-      place(root, `${STEM}-aaaaaa`, GUARDED);
+      const file = place(root, `${STEM}-aaaaaa`, GUARDED);
       const r = runBlock(root, `${stub}\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
       assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
       assert.equal(r.exitCode, EXIT.count, `${name}: ${r.stderr}`);
       assert.match(r.stderr, message, name);
       assert.equal(r.stdout, '', `${name}: no prompt printed`);
+      assert.equal(!fs.existsSync(file), removed, `${name}: the count halt removes the file; the stubbed rm cannot`);
     }
   });
 
