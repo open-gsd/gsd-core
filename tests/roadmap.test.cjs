@@ -2682,6 +2682,173 @@ describe('regressions: insert missing plan rows (#1163) — adversarial: partial
 });
 
 
+// #6169: `roadmap update-plan-progress` inserts a missing plan row, and rewrites the
+// `**Plans:**` count, inside the SAME level-bounded, fence-aware phase scope that
+// missing-row detection reads. A `####` sub-heading or a `#` line inside a fenced
+// block between the `**Plans:**` summary and the bare `Plans:` list must not end
+// the scope early and strand the row above the sub-heading or fence.
+describe('#6169: plan-row insertion and count rewrite use the detection scope', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-6169-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function plans(...names) {
+    const dir = path.join(tmpDir, '.planning', 'phases', '12-test-phase');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const n of names) fs.writeFileSync(path.join(dir, n), `# ${n}\n`);
+  }
+
+  function run(roadmap, planFiles = ['12-01-PLAN.md', '12-02-PLAN.md', '12-03-PLAN.md']) {
+    fs.writeFileSync(roadmapPath, roadmap);
+    plans(...planFiles);
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '12'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+
+  const lines = (text) => text.split('\n');
+  const indexOfLine = (text, needle) => lines(text).findIndex((l) => l.includes(needle));
+
+  const phase12 = (middle, tail = '') => [
+    '# ROADMAP',
+    '',
+    '## Milestone v1.0',
+    '',
+    '### Phase 12: Test phase',
+    '',
+    '**Goal**: build something',
+    ...middle,
+    'Plans:',
+    '',
+    '- [ ] 12-01-PLAN.md',
+    '- [ ] 12-02-PLAN.md',
+    '',
+    tail,
+  ].join('\n');
+
+  test('a #### sub-heading between **Plans:** and Plans: sends the row to the Plans: list', () => {
+    const out = run(phase12([
+      '**Plans:** 3 plans',
+      '',
+      '#### Success Criteria',
+      '',
+      '- it works',
+      '',
+    ]));
+    const summary = indexOfLine(out, '**Plans:**');
+    const sub = indexOfLine(out, '#### Success Criteria');
+    const list = lines(out).findIndex((l) => l === 'Plans:');
+    const row = indexOfLine(out, '- [ ] 12-03-PLAN.md');
+    assert.ok(row > list, `row must land after the bare Plans: line\n${out}`);
+    assert.ok(row > sub, `row must not land above the sub-heading\n${out}`);
+    assert.ok(!lines(out)[summary + 1].includes('12-03'), `nothing added under **Plans:**\n${out}`);
+    assert.equal(out.match(/12-03-PLAN\.md/g).length, 1);
+  });
+
+  test('a fenced # comment between **Plans:** and Plans: sends the row to the Plans: list', () => {
+    const out = run(phase12([
+      '**Plans:** 3 plans',
+      '',
+      '```sh',
+      '# run the check',
+      'npm test',
+      '```',
+      '',
+    ]));
+    const summary = indexOfLine(out, '**Plans:**');
+    const fenceClose = lines(out).lastIndexOf('```');
+    const list = lines(out).findIndex((l) => l === 'Plans:');
+    const row = indexOfLine(out, '- [ ] 12-03-PLAN.md');
+    assert.ok(row > list && row > fenceClose, `row must land in the Plans: list, below the fence\n${out}`);
+    assert.ok(!lines(out)[summary + 1].includes('12-03'), `nothing added under **Plans:**\n${out}`);
+  });
+
+  test('a **Plans:** count line after a #### sub-heading is rewritten', () => {
+    const out = run([
+      '# ROADMAP',
+      '',
+      '### Phase 12: Test phase',
+      '',
+      '**Goal**: build something',
+      '',
+      '#### Success Criteria',
+      '',
+      '- it works',
+      '',
+      '**Plans:** 3 plans',
+      '',
+      'Plans:',
+      '',
+      '- [ ] 12-01-PLAN.md',
+      '- [ ] 12-02-PLAN.md',
+      '- [ ] 12-03-PLAN.md',
+      '',
+    ].join('\n'));
+    assert.ok(out.includes('**Plans:** 0/3 plans executed'), `count not rewritten\n${out}`);
+  });
+
+  test('the next phase heading still ends the scope: no row lands in a sibling phase', () => {
+    const out = run([
+      '# ROADMAP',
+      '',
+      '### Phase 12: Test phase',
+      '',
+      '**Goal**: build something',
+      '**Plans:** 3 plans',
+      '',
+      '#### Notes',
+      '',
+      '- no list here',
+      '',
+      '### Phase 13: Other phase',
+      '',
+      '**Plans:** 1 plans',
+      '',
+      'Plans:',
+      '',
+      '- [ ] 13-01-PLAN.md',
+      '',
+    ].join('\n'));
+    const sibling = out.slice(out.indexOf('### Phase 13'));
+    assert.ok(!sibling.includes('12-0'), `a phase-12 row leaked into phase 13\n${out}`);
+  });
+
+  test('no bare Plans: in scope falls back to the **Plans:** anchor', () => {
+    const out = run([
+      '# ROADMAP',
+      '',
+      '### Phase 12: Test phase',
+      '',
+      '**Goal**: build something',
+      '**Plans:** 3 plans',
+      '',
+      '#### Success Criteria',
+      '',
+      '- it works',
+      '',
+    ].join('\n'));
+    const summary = indexOfLine(out, '**Plans:**');
+    assert.ok(lines(out)[summary + 1].startsWith('- [ ] 12-01-PLAN.md'), `rows go under **Plans:**\n${out}`);
+    assert.ok(out.includes('- [ ] 12-03-PLAN.md'));
+    assert.ok(indexOfLine(out, '- [ ] 12-03-PLAN.md') < indexOfLine(out, '#### Success Criteria'));
+  });
+
+  test('re-running is idempotent', () => {
+    const first = run(phase12(['**Plans:** 3 plans', '', '#### Success Criteria', '', '- it works', '']));
+    const again = runGsdTools(['roadmap', 'update-plan-progress', '12'], tmpDir);
+    assert.ok(again.success);
+    assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), first);
+  });
+});
+
 describe('#5483: update-plan-progress ticks only the active milestone row', () => {
   let tmpDir;
   let roadmapPath;
