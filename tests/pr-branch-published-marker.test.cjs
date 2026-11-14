@@ -263,10 +263,10 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(builtOf(dir), git(dir, 'rev-parse', 'refs/heads/feature-pr'), 'the built-head ref is the branch tip, not the tag');
   });
 
-  test('refkey encodes control and non-ASCII bytes so the marker ref is valid and injective', (t) => {
+  test('refkey encodes control and non-ASCII bytes so the marker ref is valid and injective', () => {
     const fn = refkeyFn();
     const tmp = createTempDir('gsd-refkey-ctl-');
-    t.after(() => cleanup(tmp));
+    dirs.push(tmp);
     const key = (arg) => runSh(`${fn}\nrefkey ${arg}`, tmp).stdout;
     assert.equal(key(`"$(printf 'a\\tb')"`), 'a%09b');
     assert.equal(key(`"$(printf 'a\\001b\\177')"`), 'a%01b%7F');
@@ -1549,11 +1549,11 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   // TARGET comes from repo config (git.base_branch), so an option-like value must never reach git.
-  test('a target that starts with - is refused and never reaches git as an option', (t) => {
+  test('a target that starts with - is refused and never reaches git as an option', () => {
     const dir = repo();
     commitRound(dir, 1);
     const out = createTempDir('gsd-prmarker-pwned-');
-    t.after(() => cleanup(out));
+    dirs.push(out);
     const pwned = path.join(out, 'pwned').replace(/\\/g, '/');
     const r = publish(dir, `--output=${pwned}`);
     assert.notEqual(r.status, 0);
