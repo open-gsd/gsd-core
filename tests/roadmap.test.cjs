@@ -6502,6 +6502,122 @@ describe('#4786: suffix-less hand-written plan lists are recognized, not duplica
 
 // ─── #4801: archived phase directories resolve in init.manager ──────────────
 
+// #6171: `roadmap update-plan-progress` merges a missing plan row into the existing `Plans:` list by
+// plan id (numeric per segment), keeps the list's blank-line style, and replaces the
+// `TBD (run ... to break down)` stub that `phase add` / `phase insert` write.
+describe('#6171: missing plan rows are merged into the Plans: list in plan order', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-6171-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const roadmapWith = (listLines) => [
+    '# ROADMAP',
+    '',
+    '### Phase 12: Test phase',
+    '',
+    '**Goal**: build something',
+    '**Plans:** 0 plans',
+    '',
+    ...listLines,
+    '',
+  ].join('\n');
+
+  // Writes the roadmap and one PLAN.md per id, runs the verb, returns the written text.
+  function run(listLines, planIds) {
+    fs.writeFileSync(roadmapPath, roadmapWith(listLines));
+    createPhaseWithPlans(tmpDir, '12', planIds.map((id) => `${id}-PLAN.md`));
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '12'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+
+  const rowIds = (text) => [...text.matchAll(/^- \[[ x]\] (\S+?)(?:-PLAN\.md)?\s*$/gm)].map((m) => m[1]);
+  const STUB = '- [ ] TBD (run /gsd-plan-phase 12 to break down)';
+
+  test('a gap in the middle of the list is filled in plan order', () => {
+    const out = run(['Plans:', '- [ ] 12-01-PLAN.md', '- [ ] 12-03-PLAN.md'], ['12-01', '12-02', '12-03']);
+    assert.deepEqual(rowIds(out), ['12-01', '12-02', '12-03'], out);
+  });
+
+  test('a loose list (blank line after Plans:) keeps its spacing and the merged order', () => {
+    const out = run(['Plans:', '', '- [ ] 12-01-PLAN.md', '- [ ] 12-03-PLAN.md'], ['12-01', '12-02', '12-03']);
+    assert.ok(out.includes('Plans:\n\n- [ ] 12-01-PLAN.md\n- [ ] 12-02-PLAN.md\n- [ ] 12-03-PLAN.md\n'), out);
+  });
+
+  test('a stub-only list ends with the real rows in plan order and no TBD row', () => {
+    const out = run(['Plans:', STUB], ['12-01', '12-02', '12-03']);
+    assert.deepEqual(rowIds(out), ['12-01', '12-02', '12-03'], out);
+    assert.ok(!out.includes('TBD (run'), out);
+  });
+
+  test('a stub plus some real rows: the stub is dropped', () => {
+    const out = run(['Plans:', STUB, '- [ ] 12-01-PLAN.md'], ['12-01', '12-02']);
+    assert.deepEqual(rowIds(out), ['12-01', '12-02'], out);
+    assert.ok(!out.includes('TBD (run'), out);
+  });
+
+  test('the codex-form stub ($gsd-plan-phase) is dropped too', () => {
+    const out = run(['Plans:', '- [ ] TBD (run $gsd-plan-phase 12 to break down)'], ['12-01', '12-02']);
+    assert.deepEqual(rowIds(out), ['12-01', '12-02'], out);
+    assert.ok(!out.includes('TBD (run'), out);
+  });
+
+  test('12-9 present, 12-10 missing: 12-10 follows 12-9 (numeric, not lexicographic)', () => {
+    const out = run(['Plans:', '- [ ] 12-9-PLAN.md'], ['12-9', '12-10']);
+    assert.deepEqual(rowIds(out), ['12-9', '12-10'], out);
+  });
+
+  test('a missing id that sorts after every existing row is appended after the last row', () => {
+    const out = run(['Plans:', '- [ ] 12-01-PLAN.md', '- [ ] 12-02-PLAN.md'], ['12-01', '12-02', '12-03']);
+    assert.deepEqual(rowIds(out), ['12-01', '12-02', '12-03'], out);
+  });
+
+  test('a missing id that sorts first goes above the first row, and several missing ids stay ordered', () => {
+    const out = run(['Plans:', '- [ ] 12-04-PLAN.md'], ['12-01', '12-02', '12-03', '12-04', '12-05']);
+    assert.deepEqual(rowIds(out), ['12-01', '12-02', '12-03', '12-04', '12-05'], out);
+  });
+
+  test('an indented detail line stays attached to its row', () => {
+    const out = run(['Plans:', '- [ ] 12-01-PLAN.md', '  detail of one', '- [ ] 12-03-PLAN.md'], ['12-01', '12-02', '12-03']);
+    assert.ok(out.includes('- [ ] 12-01-PLAN.md\n  detail of one\n- [ ] 12-02-PLAN.md\n- [ ] 12-03-PLAN.md'), out);
+  });
+
+  test('a row after the last row stays above the text that follows the list', () => {
+    const out = run(['Plans:', '- [ ] 12-01-PLAN.md', '', '**Success Criteria**: it works'], ['12-01', '12-02']);
+    assert.ok(out.includes('- [ ] 12-01-PLAN.md\n- [ ] 12-02-PLAN.md\n\n**Success Criteria**'), out);
+  });
+
+  test('re-running the verb is idempotent', () => {
+    const first = run(['Plans:', STUB], ['12-01', '12-02', '12-10']);
+    const again = runGsdTools(['roadmap', 'update-plan-progress', '12'], tmpDir);
+    assert.ok(again.success, again.error);
+    assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), first);
+  });
+
+  test('property: comparePlanIds is a numeric-per-segment total order', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    const { comparePlanIds } = require('../gsd-core/bin/lib/roadmap.cjs');
+    const id = fc.tuple(fc.nat(30), fc.nat(30), fc.option(fc.nat(9), { nil: undefined }))
+      .map(([p, n, sub]) => `${p}-${String(n).padStart(2, '0')}${sub === undefined ? '' : `.${sub}`}`);
+    fc.assert(fc.property(id, id, id, (a, b, c) => {
+      assert.equal(comparePlanIds(a, a), 0);
+      assert.equal(comparePlanIds(a, b), -comparePlanIds(b, a));
+      if (comparePlanIds(a, b) <= 0 && comparePlanIds(b, c) <= 0) assert.ok(comparePlanIds(a, c) <= 0);
+    }));
+    assert.ok(comparePlanIds('12-9', '12-10') < 0);
+    assert.ok(comparePlanIds('5-01', '5-01.5') < 0);
+    assert.ok(comparePlanIds('5-01.5', '5-02') < 0);
+  });
+});
+
 describe('#4801: init.manager resolves archived phase directories', () => {
   let tmpDir;
 
