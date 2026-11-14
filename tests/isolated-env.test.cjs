@@ -262,7 +262,7 @@ describe('gitChildEnv', () => {
     const helper = JSON.stringify(path.join(__dirname, 'helpers', 'isolated-env.cjs'));
     const script = `const h = require(${helper}); const d = process.argv[1];`
       + ' process.stdout.write(JSON.stringify({ gitDir: h.gitIn(d)(["rev-parse", "--git-dir"]).trim(), ref: h.refOf(d, "HEAD") }))';
-    const out = probe(script, { ...SYSTEM_VARS, GIT_DIR: hostileDir }, [repo]);
+    const out = probe(script, { ...SYSTEM_VARS, PATH: process.env.PATH, GIT_DIR: hostileDir }, [repo]);
     assert.equal(out.gitDir, '.git');
     assert.equal(out.ref, sha);
   });
