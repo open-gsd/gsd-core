@@ -40,6 +40,8 @@
 
 // ─── Closed vocabularies ───────────────────────────────────────────────────
 
+import { escapeCell } from './markdown-table.cjs';
+
 /** The lifecycle ladder, lowest rung first. */
 export const PHASE_STATUS = Object.freeze({
   NOT_STARTED: 'NOT_STARTED',
@@ -407,6 +409,25 @@ export function matchRoadmapStatusCell(cell: unknown): { token: RoadmapStatusTok
   if (!m) return null;
   const key = m[1].toLowerCase().replace(/\s+/g, ' ');
   return { token: TOKEN_BY_KEY[key], text: m[1] };
+}
+
+/**
+ * #6170: the one rewrite rule for a Progress-table Status cell's leading status token, shared by
+ * `roadmap update-plan-progress` and `phase complete`. `current` is the trimmed, unescaped cell and
+ * `status` the token to write. Returns the literal cell text to splice (padded, `|` escaped):
+ *   - empty or a dash placeholder -> `status`, padded to 11;
+ *   - a leading status token -> the token rewritten to `status` with the tail kept;
+ *   - the token already spelled `status` -> `current` itself (the writer's byte-identical no-op).
+ * Returns null when the cell has no leading token: what to do with token-less prose is the caller's
+ * call (`update-plan-progress` leaves it alone; `phase complete` prefixes it with `Complete - `).
+ */
+export function rewriteRoadmapStatusCell(current: string, status: string): string | null {
+  if (current === '' || /^[-–—]$/.test(current)) return ` ${status.padEnd(11)} `;
+  const m = matchRoadmapStatusCell(current);
+  if (!m) return null;
+  if (m.text === status) return current;
+  const rest = current.slice(m.text.length);
+  return rest === '' ? ` ${status.padEnd(11)} ` : ` ${escapeCell(status + rest)} `;
 }
 
 /**
