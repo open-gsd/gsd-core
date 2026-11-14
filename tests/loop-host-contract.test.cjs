@@ -52,11 +52,17 @@ function makeTempWorkflowsDir(files) {
 
 // ─── Minimal valid workflow content templates ─────────────────────────────────
 
-function makeWorkflow(step, points, roles, produces, consumes, extraContent) {
+// `wiredPoints` defaults to every declared point: a real host both declares a
+// point in its header AND renders it in its body (#5848). A test that needs a
+// declared-but-undispatched point passes a shorter list.
+function makeWorkflow(step, points, roles, produces, consumes, extraContent, wiredPoints) {
   const pointsList = points.join(', ');
   const rolesList = roles.join(', ');
   const producesList = produces.join(', ');
   const consumesList = consumes.join(', ');
+  const sites = (wiredPoints || points)
+    .map((p) => 'HOOKS_JSON=$(gsd_run loop render-hooks ' + p + ' --raw)\n')
+    .join('');
   return (
     '<!-- gsd:loop-host\n' +
     'step: ' + step + '\n' +
@@ -65,6 +71,7 @@ function makeWorkflow(step, points, roles, produces, consumes, extraContent) {
     'produces: ' + producesList + '\n' +
     'consumes: ' + consumesList + '\n' +
     '-->\n' +
+    sites +
     (extraContent || '')
   );
 }
@@ -91,6 +98,14 @@ function makeValidWorkflowFiles() {
       ['SUMMARY.md'], ['PLAN.md'],
       'gsd-executor gsd-verifier',
     ),
+    // #5848: execute:pre's dispatch lives in its step file.
+    'execute-phase/steps/pre-execute-gate-hooks.md': [
+      'EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)',
+      'For each active entry where `kind == "contribution"`: inject.',
+      'For each active entry where `kind == "step"`: dispatch.',
+      'For each active entry where `kind == "gate"`: evaluate.',
+      '',
+    ].join('\n'),
     // #5118: the shared verification step hosts execute:post step/gate dispatch.
     'execute-phase/steps/verify-phase-goal.md': [
       'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
@@ -951,6 +966,139 @@ describe('--check full-content comparison (FIX 4)', () => {
 // ─── 12. Regression: FIX 5 — temp-dir cleanup in existing cross-check tests ──
 //  (cleanup is handled via try/finally in each test above that creates temp dirs;
 //   this suite documents and verifies the makeTempWorkflowsDir helper itself)
+
+// ─── #5848 — a declared point must be dispatched ─────────────────────────────
+
+const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
+const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
+const { scanWiredPoints, scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
+
+describe('declared loop points are dispatched (#5848)', () => {
+  // Acceptance criterion (#5848): every declared point of a workflow has a dispatch site. The
+  // enforcement lives in buildContract; its rejection is covered below ('buildContract rejects a host
+  // that declares a point with no call site'), and this runs it over the real workflows.
+  test('every declared point of every real workflow has a dispatch site (#5848 acceptance criterion)', () => {
+    assert.doesNotThrow(() => buildContract(WORKFLOWS_ROOT));
+  });
+
+  test('execute:pre is handed off before the first wave and before STATE.md records the phase start', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
+    const handoffIdx = text.indexOf('execute-phase/steps/pre-execute-gate-hooks.md');
+    const wavePreIdx = text.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
+    assert.ok(handoffIdx !== -1, 'execute:pre hand-off to its step file must exist');
+    assert.equal(text.split('execute-phase/steps/pre-execute-gate-hooks.md').length, 2, 'the hand-off is the only mention');
+    assert.ok(handoffIdx < wavePreIdx, 'execute:pre must be handed off before the first wave dispatch site');
+    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name');
+    assert.ok(handoffIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
+  });
+
+  test('the execute:pre auxiliary host renders the point and dispatches contribution, step and gate', () => {
+    const aux = STEP_WORKFLOWS.find((w) => w.step === 'execute').auxiliaryHosts.find((h) => h.point === 'execute:pre');
+    assert.deepEqual(aux, { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] });
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, aux.file), 'utf8');
+    assert.ok(scanWiredPoints(text).has('execute:pre'), 'step file must render execute:pre');
+    const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
+    assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
+  });
+
+  // The halt itself is an instruction an agent follows when it reads the step file, so there is no
+  // code seam to execute it; the blocking decision's code seams (resolveLoopHooks delivering the gate
+  // with blocking:true, the check/predicate evaluators' block verdict) are covered by their own tests.
+  // What the host owns, and what this asserts, is that its hand-off resolves to a real step file.
+  test('the execute:pre gate step file the host hands off to exists', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
+    const m = /execute-phase\/steps\/(pre-execute-gate-hooks\.md)/.exec(text);
+    assert.ok(m, 'execute-phase.md must hand execute:pre gate evaluation to its step file');
+    const stepPath = path.join(WORKFLOWS_ROOT, 'execute-phase', 'steps', m[1]);
+    assert.ok(fs.existsSync(stepPath), 'referenced step file must exist');
+  });
+
+  test('resolveLoopHooks delivers a blocking gate and a step registered at execute:pre', () => {
+    const registry = {
+      byLoopPoint: {
+        'execute:pre': {
+          steps: [{ capId: 'approval', ref: { skill: 'approve-plan' } }],
+          contributions: [],
+          gates: [{ capId: 'approval', blocking: true, onError: 'halt', check: { query: 'ui.plan-gate' } }],
+        },
+      },
+      configSchema: {},
+    };
+    const { activeHooks } = resolveLoopHooks({ point: 'execute:pre', registry, config: {} });
+    assert.deepEqual(activeHooks.map((h) => h.kind), ['step', 'gate']);
+    assert.equal(activeHooks[1].blocking, true);
+  });
+
+  test('buildContract rejects a host that declares a point with no call site', () => {
+    const files = makeValidWorkflowFiles();
+    files['execute-phase.md'] = makeWorkflow(
+      'execute', ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
+      ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
+      ['execute:wave:pre', 'execute:wave:post', 'execute:post'],
+    );
+    delete files['execute-phase/steps/pre-execute-gate-hooks.md'];
+    const tmpDir = makeTempWorkflowsDir(files);
+    try {
+      assert.throws(
+        () => buildContract(tmpDir),
+        /execute-phase\.md: declared point "execute:pre" has no `loop render-hooks execute:pre` call site/,
+      );
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('buildContract accepts a declared point wired only in an auxiliary host', () => {
+    const files = makeValidWorkflowFiles();
+    files['execute-phase.md'] = makeWorkflow(
+      'execute', ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
+      ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
+      ['execute:pre', 'execute:wave:pre', 'execute:wave:post'],
+    );
+    const tmpDir = makeTempWorkflowsDir(files);
+    try {
+      assert.doesNotThrow(() => buildContract(tmpDir));
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('findUndispatchedPoints boundary: 0, 1 and 2 declared points (limit-1, limit, limit+1)', () => {
+    const site = (p) => 'HOOKS_JSON=$(gsd_run loop render-hooks ' + p + ' --raw)\n';
+    assert.deepEqual(findUndispatchedPoints([], []), []);
+    assert.deepEqual(findUndispatchedPoints(['a:pre'], [site('a:pre')]), []);
+    assert.deepEqual(findUndispatchedPoints(['a:pre'], ['no call site here']), ['a:pre']);
+    assert.deepEqual(findUndispatchedPoints(['a:pre', 'a:post'], [site('a:post')]), ['a:pre']);
+    assert.deepEqual(findUndispatchedPoints(['a:pre', 'a:post'], []), ['a:pre', 'a:post']);
+  });
+
+  test('findUndispatchedPoints ignores a prose mention of a point', () => {
+    assert.deepEqual(
+      findUndispatchedPoints(['execute:pre'], ['The execute:pre point is declared but never rendered.']),
+      ['execute:pre'],
+    );
+  });
+
+  test('findUndispatchedPoints tolerates CRLF', () => {
+    const text = 'step one\r\nHOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)\r\nstep two\r\n';
+    assert.deepEqual(findUndispatchedPoints(['execute:pre', 'execute:post'], [text]), ['execute:post']);
+  });
+
+  test('property: findUndispatchedPoints == declared minus the union of wired points', () => {
+    const point = fc.constantFrom(...CANONICAL_POINTS);
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(point),
+        fc.array(fc.array(point), { maxLength: 4 }),
+        (declared, wiredPerText) => {
+          const texts = wiredPerText.map((ps) => ps.map((p) => 'gsd_run loop render-hooks ' + p + ' --raw\n').join(''));
+          const wired = new Set(wiredPerText.flat());
+          assert.deepEqual(findUndispatchedPoints(declared, texts), declared.filter((p) => !wired.has(p)));
+        },
+      ),
+    );
+  });
+});
 
 describe('temp-dir lifecycle', () => {
   test('makeTempWorkflowsDir creates a directory that can be cleaned up', () => {

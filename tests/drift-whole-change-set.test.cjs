@@ -1306,7 +1306,7 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
 // workstream-aware through the resolver `config-get` shares (GSD_WORKSTREAM: the workstream's
 // config first, then the project root's).
 describe('verify codebase-drift: workflow.drift_threshold / drift_action through the gate-config reader (#5139)', () => {
-  const { spawnSync } = require('node:child_process');
+  const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
   const { TEST_ENV_BASE } = require('./helpers.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -1338,13 +1338,12 @@ describe('verify codebase-drift: workflow.drift_threshold / drift_action through
   }
 
   function driftCli(workstream) {
-    const r = spawnSync(process.execPath, [TOOLS, 'verify', 'codebase-drift'], {
+    const r = runNode([TOOLS, 'verify', 'codebase-drift'], {
       cwd: tmp,
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
       env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
     });
-    assert.equal(r.status, 0, `verify codebase-drift failed: ${r.stderr}`);
+    assertSeamExit(assert, r, 0, 'verify codebase-drift failed');
     return { data: JSON.parse(r.stdout), stderr: r.stderr };
   }
   const config = (workflow) => writeFile('.planning/config.json', JSON.stringify({ workflow }));
