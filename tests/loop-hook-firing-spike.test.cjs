@@ -117,7 +117,7 @@ describe('spike #1018 — off means off (structural proof)', () => {
       'Expected exactly 1 active UI step when ui_phase defaults to true');
     assert.deepEqual(consumed.skillsToInvoke, ['ui-phase'],
       'UI skillsToInvoke must be [ui-phase]');
-    assert.match(consumed.rendered, /### Step \d+: skill:ui-phase \(ui\)/,
+    assert.match(consumed.rendered, /### Step \d+: skill:gsd-ui-phase \(ui\)/,
       'rendered must include the properly-structured Step block heading for ui-phase');
 
     // onError='skip' must be carried into the active hook entry
@@ -252,7 +252,7 @@ describe('spike #1018 — off means off (structural proof)', () => {
       "onError must be 'skip' on the ui-review step at verify:post");
     // Also verify the rendered output contains the structured heading for this point
     const rendered = renderLoopHooks(resolved);
-    assert.match(rendered, /### Step \d+: skill:ui-review \(ui\)/,
+    assert.match(rendered, /### Step \d+: skill:gsd-ui-review \(ui\)/,
       'rendered must include the properly-structured Step block heading for ui-review at verify:post');
   });
 
