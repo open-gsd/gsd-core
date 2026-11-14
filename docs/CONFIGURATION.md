@@ -2279,7 +2279,7 @@ On the Claude runtime, tier resolution stays on Claude Code's adaptive tier alia
 4. Claude-native default — `model_profile` tier as alias (current default).
 5. `inherit` — propagates literal `inherit` for `Task(model="inherit")` semantics.
 
-**Backwards compatibility.** Setups without `runtime` set see zero behavior change — every existing config continues to work identically. Codex installs that auto-set `resolve_model_ids: "omit"` continue to omit the model field unless the user opts in by setting `runtime: "codex"`.
+**Backwards compatibility.** A recognized Codex identity from the environment, project config or install marker resolves through the Codex tier map. An explicit project `resolve_model_ids: "omit"` keeps its existing precedence: a populated non-Claude tier entry can resolve before the omit gate; paths without such an entry keep the empty-model result.
 
 **Unknown runtimes.** If `runtime` is set to a value with no built-in tier map and no `model_profile_overrides[<runtime>]`, GSD falls back to the Claude-alias safe default rather than emit a model ID the runtime cannot accept. To support a new runtime, populate `model_profile_overrides.<runtime>.{opus,sonnet,haiku}` with valid IDs.
 
@@ -2435,7 +2435,9 @@ Save settings as global defaults for future projects:
 
 Every reader and writer of this store resolves its root the same way: `GSD_HOME` when it is set and non-blank, otherwise your home directory. That covers the config loader, the install-time model / tools / effort resolvers, the installer's non-Claude defaults writer, the isolation hooks' runtime fallback, capability staging, and the `/gsd-settings` and `/gsd-new-project` workflows (#5017).
 
-When `/gsd-new-project` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals.
+When `/gsd-new-project`, `config-ensure-section`, or `config-set-model-profile` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals. Project creation excludes the shared `runtime` key. A shared `resolve_model_ids: "omit"` is excluded only when the runtime creating the project has native model aliases (currently Claude Code). Every other runtime keeps the shared omit, preserving its existing resolution for unknown agents and the `inherit` profile as well as known agents. Boolean `true`/`false` defaults and any explicit new-project choice, including `"omit"`, are preserved.
+
+Existing project configs are left unchanged. If a project's `resolve_model_ids: "omit"` suppresses Claude tier routing, each resolving CLI invocation emits one warning per project scope naming the key and explaining that an older version may have copied it from shared defaults. The per-process scope follows the existing config-warning seam: separate CLI processes cannot share an in-memory dedupe, and resolution does not write marker state merely to silence later diagnostics. GSD cannot distinguish a copied value from an intentional one and continues to honor it. To restore tier routing when desired, remove the key or set it to `false` in the project config. Non-Claude runtime resolution keeps its existing behavior.
 
 ### What a global file can and cannot set at runtime
 

@@ -123,6 +123,7 @@ export const MODEL_ALIAS_MAP: Record<string, string | undefined> = Object.fromEn
   Object.entries(_catalog.runtimeTierDefaults['claude'] ?? {}).map(([tier, entry]) => [tier, entry?.model])
 );
 
+
 export const RUNTIME_PROFILE_MAP: Record<string, Record<string, TierEntry>> = (() => {
   const result: Record<string, Record<string, TierEntry>> = {};
   for (const [runtime, tiers] of Object.entries(_catalog.runtimeTierDefaults)) {
