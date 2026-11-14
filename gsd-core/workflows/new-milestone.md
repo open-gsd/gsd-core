@@ -204,7 +204,11 @@ milestone version/name into the YAML frontmatter, resets `status` to
 `planning`, zeroes `progress.*` counters, and rewrites the `## Current Position`
 section to the new-milestone template. Accumulated Context (decisions,
 blockers, todos) is preserved across the switch — symmetric with
-`milestone.complete`.
+`milestone.complete`. Frontmatter keys STATE.md does not define (for example a
+custom `team_owner`) keep their values. Any other line in `## Current Position`
+(for example `Blocked on:` or `Carry-over:`) is moved to the top of
+`## Accumulated Context` and listed in the command's JSON result under
+`moved_current_position_lines`; `milestone.complete` does the same (#6174).
 
 ```bash
 GSD_WS_ARG=$(cat .planning/.gsd-ws-arg 2>/dev/null || true)

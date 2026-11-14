@@ -18,7 +18,7 @@
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
-import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, withSection, maskFences, scanFencedBlocks } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
 import { milestoneVersionOf } from './roadmap-progress.cjs';
@@ -2711,6 +2711,74 @@ function plannedPhaseCore(
 // milestoneSwitch — intent implementation (Phase 4)
 // ----------------------------------------------------------------------------
 
+// #6174: the milestone-switch and milestone-complete resets both replace the
+// whole `## Current Position` body with the four template lines. Anything else
+// an operator kept in that section (`Blocked on:`, `Carry-over:`, ...) used to
+// be deleted silently. These two helpers are the ONE shared treatment of those
+// lines, so the two intents cannot diverge: collect every non-template line
+// before the reset, then re-home it under `## Accumulated Context`.
+
+/** The four template fields of the `## Current Position` reset (bold or plain). */
+const CURRENT_POSITION_TEMPLATE_LINE_RE = /^\s*\**(?:Phase|Plan|Status|Last activity)\**\s*:/i;
+
+/**
+ * Collect the lines of `## Current Position` that are not one of the four
+ * template lines, in original order. Blank lines outside a fenced block are
+ * layout, not content, and are not collected; every line inside a fenced block
+ * (delimiters included) is collected verbatim so a fenced example keeps its
+ * shape. Fence-aware heading location (a `##` inside a fence does not end the
+ * section) via `tokenizeHeadings`. Trailing `\r` is dropped (CRLF input).
+ * Returns `[]` when the section is absent.
+ */
+function collectNonTemplateCurrentPositionLines(body: string): string[] {
+  const hs = tokenizeHeadings(body);
+  const posIdx = hs.findIndex((h) => h.level === 2 && /^current\s+position$/i.test(h.text));
+  if (posIdx === -1) return [];
+  const h = hs[posIdx];
+  const headingLine = body.split('\n')[h.line - 1];
+  const sectionStart = h.offset + headingLine.length + 1;
+  let sectionEnd = body.length;
+  for (let j = posIdx + 1; j < hs.length; j++) {
+    if (STOP_H2_PLUS(hs[j].level)) { sectionEnd = hs[j].offset - 1; break; }
+  }
+  if (sectionStart >= sectionEnd) return [];
+
+  const lines = body.slice(sectionStart, sectionEnd).split('\n').map((l) => l.replace(/\r$/, ''));
+  const inFence = new Array<boolean>(lines.length).fill(false);
+  for (const block of scanFencedBlocks(lines)) {
+    const last = block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx;
+    for (let i = block.openLineIdx; i <= last; i++) inFence[i] = true;
+  }
+  const moved: string[] = [];
+  lines.forEach((line, i) => {
+    if (inFence[i]) { moved.push(line); return; }
+    if (line.trim() === '') return;
+    if (CURRENT_POSITION_TEMPLATE_LINE_RE.test(line)) return;
+    moved.push(line);
+  });
+  return moved;
+}
+
+/**
+ * Insert `lines` directly under the `## Accumulated Context` heading (ahead of
+ * the section's existing content, which is left byte-for-byte as it was), or
+ * append a new `## Accumulated Context` section when the document has none.
+ * No-op for an empty list, so a transition with nothing to move is unchanged.
+ */
+function placeUnderAccumulatedContext(body: string, lines: string[]): string {
+  if (lines.length === 0) return body;
+  const block = lines.join('\n');
+  const hs = tokenizeHeadings(body);
+  const idx = hs.findIndex((h) => h.level === 2 && /^accumulated\s+context$/i.test(h.text));
+  if (idx === -1) {
+    return `${body.trimEnd()}\n\n## Accumulated Context\n\n${block}\n`;
+  }
+  const h = hs[idx];
+  const headingEnd = h.offset + body.split('\n')[h.line - 1].length + 1;
+  const rest = body.slice(headingEnd).replace(/^(?:\r?\n)+/, '');
+  return `${body.slice(0, Math.min(headingEnd, body.length))}${headingEnd > body.length ? '\n' : ''}\n${block}\n${rest === '' ? '' : `\n${rest}`}`;
+}
+
 /**
  * Apply a `milestoneSwitch` transition to STATE.md content.
  *
@@ -2760,6 +2828,9 @@ function milestoneSwitchCore(
     `Status: Defining requirements\n` +
     `Last activity: ${today} — Milestone ${intent.version} started\n\n`;
 
+  // #6174: operator lines in the section the reset is about to replace.
+  const movedLines = collectNonTemplateCurrentPositionLines(body);
+
   let newBody: string;
   const hs = tokenizeHeadings(body);
   const posIdx = hs.findIndex((h) => h.level === 2 && /^current\s+position$/i.test(h.text));
@@ -2781,8 +2852,15 @@ function milestoneSwitchCore(
     newBody = `${preface.trimEnd()}\n\n## Current Position\n${resetPositionBody}`;
   }
 
+  if (movedLines.length > 0) {
+    newBody = placeUnderAccumulatedContext(newBody, movedLines);
+    updated.push('Accumulated Context');
+  }
+
   // Rebuilt frontmatter — curated fields are intentionally reset (milestone
-  // boundary). gsd_state_version is preserved.
+  // boundary). gsd_state_version is preserved, and so is every key
+  // FIELD_CLASSIFICATION does not know (#6174: a custom `team_owner`); the
+  // classified curated keys are still dropped, as before.
   const fm: Record<string, unknown> = {
     gsd_state_version: existingFm['gsd_state_version'] || '1.0',
     milestone: intent.version,
@@ -2798,10 +2876,15 @@ function milestoneSwitchCore(
       percent: 0,
     },
   };
+  for (const [key, value] of Object.entries(existingFm)) {
+    if (!(key in fm) && getFieldClassification(key) === null) fm[key] = value;
+  }
 
   const yamlStr = reconstructFrontmatter(fm as unknown as Frontmatter);
   const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
-  return { content: assembled, updated };
+  return movedLines.length > 0
+    ? { content: assembled, updated, data: { moved_current_position_lines: movedLines } }
+    : { content: assembled, updated };
 }
 
 // ----------------------------------------------------------------------------
@@ -2943,6 +3026,8 @@ function milestoneCompleteCore(
     `Plan: —\n` +
     `Status: Awaiting next milestone\n` +
     `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
+  // #6174: operator lines in the section the reset is about to replace.
+  const movedLines = collectNonTemplateCurrentPositionLines(body);
   const positionReset = resetSectionVerbatim(
     body,
     (h) => h.level === 2 && /^current\s+position$/i.test(h.text),
@@ -2954,6 +3039,10 @@ function milestoneCompleteCore(
     body = `${body.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
   }
   updated.push('Current Position');
+  if (movedLines.length > 0) {
+    body = placeUnderAccumulatedContext(body, movedLines);
+    updated.push('Accumulated Context');
+  }
 
   // ## Operator Next Steps — normalize stale tails that can persist after close.
   const operatorReset = resetSectionVerbatim(
@@ -2968,7 +3057,9 @@ function milestoneCompleteCore(
   }
   updated.push('Operator Next Steps');
 
-  return { content: reassemble(body), updated };
+  return movedLines.length > 0
+    ? { content: reassemble(body), updated, data: { moved_current_position_lines: movedLines } }
+    : { content: reassemble(body), updated };
 }
 
 // ----------------------------------------------------------------------------
