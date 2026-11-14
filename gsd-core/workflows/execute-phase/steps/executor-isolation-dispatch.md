@@ -301,14 +301,19 @@ PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2
 # Count bytes in the C locale: BSD tr stops at the first byte that is not valid in the user's locale.
 _PROMPT_BYTES=$(LC_ALL=C wc -c 2>/dev/null < "$PROMPT_FILE" || :)
 _PROMPT_NONNUL=$(LC_ALL=C tr -d '\000' 2>/dev/null < "$PROMPT_FILE" | LC_ALL=C wc -c || :)
-if [ -n "$_PROMPT_BYTES" ] && [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
+if [ -z "$_PROMPT_BYTES" ] || [ -z "$_PROMPT_NONNUL" ]; then
+  rm -rf -- "$PROMPT_FILE" || :
+  echo "FATAL: could not count the bytes of the executor prompt file for plan {plan_number}. Halting." >&2
+  exit 69
+fi
+if [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
   rm -rf -- "$PROMPT_FILE" || :
   echo "FATAL: executor prompt file for plan {plan_number} holds a NUL byte, which a shell variable cannot carry. Halting." >&2
   exit 69
 fi
 if EXECUTOR_PROMPT=$(cat -- "$PROMPT_FILE" 2>/dev/null && printf x); then _PROMPT_RC=0; else _PROMPT_RC=$?; fi
 EXECUTOR_PROMPT=${EXECUTOR_PROMPT%x}
-rm -rf -- "$PROMPT_FILE" || :
+rm -rf -- "$PROMPT_FILE" || { echo "FATAL: could not remove the executor prompt file for plan {plan_number}. Halting." >&2; exit 69; }
 [ "$_PROMPT_RC" -eq 0 ] || { echo "FATAL: executor prompt file for plan {plan_number} is missing or unreadable. Halting." >&2; exit 69; }
 [ -n "$EXECUTOR_PROMPT" ] || { echo "FATAL: executor prompt is empty for plan {plan_number}." >&2; exit 1; }
 # #3637 fail-closed verification. Two classes of check:

@@ -36,7 +36,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   const BOM = String.fromCharCode(0xfeff);
   // Every halt #5531 adds exits 69 UNAVAILABLE (the exit-code registry doc), so the exit code does not tell them apart: each case below
   // is a separate input, and a stub mark or a payload check shows that its own guard fired. The older guards keep exit 1.
-  const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 69, two: 69, nul: 69, unreadable: 69, guard: 1 };
+  const EXIT = { mkdir: 69, leftover: 69, mktemp: 69, symlink: 69, none: 69, two: 69, nul: 69, unreadable: 69, count: 69, guard: 1 };
   // The two markers the read-and-check guards need, so a payload after them reaches the last guard.
   const GUARDED = '<required_reading>\nskipped_gitignored\n';
 
@@ -220,11 +220,27 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
   test('#5531: the read-and-check block removes a regular prompt file whose read fails and halts with the unreadable code', (t) => {
     const root = path.join(tempDir(t), 'orch');
     const file = place(root, `${STEM}-aaaaaa`, GUARDED);
-    // Failing `wc` and `cat` stand in for a mode-000 file without mode bits, so the case also runs as root: the empty byte count skips the NUL check, and the block falls through to the cat FATAL, as it does for a file nobody can read.
-    const r = runBlock(root, `wc() { return 1; }\ncat() { return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
+    // A failing `cat` stands in for a mode-000 file without mode bits, so the case also runs as root.
+    const r = runBlock(root, `cat() { return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
     assert.equal(r.exitCode, EXIT.unreadable, r.stderr);
+    assert.match(r.stderr, /missing or unreadable/);
     assert.ok(!fs.existsSync(file), 'the file is removed before the halt');
+  });
+
+  test('#5531: the read-and-check block halts (exit 69) when a byte count fails instead of skipping the NUL check, and when the removal fails', (t) => {
+    const dir = tempDir(t);
+    // A failing `wc` leaves a count empty; a failing `rm` leaves the file. Neither may let the prompt through.
+    const cases = { count: ['wc() { return 1; }', /could not count the bytes/], remove: ['rm() { return 1; }', /could not remove the executor prompt file/] };
+    for (const [name, [stub, message]] of Object.entries(cases)) {
+      const root = path.join(dir, name);
+      place(root, `${STEM}-aaaaaa`, GUARDED);
+      const r = runBlock(root, `${stub}\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
+      assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
+      assert.equal(r.exitCode, EXIT.count, `${name}: ${r.stderr}`);
+      assert.match(r.stderr, message, name);
+      assert.equal(r.stdout, '', `${name}: no prompt printed`);
+    }
   });
 
   test('#5531: the name pattern keeps plan 3 apart from plan 30, plan 9 and the plan 3 of another wave for the lookup and for the leftover removal', (t) => {
