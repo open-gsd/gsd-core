@@ -1388,6 +1388,15 @@ describe('#6002: detectors match platform behavior, not text', () => {
     assert.equal(classifyMacosContent('const x = notcanonicalizePath(a);').needsRealOs, false);
   });
 
+  test('aliased canonicalizing helper calls are not a macOS signal', () => {
+    const source = 'const { runGateWithStatFailure: invoke } = require("./helpers/fs-failure.cjs"); invoke(t, dir, "g", "EACCES", opts);';
+    assert.equal(classifyMacosContent(source).needsRealOs, false);
+  });
+
+  test('canonicalizing helper callback references are not a macOS signal', () => {
+    assert.equal(classifyMacosContent('values.map(canonicalizePath);').needsRealOs, false);
+  });
+
   // Property: comments never add or remove signals.
   test('property: comment-only content has no signals (#6002)', () => {
     fc.assert(
