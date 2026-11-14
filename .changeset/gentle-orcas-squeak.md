@@ -2,4 +2,4 @@
 type: Fixed
 pr: 0
 ---
-**`GSD_RUNTIME` and the install marker now recognise pi, vscode and zcode** — the runtime name policy did not list these three registered runtimes, so an install naming one of them resolved with no runtime identity, and under `resolve_model_ids: "omit"` pi lost its own tier map. (#3703)
+**pi, vscode and zcode are now recognised as the install's runtime identity** — the runtime name policy did not list these three registered runtimes, so `GSD_RUNTIME` or the install marker naming one of them never set `runtime` in the loaded config, and under `resolve_model_ids: "omit"` pi lost its own tier map. (#3703)
