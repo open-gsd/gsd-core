@@ -32,7 +32,7 @@ const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fc = require('fast-check');
-const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { runHook: runHookSeam, runGit, runNode } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
@@ -124,6 +124,10 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
     ["cd repo && git -c alias.x='!cat .env' x", '.env'],
     ["git -c alias.x='!cat .env' ls-files .env", '.env'],
     ["git -c diff.external='cat .env' diff\r\n", '.env'],
+    // #5492: a plain alias is scanned as the git command it expands to, so
+    // `git echo .env` names a secret operand (git itself rejects `echo`; an
+    // accepted over-block).
+    ["git -c alias.x='echo .env' x", '.env'],
   ];
   for (const [cmd, expectedPath] of blocks) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
@@ -139,7 +143,6 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
     "git -c diff.externalCommand='cat .env' diff",
     "git -c aliasx.read='!cat .env' status",
     "git -c alias.x='status' x",
-    "git -c alias.x='echo .env' x", // no leading !: not a shell script
     "git -c alias.x='!echo .env' x",
     "git -c diff.external='echo .env' diff",
     "git -c alias.x='!cat .env.example' x",
@@ -270,6 +273,973 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
       const cmd = `git ${globals.join(' ')} ls-files --error-unmatch ${secret}`;
       assertAllowed(runHook(bash(cmd)), cmd);
     }), OPTIONS);
+  });
+});
+
+// Environment variables git reads in place of a config key, and that key
+// (checked live on git 2.43). git's own precedence among them does not
+// matter: every one of them is scanned. Sources are git v2.56.0's
+// Documentation/ files.
+const TWINS = [
+  ['GIT_EDITOR', 'core.editor'], ['VISUAL', 'core.editor'], ['EDITOR', 'core.editor'], // git-var.adoc GIT_EDITOR
+  ['GIT_SEQUENCE_EDITOR', 'sequence.editor'], // git-var.adoc
+  ['GIT_SSH_COMMAND', 'core.sshcommand'], ['GIT_SSH', 'core.sshcommand'], // git.adoc ENVIRONMENT, config/core.adoc
+  ['GIT_EXTERNAL_DIFF', 'diff.external'], // git.adoc ENVIRONMENT
+  ['GIT_ASKPASS', 'core.askpass'], ['SSH_ASKPASS', 'core.askpass'], // config/core.adoc, gitcredentials.adoc
+  ['GIT_PROXY_COMMAND', 'core.gitproxy'], // config/core.adoc core.gitProxy
+  ['GIT_PAGER', 'core.pager'], ['PAGER', 'core.pager'], // git-var.adoc GIT_PAGER
+];
+
+describe('gsd-secret-read-guard: remaining command-valued git config keys (#5492)', () => {
+  // Oracle: #5492's approved key list. Git runs each value as a command
+  // (git-config(1)). A credential helper is a script with a leading `!`, an
+  // absolute path, or shell metacharacters; a plain word runs as
+  // `git credential-<word>` (gitcredentials(7), "Custom Helpers"). A
+  // submodule update is a script only with `!`; otherwise it is a mode word.
+  // ROWS is the oracle: every key the hook scans by shape (#5045's
+  // diff.external included), as [section, hasSubsection, name, bangOnly]
+  // rows rather than the hook's collapsed-shape strings. A bangOnly key
+  // blocks a `cat .env` value only behind a leading `!`; credential helpers'
+  // path and metacharacter forms are rows in `blocks`, not in this oracle.
+  // core.askPass, core.gitProxy and sendemail.smtpServer exec a program
+  // rather than a shell; they are scanned conservatively anyway. alias.* is
+  // #5045's own branch, not a shape, so it stays out.
+  // Each row cites where git v2.56.0 documents the key (Documentation/).
+  const ROWS = [
+    ['diff', false, 'external', false], // config/diff.adoc
+    ['sequence', false, 'editor', false], // config/sequencer.adoc
+    ['core', false, 'editor', false], ['core', false, 'sshcommand', false], ['core', false, 'fsmonitor', false], // config/core.adoc
+    ['gpg', false, 'program', false], ['gpg', true, 'program', false], // config/gpg.adoc
+    ['diff', true, 'textconv', false], ['diff', true, 'command', false], // config/diff.adoc
+    ['filter', true, 'clean', false], ['filter', true, 'smudge', false], // config/filter.adoc
+    ['filter', true, 'process', false], // gitattributes.adoc "Long Running Filter Process"
+    ['merge', true, 'driver', false], // config/merge.adoc
+    ['credential', false, 'helper', true], ['credential', true, 'helper', true], // config/credential.adoc
+    ['core', false, 'askpass', false], ['core', false, 'gitproxy', false], // config/core.adoc
+    ['core', false, 'alternaterefscommand', false], // config/core.adoc
+    ['uploadpack', false, 'packobjectshook', false], // config/uploadpack.adoc
+    ['gc', false, 'recentobjectshook', false], // config/gc.adoc
+    ['interactive', false, 'difffilter', false], // config/interactive.adoc
+    ['imap', false, 'tunnel', false], // config/imap.adoc
+    ['instaweb', false, 'httpd', false], // config/instaweb.adoc
+    ['difftool', true, 'cmd', false], ['mergetool', true, 'cmd', false], // config/difftool.adoc, config/mergetool.adoc
+    ['browser', true, 'cmd', false], ['man', true, 'cmd', false], ['guitool', true, 'cmd', false], // config/browser.adoc, man.adoc, guitool.adoc
+    ['trailer', true, 'cmd', false], ['trailer', true, 'command', false], // config/trailer.adoc
+    ['gpg', true, 'defaultkeycommand', false], // config/gpg.adoc gpg.ssh.defaultKeyCommand
+    ['tar', true, 'command', false], // git-archive.adoc CONFIGURATION
+    ['remote', true, 'uploadpack', false], ['remote', true, 'receivepack', false], // config/remote.adoc
+    ['sendemail', false, 'smtpserver', false], ['sendemail', true, 'smtpserver', false], // config/sendemail.adoc
+    ['sendemail', false, 'sendmailcmd', false], ['sendemail', true, 'sendmailcmd', false], // git-send-email.adoc --sendmail-cmd
+    ['sendemail', false, 'tocmd', false], ['sendemail', true, 'tocmd', false], // config/sendemail.adoc
+    ['sendemail', false, 'cccmd', false], ['sendemail', true, 'cccmd', false], // config/sendemail.adoc
+    ['sendemail', false, 'headercmd', false], ['sendemail', true, 'headercmd', false], // config/sendemail.adoc
+    ['submodule', true, 'update', true], // config/submodule.adoc
+    ['hook', true, 'command', false], // config/hook.adoc
+  ];
+  const blocks = [
+    ["git -c sequence.editor='cat .env; true' rebase -i --root", '.env'],
+    ["git -c core.editor='cat .env; true' commit", '.env'],
+    ["git -c core.sshCommand='cat .env #' fetch", '.env'],
+    ["git -c core.fsmonitor='cat .env' status", '.env'],
+    ["git -c gpg.program='cat .env' commit -S", '.env'],
+    ["git -c gpg.ssh.program='cat .env' commit -S", '.env'],
+    ["git -c diff.x.textconv='cat .env #' show --textconv HEAD", '.env'],
+    ["git -c diff.x.command='cat .env' diff", '.env'],
+    ["git -c filter.x.clean='cat .env' add f", '.env'],
+    ["git -c filter.x.smudge='cat .env' checkout f", '.env'],
+    ["git -c filter.x.process='cat .env' checkout f", '.env'],
+    ["git -c merge.x.driver='cat .env' merge b", '.env'],
+    ["git -c credential.helper='!cat .env' fetch", '.env'],
+    // A subsection may itself contain dots (a URL); section and name decide.
+    ["git -c credential.https://example.com.helper='!cat .env' fetch", '.env'],
+    // Without `!`, an absolute helper runs verbatim and any other helper as
+    // `git credential-<value>` through the shell, so a path or a shell
+    // metacharacter runs a command.
+    ["git -c credential.helper='/bin/cat .env' fetch", '.env'],
+    ["git -c credential.helper='x; cat .env' fetch", '.env'],
+    ["git -c credential.helper='x $(cat .env)' fetch", '.env'],
+    ["git -c credential.helper='x `cat .env`' fetch", '.env'],
+    ["git -c credential.https://example.com.helper='/bin/cat .env' fetch", '.env'],
+    // git's built-in `store` helper reads the file it is given, and
+    // `git credential fill` prints a URL line from it.
+    ["git -c credential.helper='store --file .env' credential fill", '.env'],
+    ["git -c credential.helper='store --file=.env' credential fill", '--file=.env'],
+    ["git -c Core.SSHCommand='cat .env #' fetch", '.env'],
+    ["git -c DIFF.X.TEXTCONV='cat .env #' show --textconv HEAD", '.env'],
+    ["git -c core.askPass='cat .env' fetch", '.env'],
+    ["git -c core.gitProxy='cat .env for example.com' fetch", '.env'],
+    ["git -c core.alternateRefsCommand='cat .env #' fetch", '.env'],
+    ["git -c uploadpack.packObjectsHook='cat .env #' upload-pack .", '.env'],
+    ["git -c gc.recentObjectsHook='cat .env' gc --cruft", '.env'],
+    ["git -c interactive.diffFilter='cat .env #' add -p", '.env'],
+    ["git -c imap.tunnel='cat .env' imap-send", '.env'],
+    ["git -c instaweb.httpd='cat .env' instaweb", '.env'],
+    ["git -c difftool.x.cmd='cat .env #' difftool -t x", '.env'],
+    ["git -c mergetool.x.cmd='cat .env #' mergetool -t x", '.env'],
+    ["git -c browser.x.cmd='cat .env #' web--browse -b x", '.env'],
+    ["git -c man.x.cmd='cat .env #' help -m log", '.env'],
+    ["git -c guitool.x.cmd='cat .env' gui", '.env'],
+    ["git -c trailer.x.cmd='cat .env #' interpret-trailers", '.env'],
+    ["git -c trailer.x.command='cat .env' interpret-trailers", '.env'],
+    ["git -c gpg.ssh.defaultKeyCommand='cat .env' commit -S", '.env'],
+    ["git -c tar.tgz.command='cat .env #' archive --format=tgz HEAD", '.env'],
+    ["git -c remote.origin.uploadpack='cat .env; git-upload-pack' fetch", '.env'],
+    ["git -c remote.origin.receivepack='cat .env; git-receive-pack' push", '.env'],
+    ["git -c sendemail.smtpServer='/bin/cat .env' send-email x.patch", '.env'],
+    ["git -c sendemail.sendmailCmd='cat .env #' send-email x.patch", '.env'],
+    ["git -c sendemail.toCmd='cat .env #' send-email x.patch", '.env'],
+    ["git -c sendemail.work.ccCmd='cat .env #' send-email --identity=work x.patch", '.env'],
+    ["git -c sendemail.headerCmd='cat .env #' send-email x.patch", '.env'],
+    ["git -c submodule.x.update='!cat .env' submodule update", '.env'],
+    // git 2.54 config-based hooks: the command runs through the shell.
+    ["git -c hook.x.command='cat .env' -c hook.x.event=pre-commit commit --allow-empty -m t", '.env'],
+    // A plain alias may carry its own -c (git applies the alias's leading
+    // options), so it is scanned as the git command it expands to.
+    ["git -c alias.x='-c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c sequence.editor=\"cat .env\" rebase -i' x", '.env'],
+    ["git -c alias.x='-c credential.helper=\"!cat .env\" fetch' x", '.env'],
+    ["git -c Alias.X='-c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.a='-c alias.b=\"-c core.fsmonitor=\\\"cat .env\\\" status\" b' a", '.env'],
+    ["git -c alias.x='log -p -- .env' x", '.env'],
+    // Git splits an alias on whitespace and quotes only: `;`, `|`, `&` and a
+    // newline are ordinary characters inside a word, not command boundaries.
+    ["git -c alias.x='-c user.name=x; -c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c user.name=x| -c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c user.name=x& -c core.fsmonitor=\"cat .env\" status' x", '.env'],
+    ["git -c alias.x='-c user.name=x\n-c core.fsmonitor=\"cat .env\" status' x", '.env'],
+  ];
+  for (const [cmd, expectedPath] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  const allows = [
+    "git -c core.pager='cat .env' log",
+    "git -c pager.log='cat .env' log",
+    'git -c credential.helper=store fetch',
+    // A plain word only names a helper: git runs `git credential-cat .env`.
+    "git -c credential.helper='cat .env' fetch",
+    "git -c credential.helper='store --file ~/.git-credentials' fetch",
+    'git -c credential.https://example.com.helper=store fetch',
+    'git -c core.editor=vim commit',
+    'git -c core.fsmonitor=true status',
+    "git -c diff.x.textconv='cat README.md' show --textconv HEAD",
+    "git -c filter.x.clean='cat .env.example' add f",
+    "git -c diff.textconv='cat .env' diff", // no subsection: not a textconv key
+    "git -c sequence.editorx='cat .env' rebase -i",
+    "git -c http.extraHeader='cat .env' fetch",
+    'git -c core.autocrlf=true status',
+    "git -c foo='cat .env' status",
+    "echo \"git -c sequence.editor='cat .env' rebase -i\"",
+    'git -c sendemail.smtpServer=smtp.example.com send-email x.patch',
+    'git -c submodule.x.update=rebase submodule update',
+    "git -c submodule.x.update='cat .env' submodule update", // a mode word, not a command
+    "git -c difftool.x.path='cat .env' difftool -t x", // a program path, not a command line
+    "git -c remote.origin.url='cat .env' fetch",
+    'git -c core.askPass=/usr/lib/ssh/ssh-askpass fetch',
+    'git -c instaweb.httpd=lighttpd instaweb',
+    // A stripped `!` leaves `echo .env`, which prints a name, not contents.
+    "git -c credential.helper='!echo .env' fetch",
+    "git -c submodule.x.update='!echo .env' submodule update",
+    'git -c alias.st=status st',
+    "git -c alias.lg='log --oneline' lg",
+    "git -c alias.x='-c credential.helper=store fetch' x",
+    "git -c alias.x='-c user.name=x; status' x",
+    // One word to git (`cat .env`), so no `.env` operand.
+    "git -c alias.x='-c user.name=cat\\ .env status' x",
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // Every key shape against every secret form, exhaustively rather than sampled.
+  const KEYS = [
+    ...ROWS.map(([section, hasSub, name, bangOnly]) =>
+      [hasSub ? `${section}.x.${name}` : `${section}.${name}`, bangOnly ? '!' : '']),
+    ['gpg.x509.program', ''], ['credential.https://example.com.helper', '!'],
+  ];
+  const SECRETS = ['.env', '.env.local', '.secrets', 'config/.env.production'];
+  for (const [key, prefix] of KEYS) {
+    for (const secret of SECRETS) {
+      test(`blocks ${key} reading ${secret}`, () => {
+        const cmd = `git -c ${key}='${prefix}cat ${secret}' status`;
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: secret });
+      });
+    }
+  }
+
+  const expected = (section, sub, name, bang) => ROWS.some(([s, hasSub, n, bangOnly]) =>
+    s === section.toLowerCase() && n === name.toLowerCase() && hasSub === (sub !== null) && (bang || !bangOnly));
+  const keyOf = (section, sub, name) => (sub === null ? `${section}.${name}` : `${section}.${sub}.${name}`);
+  const check = (section, sub, name, bang) => {
+    const cmd = `git -c ${keyOf(section, sub, name)}='${bang ? '!' : ''}cat .env' status`;
+    const result = runHook(bash(cmd));
+    if (expected(section, sub, name, bang)) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
+    else assertAllowed(result, cmd);
+  };
+
+  // Deterministic companion to the property: per row, case never changes the
+  // verdict, and adding/removing the subsection or the `!` lands wherever the
+  // oracle says (gpg.program and credential.helper exist in both forms).
+  for (const [section, hasSub, name, bangOnly] of ROWS) {
+    const sub = hasSub ? 'x' : null;
+    test(`key shape ${keyOf(section, sub, name)}: case, subsection and ! variants follow the oracle`, () => {
+      check(section.toUpperCase(), sub, name.toUpperCase(), bangOnly);
+      check(section[0].toUpperCase() + section.slice(1), sub, name[0].toUpperCase() + name.slice(1), bangOnly);
+      check(section, hasSub ? null : 'x', name, bangOnly);
+      if (bangOnly) check(section, sub, name, false);
+    });
+  }
+
+  // Vocabulary for the property and the exhaustive allow batches: every
+  // section and name in ROWS plus decoys that sit next to them.
+  const SECTIONS = ['core', 'diff', 'filter', 'gpg', 'merge', 'credential', 'sequence', 'pager', 'user', 'http',
+    'remote', 'trailer', 'sendemail', 'gc', 'interactive', 'uploadpack', 'difftool', 'mergetool', 'browser', 'man',
+    'guitool', 'imap', 'tar', 'submodule', 'instaweb', 'hook'];
+  const NAMES = ['editor', 'sshcommand', 'fsmonitor', 'program', 'textconv', 'command', 'clean',
+    'smudge', 'process', 'driver', 'helper', 'external', 'pager', 'name', 'extraheader',
+    'askpass', 'gitproxy', 'alternaterefscommand', 'packobjectshook', 'recentobjectshook', 'difffilter',
+    'defaultkeycommand', 'cmd', 'uploadpack', 'receivepack', 'sendmailcmd', 'smtpserver', 'tocmd', 'cccmd',
+    'headercmd', 'tunnel', 'update', 'httpd', 'url', 'path', 'vcs', 'binary', 'smtpuser', 'log', 'event'];
+
+  // Every vocabulary key the oracle does not list must stay allowed, so an
+  // over-broad key set fails here; one hook run per section and form, since
+  // the hook reads every -c. lastSegment splits only on `/` and `\`, so a
+  // `sec.x.name=cat .env` word never looks like a secret path itself.
+  for (const section of SECTIONS) {
+    for (const sub of [null, 'x']) {
+      const names = NAMES.filter((name) => !expected(section, sub, name, false));
+      test(`allows every non-command ${keyOf(section, sub, '<name>')} key`, () => {
+        const cmd = `git ${names.map((name) => `-c ${keyOf(section, sub, name)}='cat .env'`).join(' ')} status`;
+        const result = runHook(bash(cmd));
+        if (result.status !== 0) for (const name of names) check(section, sub, name, false); // names the culprit
+        assertAllowed(result, cmd);
+      });
+    }
+  }
+
+  // The subsection alphabet leaves out `/` and `:`, which would make the -c
+  // word itself look like a secret path to the generic operand check; URL
+  // subsections come from fixed values instead.
+  const SUBSECTION = fc.oneof(
+    fc.string({ unit: fc.constantFrom(...'abxyz019.-'), minLength: 1, maxLength: 8 }),
+    fc.constantFrom('https://example.com', 'https://x.y.z:8443'),
+  );
+  const KEY_PARTS = fc.oneof(
+    fc.constantFrom(...ROWS).chain(([section, hasSub, name]) => fc.record({
+      section: fc.constant(section), sub: hasSub ? SUBSECTION : fc.constant(null), name: fc.constant(name),
+    })),
+    fc.record({
+      section: fc.constantFrom(...SECTIONS),
+      sub: fc.option(SUBSECTION, { nil: null }),
+      name: fc.constantFrom(...NAMES),
+    }),
+  ).chain(({ section, sub, name }) => fc.record({
+    section: fc.mixedCase(fc.constant(section)),
+    sub: fc.constant(sub),
+    name: fc.mixedCase(fc.constant(name)),
+    // `!` only on bangOnly keys (credential helpers, submodule update): on other keys
+    // a leading `!` would be judged by the generic operand check, not by the
+    // key-shape scan this property is about.
+    bang: section === 'credential' || section === 'submodule' ? fc.boolean() : fc.constant(false),
+  }));
+
+  test('property: a git -c key is scanned iff its section, subsection and name match a command-valued key', () => {
+    fc.assert(fc.property(KEY_PARTS, ({ section, sub, name, bang }) => {
+      check(section, sub, name, bang);
+    }), { seed: 5492, numRuns: 40 });
+  });
+
+  // The hook's key sets and environment twins match these oracles in both
+  // directions. Read in a child Node, so a hook without its export seam
+  // cannot end this test process from its stdin handler.
+  test('the hook scans exactly the oracle key shapes and environment twins', () => {
+    const script = `const h = require(${JSON.stringify(HOOK_PATH)}); console.log(JSON.stringify({
+      command: [...h.GIT_COMMAND_CONFIG_KEYS], bang: [...h.GIT_BANG_COMMAND_CONFIG_KEYS],
+      credential: [...h.GIT_CREDENTIAL_HELPER_KEYS], twins: [...h.GIT_ENV_CONFIG_KEYS] }))`;
+    const r = runNode(['-e', script], { input: '', timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    const hook = JSON.parse(r.stdout);
+    const shape = ([section, hasSub, name]) => (hasSub ? `${section}.*.${name}` : `${section}.${name}`);
+    const sorted = (list) => [...list].sort();
+    assert.deepEqual(sorted(hook.command), sorted(ROWS.filter((row) => !row[3]).map(shape)));
+    assert.deepEqual(sorted(hook.credential), sorted(ROWS.filter((row) => row[0] === 'credential').map(shape)));
+    assert.deepEqual(sorted(hook.bang), sorted(ROWS.filter((row) => row[3] && row[0] !== 'credential').map(shape)));
+    assert.deepEqual(sorted(hook.twins.map((pair) => pair.join('='))), sorted(TWINS.map((pair) => pair.join('='))));
+  });
+});
+
+describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () => {
+  // Oracle: what git runs, checked live on git 2.43 with harmless markers or
+  // cited from git's sources (builtin/rebase.c, connect.c, builtin/grep.c,
+  // builtin/submodule--helper.c, builtin/bisect.c, builtin/remote-ext.c,
+  // git-send-email.perl, ssh_config(5)). Every row reads a secret through a
+  // command git (or ssh) runs; the allows run the same shapes on benign input.
+  const sq = (s) => `'${s.replaceAll("'", "'\\''")}'`;
+  const blocks = [
+    // An invoked alias expands with the words after it, so its subcommand's
+    // command options are seen; -c values reach child gits (git exports them
+    // in GIT_CONFIG_PARAMETERS), so an alias a script calls resolves too.
+    ["git -c alias.r=rebase r -x 'cat .env' HEAD~1", '.env'],
+    ["git -c alias.R=rebase R --exec='cat .env' HEAD~1", '.env'],
+    ["git -c alias.r=rebase -c alias.x='!git r -x \"cat .env\" HEAD~1' x", '.env'],
+    ["git -c alias.r=rebase -c alias.x='!sh -c \"git r -x cat\\\\ .env HEAD~1\"' x", '.env'],
+    ["git -c alias.r=rebase -c core.editor='git r -x \"cat .env\" HEAD~1' commit", '.env'],
+    // Subcommand options whose value git runs. parse_options takes any
+    // unambiguous prefix of a long option and bundled short options.
+    ["git rebase -x 'cat .env' HEAD~1", '.env'],
+    ["git rebase --exec 'cat .env' HEAD~1", '.env'],
+    ["git rebase --exec='cat .env' HEAD~1", '.env'],
+    ["git rebase --exe 'cat .env' HEAD~1", '.env'],
+    ["git ls-remote --u='cat .env #' ../r", '.env'],
+    // An option's value may be `--` itself, so `--` does not end the walk.
+    ["git rebase -X -- -x 'cat .env' HEAD~1", '.env'],
+    // On a case-insensitive filesystem `git Rebase` runs git-rebase.
+    ["git Rebase -x 'cat .env' HEAD~1", '.env'],
+    ["git Submodule foreach 'cat .env'", '.env'],
+    ["git rebase -ix'cat .env' HEAD~1", '.env'],
+    ["git rebase -i -x 'cat .env' HEAD~1", '.env'],
+    ["git fetch --upload-pack='cat .env #' ../r", '.env'],
+    ["git fetch --upload='cat .env #' ../r", '.env'],
+    ["git pull --upload-pack 'cat .env #' ../r", '.env'],
+    ["git clone -u 'cat .env #' ../r d", '.env'],
+    ["git ls-remote --exec='cat .env #' ../r", '.env'],
+    ["git fetch-pack --upload-pack='cat .env #' ../r", '.env'],
+    ["git push --receive-pack='cat .env #' ../r", '.env'],
+    ["git send-pack --exec='cat .env #' ../r", '.env'],
+    ["git archive --remote=../r --exec='cat .env #' HEAD", '.env'],
+    ["git grep -O'cat .env #' x", '.env'],
+    ["git grep --open-files-in-pager='cat .env #' x", '.env'],
+    // A bare -O runs the configured pager even without a terminal.
+    ["git -c core.pager='cat .env' grep -O x f", '.env'],
+    ["git -c core.pager='cat .env' grep -nO x f", '.env'],
+    ["git -c pager.grep='cat .env' grep --open-files-in-pager x f", '.env'],
+    ["git difftool -x 'cat .env #' HEAD~1", '.env'],
+    ["git difftool --extcmd='cat .env #' HEAD~1", '.env'],
+    ["git filter-branch --tree-filter 'cat .env' HEAD", '.env'],
+    ["git filter-branch --msg-filter 'cat .env' HEAD", '.env'],
+    ["git send-email --to-cmd='cat .env #' x.patch", '.env'],
+    // Getopt::Long: one or two dashes or `+`, any case, and any prefix that
+    // resolves to one option among send-email's (`h` alone is help unless a
+    // value is attached; replayed through send-email's three GetOptions passes).
+    ["git send-email -SendMail-Cmd='cat .env #' x.patch", '.env'],
+    ["git send-email --he='cat .env #' x.patch", '.env'],
+    ["git send-email --hea='cat .env #' x.patch", '.env'],
+    ["git send-email -he 'cat .env #' x.patch", '.env'],
+    ["git send-email --HE='cat .env #' x.patch", '.env'],
+    ["git send-email --h='cat .env #' x.patch", '.env'],
+    ["git send-email -h='cat .env #' x.patch", '.env'],
+    ["git send-email +he='cat .env #' x.patch", '.env'],
+    ["git send-email +h='cat .env #' x.patch", '.env'],
+    ["git send-email --sendm='cat .env #' x.patch", '.env'],
+    ["git send-email -to-cm 'cat .env #' x.patch", '.env'],
+    ["git instaweb --httpd='cat .env'", '.env'],
+    ["git daemon --access-hook='cat .env #' .", '.env'],
+    ["git svn fetch --authors-prog='cat .env #'", '.env'],
+    ["git rebase -x .env HEAD~1", '.env'],
+    // clone -c sets a key before the fetch, in every parse_options form.
+    ["git clone -c core.sshCommand='cat .env #' ssh://x/y d", '.env'],
+    ["git clone -ccore.sshCommand='cat .env #' ssh://x/y d", '.env'],
+    ["git clone -vc core.sshCommand='cat .env #' ssh://x/y d", '.env'],
+    ["git clone --conf=credential.helper='!cat .env' https://x/y d", '.env'],
+    // Commands given as trailing words, rebuilt the way git runs them.
+    ["git submodule foreach 'cat .env'", '.env'],
+    ["git submodule --quiet foreach --recursive 'cat .env'", '.env'],
+    ["git submodule foreach sh -c 'cat .env'", '.env'],
+    ["git submodule foreach -q git -c 'core.fsmonitor=bash -c \"cat .env\"' status", '.env'],
+    ["git bisect run sh -c 'eval \"cat .env\"'", '.env'],
+    ["git bisect run git -c 'core.fsmonitor=bash -c \"cat .env\"' status", '.env'],
+    ["git for-each-repo --config=x.repos -- -c alias.z='!cat .env' z", '.env'],
+    // ext:: URLs: words split on a space, `% ` is a space inside one word,
+    // and %G/%V words are git-remote-ext's own.
+    ["git archive '--remote=ext::cat .env' HEAD", '.env'],
+    ["git ls-remote 'ext::sh -c cat% .env'", '.env'],
+    ["git ls-remote 'ext::%G/foo sh -c cat% .env'", '.env'],
+    ["git ls-remote 'EXT::sh -c cat% .env'", '.env'],
+    ["git -c protocol.ext.allow=always -c remote.origin.url='ext::sh -c cat% .env' fetch origin", '.env'],
+    ["git -c 'url.ext::sh -c cat% .env.insteadOf=x' fetch x", '.env'],
+    ["git -c 'url.ext::sh -c .insteadOf=https://x/' ls-remote 'https://x/cat% .env'", '.env'],
+    ["git -c remote.origin.vcs=ext -c remote.origin.url='sh -c cat% .env' fetch origin", '.env'],
+    ["git -c remote.origin.vcs=ext clone 'sh -c cat% .env' d", '.env'],
+    ["git remote-ext x 'sh -c cat% .env'", '.env'],
+    // A key naming a file git reads may quote it back in an error.
+    ['git -c blame.ignoreRevsFile=.env blame f', '.env'],
+    ['git -c include.path=.secrets status', '.secrets'],
+    ["git clone -c mailmap.file=.env https://x/y d", '.env'],
+    // ssh runs ProxyCommand, LocalCommand and KnownHostsCommand locally,
+    // through the shell.
+    ["git -c core.sshCommand='ssh -o ProxyCommand=\"cat .env\"' fetch", '.env'],
+    ["ssh -o ProxyCommand='cat .env' host", '.env'],
+    ["ssh -oProxyCommand='cat .env' host", '.env'],
+    ["ssh -vo 'LocalCommand cat .env' host", '.env'],
+    ["ssh -o '  \"ProxyCommand\" = cat .env' host", '.env'],
+    ["scp -o KnownHostsCommand='cat .env' a host:b", '.env'],
+    ["ssh.exe -o ProxyCommand='cat .env' host", '.env'],
+    // A bundle may start with a digit flag (-4, -6).
+    ["ssh -4o ProxyCommand='cat .env' host", '.env'],
+    ["ssh -6vo ProxyCommand='cat .env' host", '.env'],
+    ["ssh -4oProxyCommand='cat .env' host", '.env'],
+    ["git -c core.sshCommand='ssh -4o ProxyCommand=\"cat .env\"' fetch", '.env'],
+    // xargs runs its sub-command with stdin words appended, after its own
+    // options (valued long options, abbreviations, bundles).
+    ["echo x | xargs git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["xargs git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["xargs -a list git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["echo ok | xargs --max-args 1 git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["echo ok | xargs --max-a=1 git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["echo ok | xargs -rn 1 git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["echo ok | xargs -I{} git -c sequence.editor='cat .env' rebase -i", '.env'],
+    ["echo ok | xargs ssh -o ProxyCommand='cat .env'", '.env'],
+    // sshpass runs ssh after its own options, and -f names the password file.
+    ["sshpass -p x ssh -o ProxyCommand='cat .env' host", '.env'],
+    ["sshpass -e ssh -o ProxyCommand='cat .env' host", '.env'],
+    ['sshpass -f .env ssh host', '.env'],
+    ['sshpass -f.env ssh host', '.env'],
+    // sshpass reads the password file whatever it runs: nothing, or only
+    // another wrapper (`env` prints its environment on the pty sshpass watches).
+    ['sshpass -f .env', '.env'],
+    ['sshpass -f .env env', '.env'],
+    ['PROMPT=x sshpass -Px -f .env env', '.env'],
+    ['sshpass -f .env nice', '.env'],
+    // A valued option with no value word left reaches the read after it.
+    ['sshpass -f; cat .env', '.env'],
+    ['sshpass -p; cat .env', '.env'],
+    ['sshpass -P; cat .env', '.env'],
+    ['sshpass -d; cat .env', '.env'],
+    ['sudo sshpass -f; cat .env', '.env'],
+    ["bash -c 'sshpass -f'; cat .env", '.env'],
+    // Credential helper forms (gitcredentials(7)); `Store` finds the store
+    // helper on a case-insensitive filesystem.
+    ["git -c credential.helper='C:\\bin\\cat .env' fetch", '.env'],
+    ["git -c credential.helper='\\\\srv\\share\\cat .env' fetch", '.env'],
+    ["git -c credential.helper='Store --file .env' credential fill", '.env'],
+    // Alias splitting: single quotes keep a backslash, `\\"` inside double
+    // quotes, and quotes toggle mid-word, as in git's split_cmdline.
+    ["git -c alias.x=\"-c 'core.fsmonitor=cat .env' status\" x", '.env'],
+    ["git -c alias.x='-c \"core.fsmonitor=cat \\\".env\\\"\" status' x", '.env'],
+    ["git -c alias.x='-c core.fsmonitor=\"cat \".env status' x", '.env'],
+  ];
+  for (const [cmd, expectedPath] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  const allows = [
+    "git rebase --exec 'npm test' HEAD~3",
+    "git rebase -x 'cat README.md' HEAD~1",
+    'git rebase -Xtheirs main',
+    "git commit -m 'stop calling cat .env in setup'",
+    'git fetch origin',
+    'git push origin HEAD',
+    'git grep -O x f',
+    "git -c core.pager='cat .env' grep x f",
+    'git -c core.pager=less grep -O x f',
+    "git -c pager.grep=true -c core.pager=less grep -O x f",
+    "git submodule foreach 'git status'",
+    'git bisect run npm test',
+    "git -c alias.r=rebase r -x 'npm test' HEAD~1",
+    "git send-email --to dev@example.com --cc .env-team@example.com x.patch",
+    // A recipient, not a command: `--cc` is not `--cc-cmd` to Getopt::Long.
+    "git send-email --cc 'cat .env' x.patch",
+    // `-h` is help and takes no value; `--to-c` matches both --to-cmd and
+    // --to-cover, so Getopt::Long resolves it to neither.
+    "git send-email -h 'cat .env' x.patch",
+    "git send-email --to-c='cat .env' x.patch",
+    'ssh -4 -o ProxyCommand=none host',
+    'echo x | xargs git status',
+    'echo ok | xargs -rn 1 git log',
+    'sshpass -p x ssh host',
+    // One program literally named `cat .env`: `% ` keeps the space in a word.
+    "git ls-remote 'ext::cat% .env'",
+    "git ls-remote 'ext::git-upload-pack% repo'",
+    'git -c blame.ignoreRevsFile=.git-blame-ignore-revs blame f',
+    'git -c include.path=.env.example status',
+    "ssh -o ProxyCommand='nc %h %p' host",
+    // RemoteCommand runs on the remote host.
+    "ssh -o RemoteCommand='cat .env' host",
+    'git clone -c core.autocrlf=true https://x/y d',
+    "git -c credential.helper='storex --file .env' fetch",
+    // git keeps a vertical tab inside a word (its isspace is space, \t, \n,
+    // \r), so this alias is the single unknown option `-c<VT>core…` to git.
+    "git -c alias.x='-c\vcore.fsmonitor=cat\v.env' x",
+    // git rejects these aliases (unclosed quote, trailing backslash) and
+    // runs nothing.
+    "git -c alias.x='-c core.fsmonitor=\"cat .env status' x",
+    "git -c alias.x='-c core.fsmonitor=cat .env\\' x",
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // Alias hops do not spend scan depth. Each level defines the next alias
+  // inside the previous one's value (quoted for git's split_cmdline); git
+  // runs the innermost -c at any level count.
+  const dq = (s) => `"${s.replace(/[\\"]/g, '\\$&')}"`;
+  const nestedAlias = (levels, script) => {
+    let value = `-c core.fsmonitor=${dq(script)} status`;
+    for (let k = 1; k < levels; k++) value = `-c alias.a${k}=${dq(value)} a${k}`;
+    return `git -c alias.top=${sq(value)} top`;
+  };
+  for (const levels of [2, 3, 4]) {
+    test(`a -c nested ${levels} alias levels deep is scanned`, () => {
+      const cmd = nestedAlias(levels, 'cat .env');
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test('a benign -c nested 4 alias levels deep is allowed', () => {
+    const cmd = nestedAlias(4, 'cat README.md');
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  // An invoked alias resolves through sibling aliases up to 16 hops; past
+  // that, on a loop, and past 256 expansions, the scan fails closed with
+  // `alias-too-complex` on the alias key.
+  const siblingChain = (hops) => {
+    const defs = ['-c alias.a1=rebase'];
+    for (let k = 2; k <= hops; k++) defs.push(`-c alias.a${k}=a${k - 1}`);
+    return `git ${defs.join(' ')} a${hops} -x 'cat .env' HEAD~1`;
+  };
+  for (const hops of [15, 16]) {
+    test(`an alias resolved through ${hops} sibling hops is scanned`, () => {
+      const cmd = siblingChain(hops);
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test('an alias chain past 16 hops fails closed', () => {
+    const cmd = siblingChain(17);
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.a1' });
+  });
+  test('an alias loop fails closed', () => {
+    const cmd = 'git -c alias.a=b -c alias.b=a a';
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash' });
+  });
+  test('aliases that fan out to the same alias stay bounded and fail closed', () => {
+    let value = 'status';
+    // Seven levels stay within 16 hops; the expansions do not stay within 256.
+    for (let k = 1; k <= 7; k++) {
+      value = `-c alias.p${k}=${dq(value)} -c alias.q${k}=p${k} -c alias.r${k}=p${k} -c alias.s${k}=p${k} status`;
+    }
+    const cmd = `git -c alias.top=${sq(value)} top`;
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash' });
+  });
+
+  // n flat definitions invoking the first: only the invoked one spends the
+  // 256-expansion budget (the others are scanned but never invoked), so n
+  // past 256 is allowed too.
+  const flatAliases = (n) => `git ${Array.from({ length: n }, (_, k) => `-c alias.q${k + 1}=status`).join(' ')} q1`;
+  for (const n of [255, 256, 257]) {
+    test(`${n} flat alias definitions in one git command are allowed`, () => {
+      const cmd = flatAliases(n);
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // Only invocations spend the 256-expansion budget: `top` runs a script
+  // that invokes `q` n − 1 times, so n aliases are invoked in all. A
+  // definition nothing invokes is still scanned, at no expansion cost.
+  const invokedAliases = (n) => `git -c alias.q=status -c alias.top=${sq(`!${'git q; '.repeat(n - 1)}`)} top`;
+  for (const n of [255, 256]) {
+    test(`${n} alias invocations in one git command are allowed`, () => {
+      const cmd = invokedAliases(n);
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+  // A script holding dollar-quoting is read four ways; each reading counts
+  // the same invocations, not the sum of all four.
+  const quotedInvocations = (n) => `git -c alias.q=status -c alias.top=${sq(`!echo $'x'; ${'git q; '.repeat(n - 1)}`)} top`;
+  test('256 alias invocations in one git command are allowed when the script holds dollar-quoting', () => {
+    const cmd = quotedInvocations(256);
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+  test('257 alias invocations in one git command fail closed when the script holds dollar-quoting', () => {
+    const cmd = quotedInvocations(257);
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
+  });
+  test('257 alias invocations in one git command fail closed', () => {
+    const cmd = invokedAliases(257);
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
+  });
+  test('300 alias definitions nothing invokes are allowed', () => {
+    const cmd = `git ${Array.from({ length: 300 }, (_, k) => `-c alias.u${k}=status`).join(' ')} log`;
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+
+  // The same aliases set in the environment count the same: scanning the
+  // invoked alias as a definition too must not spend the command's budget.
+  const envForms = {
+    GIT_CONFIG_PARAMETERS: (n) => `GIT_CONFIG_PARAMETERS=${dq(`'alias.q=status' 'alias.top=!${'git q; '.repeat(n - 1)}'`)} git top`,
+    GIT_CONFIG_KEY: (n) => `GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=alias.q GIT_CONFIG_VALUE_0=status GIT_CONFIG_KEY_1=alias.top GIT_CONFIG_VALUE_1=${sq(`!${'git q; '.repeat(n - 1)}`)} git top`,
+  };
+  for (const [form, make] of Object.entries(envForms)) {
+    for (const n of [128, 256]) {
+      test(`${n} alias invocations set through ${form} are allowed`, () => {
+        const cmd = make(n);
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+    test(`257 alias invocations set through ${form} fail closed`, () => {
+      const cmd = make(257);
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
+    });
+  }
+
+  // The budget is per git command, however the shell or the hook's other
+  // readings of the command reach it.
+  const G = flatAliases(100);
+  for (const [shape, cmd] of [['in sequence', `${G}; ${G}; ${G}`], ['in bash -c', `bash -c ${sq(`${G}; ${G}; ${G}`)}`],
+    ['after a heredoc', `cat <<EOF\nx\nEOF\nbash -c ${sq(G)}; bash -c ${sq(G)}; bash -c ${sq(G)}`]]) {
+    test(`three git commands of 100 alias expansions each are allowed ${shape}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The hook's alias split against git's own: `git rev-parse --sq-quote`
+  // prints the words git split the alias into (or git dies on a bad alias).
+  // Every word before the payload is a `-c user.name=<frag>` pair, so the
+  // scan has to step over each one exactly as git splits it.
+  const FRAG = fc.constantFrom('x', 'x;', 'a|b', 'a&b', "'q r'", '"q r"', 'a\\ b', '"a\\"b"', "'a\\b'",
+    'a"b c"d', '\v', 'a\vb');
+  const SEP = fc.constantFrom(' ', '\t', ' \t ', '\n');
+  const PAYLOAD = fc.constantFrom('core.fsmonitor="cat .env"', "'core.fsmonitor=cat .env'",
+    'core.fsmonitor=cat\\ .env', '"core.fsmonitor=cat .env', 'core.fsmonitor=cat\v.env',
+    "core.fsmonitor='cat \\.env'", 'core.fsmonitor="cat .env.example"', 'core.fsmonitor=cat\\');
+  test('property: an alias is split the way git splits it', () => {
+    fc.assert(fc.property(fc.array(fc.tuple(FRAG, SEP), { maxLength: 3 }), SEP, PAYLOAD, fc.array(FRAG, { maxLength: 2 }),
+      (before, sep, payload, after) => {
+        const words = [...before.flatMap(([frag, s]) => ['-c', s, `user.name=${frag}`, ' ']), '-c', sep, payload,
+          ' status', ...after.map((frag) => ` ${frag}`)];
+        const value = words.join('');
+        const git = runGit(['-c', `alias.q=rev-parse --sq-quote ${value}`, 'q'], { timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+        const direct = git.exitCode === 0 ? runHook(bash(`git${git.stdout.trimEnd()}`)) : { status: 0, stdout: '' };
+        const viaAlias = runHook(bash(`git -c alias.x=${sq(value)} x`));
+        assert.equal(viaAlias.status, direct.status, `${JSON.stringify(value)}: alias vs git's split`);
+        if (direct.status === 2) assert.equal(JSON.parse(viaAlias.stdout).path, JSON.parse(direct.stdout).path);
+      }), { seed: 5492, numRuns: 40 });
+  });
+});
+
+describe('gsd-secret-read-guard: git configuration set in the environment on the command line (#5492)', () => {
+  // Oracle: git 2.43, checked live with harmless markers. git reads
+  // GIT_CONFIG_COUNT / GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n>,
+  // GIT_CONFIG_PARAMETERS (`'key'='value'` or `'key=value'` words),
+  // `--config-env=<key>=<var>` (in order with `-c`; the last one wins), and the
+  // TWINS. A value counts when the command line sets it: a prefix assignment,
+  // `env` or `sudo` assignments, `export` / `declare` / a bare assignment
+  // anywhere in the same script, inherited by nested shells and aliases.
+  const blocks = [
+    ["GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=sequence.editor GIT_CONFIG_VALUE_0='cat .env; true' git rebase -i --root", '.env'],
+    ["env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=sequence.editor GIT_CONFIG_VALUE_0='cat .env; true' git rebase -i --root", '.env'],
+    ["env -i PATH=/usr/bin GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env' git status", '.env'],
+    ["sudo GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env' git status", '.env'],
+    ["E='cat .env; true' git --config-env=sequence.editor=E rebase -i --root", '.env'],
+    ["E='cat .env; true' git --config-env sequence.editor=E rebase -i --root", '.env'],
+    ["GIT_CONFIG_PARAMETERS=\"'sequence.editor'='cat .env; true'\" git rebase -i --root", '.env'],
+    ["GIT_CONFIG_PARAMETERS=\"'core.fsmonitor=cat .env'\" git status", '.env'],
+    ["GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='!cat .env' git x", '.env'],
+    // Set earlier in the script, or split between the script and the prefix.
+    ["export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env'; git status", '.env'],
+    ["GIT_CONFIG_KEY_0=core.fsmonitor; GIT_CONFIG_VALUE_0='cat .env'; export GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; GIT_CONFIG_COUNT=1 git status", '.env'],
+    ["export GIT_CONFIG_KEY_0=core.fsmonitor; GIT_CONFIG_COUNT=1 GIT_CONFIG_VALUE_0='cat .env' git status", '.env'],
+    ["declare -x E='cat .env'; git --config-env=core.fsmonitor=E status", '.env'],
+    // A declaration behind a reserved word, a builtin prefix, an assignment
+    // prefix or a redirect still sets the variable for the rest of the script.
+    ["if true; then export GIT_EDITOR='cat .env #'; fi; git status", '.env'],
+    ["if false; then :; else export GIT_EDITOR='cat .env #'; fi; git status", '.env'],
+    ["if false; then :; elif export GIT_EDITOR='cat .env #'; then :; fi; git status", '.env'],
+    ["while false; do :; done; command export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["until export GIT_EDITOR='cat .env #'; do :; done; git status", '.env'],
+    ["set -- 1; for x do export GIT_EDITOR='cat .env #'; done; git status", '.env'],
+    ["! export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["builtin export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["command -p export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["time -p ! export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["X=1 command export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["GIT_EDITOR='cat .env #' export X=1; git status", '.env'], // kept in POSIX mode
+    ["if true; then GIT_EDITOR='cat .env #'; fi; export GIT_EDITOR; git status", '.env'],
+    [">/dev/null export GIT_EDITOR='cat .env #'; git status", '.env'],
+    ["GIT_EDITOR='cat .env #' >/dev/null; git status", '.env'],
+    ["{\\\n export GIT_EDITOR='cat .env #'; }; git status", '.env'],
+    ["case x in x) export GIT_EDITOR='cat .env #';; esac; git status", '.env'],
+    // A prefix with nothing after it reaches the read after it.
+    ['command; cat .env', '.env'],
+    ['time -p; cat .env', '.env'],
+    ["GIT_EDITOR+='cat .env #' git status", '.env'], // bash's appending assignment
+    ["export E='cat .env'; echo $(git --config-env=core.fsmonitor=E status)", '.env'],
+    // A prefix reaches whatever its command runs.
+    ["E='cat .env; true' bash -c 'git --config-env=sequence.editor=E rebase -i --root'", '.env'],
+    ["GIT_SEQUENCE_EDITOR='cat .env' bash -c 'git rebase -i --root'", '.env'],
+    ["E='cat .env' git -c alias.x='!git --config-env=core.fsmonitor=E status' x", '.env'],
+    // Every value a variable is given counts, whatever order or subshell.
+    ["export E='!cat .env'; git --config-env=alias.x=E x; E='!true'", '.env'],
+    ["E='!true'; export E='!cat .env'; git --config-env=alias.x=E x", '.env'],
+    ["export E='!cat .env'; (E='!true'); git --config-env=alias.x=E x", '.env'],
+    // --config-env keeps its place among -c options.
+    ["E='!cat .env' git -c alias.x='!true' --config-env=alias.x=E x", '.env'],
+    // The key splits at the last `=`: a subsection may hold one, a variable name may not.
+    ["E='!cat .env' git --config-env='credential.https://example.com?a=b.helper=E' fetch", '.env'],
+    // url.<base>.insteadOf keeps its base from the key, wherever the key is set.
+    ["GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.ext::sh -c cat% .env.insteadOf' GIT_CONFIG_VALUE_0=x git fetch x", '.env'],
+    ["E=x git --config-env='url.ext::sh -c cat% .env.insteadOf=E' fetch x", '.env'],
+    // A value naming a secret file, under any key.
+    ['GIT_EDITOR=.env git commit', '.env'],
+    ['git -c core.editor=.env commit', '.env'],
+    ['GIT_CONFIG_GLOBAL=.env git config --global --list', '.env'],
+    ['GIT_CONFIG_SYSTEM=.secrets git config --system --list', '.secrets'],
+    // A bare grep -O runs GIT_PAGER first, then pager.grep / core.pager, then PAGER.
+    ["GIT_PAGER='cat .env' git -c core.pager=less grep -O x f", '.env'],
+    ["PAGER='cat .env' git grep -O x f", '.env'],
+    ...TWINS.filter(([, key]) => key !== 'core.pager').map(([name]) => [`${name}='cat .env #' git status`, '.env']),
+  ];
+  for (const [cmd, expectedPath] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  const allows = [
+    'EDITOR=vim git commit',
+    'PAGER=cat git log',
+    'GIT_PAGER=cat git diff',
+    // Paging runs without a terminal and prints nothing.
+    "GIT_PAGER='cat .env' git log",
+    "GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no' git fetch",
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true git status',
+    // Aliases from the environment resolve once, not again on every hop.
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.st GIT_CONFIG_VALUE_0=status git st',
+    "GIT_CONFIG_PARAMETERS=\"'alias.st'='status'\" git st",
+    "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=alias.st GIT_CONFIG_VALUE_0=status GIT_CONFIG_KEY_1=alias.lg GIT_CONFIG_VALUE_1='log --oneline' git st",
+    "GIT_CONFIG_VALUE_0='cat .env' git status", // no key to set
+    'E=x git --config-env=user.name=E log',
+    // The value comes from the inherited environment, which the hook cannot see.
+    'git --config-env=sequence.editor=E rebase -i',
+    "export E='cat .env'; git status",
+    // `command -v` only looks the name up; nothing is exported.
+    "command -v export GIT_EDITOR='cat .env #'; git status",
+    "FOO='cat .env' make",
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
+  // A hook that crashes or outlives its timeout allows the command, so each
+  // of these must decide. They are the reviewers' payloads, at a size that
+  // crashed (a stack overflow, a V8 heap abort) or ran past the hook timeout
+  // before the scan was budgeted. Each ends in a plain read: `secret-read`
+  // means the scan got through to it, a too-complex code that the budget
+  // stopped it first. Verdicts and codes are asserted, never the time.
+  const rep = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join('');
+  const sq = (s) => `'${s.replaceAll("'", "'\\''")}'`;
+  const blocks = [
+    ['an alias body that re-expands with the words after it',
+      `git -c alias.z="${'z '.repeat(300000)}" z; cat .env`, 'alias-too-complex', 'alias.z'],
+    ['an environment twin with many values, read by many git commands',
+      `${rep(6000, (i) => `export GIT_EDITOR=v${i}; `)}${'git log; '.repeat(6000)}cat .env`, 'secret-read', '.env'],
+    ['many configs in force under many nested git commands',
+      `git ${'-c a.b=1 '.repeat(30000)}rebase -x '${'git a; '.repeat(40000)}' HEAD; cat .env`, 'secret-read', '.env'],
+    ['many configs in force under many bare grep -O options',
+      `git ${'-c a.b=1 '.repeat(30000)}grep ${'-O '.repeat(80000)} x f; cat .env`, 'secret-read', '.env'],
+    ['GIT_CONFIG_KEY_0 values paired with GIT_CONFIG_VALUE_0 values',
+      `${rep(6000, (i) => `export GIT_CONFIG_KEY_0=a.b${i}; `)}${rep(6000, (i) => `export GIT_CONFIG_VALUE_0=v${i}; `)}git log; cat .env`,
+      'command-too-complex', ''],
+    ['an export of many assignments', `export ${'A=1 '.repeat(150000)}; git log; cat .env`, 'secret-read', '.env'],
+    ['an sshpass with many options', `sshpass ${'-fa '.repeat(150000)}ssh h; cat .env`, 'secret-read', '.env'],
+    ['URL rewrites applied to many URLs',
+      `git ${'-c url.ext::true.insteadOf=a '.repeat(2500)}fetch ${'a '.repeat(2500)}; cat .env`, 'command-too-complex', ''],
+    ['URL rewrites applied to their own values',
+      `git ${'-c url.ext::a.insteadOf=a '.repeat(3000)}status; cat .env`, 'command-too-complex', ''],
+    ['URL rewrites applied to one long URL',
+      `git ${'-c url.ext::x.insteadOf=a '.repeat(2000)}fetch a${'b'.repeat(500000)}; cat .env`, 'command-too-complex', ''],
+    ['--config-env specs naming a variable with many values',
+      `export ${rep(5000, (i) => `E=${i} `)}; git ${'--config-env=a.b=E '.repeat(5000)}status; cat .env`, 'command-too-complex', ''],
+    ['a long GIT_CONFIG_PARAMETERS word split at every =',
+      `GIT_CONFIG_PARAMETERS="'${'a'.repeat(500000)}${'='.repeat(2000)}'" git status; cat .env`, 'command-too-complex', ''],
+    ['a config-file variable with many values, read by many git commands',
+      `export ${rep(10000, (i) => `GIT_CONFIG=v${i} `)}; ${'git status; '.repeat(10000)}cat .env`, 'secret-read', '.env'],
+    ['an editor script of git commands, rescanned by each of them',
+      `export GIT_EDITOR='${'git log; '.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
+    ['a long ext:: rewrite base that decodes to nothing, under many git commands',
+      `export GIT_CONFIG_PARAMETERS="'url.ext::%G${'a'.repeat(500000)}.insteadOf='"; ${'git a; '.repeat(70000)}cat .env`,
+      'command-too-complex', ''],
+    ['an editor script of short segments, rescanned by its git commands',
+      `export GIT_EDITOR='${'git log; '.repeat(30)}${'x;'.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
+  ];
+  for (const [shape, cmd, code, expectedPath] of blocks) {
+    test(`decides ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
+      assertBlocked(runHook(bash(cmd)), shape, { code, tool: 'Bash', path: expectedPath });
+    });
+  }
+
+  // The same shapes with nothing to find stay allowed: each twin value and
+  // each alias the environment defines is scanned once, not once per git
+  // command.
+  const allows = [
+    ['an environment twin with many values, read by many git commands',
+      `${rep(12000, (i) => `export GIT_EDITOR=v${i}; `)}${'git log; '.repeat(12000)}`],
+    ['an alias the environment defines and many git commands do not invoke',
+      `export GIT_CONFIG_PARAMETERS="'alias.q=status'"; ${'git log; '.repeat(50000)}`],
+  ];
+  for (const [shape, cmd] of allows) {
+    test(`allows ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
+      assertAllowed(runHook(bash(cmd)), shape);
+    });
+  }
+
+  // The environment's config is scanned once per shell-variable frame, and
+  // only for a depth-0 git command that sets no config of its own. A scan a
+  // nesting limit cut short, a frame with more variables, or a command whose
+  // own config changes what the environment's scripts run must not reuse it.
+  // Every definition of an alias is scanned, the one git would ignore too.
+  // `via` is the chain of git steps the read was reached through.
+  const chains = [
+    [`export GIT_EDITOR='bash -c "bash -c \\"cat .env\\""'; bash -c 'git log'; git log`, ['$GIT_EDITOR']],
+    [`export GIT_EDITOR='bash -c "git -c core.editor=\\"cat .env\\" commit"'; bash -c 'git log'; git log`,
+      ['$GIT_EDITOR', '-c core.editor']],
+    ["export GIT_EDITOR='git foo'; git a; GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.foo GIT_CONFIG_VALUE_0='!cat .env' git b",
+      ['alias foo']],
+    [`export GIT_EDITOR="git fetch 'zzsh -c cat% .env'"; git status; git -c url.ext::.insteadOf=zz log`, ['$GIT_EDITOR', 'ext::']],
+    ["git -c alias.x='!cat .env' -c alias.x=status x", ['alias x']],
+    [`GIT_CONFIG_PARAMETERS="'alias.x=!cat .env' 'alias.x=status'" git x`, ['alias x']],
+    ["git -c alias.r=rebase r -x 'cat .env' HEAD~1", ['alias r', 'rebase --exec']],
+    [`git -c core.editor='git -c alias.r=rebase r -x "cat .env" HEAD~1' commit`, ['-c core.editor', 'alias r', 'rebase --exec']],
+    [`GIT_SSH_COMMAND="ssh -o ProxyCommand='cat .env'" git fetch`, ['$GIT_SSH_COMMAND', 'ssh -o ProxyCommand']],
+    ["git -c core.pager='cat .env' grep -O x f", ['grep --open-files-in-pager', '-c core.pager']],
+    ["git -c 'url.ext::sh -c cat% .env.insteadOf=x' fetch x", ['ext::']],
+    ['GIT_CONFIG_GLOBAL=.env git status', ['$GIT_CONFIG_GLOBAL']],
+  ];
+  for (const [cmd, via] of chains) {
+    test(`blocks ${JSON.stringify(cmd)} via ${via.join(' → ')}`, () => {
+      const out = assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      assert.deepEqual(out.via, via, `${cmd}: via`);
+    });
+  }
+  // A git command an alias or script runs inherits the environment's config,
+  // and its own config can change what that config runs: a URL the
+  // environment sets becomes an ext:: command under the nested rewrite or
+  // vcs=ext, so the inherited config is scanned again under it.
+  for (const cmd of [
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f="!git -c remote.origin.vcs=ext fetch origin" f`,
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=zz'" git -c alias.f="!git -c 'url.ext::cat .env #.insteadOf=zz' -c alias.g=status g" f`,
+    `export GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'"; git -c core.editor='git -c remote.origin.vcs=ext fetch origin' commit`,
+    // ... or under config a variable of its own sets, or a variable --config-env reads ...
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f="!GIT_CONFIG_PARAMETERS=\\"'remote.origin.vcs=ext'\\" git fetch origin" f`,
+    `GIT_EDITOR='git --config-env=core.fsmonitor=E status' git rebase -x "E='cat .env' git commit" HEAD`,
+    // ... or under the -c a plain alias carries.
+    `GIT_CONFIG_PARAMETERS="'remote.origin.url=cat .env'" git -c alias.f='-c remote.origin.vcs=ext fetch origin' f`,
+    `GIT_EDITOR="git fetch 'zzsh -c cat% .env'" git -c alias.f='-c url.ext::.insteadOf=zz commit' f`,
+  ]) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  test('a read reached through no git step carries no via', () => {
+    const out = assertBlocked(runHook(bash('cat .env')), 'cat .env', { tool: 'Bash', path: '.env' });
+    assert.equal(out.via, undefined);
+  });
+
+  // Every place the scan recurses reports a read found through it: a place
+  // that lost the scan's context would crash, and a crash allows.
+  const sites = [
+    'echo $(cat .env)', 'eval cat .env', 'source <(echo cat .env)', "bash -c 'cat .env'", 'bash <(echo cat .env)',
+    'bash <<EOF\ncat .env\nEOF', "bash <<< 'cat .env'", 'echo cat .env | bash', "xargs sh -c 'cat .env'",
+    "xargs git -c core.fsmonitor='cat .env' status", "git -c core.fsmonitor='cat .env' status",
+    "git -c alias.x='!cat .env' x", "git -c alias.x='log -- .env' x", "git rebase -x 'cat .env' HEAD",
+    "git -c core.pager='cat .env' grep -O x f", "git submodule foreach 'cat .env'", "git ls-remote 'ext::sh -c cat% .env'",
+    "GIT_EDITOR='cat .env' git commit", "E='cat .env' git --config-env=core.fsmonitor=E status",
+    "ssh -o ProxyCommand='cat .env' h", 'GIT_CONFIG_GLOBAL=.env git status',
+  ];
+  for (const cmd of sites) {
+    test(`a read through ${JSON.stringify(cmd)} is reported`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // Pager values run with no terminal and print nothing, so a value naming a
+  // file is allowed like any other pager value. A bare `grep -O` runs the
+  // pager, so its command is scanned (the `'cat .env'` rows above), but a
+  // bare name is only exec'd.
+  for (const cmd of ['git -c core.pager=.env log', 'git -c pager.log=.env log', 'GIT_PAGER=.env git log', 'PAGER=.env git log',
+    'git -c core.pager=.env grep -O x f']) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The budget and the work each command's first reading spends, from the
+  // hook's test seam, read in a child Node.
+  const scanWork = (commands) => {
+    const script = `const h = require(${JSON.stringify(HOOK_PATH)}); let input = '';
+      process.stdin.on('data', (c) => { input += c; }).on('end', () => {
+        console.log(JSON.stringify({ max: h.MAX_SCAN_WORK, work: JSON.parse(input).map(h.scanWork) }));
+      });`;
+    const r = runNode(['-e', script], { input: JSON.stringify(commands), timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+
+  // URL rewrites that never match make the work (each comparison is charged
+  // the prefix length); each space in the trailing nested script adds one unit.
+  test('a scan spending exactly the work budget is allowed, and one unit more blocks', () => {
+    const defs = Array.from({ length: 64 }, () => `-c url.B.insteadOf=${'a'.repeat(1000)}`).join(' ');
+    const make = (urls, pad) => `git ${defs} fetch ${Array(urls).fill('b'.repeat(1000)).join(' ')}; bash -c '${' '.repeat(pad)}'`;
+    const { max, work: [w0, w1] } = scanWork([make(0, 0), make(1, 0)]);
+    const urls = Math.floor((max - w0) / (w1 - w0)) - 1;
+    const base = scanWork([make(urls, 0)]).work[0];
+    const commands = [-1, 0, 1].map((d) => make(urls, max - base + d));
+    assert.deepEqual(scanWork(commands).work, [max - 1, max, max + 1]);
+    assertAllowed(runHook(bash(commands[0])), 'budget − 1');
+    assertAllowed(runHook(bash(commands[1])), 'budget');
+    assertBlocked(runHook(bash(commands[2])), 'budget + 1', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  // A command that opens a heredoc is scanned under three readings, all
+  // spending one budget: k prefixed git commands each rescan the editor
+  // script, the same work in every reading (past the first, which also builds
+  // the environment's config), so the smallest k whose three readings pass
+  // the budget together blocks, one fewer is allowed, and one more blocks.
+  test('the readings of a heredoc command share one budget', () => {
+    const make = (k) => `cat <<EOF\nx\nEOF\nexport GIT_EDITOR='git log; git log'\n${'X=1 git log; '.repeat(k)}`;
+    const { max, work: [w1, w2] } = scanWork([make(1), make(2)]);
+    const k = Math.floor((max / 3 - w1) / (w2 - w1)) + 2;
+    const { work: [under, over, past] } = scanWork([make(k - 1), make(k), make(k + 1)]);
+    assert.ok(3 * under <= max && 3 * over > max && over <= max && 3 * past > max && past <= max,
+      `k=${k}: ${under}, ${over}, ${past} against ${max}`);
+    assertAllowed(runHook(bash(make(k - 1))), `${k - 1} commands`);
+    assertBlocked(runHook(bash(make(k))), `${k} commands`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+    assertBlocked(runHook(bash(make(k + 1))), `${k + 1} commands`, { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  // Whatever mix of the amplifying shapes and whatever their sizes, up to
+  // past the budget, a command ending in a plain read is blocked: the scan
+  // reaches the read or stops at a limit, and never crashes or stalls.
+  const SHAPE = fc.oneof(
+    fc.integer({ min: 1, max: 60000 }).map((n) => `git -c alias.z=${sq('z '.repeat(n))} z`),
+    fc.tuple(fc.integer({ min: 1, max: 3000 }), fc.integer({ min: 1, max: 3000 }))
+      .map(([n, m]) => `${rep(n, (i) => `export GIT_EDITOR=v${i}; `)}${'X=1 git log; '.repeat(m)}`),
+    fc.tuple(fc.integer({ min: 1, max: 1500 }), fc.integer({ min: 1, max: 1500 }))
+      .map(([n, m]) => `git ${'-c url.ext::true.insteadOf=a '.repeat(n)}fetch ${'a '.repeat(m)}`),
+    fc.tuple(fc.integer({ min: 1, max: 2000 }), fc.integer({ min: 1, max: 2000 }))
+      .map(([n, m]) => `${rep(n, (i) => `export GIT_CONFIG_KEY_0=a.b${i}; `)}${rep(m, (i) => `export GIT_CONFIG_VALUE_0=v${i}; `)}git log`),
+    fc.integer({ min: 1, max: 600 }).map((n) => `export GIT_EDITOR='${'git log; '.repeat(n)}'; git log`),
+  );
+  test('property: amplified git command lines always decide', () => {
+    fc.assert(fc.property(fc.array(SHAPE, { minLength: 1, maxLength: 3 }), (shapes) => {
+      const cmd = `${shapes.join('; ')}; cat .env`;
+      const r = runHook(bash(cmd));
+      assert.equal(r.status, 2, `${cmd.slice(0, 200)}: expected block, got exit ${r.status}`);
+      const out = JSON.parse(r.stdout);
+      assert.ok(['secret-read', 'command-too-complex', 'alias-too-complex'].includes(out.code), out.code);
+      if (out.code === 'secret-read') assert.equal(out.path, '.env');
+    }), { seed: 5492, numRuns: 20 });
   });
 });
 
@@ -1570,6 +2540,54 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
   test('with dollar-quoting, still allows a read inside a heredoc whose tag holds a substitution', () => {
     const cmd = "echo $'a'; cat <<E$(x)F\ncat .env\nE$(x)F";
     assertAllowed(runHook(bash(cmd)), cmd);
+  });
+});
+
+describe('gsd-secret-read-guard: $\'…\' words through the git rescans (#5492, #5255)', () => {
+  // String.raw keeps every backslash as the shell receives it. Each value the
+  // git scan rescans (an alias body, a -c or environment config value, an ssh
+  // option, a sshpass or xargs sub-command) is the word's decoded value, and a
+  // body is read each way again when it is rescanned: `.e\x6ev` is `.env` only
+  // once decoded. `via` names the git steps, outermost first.
+  const R = String.raw;
+  const rows = [
+    [R`git -c alias.x=$'!cat .env' x`, ['alias x']],
+    [R`GIT_CONFIG_PARAMETERS=$'\'alias.x\'=\'!cat .env\'' git x`, ['alias x']],
+    [R`git -c alias.x=$'!cat .e\x6ev' x`, ['alias x']],
+    [R`GIT_CONFIG_PARAMETERS=$'\'alias.x\'=\'!cat .e\x6ev\'' git x`, ['alias x']],
+    // The span is inside the alias body, so the alias rescan decodes it.
+    [R`git -c alias.x='!cat $'"'"'.e\x6ev'"'"'' x`, ['alias x']],
+    [R`V=$'!cat .e\x6ev' git --config-env=alias.x=V x`, ['alias x']],
+    [R`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=$'!cat .e\x6ev' git x`, ['alias x']],
+    [R`git -c core.sshCommand=$'cat .e\x6ev #' fetch`, ['-c core.sshCommand']],
+    [R`ssh -o ProxyCommand=$'cat .e\x6ev' host`, ['ssh -o ProxyCommand']],
+    [R`sshpass -p x bash -c $'cat .e\x6ev'`, undefined],
+    [R`echo x | xargs git -c alias.x=$'!cat .e\x6ev' x`, ['alias x']],
+  ];
+  for (const [cmd, via] of rows) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      const out = assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      assert.deepEqual(out.via, via, `${cmd}: via`);
+    });
+  }
+
+  // A word with no value in a rescanned body is held, not dropped, so it
+  // carries no `via`: the steps it came through unwind with nothing to add.
+  test('an unterminated $\' in an alias body is denied as ansi-c-unterminated', () => {
+    const cmd = R`git -c alias.x=$'!echo $\'abc' x`;
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash', path: R`$'abc` });
+  });
+  // A plain alias is rescanned at the depth of the git that ran it, 0 here; a
+  // rescan that started a new command would drop the word held before it.
+  test('a plain alias at depth 0 keeps the unreadable word held before it', () => {
+    const cmd = R`bash -c "echo \$'abc"; git -c alias.s=status s`;
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash', path: R`$'abc` });
+  });
+  // Every reading spends the same work budget, and an overrun inside one is
+  // the block, with the alias it was expanding.
+  test('an alias past the work budget in a command the readings scan is denied as alias-too-complex', () => {
+    const cmd = `echo $'x'; git -c alias.z="${'z '.repeat(300000)}" z`;
+    assertBlocked(runHook(bash(cmd)), 'a 600 KB alias body after a $\'…\' word', { code: 'alias-too-complex', tool: 'Bash', path: 'alias.z' });
   });
 });
 
