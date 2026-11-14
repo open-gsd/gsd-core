@@ -15378,7 +15378,6 @@ module.exports = {
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,
     managedCodexMarkers,
-    parseCodexHooksOwnership,
     collapseTomlBlankLines,
     setManagedCodexHooksOwnership,
     stripStaleGsdHookBlocks,
