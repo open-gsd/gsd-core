@@ -78,14 +78,15 @@ function commitRound(dir, n, file = 'code.txt') {
 }
 
 // Runs the shipped blocks in workflow order under pr_strict.
-function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh = 'return 1', prelude = '', afterPre = '', cwd = dir } = {}) {
+function publish(dir, target = 'main', { branch = 'feature', mode = 'true', gh = 'return 1', prelude = '', arms = '', afterPre = '', cwd = dir } = {}) {
   const text = readWorkflowText();
   const b = (marker) => extractBashBlockContaining(text, marker);
   const script = [
     `CURRENT_BRANCH='${branch}'`,
     `TARGET=${target}`,
     // run-with-timeout <secs> -- cmd...: log the call, then exec cmd (the real verb bounds it; the log proves it was used).
-    `gsd_run() { if [ "$1" = run-with-timeout ]; then echo "$*" >> .git/rwt.log; shift 3; "$@"; else echo ${mode}; fi; }`,
+    // `arms` are case arms matched against the command (after the bound), to make one call fail, time out or lose output.
+    `gsd_run() { if [ "$1" = run-with-timeout ]; then echo "$*" >> .git/rwt.log; shift 3; case "$*" in ${arms} esac; "$@"; else echo ${mode}; fi; }`,
     prelude || `gh() { ${gh}; }`, // hermetic: no network lookup unless a test supplies one
     b('PR_STRICT=$(gsd_run query config-get'), // the mode and the filter projections come first; the preconditions read them
     b(TRANSIENT_DIRS_MARKER),
@@ -390,8 +391,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.notEqual(builtOf(dir), '', 'the first run recorded the built head');
     git(dir, 'branch', '-D', 'feature-pr');
     commitRound(dir, 2);
-    const stop = 'gsd_run() { case "$*" in *"rev-list --reverse"*) return 1 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
-    assert.equal(publish(dir, 'main', { prelude: stop }).status, 1);
+    const stop = '*"rev-list --reverse"*) return 1 ;;';
+    assert.equal(publish(dir, 'main', { arms: stop }).status, 1);
     assert.equal(pendingOf(dir), '');
     assert.equal(builtOf(dir), '');
   });
@@ -1233,8 +1234,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
     // run-with-timeout reports 124 for the patch walk only; every other call runs as usual
-    const slow = `${prelude}\ngsd_run() { case "$*" in *"log -p"*) return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }`;
-    const r = publish(dir, 'main', { prelude: slow });
+    const r = publish(dir, 'main', { prelude, arms: '*"log -p"*) return 124 ;;' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
     assert.ok(changed(dir).includes('two.txt'), 'round 2 is still replayed');
@@ -1246,8 +1246,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
       const { dir, prelude } = publishedWhileMainMoves();
       git(dir, 'rebase', '-q', 'main');
       commitRound(dir, 2, 'two.txt');
-      const failing = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in ${pattern}) return 1 ;; esac; "$@"; else echo true; fi; }`;
-      const r = publish(dir, 'main', { prelude: failing });
+      const r = publish(dir, 'main', { prelude, arms: `${pattern}) return 1 ;;` });
       assert.equal(r.status, 0, r.stderr);
       assert.match(r.stderr, WARNED);
     });
@@ -1258,8 +1257,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
     // run-with-timeout cuts the last two lines off the patch walk (inside its oldest patch) and reports 124
-    const cut = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in *"log -p"*) "$@" | awk '{a[NR]=$0} END{for(i=1;i<=NR-2;i++)print a[i]}'; return 124 ;; esac; "$@"; else echo true; fi; }`;
-    const r = publish(dir, 'main', { prelude: cut });
+    const cut = `*"log -p"*) "$@" | awk '{a[NR]=$0} END{for(i=1;i<=NR-2;i++)print a[i]}'; return 124 ;;`;
+    const r = publish(dir, 'main', { prelude, arms: cut });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
   });
@@ -1270,8 +1269,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 2, 'two.txt');
     const picked = git(dir, 'rev-parse', 'HEAD~1'); // the `feat: r2` commit
     // run-with-timeout drops that commit's line from the patch-id output; every other call runs as usual
-    const lossy = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in *patch-id*) "$@" | grep -v " ${picked}$"; return 0 ;; esac; "$@"; else echo true; fi; }`;
-    const r = publish(dir, 'main', { prelude: lossy });
+    const lossy = `*patch-id*) "$@" | grep -v " ${picked}$"; return 0 ;;`;
+    const r = publish(dir, 'main', { prelude, arms: lossy });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
   });
@@ -1282,8 +1281,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
     // the patch-id output loses that commit's line; every other call runs as usual
-    const lossy = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in *patch-id*) "$@" | grep -v " ${built}$"; return 0 ;; esac; "$@"; else echo true; fi; }`;
-    const r = publish(dir, 'main', { prelude: lossy });
+    const lossy = `*patch-id*) "$@" | grep -v " ${built}$"; return 0 ;;`;
+    const r = publish(dir, 'main', { prelude, arms: lossy });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
   });
@@ -1604,7 +1603,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'update-ref', 'refs/gsd/pr-built-head', 'main');
     const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-built\/strict\/main\/feature/);
+    assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-built-head\/strict\/main\/feature or refs\/gsd\/pr-built\/strict\/main\/feature/, 'both refs are named, so the blocked one is');
     assert.equal(pendingOf(dir), '');
   });
 
@@ -1711,8 +1710,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
   test('a failed pick-list lookup stops the run with exit 1 and changes no ref', () => {
     const dir = repo();
     commitRound(dir, 1);
-    const stub = 'gsd_run() { case "$*" in *"rev-list --reverse"*) return 1 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
-    const r = publish(dir, 'main', { prelude: stub });
+    const r = publish(dir, 'main', { arms: '*"rev-list --reverse"*) return 1 ;;' });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Cannot list the commits to pick; re-run\./);
     noRefs(dir);
@@ -1744,8 +1742,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     mergePr(dir);
     commitRound(dir, 2, 'two.txt');
     const before = [markerOf(dir), pendingOf(dir), builtOf(dir), refOf(dir, 'refs/heads/feature-pr')];
-    const stub = 'gsd_run() { case "$*" in *--is-ancestor*" refs/heads/feature") return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
-    const r = publish(dir, 'main', { prelude: stub });
+    const r = publish(dir, 'main', { arms: '*--is-ancestor*" refs/heads/feature") return 124 ;;' });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Cannot check refs\/gsd\/pr-published\/strict\/main\/feature; re-run\./);
     assert.doesNotMatch(r.stderr, /history rewritten/);
