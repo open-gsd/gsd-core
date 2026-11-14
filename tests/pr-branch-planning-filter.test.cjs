@@ -72,6 +72,7 @@ const {
   extractPickLoop,
   extractBashBlockContaining,
   extractDeclarationLines,
+  extractFunction,
   PRECONDITIONS_MARKER,
   TRANSIENT_DIRS_MARKER,
   REVS_MARKER,
@@ -302,6 +303,24 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         () => parseWorkflow(dupStructural),
         /STRUCTURAL_RE declared 2 times/,
       );
+    });
+
+    test('18b: the shipped-text extractors throw on a missing name, so a rename in pr-branch.md fails the test', () => {
+      const text = readWorkflowText();
+      assert.throws(() => extractDeclarationLines(text, PRECONDITIONS_MARKER, ['no_such_line=']), /no line starting with no_such_line=/);
+      assert.throws(() => extractFunction(text, PRECONDITIONS_MARKER, 'no_such_fn'), /no function no_such_fn/);
+    });
+
+    test('18c: runBashFile passes the timeout to the run and removes its temp dir', () => {
+      const prefix = 'gsd-runbash-probe-';
+      const CUT_OFF_MS = 300; // a distinct class: far below the 5s sleep it must cut off
+      const left = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith(prefix)).length;
+      const before = left();
+      const slow = runBashFile('sleep 5; exit 7', { prefix, env: (d) => gitChildEnv(d), timeoutMs: CUT_OFF_MS });
+      assert.notEqual(slow.exitCode, 7, 'the run was cut off at timeoutMs, not left to finish');
+      const ok = runBashFile('exit 0', { prefix, env: (d) => gitChildEnv(d) });
+      assert.equal(ok.exitCode, 0);
+      assert.equal(left(), before, 'every run removed its temp dir');
     });
   });
 

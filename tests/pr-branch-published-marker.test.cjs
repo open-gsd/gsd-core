@@ -128,8 +128,9 @@ const prMergedFns = () => {
   return [toFn, extractFunction(text, 'pr_merged() {', 'pr_merged')].join('\n');
 };
 
-// Runs the shipped pr_merged on feature-pr in `cwd`: MERGED or UNMERGED. `pre` stubs gh and gsd_run.
-const probePrMerged = (cwd, pre = 'gh() { return 1; }') =>
+// Runs the shipped pr_merged on feature-pr in `cwd`: MERGED or UNMERGED. `pre` stubs gh and gsd_run (the default runs
+// the command unbounded: without a gsd_run every `_to` call fails and any probe reads UNMERGED).
+const probePrMerged = (cwd, pre = 'gsd_run() { shift 3; "$@"; }\ngh() { return 1; }') =>
   runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\n${pre}\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd).stdout.trim();
 
 // The command a refusal prints on its `  <label>: <cmd>` line, so tests run what a user would paste.
@@ -211,6 +212,11 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(key(`'a%09b'`), 'a%2509b');
     const ref = key(`"$(printf 'x\\037y')"`);
     git(tmp, 'check-ref-format', `refs/gsd/pr-published/default/${ref}/b`); // throws on an invalid ref
+  });
+
+  test('refkey keeps a long run of one byte whole (od prints every line)', () => {
+    const names = ['a'.repeat(48), 'a'.repeat(64)];
+    assert.deepEqual(refKeys(refkeyFn(), names), names);
   });
 
   test('refkey is injective and never emits a slash (property)', () => {
@@ -651,6 +657,59 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(replayed(dir), ['r1.txt', 'r2.txt']);
   });
 
+  test('pr_merged: the probe reads a merged -pr as MERGED (positive control for the UNMERGED probes)', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    assert.equal(probePrMerged(dir), 'MERGED');
+  });
+
+  // The -pr tip has the tree of its fork point and the target moved on: no changed path, so nothing is proven.
+  test('pr_merged: a -pr tip that changes no path is not a proof, even where xargs runs nothing on empty input (BSD)', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'checkout', '-q', '-b', 'feature-pr', 'main');
+    git(dir, 'commit', '-q', '--allow-empty', '-m', 'chore: empty tip');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'x\n');
+    commitAll(dir, 'chore: main moves on');
+    git(dir, 'checkout', '-q', 'feature');
+    const bsdXargs = 'xargs() { local first; if IFS= read -r -d "" first; then { printf "%s\\0" "$first"; cat; } | command xargs "$@"; fi; }';
+    assert.equal(probePrMerged(dir, `gsd_run() { shift 3; "$@"; }\ngh() { return 1; }\n${bsdXargs}`), 'UNMERGED');
+  });
+
+  // A path git reads as magic pathspec syntax must be compared as a file name.
+  test('pr_merged: a changed file named like a magic pathspec is compared by name', { skip: process.platform === 'win32' }, () => {
+    const dir = repo();
+    const magic = ':(top)z';
+    git(dir, 'checkout', '-q', '-b', 'feature-pr', 'main');
+    write(dir, magic, 'A\n');
+    commitAll(dir, 'feat: add magic name');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, magic, 'B\n');
+    commitAll(dir, 'chore: main adds the same name with other content');
+    git(dir, 'checkout', '-q', 'feature');
+    assert.equal(probePrMerged(dir), 'UNMERGED');
+  });
+
+  test('pr_merged: a failed root lookup proves nothing (the changed paths are root-relative)', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    squashMerge(dir);
+    assert.equal(probePrMerged(dir), 'MERGED');
+    const noRoot = 'gsd_run() { shift 3; case "$*" in *show-toplevel*) return 124 ;; esac; "$@"; }\ngh() { return 1; }';
+    assert.equal(probePrMerged(dir, noRoot), 'UNMERGED');
+  });
+
+  test('pr_merged: a -pr tip that does not resolve is not merged, even when gh reports an empty head', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const pre = `gsd_run() { shift 3; "$@"; }\n${ghPrelude('')}`;
+    assert.equal(probePrMerged(dir, pre), 'UNMERGED');
+  });
+
   test('pr_merged judges an unmerged -pr unmerged from a repo subdirectory too (paths are root-relative)', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -997,6 +1056,40 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(changed(dir).includes('two.txt'), 'round 2 is still replayed');
   });
 
+  test('a picked commit the patch-id run left out warns instead of being read as unpublished', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const picked = git(dir, 'rev-parse', 'HEAD~1'); // the `feat: r2` commit
+    // run-with-timeout drops that commit's line from the patch-id output; every other call runs as usual
+    const lossy = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in *patch-id*) "$@" | grep -v " ${picked}$"; return 0 ;; esac; "$@"; else echo true; fi; }`;
+    const r = publish(dir, 'main', { prelude: lossy });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
+  // Squash-merged, then the target renamed a file the published commit changed: the old name is gone from the target.
+  test('published file renamed on the target after a squash of two commits: the rewrite warns instead of trusting the rename', () => {
+    const dir = repo();
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code only 1');
+    write(dir, 'x2.txt', '2\n');
+    commitAll(dir, 'feat: code only 2');
+    assert.equal(publish(dir).status, 0);
+    const prelude = ghPrelude(builtOf(dir));
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'merge', '-q', '--squash', 'feature-pr');
+    git(dir, 'commit', '-q', '-m', 'feat: squash of the round (#1)');
+    git(dir, 'mv', 'x1.txt', 'moved1.txt');
+    commitAll(dir, 'chore: rename x1.txt');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'reset', '-q', '--hard', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
   test('a merged leftover -pr with nothing recorded as published warns that every commit is picked again', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -1156,6 +1249,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const r = publish(dir, `--output=${pwned}`);
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /starts with -/);
+    assert.doesNotMatch(r.stderr, /Unknown target/, 'the run stopped at the refusal, not at the later lookup');
     assert.ok(!fs.existsSync(pwned), 'git wrote no file');
   });
 
@@ -1298,6 +1392,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const r = publish(dir, 'nosuch');
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Unknown target: nosuch/);
+    assert.doesNotMatch(r.stderr, /fatal:|Cannot list/, 'the run stopped at the lookup, not at a later step');
     noRefs(dir);
   });
 
@@ -1314,10 +1409,19 @@ describe('#5469 pr-branch published marker (real git)', () => {
   test('a -pr branch that cannot be created stops the run with exit 1 and records nothing', () => {
     const dir = repo();
     commitRound(dir, 1);
+    // Add a file, drop it, add another: replaying these on `feature` itself would add commits there.
+    write(dir, 'x.txt', 'x\n');
+    commitAll(dir, 'feat: add x');
+    cleanup(path.join(dir, 'x.txt'));
+    commitAll(dir, 'feat: drop x');
+    write(dir, 'y.txt', 'y\n');
+    commitAll(dir, 'feat: add y');
+    const commits = git(dir, 'rev-list', '--count', 'feature');
     git(dir, 'update-ref', 'refs/heads/feature-pr/x', 'main'); // a ref below the name blocks the branch
     const r = publish(dir);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /could not create feature-pr from main/);
+    assert.equal(git(dir, 'rev-list', '--count', 'feature'), commits, 'the run did not go on to replay commits onto feature');
     assert.equal(git(dir, 'for-each-ref', 'refs/gsd'), '');
   });
 

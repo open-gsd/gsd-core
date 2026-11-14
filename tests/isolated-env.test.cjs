@@ -227,6 +227,21 @@ describe('gitChildEnv', () => {
     assert.notEqual(env.GIT_CONFIG_GLOBAL, undefined);
     assert.equal(env.HOME, home);
   });
+
+  test('gitIn and refOf run git under gitChildEnv: a hostile GIT_DIR in the parent env does not reach them', (t) => {
+    const repo = tmp(t, 'gsd-6033-gitin-home-');
+    const hostileDir = tmp(t, 'gsd-6033-gitin-hostile-');
+    const run = (...args) => gitOrThrow(args, { cwd: repo, env: isolatedEnv({ home: repo }), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    run('init', '-q');
+    run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'm');
+    const sha = run('rev-parse', 'HEAD').trim();
+    const helper = JSON.stringify(path.join(__dirname, 'helpers', 'isolated-env.cjs'));
+    const script = `const h = require(${helper}); const d = process.argv[1];`
+      + ' process.stdout.write(JSON.stringify({ gitDir: h.gitIn(d)(["rev-parse", "--git-dir"]).trim(), ref: h.refOf(d, "HEAD") }))';
+    const out = probe(script, { ...SYSTEM_VARS, GIT_DIR: hostileDir }, [repo]);
+    assert.equal(out.gitDir, '.git');
+    assert.equal(out.ref, sha);
+  });
 });
 
 describe('isolatedEnv: key casing', () => {
