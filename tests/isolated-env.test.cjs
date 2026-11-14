@@ -22,7 +22,8 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, gitChildEnv, nullGitConfig, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { nullGitConfig } = require('../scripts/lint-removed-but-needed.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
