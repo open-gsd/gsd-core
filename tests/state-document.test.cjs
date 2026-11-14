@@ -2627,6 +2627,14 @@ describe('#4186: normalizeStateStatus anchored status vocabulary — documented 
     assert.strictEqual(normalizeStateStatus('1.0 milestone complete', null), 'completed');
   });
 
+  test('#6176: ADR-2207 terminal `Awaiting next milestone` (written by milestone complete) normalizes to completed, whole-value only', () => {
+    assert.strictEqual(normalizeStateStatus('Awaiting next milestone', null), 'completed');
+    assert.strictEqual(normalizeStateStatus('  AWAITING   NEXT MILESTONE ', null), 'completed');
+    // Anchored like the rest of the vocabulary: prose merely containing the phrase passes through.
+    const prose = 'Awaiting next milestone decision from the PM';
+    assert.strictEqual(normalizeStateStatus(prose, null), prose);
+  });
+
   test('rows 19-25: fixed-form handler defaults, including case and whitespace variants', () => {
     assert.strictEqual(normalizeStateStatus('Ready to plan', null), 'planning');
     assert.strictEqual(normalizeStateStatus('Ready to execute', null), 'executing');
@@ -2660,7 +2668,7 @@ describe('#4186: normalizeStateStatus anchored status vocabulary — documented 
   });
 
   test('row 31: statuses with no branch today stay verbatim', () => {
-    assert.strictEqual(normalizeStateStatus('Awaiting next milestone', null), 'Awaiting next milestone');
+    // `Awaiting next milestone` was listed here until #6176 gave it a vocabulary entry (-> completed).
     assert.strictEqual(normalizeStateStatus('Defining requirements', null), 'Defining requirements');
     assert.strictEqual(normalizeStateStatus('Active', null), 'Active');
   });

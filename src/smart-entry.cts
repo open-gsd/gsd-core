@@ -57,7 +57,7 @@ import roadmapParser = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone, scanMilestonePhaseIds } = roadmapParser;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateDocument = require('./state-document.cjs');
-const { stateFieldValue } = stateDocument;
+const { stateFieldValue, normalizeStateStatus } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
 const { comparePhaseNum, extractPhaseToken, customPhaseQuery, customDirectoryOwner, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
@@ -641,6 +641,17 @@ function isComplete(s: SmartEntrySignals): boolean {
   // status field, "done" is per-phase noise (e.g. "Phase X done"), not a
   // milestone-completion signal. Mirrors workstream-inventory-builder.cts's
   // terminal pattern \bmilestone\s+complete\b.
+  //
+  // #6176: the terminal statuses are read from the shared vocabulary
+  // (`normalizeStateStatus` -> `completed`), so a lifecycle value added there
+  // (e.g. ADR-2207's `Awaiting next milestone`) cannot fall through to
+  // `unknown` here again. Bare `done` also normalizes to `completed` but stays
+  // excluded for the reason above. The regex is kept unchanged as the
+  // substring-tolerant legacy reader: it also recognizes forms the anchored
+  // vocabulary does not (`Phase complete — ready for verification` at the last
+  // phase, #3864), which `normalizeStateStatus` maps to `verifying`.
+  const normalized = normalizeStateStatus(s.status, null);
+  if (normalized === 'completed' && s.status.trim() !== 'done') return true;
   return /\b(milestone\s+complete|all\s+phases\s+complete|complete(d)?)\b/i.test(s.status);
 }
 
