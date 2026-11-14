@@ -682,7 +682,7 @@ beside it; the next run promotes pending to published once that tip is merged. A
 
 ```bash
 if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ]; then
-  git update-ref "$PR_TIP_REF" "$(git rev-parse "refs/heads/$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PR_TIP_REF or $PENDING_REF; next run will replay commits." >&2
+  git update-ref "$PR_TIP_REF" "$(TO=60 _to git rev-parse "refs/heads/$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PR_TIP_REF or $PENDING_REF; next run will replay commits." >&2
 fi
 ```
 

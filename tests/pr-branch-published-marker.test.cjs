@@ -1607,6 +1607,16 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(pendingOf(dir), '');
   });
 
+  test('a timed-out read of the built -pr tip warns and records no pending ref', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const r = publish(dir, 'main', { arms: '*"git rev-parse refs/heads/feature-pr"*) return 124 ;;' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /WARNING: could not record/);
+    assert.equal(pendingOf(dir), '');
+    assert.equal(builtOf(dir), '');
+  });
+
   test('an unreadable .planning/milestones stops the run with exit 1 and changes no ref', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, (t) => {
     const dir = buildRepo(); // not repo(): afterEach runs before t.after, and cleanup must read the dir
     const ms = path.join(dir, '.planning', 'milestones');
