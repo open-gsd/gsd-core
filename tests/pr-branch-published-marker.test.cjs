@@ -242,6 +242,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
     assert.equal(git(dir, 'show', 'refs/heads/feature-pr:r1.txt'), 'round 1', 'the branch was built, the tag is not its tip');
+    assert.equal(builtOf(dir), git(dir, 'rev-parse', 'refs/heads/feature-pr'), 'the built-head ref is the branch tip, not the tag');
   });
 
   test('refkey encodes control and non-ASCII bytes so the marker ref is valid and injective', (t) => {

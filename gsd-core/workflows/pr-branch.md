@@ -646,14 +646,14 @@ would report itself as failed on every phase that touched STATE.md, which is eve
 
 ```bash
 # Fail closed: empty lists pass both gates.
-{ DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n') &&
-  DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA".."$PR_BRANCH" | tr '\0' '\n'); } ||
+{ DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA"..refs/heads/"$PR_BRANCH" | tr '\0' '\n') &&
+  DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA"..refs/heads/"$PR_BRANCH" | tr '\0' '\n'); } ||
   { git branch -qD "$PR_BRANCH" && D=deleted || D="not deleted; run git branch -D $(shq "$PR_BRANCH") first"; echo "Cannot read $PR_BRANCH ($D); re-run." >&2; exit 1; }
 FORBIDDEN=$(grep -Ec "$FORBIDDEN_RE" <<<"$DIFF_PATHS" || true)
 PLANNING_TOTAL=$(grep -c "^\.planning/" <<<"$DIFF_PATHS" || true)
 ALLOWED=$((PLANNING_TOTAL - FORBIDDEN))
 TOTAL_FILES=$(grep -c . <<<"$DIFF_PATHS" || true)
-PR_COMMITS=$(TO=60 _to git rev-list --count "$TARGET_SHA".."$PR_BRANCH")
+PR_COMMITS=$(TO=60 _to git rev-list --count "$TARGET_SHA"..refs/heads/"$PR_BRANCH")
 
 # #3679: a DELETED planning path is never legitimate — this workflow only ever
 # excludes content a cherry-picked commit ADDED; pre-existing target-tracked
@@ -681,7 +681,7 @@ beside it; the next run promotes pending to published once that tip is merged. A
 
 ```bash
 if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ]; then
-  git update-ref "$PR_TIP_REF" "$(git rev-parse "$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PENDING_REF; next run will replay commits." >&2
+  git update-ref "$PR_TIP_REF" "$(git rev-parse "refs/heads/$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PENDING_REF; next run will replay commits." >&2
 fi
 ```
 

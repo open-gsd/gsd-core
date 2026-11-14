@@ -2766,6 +2766,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
       'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
+      'echo "GATE_COMMITS=${PR_COMMITS:-unset}"',
     ].join('\n');
     const r = runBashFile(script, { prefix: 'gsd-verify-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
@@ -2856,7 +2857,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   }
 
   // A timed-out read leaves an empty list, which would pass both gates: verify must stop instead.
-  for (const cmd of ['--name-only main..pr', '--diff-filter=D']) { // the two reads differ by these arguments
+  for (const cmd of ['--name-only main..refs/heads/pr', '--diff-filter=D']) { // the two reads differ by these arguments
     test(`verify stops with exit 1 when its bounded diff read (${cmd}) times out`, (t) => {
       const { repo, g } = leakedPhaseRepo(t, 'gsd-3679-verify-timeout-');
       g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
@@ -2878,6 +2879,34 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.equal(exitCode, 1, 'the run stops with exit 1');
     assert.notEqual(refOf(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
+  });
+
+  // A tag named like the -pr branch wins in a bare rev lookup; verify must read the branch.
+  test('verify reads the -pr branch, not a tag of the same name', (t) => {
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-tag-', defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.planning', 'STATE.md'), 'state\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['checkout', '-qb', 'pr']);
+    fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'leaked planning file']);
+    g(['checkout', '-qb', 'other', 'main']);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'one']);
+    g(['rm', '-q', path.join('.planning', 'STATE.md')]);
+    g(['commit', '-qm', 'two: deletes STATE.md']);
+    g(['tag', 'pr', 'other']); // a tag on two commits that delete a planning file
+    g(['checkout', '-q', 'main']);
+    const { out } = runVerify(repo);
+    const lines = out.split(/\r?\n/);
+    assert.ok(lines.includes('GATE_FORBIDDEN=1'), `the branch's leaked file is counted: ${out}`);
+    assert.ok(lines.includes('GATE_PLANNING_DELETIONS=0'), `the tag's deletion is not read: ${out}`);
+    assert.ok(lines.includes('GATE_COMMITS=1'), `the branch's commit count, not the tag's: ${out}`);
   });
 
   test('verify names a -pr branch with shell metacharacters quoted, so the printed delete command runs as one command', (t) => {
