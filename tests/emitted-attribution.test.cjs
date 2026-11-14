@@ -1362,7 +1362,7 @@ test('#2854: the cache is used exactly when it is valid for the sha under test',
   }), { numRuns: 200 });
 });
 
-test('#2854: the gate is pinned to the SAME base the tree was merged with', () => {
+test('#2854: the gate pin GSD_EMITTED_BASE equals the rebase step pin CI_REBASE_BASE_SHA', () => {
   // The deepest half of this bug. "Rebase check" is handed `pull_request.base.sha`
   // (CI_REBASE_BASE_SHA, pinned by #2472). But resolveBase()
   // otherwise falls through to `origin/next`, which `fetch-depth: 0` leaves at the
@@ -1393,9 +1393,8 @@ test('#2854: the gate is pinned to the SAME base the tree was merged with', () =
     assert.ok(mergedBase, `job ${name}: rebase step must pin CI_REBASE_BASE_SHA`);
     assert.equal(gateBase, mergedBase,
       `job ${name}: the emitted gate's base (GSD_EMITTED_BASE=${JSON.stringify(gateBase)}) must equal ` +
-      `the commit the tree was merged with (CI_REBASE_BASE_SHA=${JSON.stringify(mergedBase)}). ` +
-      'Diverging them makes the differential compare a tree against a baseline from a ' +
-      'different commit, which mis-attributes unrelated merges to this PR.');
+      `the rebase step's pin (CI_REBASE_BASE_SHA=${JSON.stringify(mergedBase)}). ` +
+      'Diverging them gives the two steps different pins for one run.');
   }
 });
 
