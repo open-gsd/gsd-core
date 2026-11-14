@@ -153,6 +153,54 @@ describe('#5583 insert-phase --sibling', () => {
     }
   });
 
+  // The init step and the insert fence each read --ws from the typed text: both must pick the same workstream.
+  describe('init step and insert fence read the same --ws', { skip: SKIP }, () => {
+    const WS_ROWS = [
+      '15.2 --ws feature x',
+      '--ws feature 15.2 x --sibling',
+      '15.2 x --ws',
+      '15.2 --ws "feature" x',
+      '15.2 y --ws=x',
+      '15.2 --ws a.b-c_1 x',
+      '15.2 --ws -bad x',
+    ];
+    const blocks = (text) => text.split('```').filter((f, i) => i % 2 && f.includes('GSD_WS=$('));
+    // the workstream argument the block hands to gsd_run, or '' when it hands none
+    const wsOf = (block, args, probe) => {
+      const lines = block.split('\n').slice(1).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n')
+        .replace('$ARGUMENTS', () => args).split('\n');
+      const r = runBash(lines, { stdout: '', rc: 0 }, {
+        setE: false,
+        preamble: ["after_phase=15.2; gsd_run() { printf '[%s]\\n' \"$@\"; }"],
+        probe,
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.split('\n').filter((l) => l.startsWith('[--ws=')).join('');
+    };
+    const wsPair = (text, args) => {
+      const [init, fence] = blocks(text);
+      return [wsOf(init, args, 'printf "%s\\n" "$INIT"'), wsOf(fence, args, 'printf "%s\\n" "$RESULT"')];
+    };
+
+    test('the workflow has exactly the init block and the insert fence', () => assert.equal(blocks(read(WF)).length, 2));
+    for (const args of WS_ROWS) {
+      test('same workstream for "' + args + '"', () => {
+        const [a, b] = wsPair(read(WF), args);
+        assert.equal(a, b);
+      });
+    }
+    test('a table row reads a workstream in both blocks', () => {
+      assert.deepEqual(wsPair(read(WF), '15.2 --ws feature x'), ['[--ws=feature]', '[--ws=feature]']);
+    });
+    test('a mutated sed in one block makes the two disagree', () => {
+      const text = read(WF);
+      const fenceSed = blocks(text)[1].split('\n').find((l) => l.startsWith('GSD_WS=$('));
+      const mutated = text.replace(fenceSed, () => fenceSed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*'));
+      const [a, b] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
+      assert.notEqual(a, b);
+    });
+  });
+
   test('workflow documents nest-by-default and the top-level fallback', () => {
     const WORKFLOW = read(WF);
     assert.match(WORKFLOW, /inserting after a decimal phase nests by default/i);
