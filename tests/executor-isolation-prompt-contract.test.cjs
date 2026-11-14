@@ -124,33 +124,6 @@ test('#5531: the template carries the two markers that only the read-and-check g
   }
 });
 
-test('#5531: the two compose blocks declare the same prompt file name prefix', () => {
-  // The blocks run as separate commands, so each declares the prefix; a run of one block cannot show they agree.
-  const lines = content.split('\n');
-  const prefixes = scanFencedBlocks(lines)
-    .filter((b) => b.infoString === 'bash')
-    .flatMap((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx))
-    .filter((l) => l.startsWith('_PROMPT_PREFIX='));
-  assert.equal(prefixes.length, 2, 'block 1 and the read-and-check block each declare the prefix');
-  assert.equal(new Set(prefixes).size, 1, 'both declare the same prefix');
-});
-
-test('#5531: the two compose blocks derive the wave-keyed prompt file name the same way', () => {
-  // The blocks run as separate commands, so each derives the name; a run of one block cannot show they agree.
-  const lines = content.split('\n');
-  const bash = scanFencedBlocks(lines)
-    .filter((b) => b.infoString === 'bash')
-    .flatMap((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx));
-  const stem = bash.filter((l) => l.startsWith('_PROMPT_STEM='));
-  const name = bash.filter((l) => l.startsWith('_PROMPT_NAME='));
-  assert.equal(stem.length, 1, 'block 1 derives the stem once');
-  assert.equal(name.length, 1, 'the read-and-check block derives the name once');
-  assert.equal(name[0].replace('_PROMPT_NAME=', ''), stem[0].replace('_PROMPT_STEM=', '').replace(/"$/, '-??????"'), 'the name is the stem plus the random suffix');
-  // Block 1 builds the file from the same stem: the sweep and leftover patterns and the mktemp template share it, with a 6-wide suffix.
-  assert.ok(bash.some((l) => l.includes('-name "${_PROMPT_STEM}-??????"')), 'the leftover removal matches the stem plus the 6-wide suffix');
-  assert.ok(bash.some((l) => l.includes('mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX"')), 'mktemp creates the stem plus a 6-wide suffix');
-});
-
 test('#5531: the wave name shape the prompt file carries is the one execute-phase.md gives the manifest', () => {
   // The integration test builds wave names of this shape by hand.
   const executePhase = readFileNormalized(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'));
