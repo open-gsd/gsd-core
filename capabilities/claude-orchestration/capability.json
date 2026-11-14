@@ -1,7 +1,7 @@
 {
   "id": "claude-orchestration",
   "role": "feature",
-  "version": "1.20.1",
+  "version": "1.21.0",
   "title": "Claude orchestration (Workflow backend)",
   "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When every detection gate passes (Claude runtime, nesting-capable host, no Claude Code workflow kill switch set), the claude-orchestration commands emit a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, the phase run id carried in the summary for the Workflow tool's resumeFromRunId input, token budget recorded as intent only) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, aimed at restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. execute-phase does not dispatch through it yet: its loop contribution was removed in #4740 and no host-level dispatch path exists. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
   "tier": "full",
