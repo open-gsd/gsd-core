@@ -22,36 +22,48 @@
  * chain; the row carries `greenFrom` and the report names the supplier. Its own RED is still
  * required, and a plan nothing depends on is scored on its own commits alone.
  *
- * Argv after the verb: `<phase>` (a number; an unresolvable phase reports zero plans).
+ * Argv after the verb: `<phase>` (a number; an unresolvable phase reports zero plans) and an optional
+ * `--record` (#5354), which also WRITES `TDD-REVIEW-SEAL.json` in the phase directory: one entry per
+ * plan that passes, so a failing sibling plan does not cost the others their credit after a squash.
+ * ADR-5057 §4 says a gate returns a verdict and never calls `output()`; it says nothing on writes. The seal
+ * file I/O lives in `gate-tdd-review-seal` (this module imports no io module). This gate requests the write
+ * because the seal comes from the evaluation it just ran, and a separate verb would have to repeat that.
  */
 
 import path from 'node:path';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
-import { readDirEvidence, readPlanSetEvidence, readTextEvidence } from './gate-evidence.cjs';
-import { resolveEvaluationScope, commitIsAncestor } from './gate-evaluation-scope.cjs';
+import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFromError, evidenceNone } from './gate-evidence.cjs';
+import { resolveEvaluationScope, commitIsAncestor, isFullSha } from './gate-evaluation-scope.cjs';
+import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, commitIsGone, commitReachability, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;
 
-interface TddPlanRow {
+interface TddPlanRowBase {
   planId: string;
   red: boolean;
   green: boolean;
   refactor: boolean;
-  status: 'Pass' | 'FAIL';
-  missing: string[];
-  /** Set only on an order violation (#5275): both commit kinds exist but no GREEN follows a RED. A missing commit is told by `missing`. */
-  reason?: TddRowReason;
   /** Plans whose `feat(...)` commit supplied this plan's GREEN through `depends_on` (#4867). */
   greenFrom?: string[];
 }
+/** A `NotEvaluable` row always says why (#5354); `reason` on a FAIL row is set only on an order violation (#5275), a missing commit is told by `missing`. */
+type TddRowVerdict =
+  | { status: 'NotEvaluable'; missing: string[]; reason: NotEvaluableReason }
+  | { status: 'Pass'; missing: string[] }
+  | { status: 'FAIL'; missing: string[]; reason?: typeof TDD_ROW_REASON.GREEN_BEFORE_RED };
+type TddPlanRow = TddPlanRowBase & TddRowVerdict;
 
 export const TDD_ROW_REASON = {
   GREEN_BEFORE_RED: 'green_before_red',
+  /** NotEvaluable: a sealed plan, but a shallow clone lacks the sealed commits (#5354). */
+  SEALED_SHALLOW_HISTORY: 'sealed_shallow_history',
+  /** NotEvaluable: no seal entry, and every SUMMARY task commit is unreachable (#5354). */
+  UNSEALED_SUMMARY_UNREACHABLE: 'unsealed_summary_unreachable',
 } as const;
-type TddRowReason = (typeof TDD_ROW_REASON)[keyof typeof TDD_ROW_REASON];
+type NotEvaluableReason = typeof TDD_ROW_REASON.SEALED_SHALLOW_HISTORY | typeof TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE;
 
 /**
  * True when the plan's frontmatter declares `type: tdd` (CRLF included, #2449). The block is the
@@ -147,18 +159,104 @@ interface UnreadableSource {
  * unchanged (`block: false`); the outcome is `unreadable` (exit UNAVAILABLE) and `passed` is false
  * because nothing was certified.
  */
-function unreadableReview(phase: string, tddPlans: number, unreadable: UnreadableSource[]): GateResult {
+function unreadableReview(
+  phase: string,
+  tddPlans: number,
+  unreadable: UnreadableSource[],
+  reviewed?: { rows: TddPlanRow[]; violations: number; table: string },
+): GateResult {
   const names = unreadable.map((u) => `${u.source} (${u.reason})`).join(', ');
+  // A failed `--record` write comes after the review ran: it keeps the review result and says nothing was sealed.
+  const { rows, violations, table } = reviewed ?? { rows: [] as TddPlanRow[], violations: 0, table: '' };
+  const message = reviewed
+    ? `TDD review could not write: ${names}. Phase ${phase} was reviewed and nothing was sealed.\n\n${table}`
+    : `TDD review could not read: ${names}. Phase ${phase} was not reviewed.`;
   return gateUnreadable(false, {
     block: false,
     passed: false,
     tddPlans,
-    violations: 0,
-    table: '',
-    rows: [] as TddPlanRow[],
+    violations,
+    table,
+    rows,
     unreadable,
-    message: `TDD review could not read: ${names}. Phase ${phase} was not reviewed.`,
+    message,
   });
+}
+
+/** One TDD plan's row, plus the evidence `--record` seals when it passes (the GREEN prefers live hashes over the seal's, the RED is the seal's when the seal supplied it). */
+function planRow(
+  projectDir: string,
+  phaseDir: string,
+  planPath: string,
+  seal: SealPlans,
+  dependents: ReadonlyMap<string, string[]>,
+  historyComplete: () => boolean,
+): { row: TddPlanRow; evidence?: SealEntry } {
+  const planId = path.basename(planPath, '-PLAN.md');
+  const commits = planCommits(projectDir, planId);
+  const reds = shasOfKind(commits, 'test');
+  // #5354: the seal stands in once the plan was squashed away. The test: its RED (else its GREEN) is no longer
+  // reachable from HEAD (an absent object counts only in a complete history). A live `test(<plan>):`
+  // commit proves nothing, since a squash may carry that title or be followed by one. A seal whose RED is still reachable
+  // was not squashed, so it credits nothing. It credits each kind no live commit credits; the evidence keeps a live GREEN, and the seal's
+  // RED when the seal supplied the credit.
+  const entry = Object.hasOwn(seal, planId) ? seal[planId] : undefined;
+  const probe = isFullSha(entry?.red) ? entry.red : entry?.green;
+  const squashed = isFullSha(probe) && commitIsGone(commitReachability(projectDir, probe, 'HEAD'), historyComplete);
+  const sealed = squashed && entry !== undefined && entry.red !== entry.green ? entry : {};
+  const sealedRed = isFullSha(sealed.red);
+  const sealedGreen = isFullSha(sealed.green);
+  const red = reds.length > 0 || sealedRed;
+  const refactor = commits.some((c) => c.kind === 'refactor');
+
+  // #5275: with a RED present, a GREEN counts only when it descends from a RED. Without one there is
+  // nothing to order against and the plan is already missing RED, so a GREEN commit stays credited.
+  const inOrder = (greens: readonly string[]): boolean =>
+    greens.length > 0 && (reds.length === 0 || greenFollowsRed(projectDir, reds, greens) !== false);
+
+  const ownGreens = shasOfKind(commits, 'feat');
+  const ownOk = inOrder(ownGreens);
+
+  // #4867: a RED-only probe plan is satisfied by the GREEN of a plan that (transitively) declares
+  // `depends_on` it. Only a real `feat(...)` commit under such a plan counts, and it must follow the
+  // RED too (#5275); the plan's own RED is still required, and a plan nothing depends on is scored
+  // on its own commits alone.
+  const dependentGreens = ownOk
+    ? []
+    : transitiveDependents(planId, dependents).map((id) => ({ id, greens: shasOfKind(planCommits(projectDir, id), 'feat') }));
+  const greenFrom = dependentGreens.filter((d) => inOrder(d.greens)).map((d) => d.id);
+  const green = ownOk || greenFrom.length > 0 || sealedGreen;
+  const anyGreenCommit = ownGreens.length > 0 || dependentGreens.some((d) => d.greens.length > 0) || sealedGreen;
+
+  const missing: string[] = [];
+  if (!red) missing.push('RED');
+  if (!anyGreenCommit) missing.push('GREEN');
+  // #5354: credit incomplete and no live plan commit: a plan squashed away. With nothing sealed, its SUMMARY's task commits
+  // are all gone. With a complete-looking seal that did not apply, a shallow clone cannot tell (it lacks the sealed commits).
+  const sealedPair = entry !== undefined && isFullSha(entry.red) && isFullSha(entry.green) && entry.red !== entry.green;
+  const squashedAway = missing.length > 0 && commits.length === 0;
+  const notEvaluableReason: NotEvaluableReason | undefined = !squashedAway ? undefined
+    : entry !== undefined
+      ? (sealedPair && !historyComplete() ? TDD_ROW_REASON.SEALED_SHALLOW_HISTORY : undefined)
+      : (summaryCommitsAllUnreachable(projectDir, phaseDir, planPath, historyComplete) ? TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE : undefined);
+  // Both commit kinds exist but no GREEN follows a RED: its own reason. A row that fails for a
+  // missing commit keeps the exact shape it always had (`missing` already says why).
+  const verdict: TddRowVerdict = notEvaluableReason !== undefined ? { status: 'NotEvaluable', missing, reason: notEvaluableReason }
+    : missing.length === 0 && green ? { status: 'Pass', missing }
+      : { status: 'FAIL', missing, ...(missing.length === 0 ? { reason: TDD_ROW_REASON.GREEN_BEFORE_RED } : {}) };
+  // A credit the seal supplied is written back as the seal has it: a live `test(<plan>):` commit left by the squash is
+  // reachable, and sealing it would make the next run read the plan as not squashed and drop the seal's GREEN.
+  const redSha = sealedRed ? sealed.red : reds[0];
+  const greenSha = (ownOk ? ownGreens[0] : dependentGreens.find((d) => inOrder(d.greens))?.greens[0]) ?? sealed.green;
+  const sealEvidence = isFullSha(redSha) && isFullSha(greenSha) ? { red: redSha, green: greenSha } : undefined;
+
+  // Key order (status, missing, reason, greenFrom) is part of the payload contract.
+  const head = { planId, red, green, refactor };
+  const greenFromKey = greenFrom.length > 0 ? { greenFrom } : {};
+  return {
+    row: { ...head, ...verdict, ...greenFromKey },
+    ...(sealEvidence ? { evidence: sealEvidence } : {}),
+  };
 }
 
 export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: readonly string[] }): GateResult {
@@ -167,7 +265,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   if (!phase) {
     return gateUsageFailure(
       GATE_FAILURE_CODE.SDK_MISSING_ARG,
-      'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase>',
+      'tdd.review-checkpoint requires a phase argument: check tdd.review-checkpoint <phase> [--record]',
     );
   }
 
@@ -227,56 +325,29 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
 
   // For each TDD plan, extract the plan ID (e.g. "01-02-PLAN.md" → "01-02") and check git log
   const rows: TddPlanRow[] = [];
+  // ADR-5057 §4: an unreadable seal is not an absent one; never fold it into "no entry".
+  const sealRead = phaseDir ? readSeal(phaseDir) : evidenceNone<SealPlans>();
+  if (sealRead.kind === 'unreadable') return unreadableReview(phase, tddPlanFiles.length, [{ source: sealRead.span ?? SEAL_FILE, reason: sealRead.reason }]);
+  const seal: SealPlans = sealRead.kind === 'found' ? sealRead.value : {};
+  // No prototype: a plan named `__proto__` must be its own key, as the seal read (`Object.hasOwn`) takes it.
+  const evidence = Object.create(null) as Record<string, SealEntry>;
+  // One shallow-clone probe per run: history completeness is the same for every plan.
+  let complete: boolean | undefined;
+  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
   for (const planPath of tddPlanFiles) {
-    const planId = path.basename(planPath, '-PLAN.md');
-    const commits = planCommits(projectDir, planId);
-    const reds = shasOfKind(commits, 'test');
-    const red = reds.length > 0;
-    const refactor = commits.some((c) => c.kind === 'refactor');
-
-    // #5275: with a RED present, a GREEN counts only when it descends from a RED. Without one there is
-    // nothing to order against and the plan is already missing RED, so a GREEN commit stays credited.
-    const inOrder = (greens: readonly string[]): boolean =>
-      greens.length > 0 && (!red || greenFollowsRed(projectDir, reds, greens) !== false);
-
-    const ownGreens = shasOfKind(commits, 'feat');
-    const ownOk = inOrder(ownGreens);
-
-    // #4867: a RED-only probe plan is satisfied by the GREEN of a plan that (transitively) declares
-    // `depends_on` it. Only a real `feat(...)` commit under such a plan counts, and it must follow the
-    // RED too (#5275); the plan's own RED is still required, and a plan nothing depends on is scored
-    // on its own commits alone.
-    const dependentGreens = ownOk
-      ? []
-      : transitiveDependents(planId, dependents).map((id) => ({ id, greens: shasOfKind(planCommits(projectDir, id), 'feat') }));
-    const greenFrom = dependentGreens.filter((d) => inOrder(d.greens)).map((d) => d.id);
-    const green = ownOk || greenFrom.length > 0;
-    const anyGreenCommit = ownGreens.length > 0 || dependentGreens.some((d) => d.greens.length > 0);
-
-    const missing: string[] = [];
-    if (!red) missing.push('RED');
-    if (!anyGreenCommit) missing.push('GREEN');
-    const status: 'Pass' | 'FAIL' = missing.length === 0 && green ? 'Pass' : 'FAIL';
-    // Both commit kinds exist but no GREEN follows a RED: its own reason. A row that fails for a
-    // missing commit keeps the exact shape it always had (`missing` already says why).
-    const reason: TddRowReason | undefined = status === 'FAIL' && missing.length === 0
-      ? TDD_ROW_REASON.GREEN_BEFORE_RED
-      : undefined;
-
-    rows.push({
-      planId, red, green, refactor, status, missing,
-      ...(reason ? { reason } : {}),
-      ...(greenFrom.length > 0 ? { greenFrom } : {}),
-    });
+    const { row, evidence: sealEvidence } = planRow(projectDir, phaseDir, planPath, seal, dependents, historyComplete);
+    rows.push(row);
+    if (sealEvidence) evidence[row.planId] = sealEvidence;
   }
 
   const violations = rows.filter(r => r.status === 'FAIL').length;
 
   // Build review table
-  const tableHeader = '| Plan | RED | GREEN | REFACTOR | Status |';
-  const tableDivider = '|------|-----|-------|----------|--------|';
+  const statusWidth = Math.max(6, ...rows.map(r => r.status.length));
+  const tableHeader = `| Plan | RED | GREEN | REFACTOR | ${'Status'.padEnd(statusWidth)} |`;
+  const tableDivider = `|------|-----|-------|----------|${'-'.repeat(statusWidth + 2)}|`;
   const tableRows = rows.map(r =>
-    `| ${r.planId.padEnd(4)} | ${r.red ? ' ✓ ' : ' ✗ '} | ${r.green ? '  ✓  ' : '  ✗  '} | ${r.refactor ? '   ✓    ' : '   —    '} | ${r.status.padEnd(6)} |`,
+    `| ${r.planId.padEnd(4)} | ${r.red ? ' ✓ ' : ' ✗ '} | ${r.green ? '  ✓  ' : '  ✗  '} | ${r.refactor ? '   ✓    ' : '   —    '} | ${r.status.padEnd(statusWidth)} |`,
   );
 
   let table = [
@@ -293,6 +364,15 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += `\n\nPlan ${r.planId} GREEN is supplied by dependent plan ${(r.greenFrom ?? []).join(', ')}.`;
   }
 
+  const notEvaluableRows = rows.filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable');
+  const notEvaluableWhy: Record<NotEvaluableReason, string> = {
+    [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY]: 'its sealed commits cannot be verified because the history is incomplete (shallow clone or git unavailable); fetch full history. Not counted as a violation.',
+    [TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]: `its SUMMARY task commits are unreachable and no ${SEAL_FILE} entry exists (squashed?); not counted as a violation.`,
+  };
+  for (const r of notEvaluableRows) {
+    table += `\n\nPlan ${r.planId} not evaluable: ${notEvaluableWhy[r.reason]}`;
+  }
+
   if (violations > 0) {
     table += '\n\n⚠ Gate violations are advisory — review before advancing.';
     for (const r of rows.filter(row => row.status === 'FAIL')) {
@@ -303,10 +383,20 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     }
   }
 
+  // #5354: --record seals every passing plan's evidence so it survives a squash merge.
+  if (phaseDir && Object.keys(evidence).length > 0 && input.args.includes('--record')) {
+    try {
+      writeSeal(phaseDir, evidence, sealRead);
+    } catch (err) {
+      const e = evidenceFromError(err, SEAL_FILE);
+      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }], { rows, violations, table });
+    }
+  }
+
   // Uniform gate contract: block = violations > 0. The gate is advisory (blocking:false in
   // capability.json), so block:true only surfaces as a warning, never halts. The human-readable
   // report is carried in `message` (and `table`) for the dispatch's advisory branch.
-  return gateVerdict(violations > 0 ? 'advisory' : 'pass', violations > 0, {
+  return gateVerdict(violations > 0 || notEvaluableRows.length > 0 ? 'advisory' : 'pass', violations > 0, {
     block: violations > 0,
     passed: true,
     tddPlans: tddPlanFiles.length,

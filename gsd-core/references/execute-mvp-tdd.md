@@ -58,7 +58,11 @@ The executor MUST:
 The existing end-of-phase TDD review (in `workflows/execute-phase.md`'s `tdd_review_checkpoint` step) is normally **advisory** — it surfaces gate violations but does not block phase completion.
 
 Under TDD mode, escalate this to **blocking**:
-- If any TDD plan is missing a RED or GREEN commit, the executor MUST refuse to mark the phase complete.
+- If any TDD plan is missing a RED or GREEN commit, the executor MUST refuse to mark the phase complete. A `NotEvaluable` row is not a violation and leaves `block` false. The gate reports it only for a plan with no live plan commit and an incomplete RED/GREEN credit, in one of two cases:
+  - `sealed_shallow_history`: the plan has a seal entry that names two distinct 40-hex hashes, but the history is not complete (a shallow clone, or git cannot answer). The sealed commits cannot be verified: fetch full history.
+  - `unsealed_summary_unreachable`: the plan has no seal entry. Its SUMMARY (the first existing candidate name decides) names 1 to 64 distinct task commits, all unreachable in a complete history, and not all rewritten. A named commit counts as rewritten when its exact subject line occurs on a commit reachable from HEAD but not from the named commits, and whose committer date is not before the earliest author or committer date of any named commit. If any named commit no longer exists, the rewrite check is skipped and the plan is `NotEvaluable`.
+
+  SUMMARY hashes cannot be re-verified once squashed away, so a fabricated hash also yields `NotEvaluable`. A SUMMARY that names more than 64 distinct task commits, is over 64 KiB, or is a symlink or other non-regular file is an ordinary failure. So is a reachability or subject lookup that git cannot answer.
 - The user is shown the same review table, but the verdict line reads:
   > "Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD. Resolve and re-run /gsd:execute-phase, or override with `/gsd:execute-phase {phase} --force-mvp-gate` to ship anyway."
 

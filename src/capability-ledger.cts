@@ -119,6 +119,9 @@ function isUnsafeCapabilityId(id: unknown): boolean {
   return false;
 }
 
+/** `strict`: refuse to read through a symlink (LedgerIOError `ELOOP`) and report a close() failure instead of swallowing it. */
+interface ReadSmallOptions { strict?: boolean }
+
 /**
  * Sentinel for distinguishing IO errors (EACCES, EISDIR, EPERM, …) from
  * parse/validation failures. Thrown internally by readLedgerRaw; caught by the
@@ -157,12 +160,16 @@ class LedgerIOError extends Error {
  *   5. read EXACTLY stat.size bytes from the fd — never an unbounded streaming read.
  *   6. closeSync(fd) in finally.
  *
+ * `strict` (`ReadSmallOptions`) adds three steps for untrusted repo text: lstat refuses a symlink (the
+ * reader throws `ELOOP`), the open adds O_NOFOLLOW (the race backstop; O_NOFOLLOW is 0 on Windows, hence
+ * the lstat), and a close() failure after a good read throws LedgerIOError instead of being swallowed.
+ *
  * Returns the file content as a string, or null for ENOENT (genuinely missing). Throws LedgerIOError
  * for every other condition (non-regular, oversized, IO error) so callers fail closed. Behavior for a
  * normal small regular file is identical to the prior readFileSync(path,'utf8').
  */
-function readSmallRegularFile(filePath: string, maxBytes: number): string | null {
-  const buf = readSmallRegularFileBuffer(filePath, maxBytes);
+function readSmallRegularFile(filePath: string, maxBytes: number, options: ReadSmallOptions = {}): string | null {
+  const buf = readSmallRegularFileBuffer(filePath, maxBytes, options);
   if (buf === null) return null;
   // Decode to UTF-8 for STRING consumers (JSON parsers, lock-body parsers). This decode is LOSSY for
   // binary content (invalid byte sequences → U+FFFD), so a content-hash binding must NOT use this —
@@ -180,17 +187,22 @@ function readSmallRegularFile(filePath: string, maxBytes: number): string | null
  * sequences to U+FFFD) so two different binary artifacts could collide. Returns the bytes, or null
  * for ENOENT (genuinely missing); throws LedgerIOError for every other fail-closed condition.
  */
-function readSmallRegularFileBuffer(filePath: string, maxBytes: number): Buffer | null {
+function readSmallRegularFileBuffer(filePath: string, maxBytes: number, options: ReadSmallOptions = {}): Buffer | null {
   // O_RDONLY | O_NONBLOCK: never block on opening a FIFO/device — return the fd so fstat can reject it.
-  const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOCTTY || 0);
+  // strict: refuse a symlink (lstat, because O_NOFOLLOW is 0 on Windows; O_NOFOLLOW at open is the race backstop).
+  const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOCTTY || 0) | (options.strict ? fs.constants.O_NOFOLLOW : 0);
   let fd: number;
   try {
+    if (options.strict && fs.lstatSync(filePath).isSymbolicLink()) {
+      throw Object.assign(new Error('is a symbolic link'), { code: 'ELOOP' });
+    }
     fd = fs.openSync(filePath, openFlags);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return null; // genuinely missing — not a corruption.
     throw new LedgerIOError(`Cannot open ${filePath}: ${(err as Error).message}`, code);
   }
+  let failed = false;
   try {
     const st = fs.fstatSync(fd);
     if (!st.isFile()) {
@@ -222,10 +234,16 @@ function readSmallRegularFileBuffer(filePath: string, maxBytes: number): Buffer 
     // Return EXACTLY the bytes we read (off may be < st.size on a truncated-under-us read).
     return off === buf.length ? buf : buf.subarray(0, off);
   } catch (err) {
+    failed = true;
     if (err instanceof LedgerIOError) throw err;
     throw new LedgerIOError(`Cannot read ${filePath}: ${(err as Error).message}`, (err as NodeJS.ErrnoException).code);
   } finally {
-    try { fs.closeSync(fd); } catch { /* best-effort */ }
+    try {
+      fs.closeSync(fd);
+    } catch (err) {
+      // best-effort, except in strict mode after a good read: a close failure then replaces the result (it never masks an earlier error).
+      if (options.strict && !failed) throw new LedgerIOError(`Cannot close ${filePath}: ${(err as Error).message}`, (err as NodeJS.ErrnoException).code);
+    }
   }
 }
 

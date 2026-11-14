@@ -2449,3 +2449,25 @@ test('finding-2: unsupported-version reparse still surfaces a clear schema-versi
     'readLedgerStrict must reparse (bounded) and surface the unsupported-version message',
   );
 });
+
+test('readSmallRegularFile with strict refuses a symlink and reports a close failure; without it both are as before (#5354)', { skip: process.platform === 'win32' }, (t) => {
+  const dir = createTempDir('ledger-strict-');
+  t.after(() => cleanup(dir));
+  fs.writeFileSync(path.join(dir, 'target.txt'), 'hello');
+  fs.symlinkSync(path.join(dir, 'target.txt'), path.join(dir, 'link.txt'));
+  assert.equal(readSmallRegularFile(path.join(dir, 'link.txt'), 100), 'hello');
+  assert.throws(() => readSmallRegularFile(path.join(dir, 'link.txt'), 100, { strict: true }), { code: 'ELOOP' });
+  assert.equal(readSmallRegularFile(path.join(dir, 'missing.txt'), 100, { strict: true }), null);
+  const closeMock = t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
+  assert.equal(readSmallRegularFile(path.join(dir, 'target.txt'), 100), 'hello');
+  assert.throws(() => readSmallRegularFile(path.join(dir, 'target.txt'), 100, { strict: true }), { code: 'EIO' });
+  closeMock.mock.restore();
+});
+
+test('readSmallRegularFile strict: a close failure never masks the read error that came first (#5354)', (t) => {
+  const dir = createTempDir('ledger-strict-close-');
+  t.after(() => cleanup(dir));
+  fs.writeFileSync(path.join(dir, 'big.txt'), 'x'.repeat(200));
+  t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
+  assert.throws(() => readSmallRegularFile(path.join(dir, 'big.txt'), 100, { strict: true }), { code: 'EFBIG' });
+});

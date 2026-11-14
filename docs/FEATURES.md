@@ -460,7 +460,7 @@
 
 **Prerequisites:** Phase verified and recorded complete in ROADMAP.md, `gh` CLI installed and authenticated, `jq` installed, work on feature branch
 
-**Produces:** GitHub PR with rich body, optional configured PRD-style sections, STATE.md updated
+**Produces:** GitHub PR with rich body, optional configured PRD-style sections, STATE.md updated, and for a phase with TDD plans a `docs(<padded phase>)` commit that seals the TDD review evidence
 
 **User documentation:** [Custom PR Body Sections](ship-pr-body-sections.md)
 

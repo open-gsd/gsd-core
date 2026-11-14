@@ -446,6 +446,7 @@
       "gate-schema-drift.cjs",
       "gate-tdd-red-evidence.cjs",
       "gate-tdd-review-checkpoint.cjs",
+      "gate-tdd-review-seal.cjs",
       "gate-ui-plan.cjs",
       "gate-ui-safety.cjs",
       "gate-verdict.cjs",

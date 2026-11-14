@@ -1176,9 +1176,9 @@ report), stop here.
 **TDD review escalation (#4011):** the `tdd.review-checkpoint` gate is advisory (`blocking: false`)
 except when `TDD_MODE=true` AND `GATE_RESULT.block == true` — no MVP condition — where the shared
 step escalates the end-of-phase review to blocking: refuse to mark the phase complete and present
-`Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD.` Never proceed to
-`close_parent_artifacts`, `verify_phase_goal`'s verifier or `phase.complete` past that block. Full
-contract: `gsd-core/references/execute-mvp-tdd.md` and the step's `code_review_gate`.
+`Phase blocked: {N} TDD plan(s) violate the RED→GREEN gate sequence under TDD.` Never run
+`close_parent_artifacts`, `verify_phase_goal`'s verifier or `phase.complete` past that block.
+Contract: `gsd-core/references/execute-mvp-tdd.md`, `code_review_gate`. `NotEvaluable` leaves `block` false.
 
 Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the phase pending — present `$NEXT_ACTION` to the user and, when `$NEXT_COMMAND` is non-empty, show it as the next command to run. The query covers every case — including no report (`missing`) and no phase directory (`phase_dir_not_found`) — and a status outside the closed set is a hard error the shared step already halted on, so no per-status arm needs to be listed here.
 

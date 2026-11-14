@@ -161,6 +161,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/gate-phase-context.cjs',
       'gsd-core/bin/lib/gate-tdd-red-evidence.cjs',
       'gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs',
+      'gsd-core/bin/lib/gate-tdd-review-seal.cjs',
       'gsd-core/bin/lib/gate-ui-plan.cjs',
       'gsd-core/bin/lib/gate-ui-safety.cjs',
       // #5219 (epic #5056, ADR-5057 §4 arm C): the four drift / prohibition gates, moved out of verify.cts.

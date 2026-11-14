@@ -309,6 +309,7 @@ build/
 /gsd-core/bin/lib/gate-phase-context.cjs
 /gsd-core/bin/lib/gate-tdd-red-evidence.cjs
 /gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs
+/gsd-core/bin/lib/gate-tdd-review-seal.cjs
 /gsd-core/bin/lib/gate-ui-plan.cjs
 /gsd-core/bin/lib/gate-ui-safety.cjs
 /gsd-core/bin/lib/gate-schema-drift.cjs

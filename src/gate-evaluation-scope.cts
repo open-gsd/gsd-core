@@ -76,7 +76,7 @@ export interface ScopeOptions {
   shaChunk?: number;
 }
 
-export type GitRunner = (args: string[], opts?: { cwd?: string }) => SpawnResultOutput;
+export type GitRunner = (args: string[], opts?: { cwd?: string; maxBuffer?: number }) => SpawnResultOutput;
 
 export interface ScopeCommit {
   sha: string;
@@ -314,7 +314,7 @@ class ScopeUnreadable extends Error {
   }
 }
 
-type Git = (args: string[], cwd?: string) => string;
+type Git = (args: string[], cwd?: string, maxBuffer?: number) => string;
 
 /** The git subcommand of `args`: the first argument after any leading `-c <key=value>` pairs. */
 function gitSubcommand(args: readonly string[]): string {
@@ -336,8 +336,8 @@ const SUB_REPO_GIT_HARDENING: readonly string[] = [
 ];
 
 function makeGit(projectDir: string, runner: GitRunner, leading: readonly string[] = []): Git {
-  return (args, cwd = projectDir) => {
-    const result = runner([...leading, ...args], { cwd });
+  return (args, cwd = projectDir, maxBuffer) => {
+    const result = runner([...leading, ...args], maxBuffer === undefined ? { cwd } : { cwd, maxBuffer });
     if (result.timedOut) throw new ScopeUnreadable('git-timeout');
     if (result.exitCode === 127) throw new ScopeUnreadable('git-unavailable');
     if (result.exitCode !== 0) throw new ScopeUnreadable(`git-failed:${gitSubcommand(args)}`, result.exitCode);
@@ -384,6 +384,11 @@ export function isSafeDateArgument(candidate: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9 .,:+-]{0,63}$/.test(candidate);
 }
 
+/** True for a full 40-character lowercase hex object name. */
+export function isFullSha(v: unknown): v is string {
+  return typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+}
+
 function isAncestor(git: Git, sha: string, of: string): boolean {
   return gitOrNo(git, ['merge-base', '--is-ancestor', sha, of]) !== null;
 }
@@ -424,6 +429,38 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
       }
     }
     return null;
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return null;
+    throw error;
+  }
+}
+
+/**
+ * Whether the subject of each commit in `ids` still occurs on a commit reachable from HEAD but not from
+ * `ids` (#5354): a rebase or amend rewrote them rather than a squash dropping them. `null` means git could
+ * not answer (a timeout, no git, an unsafe or unknown id): not a "no".
+ */
+export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], execGit?: GitRunner): boolean | null {
+  if (ids.length === 0 || !ids.every(isSafeRefArgument)) return null;
+  const git = makeGit(projectDir, execGit ?? execGitSeam);
+  try {
+    // The log record framing (`%x1e`) keeps an empty or space-edged subject intact through the runner's trim.
+    // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
+    const named = parseLog(git(['log', '--no-walk=unsorted', logFormat(false), ...ids, '--']), false);
+    // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
+    // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
+    // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
+    // twin at limit-1).
+    const times = commitTimes(git, ids, true);
+    // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
+    if (times.size < named.length) return null;
+    const since = Math.min(...times.values());
+    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
+    // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time each record ends with.
+    const filtered = gitAtLeast(git, SINCE_AS_FILTER_MIN_GIT);
+    const listing = git(['log', logFormat('time'), ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--'], undefined, Infinity);
+    const onHead = new Set(parseLog(listing, 'time', undefined, filtered ? undefined : since).map((c) => c.subject));
+    return named.every((c) => onHead.has(c.subject));
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;
@@ -551,16 +588,26 @@ function openSources(projectDir: string, names: readonly string[], runner: GitRu
 
 const withPrefix = (prefix: string, file: string): string => (prefix === '' ? file : `${prefix}/${file}`);
 
-/** Committer time (unix seconds) per sha, for ordering commits that come from different repos. */
-function commitTimes(git: Git, shas: readonly string[]): Map<string, number> {
+/**
+ * Committer time (unix seconds) per sha, for ordering commits that come from different repos; with `earliest`,
+ * the earlier of the committer and the author time (a rewrite keeps the author time).
+ */
+function commitTimes(git: Git, shas: readonly string[], earliest = false): Map<string, number> {
   const times = new Map<string, number>();
   for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct', ...group]).split('\n')) {
-      const [sha, time] = line.split('\x1f');
-      if (sha && time !== undefined && /^[0-9]+$/.test(time)) times.set(sha, Number(time));
+    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct%x1f%at', ...group, '--']).split('\n')) {
+      const [sha, committed, authored] = line.split('\x1f');
+      const commit = unixSeconds(committed);
+      if (!sha || commit === null) continue;
+      times.set(sha, earliest ? Math.min(commit, unixSeconds(authored) ?? Infinity) : commit);
     }
   }
   return times;
+}
+
+/** The one reader of a unix-seconds field (`%ct`, `%at`) of a git log record; null when it is not all digits. */
+function unixSeconds(field: string | undefined): number | null {
+  return field !== undefined && /^[0-9]+$/.test(field.trim()) ? Number(field) : null;
 }
 
 interface SinceSplit {
@@ -764,6 +811,8 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
 
 /** First git release with `show --remerge-diff` (#5751). */
 const REMERGE_DIFF_MIN_GIT: readonly [number, number] = [2, 36];
+/** First git release with `log --since-as-filter` (#5354). */
+const SINCE_AS_FILTER_MIN_GIT: readonly [number, number] = [2, 37];
 
 /**
  * The first `<major>.<minor>` in `git --version` output ("git version 2.45.1.windows.1",
@@ -774,34 +823,43 @@ export function parseGitVersion(output: string): { major: number; minor: number 
   return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
 }
 
-/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
-export function remergeDiffSupported(output: string): boolean {
+/** Whether `git --version` output names a git at or after `min`; unparseable reads as no. */
+function versionAtLeast(output: string, min: readonly [number, number]): boolean {
   const version = parseGitVersion(output);
   if (version === null) return false;
-  return version.major > REMERGE_DIFF_MIN_GIT[0]
-    || (version.major === REMERGE_DIFF_MIN_GIT[0] && version.minor >= REMERGE_DIFF_MIN_GIT[1]);
+  return version.major > min[0] || (version.major === min[0] && version.minor >= min[1]);
+}
+
+/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
+export function remergeDiffSupported(output: string): boolean {
+  return versionAtLeast(output, REMERGE_DIFF_MIN_GIT);
 }
 
 /** Per-resolve cache of the `git --version` probe, keyed by the bound git function. */
-const remergeSupportCache = new WeakMap<Git, boolean>();
+const gitVersionCache = new WeakMap<Git, string>();
 
 /**
- * Whether this git can report a merge's own changes (`--remerge-diff`, git >= 2.36). Detected from
- * `git --version`, never from error output: an unknown option exits 128 or 129 depending on where
- * it is parsed. An unparseable version reads as unsupported, the safe side. A timeout still
- * rethrows (unresolvable); any other probe failure reads as unsupported.
+ * Whether this git is at or after `min`. Detected from `git --version`, never from error output: an
+ * unknown option exits 128 or 129 depending on where it is parsed. An unparseable version reads as
+ * older, the safe side. A timeout still rethrows (unresolvable); any other probe failure reads as older.
  */
-function supportsRemergeDiff(git: Git): boolean {
-  const cached = remergeSupportCache.get(git);
-  if (cached !== undefined) return cached;
-  let supported = false;
-  try {
-    supported = remergeDiffSupported(git(['--version']));
-  } catch (error) {
-    if (error instanceof ScopeUnreadable && error.reason === 'git-timeout') throw error;
+function gitAtLeast(git: Git, min: readonly [number, number]): boolean {
+  let output = gitVersionCache.get(git);
+  if (output === undefined) {
+    output = '';
+    try {
+      output = git(['--version']);
+    } catch (error) {
+      if (error instanceof ScopeUnreadable && error.reason === 'git-timeout') throw error;
+    }
+    gitVersionCache.set(git, output);
   }
-  remergeSupportCache.set(git, supported);
-  return supported;
+  return versionAtLeast(output, min);
+}
+
+/** Whether this git can report a merge's own changes (`--remerge-diff`, git >= 2.36). */
+function supportsRemergeDiff(git: Git): boolean {
+  return gitAtLeast(git, REMERGE_DIFF_MIN_GIT);
 }
 
 /**
@@ -844,23 +902,36 @@ function finalizeFiles(scope: EvaluationScope, repoRoot: string, changed: Iterab
   scope.missingOnDisk = missing;
 }
 
-/** `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. */
-function logFormat(withBody: boolean): string {
-  return withBody ? '--format=%H%x1f%P%x1f%s%x1f%b%x1e' : '--format=%H%x1f%P%x1f%s%x1e';
+/**
+ * `%P` rides every log so a commit's parents come from the listing itself, never a per-commit lookup. The fourth
+ * field is the body (`true`), the committer time (`'time'`, read by `parseLog`'s `since`) or absent (`false`).
+ */
+function logFormat(fourth: boolean | 'time'): string {
+  const field = fourth === 'time' ? '%x1f%ct' : fourth ? '%x1f%b' : '';
+  return `--format=%H%x1f%P%x1f%s${field}%x1e`;
 }
 
 /** Parent shas by commit sha, as read from the logs that listed the commits. */
 type ParentMap = Map<string, string[]>;
 
-function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): ScopeCommit[] {
+/**
+ * `fourth` is the choice given to `logFormat`. With `'time'` and `since`, a record committed before `since` is
+ * skipped, and a record without a numeric time is no answer (`ScopeUnreadable`).
+ */
+function parseLog(out: string, fourth: boolean | 'time', parentsOut?: ParentMap, since?: number): ScopeCommit[] {
   const commits: ScopeCommit[] = [];
   for (const record of out.split('\x1e')) {
     const trimmed = record.replace(/^\n+/, '');
     if (!trimmed) continue;
-    const [sha, parents, subject, body] = trimmed.split('\x1f');
-    if (!sha || !/^[0-9a-f]{40}$/.test(sha)) continue;
+    const [sha, parents, subject, field] = trimmed.split('\x1f');
+    if (!isFullSha(sha)) continue;
+    if (fourth === 'time' && since !== undefined) {
+      const time = unixSeconds(field);
+      if (time === null) throw new ScopeUnreadable('git-malformed:log');
+      if (time < since) continue;
+    }
     const commit: ScopeCommit = { sha, subject: subject ?? '' };
-    if (withBody) commit.body = (body ?? '').trim();
+    if (fourth === true) commit.body = (field ?? '').trim();
     commits.push(commit);
     parentsOut?.set(sha, (parents ?? '').split(' ').filter(Boolean));
   }

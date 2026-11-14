@@ -347,6 +347,8 @@ TDD Plans: {count} | Gate violations: {count}
 3. **Minimal GREEN:** Implementation is minimal — no premature optimization in GREEN phase
 4. **Refactor discipline:** If REFACTOR commit exists, tests still pass
 
+A `NotEvaluable` row is not a violation and carries `reason: sealed_shallow_history` or `reason: unsealed_summary_unreachable`. The report prints one line per such row, before the violations block: `Plan {id} not evaluable: {why}`, in a Status column that widens to fit `NotEvaluable`. Read `status`, not `missing`, to tell a violation from a `NotEvaluable` row. Conditions in `gsd-core/references/execute-mvp-tdd.md`.
+
 This checkpoint is advisory — it does not block phase completion but surfaces TDD discipline issues for human review.
 </end_of_phase_review>
 
