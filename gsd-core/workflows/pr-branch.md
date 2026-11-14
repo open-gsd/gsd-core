@@ -218,7 +218,7 @@ RW_PATHS_EOF
       RW_N=$(for H in $(printf '%s\n%s' "$RW_L" "$RW_R"); do picked "$H" || echo "$H"; done) &&
       RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET_SHA" 2>/dev/null) &&
       RW_F=$(rw_git log --full-history --name-only --format='%x09%H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
-      RW_P=$(rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" | TO=60 _to git patch-id --stable); then
+      RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" | TO=60 _to git patch-id --stable); then
       REWRITE=$(printf '\tL\n%s\n\tR\n%s\n\tD\n%s\n\tF\n%s\n\tP\n%s\n\tN\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" "$RW_N" |
         awk '/^\t[LRDFPN]$/{s=index("LRDFPN",substr($0,2));next}
           s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&$0!=""{dif[$0]=1}

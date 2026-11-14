@@ -1056,6 +1056,17 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(changed(dir).includes('two.txt'), 'round 2 is still replayed');
   });
 
+  test('a patch walk killed after partial output warns: the cut commit is not read as unpublished', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    // run-with-timeout cuts the last two lines off the patch walk (inside its oldest patch) and reports 124
+    const cut = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in *"log -p"*) "$@" | awk '{a[NR]=$0} END{for(i=1;i<=NR-2;i++)print a[i]}'; return 124 ;; esac; "$@"; else echo true; fi; }`;
+    const r = publish(dir, 'main', { prelude: cut });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
   test('a picked commit the patch-id run left out warns instead of being read as unpublished', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     git(dir, 'rebase', '-q', 'main');
@@ -1261,7 +1272,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const pendingBefore = pendingOf(dir);
     squashMerge(dir, { later: true, deletePr: true });
     commitRound(dir, 2, 'two.txt');
-    publish(dir, 'main', { prelude: ghPrelude(`${builtOf(dir)}0`) });
+    const r = publish(dir, 'main', { prelude: ghPrelude(`${builtOf(dir)}0`) });
+    assert.equal(r.status, 1, r.stderr);
     assert.ok(fs.existsSync(path.join(dir, '.git', 'gh-called')), 'gh was queried');
     assert.equal(markerOf(dir), '');
     assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
@@ -1453,7 +1465,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     // Add a file, drop it, add another: replaying these on `feature` itself would add commits there.
     write(dir, 'x.txt', 'x\n');
     commitAll(dir, 'feat: add x');
-    cleanup(path.join(dir, 'x.txt'));
+    git(dir, 'rm', '-q', 'x.txt');
     commitAll(dir, 'feat: drop x');
     write(dir, 'y.txt', 'y\n');
     commitAll(dir, 'feat: add y');
