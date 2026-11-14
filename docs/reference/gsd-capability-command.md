@@ -353,6 +353,14 @@ gsd capability trust revoke <id> [--project <path>]
 
 The `install` subcommand accepts the following source specification forms.
 
+Git `#sha:` pins require a complete 40- or 64-hex object ID; short IDs and branch names
+after `sha:` are rejected. Fetching an object ID requires the remote server to permit
+that object to be requested under its unadvertised-object policy. A refusal reports
+`git fetch "<ref>" failed`; typed pins never fall back. A bare ref may use a commit already
+in the shallow clone after any fetch failure, including network, authentication or timeout
+errors. That compatibility fallback emits `GSD_GIT_REF_LOCAL_FALLBACK`; the fetched
+remote target has not been verified, and the installed commit is the locally resolved ref.
+
 | Form | Example | Adapter | `--integrity` |
 |---|---|---|---|
 | Git URL with tag | `https://github.com/org/repo.git#v1.2.0` | Git — clones/fetches at the specified tag; `#sha:<40-hex>` pins a specific commit. | **Rejected** — a clone is a directory tree, not a single hashable artifact. Pin the commit with `#sha:<commit>` instead. |
