@@ -3247,3 +3247,174 @@ describe('#5038 explicit `milestone: null` — no false warning, counters withhe
     });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #6175 — MILESTONES.md "Key accomplishments" holds a curated list when the
+// workflow supplies one, and de-duplicated entries otherwise.
+//
+// `milestone complete` pushed every SUMMARY one-liner into the entry with no
+// filtering, so a milestone whose plans shared a one-liner listed it N times,
+// and the workflow's curated 4-6 list (complete-milestone.md) had no input to
+// reach the file through. The fix adds `--accomplishments-file` (modeled on
+// `--release-map`: size-capped, validated before anything is mutated) and
+// drops exact repeats when no curated list is passed. The raw list stays in
+// the JSON result: it is the evidence the curated list was chosen from.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#6175: milestone complete accomplishments', () => {
+  const fc = require('fast-check');
+  const milestoneMod = require('../gsd-core/bin/lib/milestone.cjs');
+  const A = 'Added the retry helper';
+  const B = 'Wired retry helper into the client';
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-6175-');
+    writeRoadmap(tmpDir, '# Roadmap v1.3 Example\n\n### Phase 1: Alpha\n**Goal:** a\n\n### Phase 2: Beta\n**Goal:** b\n');
+    writeState(tmpDir);
+    const p1 = mkPhaseDir(tmpDir, '01-alpha', { plan: true, oneLiner: A });
+    fs.writeFileSync(path.join(p1, '01-02-SUMMARY.md'), `---\none-liner: ${B}\n---\n# Summary\n`);
+    mkPhaseDir(tmpDir, '02-beta', { plan: true, oneLiner: B });
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const milestonesText = () => fs.readFileSync(path.join(tmpDir, '.planning', 'MILESTONES.md'), 'utf-8');
+  const bulletsOf = (text) => {
+    const section = text.split('**Key accomplishments:**\n')[1].split('\n\n')[0];
+    return section.split('\n');
+  };
+  const writeFile = (name, content) => {
+    const file = path.join(tmpDir, name);
+    fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content));
+    return file;
+  };
+  const snapshot = () => {
+    const out = {};
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else out[path.relative(tmpDir, full)] = fs.readFileSync(full, 'utf-8');
+      }
+    };
+    walk(path.join(tmpDir, '.planning'));
+    return out;
+  };
+  const complete = (...extra) => runGsdTools(['milestone', 'complete', 'v1.3', '--name', 'Example', '--confirm', ...extra], tmpDir);
+
+  test('no flag: repeats are dropped (first kept, order preserved) and the JSON keeps all three', () => {
+    const r = complete();
+    assert.ok(r.success, r.error);
+    assert.deepEqual(bulletsOf(milestonesText()), [`- ${A}`, `- ${B}`]);
+    assert.deepEqual(JSON.parse(r.output).accomplishments, [A, B, B]);
+  });
+
+  test('--accomplishments-file: the entry lists exactly the supplied lines; the JSON keeps the raw list', () => {
+    const file = writeFile('curated.json', ['Curated one', 'Curated two']);
+    const r = complete('--accomplishments-file', file);
+    assert.ok(r.success, r.error);
+    assert.deepEqual(bulletsOf(milestonesText()), ['- Curated one', '- Curated two']);
+    assert.deepEqual(JSON.parse(r.output).accomplishments, [A, B, B]);
+  });
+
+  test('--dry-run validates the file too (a bad file is refused, a good one changes nothing)', () => {
+    const bad = writeFile('bad.json', '{ nope');
+    const before = snapshot();
+    const refused = runGsdTools(['milestone', 'complete', 'v1.3', '--dry-run', '--accomplishments-file', bad], tmpDir);
+    assert.equal(refused.success, false);
+    assert.match(refused.error, /nothing has been changed/);
+    const good = writeFile('good.json', ['x']);
+    const ok = runGsdTools(['milestone', 'complete', 'v1.3', '--dry-run', '--accomplishments-file', good], tmpDir);
+    assert.ok(ok.success, ok.error);
+    assert.deepEqual(snapshot(), before);
+  });
+
+  const badInputs = {
+    'missing file': () => path.join(tmpDir, 'does-not-exist.json'),
+    'a directory': () => tmpDir,
+    'not JSON': () => writeFile('a.json', 'not json'),
+    'not an array': () => writeFile('a.json', { lines: ['x'] }),
+    'empty array': () => writeFile('a.json', []),
+    'non-string entry': () => writeFile('a.json', ['ok', 7]),
+    'blank entry': () => writeFile('a.json', ['ok', '   ']),
+    'multi-line entry': () => writeFile('a.json', ['two\nlines']),
+    'over-long entry': () => writeFile('a.json', ['x'.repeat(milestoneMod.MAX_ACCOMPLISHMENT_LENGTH + 1)]),
+    'oversized file': () => writeFile('a.json', JSON.stringify(['x']) + ' '.repeat(milestoneMod.MAX_ACCOMPLISHMENTS_FILE_BYTES)),
+  };
+  for (const [label, makeFile] of Object.entries(badInputs)) {
+    test(`${label}: fails before any file is changed, with the "nothing has been changed" wording`, () => {
+      const file = makeFile();
+      const before = snapshot();
+      const r = complete('--accomplishments-file', file);
+      assert.equal(r.success, false, 'must exit non-zero');
+      assert.match(r.error, /nothing has been changed/);
+      assert.deepEqual(snapshot(), before, 'no file may be created, moved or edited');
+    });
+  }
+
+  test('an empty path fails before any file is changed', () => {
+    const before = snapshot();
+    const r = complete('--accomplishments-file', '');
+    assert.equal(r.success, false);
+    assert.match(r.error, /nothing has been changed/);
+    assert.deepEqual(snapshot(), before);
+  });
+
+  test('a bare --accomplishments-file (no value) fails before any file is changed', () => {
+    const before = snapshot();
+    const r = runGsdTools(['milestone', 'complete', 'v1.3', '--name', 'Example', '--confirm', '--accomplishments-file'], tmpDir);
+    assert.equal(r.success, false);
+    assert.match(r.error, /nothing has been changed/);
+    assert.deepEqual(snapshot(), before);
+  });
+
+  test('boundary: MAX-1, MAX and MAX+1 entries (the last is refused)', () => {
+    const max = milestoneMod.MAX_ACCOMPLISHMENTS_ENTRIES;
+    const lines = (n) => Array.from({ length: n }, (_, i) => `Accomplishment ${i + 1}`);
+    for (const n of [max - 1, max]) {
+      const t = createTempProject('gsd-6175-bound-');
+      try {
+        const r = milestoneMod.loadAccomplishmentsFile(
+          (() => { const f = path.join(t, 'a.json'); fs.writeFileSync(f, JSON.stringify(lines(n))); return f; })(),
+        );
+        assert.equal(r.ok, true, `${n} entries must be accepted`);
+        assert.equal(r.accomplishments.length, n);
+      } finally { cleanup(t); }
+    }
+    const t = createTempProject('gsd-6175-bound-');
+    try {
+      const f = path.join(t, 'a.json');
+      fs.writeFileSync(f, JSON.stringify(lines(max + 1)));
+      assert.equal(milestoneMod.loadAccomplishmentsFile(f).ok, false, `${max + 1} entries must be refused`);
+    } finally { cleanup(t); }
+  });
+
+  test('property: dedupe is idempotent, order-preserving, drops only exact repeats', () => {
+    fc.assert(fc.property(fc.array(fc.string({ maxLength: 6 }), { maxLength: 30 }), (list) => {
+      const once = milestoneMod.dedupeAccomplishments(list);
+      assert.deepEqual(milestoneMod.dedupeAccomplishments(once), once, 'idempotent');
+      assert.equal(new Set(once).size, once.length, 'no repeats left');
+      assert.deepEqual([...new Set(list)].sort(), [...once].sort(), 'same members');
+      // order-preserving: each kept entry sits at its first-occurrence position
+      assert.deepEqual(once, list.filter((v, i) => list.indexOf(v) === i));
+    }));
+  });
+});
+
+describe('#6175: the complete-milestone workflow passes the curated list on every milestone complete call', () => {
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const wf = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
+
+  test('the workflow names --accomplishments-file and applies it to the --no-archive-phases form', () => {
+    assert.match(wf, /--accomplishments-file/);
+    const noArchiveForm = splitLines(wf).filter((l) => /^gsd_run query milestone complete /.test(l) && l.includes('--no-archive-phases'));
+    assert.ok(noArchiveForm.length > 0, 'the --no-archive-phases form must exist in the workflow');
+    for (const l of noArchiveForm) assert.match(l, /--accomplishments-file/);
+  });
+
+  test('every mutating `milestone complete` invocation in the workflow carries --accomplishments-file', () => {
+    const invocations = splitLines(wf).filter((l) => /^(ARCHIVE=\$\()?gsd_run query milestone[. ]complete /.test(l) && !l.includes('--dry-run'));
+    assert.ok(invocations.length >= 2, `expected the default and --no-archive-phases forms; found ${invocations.length}`);
+    for (const l of invocations) assert.match(l, /--accomplishments-file/, `invocation without the flag: ${l}`);
+  });
+});
