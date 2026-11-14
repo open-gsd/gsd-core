@@ -850,6 +850,17 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
+  // A script holding dollar-quoting is read four ways; each reading counts
+  // the same invocations, not the sum of all four.
+  const quotedInvocations = (n) => `git -c alias.q=status -c alias.top=${sq(`!echo $'x'; ${'git q; '.repeat(n - 1)}`)} top`;
+  test('256 alias invocations in one git command are allowed when the script holds dollar-quoting', () => {
+    const cmd = quotedInvocations(256);
+    assertAllowed(runHook(bash(cmd)), cmd);
+  });
+  test('257 alias invocations in one git command fail closed when the script holds dollar-quoting', () => {
+    const cmd = quotedInvocations(257);
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
+  });
   test('257 alias invocations in one git command fail closed', () => {
     const cmd = invokedAliases(257);
     assertBlocked(runHook(bash(cmd)), cmd, { code: 'alias-too-complex', tool: 'Bash', path: 'alias.q' });
