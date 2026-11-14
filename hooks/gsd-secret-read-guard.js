@@ -2043,7 +2043,9 @@ function wrapperReadValues(words, start, end, spec) {
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
 // `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes
 // remain. `assigns` are the prefix's `VAR=val` words, which the command and
-// everything it runs inherit; `reads` are files a wrapper reads itself.
+// everything it runs inherit; `reads` are files a wrapper reads itself. A
+// wrapper reads them whatever it runs (`sshpass -f .env`, `sshpass -f .env
+// env`), so prefixes with reads and no command give an empty `base`.
 function resolveCommand(words) {
   let idx = 0;
   const reads = [];
@@ -2056,9 +2058,9 @@ function resolveCommand(words) {
     if (spec.reads) for (const value of wrapperReadValues(words, idx + 1, next, spec)) reads.push(value);
     idx = next;
   }
-  if (idx >= words.length) return null;
+  if (idx >= words.length && reads.length === 0) return null;
   return {
-    base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1), reads,
+    base: idx < words.length ? lastSegment(words[idx].text).toLowerCase() : '', operands: words.slice(idx + 1), reads,
     assigns: words.slice(0, idx).map((w) => w.text).filter((t) => ASSIGNMENT_RE.test(t)),
   };
 }
