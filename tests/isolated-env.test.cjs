@@ -24,6 +24,7 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
 const { nullGitConfig } = require('../scripts/lint-removed-but-needed.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -215,7 +216,7 @@ describe('gitChildEnv', () => {
   test('drops the variables that redirect git and the developer\'s git config', (t) => {
     const home = tmp(t, 'gsd-6033-gitenv-home-');
     // Source of the location list: git itself (`git rev-parse --local-env-vars`), plus the config-injection variable.
-    const listed = gitOrThrow(['rev-parse', '--local-env-vars'], { cwd: home, env: isolatedEnv({ home }), timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).split('\n').filter(Boolean);
+    const listed = splitLines(gitOrThrow(['rev-parse', '--local-env-vars'], { cwd: home, env: isolatedEnv({ home }), timeoutMs: GIT_FIXTURE_TIMEOUT_MS })).filter(Boolean);
     const hostile = { ...Object.fromEntries(listed.map((k) => [k, '/hostile'])), GIT_CONFIG_PARAMETERS: "'core.hooksPath=/hostile'" };
     // The hostile env is the child's own process env, so process.env here is never mutated.
     const script = `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(__dirname, 'helpers', 'isolated-env.cjs'))}).gitChildEnv(process.argv[1])))`;
@@ -254,7 +255,7 @@ describe('gitChildEnv', () => {
   test('gitIn and refOf run git under gitChildEnv: a hostile GIT_DIR in the parent env does not reach them', (t) => {
     const repo = tmp(t, 'gsd-6033-gitin-home-');
     const hostileDir = tmp(t, 'gsd-6033-gitin-hostile-');
-    const run = (...args) => gitOrThrow(args, { cwd: repo, env: isolatedEnv({ home: repo }), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    const run = (...args) => gitOrThrow(args, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
     run('init', '-q');
     run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'm');
     const sha = run('rev-parse', 'HEAD').trim();
