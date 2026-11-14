@@ -27,6 +27,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const helpers = require('../helpers.cjs');
+const { isolatedGitEnv: scrubGitEnv } = require('../../scripts/lint-removed-but-needed.cjs');
+const { scrubGitLocationEnv } = require('../../gsd-core/bin/lib/read-only-git-env.cjs');
+const { gitOrThrow, refShaOrEmpty, GIT_FIXTURE_TIMEOUT_MS } = require('./git-fixture.cjs');
 
 const { cleanup } = helpers;
 
@@ -239,4 +242,34 @@ function createHermeticRoot(prefix, { parent } = {}) {
   return root;
 }
 
-module.exports = { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable };
+/**
+ * The env of a test child that runs git: `isolatedEnv` over the base that
+ * `scripts/lint-removed-but-needed.cjs` `isolatedGitEnv` owns (no config-redirecting
+ * variable, no global or system config) and `scrubGitLocationEnv` owns (no variable
+ * that points git at another repository, index or object store), so a developer's `commit.gpgsign`, `core.hooksPath`
+ * or a hook's `GIT_DIR` stays out.
+ *
+ * @param {string} home Absolute home dir (see `isolatedEnv`).
+ * @returns {Record<string, string>}
+ */
+function gitChildEnv(home) {
+  return isolatedEnv({ home, base: scrubGitLocationEnv(scrubGitEnv(home)) });
+}
+
+/**
+ * `gitOrThrow` under `gitChildEnv(dir)`: the one runner of fixture git in a test repo.
+ *
+ * @param {string} dir Repository dir (also the isolated home).
+ * @param {number} [timeoutMs] Default: the git fixture class timeout.
+ * @returns {(args: string[]) => string} stdout of the run; throws on any other outcome.
+ */
+function gitIn(dir, timeoutMs = GIT_FIXTURE_TIMEOUT_MS) {
+  return (args) => gitOrThrow(args, { cwd: dir, env: gitChildEnv(dir), timeoutMs });
+}
+
+/** `refShaOrEmpty` of `ref` in `dir` under `gitChildEnv(dir)`. */
+function refOf(dir, ref, timeoutMs = GIT_FIXTURE_TIMEOUT_MS) {
+  return refShaOrEmpty(ref, { cwd: dir, env: gitChildEnv(dir), timeoutMs });
+}
+
+module.exports = { isolatedEnv, gitChildEnv, gitIn, refOf, isolatedPath, createHermeticRoot, linkExecutable };

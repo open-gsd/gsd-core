@@ -193,6 +193,7 @@ module.exports = {
   "tests/platform-conformance-tier.test.cjs",
   "tests/plugin-manifest.test.cjs",
   "tests/policy-shell-pinning.test.cjs",
+  "tests/pr-branch-published-marker-failures.test.cjs",
   "tests/precommit-alias-drift-hook.test.cjs",
   "tests/prepush-enterprise-email-hook.test.cjs",
   "tests/process-seam.test.cjs",

@@ -6,6 +6,7 @@ const path = require('path');
 const { createFixture, seedPhase, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitChildEnv, gitIn } = require('./helpers/isolated-env.cjs');
 
 const created = [];
 afterEach(() => {
@@ -82,5 +83,19 @@ describe('fixture builder module', () => {
       fs.existsSync(path.join(dir, '.planning', 'PROJECT.md')),
       'git fixture writes canonical PROJECT.md'
     );
+  });
+
+  test('gitEnv supplies the env of the construction git calls', () => {
+    const seen = [];
+    const gitEnv = (dir) => {
+      seen.push(dir);
+      return { ...gitChildEnv(dir), GIT_AUTHOR_NAME: 'Env Author' };
+    };
+    const dir = createFixture({ git: true, gitEnv });
+    created.push(dir);
+
+    assert.deepStrictEqual(seen, [dir]);
+    // `git config user.name Test` is set too; only the env explains this author.
+    assert.strictEqual(gitIn(dir)(['log', '-1', '--format=%an']).trim(), 'Env Author');
   });
 });

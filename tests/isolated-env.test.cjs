@@ -22,7 +22,9 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { isolatedEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { isolatedEnv, gitChildEnv, isolatedPath, createHermeticRoot, linkExecutable } = require('./helpers/isolated-env.cjs');
+const { nullGitConfig } = require('../scripts/lint-removed-but-needed.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const MODEL_RESOLVER = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'install-model-override-resolver.cjs',
@@ -207,6 +209,62 @@ describe('isolatedEnv: stripped and inherited variables', () => {
     const base = { ...SYSTEM_VARS, LANG: 'xx_XX.UTF-8' };
     const view = childView(isolatedEnv({ home, base }));
     assert.equal(view.env.LANG, 'xx_XX.UTF-8');
+  });
+});
+
+describe('gitChildEnv', () => {
+  test('drops the variables that redirect git and the developer\'s git config', (t) => {
+    const home = tmp(t, 'gsd-6033-gitenv-home-');
+    // Source of the location list: git itself (`git rev-parse --local-env-vars`), plus the config-injection variable.
+    const listed = splitLines(gitOrThrow(['rev-parse', '--local-env-vars'], { cwd: home, env: isolatedEnv({ home }), timeoutMs: GIT_FIXTURE_TIMEOUT_MS })).filter(Boolean);
+    const hostile = { ...Object.fromEntries(listed.map((k) => [k, '/hostile'])), GIT_CONFIG_PARAMETERS: "'core.hooksPath=/hostile'" };
+    // The hostile env is the child's own process env, so process.env here is never mutated.
+    const script = `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(__dirname, 'helpers', 'isolated-env.cjs'))}).gitChildEnv(process.argv[1])))`;
+    const env = probe(script, { ...SYSTEM_VARS, ...hostile }, [home]);
+    for (const k of Object.keys(hostile)) assert.ok(!(k in env), `${k} leaked`);
+    // Bypass: the raw hostile env reaches a child, so the probe can see the leak.
+    const raw = childView({ ...SYSTEM_VARS, ...hostile }).env;
+    for (const k of Object.keys(hostile)) assert.ok(k in raw, `${k} is not visible without the scrub`);
+    assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+    assert.notEqual(env.GIT_CONFIG_GLOBAL, undefined);
+    assert.equal(env.HOME, home);
+  });
+
+  test('GIT_CONFIG_GLOBAL is a path git can open on every platform: the null device, or an empty file on Windows', (t) => {
+    assert.equal(nullGitConfig('linux'), os.devNull);
+    assert.equal(nullGitConfig('darwin'), os.devNull);
+    const win = nullGitConfig('win32');
+    assert.notEqual(win, os.devNull, 'on Windows the null device is `\\\\.\\nul`, which git cannot open');
+    assert.ok(fs.existsSync(win) && fs.readFileSync(win, 'utf-8') === '', 'an existing empty file');
+    const listed = gitOrThrow(['config', '--global', '--list'], { cwd: tmp(t, 'gsd-6033-nullcfg-cwd-'), env: { ...isolatedEnv({ home: tmp(t, 'gsd-6033-nullcfg-git-') }), GIT_CONFIG_GLOBAL: win }, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    assert.equal(listed.trim(), '', 'git opens that path and reads no config');
+    assert.equal(gitChildEnv(tmp(t, 'gsd-6033-nullcfg-home-')).GIT_CONFIG_GLOBAL, nullGitConfig());
+  });
+
+  test('the Windows empty git config is one file per process, emptied on every call and removed at exit', () => {
+    const first = nullGitConfig('win32');
+    assert.equal(nullGitConfig('win32'), first, 'one file per process');
+    fs.writeFileSync(first, '[user]\n\tname = leaked\n');
+    assert.equal(fs.readFileSync(nullGitConfig('win32'), 'utf-8'), '', 'a write between two calls does not reach the next one');
+    const script = `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(__dirname, '..', 'scripts', 'lint-removed-but-needed.cjs'))}).nullGitConfig('win32')))`;
+    const childFile = probe(script, { ...SYSTEM_VARS });
+    assert.ok(!fs.existsSync(path.dirname(childFile)), 'the child removed its private dir when it exited');
+    assert.notEqual(path.dirname(childFile), path.dirname(first), 'each process has its own dir');
+  });
+
+  test('gitIn and refOf run git under gitChildEnv: a hostile GIT_DIR in the parent env does not reach them', (t) => {
+    const repo = tmp(t, 'gsd-6033-gitin-home-');
+    const hostileDir = tmp(t, 'gsd-6033-gitin-hostile-');
+    const run = (...args) => gitOrThrow(args, { cwd: repo, env: gitChildEnv(repo), timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    run('init', '-q');
+    run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'm');
+    const sha = run('rev-parse', 'HEAD').trim();
+    const helper = JSON.stringify(path.join(__dirname, 'helpers', 'isolated-env.cjs'));
+    const script = `const h = require(${helper}); const d = process.argv[1];`
+      + ' process.stdout.write(JSON.stringify({ gitDir: h.gitIn(d)(["rev-parse", "--git-dir"]).trim(), ref: h.refOf(d, "HEAD") }))';
+    const out = probe(script, { ...SYSTEM_VARS, PATH: process.env.PATH, GIT_DIR: hostileDir }, [repo]);
+    assert.equal(out.gitDir, '.git');
+    assert.equal(out.ref, sha);
   });
 });
 

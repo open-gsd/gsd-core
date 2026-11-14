@@ -11,6 +11,8 @@ const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('../helpers/git-fixture.c
  * @param {boolean} [options.git=false] - initialize git repo with initial commit
  * @param {boolean} [options.planning=true] - create .planning/phases layout
  * @param {boolean} [options.projectDoc=true] - write .planning/PROJECT.md
+ * @param {(dir: string) => Record<string, string>} [options.gitEnv] - child env of the git
+ *   construction calls, built from the fixture dir (default: inherit the process env)
  * @returns {string} absolute fixture directory path
  */
 function createFixture(options = {}) {
@@ -19,6 +21,7 @@ function createFixture(options = {}) {
     git = false,
     planning = true,
     projectDoc = git,
+    gitEnv,
   } = options;
 
   const tmpDir = fs.mkdtempSync(path.join(path.resolve(os.tmpdir()), prefix));
@@ -39,7 +42,7 @@ function createFixture(options = {}) {
     // Construction calls (init/config/add/commit), a heavier class than a
     // plumbing read — each of `init`/`commit` writes dozens of files, and on
     // Windows every spawn is Defender-scanned (#3323).
-    const gitOpts = { cwd: tmpDir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS };
+    const gitOpts = { cwd: tmpDir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS, ...(gitEnv && { env: gitEnv(tmpDir) }) };
     gitOrThrow(['init'], gitOpts);
     gitOrThrow(['config', 'user.email', 'test@test.com'], gitOpts);
     gitOrThrow(['config', 'user.name', 'Test'], gitOpts);

@@ -552,6 +552,26 @@ function isSafeRepoPath(rel) {
   });
 }
 
+let emptyConfigDir = null; // the private dir of the Windows empty config, made on first use
+
+/**
+ * The path `GIT_CONFIG_GLOBAL` takes to read no config: `os.devNull`, except on Windows, where
+ * that is `\\.\nul` and git cannot open it ("unable to access '\\.\nul'"), so an empty file in a private temp dir stands in.
+ * @param {string} [platform] - default: this process's platform
+ * @returns {string}
+ */
+function nullGitConfig(platform = process.platform) {
+  if (platform !== 'win32') return os.devNull;
+  if (emptyConfigDir === null) {
+    // One private dir per process, removed on exit: a child's `git config --global` write never reaches another run.
+    emptyConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-empty-gitconfig-'));
+    process.once('exit', () => fs.rmSync(emptyConfigDir, { recursive: true, force: true }));
+  }
+  const empty = path.join(emptyConfigDir, 'config');
+  fs.writeFileSync(empty, '');
+  return empty;
+}
+
 /**
  * The environment for git commands run in the scratch repo: the parent's with
  * every variable that could redirect git to another repository, index,
@@ -567,7 +587,7 @@ function isolatedGitEnv(scratchDir = null) {
   }
   // No system or global git config at all (and no per-user config home).
   env.GIT_CONFIG_NOSYSTEM = '1';
-  env.GIT_CONFIG_GLOBAL = os.devNull;
+  env.GIT_CONFIG_GLOBAL = nullGitConfig();
   if (scratchDir) {
     env.HOME = scratchDir;
     env.XDG_CONFIG_HOME = scratchDir;
@@ -981,6 +1001,7 @@ module.exports = {
   getTrackedIgnoredFiles,
   ignoredByTrackedRules,
   isolatedGitEnv,
+  nullGitConfig,
   initScratchRepo,
   isSafeRepoPath,
   resolveBaseBranch,

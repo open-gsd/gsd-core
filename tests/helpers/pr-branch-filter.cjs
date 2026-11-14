@@ -1,8 +1,13 @@
 'use strict';
 
 /**
- * Parsing seam for `tests/pr-branch-planning-filter.test.cjs` against
- * `/gsd-pr-branch`'s planning-path filter.
+ * Parsing seam for `/gsd-pr-branch`'s shipped shell, shared by
+ * `tests/pr-branch-planning-filter.test.cjs`, `tests/git-base-branch.test.cjs`,
+ * `tests/pr-branch-published-marker-*.test.cjs` and
+ * `tests/pr-branch-matcher.property.test.cjs`. Besides the planning-path
+ * filter it exports `extractDeclarationLines` (one-line declarations) and
+ * `extractFunction` (a multi-line function) so tests run the shipped text, and
+ * `runBashFile`, the one runner of a shipped recipe from a file.
  *
  * The workflow (`gsd-core/workflows/pr-branch.md`) is the single source of
  * truth for which `.planning/` subdirectories are "transient" (excluded from
@@ -36,6 +41,8 @@ const fs = require('fs');
 const path = require('path');
 const { escapeRegex: escapeRe } = require('../../gsd-core/bin/lib/pattern.cjs');
 const { normalizeEol } = require('../../gsd-core/bin/lib/text-lines.cjs');
+const { createTempDir, cleanup } = require('../helpers.cjs');
+const { runHook } = require('./process-seam.cjs');
 
 const WORKFLOW_PATH = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'pr-branch.md');
 
@@ -82,10 +89,17 @@ const parseWorkflow = (text) => {
   return { transientDirs, structuralRe };
 };
 
-const readWorkflow = () => parseWorkflow(fs.readFileSync(WORKFLOW_PATH, 'utf-8'));
+const readWorkflowText = () => fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+const readWorkflow = () => parseWorkflow(readWorkflowText());
 
 const BASH_FENCE_OPEN_RE = /^```bash\s*$/;
 const BASH_FENCE_CLOSE_RE = /^```\s*$/;
+// A line that identifies each shipped bash block the tests run: the mode's TRANSIENT_DIRS, its FILTER_PATHS
+// projection, the preconditions (PR_BRANCH and the helpers declared with it), the REVS pick list and the pick loop.
+const TRANSIENT_DIRS_MARKER = 'TRANSIENT_DIRS="phases';
+const FILTER_PATHS_MARKER = 'FILTER_PATHS=$(for d';
+const PRECONDITIONS_MARKER = 'PR_BRANCH="${CURRENT_BRANCH}-pr"';
+const REVS_MARKER = 'REVS=$(TO=60';
 const PICK_LOOP_MARKER = 'for HASH in $(printf \'%s\' "$INCLUDED_COMMITS")';
 
 /**
@@ -148,6 +162,38 @@ const extractBashBlockContaining = (text, marker) => {
 
 const extractPickLoop = (text) => extractBashBlockContaining(text, PICK_LOOP_MARKER);
 
+// The shipped one-line declarations that start with each of `names` (literal text, e.g. `refkey() {`), taken
+// from the one bash block holding `marker`; throws when a name is missing, so a rename fails the test.
+const extractDeclarationLines = (text, marker, names) => {
+  const block = extractBashBlockContaining(text, marker);
+  return names.map((n) => {
+    const m = block.match(new RegExp(`^${escapeRe(n)}.*$`, 'm'));
+    if (!m) throw new Error(`pr-branch.md: no line starting with ${n} in the block holding "${marker}"`);
+    return m[0];
+  });
+};
+
+// The shipped multi-line function `name`, from its `name() {` line to the closing `}` at column 0, taken from the
+// one bash block holding `marker`; throws when it is missing, so a rename fails the test.
+const extractFunction = (text, marker, name) => {
+  const m = extractBashBlockContaining(text, marker).match(new RegExp(`^${escapeRe(name)}\\(\\) \\{[\\s\\S]*?^\\}$`, 'm'));
+  if (!m) throw new Error(`pr-branch.md: no function ${name} in the block holding "${marker}"`);
+  return m[0];
+};
+
+// The one owner of "run a shipped bash recipe from a file, not argv" (Windows MSYS2 mis-parses long quote-heavy
+// argv): `script` and `files` (name -> content) go into a fresh dir; bash runs the script in `cwd` (default the
+// fresh dir) under `env(dir)`, bounded by `timeoutMs` when given. Returns the seam result.
+const runBashFile = (script, { prefix, env, cwd, files = {}, timeoutMs }) => {
+  const dir = createTempDir(prefix);
+  try {
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content);
+    const file = path.join(dir, 'run.sh');
+    fs.writeFileSync(file, `${script}\n`);
+    return runHook(file, [], { interpreter: 'bash', cwd: cwd ?? dir, env: env(dir), timeoutMs });
+  } finally { cleanup(dir); }
+};
+
 const normalizePaths = (input) => {
   const raw = typeof input === 'string' ? input.split('\n') : input;
   return raw.map((s) => s.replace(/\r$/, '')).filter((s) => s.length > 0);
@@ -201,8 +247,16 @@ module.exports = {
   WORKFLOW_PATH,
   parseWorkflow,
   readWorkflow,
+  readWorkflowText,
   extractPickLoop,
   extractBashBlockContaining,
+  extractDeclarationLines,
+  extractFunction,
+  runBashFile,
+  TRANSIENT_DIRS_MARKER,
+  FILTER_PATHS_MARKER,
+  PRECONDITIONS_MARKER,
+  REVS_MARKER,
   normalizePaths,
   forbiddenRegex,
   forbiddenPaths,

@@ -56,19 +56,26 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
 const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
   cleanup, createTempProject, runGsdTools, readFileNormalized,
 } = require('./helpers.cjs');
-const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
+const { gitChildEnv, gitIn } = require('./helpers/isolated-env.cjs');
 const {
   WORKFLOW_PATH,
   parseWorkflow,
   readWorkflow,
+  readWorkflowText,
+  runBashFile,
   extractPickLoop,
   extractBashBlockContaining,
+  extractDeclarationLines,
+  extractFunction,
+  PRECONDITIONS_MARKER,
+  TRANSIENT_DIRS_MARKER,
+  REVS_MARKER,
   forbiddenRegex,
   forbiddenPaths,
   structuralPaths,
@@ -96,7 +103,7 @@ const CHERRY_PICK_RECIPE_TIMEOUT_MS = 30000;
 // ── Shared git-fixture primitives (L2 + L4) ────────────────────────────────
 
 function git(args, cwd) {
-  return gitOrThrow(args, { cwd, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+  return gitIn(cwd)(args);
 }
 
 function initRepo(dir) {
@@ -297,6 +304,24 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         /STRUCTURAL_RE declared 2 times/,
       );
     });
+
+    test('18b: the shipped-text extractors throw on a missing name, so a rename in pr-branch.md fails the test', () => {
+      const text = readWorkflowText();
+      assert.throws(() => extractDeclarationLines(text, PRECONDITIONS_MARKER, ['no_such_line=']), /no line starting with no_such_line=/);
+      assert.throws(() => extractFunction(text, PRECONDITIONS_MARKER, 'no_such_fn'), /no function no_such_fn/);
+    });
+
+    test('18c: runBashFile passes the timeout to the run and removes its temp dir', () => {
+      const prefix = 'gsd-runbash-probe-';
+      const CUT_OFF_MS = 300; // a distinct class: far below the 5s sleep it must cut off
+      const left = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith(prefix)).length;
+      const before = left();
+      const slow = runBashFile('sleep 5; exit 7', { prefix, env: (d) => gitChildEnv(d), timeoutMs: CUT_OFF_MS });
+      assert.notEqual(slow.exitCode, 7, 'the run was cut off at timeoutMs, not left to finish');
+      const ok = runBashFile('exit 0', { prefix, env: (d) => gitChildEnv(d) });
+      assert.equal(ok.exitCode, 0);
+      assert.equal(left(), before, 'every run removed its temp dir');
+    });
   });
 
   // ── L2: the real create_pr_branch recipe, executed against real git ─────
@@ -327,7 +352,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
      *   prbranch: checked out from main (or from main + a conflicting extra
      *            commit on main, when conflict is true).
      */
-    function buildFixture({ noPlanning = false, conflict = false, planningOnlySecondCommit = false } = {}) {
+    function buildFixture({ noPlanning = false, conflict = false, planningOnlySecondCommit = false, configOnlySecondCommit = false } = {}) {
       const dir = trackDir(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-')));
       initRepo(dir);
       writeFile(dir, 'code.txt', 'line1\n');
@@ -344,7 +369,10 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       writeFile(dir, '.planning/phases/new.md', 'new plan v1\n');
       commitAll(dir, 'feat: c1');
 
-      if (planningOnlySecondCommit) {
+      if (configOnlySecondCommit) {
+        writeFile(dir, '.planning/config.json', '{}\n'); // neither transient nor structural: the loop never filters it
+        commitAll(dir, 'docs: c2 config-only');
+      } else if (planningOnlySecondCommit) {
         writeFile(dir, '.planning/phases/new.md', 'new plan v2\n');
         commitAll(dir, 'docs: c2 planning-only');
       } else {
@@ -362,17 +390,27 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       return dir;
     }
 
-    function readWorkflowText() {
-      return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    }
-
     // Builds the exact fixture script L2 executes: fixed shell vars plus the
     // REAL create_pr_branch cherry-pick loop extracted verbatim from
     // pr-branch.md — not a hand-written mirror of it. NOTE: INCLUDED_COMMITS
-    // here is deliberately ALL commits `main..feature`; this layer is only
+    // here is by default ALL commits `main..feature`; this layer is only
     // proving the filter recipe (rm/checkout/conflict-halt/empty-skip), not
     // `analyze_commits`' include/exclude classification, which L1 covers.
-    function buildRecipeScript(filterPaths) {
+    // With `shippedPickList`, REVS, INCLUDED_COMMITS, STRUCTURAL_RE and
+    // `picked` come from the shipped blocks instead.
+    function buildRecipeScript(filterPaths, { shippedPickList = false } = {}) {
+      const text = readWorkflowText();
+      const pickList = shippedPickList
+        ? [
+          'PR_STRICT=false',
+          '_to() { "$@"; }',
+          ...extractDeclarationLines(text, TRANSIENT_DIRS_MARKER, ['STRUCTURAL_RE=']),
+          ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['CUR=', 'picked() {']),
+          'BASE=main',
+          'TARGET_SHA=main',
+          ...extractDeclarationLines(text, REVS_MARKER, [REVS_MARKER, 'INCLUDED_COMMITS=$(']),
+        ]
+        : ['INCLUDED_COMMITS=$(git rev-list --reverse main..feature)'];
       return [
         'set -u',
         'CURRENT_BRANCH=feature',
@@ -385,29 +423,20 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         // constructs a third-bucket conflict.
         'FORBIDDEN_RE="^\\.planning/NEVER_MATCH_4606_TEST_SENTINEL$"',
         'STRUCTURAL_RE="^\\.planning/NEVER_MATCH_4606_TEST_SENTINEL$"',
-        'INCLUDED_COMMITS=$(git rev-list --reverse main..feature)',
+        ...pickList,
         // Newline-joined (#4605) — the real loop reads $FILTER_PATHS one path
         // per LINE via `while IFS= read -r`, not space-split, so a fixture
         // that space-joined this (the pre-#4605 test-side form) would feed
         // the whole list as a single bogus path.
         `FILTER_PATHS="${filterPaths.join('\n')}"`,
-        extractPickLoop(readWorkflowText()),
+        extractPickLoop(text),
       ].join('\n');
     }
 
-    function runFilterLoop(repoDir, { strict, transientDirs }) {
+    function runFilterLoop(repoDir, { strict, transientDirs, shippedPickList }) {
       const filterPaths = strict ? ['.planning/'] : transientDirs.map((d) => `.planning/${d}/`);
-      const script = buildRecipeScript(filterPaths);
-      try {
-        const stdout = execFileSync('sh', ['-c', script], { cwd: repoDir, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
-        return { status: 0, stdout, stderr: '' };
-      } catch (err) {
-        return {
-          status: typeof err.status === 'number' ? err.status : 1,
-          stdout: err.stdout || '',
-          stderr: err.stderr || '',
-        };
-      }
+      const script = buildRecipeScript(filterPaths, { shippedPickList });
+      return toLegacyResult(runBashFile(script, { prefix: 'gsd-prbranch-filter-', cwd: repoDir, env: () => gitChildEnv(repoDir), timeoutMs: CHERRY_PICK_RECIPE_TIMEOUT_MS }));
     }
 
     test('19: REGRESSION default — old.md is never staged as deleted', () => {
@@ -468,6 +497,15 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       } finally {
         teardown();
       }
+    });
+
+    test('22b: the shipped pick list keeps a config.json-only planning commit out of the loop', (t) => {
+      t.after(teardown);
+      const dir = buildFixture({ configOnlySecondCommit: true });
+      const result = runFilterLoop(dir, { strict: false, transientDirs: currentTransientDirs(), shippedPickList: true });
+      assert.strictEqual(result.status, 0, `filter loop failed: ${result.stderr}`);
+      const count = parseInt(git(['rev-list', '--count', 'main..prbranch'], dir).trim(), 10);
+      assert.strictEqual(count, 1, 'only c1 lands; the config-only c2 is not picked');
     });
 
     test('23: default end-to-end — diff carries code + STATE.md, nothing forbidden-default', () => {
@@ -918,36 +956,11 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       while (activeDirs.length) cleanup(activeDirs.pop());
     }
 
-    function readWorkflowText() {
-      return fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    }
-
-    // Windows: `execFileSync('sh', ['-c', script], ...)` passes a large,
-    // multi-line, quote-heavy `script` as a single argv element. POSIX hands
-    // that straight to execve with no re-parsing, but Windows processes only
-    // ever receive ONE command-line string, so Node's uv layer must serialize
-    // argv into it using the MS CRT backslash-quote quoting convention. Git
-    // for Windows' `sh.exe` is an MSYS2/Cygwin binary: it decodes that
-    // command line with Cygwin's OWN argv parser, not the CRT one Node
-    // assumes, and the two diverge on long arguments containing many nested
-    // double quotes and heredoc markers (test 54's extracted recipe carries
-    // ~9.5KB, 170 lines, 82 double quotes, and 2 heredoc markers vs. test 53's
-    // ~1.4KB/22-line script, the smallest of the three — see investigation
-    // notes). That divergence is exactly what CI observed: an `if`/`fi`
-    // pairing broken mid-script on Windows only, with `bash -n` clean on the
-    // identical LF-only text. Routing the script through the filesystem
-    // instead of argv sidesteps the whole encode/decode mismatch: the only
-    // thing that reaches Windows' command-line serialization is a short
-    // temp-file path with no embedded quotes or newlines to mis-escape.
+    // The recipe goes through a file, not argv (see `runBashFile`, which owns the Windows MSYS2 argv rationale).
     function runShScript(script, cwd) {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-prbranch-script-'));
-      const scriptPath = path.join(tmpDir, 'recipe.sh');
-      try {
-        fs.writeFileSync(scriptPath, script);
-        return execFileSync('sh', [scriptPath], { cwd, encoding: 'utf8', timeout: CHERRY_PICK_RECIPE_TIMEOUT_MS });
-      } finally {
-        cleanup(tmpDir);
-      }
+      const r = runBashFile(script, { prefix: 'gsd-prbranch-script-', cwd, env: () => gitChildEnv(cwd), timeoutMs: CHERRY_PICK_RECIPE_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, r.stderr);
+      return r.stdout;
     }
 
     // The canonical declarations block: TRANSIENT_DIRS/STRUCTURAL_RE/
@@ -971,6 +984,9 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       writeFile(dir, '.planning/milestones/My Milestone-phases/PLAN.md', '# plan\n');
       // A non-`-phases` milestone directory must NOT be swept up by MILESTONE_PHASE_DIRS.
       fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-notes'), { recursive: true });
+      // Only direct subdirectories count: not a deeper `-phases` dir, and not a file with that name.
+      fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-phases', 'inner-phases'), { recursive: true });
+      writeFile(dir, '.planning/milestones/x-phases', 'a file\n');
       try {
         const script = [
           'set -u',
@@ -992,6 +1008,10 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         assert.ok(
           !lines.some((l) => l.includes('v1.0-notes')),
           `a non-"-phases" milestones/ subdirectory must not appear in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
+        );
+        assert.ok(
+          !lines.some((l) => l.includes('inner-phases') || l.includes('x-phases')),
+          `a deeper -phases dir and a -phases file must not appear in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
         );
       } finally {
         teardown();
@@ -1074,7 +1094,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       } catch (err) {
         assert.fail(
           `expected the #4606 third-bucket conflict to resolve via checkout --theirs, not halt: `
-            + `status=${err.status} stdout=${err.stdout} stderr=${err.stderr}`,
+            + err.message,
         );
       } finally {
         teardown();

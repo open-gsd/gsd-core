@@ -34,6 +34,15 @@ const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
+const { gitChildEnv, gitIn, refOf } = require('./helpers/isolated-env.cjs');
+const {
+  extractBashBlockContaining,
+  extractDeclarationLines,
+  TRANSIENT_DIRS_MARKER,
+  FILTER_PATHS_MARKER,
+  PRECONDITIONS_MARKER,
+  runBashFile,
+} = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -74,14 +83,15 @@ const WORKTREE_INFO_TIMEOUT_MS = 5000;
 function createGitRepo(opts = {}) {
   const { prefix = 'gsd-1146-', defaultBranch = 'master' } = opts;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  gitOrThrow(['init', '-b', defaultBranch], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['config', 'user.email', 'test@test.com'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['config', 'user.name', 'Test'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+  const g = gitIn(dir, GIT_TIMEOUT_MS);
+  g(['init', '-b', defaultBranch]);
+  g(['config', 'user.email', 'test@test.com']);
+  g(['config', 'user.name', 'Test']);
+  g(['config', 'commit.gpgsign', 'false']);
   // Need at least one commit so branches exist
   fs.writeFileSync(path.join(dir, 'README.md'), '# test\n');
-  gitOrThrow(['add', 'README.md'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
-  gitOrThrow(['commit', '-m', 'init'], { cwd: dir, timeoutMs: GIT_TIMEOUT_MS });
+  g(['add', 'README.md']);
+  g(['commit', '-m', 'init']);
   return dir;
 }
 
@@ -2432,16 +2442,8 @@ const EXECUTE_PHASE_PATH = path.join(
   'execute-phase.md'
 );
 
-const GIT_ENV = Object.freeze({
-  ...process.env,
-  GIT_AUTHOR_NAME: 'Test',
-  GIT_AUTHOR_EMAIL: 'test@test.com',
-  GIT_COMMITTER_NAME: 'Test',
-  GIT_COMMITTER_EMAIL: 'test@test.com',
-});
-
 function git(cwd, ...args) {
-  return gitOrThrow(args, { cwd, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS }).trim();
+  return gitIn(cwd, GIT_TIMEOUT_MS)(args).trim();
 }
 
 /**
@@ -2518,6 +2520,8 @@ function setupFixture(defaultBranch = 'main') {
   fs.mkdirSync(seedPath);
   git(seedPath, 'init', '-b', defaultBranch);
   git(seedPath, 'config', 'commit.gpgsign', 'false');
+  git(seedPath, 'config', 'user.email', 'test@test.com');
+  git(seedPath, 'config', 'user.name', 'Test');
   fs.writeFileSync(path.join(seedPath, 'README.md'), '# seed\n');
   git(seedPath, 'add', 'README.md');
   git(seedPath, 'commit', '-m', 'initial');
@@ -2555,7 +2559,7 @@ function runHandleBranchingStep(bash, cwd, branchName) {
     // (PR #3787 run 32668773524) and tests/worktree-safety.test.cjs (`next`
     // run 32608945654). See HOOK_FANOUT_TIMEOUT_MS in ./helpers/timeouts.cjs
     // for the class rationale.
-    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd, env: GIT_ENV, timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    const r = runHook(scriptPath, [], { interpreter: 'bash', cwd, env: gitChildEnv(cwd), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     throwIfFailed(r, `runHandleBranchingStep: bash ${scriptPath}`);
     return r.stdout;
   } finally {
@@ -2715,7 +2719,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('verify fails when the PR diff deletes target-tracked planning files', (t) => {
     const repo = createTempDir('gsd-3679-verify-fail-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2733,31 +2737,70 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['add', '-A']);
     g(['commit', '-qm', 'changes + planning deletion']);
 
-    const verifyBash = extractStepBash('verify');
+    const { out } = runVerify(repo);
+    assert.match(out, /GATE_PLANNING_DELETIONS=1/, `deletion count must be non-zero: ${out.slice(0, 400)}`);
+    assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
+  });
+
+  // #5486: the pending build is recorded only when both gates pass.
+  const PENDING_REF = 'refs/gsd/pr-built/default/main/feature';
+  // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
+  // Returns `{ out, exitCode }`: the run's stdout and stderr, and its exit status.
+  function runVerify(repo, to = '_to() { "$@"; }', prBranch = 'pr') {
+    const workflowText = readFileNormalized(PR_BRANCH_MD); // read here, so a failure fails the named test
     const script = [
       'set -u',
+      to,
       'TARGET=main',
-      'PR_BRANCH=pr',
-      'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
-      'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
-      verifyBash,
+      'TARGET_SHA=main',
+      'CURRENT_BRANCH=feature',
+      `PR_BRANCH='${prBranch.replace(/'/g, "'\\''")}'`,
+      'TIP=HEAD',
+      'PR_STRICT=false',
+      'PR_MODE=default',
+      // The shipped declarations: the regexes, the mode's projections and the ref names.
+      extractBashBlockContaining(workflowText, TRANSIENT_DIRS_MARKER),
+      extractBashBlockContaining(workflowText, FILTER_PATHS_MARKER),
+      ...extractDeclarationLines(workflowText, PRECONDITIONS_MARKER, ['shq() {', 'refkey() {', 'REF_KEY=', 'PENDING_REF=', 'PR_TIP_REF=']),
+      'echo "PENDING_REF=$PENDING_REF"',
+      extractStepBash('verify'),
       'echo "GATE_FORBIDDEN=$FORBIDDEN"',
       'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
+      'echo "GATE_COMMITS=${PR_COMMITS:-unset}"',
     ].join('\n');
-    fs.writeFileSync(path.join(repo, 'verify.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'verify.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
-    const out = r.stdout + r.stderr;
-    assert.match(out, /GATE_PLANNING_DELETIONS=1/, `deletion count must be non-zero: ${out.slice(0, 400)}`);
+    const r = runBashFile(script, { prefix: 'gsd-verify-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
+    return { out: r.stdout + r.stderr, exitCode: r.exitCode };
+  }
+  const pendingRef = (repo) => refOf(repo, PENDING_REF);
+
+  // A repo on `pr` whose one commit adds a transient planning file (.planning/phases/PLAN.md) over a code base on main.
+  function leakedPhaseRepo(t, prefix) {
+    const repo = createGitRepo({ prefix, defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    fs.writeFileSync(path.join(repo, 'code.sh'), 'code\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['checkout', '-qb', 'pr']);
+    fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'transient planning file']);
+    return { repo, g };
+  }
+
+  test('verify records no pending build when the PR diff holds a forbidden planning path', (t) => {
+    const { repo } = leakedPhaseRepo(t, 'gsd-3679-verify-forbidden-');
+    const { out } = runVerify(repo);
+    assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
+    assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
   });
 
   test('verify passes a clean diff with zero deletions', (t) => {
     const repo = createTempDir('gsd-3679-verify-clean-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2771,31 +2814,119 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['add', '-A']);
     g(['commit', '-qm', 'code only']);
 
-    const verifyBash = extractStepBash('verify');
-    const script = [
-      'set -u',
-      'TARGET=main',
-      'PR_BRANCH=pr',
-      'FORBIDDEN_RE="^\\.planning/(phases|quick|research|threads|todos|debug|seeds|codebase|ui-reviews)/"',
-      'STRUCTURAL_RE="^\\.planning/(STATE|ROADMAP|MILESTONES|PROJECT|REQUIREMENTS)\\.md$|^\\.planning/milestones/"',
-      verifyBash,
-      'echo "GATE_FORBIDDEN=$FORBIDDEN"',
-      'echo "GATE_PLANNING_DELETIONS=${PLANNING_DELETIONS:-unset}"',
-    ].join('\n');
-    fs.writeFileSync(path.join(repo, 'verify.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'verify.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
-    const out = r.stdout + r.stderr;
+    const { out } = runVerify(repo);
     assert.match(out, /GATE_PLANNING_DELETIONS=0/, `clean diff must count zero deletions: ${out.slice(0, 400)}`);
+    assert.equal(pendingRef(repo), refOf(repo, 'HEAD'), 'both gates pass: HEAD is the pending build');
+  });
+
+  test('verify keeps the pending ref when the marker write failed (KEEP)', (t) => {
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-keep-', defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    const seeded = refOf(repo, 'main');
+    g(['update-ref', PENDING_REF, seeded]);
+    g(['checkout', '-qb', 'pr']);
+    fs.writeFileSync(path.join(repo, 'code.sh'), 'code2\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'code only']);
+
+    runVerify(repo, '_to() { "$@"; }\nKEEP=1');
+    assert.equal(pendingRef(repo), seeded, 'the failed marker write leaves the seeded pending ref untouched');
+  });
+
+  // git quotes a non-ASCII path, and one with a double quote, in a plain name list; both gates must still see it under .planning/.
+  for (const name of ['é.md', 'a"b.md']) {
+    test(`verify counts a planning deletion and a forbidden path named ${name}, which git quotes in a plain name list`, { skip: name.includes('"') && process.platform === 'win32' }, (t) => {
+      const repo = createGitRepo({ prefix: 'gsd-3679-verify-quoted-', defaultBranch: 'main' });
+      t.after(() => cleanup(repo));
+      const g = gitIn(repo);
+      fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.planning', `notes-${name}`), 'n\n');
+      g(['add', '-A']);
+      g(['commit', '-qm', 'base']);
+      g(['checkout', '-qb', 'pr']);
+      g(['rm', '-q', `.planning/notes-${name}`]);
+      fs.writeFileSync(path.join(repo, '.planning', 'phases', name), 'p\n');
+      g(['add', '-A']);
+      g(['commit', '-qm', 'delete one, leak one']);
+      const { out } = runVerify(repo);
+      assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
+      assert.match(out, /GATE_PLANNING_DELETIONS=1/, out.slice(0, 400));
+      assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
+    });
+  }
+
+  // A timed-out read leaves an empty list, which would pass both gates: verify must stop instead.
+  for (const cmd of ['--name-only main..refs/heads/pr', '--diff-filter=D']) { // the two reads differ by these arguments
+    test(`verify stops with exit 1 when its bounded diff read (${cmd}) times out`, (t) => {
+      const { repo, g } = leakedPhaseRepo(t, 'gsd-3679-verify-timeout-');
+      g(['checkout', '-q', 'main']); // verify runs after the build returned to the working branch
+      // Only a read run with the 60 s bound (TO=60) times out; a read that lost its bound runs and the stop assertion fails.
+      const { out, exitCode } = runVerify(repo, `_to() { case "\${TO:-}:$*" in 60:*"${cmd}"*) return 124 ;; esac; "$@"; }`);
+      assert.equal(exitCode, 1, 'the run stops with exit 1');
+      assert.equal(refOf(repo, 'refs/heads/pr'), '', 'the unchecked -pr is deleted, so a re-run is not refused');
+      assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
+      assert.equal(pendingRef(repo), '', 'a stopped verify records no pending build');
+    });
+  }
+
+  test('verify stops with exit 1 and keeps the -pr branch when the delete fails', (t) => {
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-nodelete-', defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    g(['branch', 'pr']);
+    const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }');
+    assert.equal(exitCode, 1, 'the run stops with exit 1');
+    assert.notEqual(refOf(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
+    assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
+  });
+
+  // A tag named like the -pr branch wins in a bare rev lookup; verify must read the branch.
+  test('verify reads the -pr branch, not a tag of the same name', (t) => {
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-tag-', defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    fs.mkdirSync(path.join(repo, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.planning', 'STATE.md'), 'state\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'base']);
+    g(['checkout', '-qb', 'pr']);
+    fs.writeFileSync(path.join(repo, '.planning', 'phases', 'PLAN.md'), 'plan\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'leaked planning file']);
+    g(['checkout', '-qb', 'other', 'main']);
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+    g(['add', '-A']);
+    g(['commit', '-qm', 'one']);
+    g(['rm', '-q', path.join('.planning', 'STATE.md')]);
+    g(['commit', '-qm', 'two: deletes STATE.md']);
+    g(['tag', 'pr', 'other']); // a tag on two commits that delete a planning file
+    g(['checkout', '-q', 'main']);
+    const { out } = runVerify(repo);
+    const lines = out.split(/\r?\n/);
+    assert.ok(lines.includes('GATE_FORBIDDEN=1'), `the branch's leaked file is counted: ${out}`);
+    assert.ok(lines.includes('GATE_PLANNING_DELETIONS=0'), `the tag's deletion is not read: ${out}`);
+    assert.ok(lines.includes('GATE_COMMITS=1'), `the branch's commit count, not the tag's: ${out}`);
+  });
+
+  test('verify names a -pr branch with shell metacharacters quoted, so the printed delete command runs as one command', (t) => {
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-hostile-', defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    const branch = 'p;q$r';
+    g(['branch', branch]);
+    const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }', branch);
+    assert.equal(exitCode, 1, 'the run stops with exit 1');
+    const cmd = out.split(/\r?\n/).map((l) => l.match(/run (git branch -D .*) first/)).find(Boolean)[1];
+    const run = runBashFile(cmd, { prefix: 'gsd-verify-hostile-cmd-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.equal(refOf(repo, `refs/heads/${branch}`), '', 'the printed command deleted the branch');
   });
 
   test('create loop preserves pre-existing transient content (#3720 guarantee pinned)', (t) => {
     const repo = createTempDir('gsd-3679-create-mixed-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2824,6 +2955,9 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       `CURRENT_BRANCH=feature`,
       'TARGET=main',
+      'TARGET_SHA=main',
+      '_to() { "$@"; }', // stands in for the bounded runner the preconditions block defines
+      'PR_BRANCH=feature-pr',
       `INCLUDED_COMMITS="${hash}"`,
       // Newline-joined (#4605) — the shipped consumption loop is
       // `while IFS= read -r P; do ... done <<FILTER_PATHS_EOF`, which reads
@@ -2837,12 +2971,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'FILTER_PATHS=".planning/phases/\n.planning/quick/\n.planning/research/\n.planning/threads/\n.planning/todos/\n.planning/debug/\n.planning/seeds/\n.planning/codebase/\n.planning/ui-reviews/"',
       createBash,
     ].join('\n');
-    fs.writeFileSync(path.join(repo, 'create.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'create.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const r = runBashFile(script, { prefix: 'gsd-create-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, `create loop must succeed: ${r.stderr.slice(0, 400)}`);
 
     const status = g(['diff', '--name-status', 'main..feature-pr']);
@@ -2858,7 +2987,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   test('create loop preserves planning content on pure-code commits', (t) => {
     const repo = createTempDir('gsd-3679-create-pure-');
     t.after(() => cleanup(repo));
-    const g = (args) => gitOrThrow(args, { cwd: repo });
+    const g = gitIn(repo);
     g(['init', '-q', '-b', 'main']);
     g(['config', 'user.email', 't@t']);
     g(['config', 'user.name', 't']);
@@ -2879,18 +3008,16 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'set -u',
       'CURRENT_BRANCH=feature',
       'TARGET=main',
+      'TARGET_SHA=main',
+      '_to() { "$@"; }', // stands in for the bounded runner the preconditions block defines
+      'PR_BRANCH=feature-pr',
       `INCLUDED_COMMITS="${hash}"`,
       // See the sibling #3720 test above: newline-joined, matching the shipped
       // `while IFS= read -r P ... <<FILTER_PATHS_EOF` consumption loop (#4605).
       'FILTER_PATHS=".planning/phases/\n.planning/quick/\n.planning/research/\n.planning/threads/\n.planning/todos/\n.planning/debug/\n.planning/seeds/\n.planning/codebase/\n.planning/ui-reviews/"',
       createBash,
     ].join('\n');
-    fs.writeFileSync(path.join(repo, 'create.sh'), script + '\n');
-    const r = runHook(path.join(repo, 'create.sh'), [], {
-      interpreter: 'bash',
-      cwd: repo,
-      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
-    });
+    const r = runBashFile(script, { prefix: 'gsd-create-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, `create loop must succeed: ${r.stderr.slice(0, 400)}`);
     const status = g(['diff', '--name-status', 'main..feature-pr']);
     assert.equal((status.match(/^D/gm) || []).length, 0, `no deletions allowed: ${status}`);

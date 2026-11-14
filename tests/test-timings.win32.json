@@ -8,7 +8,7 @@
     "test-timings-windows-latest-job1.jsonl",
     "test-timings-windows-latest-job2.jsonl"
   ],
-  "file_count": 280,
+  "file_count": 282,
   "timings": {
     "adr-index-gate.test.cjs": 20776,
     "adr857-core-without-capabilities.test.cjs": 10064,
@@ -211,6 +211,8 @@
     "policy-shell-pinning.test.cjs": 124,
     "portability-rule-disable-ban.test.cjs": 11101,
     "pr-branch-planning-filter.test.cjs": 40071,
+    "pr-branch-published-marker-failures.test.cjs": 178500,
+    "pr-branch-published-marker-keyed.test.cjs": 325500,
     "precommit-alias-drift-hook.test.cjs": 11071,
     "prepush-enterprise-email-hook.test.cjs": 985,
     "process-seam.test.cjs": 5572,
