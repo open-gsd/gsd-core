@@ -46,7 +46,11 @@
 //
 // Limits, stated plainly. It sees only code paths the suite executes. It wraps the fs entry points
 // listed in WRAPPED and WRAPPED_PROMISES (fs.promises.cp is seen through the fs.promises.copyFile
-// it calls); a write through fs.openSync + fs.writeSync, a FileHandle,
+// it calls). The promise functions are wrapped on first reach, through fs.promises or a CommonJS
+// require of `fs/promises`, so loading the check does not load node:os (whose tmpdir branch is
+// fixed at load); an ES module import or process.getBuiltinModule of `fs/promises` before either
+// is not seen. A write
+// through fs.openSync + fs.writeSync, a FileHandle,
 // a write stream, or a native addon is not seen (the seam's own direct fallback writes through a
 // descriptor, so a fallback write is not counted among the seam writes). A test that replaces
 // NODE_OPTIONS, or spawns node with an env that drops it, runs its child unguarded. A child built
@@ -318,7 +322,11 @@ function install(ledger) {
   for (const [name, index] of Object.entries(WRAPPED)) {
     const original = fs[name];
     if (typeof original !== 'function') continue;
+    // cpSync and cp load node's cp module, which takes copyFile from the promises object once,
+    // when it loads; reaching fs.promises first (they load it anyway) wraps it before then.
+    const loadsCp = name === 'cpSync' || name === 'cp';
     fs[name] = function rawStateWriteGuard(...args) {
+      if (loadsCp) void fs.promises;
       if (depth === 0) observe(name, args[index], args[0]);
       depth++;
       try {
@@ -328,14 +336,38 @@ function install(ledger) {
       }
     };
   }
-  for (const [name, index] of Object.entries(WRAPPED_PROMISES)) {
-    const original = fs.promises[name];
-    if (typeof original !== 'function') continue;
-    fs.promises[name] = function rawStateWriteGuard(...args) {
-      if (depth === 0) observe(`promises.${name}`, args[index], args[0]);
-      return original.apply(this, args);
-    };
+  // fs.promises is wrapped when something first reaches it, never here: reading it loads
+  // internal/fs/promises, which loads node:os, and node:os picks its win32 or POSIX tmpdir branch
+  // once, when it loads. Loaded from this preload, that branch was fixed before the process's own
+  // code ran, so a child that presents itself as win32 (the #5848 install probe) read the TMPDIR it
+  // inherited instead of its TEMP/TMP. Both CommonJS routes to the one promises object wrap it:
+  // the fs.promises getter and a require of `fs/promises` or `node:fs/promises`.
+  let promisesWrapped = false;
+  const wrapPromises = (promises) => {
+    if (promisesWrapped || !promises) return promises;
+    promisesWrapped = true;
+    for (const [name, index] of Object.entries(WRAPPED_PROMISES)) {
+      const original = promises[name];
+      if (typeof original !== 'function') continue;
+      promises[name] = function rawStateWriteGuard(...args) {
+        if (depth === 0) observe(`promises.${name}`, args[index], args[0]);
+        return original.apply(this, args);
+      };
+    }
+    return promises;
+  };
+  const promisesProperty = Object.getOwnPropertyDescriptor(fs, 'promises');
+  if (promisesProperty && promisesProperty.configurable && typeof promisesProperty.get === 'function') {
+    Object.defineProperty(fs, 'promises', { ...promisesProperty, get() { return wrapPromises(promisesProperty.get.call(this)); } });
+  } else {
+    wrapPromises(fs.promises);
   }
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function rawStateWriteGuardLoad(request) {
+    const loaded = originalLoad.apply(this, arguments);
+    return request === 'fs/promises' || request === 'node:fs/promises' ? wrapPromises(loaded) : loaded;
+  };
 
   // One install sentinel per process, written after the wrappers are in place. The runner
   // counts these against the chunks it spawned: a chunk whose preload never loaded leaves no
