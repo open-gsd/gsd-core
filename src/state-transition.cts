@@ -2084,7 +2084,11 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   } = parsePlanFields(content);
 
   if (parsedCurrent === null || parsedTotal === null) {
-    return { content: reassemble(body), updated: [], data: { error: true } };
+    // #6168: a refusal returns the INPUT document, not `reassemble(body)` —
+    // the rebuild re-quotes/adds frontmatter keys, so the read-modify-write
+    // no-op guard (`modified === content`) would not fire and the refusal
+    // would be written to disk.
+    return { content, updated: [], data: { error: true } };
   }
   const currentPlan = parsedCurrent;
   const totalPlans = parsedTotal;
@@ -2122,7 +2126,7 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // would be this transition inventing an answer to a question nobody asked it.
   if (legacyOwnCurrent !== null && planOwnCurrent !== null && legacyOwnCurrent !== planOwnCurrent) {
     return {
-      content: reassemble(body),
+      content, // #6168: input document, so the refusal is a no-op write
       updated: [],
       data: {
         error: true,
