@@ -324,21 +324,97 @@ process.stdout.write(require('node:os').tmpdir());`);
     assert.equal(r.stdout, given, 'os.tmpdir() under the shim must be the TEMP/TMP the child was given');
   });
 
-  test('a product write onto STATE.md through require(\'fs/promises\'), never through fs.promises, is still a violation (#5120)', (t) => {
-    const dir = createTempDir('rswg-fsp-');
-    t.after(() => cleanup(dir));
-    const target = path.join(dir, '.planning', 'STATE.md');
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    // The module reaches the promise API only by its own specifiers, before anything reads
-    // fs.promises, so the wrappers must be in place on that path too.
-    writeModule(dir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
-const fsp = require('node:fs/promises');
-const { appendFile } = require('fs/promises');
-module.exports = async (target) => { await fsp.writeFile(target, 'a'); await appendFile(target, 'b'); };
+  // One row per spelling, each in a fresh child where nothing reads fs.promises or requires the
+  // other spelling first: both return the one shared object, so a row that used both would stay
+  // green with either spelling dropped from the require hook (#5120 review Minor 3).
+  for (const spec of ['fs/promises', 'node:fs/promises']) {
+    test(`a product write onto STATE.md through require('${spec}') alone, never through fs.promises, is still a violation (#5120)`, (t) => {
+      const dir = createTempDir('rswg-fsp-');
+      t.after(() => cleanup(dir));
+      const target = path.join(dir, '.planning', 'STATE.md');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      writeModule(dir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
+const fsp = require(${JSON.stringify(spec)});
+module.exports = async (target) => { await fsp.writeFile(target, 'a'); await fsp.appendFile(target, 'b'); };
 `);
-    const main = writeModule(dir, 'tests/main.cjs', `require(${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/writer.cjs'))})(${JSON.stringify(target)});`);
-    const entries = runGuarded(dir, main);
-    assert.deepEqual(entries.map((e) => [e.fn, e.violation]), [['promises.writeFile', true], ['promises.appendFile', true]], JSON.stringify(entries));
+      const main = writeModule(dir, 'tests/main.cjs', `require(${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/writer.cjs'))})(${JSON.stringify(target)});`);
+      const entries = runGuarded(dir, main);
+      assert.deepEqual(entries.map((e) => [e.fn, e.violation]), [['promises.writeFile', true], ['promises.appendFile', true]], JSON.stringify(entries));
+    });
+
+    test(`process.getBuiltinModule('${spec}') as the first reach wraps the promise API, so a cp through it first leaves a later fs.promises.cp seen (#5120)`, (t) => {
+      const dir = createTempDir('rswg-gbm-');
+      t.after(() => cleanup(dir));
+      const target = path.join(dir, '.planning', 'STATE.md');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      // The cp onto a non-STATE.md file loads node's cp module, which takes copyFile from the
+      // promises object once; unwrapped at that moment, every later fs.promises.cp is unseen.
+      writeModule(dir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+module.exports = async (target) => {
+  const src = path.join(path.dirname(target), 'src.txt');
+  fs.writeFileSync(src, 'x');
+  const p = process.getBuiltinModule(${JSON.stringify(spec)});
+  await p.cp(src, path.join(path.dirname(target), 'other.txt'));
+  await p.writeFile(target, 'a');
+  await fs.promises.cp(src, target);
+};
+`);
+      const main = writeModule(dir, 'tests/main.cjs', `require(${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/writer.cjs'))})(${JSON.stringify(target)});`);
+      const entries = runGuarded(dir, main);
+      assert.deepEqual(entries.map((e) => [e.fn, e.violation]), [['promises.writeFile', true], ['promises.copyFile', true]], JSON.stringify(entries));
+    });
+  }
+
+  test('known limit, pinned as it stands: an ES module import of fs/promises is not a reach that wraps the promise API (#5120 review Minor 1, Minor 2)', (t) => {
+    // The header's limits state this. If a change makes either child below record, update the
+    // header, docs/TESTING-SUITES.md and this row together. Each child asserts the bytes landed, so
+    // an empty ledger is an unseen real write, not a child that never wrote.
+    const dir = createTempDir('rswg-esm-');
+    t.after(() => cleanup(dir));
+    // 1. Test code runs a cp through the import first; a later product fs.promises.cp onto STATE.md
+    //    copies through the unwrapped copyFile node's cp module took when it loaded.
+    const cpDir = path.join(dir, 'cp');
+    const cpTarget = path.join(cpDir, '.planning', 'STATE.md');
+    fs.mkdirSync(path.dirname(cpTarget), { recursive: true });
+    writeModule(cpDir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
+const fs = require('node:fs');
+module.exports = async (src, target) => { await fs.promises.cp(src, target); };
+`);
+    const cpMain = writeModule(cpDir, 'tests/main.cjs', `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+(async () => {
+  const src = path.join(${JSON.stringify(cpDir)}, 'src.txt');
+  fs.writeFileSync(src, 'copied');
+  const m = await import('node:fs/promises');
+  await m.cp(src, path.join(${JSON.stringify(cpDir)}, 'other.txt'));
+  await require(${JSON.stringify(path.join(cpDir, 'gsd-core/bin/lib/writer.cjs'))})(src, ${JSON.stringify(cpTarget)});
+})().catch((e) => { console.error(e); process.exitCode = 1; });
+`);
+    assert.deepEqual(runGuarded(cpDir, cpMain), []);
+    assert.equal(fs.readFileSync(cpTarget, 'utf8'), 'copied', 'the unseen cp landed');
+    // 2. A named binding taken from the import before any reach stays unwrapped after a later
+    //    fs.promises read; the module's default object, read after that, is the wrapped one.
+    const namedDir = path.join(dir, 'named');
+    const early = path.join(namedDir, 'a', 'STATE.md');
+    const late = path.join(namedDir, 'b', 'STATE.md');
+    fs.mkdirSync(path.dirname(early), { recursive: true });
+    fs.mkdirSync(path.dirname(late), { recursive: true });
+    writeModule(namedDir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
+module.exports = async (early, late) => {
+  const m = await import('fs/promises');
+  const { writeFile } = m;
+  void require('node:fs').promises;
+  await writeFile(early, 'named');
+  await m.default.writeFile(late, 'default');
+};
+`);
+    const namedMain = writeModule(namedDir, 'tests/main.cjs', `require(${JSON.stringify(path.join(namedDir, 'gsd-core/bin/lib/writer.cjs'))})(${JSON.stringify(early)}, ${JSON.stringify(late)});`);
+    const named = runGuarded(namedDir, namedMain);
+    assert.deepEqual(named.map((e) => [e.fn, e.destination]), [['promises.writeFile', late]], JSON.stringify(named));
+    assert.equal(fs.readFileSync(early, 'utf8'), 'named', 'the unseen named-binding write landed');
   });
 });
 
@@ -461,12 +537,38 @@ module.exports = (target) => fs.writeFileSync(target, 'raw');
 `);
     writeModule(dir, 'a.test.cjs', testBody);
   }
-  function runRunner(dir) {
+  function runRunner(dir, extra = {}) {
     // isolatedEnv strips NODE_TEST_CONTEXT, every RUN_TESTS_* and every GSD_* variable; the
     // runner's own input directory is opted back in.
-    const env = isolatedEnv({ home: dir, override: { GSD_TEST_DIR: dir } });
+    const env = isolatedEnv({ home: dir, override: { GSD_TEST_DIR: dir, ...extra } });
     return runNode([RUNNER], { cwd: path.join(__dirname, '..'), env, timeoutMs: RUN_TESTS_HARNESS_TIMEOUT_MS });
   }
+
+  test('the runner puts its shim ahead of a preload already in NODE_OPTIONS, so the check installs first in every process that received it (#5120 review Nit 1, Nit 2)', (t) => {
+    // The header's limits hold only when the shim is the first preload: a preload ordered before it
+    // could keep an unwrapped fs.promises. This preload, handed to the runner in NODE_OPTIONS,
+    // records whether the check had installed by the time it ran, in each process it ran in.
+    const dir = createTempDir('rswg-runner-order-');
+    t.after(() => cleanup(dir));
+    const record = path.join(dir, 'order.ndjson');
+    const early = writeModule(dir, 'ev/early-preload.cjs', `require('node:fs').appendFileSync(${JSON.stringify(record)}, JSON.stringify({
+  installed: globalThis[Symbol.for('gsd.rawStateWriteGuard.installed')] === true,
+  nodeOptions: process.env.NODE_OPTIONS || '',
+}) + '\\n');`);
+    seedRun(dir, `'use strict';
+const { test } = require('node:test');
+test('passes', () => {});
+`);
+    const r = runRunner(dir, { NODE_OPTIONS: nodeOptionsWithRequire(undefined, early) });
+    assert.equal(r.exitCode, 0, r.stderr);
+    // The runner process itself received only this preload; every process the runner gave its
+    // shim to must have run the shim first.
+    const shimmed = fs.readFileSync(record, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+      .filter((rec) => rec.nodeOptions.includes('raw-state-write-preload.cjs'));
+    assert.ok(shimmed.length >= 1, `a process that received the shim ran the early preload: ${fs.readFileSync(record, 'utf8')}`);
+    assert.ok(shimmed.every((rec) => rec.installed), JSON.stringify(shimmed));
+    assert.ok(shimmed.every((rec) => rec.nodeOptions.startsWith('--require "') && rec.nodeOptions.indexOf('raw-state-write-preload.cjs') < rec.nodeOptions.indexOf('early-preload.cjs')), JSON.stringify(shimmed));
+  });
 
   test('a product write inside a child built with isolatedEnv is still recorded: the ledger path rides in the preload shim (#5120 review)', (t) => {
     const dir = createTempDir('rswg-runner-isolated-');
