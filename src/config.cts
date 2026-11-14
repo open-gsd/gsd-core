@@ -29,9 +29,10 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
-import { hasRuntimeModelTierMap } from './model-catalog.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import modelResolver = require('./model-resolver.cjs');
+const { hasNativeModelAliases } = modelResolver;
 import { resolveActiveRuntime } from './runtime-slash.cjs';
-import { canonicalizeRuntimeName } from './runtime-name-policy.cjs';
 import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
 // #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
@@ -479,21 +480,16 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // new project config — e.g. a Codex install's `runtime:"codex"` leaks into
   // Claude Code projects, resolving agents to wrong model IDs. Shared
   // `resolve_model_ids:"omit"` is excluded only when the ACTIVE runtime has a
-  // native model route (#5329): copying it into a Claude/Codex/OpenCode project
+  // native model aliases (#5329): copying it into a Claude project
   // makes the resolver treat it as explicit project intent, bypassing the #2297
-  // shared-defaults guard. A runtime with no tier map still needs the shared omit
+  // shared-defaults guard. Every non-native runtime still needs the shared omit
   // to avoid receiving a Claude alias it cannot resolve. Preserve boolean defaults
   // and every explicit choice.
   // Projects detect the runtime from the install path / .gsd-runtime marker.
   const safeDefaults = { ...userDefaults };
   delete safeDefaults['runtime'];
   const activeRuntime = resolveActiveRuntime(choices);
-  // Match the loader identity boundary: a catalog-only future runtime is not
-  // materialized as config.runtime, so removing omit would change its route.
-  const activeRuntimeHasTierMap = hasRuntimeModelTierMap(activeRuntime)
-    && canonicalizeRuntimeName(activeRuntime) !== null;
-  if (safeDefaults['resolve_model_ids'] === 'omit'
-      && activeRuntimeHasTierMap) {
+  if (safeDefaults['resolve_model_ids'] === 'omit' && hasNativeModelAliases(activeRuntime)) {
     delete safeDefaults['resolve_model_ids'];
   }
 

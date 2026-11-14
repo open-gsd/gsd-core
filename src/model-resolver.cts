@@ -1134,6 +1134,7 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 }
 
 export = {
+  hasNativeModelAliases,
   MODEL_RESOLVER_DIAGNOSTIC,
   PROJECT_MODEL_OMIT_WARNING,
   resolveTierEntry,

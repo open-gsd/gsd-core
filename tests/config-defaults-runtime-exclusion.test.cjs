@@ -11,8 +11,7 @@ const path = require('node:path');
 const { runGsdTools, createTempDir, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { diagnosticCodes } = require('./helpers/diagnostic-codes.cjs');
-const { canonicalizeRuntimeName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
-const { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
+const { MODEL_ALIAS_MAP, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const {
   MODEL_RESOLVER_DIAGNOSTIC,
   resolveModelInternal,
@@ -125,9 +124,6 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     return JSON.parse(result.output);
   }
 
-  const tierMapRuntimes = Object.keys(RUNTIME_PROFILE_MAP).filter((runtime) => runtime !== 'claude' && canonicalizeRuntimeName(runtime) !== null).sort();
-  const noTierMapRuntimes = [...KNOWN_RUNTIMES].filter((runtime) => !RUNTIME_PROFILE_MAP[runtime] || canonicalizeRuntimeName(runtime) === null).sort();
-
   for (const command of ['config-new-project', 'config-ensure-section', 'config-set-model-profile']) {
     for (const runtime of [undefined, 'codex', 'opencode']) {
       test(`${command} excludes shared omit with runtime=${runtime ?? 'absent'} and resolves Claude tiers`, () => {
@@ -160,25 +156,6 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     });
   }
 
-  for (const runtime of tierMapRuntimes) {
-    test(`${runtime} still resolves its runtime tier map after project seeding`, () => {
-      const config = seed({ resolve_model_ids: 'omit', runtime }, 'config-new-project', {}, project, runtime);
-      assert.equal(Object.hasOwn(config, 'resolve_model_ids'), false);
-      assert.equal(resolve('gsd-executor', runtime).model, RUNTIME_PROFILE_MAP[runtime].sonnet.model);
-    });
-  }
-
-  for (const runtime of noTierMapRuntimes) {
-    for (const command of ['config-new-project', 'config-ensure-section', 'config-set-model-profile']) {
-      test(`${command} keeps shared omit for ${runtime} because it has no runtime tier map`, () => {
-        const config = seed({ resolve_model_ids: 'omit', runtime }, command, {}, project, runtime);
-        assert.equal(config.resolve_model_ids, 'omit');
-        assert.equal(Object.hasOwn(config, 'runtime'), false);
-        assert.equal(resolve('gsd-executor', runtime).model, '');
-      });
-    }
-  }
-
   test('the install runtime marker determines shared omit with hermetic in-process defaults', (t) => {
     const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE'];
     const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -197,28 +174,60 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({
       resolve_model_ids: 'omit', model_profile: 'balanced',
     }));
-    for (const runtime of ['cline', 'codex']) {
+    for (const runtime of ['claude', 'cline', 'codex']) {
       _setInstallRuntimeMarkerForTests(runtime);
       for (const command of ['config-new-project', 'config-ensure-section', 'config-set-model-profile']) {
         const cwd = path.join(root, `marker-${runtime}-${command}`);
         fs.mkdirSync(cwd);
+        const before = ['gsd-executor', 'my-custom-agent'].map((agent) => resolveModelInternal(cwd, agent));
         if (command === 'config-new-project') configCommands.cmdConfigNewProject(cwd, '{}', false);
         else if (command === 'config-ensure-section') configCommands.cmdConfigEnsureSection(cwd, false);
         else configCommands.cmdConfigSetModelProfile(cwd, 'balanced', false);
         const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
-        assert.equal(Object.hasOwn(config, 'resolve_model_ids'), runtime === 'cline', command);
+        assert.equal(Object.hasOwn(config, 'resolve_model_ids'), runtime !== 'claude', command);
+        assert.deepEqual(['gsd-executor', 'my-custom-agent'].map((agent) => resolveModelInternal(cwd, agent)), before, command);
       }
     }
   });
 
   for (const runtime of KNOWN_RUNTIMES) {
-    test(`shared omit seeding and resolution agree for ${runtime}`, () => {
-      fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
-      const sharedModel = resolve('gsd-executor', runtime).model;
-      const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', {}, project, runtime);
-      assert.equal(Object.hasOwn(config, 'resolve_model_ids'), !RUNTIME_PROFILE_MAP[runtime] || canonicalizeRuntimeName(runtime) === null);
-      assert.equal(resolve('gsd-executor', runtime).model, sharedModel);
-    });
+    for (const profile of ['balanced', 'inherit']) {
+      for (const rung of ['environment', 'choice', 'marker']) {
+        test(`${runtime} ${profile} ${rung}: known and unknown agent resolution survive seeding`, (t) => {
+          const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
+          const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+          t.after(() => {
+            _setInstallRuntimeMarkerForTests(null);
+            _resetInstallRuntimeMarkerCacheForTests();
+            for (const key of keys) {
+              if (original[key] === undefined) delete process.env[key];
+              else process.env[key] = original[key];
+            }
+          });
+          Object.assign(process.env, env);
+          delete process.env.GSD_WORKSTREAM;
+          delete process.env.GSD_PROJECT;
+          delete process.env.GSD_RUNTIME;
+          _setInstallRuntimeMarkerForTests(null);
+          const defaults = { resolve_model_ids: 'omit', model_profile: profile };
+          const choices = {};
+          if (rung === 'environment') process.env.GSD_RUNTIME = runtime;
+          else if (rung === 'marker') _setInstallRuntimeMarkerForTests(runtime);
+          else {
+            // The unseeded global layer carries the same identity the explicit
+            // creation choice will persist, so this compares one active runtime.
+            defaults.runtime = runtime;
+            choices.runtime = runtime;
+          }
+          fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify(defaults));
+          const agents = ['gsd-executor', 'my-custom-agent'];
+          const before = agents.map((agent) => resolveModelInternal(project, agent));
+          configCommands.cmdConfigNewProject(project, JSON.stringify(choices), false);
+          assert.ok(fs.existsSync(path.join(project, '.planning', 'config.json')));
+          assert.deepEqual(agents.map((agent) => resolveModelInternal(project, agent)), before);
+        });
+      }
+    }
   }
 
   for (const [choice, runtime] of [
