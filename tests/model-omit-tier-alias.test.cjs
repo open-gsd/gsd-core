@@ -355,12 +355,22 @@ describe('#3703: dynamic_routing under omit escalates by tier alias', () => {
   });
 
   test('an omit only in the shared defaults is ignored on claude, so routing returns tier_models ids', () => {
-    dir = mkProject({ model_profile: 'quality', dynamic_routing: DR });
-    // loadConfig reads <GSD_HOME>/.gsd/defaults.json; withEnv points GSD_HOME at dir.
+    // Branch D of loadConfig (src/config-loader.cts:1107-1170): with NO .planning/ directory the
+    // loader reads <GSD_HOME>/.gsd/defaults.json and copies model_profile, resolve_model_ids and
+    // dynamic_routing into the config. withEnv points GSD_HOME at dir.
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3703-'));
     fs.mkdirSync(path.join(dir, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(dir, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
+    const DRd = { ...DR, provider_escalation: ['gpt-x', 'gemini-y'] };
+    fs.writeFileSync(path.join(dir, '.gsd', 'defaults.json'), JSON.stringify({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: DRd }));
+    // claude: the defaults-level omit is not applied, so the routed tier_models id is unchanged.
     assert.strictEqual(resolveIn(dir, MAPPER, 'claude'), 'claude-haiku-4-5');
     assert.strictEqual(resolveForTierIn(dir, MAPPER, 'claude', 1), 'claude-sonnet-4-5');
+    // non-native control: the same defaults DO blank the model there.
+    assert.strictEqual(resolveIn(dir, MAPPER, NON_NATIVE_NO_MAP[0]), '');
+    // provider ladder is live on claude because the omit was not applied.
+    const r = withEnv(dir, 'claude', {}, () => resolveProviderEscalation(dir, MAPPER, 1, true));
+    assert.strictEqual(r.escalated, true);
+    assert.strictEqual(r.to, 'gpt-x');
   });
 
   test('a heavy-routed agent stays opus on escalation', () => {
@@ -470,6 +480,8 @@ describe('#3703: provider_escalation under omit', () => {
     const r = ladder(dir, 'claude', 1);
     assert.strictEqual(r.to, 'haiku');
     assert.strictEqual(r.escalated, false);
+    // to === from (the attempt-0 model): the ladder was not consulted.
+    assert.ok(!PE.provider_escalation.includes(r.to));
   });
 
   test('every non-native runtime without a tier map stays blank under omit', () => {
@@ -490,9 +502,19 @@ describe('#3703: provider_escalation under omit', () => {
     assert.strictEqual(ladder(dir, 'claude', 2).to, 'gemini-y');
   });
 
-  test('the resolve-execution CLI keeps the alias on a quota-exceeded failure under omit', () => {
+  test('an explicit non-Claude opt-in that resolved its own tier map keeps the ladder', () => {
+    dir = mkProject({ model_profile: 'quality', runtime: 'codex', resolve_model_ids: 'omit', dynamic_routing: PE });
+    const r = ladder(dir, 'codex', 1);
+    assert.strictEqual(r.escalated, true);
+    assert.strictEqual(r.to, 'gpt-x');
+    assert.notStrictEqual(r.from, '');
+  });
+
+  test('resolve-execution CLI escalates by alias and skips the provider swap under omit', () => {
     dir = mkProject({ model_profile: 'quality', resolve_model_ids: 'omit', dynamic_routing: PE });
     const parsed = JSON.parse(cli(dir, `resolve-execution ${MAPPER} --attempt 1 --failure-class quota-exceeded`));
-    assert.strictEqual(parsed.model, 'haiku');
+    assert.strictEqual(parsed.model, 'sonnet');
+    assert.strictEqual(parsed.escalation.escalated, false);
+    assert.notStrictEqual(parsed.escalation.to, 'gpt-x');
   });
 });
