@@ -149,7 +149,7 @@ pr_merged() {
   _to git merge-base --is-ancestor "$1" "$TARGET_SHA" 2>/dev/null && return 0
   _sha=$(_to git rev-parse -q --verify "$1") || return 1
   # pipefail: a path list cut short by a failure or timeout proves nothing.
-  if _fork=$(_to git merge-base "$_sha" "$TARGET_SHA" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only --no-renames "$_fork" "$_sha")" ] &&
+  if _fork=$(_to git merge-base "$_sha" "$TARGET_SHA" 2>/dev/null) && [ -n "$(_to git -C "$_top" diff --name-only "$_fork" "$_sha")" ] &&
     ( set -o pipefail; _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET_SHA" -- ); then
     return 0
   fi
@@ -206,7 +206,7 @@ if [ -n "$MARKER_TIP" ]; then
     # rw_git GIT-ARGS... — git with its output config pinned, bounded, limited to the kept paths.
     rw_git() {
       set -- "$@" --no-color --no-ext-diff -- ':/'
-      while IFS= read -r _p; do [ -n "$_p" ] && set -- "$@" ":(exclude,top)$_p"; done <<RW_PATHS_EOF
+      while IFS= read -r _p; do [ -n "$_p" ] && set -- "$@" ":(exclude)$_p"; done <<RW_PATHS_EOF
 $FILTER_PATHS
 RW_PATHS_EOF
       TO=60 _to git -c color.ui=never -c diff.relative=false "$@"
@@ -217,8 +217,8 @@ RW_PATHS_EOF
       RW_R=$(TO=60 _to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CURRENT_BRANCH" --not "$TARGET_SHA" 2>/dev/null) &&
       RW_N=$(for H in $(printf '%s\n%s' "$RW_L" "$RW_R"); do picked "$H" || echo "$H"; done) &&
       RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET_SHA" 2>/dev/null) &&
-      RW_F=$(rw_git log --full-history --no-merges --name-only --format='%x09%H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
-      RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null | TO=60 _to git patch-id --stable); then
+      RW_F=$(rw_git log --full-history --name-only --format='%x09%H' "$MARKER_TIP...$CURRENT_BRANCH" 2>/dev/null) &&
+      RW_P=$(rw_git log -p --full-history --no-merges --no-renames --format='commit %H' "$MARKER_TIP...$CURRENT_BRANCH" | TO=60 _to git patch-id --stable); then
       REWRITE=$(printf '\tL\n%s\n\tR\n%s\n\tD\n%s\n\tF\n%s\n\tP\n%s\n\tN\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" "$RW_N" |
         awk '/^\t[LRDFPN]$/{s=index("LRDFPN",substr($0,2));next}
           s==1&&NF{L[$1]=nl++} s==2&&NF{R[++n]=$1} s==3&&$0!=""{dif[$0]=1}
@@ -268,7 +268,7 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   exit 1
 fi
 settle_pending
-AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA" 2>/dev/null)
+AHEAD=$(_to git rev-list --count "$CURRENT_BRANCH" --not "$BASE" "$TARGET_SHA")
 if [ "$AHEAD" = "0" ]; then
   echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
   exit 0
