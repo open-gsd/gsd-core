@@ -534,7 +534,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.equal(refOf(dir, 'refs/gsd/pr-built/default/main/feature'), git(dir, 'rev-parse', 'feature'), 'default mode keeps its own pending ref');
     assert.equal(refOf(dir, 'refs/gsd/pr-published/default/main/feature'), '');
-    assert.ok(refOf(dir, 'refs/gsd/pr-built/strict/main/feature'), 'strict pending untouched');
+    assert.ok(pendingOf(dir), 'strict pending untouched');
   });
 
   test('branches feat and feat/sub both record markers (no ref is a directory prefix of another)', () => {
@@ -548,7 +548,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
       git(dir, 'checkout', '-q', 'main');
       git(dir, 'branch', '-D', `${branch}-pr`);
     }
-    assert.ok(refOf(dir, 'refs/gsd/pr-built/strict/main/feature'));
+    assert.ok(pendingOf(dir));
     assert.ok(refOf(dir, 'refs/gsd/pr-built/strict/main/feat%2Fsub'));
   });
 
@@ -1321,13 +1321,12 @@ describe('#5469 pr-branch published marker (real git)', () => {
     mergePr(dir);
     git(dir, 'update-ref', 'refs/gsd/pr-published', 'main');
     commitRound(dir, 2, 'two.txt');
-    const pendingRef = 'refs/gsd/pr-built/strict/main/feature';
-    const before = refOf(dir, pendingRef);
+    const before = pendingOf(dir);
     assert.notEqual(before, '', 'round 1 left a pending build');
     const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /WARNING: could not record refs\/gsd\/pr-published\/strict\/main\/feature/);
-    assert.equal(refOf(dir, pendingRef), before, 'the unpromoted pending build is kept, not overwritten by the new build');
+    assert.equal(pendingOf(dir), before, 'the unpromoted pending build is kept, not overwritten by the new build');
   });
 
   // The pending write fails the same way; the run warns and records no pending ref.
