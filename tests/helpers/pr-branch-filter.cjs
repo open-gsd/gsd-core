@@ -3,7 +3,7 @@
 /**
  * Parsing seam for `/gsd-pr-branch`'s shipped shell, shared by
  * `tests/pr-branch-planning-filter.test.cjs`, `tests/git-base-branch.test.cjs`,
- * `tests/pr-branch-published-marker.test.cjs` and
+ * `tests/pr-branch-published-marker-*.test.cjs` and
  * `tests/pr-branch-matcher.property.test.cjs`. Besides the planning-path
  * filter it exports `extractDeclarationLines` (one-line declarations) and
  * `extractFunction` (a multi-line function) so tests run the shipped text, and
