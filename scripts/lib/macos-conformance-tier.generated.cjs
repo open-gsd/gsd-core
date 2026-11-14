@@ -123,6 +123,7 @@ module.exports = {
   "tests/hooks-opt-in.test.cjs",
   "tests/init-manager.test.cjs",
   "tests/init.test.cjs",
+  "tests/insert-phase-sibling-docs.test.cjs",
   "tests/install-fs-adapter-seam.test.cjs",
   "tests/install-minimal-hooks.test.cjs",
   "tests/install-path-detection.test.cjs",
