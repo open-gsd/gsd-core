@@ -11,12 +11,12 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const fc = require('fast-check');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runMinimalInstall, RUNTIME_META } = require('./helpers/install-shared.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode, runHook, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const {
   ARGS_TERMINATOR,
@@ -38,13 +38,16 @@ const CAPTURE = [
   "GSD_ARGS=${GSD_ARGS%$'\\n'}",
 ];
 const FENCE = ['```bash', ...CAPTURE, 'printf "%s" "$GSD_ARGS"', '```'].join('\n');
+
+/** Run `shell` with `argv` (e.g. ['-c', script]). runHook places its target first in argv, so argv[0] is passed as the target. */
+function runShell(shell, argv, opts = {}) {
+  return runHook(argv[0], argv.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS, ...opts });
+}
+
+// Availability probe: a missing shell (SPAWN_FAILED) means "unavailable", not a failure.
 const SHELLS = ['bash', 'zsh'].filter((sh) => {
-  try {
-    execFileSync(sh, ['--version'], { stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
-    return true;
-  } catch (_err) {
-    return false;
-  }
+  const probe = runShell(sh, ['--version']);
+  return probe.outcome === OUTCOME.EXITED && probe.exitCode === 0;
 });
 
 /** The shell lines of the first fence in `text`. */
@@ -61,12 +64,9 @@ function runStamped(shell, fenceText, typed) {
   try {
     const script = fenceBody(fenceText).map((l) => (l === '$ARGUMENTS' ? typed : l)).join('\n');
     const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
-    let stdout = '';
-    try {
-      stdout = execFileSync(shell, args, { cwd: dir, encoding: 'utf8', stdio: 'pipe', timeout: PROBE_TIMEOUT_MS });
-    } catch (err) {
-      stdout = String(err.stdout || '');
-    }
+    const r = runShell(shell, args, { cwd: dir });
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    const stdout = String(r.stdout || '');
     return { stdout, canary: fs.existsSync(path.join(dir, 'CANARY')) };
   } finally {
     cleanup(dir);
@@ -297,12 +297,12 @@ describe('#5637 what an install writes', () => {
         const manifest = P.loadSkillsManifest(${JSON.stringify(path.join(configDir, 'gsd-core', 'commands', 'gsd'))});
         s.applySurface(${JSON.stringify(configDir)}, layout, manifest, C.CLUSTERS);
       `;
-      execFileSync(process.execPath, ['-e', script], {
+      const surfaceRun = runNode(['-e', script], {
         cwd: root,
         env: { PATH: process.env.PATH, HOME: root, USERPROFILE: root, GSD_HOME: root },
-        stdio: 'pipe',
-        timeout: PROBE_TIMEOUT_MS * 4,
+        timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
+      assertSeamExit(assert, surfaceRun, 0);
       const surfaces = installedMarkdown(configDir).filter(({ rel }) => /(?:^|[\\/])(?:commands|skills)[\\/].*quick-batch/.test(rel));
       assert.ok(surfaces.length > 0);
       for (const { file, rel } of surfaces) {

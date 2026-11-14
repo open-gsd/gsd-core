@@ -75,14 +75,24 @@ const HARNESS_ONLY = new Set(['SCAN_USAGE_ERROR_TIMEOUT_MS', 'MALFORMED_INPUT_HO
  */
 const HISTORICAL_VALUES = { LOOP_HOOK_POINT_CLI_TIMEOUT_MS: [60000] };
 
+const EXCLUSION_KINDS = ['UNDER_TEST', 'EXEMPT'];
+const GIT_OR_THROW = 'tests/helpers/git-fixture.cjs gitOrThrow forwards options.timeoutMs to runGit (process seam)';
+
 /**
  * Sites the callee resolver cannot classify, resolved by reading the source. An entry applies to
  * every census site in `file` whose census callee text equals `callee` (a bare callee name, or
  * `(not-direct-arg)` plus ` var=<name>` when the options object is held in a variable). The
  * resolution replaces the AST result for those sites. Sites left unresolved and entries that
  * match nothing are reported in the output (`unresolvedSites`, `unusedResolutions`).
+ *
+ * A resolution carries either `cls` (SEAM | DIRECT, with `resolvedCallee` and `note`) or `kind`:
+ *   UNDER_TEST  a call into production code whose own spawning is the subject of the test;
+ *   EXEMPT      a direct spawn kept deliberately.
+ * A `kind` resolution REQUIRES a non-empty `reason` (validateResolutions throws without one). Its
+ * sites are counted neither as seam nor as raw/unseen and are reported in `excludedSites` with kind
+ * and reason. An optional `optionKey` narrows a resolution to the sites whose options object has
+ * that property (e.g. `stdio`), so one deliberate site does not swallow its file's other sites.
  */
-const GIT_OR_THROW = 'tests/helpers/git-fixture.cjs gitOrThrow forwards options.timeoutMs to runGit (process seam)';
 const MANUAL_RESOLUTIONS = [
   { file: 'tests/commit-docs-bypass.test.cjs', callee: 'gitOrThrow', cls: 'SEAM', resolvedCallee: 'gitOrThrow', note: GIT_OR_THROW },
   { file: 'tests/gsd-statusline.test.cjs', callee: 'gitOrThrow', cls: 'SEAM', resolvedCallee: 'gitOrThrow', note: GIT_OR_THROW },
@@ -99,7 +109,8 @@ const MANUAL_RESOLUTIONS = [
   { file: 'tests/loop-walk.qa.test.cjs', callee: 'execFileAsync', cls: 'DIRECT', resolvedCallee: 'execFileAsync', note: 'execFileAsync = promisify(execFile) from child_process' },
   { file: 'tests/review-lane-availability.test.cjs', callee: 'run', cls: 'DIRECT', resolvedCallee: 'run', note: 'run = promisify(execFile) from child_process' },
   { file: 'tests/review-lane-no-redirect-5433.test.cjs', callee: 'run', cls: 'DIRECT', resolvedCallee: 'run', note: 'run = promisify(execFile) from child_process' },
-  { file: 'tests/criterion-replay.test.cjs', callee: 'projection.execArgvQuarantined', cls: 'DIRECT', resolvedCallee: 'execArgvQuarantined', note: 'src/shell-command-projection.cts execArgvQuarantined calls childProcess.spawnSync directly' },
+  { file: 'tests/criterion-replay.test.cjs', callee: 'projection.execArgvQuarantined', kind: 'UNDER_TEST', reason: 'the test asserts execArgvQuarantined\'s own refused/not_found/timed_out/overflow outcomes, so the call is the production spawner under test' },
+  { file: 'tests/agent-skills.test.cjs', callee: 'spawnSync', optionKey: 'stdio', kind: 'EXEMPT', reason: 'passes stdio [\'ignore\', fd, \'pipe\'] to reproduce the exit-before-flush truncation bug; the process seam does not forward stdio and a pipe would defeat the test' },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -201,7 +212,8 @@ function censusSource(src, rel, names) {
             callee = '(not-direct-arg)';
             if (holder && holder.type === 'VariableDeclarator' && holder.id.type === 'Identifier') callee += ' var=' + holder.id.name;
           }
-          propRows.push({ file: rel, line: node.loc.start.line, constants: [...new Set(found)], callee, valueIsBare: node.value.type === 'Identifier' && nameSet.has(node.value.name) });
+          const optionKeys = obj && obj.type === 'ObjectExpression' ? obj.properties.map((p) => (p.type === 'Property' ? keyName(p) : null)).filter(Boolean) : [];
+          propRows.push({ file: rel, line: node.loc.start.line, constants: [...new Set(found)], callee, optionKeys, valueIsBare: node.value.type === 'Identifier' && nameSet.has(node.value.name) });
         }
       }
     }
@@ -421,11 +433,43 @@ function createClassifier(view) {
   return { classify };
 }
 
+const isNonEmptyString = (v) => typeof v === 'string' && v.trim().length > 0;
+
+/**
+ * Throws, naming the entry by file and callee, when a resolution is not exactly one of
+ * `{kind, reason}` (exclusion) or `{cls, resolvedCallee, note}` (SEAM | DIRECT classification).
+ */
+function validateResolutions(resolutions) {
+  for (const o of resolutions) {
+    const id = `resolution ${o.file} ${o.callee}`;
+    const hasKind = o.kind !== undefined;
+    const hasCls = o.cls !== undefined;
+    if (hasKind && hasCls) throw new Error(`${id}: sets both kind and cls`);
+    if (!hasKind && !hasCls) throw new Error(`${id}: sets neither kind nor cls`);
+    if (hasKind) {
+      if (!EXCLUSION_KINDS.includes(o.kind)) throw new Error(`${id}: unknown kind ${JSON.stringify(o.kind)}`);
+      if (!isNonEmptyString(o.reason)) throw new Error(`${id}: kind ${o.kind} requires a non-empty reason`);
+    } else {
+      if (o.cls !== 'SEAM' && o.cls !== 'DIRECT') throw new Error(`${id}: unknown cls ${JSON.stringify(o.cls)}`);
+      if (!isNonEmptyString(o.resolvedCallee)) throw new Error(`${id}: cls ${o.cls} requires a non-empty resolvedCallee`);
+      if (!isNonEmptyString(o.note)) throw new Error(`${id}: cls ${o.cls} requires a non-empty note`);
+    }
+  }
+}
+
+/** One matched resolution as `{ cls, callee, via, exclusion }`; `exclusion` is `{kind, reason}` or null. */
+function normalizeResolution(o) {
+  if (o.kind) return { cls: o.kind, callee: o.resolvedCallee, via: 'manual:' + o.reason, exclusion: { kind: o.kind, reason: o.reason } };
+  return { cls: o.cls, callee: o.resolvedCallee, via: 'manual:' + o.note, exclusion: null };
+}
+
 /**
  * Turns census rows into call sites: classify once per (file, callee text), apply manual
  * resolutions, drop sites of file-local redefinitions and node:test runner options.
  */
 function buildSites({ propRows, localRedefs }, classifier, resolutions = MANUAL_RESOLUTIONS) {
+  validateResolutions(resolutions);
+  const excluded = [];
   const classmap = new Map();
   const used = new Set();
   const sites = [];
@@ -434,19 +478,21 @@ function buildSites({ propRows, localRedefs }, classifier, resolutions = MANUAL_
     const key = r.file + '\t' + r.callee;
     if (!classmap.has(key)) classmap.set(key, classifier.classify(r));
     const m = classmap.get(key);
-    const ovIdx = resolutions.findIndex((o) => o.file === r.file && o.callee === r.callee);
-    const ov = ovIdx >= 0 ? resolutions[ovIdx] : null;
-    if (ov) used.add(ovIdx);
+    const ovIdx = resolutions.findIndex((o) => o.file === r.file && o.callee === r.callee && (!o.optionKey || (r.optionKeys || []).includes(o.optionKey)));
+    if (ovIdx >= 0) used.add(ovIdx);
+    const ov = ovIdx >= 0 ? normalizeResolution(resolutions[ovIdx]) : null;
     const cls = ov ? ov.cls : m.cls;
-    const base = { file: r.file, line: r.line, constants: r.constants, callee: ov ? ov.resolvedCallee : r.callee, cls, via: ov ? 'manual:' + ov.note : 'ast' };
+    const base = { file: r.file, line: r.line, constants: r.constants, callee: ov ? (ov.callee ?? r.callee) : r.callee, cls, via: ov ? ov.via : 'ast' };
     const redef = localRedefs.filter((x) => x.file === r.file && r.constants.includes(x.name));
     if (redef.length) { dropped.push({ ...base, why: 'file-local redefinition at line ' + redef[0].line }); continue; }
+    if (ov && ov.exclusion) { excluded.push({ file: r.file, line: r.line, constants: r.constants, callee: r.callee, kind: ov.exclusion.kind, reason: ov.exclusion.reason }); continue; }
     if (cls === 'NONE') { dropped.push({ ...base, why: 'node:test runner option, not a spawn' }); continue; }
     sites.push(base);
   }
   return {
     sites,
     dropped,
+    excludedSites: excluded,
     unresolvedSites: sites.filter((s) => s.cls !== 'SEAM' && s.cls !== 'DIRECT'),
     unusedResolutions: resolutions.filter((_, i) => !used.has(i)),
   };
@@ -747,6 +793,7 @@ function buildEvidence({ lanes, runDirectories, view, names, evidenceNames, valu
     census: { fileCount: census.fileCount, parseFailures: census.parseFailures, propRows: census.propRows.length, keptSites: built.sites.length, droppedSites: built.dropped.length, localRedefs: census.localRedefs },
     unresolvedSites: built.unresolvedSites,
     unusedResolutions: built.unusedResolutions,
+    excludedSites: built.excludedSites,
     constants: summarizeConstants({ names: evidenceNames, values, sites: built.sites, lanes, index, attribution }),
     droppedSites: built.dropped,
     ambiguousByCandidates,
@@ -899,6 +946,7 @@ module.exports = {
   censusRepo,
   createClassifier,
   buildSites,
+  validateResolutions,
   parseLane,
   percentile,
   summarizeDurations,

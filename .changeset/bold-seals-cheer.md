@@ -1,5 +1,0 @@
----
-type: Fixed
-pr: 6003
----
-**`phase add`, `phase add-batch` and `phase insert` refuse a STATE milestone with no ROADMAP heading, or one already shipped** — when STATE.md named a milestone (such as v9.9) that ROADMAP.md has no heading for, or one ROADMAP.md marks shipped, these verbs numbered the new phase and wrote its `Depends on` line against the wrong milestones (every unshipped one, or the closed one) and reported success; they now stop before writing anything and name the milestone, quoted and length-capped. A version mentioned in a Phase title, a code fence or an HTML comment no longer counts as a milestone heading. A check mark emoji that appears only inside a parenthetical naming another version (such as `v2.1 Next (after v2.0 prep)` carrying one) no longer marks the milestone shipped; every other closed-status word or check mark still does. A milestone whose name contains a status word, such as "Failed Payment Recovery" or "Closed Beta", is still read as shipped, so the refusal tells you to rename it or add an active marker such as the construction emoji or "(in progress)". (#5726)
