@@ -2457,6 +2457,10 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       assert.equal(shortGsdStatus('paused — waiting on credentials'), 'paused');
       assert.equal(shortGsdStatus('stopped by user'), 'stopped');
     });
+    test('#6176: the terminal `Awaiting next milestone` status renders the canonical `completed`, not its first word', () => {
+      assert.equal(shortGsdStatus('Awaiting next milestone'), 'completed');
+      assert.equal(shortGsdStatus('awaiting next milestone'), 'completed');
+    });
     test('collapses vocabulary values to canonical keywords via normalizeStateStatus (#4186 anchored)', () => {
       // #4186: normalizeStateStatus recognizes the DECLARED vocabulary
       // (whole-field match), so exactly those values collapse to keywords.
