@@ -129,6 +129,17 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     );
   });
 
+  test('#5531: the NUL check counts bytes in the C locale (BSD tr and wc fail in a UTF-8 locale on a byte that is not valid there)', (t) => {
+    const root = path.join(tempDir(t), 'orch');
+    const prompt = `${GUARDED}aÿb\n`;
+    fs.writeFileSync(create(root), prompt);
+    // GNU tr cannot show the macOS fault, so the stubs fail unless the call carries LC_ALL=C, as BSD tr does on such a byte.
+    const stubs = ['tr', 'wc'].map((cmd) => `${cmd}() { [ "\${LC_ALL:-}" = C ] || return 1; command ${cmd} "$@"; }`).join('\n');
+    const r = runBlock(root, `${stubs}\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(r.stdout, prompt, 'the prompt must reach the executor unchanged');
+  });
+
   test('#5531: block 1 prints the TDD verdict it resolved, so the orchestrator can fill the ${TDD_APPLICABLE ? ...} line', (t) => {
     const root = path.join(tempDir(t), 'orch');
     for (const verdict of ['true', 'false']) {
