@@ -21,7 +21,7 @@ import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
 import { updateTraceabilityCell, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
-import { requireSafePath, PathAcceptance, type ContainedPath } from './security.cjs';
+import { requireSafePath, safeJsonParse, PathAcceptance, type ContainedPath } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
 const { resolveQuickTaskSummaryFile } = auditMod;
@@ -113,6 +113,74 @@ interface MilestoneCompleteOptions {
   // `<version>-RELEASE-MAP.json` and rendered into the MILESTONES.md entry.
   // Absent, the command's output and on-disk effects are unchanged.
   releaseMap?: string | null;
+  // #6175: path to a JSON array of curated accomplishment strings, written by
+  // the complete-milestone workflow. Validated before the first write; when
+  // given, MILESTONES.md "Key accomplishments" lists exactly these lines.
+  // Absent, the SUMMARY one-liners are written with exact repeats dropped.
+  accomplishmentsFile?: string | null;
+}
+
+/** Maximum number of entries in an `--accomplishments-file`. */
+const MAX_ACCOMPLISHMENTS_ENTRIES = 32;
+/** Maximum length (UTF-16 code units) of one accomplishment line. */
+const MAX_ACCOMPLISHMENT_LENGTH = 500;
+/** Maximum size in bytes of an `--accomplishments-file`. */
+const MAX_ACCOMPLISHMENTS_FILE_BYTES = 65536;
+
+type AccomplishmentsLoad = { ok: true; accomplishments: string[] } | { ok: false; errors: string[] };
+
+/**
+ * Read and validate a caller-supplied `--accomplishments-file` (#6175): a
+ * regular file of at most 64 KiB holding a non-empty JSON array of at most 32
+ * single-line, non-blank strings. Every problem is reported in one pass, like
+ * `loadReleaseMapFile`. Entries are trimmed.
+ */
+function loadAccomplishmentsFile(filePath: string): AccomplishmentsLoad {
+  const name = path.basename(filePath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    return { ok: false, errors: [`accomplishments file cannot be read (${(err as NodeJS.ErrnoException).code ?? 'unknown'}): ${name}`] };
+  }
+  if (!stat.isFile()) return { ok: false, errors: [`accomplishments path is not a regular file: ${name}`] };
+  if (stat.size > MAX_ACCOMPLISHMENTS_FILE_BYTES) {
+    return { ok: false, errors: [`accomplishments file is ${stat.size} bytes; the maximum is ${MAX_ACCOMPLISHMENTS_FILE_BYTES}`] };
+  }
+  let text: string;
+  try {
+    text = fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    return { ok: false, errors: [`accomplishments file cannot be read (${(err as NodeJS.ErrnoException).code ?? 'unknown'}): ${name}`] };
+  }
+  const parsed = safeJsonParse(text, { maxLength: MAX_ACCOMPLISHMENTS_FILE_BYTES, label: 'accomplishments file' });
+  if (!parsed.ok) return { ok: false, errors: [parsed.error ?? 'accomplishments file: invalid JSON'] };
+  const list: unknown = parsed.value;
+  if (!Array.isArray(list)) return { ok: false, errors: ['accomplishments file must be a JSON array of strings'] };
+  if (list.length === 0) return { ok: false, errors: ['accomplishments file must contain at least one entry'] };
+  if (list.length > MAX_ACCOMPLISHMENTS_ENTRIES) {
+    return { ok: false, errors: [`accomplishments file has ${list.length} entries; the maximum is ${MAX_ACCOMPLISHMENTS_ENTRIES}`] };
+  }
+  const errors: string[] = [];
+  const accomplishments: string[] = [];
+  list.forEach((entry: unknown, i: number) => {
+    if (typeof entry !== 'string') {
+      errors.push(`entries[${i}] must be a string`);
+      return;
+    }
+    const line = entry.trim();
+    if (line.length === 0) errors.push(`entries[${i}] is blank`);
+    else if (line.length > MAX_ACCOMPLISHMENT_LENGTH) errors.push(`entries[${i}] is ${line.length} characters; the maximum is ${MAX_ACCOMPLISHMENT_LENGTH}`);
+    // a bullet is one line: refuse CR, LF and every other control byte
+    else if (/[\u0000-\u001f\u007f]/.test(line)) errors.push(`entries[${i}] must be a single line without control characters`);
+    else accomplishments.push(line);
+  });
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, accomplishments };
+}
+
+/** Exact repeats removed: first occurrence kept, order preserved (#6175). */
+function dedupeAccomplishments(list: readonly string[]): string[] {
+  return [...new Set(list)];
 }
 
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
@@ -615,6 +683,17 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       releaseMapNeedsWrite = existingText === null;
     }
   }
+  // #6175: validate the curated accomplishments file BEFORE any write, same
+  // validate-before-mutate contract as --release-map above.
+  let curatedAccomplishments: string[] | null = null;
+  if (typeof options.accomplishmentsFile === 'string') {
+    const loaded = loadAccomplishmentsFile(path.resolve(cwd, options.accomplishmentsFile));
+    if (!loaded.ok) {
+      error(`milestone complete: invalid --accomplishments-file — nothing has been changed.\n${loaded.errors.map((e) => `  - ${e}`).join('\n')}`);
+    } else {
+      curatedAccomplishments = loaded.accomplishments;
+    }
+  }
   const releaseMapReport = releaseMap && releaseMapFile
     ? { path: path.relative(cwd, releaseMapFile).split(path.sep).join('/'), entries: releaseMap.length }
     : null;
@@ -1028,7 +1107,10 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   }
 
   // Create/append MILESTONES.md entry
-  const accomplishmentsList = accomplishments.map((a) => `- ${a}`).join('\n');
+  // #6175: the curated list when the workflow supplied one, else the SUMMARY
+  // one-liners with exact repeats dropped. The result's `accomplishments`
+  // keeps the raw list either way.
+  const accomplishmentsList = (curatedAccomplishments ?? dedupeAccomplishments(accomplishments)).map((a) => `- ${a}`).join('\n');
   const milestoneEntry = `## ${version} ${milestoneName} (Shipped: ${today})\n\n**Phases completed:** ${phaseCount} phases, ${totalPlans} plans, ${totalTasks} tasks\n\n**Key accomplishments:**\n${accomplishmentsList || '- (none recorded)'}\n\n${releaseMap ? `${renderReleaseMapMarkdown(releaseMap)}\n` : ''}---\n\n`;
 
   // #3685: mirror requirementsUpdated's diff-tracking contract — the result
@@ -1954,6 +2036,11 @@ export = {
   cmdRequirementsReadyIds,
   cmdRequirementsRevertPhase,
   cmdMilestoneComplete,
+  loadAccomplishmentsFile,
+  dedupeAccomplishments,
+  MAX_ACCOMPLISHMENTS_ENTRIES,
+  MAX_ACCOMPLISHMENT_LENGTH,
+  MAX_ACCOMPLISHMENTS_FILE_BYTES,
   cmdPhasesClear,
   cmdQuickArchive,
   buildQuickArchiveIndex,
