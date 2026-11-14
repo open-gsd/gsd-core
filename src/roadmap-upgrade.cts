@@ -2332,8 +2332,10 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // rewriting it, then undo precisely those on failure — correct whether
   // `.planning/` is git-tracked or ignored.
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
-  // #5120 review: snapshots are held as bytes, so a restore puts back exactly the
-  // bytes the file had, including a sequence that is not valid UTF-8.
+  // #5120 review: a snapshot of a file read with readFileSync(path) (STATE.md and the
+  // other files snapshotted that way) is held as bytes, so a restore puts back the
+  // bytes the file had, including a sequence that is not valid UTF-8. The snapshot
+  // of a depends_on phase file is the decoded text, re-encoded as UTF-8.
   const fileBackups = new Map<string, { existed: boolean; content: Buffer }>();
   const stateMdPath = path.join(pDir, 'STATE.md');
   // #5120: the STATE.md content this migration wrote, read back after the write,

@@ -129,13 +129,15 @@ function refuseNonRegularStateMd(filePath: string): void {
 }
 
 /**
- * #5120 re-review (Major-2): a STATE.md path that no file can be created at fails
- * at once, before the lock. The lock file sits beside STATE.md, so a missing parent
- * directory made acquireStateLock retry ENOENT for its whole 30-second budget, and
- * the MCP server, which handles each tool call synchronously, answered nothing for
- * that time. The errors are the ones a raw write gave: ENOENT or ENOTDIR from the
- * parent directory's stat, and EISDIR for a path ending in a separator (it names a
- * directory, never a file). Nothing is created.
+ * #5120 re-review (Major-2): a STATE.md path whose parent directory is missing or is
+ * not a directory, or that ends in a separator, fails at once, before the lock. The
+ * lock file sits beside STATE.md, so a missing parent directory made
+ * acquireStateLock retry ENOENT for its whole 30-second budget, and the MCP server,
+ * which handles each tool call synchronously, answered nothing for that time. ENOENT or ENOTDIR comes from the parent directory's stat (or from the
+ * adapter's own ENOTDIR check), and EISDIR is the adapter's own error for a path
+ * ending in a separator. For that last case the raw write gave EISDIR when the
+ * directory exists but ENOENT when it is also missing; the adapter gives EISDIR in
+ * both. Nothing is created.
  */
 function refuseUnwritableStateMdPath(filePath: string): void {
   if (/[\\/]$/.test(filePath)) {

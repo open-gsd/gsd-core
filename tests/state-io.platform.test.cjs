@@ -154,7 +154,7 @@ test('filesystem stateIO: the STATE.md match is case-sensitive (#5120 review)', 
     const file = path.join(sub, name);
     io.write(file, crlf);
     assert.equal(fs.readFileSync(file, 'utf8'), crlf, `${name} is written exactly as given, not through the seam`);
-    assert.deepEqual(fs.readdirSync(sub), [name], `${name} takes no lock`);
+    assert.deepEqual(fs.readdirSync(sub), [name], `${name} leaves no extra file beside it`);
   }
 });
 

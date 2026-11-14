@@ -196,7 +196,8 @@ synchronously; a lock that cannot be taken returns a tool error and writes
 nothing. An existing `STATE.md` that is not a regular file with a single
 name (a symlink, live or dangling, a FIFO, a device, a socket, a directory,
 or a hard link) is refused with a tool error and nothing is written, neither
-through it nor over it, where the raw write used to write through it. A
+through it nor over it (the raw write followed a symlink, wrote into a hard
+link or a device, blocked on a FIFO, and failed on a directory or a socket). A
 `STATE.md` path whose directory is missing or is not a directory, or that
 ends in a path separator, returns a tool error at once, before any lock
 wait. Every other `path` is written exactly as given.

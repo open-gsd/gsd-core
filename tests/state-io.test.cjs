@@ -126,10 +126,11 @@ test('filesystem stateIO: every other destination is written byte-for-byte with 
 });
 
 // #5120 re-review (Major-2): a STATE.md whose directory is missing (or is not a
-// directory) fails at once with the filesystem's own error. Before, the lock
+// directory) fails at once with ENOENT or ENOTDIR. Before, the lock
 // acquisition retried ENOENT for its whole 30-second budget, and the synchronous
 // MCP server answered nothing meanwhile. A path ending in a separator names a
-// directory, never STATE.md, and is refused with EISDIR, as the raw write was.
+// directory, never STATE.md, and is refused with EISDIR (a raw write gave EISDIR when
+// the directory exists, ENOENT when it is also missing).
 // The rows count lock opens rather than timing the call: no lock is attempted.
 test('filesystem stateIO: a STATE.md path whose directory cannot hold it fails at once, before any lock attempt (#5120 re-review)', (t) => {
   const dir = createTempDir('state-io-noparent-');
