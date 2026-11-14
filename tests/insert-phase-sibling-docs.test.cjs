@@ -152,7 +152,7 @@ describe('#5583 insert-phase --sibling', () => {
   });
 
   // The init step, the insert fence and the state block each read --ws from the typed text: all must pick the same workstream.
-  describe('init step and insert fence read the same --ws', { skip: SKIP }, () => {
+  describe('init step, insert fence and state block read the same --ws', { skip: SKIP }, () => {
     const WS_ROWS = [
       '15.2 --ws feature x',
       '--ws feature 15.2 x --sibling',
@@ -188,7 +188,7 @@ describe('#5583 insert-phase --sibling', () => {
         assert.equal(c, b.repeat(STATE_CALLS), 'both state queries get the same --ws');
       });
     }
-    test('a table row reads a workstream in both blocks', () => {
+    test('a table row reads a workstream in all three blocks', () => {
       assert.deepEqual(wsPair(read(WF), '15.2 --ws feature x'), ['[--ws=feature]', '[--ws=feature]', '[--ws=feature][--ws=feature]']);
     });
     // the three sed lines are identical: mutate the nth one (init block, insert fence, state block)
