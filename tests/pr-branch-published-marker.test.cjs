@@ -277,7 +277,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   test('refkey keeps a long run of one byte whole (od prints every line)', () => {
-    const names = ['a'.repeat(48), 'a'.repeat(64)];
+    const names = [31, 32, 33, 48, 64].map((n) => 'a'.repeat(n)); // od collapses repeated 16-byte lines from 32 identical bytes
     assert.deepEqual(refKeys(refkeyFn(), names), names);
   });
 
