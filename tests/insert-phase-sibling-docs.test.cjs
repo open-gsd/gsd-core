@@ -135,6 +135,38 @@ describe('#5583 insert-phase --sibling', () => {
         assert.deepEqual(split('15.2 x ' + words.join(' ')), ['[15.2]', '[x ' + words.map((w) => w.replace(/^"|"$/g, '')).join(' ') + ']']);
       }), { numRuns: 25 });
     });
+
+    // Reference tokenizer: the shape space of the fence (separators space/tab/newline, double quotes,
+    // --ws/--sibling/--insert first, middle, last, repeated, attached, value-less, a value starting with
+    // `-`, empty argument) checked against a plain re-statement of the contract.
+    const reference = (args) => {
+      const ws = (' ' + args).split('\n').map((l) => /.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(l)).find(Boolean);
+      const name = ws ? ws[1] : '';
+      const toks = args.split(/\s+/).map((t) => t.replace(/^"/, '').replace(/"$/, '')).filter(Boolean);
+      if (toks[0] === '--insert') toks.shift();
+      let sibling = false, afterWs = false, after = '';
+      const desc = [];
+      for (const t of toks) {
+        if (afterWs) { afterWs = false; if (name && t === name) continue; }
+        if (t === '--sibling') sibling = true;
+        else if (t === '--ws') afterWs = true;
+        else if (!after) after = t;
+        else desc.push(t);
+      }
+      const d = desc.join(' ');
+      if (/^(--cwd=|--project-dir=|--exit-contract=|--ws=)/.test(d) || (/^-/.test(d) && !d.includes(' ')) || /^-/.test(after)) return null;
+      return [...(name ? ['[--ws=' + name + ']'] : []), '[' + after + ']', ...(sibling ? ['[--sibling]'] : []), '[' + d + ']'];
+    };
+    test('property: the fence matches the reference tokenizer over every token shape', () => {
+      const tok = fc.constantFrom('15.2', '7', 'x', 'fix', '-h', '-5', '--raw', '--cwd=/t', '--ws=feature', '--ws', '--ws', '--ws', '--sibling', '--insert', '1--insert', 'x--sibling', 'feature', 'feature', 'x', 'ws2', '"feature"', '"q"', '"', '""', "don't", '*');
+      const sep = fc.constantFrom(' ', '  ', '\t', '\n', ' \n ');
+      fc.assert(fc.property(fc.array(tok, { maxLength: 8 }), fc.array(sep, { minLength: 8, maxLength: 8 }), fc.constantFrom('', ' ', '\n'), (toks, seps, lead) => {
+        const args = lead + toks.map((t, i) => (i ? seps[i] : '') + t).join('');
+        const want = reference(args);
+        if (want === null) return assert.notEqual(runFence(args).status, 0, 'refuses: ' + JSON.stringify(args));
+        assert.deepEqual(split(args), want, JSON.stringify(args));
+      }), { numRuns: 250 });
+    });
   });
 
   // The real CLI, not a stub: flag words inside the description reach the phase name intact.
