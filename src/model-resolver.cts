@@ -835,8 +835,10 @@ function dynamicRoutingModel(
 
 /**
  * #3703 — the ONE omit decision. resolveModelInternal (step 4) and
- * resolveModelForTier both read it, so a first spawn and an escalated spawn
- * agree on whether the omit gate applies. Honors "omit" when the PROJECT set it
+ * resolveModelForTier both read it, and so does resolveProviderEscalation, so a
+ * first spawn, an escalated spawn and the provider ladder agree on whether the
+ * omit gate applies. They share only this decision: their precedence outside
+ * the gate still differs (#6214). Honors "omit" when the PROJECT set it
  * (#2517 finding #4) or when the active runtime lacks native model aliases; a
  * native-alias runtime ignores an "omit" that came only from the shared
  * ~/.gsd/defaults.json (#2297).
@@ -894,6 +896,7 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
   // A native-alias runtime escalates by tier ALIAS; any other runtime whose
   // gate produced "" stays "" (an explicit non-Claude opt-in that resolved its
   // own tier map at step 3 keeps today's dynamic_routing escalation).
+  // Outside this gate the two entry points still rank dynamic_routing differently (#6214).
   if (omitAppliesFor(cwd, config, activeRuntime)) {
     if (hasNativeModelAliases(activeRuntime)) {
       if (dynamicRoutingTier(config, agentType, attemptN) !== null) {
@@ -974,6 +977,14 @@ function resolveProviderEscalation(
   if (!applicable) return stay();
 
   const config = loadConfig(cwd);
+  // #3703: provider_escalation entries are concrete model ids from other
+  // providers, which an applied omit rules out. A native-alias runtime keeps
+  // its tier alias and a runtime whose gate blanked the model stays blank; an
+  // explicit non-Claude opt-in that resolved its own tier map keeps the ladder.
+  const activeRuntime = resolveActiveRuntime(config);
+  if (omitAppliesFor(cwd, config, activeRuntime) && (hasNativeModelAliases(activeRuntime) || from === '')) {
+    return stay();
+  }
   const dr = config['dynamic_routing'] as Record<string, unknown> | null | undefined;
   if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) return stay();
   if (dr['escalate_on_failure'] === false) return stay();
