@@ -36,6 +36,7 @@ const {
 const MARKER = 'refs/gsd/pr-published/strict/main/feature';
 const PENDING = 'refs/gsd/pr-built/strict/main/feature';
 const BUILT = 'refs/gsd/pr-built-head/strict/main/feature';
+const HOSTILE = 'a;b$c'; // a branch name that holds shell metacharacters
 
 function git(dir, ...args) {
   return gitIn(dir)(args).trim();
@@ -160,7 +161,7 @@ const replayed = (dir) => changed(dir).filter((f) => /^r\d+\.txt$/.test(f));
 
 describe('#5469 pr-branch published marker (real git)', () => {
   const dirs = [];
-  const repo = () => { const d = buildRepo(); dirs.push(d); return d; };
+  const repo = (branch) => { const d = buildRepo(branch); dirs.push(d); return d; };
   const renameFixture = () => {
     const dir = repo();
     write(dir, 'old.txt', 'a\nb\nc\nd\ne\nf\n');
@@ -331,9 +332,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   test('a conflict halt that cannot return to the branch prints a restore command that runs for a name with shell metacharacters', () => {
-    const branch = 'a;b$c';
-    const dir = buildRepo(branch);
-    dirs.push(dir);
+    const branch = HOSTILE;
+    const dir = repo(branch);
     commitRound(dir, 1);
     assert.equal(publish(dir, 'main', { branch }).status, 0);
     git(dir, 'checkout', '-q', 'main');
@@ -343,7 +343,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'checkout', '-q', branch);
     commitRound(dir, 2);
     // the checkout back to the working branch fails; every other git call runs as usual
-    const noReturn = 'gh() { return 1; }\ngit() { if [ "$1" = checkout ] && [ "$2" = -q ] && [ "$3" = "a;b\\$c" ]; then return 1; fi; command git "$@"; }';
+    const noReturn = `gh() { return 1; }\ngit() { if [ "$1" = checkout ] && [ "$2" = -q ] && [ "$3" = "${HOSTILE.replace('$', '\\$')}" ]; then return 1; fi; command git "$@"; }`;
     const r = publish(dir, 'main', { branch, prelude: noReturn });
     assert.notEqual(r.status, 0, 'conflict must halt');
     const m = r.stderr.match(/^Run: (git checkout .*)$/m);
@@ -638,16 +638,16 @@ describe('#5469 pr-branch published marker (real git)', () => {
   test('branches feat and feat/sub both record markers (no ref is a directory prefix of another)', () => {
     const dir = repo();
     commitRound(dir, 1);
-    git(dir, 'checkout', '-q', '-b', 'feat/sub');
-    for (const branch of ['feature', 'feat/sub']) {
-      git(dir, 'checkout', '-q', branch);
-      const r = publish(dir, 'main', { branch });
-      assert.equal(r.status, 0, r.stderr);
-      git(dir, 'checkout', '-q', 'main');
-      git(dir, 'branch', '-D', `${branch}-pr`);
-    }
-    assert.ok(pendingOf(dir));
-    assert.ok(refOf(dir, 'refs/gsd/pr-built/strict/main/feat%2Fsub'));
+    git(dir, 'checkout', '-q', '-b', 'feat');
+    assert.equal(publish(dir, 'main', { branch: 'feat' }).status, 0);
+    // `feat` and `feat-pr` go, but the refs recorded for `feat` stay: a `feat/sub` marker must not collide with them
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'branch', '-D', 'feat', 'feat-pr');
+    git(dir, 'checkout', '-q', '-b', 'feat/sub', 'feature');
+    const r = publish(dir, 'main', { branch: 'feat/sub' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(refOf(dir, 'refs/gsd/pr-built/strict/main/feat'), 'the refs of `feat` are still there');
+    assert.ok(refOf(dir, 'refs/gsd/pr-built/strict/main/feat%2Fsub'), 'and `feat/sub` recorded its own');
   });
 
   test('a remote-tracking target (origin/main) is encoded into one ref component', () => {
@@ -670,9 +670,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   test('a refused publish on a branch name with shell metacharacters leaves its refs untouched', () => {
-    const branch = 'a;b$c';
-    const dir = buildRepo(branch);
-    dirs.push(dir);
+    const branch = HOSTILE;
+    const dir = repo(branch);
     commitRound(dir, 1);
     assert.equal(publish(dir, 'main', { branch }).status, 0);
     const refs = ['pr-published', 'pr-built', 'pr-built-head'].map((k) => `refs/gsd/${k}/strict/main/${branch}`);
@@ -681,7 +680,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 2);
     const r = publish(dir, 'main', { branch });
     assert.notEqual(r.status, 0);
-    assert.match(r.stderr, /a;b\$c-pr exists and is not merged into main/);
+    assert.ok(r.stderr.includes(`${HOSTILE}-pr exists and is not merged into main`), r.stderr);
     assert.equal(git(dir, 'rev-parse', `${branch}-pr`), prTip, 'the refused publish leaves the -pr branch');
     assert.deepEqual(refs.map((ref) => refOf(dir, ref)), before);
     assert.ok(!fs.existsSync(path.join(dir, `${branch}-pr`)) && !fs.existsSync(path.join(dir, 'b$c-pr')), 'no file from the injected suffix');
@@ -693,9 +692,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
   // The printed discard command must run as one command for a hostile branch name, with and without a pending build.
   for (const withPending of [true, false]) {
     test(`a refused publish on a branch name with shell metacharacters prints a discard command that runs (${withPending ? 'with' : 'without'} a pending build)`, () => {
-      const branch = 'a;b$c';
-      const dir = buildRepo(branch);
-      dirs.push(dir);
+      const branch = HOSTILE;
+      const dir = repo(branch);
       commitRound(dir, 1);
       assert.equal(publish(dir, 'main', { branch }).status, 0);
       if (!withPending) for (const ref of ['pr-built', 'pr-built-head']) git(dir, 'update-ref', '-d', `refs/gsd/${ref}/strict/main/${branch}`);
@@ -710,9 +708,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
 
   // The re-anchor commands of the warnings name the marker ref, which may hold shell metacharacters.
   test('the re-anchor command of the pending-drop warning runs for a branch name with shell metacharacters', () => {
-    const branch = 'a;b$c';
-    const dir = buildRepo(branch);
-    dirs.push(dir);
+    const branch = HOSTILE;
+    const dir = repo(branch);
     commitRound(dir, 1);
     assert.equal(publish(dir, 'main', { branch }).status, 0);
     git(dir, 'branch', '-D', `${branch}-pr`);
@@ -726,9 +723,8 @@ describe('#5469 pr-branch published marker (real git)', () => {
   });
 
   test('the re-anchor command of the history-rewritten warning runs for a branch name with shell metacharacters', () => {
-    const branch = 'a;b$c';
-    const dir = buildRepo(branch);
-    dirs.push(dir);
+    const branch = HOSTILE;
+    const dir = repo(branch);
     write(dir, 'x1.txt', '1\n');
     commitAll(dir, 'feat: code only 1');
     write(dir, 'x2.txt', '2\n');
