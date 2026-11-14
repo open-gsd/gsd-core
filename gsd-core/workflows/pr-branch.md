@@ -118,9 +118,9 @@ The preconditions below read the filter projections above, so they come first.
 ```bash
 # TARGET comes from config: refuse an option-like name; git gets only its sha.
 case $TARGET in -*) echo "Refusing target $TARGET: it starts with -." >&2; exit 1 ;; esac
-TARGET_SHA=$(git rev-parse -q --verify "$TARGET^{commit}") || { echo "Unknown target: $TARGET" >&2; exit 1; }
+TARGET_SHA=$(git rev-parse -q --verify "refs/heads/$TARGET^{commit}" || git rev-parse -q --verify "$TARGET^{commit}") || { echo "Unknown target: $TARGET" >&2; exit 1; }
 PR_BRANCH="${CURRENT_BRANCH}-pr"
-CUR=refs/heads/$CURRENT_BRANCH # a tag of the same name must not shadow the branch
+CUR=refs/heads/$CURRENT_BRANCH
 TIP=$(git rev-parse "$CUR")
 # Keyed by mode (strict skips what default publishes). refkey STR: one valid ref component, injective, never a
 # key prefix: %, /, control, non-ASCII and git-forbidden bytes become %XX.

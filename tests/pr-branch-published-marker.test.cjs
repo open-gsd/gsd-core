@@ -112,7 +112,7 @@ function runSh(script, cwd, files) {
 const refKeys = (fn, inputs) => {
   const r = runSh(`${fn}\nwhile IFS= read -r l; do refkey "$l"; echo; done < in.txt`, undefined, { 'in.txt': inputs.join('\n') + '\n' });
   assert.equal(r.status, 0, r.stderr);
-  return r.stdout.split(/\r?\n/).slice(0, inputs.length);
+  return splitLines(r.stdout).slice(0, inputs.length);
 };
 
 // Fast-forward the bare target to the published -pr branch (a merged PR).
@@ -138,7 +138,7 @@ const probePrMerged = (cwd, pre = 'gsd_run() { shift 3; "$@"; }\ngh() { return 1
 
 // The command a refusal prints on its `  <label>: <cmd>` line, so tests run what a user would paste.
 const printedCmd = (stderr, label) => {
-  const line = stderr.split(/\r?\n/).find((l) => l.startsWith(`  ${label}: `));
+  const line = splitLines(stderr).find((l) => l.startsWith(`  ${label}: `));
   assert.ok(line, `no "${label}:" line in: ${stderr}`);
   return line.slice(label.length + 4);
 };
@@ -151,9 +151,9 @@ const rebaseMergePr = (dir) => {
   git(dir, 'checkout', '-q', 'main');
   write(dir, 'other.txt', 'x\n');
   commitAll(dir, 'chore: unrelated');
-  git(dir, 'cherry-pick', ...git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1').split(/\r?\n/));
+  git(dir, 'cherry-pick', ...splitLines(git(dir, 'log', '--reverse', '--format=%H', 'feature-pr', '--not', 'main~1')));
 };
-const changed = (dir) => git(dir, 'diff', '--name-only', 'main', 'feature-pr').split(/\r?\n/).sort();
+const changed = (dir) => splitLines(git(dir, 'diff', '--name-only', 'main', 'feature-pr')).sort();
 // Rounds whose code reached the -pr tree (state, not log text).
 const replayed = (dir) => changed(dir).filter((f) => /^r\d+\.txt$/.test(f));
 
@@ -241,6 +241,15 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.equal(pendingOf(dir), git(dir, 'rev-parse', 'refs/heads/feature'), 'the pending build is the branch tip, not the tag');
     assert.equal(git(dir, 'show', 'refs/heads/feature-pr:two.txt'), 'v2', 'both rounds were built');
+  });
+
+  test('a tag named like the target branch is not read as that branch', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'tag', 'main', 'feature'); // the tag names the working branch's tip, so the target would hold all of it
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(git(dir, 'show', 'refs/heads/feature-pr:r1.txt'), 'round 1', 'the -pr branch was built on the target branch');
   });
 
   test('a tag named like the -pr branch is not read as that branch', () => {
@@ -588,7 +597,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 2, 'two.txt');
     const r = publish(dir);
     assert.equal(r.status, 0, r.stderr);
-    assert.ok(!git(dir, 'ls-tree', '-r', '--name-only', 'feature-pr').split(/\r?\n/).includes('old.txt'), 'the unproven rename round is replayed');
+    assert.ok(!splitLines(git(dir, 'ls-tree', '-r', '--name-only', 'feature-pr')).includes('old.txt'), 'the unproven rename round is replayed');
     assert.equal(markerOf(dir), '');
     assert.notEqual(pendingOf(dir), pendingBefore, 'the old pending build was dropped');
   });
@@ -709,7 +718,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     commitRound(dir, 2);
     const r = publish(dir, 'main', { branch });
     assert.equal(r.status, 0, r.stderr);
-    const cmd = r.stderr.split(/\r?\n/).map((l) => l.match(/re-anchor: (git update-ref .*)$/)).find(Boolean)[1];
+    const cmd = splitLines(r.stderr).map((l) => l.match(/re-anchor: (git update-ref .*)$/)).find(Boolean)[1];
     assert.equal(runSh(cmd, dir).status, 0, 'the printed command runs as one command');
     assert.ok(markerOf(dir) === '' && refOf(dir, `refs/gsd/pr-published/strict/main/${branch}`) !== '', 'it set the marker of that branch');
     assert.ok(!fs.existsSync(path.join(dir, 'b$c')), 'no file from the injected suffix');
@@ -927,7 +936,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     fc.assert(fc.property(fc.array(fc.stringMatching(/^[a' $;`\\()&"%/-]{1,6}$/), { minLength: 1, maxLength: 20 }), (inputs) => {
       const r = runSh(`${fn}\nwhile IFS= read -r l; do eval "printf '%s\\n' $(shq "$l")"; done < in.txt`, undefined, { 'in.txt': inputs.join('\n') + '\n' });
       assert.equal(r.status, 0, r.stderr);
-      assert.deepEqual(r.stdout.split(/\r?\n/).slice(0, inputs.length), inputs);
+      assert.deepEqual(splitLines(r.stdout).slice(0, inputs.length), inputs);
     }), { numRuns: 20 });
   });
 
@@ -1016,7 +1025,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const r = publish(dir);
     assert.notEqual(r.status, 0);
     assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
-    assert.equal(r.stderr.split(/\r?\n/).filter((l) => l.startsWith('  discard: ')).length, 1, 'exactly one discard option');
+    assert.equal(splitLines(r.stderr).filter((l) => l.startsWith('  discard: ')).length, 1, 'exactly one discard option');
     assert.doesNotMatch(r.stderr, /update-ref/, 'the build is proven merged, so no menu line forgets it');
     assert.equal(runSh(printedCmd(r.stderr, 'discard'), dir).status, 0);
     onlyRound2(publish(dir), dir);
@@ -1070,7 +1079,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.notEqual(r.status, 0);
     assert.match(r.stderr, /feature-pr exists and is not merged into main/);
     assert.deepEqual([markerOf(dir), pendingOf(dir), builtOf(dir)], before, 'a refused run changes no ref');
-    assert.equal(r.stderr.split(/\r?\n/).filter((l) => l.startsWith('  discard: ')).length, 1, 'exactly one discard option is printed');
+    assert.equal(splitLines(r.stderr).filter((l) => l.startsWith('  discard: ')).length, 1, 'exactly one discard option is printed');
     assert.equal(printedCmd(r.stderr, 'discard'), 'git branch -D feature-pr', 'the build is proven merged, so the menu must not offer to forget it');
     assert.equal(runSh(printedCmd(r.stderr, 'discard'), dir).status, 0);
     onlyRound2(publish(dir), dir);
@@ -1380,7 +1389,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     write(dir, 'u.txt', 'u\n');
     commitAll(dir, 'feat: unpublished');
-    const [c1, d1, u] = git(dir, 'log', '--reverse', '--format=%H', 'feature', '--not', 'main').split(/\r?\n/);
+    const [c1, d1, u] = splitLines(git(dir, 'log', '--reverse', '--format=%H', 'feature', '--not', 'main'));
     git(dir, 'checkout', '-q', '-B', 'tmp', 'main');
     git(dir, 'cherry-pick', u, c1, d1);
     git(dir, 'checkout', '-q', 'feature');
