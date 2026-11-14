@@ -486,7 +486,7 @@ describe('worktree cleanup after executor completes (#1496)', () => {
   const quickPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
   test('execute-phase.md includes worktree cleanup step', () => {
-    const content = fs.readFileSync(executePhasePath, 'utf8');
+    const content = fs.readFileSync(executePhasePath, 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     assert.ok(content.includes('Worktree cleanup'),
       'execute-phase should have a worktree cleanup step');
     assert.ok(content.includes('git worktree remove'),
@@ -564,8 +564,8 @@ describe('worktree merge: orchestrator file protection (#1756)', () => {
     );
   });
 
-  test('execute-phase.md cleanup-tail snippet still backs up STATE.md for custom deviations', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+  test('cleanup-tail snippet removes residual worktrees after custom merges', () => {
+    const content = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf-8');
     // The cleanup-tail snippet (for deviations from the standard wave merge path)
     // uses git worktree remove directly — it doesn't use the SDK helper.
     // This snippet doesn't need STATE.md backup because it only removes worktrees
@@ -573,7 +573,7 @@ describe('worktree merge: orchestrator file protection (#1756)', () => {
     assert.match(
       content,
       /Cleanup-tail: remove residual agent worktrees after a cross-wave-dependency deviation/,
-      'execute-phase.md must contain the cleanup-tail snippet for custom merge deviations',
+      'the cleanup-tail fragment must cover custom merge deviations',
     );
   });
 
@@ -684,7 +684,7 @@ describe('worktree sequential dispatch', () => {
 
 describe('bug #3384: worktree cleanup workflow contracts', () => {
     test('execute-phase contract requires a cleanup manifest instead of global worktree discovery', () => {
-    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+    const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     assert.match(content, /WAVE_WORKTREE_MANIFEST/);
     assert.match(content, /worktree\.cleanup-wave/);
     // #1298: the per-agent manifest write now goes through the validated
@@ -754,7 +754,7 @@ test('#3425: helper cleanup path pins orchestrator CWD to primary worktree and c
 });
 
 test('#3425: cleanup-tail snippet carries the same primary-worktree pin before removal', () => {
-  const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
+  const content = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
 
   assert.match(content, /Cleanup-tail: pin orchestrator CWD to its OWN worktree before cleanup-tail \(#3174, #630\)\./);
   // #630: cleanup-tail resolves the orchestrator root from the manifest, with first-entry fallback.
@@ -1367,21 +1367,27 @@ describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-workt
   // ── Source contract (the .md is the product) ──────────────────────────────
 
   test('dispatch persists the orchestrator root into the manifest (#630)', () => {
-    const content = readMd();
+    // The writer lives in the step file. execute-phase.md only points at it,
+    // so the host stays under the byte ceiling.
+    const { STEP_PATH } = require('./helpers/extract-manifest-creation-bash.cjs');
+    const step = fs.readFileSync(STEP_PATH, 'utf8');
     assert.match(
-      content,
+      step,
       /ORCH_ROOT=\$\(git rev-parse --show-toplevel\)/,
       'manifest init must capture the dispatch-time orchestrator root via show-toplevel',
     );
     assert.match(
-      content,
+      step,
       /orchestrator_root:\s*process\.env\.ORCH_ROOT/,
       'manifest init must write orchestrator_root into WAVE_WORKTREE_MANIFEST',
     );
+    const content = readMd();
+    assert.match(content, /executor-isolation-dispatch\.md/);
+    assert.match(content, /Durable wave manifest/);
   });
 
   test('both cleanup guards resolve PRIMARY_WT from the manifest orchestrator_root (#630)', () => {
-    const content = readMd();
+    const content = readMd() + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     const readers = content.match(
       /PRIMARY_WT=\$\(MANIFEST="\$WAVE_WORKTREE_MANIFEST" node -e '[^']*orchestrator_root[^']*'\)/g,
     );
@@ -1392,7 +1398,7 @@ describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-workt
   });
 
   test('first-entry resolution survives only as a guarded fallback, never the sole resolver (#630)', () => {
-    const content = readMd();
+    const content = readMd() + fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'), 'utf8');
     // Every remaining first-entry resolution must be preceded by the `[ -n "$PRIMARY_WT" ] ||`
     // guard, i.e. it only runs when the manifest lookup produced nothing.
     const firstEntryLines = content.match(/^.*git worktree list --porcelain \| awk '\/\^worktree \/.*$/gm) || [];
@@ -1750,3 +1756,1154 @@ describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
 });
   });
 }
+
+describe('durable wave worktree manifest contract (#4853)', () => {
+  const os = require('node:os');
+  const { cleanup, readFileNormalized } = require('./helpers.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { runHook, runGit, runNode } = require('./helpers/process-seam.cjs');
+  const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+  // Measured constant: unseenSites is 0, so these spawns go through the seam.
+  function runBashFile(scriptPath, options = {}) {
+    const result = runHook(scriptPath, [], {
+      interpreter: 'bash',
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  function runNodeFile(args, options = {}) {
+    const result = runNode(args, {
+      cwd: options.cwd,
+      env: options.env,
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+    });
+    return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  }
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  function extractCleanupTailBash() {
+    const content = readFileNormalized(path.join(__dirname, '..', 'gsd-core/workflows/execute-phase/steps/worktree-cleanup-tail.md'));
+    assert.match(readFileNormalized(EXECUTE_PHASE_PATH), /execute-phase\/steps\/worktree-cleanup-tail\.md/);
+    const marker = 'Cleanup-tail snippet';
+    const markerIdx = content.indexOf(marker);
+    if (markerIdx === -1) {
+      throw new Error(`extractCleanupTailBash: could not find "${marker}" in ${EXECUTE_PHASE_PATH}`);
+    }
+    const afterMarker = content.slice(markerIdx + marker.length);
+    const lines = splitLines(afterMarker);
+    const fence = scanFencedBlocks(lines).find(
+      (b) => b.closeLineIdx !== -1 && ['bash', 'sh'].includes((b.infoString || '').trim()),
+    );
+    if (!fence) {
+      throw new Error(`extractCleanupTailBash: could not find \`\`\`bash fence after "${marker}"`);
+    }
+    const block = lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
+    if (!block.includes('CLEANUP_FAILED')) {
+      throw new Error('extractCleanupTailBash: extracted block does not contain CLEANUP_FAILED');
+    }
+    return block;
+  }
+
+  function extractManifestCreationBash() {
+    return require('./helpers/extract-manifest-creation-bash.cjs').extractManifestCreationBash();
+  }
+
+  function runCleanupTail(root, repo, manifestPath, cleanupTailBash) {
+    const scriptPath = path.join(root, 'cleanup-tail.sh');
+    // The extracted tail calls gsd_run. The workflow defines that earlier;
+    // a standalone snippet does not.
+    fs.writeFileSync(scriptPath, `gsd_run() { node "${GSD_TOOLS}" "$@"; }\n${cleanupTailBash}\n`);
+    return runBashFile(scriptPath, { cwd: repo, env: { ...process.env, WAVE_WORKTREE_MANIFEST: manifestPath } });
+  }
+
+  test('cleanup-tail bash removes residual worktrees and cleans up manifest on success', (t) => {
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-cleanup-succ-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    const wt = path.join(root, 'agent-wt');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'worktree-agent-test1', wt], { cwd: repo });
+    assert.equal(fs.existsSync(wt), true, 'sanity: agent worktree created');
+
+    const manifestPath = path.join(repo, 'wave-1-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        orchestrator_root: repo,
+        worktrees: [{ agent_id: 'test1', worktree_path: wt, branch: 'worktree-agent-test1' }],
+      }) + '\n',
+    );
+
+    const res = runCleanupTail(root, repo, manifestPath, cleanupTailBash);
+
+    assert.equal(res.status, 0, `cleanup-tail must exit 0 on success. stderr: ${res.stderr?.toString()}`);
+    assert.equal(fs.existsSync(wt), false, 'residual worktree must be removed from disk');
+    assert.equal(
+      gitOrThrow(['branch', '--list', 'worktree-agent-test1'], { cwd: repo }).trim(),
+      '',
+      'residual branch must be deleted',
+    );
+    assert.equal(fs.existsSync(manifestPath), false, 'manifest must be deleted when all residual worktrees are cleaned');
+  });
+
+  test('cleanup-tail bash fails closed when orchestrator_root in manifest is not a registered worktree', (t) => {
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-cleanup-unreg-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    const unregisteredDir = path.join(root, 'unregistered-dir');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(unregisteredDir);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const manifestPath = path.join(repo, 'wave-1-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        orchestrator_root: unregisteredDir,
+        worktrees: [],
+      }) + '\n',
+    );
+
+    const res = runCleanupTail(root, repo, manifestPath, cleanupTailBash);
+
+    assert.notEqual(res.status, 0, 'cleanup-tail must fail closed when orchestrator_root is unregistered');
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /FATAL: orchestrator_root in manifest is not a registered worktree/, 'stderr must report unregistered orchestrator_root');
+  });
+
+  test('cleanup-tail bash preserves manifest when residual worktree removal fails (negative control)', (t) => {
+    if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) {
+      t.skip('directory permission failure simulation is POSIX-specific and bypassed when running as root');
+      return;
+    }
+
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-cleanup-fail-'));
+    const repo = path.join(root, 'repo');
+    const wt = path.join(root, 'agent-wt-fail');
+    t.after(() => {
+      try { fs.chmodSync(wt, 0o755); } catch (_) { /* restore */ }
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'worktree-agent-fail1', wt], { cwd: repo });
+
+    const manifestPath = path.join(repo, 'wave-1-manifest.json');
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        orchestrator_root: repo,
+        worktrees: [{ agent_id: 'fail1', worktree_path: wt, branch: 'worktree-agent-fail1' }],
+      }) + '\n',
+    );
+
+    // Make worktree undeletable so git worktree remove fails
+    fs.chmodSync(wt, 0o555);
+
+    const res = runCleanupTail(root, repo, manifestPath, cleanupTailBash);
+
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /Residual worktrees remain; preserving manifest at/, 'stderr must report manifest preservation');
+    assert.equal(fs.existsSync(manifestPath), true, 'manifest must be preserved on disk when cleanup fails');
+  });
+
+  test('cleanup-tail deletes the manifest when a foreign agent worktree under the same repo does not name this wave', (t) => {
+    const cleanupTailBash = extractCleanupTailBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-tail-foreign-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const foreign = path.join(repo, '.claude', 'worktrees', 'agent-quick-foreign');
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'worktree-agent-quick-foreign', foreign], { cwd: repo });
+
+    const manifestPath = path.join(repo, '.planning', 'wave-1-manifest.json');
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repo, worktrees: [] }) + '\n');
+
+    const res = runCleanupTail(root, repo, manifestPath, cleanupTailBash);
+    assert.equal(res.status, 0, `foreign agent must not preserve the manifest. stderr: ${res.stderr?.toString()}`);
+    assert.equal(fs.existsSync(manifestPath), false, 'manifest deleted when no owned agent remains');
+    assert.equal(fs.existsSync(foreign), true, 'foreign agent worktree stays');
+  });
+
+  // Harness agent worktrees are named worktree-agent-<id> and carry no wave or phase token.
+  function tailFixture(t, prefix, { detach }) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+    const base = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repo }).trim();
+
+    const agent = path.join(repo, '.claude', 'worktrees', 'agent-a1b2c3d4');
+    const branch = 'worktree-agent-a1b2c3d4';
+    gitOrThrow(detach
+      ? ['worktree', 'add', '-q', '--detach', agent]
+      : ['worktree', 'add', '-q', '-b', branch, agent], { cwd: repo });
+
+    const manifestPath = path.join(repo, '.planning', 'phases', '01-feature', 'wave-1-manifest.json');
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      orchestrator_root: repo,
+      worktrees: [{ agent_id: 'a1b2c3d4', worktree_path: agent, branch, expected_base: base }],
+    }) + '\n');
+    return { root, repo, agent, manifestPath };
+  }
+
+  test('cleanup-tail keeps a detached worktree the manifest lists, and the manifest (#4853)', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-4853-tail-detached-', { detach: true });
+    const res = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    const output = `${res.stdout || ''}${res.stderr || ''}`;
+    assert.match(output, /is detached \(no branch\) — not removed/);
+    assert.match(output, /Residual worktrees remain; preserving manifest at/);
+    assert.equal(fs.existsSync(manifestPath), true, 'a detached listed worktree may hold unmerged commits');
+    assert.equal(fs.existsSync(agent), true);
+  });
+
+  test('cleanup-tail removes a listed worktree on its branch and then the manifest (#4853)', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-4853-tail-branch-', { detach: false });
+    const res = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    assert.equal(fs.existsSync(agent), false, `the listed worktree is removed: ${res.stderr || ''}`);
+    assert.equal(fs.existsSync(manifestPath), false, 'nothing left to reconcile, so the manifest is removed');
+  });
+
+  test('execute-phase dispatch block creates manifest and blocks overwrite on pre-existing manifest', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-create-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    const phaseDir = path.join(repo, '.planning', 'phases', '01-sample');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-create.sh');
+    fs.writeFileSync(scriptPath, script);
+
+    // Initial creation: succeeds
+    const res1 = runBashFile(scriptPath, { cwd: repo });
+    assert.equal(res1.status, 0, `initial manifest creation must succeed. stderr: ${res1.stderr?.toString()}`);
+    const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
+    assert.equal(fs.existsSync(manifestPath), true, 'manifest must be created on disk');
+    const manifestContent = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert.deepEqual(manifestContent.worktrees, [], 'newly created manifest must have empty worktrees array');
+
+    // Second execution with pre-existing manifest: must block with exit non-zero
+    const res2 = runBashFile(scriptPath, { cwd: repo });
+    assert.notEqual(res2.status, 0, 'dispatch block must exit non-zero when pre-existing manifest exists');
+    const stderr2 = (res2.stderr || '').toString();
+    assert.match(stderr2, /BLOCKED: pre-existing wave manifest found at/, 'stderr must report pre-existing manifest guard');
+    assert.match(stderr2, /cleanup-wave --manifest/, 'stderr must report reconciliation advice');
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(manifestPath, 'utf8')),
+      manifestContent,
+      'pre-existing manifest content must remain completely untouched',
+    );
+  });
+
+  test('manifest creation writeFileSync flag wx fails closed if file appears right before write', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const nodeLine = creationBash.split('\n').find((l) => l.includes('node -e') && l.includes('writeFileSync'));
+    assert.ok(nodeLine, 'creation block must contain node writeFileSync invocation');
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wx-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const manifestPath = path.join(root, 'wave-1-manifest.json');
+    fs.writeFileSync(manifestPath, 'pre-existing');
+
+    // Run the exact extracted command from execute-phase.md
+    const scriptPath = path.join(root, 'test-wx.sh');
+    fs.writeFileSync(scriptPath, `ORCH_ROOT="${root}" MANIFEST="${manifestPath}" ${nodeLine}\n`);
+    const writeRes = runBashFile(scriptPath, { cwd: root });
+    assert.notEqual(writeRes.status, 0, 'write with flag wx must fail non-zero when file already exists');
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), 'pre-existing', 'file content must remain untouched');
+  });
+
+  test('dispatch refuses a manifest path that is a directory or a symlink', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-manifest-shape-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repo });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: repo });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repo });
+    fs.writeFileSync(path.join(repo, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repo });
+
+    const runFor = (phaseName, occupy) => {
+      const phaseDir = path.join(repo, '.planning', 'phases', phaseName);
+      fs.mkdirSync(phaseDir, { recursive: true });
+      const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
+      occupy(manifestPath, phaseDir);
+      // A script file, not `bash -c`: Git Bash rewrites path-like text inside
+      // a -c argument, which breaks the absolute-path case pattern.
+      const scriptPath = path.join(root, `shape-${phaseName}.sh`);
+      fs.writeFileSync(scriptPath, `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`);
+      return runBashFile(scriptPath, { cwd: repo });
+    };
+
+    const dirRes = runFor('01-directory', (manifestPath) => {
+      fs.mkdirSync(manifestPath);
+    });
+    assert.notEqual(dirRes.exitCode, 0, `a directory at the manifest path must fail. stderr: ${dirRes.stderr}`);
+    assert.match(String(dirRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
+    assert.equal(fs.statSync(path.join(repo, '.planning', 'phases', '01-directory', 'wave-1-manifest.json')).isDirectory(), true);
+
+    let symlinkBlocked = null;
+    const linkRes = runFor('02-symlink', (manifestPath, phaseDir) => {
+      const target = path.join(phaseDir, 'elsewhere.json');
+      fs.writeFileSync(target, '{"worktrees":[]}\n');
+      try {
+        fs.symlinkSync(target, manifestPath);
+      } catch (err) {
+        if (err && (err.code === 'EPERM' || err.code === 'ENOTSUP' || err.code === 'EACCES')) {
+          symlinkBlocked = err.code;
+          return;
+        }
+        throw err;
+      }
+    });
+    if (symlinkBlocked === null) {
+      assert.notEqual(linkRes.exitCode, 0, `a symlink at the manifest path must fail. stderr: ${linkRes.stderr}`);
+      assert.match(String(linkRes.stderr), /BLOCKED: pre-existing wave manifest found at/);
+      assert.equal(fs.lstatSync(path.join(repo, '.planning', 'phases', '02-symlink', 'wave-1-manifest.json')).isSymbolicLink(), true);
+    }
+  });
+
+  test('execute-phase dispatch block fails with fatal when wave number cannot be resolved', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-no-wave-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+unset CURRENT_WAVE
+unset WAVE_WORKTREE_PLANS
+export PHASE_DIR="${root}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-no-wave.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.notEqual(res.status, 0, 'must exit non-zero when wave number cannot be resolved');
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /FATAL: cannot resolve wave number before worktree dispatch/);
+  });
+
+  test('execute-phase dispatch block rejects wave 1000 (pathspec stops at 999)', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wave-1000-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+    const phaseDir = path.join(root, '.planning', 'phases', '01-sample');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const script = `
+set -e
+gsd_run() { node "${GSD_TOOLS}" "$@"; }
+export CURRENT_WAVE=1000
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-wave-1000.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.notEqual(res.status, 0);
+    assert.match((res.stderr || '').toString(), /FATAL: cannot resolve wave number before worktree dispatch/);
+    assert.equal(fs.existsSync(path.join(phaseDir, 'wave-1000-manifest.json')), false);
+  });
+
+  test('execute-phase dispatch block fails with fatal when neither PHASE_DIR nor PHASE_NUMBER is set', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-no-phase-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+unset PHASE_DIR
+unset PHASE_NUMBER
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-no-phase.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.notEqual(res.status, 0, 'must exit non-zero when neither PHASE_DIR nor PHASE_NUMBER is set');
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /FATAL: neither PHASE_DIR nor PHASE_NUMBER is set before worktree dispatch/);
+  });
+
+  test('execute-phase dispatch block resolves via PHASE_NUMBER when PHASE_DIR is unset', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-phase-num-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '01-sample');
+    fs.mkdirSync(phaseDir, { recursive: true });
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+unset PHASE_DIR
+export PHASE_NUMBER="01"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-phase-num.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.equal(res.status, 0, `dispatch block with PHASE_NUMBER must succeed: ${res.stderr?.toString()}`);
+    const expectedManifest = path.join(phaseDir, 'wave-1-manifest.json');
+    assert.ok(fs.existsSync(expectedManifest), 'manifest must be created under discovered phase dir');
+  });
+
+  test('execute-phase dispatch block fails with fatal when wave manifest is tracked in git', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-git-tracked-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '01-sample');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const manifestPath = path.join(phaseDir, 'wave-1-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
+    gitOrThrow(['add', manifestPath], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'track manifest'], { cwd: root });
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-tracked.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.notEqual(res.status, 0, 'must exit non-zero when manifest is tracked in git');
+    const stderr = (res.stderr || '').toString();
+    assert.match(stderr, /FATAL: wave manifest at .* is tracked by git/);
+  });
+
+  test('cmdCommit: implicit sweep excludes untracked wave manifest and allows normal planning commit', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-1-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phase1 = path.join(root, '.planning', 'phases', '01-sample');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan 1\n');
+    const manifest1 = path.join(phase1, 'wave-1-manifest.json');
+    fs.writeFileSync(manifest1, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
+
+    const res1 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(01): update plan 1'], { cwd: root });
+    assert.equal(res1.status, 0, `implicit commit should succeed: ${res1.stderr?.toString()}`);
+    assert.notEqual(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/01-sample/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'wave-1-manifest.json must NOT be tracked after implicit commit',
+    );
+    assert.ok(fs.existsSync(manifest1), 'wave-1-manifest.json must still exist on disk');
+  });
+
+  test('cmdCommit: explicit directory argument excludes wave manifest', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-2-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phase2 = path.join(root, '.planning', 'phases', '02-dir');
+    fs.mkdirSync(phase2, { recursive: true });
+    fs.writeFileSync(path.join(phase2, 'PLAN.md'), '# Plan 2\n');
+    const manifest2 = path.join(phase2, 'wave-1-manifest.json');
+    fs.writeFileSync(manifest2, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
+
+    const res2 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(02): update plan 2', '--files', '.planning/phases/02-dir'], { cwd: root });
+    assert.equal(res2.status, 0, `explicit dir commit should succeed: ${res2.stderr?.toString()}`);
+    assert.notEqual(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'wave-1-manifest.json must NOT be tracked after explicit directory commit',
+    );
+    assert.equal(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/PLAN.md'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'PLAN.md must be tracked after explicit directory commit',
+    );
+  });
+
+  test('cmdCommit excludes the wave manifest of a project in a repo subdirectory (#4853)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-subdir-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    // The project lives in app/, so its planning root is app/.planning, not <repo>/.planning.
+    const app = path.join(root, 'app');
+    const phase = path.join(app, '.planning', 'phases', '01-a');
+    fs.mkdirSync(phase, { recursive: true });
+    fs.writeFileSync(path.join(phase, 'PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phase, 'wave-1-manifest.json'), JSON.stringify({ orchestrator_root: app, worktrees: [] }));
+
+    const res = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(01): add plan', '--files', '.planning/'], { cwd: app });
+    assert.equal(res.status, 0, `subdirectory commit should succeed: ${res.stderr?.toString()}`);
+    assert.notEqual(
+      runGit(['ls-files', '--error-unmatch', 'app/.planning/phases/01-a/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'the wave manifest under app/.planning must not be committed',
+    );
+    assert.equal(
+      runGit(['ls-files', '--error-unmatch', 'app/.planning/phases/01-a/PLAN.md'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'the plan next to it must be committed',
+    );
+  });
+
+  test('cmdCommit: explicit file argument naming wave manifest is excluded and reported in skipped_files (#4454)', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-3-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phase2 = path.join(root, '.planning', 'phases', '02-dir');
+    fs.mkdirSync(phase2, { recursive: true });
+    fs.writeFileSync(path.join(phase2, 'STATE.md'), '# State\n');
+    const manifestPath = path.join(phase2, 'wave-1-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
+
+    const res3 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(02): update state', '--files', '.planning/phases/02-dir/STATE.md', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root });
+    assert.equal(res3.status, 0, `explicit file commit should succeed: ${res3.stderr?.toString()}`);
+    assert.notEqual(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'wave-1-manifest.json must NOT be tracked even when explicitly passed in --files',
+    );
+    const json3 = JSON.parse(res3.stdout.toString());
+    assert.deepEqual(json3.skipped_files, ['.planning/phases/02-dir/wave-1-manifest.json']);
+
+    // Sole manifest in --files produces nothing_to_commit and reports skipped_files
+    const resSole = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(02): try commit manifest only', '--files', '.planning/phases/02-dir/wave-1-manifest.json'], { cwd: root });
+    assert.equal(resSole.status, 0, `sole manifest commit should exit 0 with nothing_to_commit: ${resSole.stderr?.toString()}`);
+    const jsonSole = JSON.parse(resSole.stdout.toString());
+    assert.equal(jsonSole.committed, false);
+    assert.equal(jsonSole.reason, 'nothing_to_commit');
+    assert.deepEqual(jsonSole.skipped_files, ['.planning/phases/02-dir/wave-1-manifest.json']);
+  });
+
+  test('cmdCommit: manifest-only sweep returns nothing_to_commit instead of commit_failed', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-manifest-only-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phase = path.join(root, '.planning', 'phases', '01-sample');
+    fs.mkdirSync(phase, { recursive: true });
+    const manifestPath = path.join(phase, 'wave-1-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: root, worktrees: [] }));
+
+    const res = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(01): default sweep with only wave manifest present'], { cwd: root });
+    assert.equal(res.status, 0, `commit should exit 0: ${res.stderr?.toString()}`);
+    const json = JSON.parse(res.stdout.toString());
+    assert.equal(json.committed, false);
+    assert.equal(json.reason, 'nothing_to_commit');
+    assert.notEqual(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/01-sample/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'manifest must not be tracked',
+    );
+  });
+
+  test('cmdCommit: already-tracked manifest in git history is NOT unstaged/deleted and modifications are NOT committed', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-4-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phase3 = path.join(root, '.planning', 'phases', '03-tracked');
+    fs.mkdirSync(phase3, { recursive: true });
+    const manifest3 = path.join(phase3, 'wave-1-manifest.json');
+    fs.writeFileSync(manifest3, '{"initial":true}\n');
+    gitOrThrow(['add', '-f', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'track manifest explicitly'], { cwd: root });
+    assert.equal(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'manifest3 must initially be tracked',
+    );
+
+    // Now modify the tracked manifest and add a new file
+    fs.writeFileSync(manifest3, '{"modified":true}\n');
+    fs.writeFileSync(path.join(phase3, 'PLAN.md'), '# Plan 3\n');
+
+    // Run commit via gsd-tools
+    const res4 = runNodeFile([GSD_TOOLS, 'commit', '-m', 'docs(03): commit plan 3'], { cwd: root });
+    assert.equal(res4.status, 0, `commit should succeed: ${res4.stderr?.toString()}`);
+    // Check that manifest3 is STILL tracked in git (NOT deleted/untracked by cmdCommit)
+    assert.equal(
+      runGit(['ls-files', '--error-unmatch', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).exitCode,
+      0,
+      'manifest3 must remain tracked in git (no accidental git rm --cached)',
+    );
+    // Check that the modified working tree changes were NOT committed (git diff shows modification against HEAD)
+    const diff = runGit(['diff', 'HEAD', '--', '.planning/phases/03-tracked/wave-1-manifest.json'], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).stdout;
+    assert.match(diff, /modified/, 'working tree modification must NOT have been committed to git history');
+  });
+
+  test('cmdCommit: parity between JS isWaveManifestPath and git pathspec WAVE_MANIFEST_PATHSPEC_EXCLUDES', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-commit-5-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const commandsMod = require('../gsd-core/bin/lib/commands.cjs');
+    const { isWaveManifestPath, WAVE_MANIFEST_PATHSPEC_EXCLUDES } = commandsMod;
+
+    const manifestUnderPlanning = path.join(root, '.planning', 'wave-1-manifest.json');
+    const manifestUnderPhase = path.join(root, '.planning', 'phases', '01-foo', 'wave-2-manifest.json');
+    const manifestWave9 = path.join(root, '.planning', 'phases', '01-foo', 'wave-9-manifest.json');
+    const manifestWave10 = path.join(root, '.planning', 'phases', '01-foo', 'wave-10-manifest.json');
+    const manifestWave11 = path.join(root, '.planning', 'phases', '01-foo', 'wave-11-manifest.json');
+    const manifestWave999 = path.join(root, '.planning', 'phases', '01-foo', 'wave-999-manifest.json');
+    const manifestWave1000 = path.join(root, '.planning', 'phases', '01-foo', 'wave-1000-manifest.json');
+    const manifestWave1001 = path.join(root, '.planning', 'phases', '01-foo', 'wave-1001-manifest.json');
+    const digitPrefixedNonNumeric = path.join(root, '.planning', 'wave-1x-manifest.json');
+    const wave10xManifest = path.join(root, '.planning', 'phases', '01-foo', 'wave-10x-manifest.json');
+    const waveNotesManifest = path.join(root, '.planning', 'phases', '01-foo', 'wave-1-notes-manifest.json');
+    const wave12NotesManifest = path.join(root, '.planning', 'phases', '01-foo', 'wave-12-notes-manifest.json');
+    const nonNumericUnderPlanning = path.join(root, '.planning', 'wave-foo-manifest.json');
+    const manifestOutsidePlanning = path.join(root, 'src', 'wave-3-manifest.json');
+    const nestedPlanningManifest = path.join(root, 'sub', '.planning', 'wave-1-manifest.json');
+
+    fs.mkdirSync(path.dirname(manifestUnderPhase), { recursive: true });
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.mkdirSync(path.dirname(nestedPlanningManifest), { recursive: true });
+
+    fs.writeFileSync(manifestUnderPlanning, '{}');
+    fs.writeFileSync(manifestUnderPhase, '{}');
+    fs.writeFileSync(manifestWave9, '{}');
+    fs.writeFileSync(manifestWave10, '{}');
+    fs.writeFileSync(manifestWave11, '{}');
+    fs.writeFileSync(manifestWave999, '{}');
+    fs.writeFileSync(manifestWave1000, '{}');
+    fs.writeFileSync(manifestWave1001, '{}');
+    fs.writeFileSync(digitPrefixedNonNumeric, '{}');
+    fs.writeFileSync(wave10xManifest, '{}');
+    fs.writeFileSync(waveNotesManifest, '{}');
+    fs.writeFileSync(wave12NotesManifest, '{}');
+    fs.writeFileSync(nonNumericUnderPlanning, '{}');
+    fs.writeFileSync(manifestOutsidePlanning, '{}');
+    fs.writeFileSync(nestedPlanningManifest, '{}');
+
+    // JS matcher checks
+    assert.equal(isWaveManifestPath(manifestUnderPlanning, root), true);
+    assert.equal(isWaveManifestPath(manifestUnderPhase, root), true);
+    assert.equal(isWaveManifestPath(manifestWave9, root), true);
+    assert.equal(isWaveManifestPath(manifestWave10, root), true);
+    assert.equal(isWaveManifestPath(manifestWave11, root), true);
+    assert.equal(isWaveManifestPath(manifestWave999, root), true, 'wave 999 is the last excluded width');
+    assert.equal(isWaveManifestPath(manifestWave1000, root), false, 'wave 1000 is outside the 1–3 digit pathspec');
+    assert.equal(isWaveManifestPath(manifestWave1001, root), false, 'wave 1001 is outside the 1–3 digit pathspec');
+    assert.equal(isWaveManifestPath(digitPrefixedNonNumeric, root), false, 'wave-1x is not a valid numeric wave manifest');
+    assert.equal(isWaveManifestPath(wave10xManifest, root), false, 'wave-10x is not a valid numeric wave manifest');
+    assert.equal(isWaveManifestPath(waveNotesManifest, root), false, 'wave-1-notes is a user file, not a wave manifest');
+    assert.equal(isWaveManifestPath(wave12NotesManifest, root), false, 'wave-12-notes is a user file, not a wave manifest');
+    assert.equal(isWaveManifestPath(nonNumericUnderPlanning, root), false);
+    assert.equal(isWaveManifestPath(manifestOutsidePlanning, root), false);
+    assert.equal(isWaveManifestPath(nestedPlanningManifest, root), false);
+
+    // Git pathspec exclude check: git ls-files with WAVE_MANIFEST_PATHSPEC_EXCLUDES should exclude wave manifests
+    const lsFiles = runGit(['ls-files', '--others', '--', ...WAVE_MANIFEST_PATHSPEC_EXCLUDES], { cwd: root, timeoutMs: HOOK_FANOUT_TIMEOUT_MS }).stdout.split('\n').filter(Boolean);
+
+    assert.ok(!lsFiles.includes('.planning/wave-1-manifest.json'), 'git pathspec must exclude .planning/wave-1-manifest.json');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-2-manifest.json'), 'git pathspec must exclude .planning/phases/01-foo/wave-2-manifest.json');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-9-manifest.json'), 'git pathspec must exclude wave-9');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-10-manifest.json'), 'git pathspec must exclude wave-10');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-11-manifest.json'), 'git pathspec must exclude wave-11');
+    assert.ok(!lsFiles.includes('.planning/phases/01-foo/wave-999-manifest.json'), 'git pathspec must exclude wave-999');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-1000-manifest.json'), 'git pathspec must NOT exclude wave-1000');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-1001-manifest.json'), 'git pathspec must NOT exclude wave-1001');
+    assert.ok(lsFiles.includes('.planning/wave-foo-manifest.json'), 'git pathspec must NOT exclude non-numeric name');
+    assert.ok(lsFiles.includes('.planning/wave-1x-manifest.json'), 'git pathspec must NOT exclude non-positive-integer wave-1x');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-10x-manifest.json'), 'git pathspec must NOT exclude non-positive-integer wave-10x');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-1-notes-manifest.json'), 'git pathspec must NOT exclude wave-1-notes');
+    assert.ok(lsFiles.includes('.planning/phases/01-foo/wave-12-notes-manifest.json'), 'git pathspec must NOT exclude wave-12-notes');
+    assert.ok(lsFiles.includes('src/wave-3-manifest.json'), 'git pathspec must NOT exclude file outside .planning');
+    assert.ok(lsFiles.includes('sub/.planning/wave-1-manifest.json'), 'git pathspec must NOT exclude nested .planning outside repo root');
+
+    // Parity with execute-phase.md post-wave hook stash pathspec
+    const executePhaseContent = readFileNormalized(EXECUTE_PHASE_PATH);
+    for (const pattern of WAVE_MANIFEST_PATHSPEC_EXCLUDES) {
+      assert.ok(executePhaseContent.includes(`"${pattern}"`), `execute-phase.md stash push must include ${pattern}`); // allow-test-rule: source-text-is-the-product
+    }
+  });
+
+  test('both dispatch paths name the one creation block in executor-isolation-dispatch.md', () => {
+    // The markdown is the runtime-loaded instruction. Keeping a second copy in
+    // execute-phase.md pushed that file over the ADR-857 ceiling, and the
+    // workflow-backend-dispatch copy drifted (any-width wave vs 1–999). Both
+    // callers point at the step file; this test executes that single block.
+    const { STEP_PATH } = require('./helpers/extract-manifest-creation-bash.cjs');
+    const creationBash = extractManifestCreationBash();
+    assert.match(creationBash, /WAVE_WORKTREE_MANIFEST/);
+    assert.match(creationBash, /\[1-9\]\[0-9\]\{0,2\}/);
+    assert.ok(readFileNormalized(STEP_PATH).includes(creationBash.slice(0, 80)));
+    const executePhase = readFileNormalized(EXECUTE_PHASE_PATH);
+    const dispatchDoc = readFileNormalized(path.join(
+      __dirname, '..', 'capabilities', 'claude-orchestration', 'docs', 'workflow-backend-dispatch.md',
+    ));
+    for (const doc of [executePhase, dispatchDoc]) {
+      assert.match(doc, /Durable wave manifest/);
+      assert.match(doc, /executor-isolation-dispatch\.md/);
+    }
+    assert.ok(!executePhase.includes('STASH_OUT'), 'the post-wave stash result is unused');
+    assert.match(executePhase, /_WT_GREP_FLAGS="-qFx"/);
+    assert.match(executePhase, /process\.platform==='win32'/);
+    assert.ok(!executePhase.includes('grep -qiFx'), 'case-folding grep is selected only on win32');
+  });
+
+  test('execute-phase dispatch block resolves wave from plan index when CURRENT_WAVE is unset', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wave-fallback-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '02-analytics');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    // Plan 02-01 completed (has summary) in wave 1; Plan 02-02 incomplete in wave 2 (depends on 02-01)
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 02-01\n---\n# Plan 02-02\n');
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+unset CURRENT_WAVE
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-dispatch.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.equal(res.status, 0, `dispatch block should resolve wave and create manifest: ${res.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDir, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
+    assert.ok(!fs.existsSync(path.join(phaseDir, 'wave-1-manifest.json')), 'wave-1-manifest.json must NOT be created');
+  });
+
+  test('execute-phase dispatch block resolves wave in filtered or gaps-only runs when earlier waves are completed', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-gaps-fallback-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '02-analytics');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    // Plan 02-01 and 02-02 completed; gap plan 02-03 in wave 3 is incomplete
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 02-01\n---\n# Plan 02-02\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-SUMMARY.md'), '# Summary 02-02\n');
+    fs.writeFileSync(path.join(phaseDir, '02-03-PLAN.md'), '---\nwave: 3\ngap_closure: true\ndepends_on:\n  - 02-02\n---\n# Plan 02-03\n');
+
+    const script = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+unset CURRENT_WAVE
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptPath = path.join(root, 'test-dispatch-gaps.sh');
+    fs.writeFileSync(scriptPath, script);
+    const res = runBashFile(scriptPath, { cwd: root });
+    assert.equal(res.status, 0, `dispatch block should resolve wave 3 for gap plan: ${res.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDir, 'wave-3-manifest.json')), 'wave-3-manifest.json must be created');
+  });
+
+  test('execute-phase dispatch block succeeds when CURRENT_WAVE matches fallback wave', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wave-agree-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '02-analytics');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 02-01\n---\n# Plan 02-02\n');
+
+    const scriptAgree = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=2
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptAgreePath = path.join(root, 'test-agree.sh');
+    fs.writeFileSync(scriptAgreePath, scriptAgree);
+    const resAgree = runBashFile(scriptAgreePath, { cwd: root });
+    assert.equal(resAgree.status, 0, `matching CURRENT_WAVE must succeed: ${resAgree.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDir, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
+  });
+
+  test('execute-phase dispatch block fails closed when CURRENT_WAVE disagrees with fallback wave', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-wave-disagree-'));
+    t.after(() => {
+      try { cleanup(root); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: root });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: root });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: root });
+    fs.writeFileSync(path.join(root, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: root });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: root });
+
+    const phaseDir = path.join(root, '.planning', 'phases', '02-analytics');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary 02-01\n');
+    fs.writeFileSync(path.join(phaseDir, '02-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 02-01\n---\n# Plan 02-02\n');
+
+    const scriptDisagree = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=1
+export PHASE_DIR="${phaseDir}"
+${creationBash}
+`;
+    const scriptDisagreePath = path.join(root, 'test-disagree.sh');
+    fs.writeFileSync(scriptDisagreePath, scriptDisagree);
+    const resDisagree = runBashFile(scriptDisagreePath, { cwd: root });
+    assert.notEqual(resDisagree.status, 0, 'disagreeing CURRENT_WAVE must fail with non-zero exit');
+    assert.match(
+      resDisagree.stderr?.toString() || '',
+      /FATAL: CURRENT_WAVE \(1\) disagrees with phase plan wave \(2\)/,
+      'stderr must report wave disagreement',
+    );
+  });
+
+  test('execute-phase dispatch block succeeds on CURRENT_WAVE=2 when earlier wave-1 plan is incomplete', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const rootIncomplete = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-earlier-inc-'));
+    t.after(() => {
+      try { cleanup(rootIncomplete); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: rootIncomplete });
+    fs.writeFileSync(path.join(rootIncomplete, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: rootIncomplete });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: rootIncomplete });
+
+    const phaseDirInc = path.join(rootIncomplete, '.planning', 'phases', '03-incomplete');
+    fs.mkdirSync(phaseDirInc, { recursive: true });
+    fs.writeFileSync(path.join(phaseDirInc, '03-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 03-01\n');
+    fs.writeFileSync(path.join(phaseDirInc, '03-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 03-01\n---\n# Plan 03-02\n');
+
+    const scriptWithoutPlans = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=2
+export PHASE_DIR="${phaseDirInc}"
+unset WAVE_WORKTREE_PLANS
+${creationBash}
+`;
+    const scriptWithoutPlansPath = path.join(rootIncomplete, 'test-without-plans.sh');
+    fs.writeFileSync(scriptWithoutPlansPath, scriptWithoutPlans);
+    const resWithoutPlans = runBashFile(scriptWithoutPlansPath, { cwd: rootIncomplete });
+    assert.equal(resWithoutPlans.status, 0, `CURRENT_WAVE=2 succeeds directly on the orchestrator loop counter: ${resWithoutPlans.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDirInc, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
+  });
+
+  test('execute-phase dispatch block ignores stale WAVE_WORKTREE_PLANS from earlier wave', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const rootIncomplete = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-stale-acc-'));
+    t.after(() => {
+      try { cleanup(rootIncomplete); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: rootIncomplete });
+    fs.writeFileSync(path.join(rootIncomplete, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: rootIncomplete });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: rootIncomplete });
+
+    const phaseDirInc = path.join(rootIncomplete, '.planning', 'phases', '03-incomplete');
+    fs.mkdirSync(phaseDirInc, { recursive: true });
+    fs.writeFileSync(path.join(phaseDirInc, '03-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 03-01\n');
+    fs.writeFileSync(path.join(phaseDirInc, '03-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 03-01\n---\n# Plan 03-02\n');
+
+    const scriptStaleAcc = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=2
+export PHASE_DIR="${phaseDirInc}"
+export WAVE_WORKTREE_PLANS="03-01"
+${creationBash}
+`;
+    const scriptStaleAccPath = path.join(rootIncomplete, 'test-stale-acc.sh');
+    fs.writeFileSync(scriptStaleAccPath, scriptStaleAcc);
+    const resStaleAcc = runBashFile(scriptStaleAccPath, { cwd: rootIncomplete });
+    assert.equal(resStaleAcc.status, 0, `stale WAVE_WORKTREE_PLANS="03-01" does not derail CURRENT_WAVE=2: ${resStaleAcc.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDirInc, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
+  });
+
+  test('execute-phase dispatch block handles comma-separated WAVE_WORKTREE_PLANS without errors', (t) => {
+    const creationBash = extractManifestCreationBash();
+    const rootIncomplete = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-comma-acc-'));
+    t.after(() => {
+      try { cleanup(rootIncomplete); } catch (_) { /* best-effort */ }
+    });
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'user.name', 'test'], { cwd: rootIncomplete });
+    gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: rootIncomplete });
+    fs.writeFileSync(path.join(rootIncomplete, 'init.txt'), 'init\n');
+    gitOrThrow(['add', 'init.txt'], { cwd: rootIncomplete });
+    gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: rootIncomplete });
+
+    const phaseDirInc = path.join(rootIncomplete, '.planning', 'phases', '03-incomplete');
+    fs.mkdirSync(phaseDirInc, { recursive: true });
+    fs.writeFileSync(path.join(phaseDirInc, '03-01-PLAN.md'), '---\nwave: 1\n---\n# Plan 03-01\n');
+    fs.writeFileSync(path.join(phaseDirInc, '03-02-PLAN.md'), '---\nwave: 2\ndepends_on:\n  - 03-01\n---\n# Plan 03-02\n');
+
+    const scriptCommaAcc = `
+set -e
+gsd_run() {
+  node "${GSD_TOOLS}" "$@"
+}
+export CURRENT_WAVE=2
+export PHASE_DIR="${phaseDirInc}"
+export WAVE_WORKTREE_PLANS="03-01,03-02"
+${creationBash}
+`;
+    const scriptCommaAccPath = path.join(rootIncomplete, 'test-comma-acc.sh');
+    fs.writeFileSync(scriptCommaAccPath, scriptCommaAcc);
+    const resCommaAcc = runBashFile(scriptCommaAccPath, { cwd: rootIncomplete });
+    assert.equal(resCommaAcc.status, 0, `comma-separated WAVE_WORKTREE_PLANS="03-01,03-02" does not derail CURRENT_WAVE=2: ${resCommaAcc.stderr?.toString()}`);
+    assert.ok(fs.existsSync(path.join(phaseDirInc, 'wave-2-manifest.json')), 'wave-2-manifest.json must be created');
+  });
+});

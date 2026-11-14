@@ -189,18 +189,14 @@ manifest-scoped merge chain inline dispatch uses, before steps 4–5.8, which th
 unchanged:
 
 1. **Create the manifest BEFORE invoking the tool** (this is step 3's creation block,
-   which this path skips). When ANY plan in the wave has `use_worktree` not `false`:
-
-   ```bash
-   if [ -z "${WAVE_WORKTREE_MANIFEST:-}" ]; then
-     M=$(mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX") && mv "$M" "$M.json" && WAVE_WORKTREE_MANIFEST="$M.json" || exit 1  # XXXXXX must be path-final on BSD/macOS (#1520)
-     # Persist the dispatch-time orchestrator worktree root so wave-cleanup pins back
-     # to the orchestrator's OWN worktree (#630), exactly as inline dispatch does.
-     ORCH_ROOT=$(git rev-parse --show-toplevel)
-     ORCH_ROOT="$ORCH_ROOT" MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e 'const fs=require("fs");fs.writeFileSync(process.env.MANIFEST,JSON.stringify({orchestrator_root:process.env.ORCH_ROOT||null,worktrees:[]})+"\n")'
-     export WAVE_WORKTREE_MANIFEST
-   fi
-   ```
+   which this path skips). When ANY plan in the wave has `use_worktree` not `false`,
+   read and execute the bash block under `## Durable wave manifest` in
+   `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`. That
+   block is the only copy of the creation script (wave `N` in `1..999`, exclusive
+   `wx` create, tracked and pre-existing manifests refused, `orchestrator_root`
+   pinned at dispatch time, #4853 / #630). Inline dispatch in `execute-phase.md`
+   points at the same block, so the two paths cannot drift and the host workflow
+   stays under its byte ceiling.
 
 2. **Invoke the Workflow tool with the emitted script and
    `resumeFromRunId: summary.resumeRunId`.** The script top-level `return`s one entry
