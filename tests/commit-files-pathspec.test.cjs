@@ -21,6 +21,7 @@ const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
@@ -3228,9 +3229,9 @@ projection.execGit = (args, opts) => {
 };
 cmdCommit(${JSON.stringify(cwd)}, 'docs: probe', ${JSON.stringify(files)}, false, false, false);
 `;
-    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
-    if (run.status !== 0 && !run.stdout) {
-      throw new Error(`probe crashed: ${run.stderr}`);
+    const run = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
+    if (run.exitCode !== 0 && !run.stdout) {
+      throw new Error(`probe crashed: ${run.summary}\n${run.stderr}`);
     }
     return { result: JSON.parse(run.stdout) };
   }
@@ -3287,7 +3288,8 @@ projection.execGit = (args, opts) => {
 };
 cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);
 `;
-    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
+    const run = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(run.outcome, OUTCOME.EXITED, `probe did not exit: ${run.summary}`);
     const result = JSON.parse(run.stdout);
     assert.equal(result.reason, 'commit_timeout', 'the timeout gate must win over the nothing-to-commit text in partial output');
     assert.equal(result.timed_out, true);
@@ -3308,7 +3310,8 @@ projection.execGit = (args, opts) => {
 };
 cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);
 `;
-    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
+    const run = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(run.outcome, OUTCOME.EXITED, `probe did not exit: ${run.summary}`);
     const result = JSON.parse(run.stdout);
     assert.equal(result.committed, false);
     assert.equal(result.reason, 'commit_failed');

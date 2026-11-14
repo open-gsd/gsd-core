@@ -17,7 +17,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const fc = require('fast-check');
-const { collectListFlagValues, COMMIT_LIST_FLAGS } = require('../gsd-core/bin/gsd-tools.cjs');
+const { parseNamedArgs } = require('../gsd-core/bin/lib/command-arg-projection.cjs');
+const { specFor } = require('../gsd-core/bin/lib/cli-surface.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -1245,6 +1246,13 @@ describe('commit --files-removed: index states absent by design are never remova
 // this pins the invariant they are instances of, over interleavings nobody
 // enumerated.
 describe('commit --files/--files-removed: the two-list parser upholds its partition invariant (#4208 review)', () => {
+  // The parser is the flag-declaration seam's `listFlags` kind (#6087); `commit` declares its two
+  // list flags in the CLI surface registry. The property feeds raw argv, so the boundary walk is off.
+  const COMMIT_LIST_FLAGS = new Set(specFor('commit').listFlags.map(f => `--${f}`));
+  const collectListFlagValues = (args, flag) => {
+    const parsed = parseNamedArgs(args, { positionals: 'rest', listFlags: specFor('commit').listFlags });
+    return parsed.data[flag.slice(2)];
+  };
   const LIST = [...COMMIT_LIST_FLAGS];
   // The alphabet a real invocation draws from: positionals, both list flags,
   // and the boolean flags that may sit inside a run without ending it.

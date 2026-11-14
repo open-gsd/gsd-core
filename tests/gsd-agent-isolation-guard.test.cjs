@@ -1719,6 +1719,19 @@ describe('#4222 — the #683 base-check degrade is re-derived by the resolver, s
     }), dir, { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, '.claude') });
     assert.equal(flagless.status, 2, `a phase-scoped none would let every plan of the phase spawn flag-less: stdout=${flagless.stdout} stderr=${flagless.stderr}`);
   });
+
+  // The flag-declaration seam reads a bare value flag as absent unless the verb's spec lists it in
+  // bareEmptyFlags, so this row pins that `plan` stays a presence test for the base check.
+  test('#4222: a BARE trailing --plan (no value token at all) is still a plan-scoped write', (t) => {
+    const { dir } = projectWithOrigin(t, 'gsd-4222-planbare-');
+    diverge(dir);
+
+    const r = runGsdTools(['query', 'dispatch-isolation', '--raw', '--phase', '1', '--plan'], dir, env(dir));
+    assert.equal(r.success, true, r.error);
+    const sentinel = readSentinelRaw(dir);
+    assert.equal(sentinel.isolation, 'harness-worktree', 'a bare --plan is present, so the base check is not re-derived');
+    assert.equal(sentinel.plan, null, 'a bare --plan names no plan in the record');
+  });
 });
 
 describe('#3045 MAJOR — --harness-flag can now accept a bare CLI-flag value (Cursor real registry value + generalized parsing)', () => {
