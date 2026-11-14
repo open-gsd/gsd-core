@@ -2526,6 +2526,54 @@ describe('gsd-secret-read-guard: heredoc inside a command substitution (#5513)',
   });
 });
 
+describe('gsd-secret-read-guard: $\'…\' words through the git rescans (#5492, #5255)', () => {
+  // String.raw keeps every backslash as the shell receives it. Each value the
+  // git scan rescans (an alias body, a -c or environment config value, an ssh
+  // option, a sshpass or xargs sub-command) is the word's decoded value, and a
+  // body is read each way again when it is rescanned: `.e\x6ev` is `.env` only
+  // once decoded. `via` names the git steps, outermost first.
+  const R = String.raw;
+  const rows = [
+    [R`git -c alias.x=$'!cat .env' x`, ['alias x']],
+    [R`GIT_CONFIG_PARAMETERS=$'\'alias.x\'=\'!cat .env\'' git x`, ['alias x']],
+    [R`git -c alias.x=$'!cat .e\x6ev' x`, ['alias x']],
+    [R`GIT_CONFIG_PARAMETERS=$'\'alias.x\'=\'!cat .e\x6ev\'' git x`, ['alias x']],
+    // The span is inside the alias body, so the alias rescan decodes it.
+    [R`git -c alias.x='!cat $'"'"'.e\x6ev'"'"'' x`, ['alias x']],
+    [R`V=$'!cat .e\x6ev' git --config-env=alias.x=V x`, ['alias x']],
+    [R`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0=$'!cat .e\x6ev' git x`, ['alias x']],
+    [R`git -c core.sshCommand=$'cat .e\x6ev #' fetch`, ['-c core.sshCommand']],
+    [R`ssh -o ProxyCommand=$'cat .e\x6ev' host`, ['ssh -o ProxyCommand']],
+    [R`sshpass -p x bash -c $'cat .e\x6ev'`, undefined],
+    [R`echo x | xargs git -c alias.x=$'!cat .e\x6ev' x`, ['alias x']],
+  ];
+  for (const [cmd, via] of rows) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      const out = assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+      assert.deepEqual(out.via, via, `${cmd}: via`);
+    });
+  }
+
+  // A word with no value in a rescanned body is held, not dropped, so it
+  // carries no `via`: the steps it came through unwind with nothing to add.
+  test('an unterminated $\' in an alias body is denied as ansi-c-unterminated', () => {
+    const cmd = R`git -c alias.x=$'!echo $\'abc' x`;
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash', path: R`$'abc` });
+  });
+  // A plain alias is rescanned at the depth of the git that ran it, 0 here; a
+  // rescan that started a new command would drop the word held before it.
+  test('a plain alias at depth 0 keeps the unreadable word held before it', () => {
+    const cmd = R`bash -c "echo \$'abc"; git -c alias.s=status s`;
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash', path: R`$'abc` });
+  });
+  // Every reading spends the same work budget, and an overrun inside one is
+  // the block, with the alias it was expanding.
+  test('an alias past the work budget in a command the readings scan is denied as alias-too-complex', () => {
+    const cmd = `echo $'x'; git -c alias.z="${'z '.repeat(300000)}" z`;
+    assertBlocked(runHook(bash(cmd)), 'a 600 KB alias body after a $\'…\' word', { code: 'alias-too-complex', tool: 'Bash', path: 'alias.z' });
+  });
+});
+
 describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
   // String.raw keeps every backslash exactly as the shell would receive it.
   const R = String.raw;
