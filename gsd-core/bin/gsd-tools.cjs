@@ -373,7 +373,7 @@ const smartEntryMod = require('./lib/smart-entry.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgsOrExit, isFlagToken } = require('./lib/command-arg-projection.cjs');
-const { specFor, GLOBAL_FLAGS } = require('./lib/cli-surface.cjs');
+const { specFor, GLOBAL_FLAGS, CLI_SURFACE } = require('./lib/cli-surface.cjs');
 const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
 const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
 
@@ -748,6 +748,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigEnsureSection({ args, cwd, raw }) {
+    parseNamedArgsOrExit(args, specFor('config-ensure-section'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-ensure-section',
       registryArgs: args.slice(1),
@@ -777,6 +778,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   }
 
   function routeConfigSetModelProfile({ args, cwd, raw }) {
+    // The seam starts after the owned profile slot; refuse flag-shaped profiles too.
+    if (typeof args[1] === 'string' && args[1].startsWith('-')) {
+      error(`Unknown flag for ${args[0]}: ${args[1]}`, ERROR_REASON.USAGE);
+    }
+    parseNamedArgsOrExit(args, specFor('config-set-model-profile'), error);
     const handled = _dispatchNonFamily({
       registryCommand: 'config-set-model-profile',
       registryArgs: args.slice(1),
@@ -4993,6 +4999,7 @@ function runWithTimeout(argv) {
 // independently hand-maintained sites and nothing previously caught them
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
+  'The config-ensure-section, config-set-model-profile and migrate-config commands reject --pick and --default.\n' +
   'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, project-context, ' +
   'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
@@ -5294,6 +5301,21 @@ async function main() {
   const raw = rawIndex !== -1;
   if (rawIndex !== -1) args.splice(rawIndex, 1);
 
+  // Closed mutation verbs do not consume output selectors or config-get defaults.
+  // Refuse them before global value extraction can hide an unsupported flag.
+  const closedConfigMutations = Object.keys(CLI_SURFACE).filter((verb) => CLI_SURFACE[verb].rejectedGlobalFlags);
+  // eslint-disable-next-line local/named-args-spec-from-registry -- main preserves global flags declared by GLOBAL_FLAGS before extraction; rejection policy comes from CLI_SURFACE
+  const originalGlobalValueFlags = GLOBAL_FLAGS.valueFlags.filter((flag) => args.includes(`--${flag}`));
+  function rejectConfigMutationValueFlags(verb) {
+    const rejected = CLI_SURFACE[verb]?.rejectedGlobalFlags ?? [];
+    const flag = rejected.find((name) => originalGlobalValueFlags.includes(name));
+    if (flag) error(`Unknown flag for ${verb}: --${flag}`, ERROR_REASON.USAGE);
+  }
+  const restrictedGlobalNames = new Set(Object.values(CLI_SURFACE).flatMap((spec) => spec.rejectedGlobalFlags ?? []));
+  let prefixEnd = 0;
+  while (typeof args[prefixEnd] === 'string' && isFlagToken(args[prefixEnd]) && restrictedGlobalNames.has(args[prefixEnd].slice(2))) prefixEnd += 2;
+  rejectConfigMutationValueFlags(args[prefixEnd] === 'query' ? args[prefixEnd + 1] : args[prefixEnd]);
+
   // --pick <name>: extract a single field from JSON output (replaces jq dependency).
   // Supports dot-notation (e.g., --pick workflow.research) and bracket notation
   // for arrays (e.g., --pick directories[-1]).
@@ -5344,6 +5366,16 @@ async function main() {
       command = head;
       args = [head, rest, ...args.slice(1)];
     }
+  }
+
+  // A global value flag may precede the verb. Its original presence survives
+  // extraction so a dash-led value cannot be swallowed before route validation.
+  rejectConfigMutationValueFlags(command);
+  if (closedConfigMutations.includes(command)) {
+    // Idempotent global --raw is consumed before the declared migrate-config
+    // router, just as it is for the other two config routers (#5286).
+    // eslint-disable-next-line local/named-args-spec-from-registry -- global raw is declared in GLOBAL_FLAGS and normalized in main, not a verb-local flag
+    args = args.filter((arg) => arg !== '--raw');
   }
 
   if (!command) {
