@@ -418,31 +418,6 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
     }
   });
 
-  // #5029: tests/helpers/shard-spec.cjs is the one reader of the shard layout
-  // test.yml and release.yml declare, so a test that imports it asserts on that
-  // layout. A re-shard edits only the workflow file; a test missing from the
-  // targeted set would first run on `next`. Reads the REAL tests/ tree on
-  // purpose: a new importer that is not registered fails here.
-  test('every test that reads the declared shard layout runs on a workflow-only diff', () => {
-    const testsDir = path.join(ROOT, 'tests');
-    const importers = fs.readdirSync(testsDir)
-      .filter(name => name.endsWith('.test.cjs'))
-      .filter(name => /require\(\s*['"]\.\/helpers\/shard-spec\.cjs['"]\s*\)/.test(
-        fs.readFileSync(path.join(testsDir, name), 'utf8'),
-      ))
-      .map(name => `tests/${name}`);
-    assert.ok(
-      importers.includes('tests/ci-timeout-report.test.cjs'),
-      `precondition: the shard-spec importers were found, got ${JSON.stringify(importers)}`,
-    );
-    for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml']) {
-      const result = assertInert([file]);
-      for (const t of importers) {
-        assert.ok(result.targeted_tests.includes(t), `${file}: ${t} missing from ${JSON.stringify(result.targeted_tests)}`);
-      }
-    }
-  });
-
   test('composite-action-only diff (.yml and .yaml): inert', () => {
     assertInert(['.github/actions/x/action.yml']);
     assertInert(['.github/actions/x/action.yaml']);

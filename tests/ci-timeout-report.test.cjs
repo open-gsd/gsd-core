@@ -988,7 +988,7 @@ test('the live gap limit holds at its boundary on the declared shard layout (#50
     `fixture precondition: every baseline must admit ${base} and the slowest must admit ${base + limit + 1}`,
   );
 
-  const runsWithGap = (gap) => constantRuns(10, keys.map((_, i) => (i === slowIdx ? base + gap : base)));
+  const runsWithGap = (gap) => constantRuns(SHARD_BALANCE.minRuns, keys.map((_, i) => (i === slowIdx ? base + gap : base)));
   const underLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit - 1), SHARD_BALANCE), SHARD_BALANCE);
   assert.equal(underLimit.status, 'ok');
   assert.equal(underLimit.gapMs, limit - 1);
