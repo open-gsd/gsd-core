@@ -1251,7 +1251,7 @@ describe('feat-3210: workflow and config contracts', () => {
 }
 
 describe('config-set: hooks.commit_types end-to-end (#4443)', () => {
-  const { spawnSync } = require('node:child_process');
+  const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
 
   test('config-set hooks.commit_types accepts a JSON array and does not report Unknown config key', (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4443-'));
@@ -1260,13 +1260,12 @@ describe('config-set: hooks.commit_types end-to-end (#4443)', () => {
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}\n');
 
     const gsdTools = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-    const result = spawnSync(
-      process.execPath,
+    const result = runNode(
       [gsdTools, 'config-set', 'hooks.commit_types', '["enhance"]'],
-      { cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+      { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS },
     );
 
-    assert.equal(result.status, 0, `config-set failed: ${result.stderr || result.stdout}`);
+    assertSeamExit(assert, result, 0, `config-set failed: ${result.stdout}`);
     assert.doesNotMatch(result.stdout + result.stderr, /Unknown config key/);
 
     const written = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'));
@@ -1280,13 +1279,12 @@ describe('config-set: hooks.commit_types end-to-end (#4443)', () => {
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}\n');
 
     const gsdTools = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-    const result = spawnSync(
-      process.execPath,
+    const result = runNode(
       [gsdTools, 'config-set', 'hooks.community', 'true'],
-      { cwd: dir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
+      { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS },
     );
 
-    assert.equal(result.status, 0, `config-set failed: ${result.stderr || result.stdout}`);
+    assertSeamExit(assert, result, 0, `config-set failed: ${result.stdout}`);
     assert.doesNotMatch(result.stdout + result.stderr, /Unknown config key/);
 
     const written = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf8'));

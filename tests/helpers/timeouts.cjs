@@ -53,8 +53,8 @@ const { DEFAULT_TIMEOUT_MS: SEAM_FALLBACK_TIMEOUT_MS } = require('./process-seam
  * The observed range is in the evidence entry below.
  *
  * Evidence (TIMEOUT_EVIDENCE.PROBE_TIMEOUT_MS): worst observed 7424ms on darwin (p50 111ms, p99 3411ms of recorded spawns),
- * margin 2.02x; CI seam spawn-stall records, 188 runs since 2026-10-25.
- * 125 call sites spawn outside the seam and are not covered; tracked in #6058 #6059.
+ * margin 2.02x; CI seam spawn-stall records, 196 runs since 2026-10-28 (including the #6134 PR run).
+ * 62 call sites spawn outside the seam and are not covered; tracked in #6059.
  */
 const PROBE_TIMEOUT_MS = 15000;
 
@@ -414,6 +414,7 @@ const HTTP_REACHABLE_PROBE_TIMEOUT_FIXTURE_MS = 2000;
 //   node scripts/timeout-evidence-from-ci.cjs --artifacts <dir> --format md
 const CI_SOURCE = 'seam:spawn-stall records (every seam spawn that ran >= 2000ms or was killed) in CI test-timings-<os>-job<N> artifacts, credited to a constant by call site: the record\'s test file (or a helper it requires) has a seam call site of that constant, its timeoutMs equals the value, and its command/argv match that site; records matching sites of two constants are credited to neither';
 const CI_WINDOW = 'test.yml runs (push and merge_group events, status success) created after 2026-10-25: 188 runs contained test-timings data (of 228 run directories downloaded), 1181 lane artifacts (win32 564, darwin 188, linux 429), spawn startedAt 2026-10-25T22:57:17.847Z to 2026-11-08T21:29:42.912Z';
+const PROBE_CI_WINDOW = 'test.yml runs within the 14-day test-timings artifact retention on 2026-11-11 (push and merge_group events, status success, created 2026-10-28 or later) plus the PR #6134 pull_request run 43022597062: 196 runs contained test-timings data, 1347 lane artifacts (win32 585, darwin 195, linux 567), spawn startedAt 2026-10-28T14:26:57.755Z to 2026-11-11T13:07:33.584Z';
 const HARNESS_SOURCE = 'local harness through the process seam, 50 spawns per entry (a script and invocation variant, or a git subcommand): SCAN_USAGE_ERROR 8 entries, MALFORMED_INPUT_HOOK 3 entries, REAL_REPO_GIT 7 entries; these call sites were moved onto the seam in this change, so CI lanes in the window ran their previous form and are not counted';
 const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.2; win32 not measured';
 
@@ -423,7 +424,7 @@ const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.
  * Rules: TESTING-STANDARDS.md "Every new or changed timeout constant states its evidence".
  */
 const TIMEOUT_EVIDENCE = Object.freeze({
-  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 9, darwin: 490, linux: 311 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 125, unseenSitesTrackedBy: '#6058 #6059', source: CI_SOURCE, window: CI_WINDOW },
+  PROBE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 7424, worstPlatform: 'darwin', p50Ms: 111, p99Ms: 3411, samples: { win32: 12, darwin: 516, linux: 407 }, lanes: { win32: 585, darwin: 195, linux: 567 }, unmeasuredPlatforms: [], unseenSites: 62, unseenSitesTrackedBy: '#6059', source: CI_SOURCE, window: PROBE_CI_WINDOW },
   HOOK_FANOUT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 23514, worstPlatform: 'win32', p50Ms: 2326, p99Ms: 7563, samples: { win32: 266, darwin: 978, linux: 173 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   GIT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 4669, worstPlatform: 'win32', p50Ms: 2344, p99Ms: 4669, samples: { win32: 12 }, lanes: { win32: 551, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 58, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },
   GIT_FIXTURE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 10114, worstPlatform: 'win32', p50Ms: 2558, p99Ms: 7180, samples: { win32: 116, darwin: 4, linux: 148 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 10, unseenSitesTrackedBy: '#6060', source: CI_SOURCE, window: CI_WINDOW },

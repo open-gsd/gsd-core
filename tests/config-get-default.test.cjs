@@ -770,7 +770,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { runNode: runNodeSeam, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const { ERROR_REASON } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'io.cjs'));
@@ -797,23 +797,16 @@ describe('bug-2943: config-get returns schema default for context_window', () =>
    */
   function runConfigGet(keyPath, extraArgs = []) {
     const args = [GSD_TOOLS, 'config-get', keyPath, '--raw', '--cwd', tmpDir, ...extraArgs];
-    let stdout = '';
-    let stderr = '';
-    let exitCode = 0;
-    try {
-      // Windows/Node 22 under --test-concurrency=4 can starve subprocess slots when
-      // sharing a wave with bug-2760-codex-install (8–15s install subtests). 15s covers
-      // observed worst case (13.5s) with headroom.
-      stdout = execFileSync(process.execPath, args, {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: PROBE_TIMEOUT_MS,
-      });
-    } catch (err) {
-      exitCode = err.status ?? 1;
-      stdout = err.stdout?.toString() ?? '';
-      stderr = err.stderr?.toString() ?? '';
-    }
+    // Windows/Node 22 under --test-concurrency=4 can starve subprocess slots when
+    // sharing a wave with bug-2760-codex-install (8–15s install subtests). 15s covers
+    // observed worst case (13.5s) with headroom.
+    const r = runNodeSeam(args, { timeoutMs: PROBE_TIMEOUT_MS });
+    // The legacy try/catch turned a timeout into exit 1 with empty output; assert
+    // the outcome so a timeout or spawn failure never reads as a plain exit-code mismatch.
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    const exitCode = r.exitCode;
+    const stdout = r.stdout;
+    const stderr = r.stderr;
     return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
   }
 

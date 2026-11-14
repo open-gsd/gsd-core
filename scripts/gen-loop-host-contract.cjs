@@ -43,7 +43,9 @@ const STEP_WORKFLOWS = [
     // #5118: execute:post's step AND gate dispatch (code_review_gate with
     // its TDD escalation) lives in the ONE shared verification step that
     // execute-phase includes (and verify-work includes too) — no per-caller copy.
+    // #5848: execute:pre's whole dispatch lives in its step file (host byte ceiling, #1168).
     auxiliaryHosts: [
+      { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] },
       { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['step', 'gate'] },
     ],
   },
@@ -410,6 +412,7 @@ function buildContract(workflowsDir) {
     const roleFamilyErrors = crossCheckRoleFamilies(entry.step, entry.agentRoles, file);
     allErrors.push(...roleFamilyErrors);
 
+    const dispatchTexts = [content];
     for (const auxiliary of auxiliaryHosts) {
       let auxiliaryContent;
       try {
@@ -418,6 +421,7 @@ function buildContract(workflowsDir) {
         allErrors.push('Could not read auxiliary host ' + auxiliary.file + ': ' + String(err.message));
         continue;
       }
+      dispatchTexts.push(auxiliaryContent);
 
       const wiredPoints = scanWiredPoints(auxiliaryContent);
       if (!wiredPoints.has(auxiliary.point)) {
@@ -436,6 +440,13 @@ function buildContract(workflowsDir) {
           );
         }
       }
+    }
+
+    // A point the header promises must be rendered somewhere (#5848)
+    for (const point of findUndispatchedPoints(entry.points, dispatchTexts)) {
+      allErrors.push(
+        file + ': declared point "' + point + '" has no `loop render-hooks ' + point + '` call site',
+      );
     }
 
     contract.push(entry);
@@ -554,6 +565,23 @@ const HOST_LOOP_FILES = STEP_WORKFLOWS.flatMap(({ file, auxiliaryHosts = [] }) =
   'gsd-core/workflows/' + file,
   ...auxiliaryHosts.map((host) => 'gsd-core/workflows/' + host.file),
 ]);
+
+/**
+ * The declared points that no text renders (#5848): a `gsd:loop-host` header
+ * promises a point, the workflow body must deliver it. A hook registered at an
+ * undispatched point installs and then never runs, silently.
+ *
+ * @param {string[]} declaredPoints  Points the host's header declares.
+ * @param {string[]} texts  The host file plus its auxiliary hosts.
+ * @returns {string[]}  The unwired points, in declared order.
+ */
+function findUndispatchedPoints(declaredPoints, texts) {
+  const wired = new Set();
+  for (const text of texts) {
+    for (const point of scanWiredPoints(text)) wired.add(point);
+  }
+  return declaredPoints.filter((point) => !wired.has(point));
+}
 
 /**
  * Pure function: scan a text string for `loop render-hooks <point>` call sites.
@@ -758,6 +786,7 @@ module.exports = {
   ROLE_TO_AGENT,
   ROLE_FAMILY,
   scanWiredPoints,
+  findUndispatchedPoints,
   getWiredLoopPoints,
   coveredKindsInRegion,
   scanWiredKinds,
