@@ -87,6 +87,42 @@ describe('runtime-name-policy windsurf alias parity — manifest vs FALLBACK_ALI
       `FALLBACK_ALIASES windsurf=${JSON.stringify(srcAliases.sort())} must match manifest windsurf=${JSON.stringify(manifestAliases)}`,
     );
   });
+
+  function parseFallbackAliases() {
+    const srcPath = path.join(ROOT, 'src', 'runtime-name-policy.cts');
+    // allow-test-rule: source-text-is-the-product (#3464)
+    // FALLBACK_ALIASES source text IS the product contract for runtimes that can't load the manifest at runtime; verifying
+    // every row against the manifest catches manual-mirror drift.
+    const src = fs.readFileSync(srcPath, 'utf8');
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses this repo's own bounded src/runtime-name-policy.cts source, not adversarial input
+    const block = src.match(/const FALLBACK_ALIASES[^=]*=\s*\{([\s\S]*?)\r?\n\};/);
+    assert.ok(block, 'FALLBACK_ALIASES block must exist in src/runtime-name-policy.cts');
+    const map = {};
+    // eslint-disable-next-line local/no-unbounded-quantifier -- parses this repo's own bounded src/runtime-name-policy.cts source, not adversarial input
+    for (const row of block[1].matchAll(/^\s*(?:'([^']+)'|([A-Za-z_][\w-]*)):\s*\[([^\]]*)\],?\s*$/gm)) {
+      map[row[1] || row[2]] = row[3]
+        .split(',')
+        .map(s => s.trim().replace(/^['"]|['"]$/g, ''))
+        .filter(Boolean);
+    }
+    return map;
+  }
+
+  test('manifest and FALLBACK_ALIASES carry identical alias sets for every runtime (#3703)', () => {
+    const parsed = parseFallbackAliases();
+    assert.deepStrictEqual(Object.keys(parsed).sort(), Object.keys(manifest).sort());
+    for (const key of Object.keys(manifest)) {
+      assert.deepStrictEqual([...parsed[key]].sort(), [...manifest[key]].sort(), key);
+    }
+  });
+
+  test('every registry runtime is a FALLBACK_ALIASES key (#3703)', () => {
+    const parsed = parseFallbackAliases();
+    const { runtimes } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+    for (const id of Object.keys(runtimes)) {
+      assert.ok(Object.prototype.hasOwnProperty.call(parsed, id), `${id} missing from FALLBACK_ALIASES`);
+    }
+  });
 });
 
 describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {

@@ -35,6 +35,7 @@ const {
 const { MODEL_PROFILES, RUNTIME_PROFILE_MAP, VALID_PROFILES, AGENT_TO_PHASE_TYPE, VALID_TIERS, catalog } =
   require('../gsd-core/bin/lib/model-catalog.cjs');
 const { AGENT_DEFAULT_TIERS, nextTier } = require('../gsd-core/bin/lib/model-profiles.cjs');
+const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 const { hostBehaviorsFor } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const { runtimes: REGISTRY_RUNTIMES } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
@@ -204,6 +205,26 @@ describe('#3703: runtimes without native aliases keep the blank', () => {
   test('codex (a detected runtime with a tier map) resolves its own map literal under omit', () => {
     dir = mkProject({ model_profile: 'balanced', resolve_model_ids: 'omit' });
     assert.strictEqual(resolveIn(dir, 'gsd-planner', 'codex'), 'gpt-5.6-sol');
+  });
+
+  test('a registered runtime with its own tier map resolves that map under omit (pi)', () => {
+    dir = mkProject({ model_profile: 'balanced', resolve_model_ids: 'omit' });
+    assert.strictEqual(resolveIn(dir, 'gsd-planner', 'pi'), RUNTIME_PROFILE_MAP.pi.opus.model);
+    assert.strictEqual(resolveIn(dir, 'gsd-planner', 'pi'), 'claude-opus-4-8');
+  });
+
+  test('GSD_RUNTIME names a registered runtime: loadConfig materializes it as config.runtime (pi, vscode, zcode)', () => {
+    dir = mkProject({ model_profile: 'balanced' });
+    for (const rt of ['pi', 'vscode', 'zcode']) {
+      assert.strictEqual(withEnv(dir, rt, {}, () => loadConfig(dir)).runtime, rt, rt);
+    }
+  });
+
+  test('vscode and zcode (no tier map) stay blank under omit', () => {
+    dir = mkProject({ model_profile: 'balanced', resolve_model_ids: 'omit' });
+    for (const rt of ['vscode', 'zcode']) {
+      assert.strictEqual(resolveIn(dir, 'gsd-planner', rt), '', rt);
+    }
   });
 
   test('an unrecognised runtime label is not native and stays blank', () => {
