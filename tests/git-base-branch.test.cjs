@@ -2746,7 +2746,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
   const PENDING_REF = 'refs/gsd/pr-built/default/main/feature';
   // `to` stands in for the preconditions' bounded runner `_to` (default: run the command unbounded).
   // Returns `{ out, exitCode }`: the run's stdout and stderr, and its exit status.
-  function runVerify(repo, to = '_to() { "$@"; }') {
+  function runVerify(repo, to = '_to() { "$@"; }', prBranch = 'pr') {
     const workflowText = readFileNormalized(PR_BRANCH_MD); // read here, so a failure fails the named test
     const script = [
       'set -u',
@@ -2754,7 +2754,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'TARGET=main',
       'TARGET_SHA=main',
       'CURRENT_BRANCH=feature',
-      'PR_BRANCH=pr',
+      `PR_BRANCH='${prBranch.replace(/'/g, "'\\''")}'`,
       'TIP=HEAD',
       'PR_STRICT=false',
       'PR_MODE=default',
@@ -2878,6 +2878,20 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.equal(exitCode, 1, 'the run stops with exit 1');
     assert.notEqual(refOf(repo, 'refs/heads/pr'), '', 'the -pr branch is still there');
     assert.doesNotMatch(out, /GATE_FORBIDDEN=/, 'the run stopped before the gates');
+  });
+
+  test('verify names a -pr branch with shell metacharacters quoted, so the printed delete command runs as one command', (t) => {
+    const repo = createGitRepo({ prefix: 'gsd-3679-verify-hostile-', defaultBranch: 'main' });
+    t.after(() => cleanup(repo));
+    const g = gitIn(repo);
+    const branch = 'p;q$r';
+    g(['branch', branch]);
+    const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }', branch);
+    assert.equal(exitCode, 1, 'the run stops with exit 1');
+    const cmd = out.split(/\r?\n/).map((l) => l.match(/run (git branch -D .*) first/)).find(Boolean)[1];
+    const run = runBashFile(cmd, { prefix: 'gsd-verify-hostile-cmd-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
+    assert.equal(run.exitCode, 0, run.stderr);
+    assert.equal(refOf(repo, `refs/heads/${branch}`), '', 'the printed command deleted the branch');
   });
 
   test('create loop preserves pre-existing transient content (#3720 guarantee pinned)', (t) => {

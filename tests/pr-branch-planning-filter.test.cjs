@@ -405,7 +405,7 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
           'PR_STRICT=false',
           '_to() { "$@"; }',
           ...extractDeclarationLines(text, TRANSIENT_DIRS_MARKER, ['STRUCTURAL_RE=']),
-          ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['picked() {']),
+          ...extractDeclarationLines(text, PRECONDITIONS_MARKER, ['CUR=', 'picked() {']),
           'BASE=main',
           'TARGET_SHA=main',
           ...extractDeclarationLines(text, REVS_MARKER, [REVS_MARKER, 'INCLUDED_COMMITS=$(']),
@@ -984,6 +984,9 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
       writeFile(dir, '.planning/milestones/My Milestone-phases/PLAN.md', '# plan\n');
       // A non-`-phases` milestone directory must NOT be swept up by MILESTONE_PHASE_DIRS.
       fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-notes'), { recursive: true });
+      // Only direct subdirectories count: not a deeper `-phases` dir, and not a file with that name.
+      fs.mkdirSync(path.join(dir, '.planning', 'milestones', 'v1.0-phases', 'inner-phases'), { recursive: true });
+      writeFile(dir, '.planning/milestones/x-phases', 'a file\n');
       try {
         const script = [
           'set -u',
@@ -1005,6 +1008,10 @@ describe('#2971 — pr-branch.md planning.pr_strict filter (failing-first)', () 
         assert.ok(
           !lines.some((l) => l.includes('v1.0-notes')),
           `a non-"-phases" milestones/ subdirectory must not appear in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
+        );
+        assert.ok(
+          !lines.some((l) => l.includes('inner-phases') || l.includes('x-phases')),
+          `a deeper -phases dir and a -phases file must not appear in FILTER_PATHS lines: ${JSON.stringify(lines)}`,
         );
       } finally {
         teardown();

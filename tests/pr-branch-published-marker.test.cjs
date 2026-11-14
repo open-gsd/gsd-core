@@ -130,8 +130,11 @@ const prMergedFns = () => {
 
 // Runs the shipped pr_merged on feature-pr in `cwd`: MERGED or UNMERGED. `pre` stubs gh and gsd_run (the default runs
 // the command unbounded: without a gsd_run every `_to` call fails and any probe reads UNMERGED).
-const probePrMerged = (cwd, pre = 'gsd_run() { shift 3; "$@"; }\ngh() { return 1; }') =>
-  runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\n${pre}\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd).stdout.trim();
+const probePrMerged = (cwd, pre = 'gsd_run() { shift 3; "$@"; }\ngh() { return 1; }') => {
+  const r = runSh(`TARGET=main TARGET_SHA=main PR_BRANCH=feature-pr PR_BASE=main\n${pre}\n${prMergedFns()}\npr_merged feature-pr && echo MERGED || echo UNMERGED`, cwd);
+  assert.doesNotMatch(r.stderr, /fatal: Needed a single revision/, 'the ref lookups of pr_merged are quiet');
+  return r.stdout.trim();
+};
 
 // The command a refusal prints on its `  <label>: <cmd>` line, so tests run what a user would paste.
 const printedCmd = (stderr, label) => {
@@ -201,6 +204,46 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(!fs.existsSync(path.join(dir, 'OUTWARD')), 'refusal must precede handle_sub_repos');
   });
 
+  test('a first publish prints no git error (the ref lookups are quiet)', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /fatal:|error:/);
+  });
+
+  test('a pending build without a built-head ref is read quietly', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    git(dir, 'update-ref', '-d', BUILT);
+    git(dir, 'branch', '-D', 'feature-pr');
+    commitRound(dir, 2);
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /fatal:|error:/);
+  });
+
+  test('a tag named like the working branch is not read as that branch', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'tag', 'feature', 'feature~2'); // an older commit under the branch name
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(pendingOf(dir), git(dir, 'rev-parse', 'refs/heads/feature'), 'the pending build is the branch tip, not the tag');
+    assert.equal(git(dir, 'show', 'refs/heads/feature-pr:two.txt'), 'v2', 'both rounds were built');
+  });
+
+  test('a tag named like the -pr branch is not read as that branch', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'tag', 'feature-pr', 'feature'); // a tag on unmerged work: read as the -pr branch it would refuse the run
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(git(dir, 'show', 'refs/heads/feature-pr:r1.txt'), 'round 1', 'the branch was built, the tag is not its tip');
+  });
+
   test('refkey encodes control and non-ASCII bytes so the marker ref is valid and injective', (t) => {
     const fn = refkeyFn();
     const tmp = createTempDir('gsd-refkey-ctl-');
@@ -268,6 +311,29 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(pendingOf(dir), git(dir, 'rev-parse', 'feature'));
   });
 
+  test('a conflict halt that cannot return to the branch prints a restore command that runs for a name with shell metacharacters', () => {
+    const branch = 'a;b$c';
+    const dir = buildRepo(branch);
+    dirs.push(dir);
+    commitRound(dir, 1);
+    assert.equal(publish(dir, 'main', { branch }).status, 0);
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'Merge pr', `${branch}-pr`);
+    write(dir, 'code.txt', 'main-diverged\n');
+    commitAll(dir, 'chore: main diverges');
+    git(dir, 'checkout', '-q', branch);
+    commitRound(dir, 2);
+    // the checkout back to the working branch fails; every other git call runs as usual
+    const noReturn = 'gh() { return 1; }\ngit() { if [ "$1" = checkout ] && [ "$2" = -q ] && [ "$3" = "a;b\\$c" ]; then return 1; fi; command git "$@"; }';
+    const r = publish(dir, 'main', { branch, prelude: noReturn });
+    assert.notEqual(r.status, 0, 'conflict must halt');
+    const m = r.stderr.match(/^Run: (git checkout .*)$/m);
+    assert.ok(m, r.stderr);
+    assert.equal(runSh(m[1], dir).status, 0, 'the printed command runs as one command');
+    assert.equal(refOf(dir, `refs/heads/${branch}-pr`), '', 'and deletes the partial -pr branch');
+    assert.equal(git(dir, 'branch', '--show-current'), branch);
+  });
+
   test('marker does not advance when a conflict halts the run', () => {
     const dir = repo();
     commitRound(dir, 1);
@@ -297,6 +363,19 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.deepEqual(replayed(dir), ['r1.txt', 'r2.txt']);
     assert.equal(markerOf(dir), '', 'nothing was published');
     assert.equal(pendingOf(dir), git(dir, 'rev-parse', 'feature'));
+  });
+
+  test('a dropped pending build leaves neither its refs behind, even when the run stops right after', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    assert.equal(publish(dir).status, 0);
+    assert.notEqual(builtOf(dir), '', 'the first run recorded the built head');
+    git(dir, 'branch', '-D', 'feature-pr');
+    commitRound(dir, 2);
+    const stop = 'gsd_run() { case "$*" in *"rev-list --reverse"*) return 1 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
+    assert.equal(publish(dir, 'main', { prelude: stop }).status, 1);
+    assert.equal(pendingOf(dir), '');
+    assert.equal(builtOf(dir), '');
   });
 
   test('merged then locally deleted -pr: pending is promoted, nothing replayed', () => {
@@ -592,6 +671,71 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(!fs.existsSync(path.join(dir, 'b$c-pr')), 'no file from the injected suffix, after running it');
   });
 
+  // The printed discard command must run as one command for a hostile branch name, with and without a pending build.
+  for (const withPending of [true, false]) {
+    test(`a refused publish on a branch name with shell metacharacters prints a discard command that runs (${withPending ? 'with' : 'without'} a pending build)`, () => {
+      const branch = 'a;b$c';
+      const dir = buildRepo(branch);
+      dirs.push(dir);
+      commitRound(dir, 1);
+      assert.equal(publish(dir, 'main', { branch }).status, 0);
+      if (!withPending) for (const ref of ['pr-built', 'pr-built-head']) git(dir, 'update-ref', '-d', `refs/gsd/${ref}/strict/main/${branch}`);
+      commitRound(dir, 2);
+      const r = publish(dir, 'main', { branch });
+      assert.notEqual(r.status, 0);
+      assert.equal(runSh(printedCmd(r.stderr, 'discard'), dir).status, 0, 'the printed command runs as one command');
+      assert.equal(refOf(dir, `refs/heads/${branch}-pr`), '', 'and deletes the -pr branch');
+      assert.ok(!fs.existsSync(path.join(dir, 'b$c-pr')), 'no file from the injected suffix');
+    });
+  }
+
+  // The re-anchor commands of the warnings name the marker ref, which may hold shell metacharacters.
+  test('the re-anchor command of the pending-drop warning runs for a branch name with shell metacharacters', () => {
+    const branch = 'a;b$c';
+    const dir = buildRepo(branch);
+    dirs.push(dir);
+    commitRound(dir, 1);
+    assert.equal(publish(dir, 'main', { branch }).status, 0);
+    git(dir, 'branch', '-D', `${branch}-pr`);
+    commitRound(dir, 2);
+    const r = publish(dir, 'main', { branch });
+    assert.equal(r.status, 0, r.stderr);
+    const cmd = r.stderr.split(/\r?\n/).map((l) => l.match(/re-anchor: (git update-ref .*)$/)).find(Boolean)[1];
+    assert.equal(runSh(cmd, dir).status, 0, 'the printed command runs as one command');
+    assert.ok(markerOf(dir) === '' && refOf(dir, `refs/gsd/pr-published/strict/main/${branch}`) !== '', 'it set the marker of that branch');
+    assert.ok(!fs.existsSync(path.join(dir, 'b$c')), 'no file from the injected suffix');
+  });
+
+  test('the re-anchor command of the history-rewritten warning runs for a branch name with shell metacharacters', () => {
+    const branch = 'a;b$c';
+    const dir = buildRepo(branch);
+    dirs.push(dir);
+    write(dir, 'x1.txt', '1\n');
+    commitAll(dir, 'feat: code only 1');
+    write(dir, 'x2.txt', '2\n');
+    commitAll(dir, 'feat: code only 2');
+    assert.equal(publish(dir, 'main', { branch }).status, 0);
+    // record the round as published by hand, so the next run reads the marker (the gh stub only knows `feature-pr`)
+    for (const ref of ['pr-built', 'pr-built-head']) git(dir, 'update-ref', '-d', `refs/gsd/${ref}/strict/main/${branch}`);
+    git(dir, 'update-ref', `refs/gsd/pr-published/strict/main/${branch}`, branch);
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'merge', '-q', '--squash', `${branch}-pr`);
+    git(dir, 'commit', '-q', '-m', 'feat: squash of the round');
+    git(dir, 'mv', 'x1.txt', 'moved1.txt');
+    commitAll(dir, 'chore: rename x1.txt');
+    git(dir, 'checkout', '-q', branch);
+    git(dir, 'branch', '-D', `${branch}-pr`);
+    git(dir, 'reset', '-q', '--hard', 'main');
+    commitRound(dir, 2, 'two.txt');
+    const r = publish(dir, 'main', { branch });
+    assert.equal(r.status, 0, r.stderr);
+    const m = r.stderr.match(/Re-anchor: (git update-ref .*?) <rebased commit/);
+    assert.ok(m, r.stderr);
+    assert.equal(runSh(`${m[1]} ${git(dir, 'rev-parse', 'main')}`, dir).status, 0, 'the printed command runs as one command');
+    assert.equal(refOf(dir, `refs/gsd/pr-published/strict/main/${branch}`), git(dir, 'rev-parse', 'main'));
+    assert.ok(!fs.existsSync(path.join(dir, 'b$c')), 'no file from the injected suffix');
+  });
+
   test('markers are keyed by target: a release run does not anchor a main run', () => {
     const dir = repo();
     git(dir, 'branch', 'release', 'main');
@@ -624,6 +768,21 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(replayed(dir), ['r2.txt']);
     assert.equal(git(dir, 'show', 'feature-pr:code.txt'), 'v2');
+  });
+
+  // The recorded tip is an ancestor of the branch, and the target already holds the whole branch.
+  test('a branch the target already holds has nothing to filter: no -pr branch is built', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    git(dir, 'update-ref', MARKER, 'feature~1');
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'merge', '-q', '--ff-only', 'feature');
+    git(dir, 'checkout', '-q', 'feature');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(refOf(dir, 'refs/heads/feature-pr'), '', 'no -pr branch was built');
+    const rwt = fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf-8');
+    assert.ok(splitLines(rwt).some((l) => l.startsWith('run-with-timeout 10 -- git rev-list --count refs/heads/feature --not')), `the count ran bounded (10 s):\n${rwt}`);
   });
 
   test('-pr rebased before merge: merged branch tip still promotes the marker', () => {
@@ -761,6 +920,13 @@ describe('#5469 pr-branch published marker (real git)', () => {
       assert.equal(r.status, 0, r.stderr);
       assert.deepEqual(r.stdout.split(/\r?\n/).slice(0, inputs.length), inputs);
     }), { numRuns: 20 });
+  });
+
+  test('shq keeps an empty string as one empty argument', () => {
+    const [fn] = extractDeclarationLines(readWorkflowText(), 'shq() {', ['shq() {']);
+    const r = runSh(`${fn}\neval "set -- $(shq '')"; printf '%s' "$#"`);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '1');
   });
 
   test('a gh shell function is never queried: it cannot be bounded, so the merge is not proven', () => {
@@ -1056,6 +1222,19 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.ok(changed(dir).includes('two.txt'), 'round 2 is still replayed');
   });
 
+  // Each list read of the rewrite must fail the whole lookup: a failed read leaves an empty list that would match anything.
+  for (const [what, pattern] of [['right-side commit list', '*"--topo-order --right-only"*'], ['changed-path list', '*"diff --name-only --no-renames "[0-9a-f]*'], ['file list per commit', '*"log --full-history --name-only"*']]) {
+    test(`a failed ${what} warns instead of skipping unpublished commits`, () => {
+      const { dir, prelude } = publishedWhileMainMoves();
+      git(dir, 'rebase', '-q', 'main');
+      commitRound(dir, 2, 'two.txt');
+      const failing = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in ${pattern}) return 1 ;; esac; "$@"; else echo true; fi; }`;
+      const r = publish(dir, 'main', { prelude: failing });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stderr, WARNED);
+    });
+  }
+
   test('a patch walk killed after partial output warns: the cut commit is not read as unpublished', () => {
     const { dir, prelude } = publishedWhileMainMoves();
     git(dir, 'rebase', '-q', 'main');
@@ -1077,6 +1256,39 @@ describe('#5469 pr-branch published marker (real git)', () => {
     const r = publish(dir, 'main', { prelude: lossy });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, WARNED);
+  });
+
+  test('a published commit the patch-id run left out warns even when the lookup succeeded', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    const built = git(dir, 'rev-parse', 'feature~1'); // the published `feat: r1` commit, before the rebase rewrites it
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    // the patch-id output loses that commit's line; every other call runs as usual
+    const lossy = `${prelude}\ngsd_run() { if [ "$1" = run-with-timeout ]; then shift 3; case "$*" in *patch-id*) "$@" | grep -v " ${built}$"; return 0 ;; esac; "$@"; else echo true; fi; }`;
+    const r = publish(dir, 'main', { prelude: lossy });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
+  // Default mode keeps .planning/config.json out of the pick, but the patch walk still sees it as a kept path.
+  test('default mode: a recorded config.json-only commit that is gone from the rebased branch is not a published commit to match', () => {
+    const dir = repo();
+    write(dir, 'x.txt', 'x\n');
+    commitAll(dir, 'feat: code');
+    write(dir, '.planning/config.json', '{}\n');
+    commitAll(dir, 'chore: config only');
+    git(dir, 'update-ref', 'refs/gsd/pr-published/default/main/feature', 'feature');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'other.txt', 'o\n');
+    commitAll(dir, 'chore: main moves on');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'reset', '-q', '--hard', 'feature~1'); // the config.json commit is dropped
+    git(dir, 'rebase', '-q', 'main');
+    write(dir, 'y.txt', 'y\n');
+    commitAll(dir, 'feat: more code');
+    const r = publish(dir, 'main', { mode: 'false' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
   });
 
   // The side commit and the line commit add the same file, so the merge equals its first parent and a path-limited
@@ -1179,6 +1391,21 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.match(r.stderr, /not an ancestor of feature[\s\S]*Re-anchor: git update-ref \S+ <rebased commit equivalent to last published tip>/);
   });
 
+  test('pr_merged ignores diff.relative: a squash-merged change outside the subdirectory is still proven from inside it', () => {
+    const dir = repo();
+    write(dir, 'lib/a.txt', 'a\n');
+    commitAll(dir, 'chore: lib exists');
+    git(dir, 'checkout', '-q', '-b', 'feature-pr', 'main');
+    write(dir, 'outside.txt', 'o\n');
+    commitAll(dir, 'feat: outside lib');
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'outside.txt', 'o\n');
+    commitAll(dir, 'feat: squashed outside lib');
+    git(dir, 'checkout', '-q', 'feature');
+    git(dir, 'config', 'diff.relative', 'true');
+    assert.equal(probePrMerged(path.join(dir, 'lib')), 'MERGED');
+  });
+
   test('pr_merged ignores diff.relative: an unmerged -pr stays unmerged when judged from the subdirectory it changed', () => {
     const dir = repo();
     write(dir, 'lib/a.txt', 'a\n');
@@ -1208,6 +1435,17 @@ describe('#5469 pr-branch published marker (real git)', () => {
     git(dir, 'rebase', '-q', 'main');
     commitRound(dir, 2, 'two.txt');
     git(dir, 'config', 'color.ui', 'always');
+    const r = publish(dir, 'main', { prelude });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, WARNED);
+    assert.deepEqual(changed(dir), ['r2.txt', 'two.txt']);
+  });
+
+  test('color.diff=always: the rebased round still matches its published patch; only round 2 is replayed', () => {
+    const { dir, prelude } = publishedWhileMainMoves();
+    git(dir, 'rebase', '-q', 'main');
+    commitRound(dir, 2, 'two.txt');
+    git(dir, 'config', 'color.diff', 'always');
     const r = publish(dir, 'main', { prelude });
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, WARNED);
@@ -1439,15 +1677,18 @@ describe('#5469 pr-branch published marker (real git)', () => {
     assert.equal(refOf(dir, 'refs/heads/feature-pr'), '');
   };
 
-  test('an unknown target stops the run with exit 1 and changes no ref', () => {
-    const dir = repo();
-    commitRound(dir, 1);
-    const r = publish(dir, 'nosuch');
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /Unknown target: nosuch/);
-    assert.doesNotMatch(r.stderr, /fatal:|Cannot list/, 'the run stopped at the lookup, not at a later step');
-    noRefs(dir);
-  });
+  // `main^{tree}` names a tree: only a commit can be a target.
+  for (const target of ['nosuch', 'main^{tree}']) {
+    test(`an unknown target (${target}) stops the run with exit 1 and changes no ref`, () => {
+      const dir = repo();
+      commitRound(dir, 1);
+      const r = publish(dir, target);
+      assert.equal(r.status, 1);
+      assert.ok(r.stderr.includes(`Unknown target: ${target}`), r.stderr);
+      assert.doesNotMatch(r.stderr, /fatal:|Cannot list/, 'the run stopped at the lookup, not at a later step');
+      noRefs(dir);
+    });
+  }
 
   test('a failed pick-list lookup stops the run with exit 1 and changes no ref', () => {
     const dir = repo();
@@ -1485,7 +1726,7 @@ describe('#5469 pr-branch published marker (real git)', () => {
     mergePr(dir);
     commitRound(dir, 2, 'two.txt');
     const before = [markerOf(dir), pendingOf(dir), builtOf(dir), refOf(dir, 'refs/heads/feature-pr')];
-    const stub = 'gsd_run() { case "$*" in *--is-ancestor*" feature") return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
+    const stub = 'gsd_run() { case "$*" in *--is-ancestor*" refs/heads/feature") return 124 ;; esac; if [ "$1" = run-with-timeout ]; then shift 3; "$@"; else echo true; fi; }\ngh() { return 1; }';
     const r = publish(dir, 'main', { prelude: stub });
     assert.equal(r.status, 1);
     assert.match(r.stderr, /Cannot check refs\/gsd\/pr-published\/strict\/main\/feature; re-run\./);
