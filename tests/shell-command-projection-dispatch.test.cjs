@@ -99,19 +99,22 @@ describe('execGit', () => {
       blob = execGit(['hash-object', '-w', 'big.txt'], { cwd: tmpDir }).stdout.trim();
     });
 
+    // spawnSync reports an overflow as `error.code === 'ENOBUFS'`; the exit status is not reliable (the child may exit before the kill lands).
+    const overflowed = (result) => result.error?.code === 'ENOBUFS';
+
     test('[negative] output over 1 MiB is an overflow by default', () => {
-      assert.notStrictEqual(execGit(['cat-file', '-p', blob], { cwd: tmpDir }).exitCode, 0);
+      assert.ok(overflowed(execGit(['cat-file', '-p', blob], { cwd: tmpDir })));
     });
 
     test('[negative] an explicit undefined keeps the default cap', () => {
-      assert.notStrictEqual(execGit(['cat-file', '-p', blob], { cwd: tmpDir, maxBuffer: undefined }).exitCode, 0);
+      assert.ok(overflowed(execGit(['cat-file', '-p', blob], { cwd: tmpDir, maxBuffer: undefined })));
     });
 
     test('[boundary] output of N bytes overflows maxBuffer N-1 and fits N and N+1', () => {
       const run = (maxBuffer) => execGit(['cat-file', '-p', blob], { cwd: tmpDir, maxBuffer });
-      assert.notStrictEqual(run(BIG - 1).exitCode, 0);
-      assert.strictEqual(run(BIG).exitCode, 0);
-      assert.strictEqual(run(BIG + 1).exitCode, 0);
+      assert.ok(overflowed(run(BIG - 1)));
+      assert.ok(!overflowed(run(BIG)) && run(BIG).exitCode === 0);
+      assert.ok(!overflowed(run(BIG + 1)) && run(BIG + 1).exitCode === 0);
     });
 
     test('[happy] a given maxBuffer is honored', () => {
