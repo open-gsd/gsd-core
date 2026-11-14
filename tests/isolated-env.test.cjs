@@ -235,6 +235,8 @@ describe('gitChildEnv', () => {
     const win = nullGitConfig('win32');
     assert.notEqual(win, os.devNull, 'on Windows the null device is `\\\\.\\nul`, which git cannot open');
     assert.ok(fs.existsSync(win) && fs.readFileSync(win, 'utf-8') === '', 'an existing empty file');
+    const listed = gitOrThrow(['config', '--global', '--list'], { cwd: tmp(t, 'gsd-6033-nullcfg-cwd-'), env: { ...isolatedEnv({ home: tmp(t, 'gsd-6033-nullcfg-git-') }), GIT_CONFIG_GLOBAL: win }, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+    assert.equal(listed.trim(), '', 'git opens that path and reads no config');
     assert.equal(gitChildEnv(tmp(t, 'gsd-6033-nullcfg-home-')).GIT_CONFIG_GLOBAL, nullGitConfig());
   });
 

@@ -552,16 +552,23 @@ function isSafeRepoPath(rel) {
   });
 }
 
+let emptyConfigDir = null; // the private dir of the Windows empty config, made on first use
+
 /**
  * The path `GIT_CONFIG_GLOBAL` takes to read no config: `os.devNull`, except on Windows, where
- * that is `\\.\nul` and git cannot open it ("unable to access '\\.\nul'"), so an empty file in the temp dir stands in.
+ * that is `\\.\nul` and git cannot open it ("unable to access '\\.\nul'"), so an empty file in a private temp dir stands in.
  * @param {string} [platform] - default: this process's platform
  * @returns {string}
  */
 function nullGitConfig(platform = process.platform) {
   if (platform !== 'win32') return os.devNull;
-  const empty = path.join(os.tmpdir(), 'gsd-empty-gitconfig');
-  fs.writeFileSync(empty, '', { flag: 'a' });
+  if (emptyConfigDir === null) {
+    // One private dir per process, removed on exit: a child's `git config --global` write never reaches another run.
+    emptyConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-empty-gitconfig-'));
+    process.once('exit', () => fs.rmSync(emptyConfigDir, { recursive: true, force: true }));
+  }
+  const empty = path.join(emptyConfigDir, 'config');
+  fs.writeFileSync(empty, '');
   return empty;
 }
 

@@ -38,6 +38,7 @@ const {
   getTrackedIgnoredFiles,
   ignoredByTrackedRules,
   isolatedGitEnv,
+  nullGitConfig,
   initScratchRepo,
   isSafeRepoPath,
   resolveBaseBranch,
@@ -1273,7 +1274,7 @@ describe('removed-but-needed lint: tracked-but-gitignored files (#3677 residual)
       const env = isolatedGitEnv('/scratch-dir');
       for (const k of keys) assert.equal(k in env, false, `${k} must be removed`);
       assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
-      assert.equal(env.GIT_CONFIG_GLOBAL, os.devNull);
+      assert.equal(env.GIT_CONFIG_GLOBAL, nullGitConfig());
       assert.equal(env.HOME, '/scratch-dir');
       assert.equal(env.XDG_CONFIG_HOME, '/scratch-dir');
       assert.equal(env.PATH, process.env.PATH, 'unrelated variables are kept');
