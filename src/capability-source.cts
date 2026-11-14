@@ -1032,28 +1032,9 @@ function resolveGit(
     throw new Error('integrity pinning is not supported for git sources; pin the commit with #sha:<commit>');
   }
 
-  const rawRef = typeof parsed.ref === 'string' ? parsed.ref.trim() : '';
-  const isEmptyTypedPin = /^(?:tag|sha):$/i.test(rawRef);
-  if (isEmptyTypedPin) {
-    throw new Error(`Invalid git ref: "${parsed.ref}" — typed ref must not be empty`);
-  }
   const ref = classifyGitRef(parsed);
-  // Validate AFTER removing typed prefixes: tag:--foo must not bypass parseSpec's
-  // raw leading-dash check. Empty typed pins must not fall back to default HEAD.
-  if (ref.value.startsWith('+') || ref.value.includes(':')) {
-    throw new Error(`Unsafe git ref (fetch refspec not allowed): "${parsed.ref}"`);
-  }
-  if (ref.value.startsWith('-')) {
-    throw new Error(`Unsafe git ref (leading dash not allowed): "${parsed.ref}"`);
-  }
-  // Patterns cannot name one target. Typed tags also forbid revision operators;
-  // bare commit-ish operators retain the previously accepted tip-local fallback.
-  if (/[*?\[]/.test(ref.value) || (ref.kind !== 'bare' && /[\^~]/.test(ref.value))) {
-    throw new Error(`Unsafe git ref (invalid ref-name character): "${parsed.ref}"`);
-  }
-  if (ref.kind === 'sha' && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ref.value)) {
-    throw new Error(`Invalid git ref: "${parsed.ref}" — sha: pin must be a full 40- or 64-hex object name`);
-  }
+  const refError = gitRefValidationError(parsed, ref);
+  if (refError !== null) throw new Error(refError);
 
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
   const cloneDir = path.join(scratchDir, 'repo');
@@ -1457,6 +1438,33 @@ function classifyGitRef(parsed: ParsedSpec): { kind: 'none' | 'sha' | 'tag' | 'b
   return { kind: 'bare', value: raw };
 }
 
+function gitRefValidationError(parsed: ParsedSpec, ref: ReturnType<typeof classifyGitRef>): string | null {
+  const rawRef = typeof parsed.ref === 'string' ? parsed.ref.trim() : '';
+  const isEmptyTypedPin = /^(?:tag|sha):$/i.test(rawRef);
+  if (isEmptyTypedPin) {
+    return `Invalid git ref: "${parsed.ref}" — typed ref must not be empty`;
+  }
+  // Validate AFTER removing typed prefixes: tag:--foo must not bypass parseSpec's
+  // raw leading-dash check. Empty typed pins must not fall back to default HEAD.
+  if (ref.value.startsWith('+') || ref.value.includes(':')) {
+    return `Unsafe git ref (fetch refspec not allowed): "${parsed.ref}"`;
+  }
+  if (ref.value.startsWith('-')) {
+    return `Unsafe git ref (leading dash not allowed): "${parsed.ref}"`;
+  }
+  // Patterns cannot name one target. Typed tags also forbid revision operators;
+  // bare commit-ish operators retain the previously accepted tip-local fallback.
+  if (/[*?\[]/.test(ref.value) || (ref.kind !== 'bare' && /[\^~]/.test(ref.value))) {
+    return `Unsafe git ref (invalid ref-name character): "${parsed.ref}"`;
+  }
+  if (ref.kind === 'sha' && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ref.value)) {
+    return `Invalid git ref: "${parsed.ref}" — sha: pin must be a full 40- or 64-hex object name`;
+  }
+
+  return null;
+}
+
+
 /**
  * #1463 Fix 2 (R Medium): resolve a bare ambiguous git ref to its KIND at the remote with a bounded
  * `git ls-remote <url> <ref>` (the SAME safe seam as the tag peek: argv + `--`, never a shell string).
@@ -1540,6 +1548,8 @@ function peekLatestVersion(
       // a newer remote tag is irrelevant; report 'pinned' WITHOUT any peek. A BARE `#<ref>` is ambiguous
       // (tag OR branch): we MUST classify it remotely so a MUTABLE branch is never falsely 'pinned'.
       const refKind = classifyGitRef(parsed);
+      const refError = gitRefValidationError(parsed, refKind);
+      if (refError !== null) return { status: 'unknown', version: null, reason: refError };
       if (refKind.kind === 'sha' || refKind.kind === 'tag') {
         return { status: 'pinned', version: null, reason: `git source pinned to ${refKind.kind} "${refKind.value}"; update will not move it` };
       }

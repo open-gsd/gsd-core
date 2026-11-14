@@ -470,6 +470,29 @@ describe('#5297 git adapter — exact pinned target', {
   });
 });
 
+const GIT_REF_SAFETY_CASES = [
+  ...['v*', 'v?', 'v[', 'tag:v*', 'tag:v?', 'tag:v[', 'tag:v^', 'tag:v~'].map((fragment) => [fragment, /invalid ref-name character/]),
+  ['tag:--foo', /leading dash not allowed/],
+  ['sha:--foo', /leading dash not allowed/],
+  ['TAG:-foo', /leading dash not allowed/],
+  ['tag:', /typed ref must not be empty/],
+  ['sha:', /typed ref must not be empty/],
+  ['SHA:', /typed ref must not be empty/],
+  ['a:refs/tags/x', /fetch refspec not allowed/],
+  ['+a:b', /fetch refspec not allowed/],
+  ['tag:+release', /fetch refspec not allowed/],
+  ['Tag:+x', /fetch refspec not allowed/],
+  ['sha:a:b', /fetch refspec not allowed/],
+  ['tag:tag:', /fetch refspec not allowed/],
+  ['sha:sha:', /fetch refspec not allowed/],
+  ['sha:main', /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(39)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(41)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(63)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(65)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'g'.repeat(40)}`, /sha: pin must be a full 40- or 64-hex object name/],
+];
+
 describe('#5297 git adapter — normalized ref safety', () => {
   test('PROPERTY (fc): unsafe typed refs reject before any Git operation', async (t) => {
     const gsdHome = createTempDir('gsd-unsafe-typed-');
@@ -489,6 +512,23 @@ describe('#5297 git adapter — normalized ref safety', () => {
       },
     ));
   });
+  test('rejected normalized refs are never reported as safe pins by update status', async (t) => {
+    const gsdHome = createTempDir('gsd-ref-status-parity-');
+    t.after(() => cleanup(gsdHome));
+    for (const [fragment] of GIT_REF_SAFETY_CASES) {
+      const spec = `https://example.com/repo.git#${fragment}`;
+      let rejection;
+      const git = () => { assert.fail('invalid refs must reject before Git'); };
+      await assert.rejects(() => resolveCapabilitySource(spec, {
+        gsdHome, hostVersion: '1.5.0', execOverrides: { git },
+      }), (err) => { rejection = err.message; return true; });
+      assert.deepEqual(peekLatestVersion(spec, { execOverrides: { git } }), {
+        status: 'unknown', version: null, reason: rejection,
+      }, fragment);
+    }
+    assert.equal(peekLatestVersion('https://example.com/r.git#sha:abc1234').status, 'unknown');
+  });
+
   test('normalized unsafe refs and empty typed refs reject before Git runs', async () => {
     const gsdHome = createTempDir('gsd-ref-safety-');
     const calls = [];
@@ -501,29 +541,7 @@ describe('#5297 git adapter — normalized ref safety', () => {
       return spawnOk('');
     };
     try {
-      const cases = [
-        ...['v*', 'v?', 'v[', 'tag:v*', 'tag:v?', 'tag:v[', 'tag:v^', 'tag:v~'].map((fragment) => [fragment, /invalid ref-name character/]),
-        ['tag:--foo', /leading dash not allowed/],
-        ['sha:--foo', /leading dash not allowed/],
-        ['TAG:-foo', /leading dash not allowed/],
-        ['tag:', /typed ref must not be empty/],
-        ['sha:', /typed ref must not be empty/],
-        ['SHA:', /typed ref must not be empty/],
-        ['a:refs/tags/x', /fetch refspec not allowed/],
-        ['+a:b', /fetch refspec not allowed/],
-        ['tag:+release', /fetch refspec not allowed/],
-        ['Tag:+x', /fetch refspec not allowed/],
-        ['sha:a:b', /fetch refspec not allowed/],
-        ['tag:tag:', /fetch refspec not allowed/],
-        ['sha:sha:', /fetch refspec not allowed/],
-        ['sha:main', /sha: pin must be a full 40- or 64-hex object name/],
-        [`sha:${'a'.repeat(39)}`, /sha: pin must be a full 40- or 64-hex object name/],
-        [`sha:${'a'.repeat(41)}`, /sha: pin must be a full 40- or 64-hex object name/],
-        [`sha:${'a'.repeat(63)}`, /sha: pin must be a full 40- or 64-hex object name/],
-        [`sha:${'a'.repeat(65)}`, /sha: pin must be a full 40- or 64-hex object name/],
-        [`sha:${'g'.repeat(40)}`, /sha: pin must be a full 40- or 64-hex object name/],
-      ];
-      for (const [fragment, expected] of cases) {
+      for (const [fragment, expected] of GIT_REF_SAFETY_CASES) {
         await assert.rejects(() => resolveCapabilitySource(`https://example.com/repo.git#${fragment}`, {
           gsdHome, hostVersion: '1.5.0', execOverrides: { git: fakeGit },
         }), expected, fragment);
