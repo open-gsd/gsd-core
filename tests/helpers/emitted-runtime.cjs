@@ -380,7 +380,9 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * contained too), so a binary search finds the newest contained one in
  * ceil(log2(n + 1)) `merge-base --is-ancestor` calls. When none of them is contained,
  * the newest contained chain commit is the first parent of the oldest listed one (or the
- * tip itself when nothing is listed), which the floor contains. When the oldest listed one
+ * tip itself when nothing is listed); in a complete clone the floor contains it. In a
+ * shallow clone that parent can be missing or outside HEAD, and the check at the advance's
+ * return keeps the floor instead of returning it. When the oldest listed one
  * is a root (the chain is rooted outside the floor's history), no chain commit is in HEAD
  * and the floor is kept with a line saying exactly that.
  *
@@ -549,9 +551,9 @@ function resolveNextRef({ cwd = REPO_ROOT } = {}) {
  * A release-merge PR (`release/X.Y.0` or `hotfix/X.Y.Z` -> `main`, #5902) is the exception:
  * its base is the fork point on `next` (`origin/next`, `upstream/next`, `next`; first that
  * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, so that fork point is never
- * advanced, and that sha is not `base.sha`: whatever the `emitted-baseline-<base.sha>`
- * restore returns was not built at the fork point, so `validateBaseline` refuses it (or the
- * restore misses) and the baseline is built in-job.
+ * advanced, and that sha is normally not `base.sha`: the `emitted-baseline-<base.sha>`
+ * restore then normally misses, or returns a baseline not built at the fork point, which
+ * `validateBaseline` refuses, and the baseline is built in-job.
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot

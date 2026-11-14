@@ -1363,13 +1363,16 @@ test('#2854: the cache is used exactly when it is valid for the sha under test',
 });
 
 test('#2854: the gate is pinned to the SAME base the tree was merged with', () => {
-  // The deepest half of this bug. "Rebase check" merges `pull_request.base.sha`,
-  // pinned by #2472 so all 12 matrix jobs agree on one tree. But resolveBase()
+  // The deepest half of this bug. "Rebase check" is handed `pull_request.base.sha`
+  // (CI_REBASE_BASE_SHA, pinned by #2472). But resolveBase()
   // otherwise falls through to `origin/next`, which `fetch-depth: 0` leaves at the
-  // LIVE tip. When `next` advanced mid-flight the gate compared a tree built on
-  // base.sha against a baseline at a NEWER commit — so the correctly-keyed cache
+  // LIVE tip. When `next` advanced mid-flight the gate compared the tree against
+  // a baseline at a NEWER commit — so the correctly-keyed cache
   // was rejected as "stale" and the run died. Worse than dying would be surviving:
   // a baseline at the wrong commit attributes other people's merges to this PR.
+  // This test pins only that the two workflow values are equal. On a pull_request lane
+  // the checked-out tree is GitHub's merge ref, whose base can be newer than that
+  // sha, so the pin is a floor for the attribution base, not the tree's base (#5797).
   //
   // Two surfaces read one value, which is the generative-divergence shape this repo
   // has been bitten by before, so the parity is asserted rather than assumed.
@@ -2674,7 +2677,7 @@ test('a shallow boundary whose real parent HEAD lacks keeps the pin: an advance 
   assert.match(messages[1], /shallow/);
 });
 
-// A rooted chain (as the row above it) whose root R1 carries a decoy `parent <PR tip>` that
+// A rooted chain (as in the row titled "a first-parent chain rooted outside HEAD ...") whose root R1 carries a decoy `parent <PR tip>` that
 // git does not treat as a parent: in the commit MESSAGE, or as a stray header after
 // `committer` (written with hash-object --literally). git reads parents only from the lines
 // directly after `tree`, so R1 is a root and the floor is kept with the rooted-chain line.
