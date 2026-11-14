@@ -698,6 +698,12 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     ["sshpass -e ssh -o ProxyCommand='cat .env' host", '.env'],
     ['sshpass -f .env ssh host', '.env'],
     ['sshpass -f.env ssh host', '.env'],
+    // sshpass reads the password file whatever it runs: nothing, or only
+    // another wrapper (`env` prints its environment on the pty sshpass watches).
+    ['sshpass -f .env', '.env'],
+    ['sshpass -f .env env', '.env'],
+    ['PROMPT=x sshpass -Px -f .env env', '.env'],
+    ['sshpass -f .env nice', '.env'],
     // A valued option with no value word left reaches the read after it.
     ['sshpass -f; cat .env', '.env'],
     ['sshpass -p; cat .env', '.env'],
