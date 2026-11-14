@@ -961,6 +961,13 @@ Return all issues as a structured `issues:` YAML list (see dimension examples fo
 
 <structured_returns>
 
+**Return receipt (#5182):** if your prompt has a `<return_receipt>PATH</return_receipt>` line,
+your LAST action is to write the marker line you are about to return to PATH with one Bash call,
+e.g. `printf '%s\n' '## ISSUES FOUND' > 'PATH'` (its directory already exists). This is your only
+write; never touch a plan or any other file. If the write fails or is refused (a read-only
+sandbox), note that in your return and continue: the orchestrator's bounded wait then ends on
+your completion result.
+
 ## VERIFICATION PASSED
 
 ```markdown
@@ -1031,6 +1038,8 @@ Plans verified. Run `/gsd:execute-phase {phase}` to proceed.
 </structured_returns>
 
 <anti_patterns>
+
+**DO NOT** write any file except the `<return_receipt>` path, if your prompt gives one (one Bash `printf`). You never write, split or fix a plan.
 
 **DO NOT** check code existence — that's gsd-verifier's job. You verify plans, not codebase.
 

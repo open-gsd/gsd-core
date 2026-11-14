@@ -4,6 +4,14 @@ Apply response_language to all user-facing prose — narration between tool call
 
 Elaboration deferred from the `plan-phase.md` spine under ADR-4139 (Compact Content mode). Read via `gsd-core/references/compact-content-gate.md` when `workflow.compact_content` is `false`. This file supplements the spine — it does not stand alone.
 
+## § mvp-prd — `--mvp` and `--prd` Compose
+
+**Interaction with `--prd <filepath>`.** `--mvp` and `--prd` compose. The PRD express path (Step 3.5) creates `CONTEXT.md` from the PRD file and continues to research; the Walking Skeleton gate fires independently from the `WALKING_SKELETON` conditions in the spine's MVP step. When both are active on Phase 1 of a new project, the planner receives `WALKING_SKELETON=true` and PRD-derived context simultaneously — the PRD informs *what the skeleton should prove*. No precedence is needed; the two signals are orthogonal. See `gsd-core/references/mvp-concepts.md` for the broader interaction map.
+
+## § 2401 — prior_verify_commands Is Not Context-Window Gated
+
+**#2401 — `prior_verify_commands` is NOT part of the `CONTEXT_WINDOW >= 500000` prior-phase enrichment and is never gated on `CONTEXT_WINDOW`.** It is a handful of one-line `<automated>` commands harvested from the nearest prior phase that had any; the payload is tiny and its absence at 200k is exactly what made the planner re-invent a verify command and author an unrunnable path. Surface it at every context window.
+
 ## § 9a — Filesystem Fallback (Planner)
 
 This elaborates the spine's §9a trigger condition (above) — the recovery banner and its three options.
@@ -100,9 +108,22 @@ Use AskUserQuestion for each gap (or batch if multiple gaps).
 
 ## § 11a — Filesystem Fallback (Checker)
 
-Fires when the checker's Agent() call comes back without either completion marker (`## VERIFICATION PASSED` / `## ISSUES FOUND`). The spine already computed `DISK_PLANS` before reaching this elaboration.
+Fires when the checker's Agent() call comes back without either completion marker (`## VERIFICATION PASSED` / `## ISSUES FOUND`), or when one of those markers arrived on the return receipt but the body step 11 reads (the issue list, or the findings a PASSED return lists) has not arrived by the next cycle (`steps/stall-detection-helpers.md`). The spine already computed `DISK_PLANS` before reaching this elaboration.
 
-**If `DISK_PLANS` > 0:** Plans exist on disk; the checker return was empty or truncated (the
+**If `DISK_PLANS` > 0 and a marker arrived on the receipt without its body:** the checker's
+findings cannot be read, so the receipt alone never counts as a pass or as 0 issues. Display:
+
+```text
+◆ Checker receipt says {MARKER}, but its full return has not arrived. {DISK_PLANS} plan(s) exist on disk.
+  Its findings cannot be read yet, so the receipt alone is not treated as a result.
+```
+
+Offer 3 options, Retry first:
+1. **Retry checker**: re-spawn the checker with the same prompt (return to step 10)
+2. **Accept verification**: treat as `## VERIFICATION PASSED` and continue to step 13
+3. **Stop**: exit; user can re-run `/gsd:plan-phase {N}` to resume
+
+**If `DISK_PLANS` > 0 and no marker arrived:** Plans exist on disk; the checker return was empty or truncated (the
 Windows stdio hang pattern — the subagent finished but the return never arrived). Display:
 
 ```text
