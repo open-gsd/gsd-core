@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * #4483: `gsd_run check predicate` resolves ${PHASE_DIR}/${PHASE_NUMBER}/${PHASE_REQ_IDS} in a
- * command-exit-zero gate from the --phase-dir/--phase-number/--phase-req-ids flags the calling
- * workflow passes. A dispatch line that omits a value the same workflow already holds makes a
- * capability gate silently resolve that placeholder to ''. These workflow dispatch lines are the
- * installed contract the orchestrating LLM follows, so the contract is asserted on the lines.
+ * #4483: `gsd_run check predicate` passes phase context through
+ * --phase-dir/--phase-number/--phase-req-ids so the evaluator can expose the values as
+ * GSD_GATE_PHASE_* environment data. A dispatch line that omits a value the same workflow already
+ * holds leaves that environment entry empty. These workflow dispatch lines are the installed
+ * contract the orchestrating LLM follows, so the contract is asserted on the lines.
  */
 
 const { test, describe } = require('node:test');

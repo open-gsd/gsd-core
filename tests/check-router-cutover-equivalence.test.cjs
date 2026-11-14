@@ -36,6 +36,9 @@
  * code: the record path used to be read uncontained, and a path escaping the
  * project directory is now the usage failure every sibling gate raises.
  *
+ * The E10 phase-number arm migrates to the ADR-2008 environment contract (#5318);
+ * its successful payload remains identical to the captured pre-move result.
+ *
  * The four other E6 payload goldens (`tdd-red-evidence-ok`, `-invalid-exit-zero`,
  * `-invalid-zero-tests`, `-empty-object`) were re-captured from the format-adapter
  * classifier (#4692): `evidence` gains `matched_test`, `format` and

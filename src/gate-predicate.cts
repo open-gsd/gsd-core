@@ -15,8 +15,8 @@
  *   --predicate '<json>' [--phase-dir <dir>] [--phase-number <n>] [--phase-req-ids <ids>]
  *
  * The subprocess runs at the runtime project root (`projectDir`), inheriting the process env.
- * Interpolation placeholders ${PHASE_NUMBER}/${PHASE_DIR}/${PHASE_REQ_IDS} are substituted from the
- * flags.
+ * Phase flags are passed as GSD_GATE_PHASE_NUMBER / GSD_GATE_PHASE_DIR / GSD_GATE_PHASE_REQ_IDS
+ * environment data, overriding inherited values; command text is never rewritten.
  */
 
 import path from 'node:path';
@@ -37,25 +37,24 @@ import { execTool, platformReadSync } from './shell-command-projection.cjs';
 /**
  * Production subprocess binding for the gate-predicate evaluator. Wraps the
  * bounded `execTool` seam (shell-command-projection) as a `runBoundedShell`
- * the pure evaluator consumes. `sh -c` runs the interpolated command; the
- * subprocess inherits the process env and is killed (SIGTERM) on timeout.
+ * the pure evaluator consumes. `sh -c` receives the capability-authored command
+ * unchanged. `execTool` merges the evaluator's context env over the inherited
+ * process env and kills the direct subprocess (SIGTERM) on timeout.
  *
- * `timedOut` is derived from the kill signal: spawnSync sets `signal: 'SIGTERM'`
- * when the `timeout` fires, distinct from a normal non-zero exit code. A command
- * that self-terminates with SIGTERM is indistinguishable at this seam and is
- * reported as a timeout — either way the gate blocks (non-zero), so the outcome
- * is fail-closed and correct. See ADR-2008.
+ * `timedOut` comes from execTool's ETIMEDOUT classification, not from a signal:
+ * a command that self-terminates with SIGTERM blocks as a non-zero result but is
+ * not misreported as a timeout. See ADR-2008 and the Shell Command Projection Module.
  */
 export function buildPredicateDeps() {
   return {
-    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): {
+    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): {
       exitCode: number | null;
       stdout: string;
       stderr: string;
       signal: NodeJS.Signals | null;
       timedOut: boolean;
     } {
-      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, timeout: opts.timeoutMs });
+      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, timeout: opts.timeoutMs, env: opts.env });
       return {
         exitCode: r.exitCode,
         stdout: r.stdout,
