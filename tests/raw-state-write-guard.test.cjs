@@ -15,6 +15,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS, RUN_TESTS_HARNESS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const RUNNER = path.join(__dirname, '..', 'scripts', 'run-tests.cjs');
 const ISOLATED_ENV_HELPER = path.join(__dirname, 'helpers', 'isolated-env.cjs');
@@ -563,7 +564,7 @@ test('passes', () => {});
     assert.equal(r.exitCode, 0, r.stderr);
     // The runner process itself received only this preload; every process the runner gave its
     // shim to must have run the shim first.
-    const shimmed = fs.readFileSync(record, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    const shimmed = splitLines(fs.readFileSync(record, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
       .filter((rec) => rec.nodeOptions.includes('raw-state-write-preload.cjs'));
     assert.ok(shimmed.length >= 1, `a process that received the shim ran the early preload: ${fs.readFileSync(record, 'utf8')}`);
     assert.ok(shimmed.every((rec) => rec.installed), JSON.stringify(shimmed));
