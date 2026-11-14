@@ -6634,8 +6634,14 @@ function cmdStateMilestoneSwitch(cwd: string, version: string | undefined, name:
     const content = platformReadSync(statePath) || '';
     const result = transitionCore(content, intent, deps);
     platformWriteSync(statePath, result.content);
+    // #6174: operator lines moved out of ## Current Position are reported
+    // (additive key, absent when nothing moved).
+    const moved = result.data?.['moved_current_position_lines'];
     output(
-      { switched: true, version, name: resolvedName, status: 'planning' },
+      {
+        switched: true, version, name: resolvedName, status: 'planning',
+        ...(Array.isArray(moved) && moved.length > 0 ? { moved_current_position_lines: moved } : {}),
+      },
       raw,
       'true',
     );
