@@ -241,7 +241,7 @@ describe('gitChildEnv', () => {
     assert.equal(gitChildEnv(tmp(t, 'gsd-6033-nullcfg-home-')).GIT_CONFIG_GLOBAL, nullGitConfig());
   });
 
-  test('the Windows empty git config is one file per process, emptied on every call and removed at exit', (t) => {
+  test('the Windows empty git config is one file per process, emptied on every call and removed at exit', () => {
     const first = nullGitConfig('win32');
     assert.equal(nullGitConfig('win32'), first, 'one file per process');
     fs.writeFileSync(first, '[user]\n\tname = leaked\n');
