@@ -37,7 +37,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { createTempDir, createTempProject, cleanup, parseFrontmatter } = require('./helpers.cjs');
+const { createTempDir, createTempProject, cleanup, parseFrontmatter, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const pkg = require('../package.json');
 
@@ -112,37 +112,13 @@ describe('getDirName — all runtimes', () => {
 });
 
 describe('getGlobalConfigDir — all runtimes default paths', () => {
-  // Derive env-var list from the registry so it stays auto-correct when new
-  // runtimes are added. GROK_AGENTS_HOME is kept explicitly because grok has
-  // no registry entry.
-  const { runtimes: _registryRuntimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
-  const _registryEnvKeys = Object.values(_registryRuntimes).flatMap((r) => {
-    const ch = r.runtime?.configHome;
-    if (!ch) return [];
-    const envs = Array.isArray(ch.env) ? ch.env : [];
-    const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
-    return [...envs, ...skillsEnvs];
-  });
-  const ENV_KEYS = [...new Set([..._registryEnvKeys, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
-  let savedEnv = {};
-
-  beforeEach(() => {
-    for (const key of ENV_KEYS) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
-    }
-  });
-
-  afterEach(() => {
-    for (const key of ENV_KEYS) {
-      if (savedEnv[key] !== undefined) process.env[key] = savedEnv[key];
-      else delete process.env[key];
-    }
-  });
-
   for (const runtime of allRuntimes.filter(runtime => runtime !== 'kimi')) {
-    test(`getGlobalConfigDir('${runtime}') returns expected home-relative path`, () => {
-      const expected = path.join(os.homedir(), RUNTIME_META[runtime].globalSuffix);
+    test(`getGlobalConfigDir('${runtime}') returns expected home-relative path`, (t) => {
+      const home = createTempDir('gsd-default-paths-home-');
+      t.after(() => cleanup(home));
+      sandboxHome(t, home);
+      t.after(scrubConfigLocationEnv());
+      const expected = path.join(home, RUNTIME_META[runtime].globalSuffix);
       assert.strictEqual(getGlobalConfigDir(runtime), expected);
     });
   }
@@ -6716,6 +6692,17 @@ const path = require('node:path');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const os = require('node:os');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { TEST_HOME_SANDBOX_MARKER, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
+
+// #6034 (epic #4635 Phase 2): the skills-root probes below run in a child whose
+// env comes from isolatedEnv({ home: <fixture> }), and expect paths derived from
+// that fixture home — never from the developer's real home, which an ambient
+// CLAUDE_CONFIG_DIR used to disagree with (#4312). The sandbox marker is
+// re-added because isolatedEnv strips every GSD_* variable.
+function skillsRootEnv(home, extra = {}) {
+  return isolatedEnv({ home, override: { [TEST_HOME_SANDBOX_MARKER]: home, ...extra } });
+}
 
 // A single short CLI query (install.js --skills-root <runtime>) — no full
 // install or build involved.
@@ -6733,23 +6720,27 @@ function readWorkflow() {
 
 describe('install.js --skills-root', () => {
   const CASES = [
-    { runtime: 'claude', expected: path.join(os.homedir(), '.claude', 'skills') },
+    { runtime: 'claude', segments: ['.claude', 'skills'] },
     // #2088 (ADR-1239 upgrade 3): Codex skills resolve to the canonical
     // $HOME/.agents/skills root (skills-kind home override), not $CODEX_HOME/skills.
-    { runtime: 'codex', expected: path.join(os.homedir(), '.agents', 'skills') },
+    { runtime: 'codex', segments: ['.agents', 'skills'] },
     // #3738: Antigravity global discovery scans ~/.gemini/config/ — skills resolve
     // to the skills-kind home override, not the configHome (~/.gemini/antigravity)
     // that still holds settings.json and the gsd-core runtime files.
-    { runtime: 'antigravity', expected: path.join(os.homedir(), '.gemini', 'config', 'skills') },
-    { runtime: 'copilot', expected: path.join(os.homedir(), '.copilot', 'skills') },
-    { runtime: 'cursor', expected: path.join(os.homedir(), '.cursor', 'skills') },
-    { runtime: 'trae', expected: path.join(os.homedir(), '.trae', 'skills') },
+    { runtime: 'antigravity', segments: ['.gemini', 'config', 'skills'] },
+    { runtime: 'copilot', segments: ['.copilot', 'skills'] },
+    { runtime: 'cursor', segments: ['.cursor', 'skills'] },
+    { runtime: 'trae', segments: ['.trae', 'skills'] },
   ];
 
-  for (const { runtime, expected } of CASES) {
-    test(`resolves correct skills root for ${runtime}`, () => {
+  for (const { runtime, segments } of CASES) {
+    test(`resolves correct skills root for ${runtime}`, (t) => {
+      const home = createTempDir('gsd-skills-root-home-');
+      t.after(() => cleanup(home));
+      const expected = path.join(home, ...segments);
+      // GSD_TEST_MODE is stripped by isolatedEnv: the probe runs outside test mode.
       const result = runNode([INSTALL_JS, '--skills-root', runtime], {
-        env: { ...process.env, GSD_TEST_MODE: undefined }, // ensure not in test mode
+        env: skillsRootEnv(home),
         timeoutMs: SKILLS_ROOT_PROBE_TIMEOUT_MS,
       });
       // Strip trailing newline
@@ -6781,17 +6772,20 @@ describe('#3024: gsd-tools query skills-root', () => {
   // Must agree with install.js --skills-root for every runtime (same underlying
   // getGlobalSkillsBase function, just a different entry point that IS shipped).
   const CASES = [
-    { runtime: 'claude', expected: path.join(os.homedir(), '.claude', 'skills') },
-    { runtime: 'codex', expected: path.join(os.homedir(), '.agents', 'skills') },
+    { runtime: 'claude', segments: ['.claude', 'skills'] },
+    { runtime: 'codex', segments: ['.agents', 'skills'] },
     // #3738: the query surface must agree with install.js --skills-root above.
-    { runtime: 'antigravity', expected: path.join(os.homedir(), '.gemini', 'config', 'skills') },
-    { runtime: 'cursor', expected: path.join(os.homedir(), '.cursor', 'skills') },
+    { runtime: 'antigravity', segments: ['.gemini', 'config', 'skills'] },
+    { runtime: 'cursor', segments: ['.cursor', 'skills'] },
   ];
 
-  for (const { runtime, expected } of CASES) {
-    test(`resolves correct skills root for ${runtime}`, () => {
+  for (const { runtime, segments } of CASES) {
+    test(`resolves correct skills root for ${runtime}`, (t) => {
+      const home = createTempDir('gsd-skills-root-home-');
+      t.after(() => cleanup(home));
+      const expected = path.join(home, ...segments);
       const result = runNode([TOOLS_PATH, 'query', 'skills-root', runtime, '--raw'], {
-        env: { ...process.env, GSD_TEST_MODE: '1' },
+        env: skillsRootEnv(home, { GSD_TEST_MODE: '1' }),
       });
       assert.equal(result.outcome, OUTCOME.EXITED, `gsd-tools did not exit cleanly: ${JSON.stringify(result)}`);
       assert.strictEqual(result.exitCode, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
@@ -6808,13 +6802,15 @@ describe('#3024: gsd-tools query skills-root', () => {
     assert.notStrictEqual(result.exitCode, 0, 'Should exit with error when runtime arg is missing');
   });
 
-  test('non-raw form: query skills-root claude parses as JSON with expected skills_root', () => {
+  test('non-raw form: query skills-root claude parses as JSON with expected skills_root', (t) => {
+    const home = createTempDir('gsd-skills-root-home-');
+    t.after(() => cleanup(home));
     const result = runNode([TOOLS_PATH, 'query', 'skills-root', 'claude'], {
-      env: { ...process.env, GSD_TEST_MODE: '1' },
+      env: skillsRootEnv(home, { GSD_TEST_MODE: '1' }),
     });
     assert.equal(result.outcome, OUTCOME.EXITED, `gsd-tools did not exit cleanly: ${JSON.stringify(result)}`);
     assert.strictEqual(result.exitCode, 0, `gsd-tools exited ${result.exitCode}: ${result.stderr}`);
-    const expected = path.join(os.homedir(), '.claude', 'skills');
+    const expected = path.join(home, '.claude', 'skills');
     const parsed = JSON.parse(result.stdout);
     assert.strictEqual(parsed.skills_root, expected, `Expected ${expected}, got ${parsed.skills_root}`);
   });
@@ -6979,9 +6975,13 @@ describe('#3024: gsd-tools query skills-root', () => {
   // through getGlobalConfigDir's retired-runtime guard and refuses outright.
   // The CLI-level rejection (isRegisteredRuntimeId) is unchanged and still
   // asserted as before.
-  test("gemini: rejected by the CLI gate, and its underlying resolution now refuses too (not merely unregistered, and no longer claude's fallback)", () => {
+  test("gemini: rejected by the CLI gate, and its underlying resolution now refuses too (not merely unregistered, and no longer claude's fallback)", (t) => {
+    const home = createTempDir('gsd-skills-root-home-');
+    t.after(() => cleanup(home));
+    sandboxHome(t, home);
+    t.after(scrubConfigLocationEnv());
     const result = runNode([TOOLS_PATH, 'query', 'skills-root', 'gemini', '--raw'], {
-      env: { ...process.env, GSD_TEST_MODE: '1' },
+      env: skillsRootEnv(home, { GSD_TEST_MODE: '1' }),
     });
     assert.equal(result.outcome, OUTCOME.EXITED, `gsd-tools did not exit cleanly: ${JSON.stringify(result)}`);
     assert.notStrictEqual(result.exitCode, 0, 'gemini must be rejected by isRegisteredRuntimeId');

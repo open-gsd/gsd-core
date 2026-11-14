@@ -15,8 +15,15 @@
  * converts to istanbul — `_normalizeProcessCov` (node: urls, file:// urls,
  * include/exclude filter), `_normalizeSourceMapCache` (file-url keys; a
  * non-file key throws, as it does in c8) and then `@bcoe/v8-coverage`
- * `mergeProcessCovs` over all dumps in one call, which is associative. The
- * merged output is a valid c8 temp-directory dump, so the gate's unchanged
+ * `mergeProcessCovs`. Merging is applied in batches of MERGE_BATCH_SIZE
+ * (`mergeProcessCovs([acc, ...batch])`) so peak memory does not grow with the
+ * number of dumps (#6140). Merge grouping preserves every per-offset execution
+ * count (what line/statement coverage reads), but @bcoe/v8-coverage
+ * normalization is not associative in range structure: a block range can be
+ * wrapped or joined differently than in a one-pass merge, so istanbul branch
+ * totals may differ by merge grouping, the same variance the shard -> gate
+ * merge already has (pinned by test). The merged output is a valid c8
+ * temp-directory dump, so the gate's unchanged
  * `c8 report` commands read it as if it were one more raw dump. Retained urls
  * are the UNION of every include glob the gate uses, so both
  * `test:coverage:report` and `test:coverage:scripts-floor` see all of the
@@ -38,6 +45,8 @@ const { fileURLToPath, pathToFileURL } = require('url');
 // test:coverage:scripts-floor (tests/ci-compact-v8-coverage.test.cjs pins it).
 const INCLUDE_GLOBS = ['gsd-core/bin/lib/**/*.cjs', 'scripts/**/*.cjs'];
 const EXCLUDE_GLOBS = ['tests/**'];
+// Bounds how many filtered dumps are held before folding them into the accumulator (#6140).
+const MERGE_BATCH_SIZE = 64;
 
 function loadDeps(cwd) {
   // Resolve through c8 so the versions are exactly the ones c8 itself uses.
@@ -68,8 +77,14 @@ function normalizeBlockFlags(result) {
   }
 }
 
-function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
-  const { mergeProcessCovs, Exclude } = loadDeps(cwd);
+// `mergeProcessCovs` is an injection point for tests; main() never passes it.
+function compact({ tempDirectory, outFile, cwd = process.cwd(), batchSize = MERGE_BATCH_SIZE, mergeProcessCovs: mergeOverride }) {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(`ci-compact-v8-coverage: batchSize must be a positive integer, got ${batchSize}`);
+  }
+  const deps = loadDeps(cwd);
+  const mergeProcessCovs = mergeOverride || deps.mergeProcessCovs;
+  const { Exclude } = deps;
   const exclude = new Exclude({
     cwd,
     include: INCLUDE_GLOBS,
@@ -102,7 +117,18 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
     return href;
   };
 
-  const processCovs = [];
+  let merged = null;
+  let pending = [];
+  // Count equality across merge groupings relies on a V8 invariant: detailed
+  // (NODE_V8_COVERAGE) coverage reports isBlockCoverage:false only for a
+  // never-compiled function (one range, count 0). @bcoe/v8-coverage drops
+  // function-level entries when block-level ones exist, so a function-level
+  // entry with count > 0 would merge differently by grouping.
+  const flush = () => {
+    if (pending.length === 0) return;
+    merged = mergeProcessCovs(merged ? [merged, ...pending] : pending);
+    pending = [];
+  };
   const sourceMapCache = {};
   let inputFiles = 0;
   for (const name of fs.readdirSync(tempDirectory).sort()) {
@@ -130,14 +156,15 @@ function compact({ tempDirectory, outFile, cwd = process.cwd() }) {
         if (shouldInstrument(keyPath)) sourceMapCache[pathToFileURL(keyPath).href] = cache[key];
       }
     }
-    processCovs.push({ result });
+    pending.push({ result });
+    if (pending.length >= batchSize) flush();
   }
 
   if (inputFiles === 0) {
     throw new Error(`ci-compact-v8-coverage: no V8 coverage dumps in ${tempDirectory}`);
   }
 
-  const merged = mergeProcessCovs(processCovs);
+  flush();
   const out = { result: merged ? merged.result : [], 'source-map-cache': sourceMapCache };
   normalizeBlockFlags(out.result);
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
@@ -174,4 +201,4 @@ function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2));
 
-module.exports = { compact, parseArgs, main, INCLUDE_GLOBS, EXCLUDE_GLOBS };
+module.exports = { compact, parseArgs, main, INCLUDE_GLOBS, EXCLUDE_GLOBS, MERGE_BATCH_SIZE };
