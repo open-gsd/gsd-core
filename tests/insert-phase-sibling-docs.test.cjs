@@ -99,6 +99,7 @@ describe('#5583 insert-phase --sibling', () => {
       ['15.2 --ws feature --sibling x', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['--ws feature 15.2 x --sibling', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['15.2 x --ws', ['[15.2]', '[x]']],
+      ['15.2 --ws --sibling x', ['[15.2]', '[--sibling]', '[x]']],
       ['5 -5 degrees', ['[5]', '[-5 degrees]']],
       ['5 -h flag', ['[5]', '[-h flag]']],
       ['  --insert 15.2 x', ['[15.2]', '[x]']],
