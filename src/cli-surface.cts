@@ -207,9 +207,9 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     positionals: 3,
     // `--archive-phases` is the documented default spelled out; nothing reads it, callers pass it (milestone tests).
     booleanFlags: ['archive-phases', 'archive-quick', 'confirm', 'dry-run', 'force', 'no-archive-phases'],
-    // A bare --release-map reads as '' (not null) so the handler can refuse it with today's exit reason.
-    valueFlags: ['release-map'],
-    bareEmptyFlags: ['release-map'],
+    // A bare --release-map / --accomplishments-file reads as '' (not null) so the handler can refuse it with today's exit reason.
+    valueFlags: ['accomplishments-file', 'release-map'],
+    bareEmptyFlags: ['accomplishments-file', 'release-map'],
     multiwordFlags: ['name'],
   },
   'progress.bar': { positionals: 2 },

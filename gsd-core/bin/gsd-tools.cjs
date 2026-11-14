@@ -89,6 +89,8 @@
  *                                    {repo, release, reference, environment, status, tag}) as
  *                                    milestones/vX.Y-RELEASE-MAP.json and record it in MILESTONES.md
  *                                    (#5706; validated before any write, absent = unchanged)
+ *     [--accomplishments-file <file>] Curated MILESTONES.md "Key accomplishments" (JSON array of strings;
+ *                                    #6175; validated before any write; absent = SUMMARY one-liners, repeats dropped)
  *
  *   milestone release-tags --map <file.json> [--dry-run]
  *                                      Preflight, then create annotated tags per sub-repo from a JSON array of
@@ -3241,7 +3243,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             if (releaseMap !== null && releaseMap.trim() === '') {
               error('--release-map requires a file path (a JSON array of release-map entries)');
             }
-            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm, releaseMap }, raw);
+            // #6175: optional file of curated accomplishments (a JSON array of strings); same
+            // bare-flag contract as --release-map.
+            const accomplishmentsFile = parsed['accomplishments-file'];
+            if (accomplishmentsFile !== null && accomplishmentsFile.trim() === '') {
+              error('milestone complete: --accomplishments-file requires a file path (a JSON array of accomplishment strings) — nothing has been changed.');
+            }
+            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun, archiveQuick, confirm, releaseMap, accomplishmentsFile }, raw);
           } else if (subcommand === 'archive-quick') {
             // #2142 escalation: narrow archival-only entry point (does NOT
             // touch ROADMAP/REQUIREMENTS/MILESTONES.md, runs no completion
