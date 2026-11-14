@@ -859,7 +859,7 @@ function omitTierAlias(config: Record<string, unknown>, agentType: string, attem
   if (tier === 'inherit' || !VALID_TIERS.has(tier ?? '')) return '';
   const routingTier = dynamicRoutingTier(config, agentType, attempt);
   if (routingTier === null) return tier as string;
-  return (catalog.adaptiveTierMap as Record<string, string>)[routingTier];
+  return catalog.adaptiveTierMap[routingTier];
 }
 
 /**
