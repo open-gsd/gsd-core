@@ -646,12 +646,90 @@ const SHARD_BALANCE = Object.freeze({
   since: '2026-09-28T14:17:51Z', // #5097 merge
   minRuns: 10,
   windowRuns: 20,
-  maxMedianGapMs: 120000,
-  baselineShardTotal: 3,
+  // #5029 resharded the lane 3 -> 6, so nothing below is scaled from the
+  // 3-shard values. `next` has no 6-shard push runs until that lands, so two
+  // measured sets stand in for them. Re-derive both from `next` push runs once
+  // `minRuns` of them exist.
+  //
+  // Gap limit. #5101 shipped 120000 (2 min) for ~25-31 min shards. Over the
+  // twelve 6-shard runs of PR #5053 whose heads carry #5097's win32 weights
+  // (36785097774, 37024435915, 37031116287, 37037251805, 37041237415,
+  // 37086102648, 37138563782, 37694227292, 37697717410, 38647499912,
+  // 38650210804, 38654860178), six 11-17 min shards have a median gap of 332.5s
+  // (5/6 median 1011.5s vs 6/6 679s). Its cause is not packing weights: a chunk
+  // cannot finish before its longest file, and the tier has single files of
+  // 3.5-6.5 min that land in different chunks of different shards (`install`
+  // 384s, `codex-config-agents` 371s, `verification-status` 219s,
+  // `install-minimal-hooks` 218s on run 37697717410). Regenerating the win32
+  // table does not move that. The limit is the measured gap x 1.5, the same
+  // headroom factor tests/ci-test-job-timeout-budget.test.cjs applies to job
+  // budgets: 332.5 x 1.5 = 498.75s, rounded up to 500s.
+  //
+  // Those twelve runs predate #5803, and the margin under the limit depends on
+  // the partition. Measured since, as evaluateShardBalance computes the gap
+  // (slowest minus fastest per-shard median):
+  //   - 229s over the twelve fork runs the baselines below come from (367-375
+  //     tier files, nine partitions);
+  //   - 430.5s over PR #5053's two runs on the 375-file partition its head
+  //     had at 77b2d9a09 (42078639141 and 42087947326; 439s and 459s run by
+  //     run);
+  //   - 265.5s over twelve fork runs on the 319-330 file partitions `next` has
+  //     had since #6002 (43136204917, 43136204941, 43136205083, 43140668487,
+  //     43140668934, 43140669065, 43248156906, 43253932817, 43253932847,
+  //     43253934459, 43253938926, 43253940560), where 2/6 is the slow shard
+  //     (median 938s against 672.5s for 5/6) and single runs range from 328s
+  //     to 586s;
+  //   - 268s over the newest twenty of all 26, which is the window the daily
+  //     check reads, and reads `ok`.
+  // So the margin is one of two things. A window that spans the partitions
+  // `next` has now, which is what the daily check reads first after #5029
+  // merges, has about 235s to spare (47%), though single runs there are
+  // already over the limit. A window that sat on one unlucky partition would
+  // have about 70s (14%). The limit is kept and not re-derived, because the
+  // two honest re-derivations disagree: the gap over those twelve runs x 1.5
+  // would be 398s, under what one partition already measures, and that one
+  // partition's gap x 1.5 would be 646s, sized to whichever partition was
+  // sampled. If the check opens a gap breach, read which shard is slow before
+  // changing this number: the cause above (#5807 tracks the packing fix) is
+  // real imbalance and not runner noise.
+  maxMedianGapMs: 500000,
+  // Baselines. A shard's time moves with the tree: #5803 refreshed
+  // tests/test-timings.json, and selectShard re-packs the light files whenever
+  // the tier changes, so `next` went through nine partitions in the 40 commits
+  // from #5803 to d47f196d1. Baselines measured on the PR runs above read
+  // `breach` on those partitions (2/6 p90 957s against 927.5s). So these come
+  // from twelve push runs of this workflow on the fork tarc/gsd-core: one per
+  // partition plus three repeats, each a `next` commit from that span merged
+  // with #5029 (42019488063, 42023851315, 42023856927, 42023862270, 42023868163,
+  // 42023874553, 42023879784, 42034547210, 42034552231, 42034559137,
+  // 42034565931, 42034572698). Spanning partitions is deliberate: the daily
+  // check reads the newest `windowRuns` push runs, which span them too. All
+  // twelve ran on one day, so they do not sample day-to-day runner variation.
+  // The twelve later fork runs the gap comment lists (319-330 tier files) read
+  // `ok` against these baselines: their p90s are 889000, 1125000, 999000,
+  // 973000, 749000 and 1034000, the closest being 2/6 at 1125000 against
+  // 1196250. One row of their 71 is above its baseline, 2/6 at 1335000 on run
+  // 43248156906, a slow VM (the test-conformance LANE_COSTS entry describes
+  // it). On the 330-file partition 2/6 starts with a chunk that is one 4-5
+  // minute file (`codex-config-agents`), so it is the shard to watch.
+  //
+  // The measured nearest-rank p90 of job wall-clock per shard (the same
+  // `percentile` this file uses) over those runs is 1/6 889000, 2/6 957000,
+  // 3/6 1028000, 4/6 993000, 5/6 904000, 6/6 940000. Each baseline is that p90
+  // x 1.25. A baseline equal to one sample's p90 is exceeded by the p90 of a
+  // fresh sample of the same distribution too often (3/6's own twelfth value,
+  // 1047000, is already above 1028000), so the daily check would open a p90
+  // breach on noise. 1.25 rather than the 1.5 used above keeps the rule a
+  // regression detector: x1.5 would let 3/6 reach ~26 min, past the worst run
+  // the test-conformance LANE_COSTS entry records.
+  baselineShardTotal: 6,
   baselineP90Ms: Object.freeze({
-    '1/3': 1824000,
-    '2/3': 2046000,
-    '3/3': 2208000,
+    '1/6': 1111250,
+    '2/6': 1196250,
+    '3/6': 1285000,
+    '4/6': 1241250,
+    '5/6': 1130000,
+    '6/6': 1175000,
   }),
   issueTitle: 'CI: Windows conformance shard balance regressed',
 });
@@ -767,8 +845,18 @@ function evaluateShardBalance(samples, config) {
 
   if (newestTotal !== config.baselineShardTotal) {
     const perShard = buildPerShard(keptSamples, newestTotal, config);
+    // #5029: a re-shard PR changes the baseline in the same merge, so until
+    // its first push runs complete on `next`, the newest runs still use the
+    // old layout. A mismatch means the lane moved away from the baseline's
+    // layout, which needs that layout to have run: while it has fewer than
+    // minRuns runs here, report insufficient-data rather than file an issue
+    // against the re-shard that just landed.
+    const baselineLayoutRuns = new Set(
+      samples.filter((s) => s.total === config.baselineShardTotal).map((s) => s.runId),
+    ).size;
+    const status = baselineLayoutRuns < config.minRuns ? 'insufficient-data' : 'baseline-mismatch';
     return {
-      status: 'baseline-mismatch', runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
+      status, runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
     };
   }
 

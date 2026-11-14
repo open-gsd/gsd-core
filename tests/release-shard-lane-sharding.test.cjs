@@ -27,34 +27,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
+const { parseShardSpec, isCompleteShardSet } = require('./helpers/shard-spec.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
 function loadWorkflow(name) {
   return yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8'));
-}
-
-/** Mirrors ci-full-lane-sharding.test.cjs's shard-spec grammar. */
-function parseShardSpec(spec) {
-  const m = /^(\d+)\/(\d+)$/.exec(String(spec));
-  if (!m) return null;
-  const index = Number(m[1]);
-  const total = Number(m[2]);
-  if (!Number.isInteger(index) || !Number.isInteger(total)) return null;
-  if (total < 1 || index < 1 || index > total) return null;
-  return { index, total };
-}
-
-/** True iff `specs` is exactly one complete shard set: same N, numerators 1..N. */
-function isCompleteShardSet(specs) {
-  if (specs.length === 0) return false;
-  const parsed = specs.map(parseShardSpec);
-  if (parsed.some((p) => p === null)) return false;
-  const total = parsed[0].total;
-  if (parsed.some((p) => p.total !== total)) return false;
-  if (parsed.length !== total) return false;
-  const seen = new Set(parsed.map((p) => p.index));
-  return seen.size === total && [...seen].every((i) => i >= 1 && i <= total);
 }
 
 const LANES = [
