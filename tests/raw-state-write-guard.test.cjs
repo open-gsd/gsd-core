@@ -296,6 +296,50 @@ process.stdout.write(String(fs.writeFileSync === before && !fs.writeFileSync.nam
     const r = runNode([main], { cwd: dir, env, timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.stdout, 'true', r.stderr);
   });
+
+  test('loading the shim leaves os.tmpdir() to the child: a child that presents itself as win32 reads its TEMP/TMP, not the TMPDIR it inherited (#5120, #5848)', (t) => {
+    // node:os picks its win32 or POSIX tmpdir branch once, when it first loads. A preload that
+    // loads it (reading fs.promises does, through internal/fs/promises) fixes the POSIX branch
+    // before the child's own code runs, so a child that spoofs process.platform, as the #5848
+    // install probe does, reads TMPDIR (the runner's run root) instead of the TEMP/TMP it was
+    // handed. TMPDIR differs from TEMP/TMP so the two branches give different answers. On a real
+    // win32 host the spoof is a no-op and the row is green either way; it discriminates on POSIX.
+    const dir = createTempDir('rswg-tmpdir-');
+    t.after(() => cleanup(dir));
+    const given = path.join(dir, 'given-temp');
+    const inherited = path.join(dir, 'inherited-tmpdir');
+    fs.mkdirSync(given);
+    fs.mkdirSync(inherited);
+    const main = writeModule(dir, 'tests/main.cjs', `Object.defineProperty(process, 'platform', { value: 'win32' });
+process.stdout.write(require('node:os').tmpdir());`);
+    const ledger = path.join(dir, 'ledger.ndjson');
+    const shim = writeModule(dir, 'ev/raw-state-write-preload.cjs', preloadShimSource(ledger));
+    const env = isolatedEnv({
+      home: dir,
+      override: { NODE_OPTIONS: nodeOptionsWithRequire(undefined, shim), TEMP: given, TMP: given, TMPDIR: inherited },
+    });
+    const r = runNode([main], { cwd: dir, env, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(readStateWriteLedger(ledger).preloadInstalls, 1, 'the shim loaded in the child, so the row tests it');
+    assert.equal(r.stdout, given, 'os.tmpdir() under the shim must be the TEMP/TMP the child was given');
+  });
+
+  test('a product write onto STATE.md through require(\'fs/promises\'), never through fs.promises, is still a violation (#5120)', (t) => {
+    const dir = createTempDir('rswg-fsp-');
+    t.after(() => cleanup(dir));
+    const target = path.join(dir, '.planning', 'STATE.md');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    // The module reaches the promise API only by its own specifiers, before anything reads
+    // fs.promises, so the wrappers must be in place on that path too.
+    writeModule(dir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
+const fsp = require('node:fs/promises');
+const { appendFile } = require('fs/promises');
+module.exports = async (target) => { await fsp.writeFile(target, 'a'); await appendFile(target, 'b'); };
+`);
+    const main = writeModule(dir, 'tests/main.cjs', `require(${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/writer.cjs'))})(${JSON.stringify(target)});`);
+    const entries = runGuarded(dir, main);
+    assert.deepEqual(entries.map((e) => [e.fn, e.violation]), [['promises.writeFile', true], ['promises.appendFile', true]], JSON.stringify(entries));
+  });
 });
 
 describe('nodeOptionsWithRequire', () => {
