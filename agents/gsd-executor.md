@@ -22,39 +22,7 @@ Your job: Execute the plan completely, commit each task, create SUMMARY.md, upda
 </role>
 
 <documentation_lookup>
-When you need library or framework documentation, check in this order:
-
-1. If Context7 MCP tools (`mcp__context7__*, mcp__plugin_context7_context7__*`) are available in your environment, use them:
-   - Resolve library ID: `mcp__context7__resolve-library-id` with `libraryName`
-   - Fetch docs: `mcp__context7__query-docs` with `libraryId` (the ID from step 1) and `query`
-
-2. If Context7 MCP is not available (custom subagents cannot see project-scoped
-   `.mcp.json` servers — they only inherit user-scoped `~/.claude/mcp.json`, so a
-   context7 server configured at the project scope is invisible to spawned
-   agents), use the CLI fallback via Bash:
-
-   Step 1 — Resolve library ID:
-   ```bash
-   if command -v ctx7 &>/dev/null; then
-     ctx7 library <name> "<query>"
-   else
-     echo "ctx7 not found — install with: npm install -g ctx7 (verify at npmjs.com/package/ctx7 first)"
-   fi
-   ```
-
-   Step 2 — Fetch documentation:
-   ```bash
-   if command -v ctx7 &>/dev/null; then
-     ctx7 docs <libraryId> "<query>"
-   else
-     echo "ctx7 not found — install with: npm install -g ctx7 (verify at npmjs.com/package/ctx7 first)"
-   fi
-   ```
-
-Do not skip documentation lookups because MCP tools are unavailable — the CLI fallback
-works via Bash and produces equivalent output. Do not rely on training knowledge alone
-for library APIs where version-specific behavior matters. Do NOT use `npx --yes` to
-auto-download ctx7 — this silently executes unverified packages from the registry.
+@~/.claude/gsd-core/references/research-documentation-lookup.md
 </documentation_lookup>
 
 <project_context>
@@ -799,13 +767,11 @@ gsd_run query state.record-session \
   --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
 ```
 
-```bash
-# Mark completed requirements from PLAN.md frontmatter
-# Extract the `requirements` array from the plan's frontmatter, then mark each complete
-gsd_run query requirements.mark-complete ${REQ_IDS}
-```
+**Ready-ids gate (#4944, #2388):** resolve this plan, then mark only the IDs that are ready. Fail closed when the plan cannot be resolved.
 
-**Requirement IDs:** Extract from the PLAN.md frontmatter `requirements:` field (e.g., `requirements: [AUTH-01, AUTH-02]`). Pass all IDs to `requirements mark-complete`. If the plan has no requirements field, skip this step.
+**Requirement IDs:** Extract from PLAN.md `requirements:` (e.g. `[AUTH-01]`). If absent, skip. Query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (#4956) before `requirements mark-complete`; skip if `PLAN_PATH` cannot be resolved. Shared requirements stay blocked until sibling plans finish (#2388, #4944). In the same Bash call, set `PHASE`, `PLAN`, `REQ_IDS` (from the plan's `requirements:`) and `PHASE_DIR` (the init JSON's `phase_dir`).
+
+@~/.claude/gsd-core/references/executor-ready-ids-gate.md
 
 **State command behaviors:**
 - `state advance-plan`: Increments Current Plan, detects last-plan edge case, sets status
@@ -814,7 +780,8 @@ gsd_run query requirements.mark-complete ${REQ_IDS}
 - `state add-decision`: Adds to Decisions section, removes placeholders
 - `state record-session`: Updates Last session timestamp and Stopped At fields
 - `roadmap update-plan-progress`: Updates ROADMAP.md progress table row with PLAN vs SUMMARY counts
-- `requirements mark-complete`: Checks off requirement checkboxes and updates traceability table in REQUIREMENTS.md
+- `requirements ready-ids`: Scans sibling plans; returns safe-to-complete IDs
+- `requirements mark-complete`: Checks off requirements and updates traceability for ready IDs
 
 **Extract decisions from SUMMARY.md:** Parse key-decisions from frontmatter or "Decisions Made" section → add each via `state add-decision`.
 

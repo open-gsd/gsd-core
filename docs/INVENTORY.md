@@ -370,9 +370,10 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `verifier-wiring-patterns.md` | Data-flow trace procedure and the four wiring patterns (Component→API, API→Database, Form→Handler, State→Render) loaded by `gsd-verifier`. |
 | `mandatory-initial-read.md` | Shared required-reading boilerplate injected into agent prompts. |
 | `gsd-run-resolver.md` | Canonical `gsd_run` bootstrap resolver block; workflows reference this file instead of copying the shell probe. |
+| `executor-ready-ids-gate.md` | Shared ready-ids gate the executor loads: resolve the plan, then mark only requirement IDs that are ready. Extracted so the executor prompt stays within its size cap. |
 | `agent-skills-bootstrap.md` | Shared agent_skills self-load contract (query + Read + dedup guard) injected into all 22 consumer agents. |
 | `project-skills-discovery.md` | Shared project-skills-discovery boilerplate injected into agent prompts. |
-| `research-documentation-lookup.md` | Shared documentation-lookup protocol (Context7 MCP + guarded CLI fallback) injected into all researcher agents. |
+| `research-documentation-lookup.md` | Shared documentation-lookup protocol (Context7 MCP + guarded CLI fallback) injected into researcher and executor agents. |
 | `research-philosophy.md` | Shared research philosophy (training-as-hypothesis, honest reporting, investigation-not-confirmation) injected into researcher agents. |
 | `research-verification-protocol.md` | Shared research verification protocol (4 pitfalls + pre-submission checklist) injected into researcher agents. |
 | `verify-command-path-resolvability.md` | Verify Command Path Resolvability dimension (#2401) loaded by `gsd-plan-checker`: how to consume the `{VERIFY_PATHS}` probe result (never re-run or hand-reason the filesystem), the severity/reason table, and report-never-prescribe rules. |
