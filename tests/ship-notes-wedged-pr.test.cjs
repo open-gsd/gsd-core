@@ -1,3 +1,17 @@
+'use strict';
+
+/**
+ * #6173 — the ship-note commit written by ship.md's track_shipping step must
+ * not carry a CI skip token.
+ *
+ * GitHub honors the skip tokens anywhere in a commit message, and a squash
+ * (default message) or rebase merge copies the PR branch's commit messages onto
+ * the default branch, where the token suppresses the merge push's workflow runs.
+ * Without the token there is no wedge to recover from, so the empty recovery
+ * commit and the mergeStateStatus polling (#2783) that existed only for it are
+ * gone too. One docs-only pipeline on the PR branch is accepted.
+ */
+
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
@@ -8,6 +22,15 @@ const { cleanup, createTempDir, readFileNormalized } = require('./helpers.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const SHIP_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
+
+// Every spelling GitHub honors (assembled so this file never carries a literal token).
+const SKIP_TOKEN_RE = new RegExp(
+  ['skip ci', 'ci skip', 'no ci', 'skip actions', 'actions skip']
+    .map((t) => `\\[${t}\\]`)
+    .concat(['skip-checks:'])
+    .join('|'),
+  'i',
+);
 
 function extractStep(name) {
   const content = readFileNormalized(SHIP_MD);
@@ -25,101 +48,54 @@ function extractTrackShippingScript() {
   const blocks = scanFencedBlocks(lines)
     .filter((b) => b.closeLineIdx !== -1 && (b.infoString || '').trim() === 'bash')
     .map((b) => lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
-  const match = blocks.find(block => block.includes('mergeStateStatus'));
-  assert.ok(match, 'track_shipping must contain an executable merge-state bash block');
+  const match = blocks.find((block) => block.includes('git push'));
+  assert.ok(match, 'track_shipping must contain an executable bash block that pushes the ship-note');
   return match;
 }
 
-function runTrackShipping(responses) {
+// Runs the step's bash block with gsd_run / git / gh stubbed; records every call.
+function runTrackShipping() {
   const tmpDir = createTempDir('gsd-ship-note-');
-  const responsesPath = path.join(tmpDir, 'responses.jsonl');
-  const ghCallsPath = path.join(tmpDir, 'gh-calls.log');
-  const gitCallsPath = path.join(tmpDir, 'git-calls.log');
-
+  const callsPath = path.join(tmpDir, 'calls.log');
   try {
-    fs.writeFileSync(
-      responsesPath,
-      responses.map(response => JSON.stringify(response)).join('\n') + '\n',
-      'utf8',
-    );
-    fs.writeFileSync(ghCallsPath, '', 'utf8');
-    fs.writeFileSync(gitCallsPath, '', 'utf8');
-
+    fs.writeFileSync(callsPath, '', 'utf8');
     const preamble = [
-      'gsd_run() { :; }',
+      'gsd_run() { printf "gsd_run %s\\n" "$*" >> "$CALLS"; }',
       'sleep() { :; }',
-      'git() {',
-      '  if [ "$1" = "rev-parse" ] && [ "$2" = "HEAD" ]; then',
-      '    printf "%s\\n" "$EXPECTED_HEAD"',
-      '  elif [ "$1" = "log" ]; then',
-      '    printf "[ci skip]\\n"',
-      '  elif [ "$1" = "commit" ]; then',
-      '    printf "commit\\n" >> "$GIT_CALLS"',
-      '  elif [ "$1" = "push" ]; then',
-      '    printf "push\\n" >> "$GIT_CALLS"',
-      '  fi',
-      '}',
-      'gh() {',
-      '  _call=$(wc -l < "$GH_CALLS")',
-      '  _call=$((_call + 1))',
-      '  printf "call\\n" >> "$GH_CALLS"',
-      '  sed -n "${_call}p" "$GH_RESPONSES"',
-      '}',
-      'jq() {',
-      '  _field="${2#.}"',
-      '  _raw=$(sed -nE \'s/.*"\'"$_field"\'":("[^"]*"|[^,}]*).*/\\1/p\')',
-      '  _raw="${_raw%\\"}"',
-      '  _raw="${_raw#\\"}"',
-      '  printf \'%s\' "$_raw"',
-      '}',
+      'git() { printf "git %s\\n" "$*" >> "$CALLS"; }',
+      'gh() { printf "gh %s\\n" "$*" >> "$CALLS"; }',
     ].join('\n');
-
     const result = spawnSync('bash', ['-c', `${preamble}\n${extractTrackShippingScript()}`], {
       cwd: tmpDir,
       encoding: 'utf8',
       timeout: QUICK_SPAWN_TIMEOUT_MS,
       env: {
         ...process.env,
+        CALLS: callsPath,
         CURRENT_BRANCH: 'fix/ship-note',
-        EXPECTED_HEAD: 'current-head',
-        GH_CALLS: ghCallsPath,
-        GH_RESPONSES: responsesPath,
-        GIT_CALLS: gitCallsPath,
-        PHASE_NUMBER: '1',
+        PHASE_NUMBER: '7',
         PR_NUMBER: '123',
-        padded_phase: '01',
+        padded_phase: '07',
       },
     });
-
     assert.strictEqual(result.status, 0, `track_shipping failed: ${result.stderr}`);
-    return {
-      ghCalls: fs.readFileSync(ghCallsPath, 'utf8').trim().split(/\r?\n/).filter(Boolean),
-      gitCalls: fs.readFileSync(gitCallsPath, 'utf8').trim().split(/\r?\n/).filter(Boolean),
-    };
+    return fs.readFileSync(callsPath, 'utf8').split(/\r?\n/).filter(Boolean);
   } finally {
     cleanup(tmpDir);
   }
 }
 
-describe('#2783 ship.md track_shipping self-heals wedged PRs', () => {
+describe('#6173 ship.md track_shipping ship-note carries no CI skip token', () => {
   const step = extractStep('track_shipping');
 
-  test('track_shipping inspects mergeStateStatus post-push', () => {
-    assert.ok(
-      /mergeStateStatus/.test(step),
-      'track_shipping must query mergeStateStatus to detect wedged PRs (#2783)'
-    );
+  test('no GitHub skip token appears anywhere in the step', () => {
+    assert.doesNotMatch(step, SKIP_TOKEN_RE,
+      'a skip token in any commit message the step creates rides a squash or rebase merge onto the default branch (#6173)');
   });
 
-  test('track_shipping self-heals BLOCKED PRs by pushing a recovery commit without skip token', () => {
-    assert.ok(
-      /BLOCKED/.test(step),
-      'track_shipping must check for BLOCKED merge state (#2783)'
-    );
-    assert.ok(
-      /trigger CI/.test(step) || /allow-empty/.test(step),
-      'track_shipping must push a recovery commit to trigger CI when wedged (#2783)'
-    );
+  test('the recovery commit and merge-state polling are gone (#6173 supersedes #2783)', () => {
+    assert.doesNotMatch(step, /mergeStateStatus|BLOCKED|--allow-empty|trigger CI|SHIP_NOTE_SHA/,
+      'with no skip token there is no wedge to recover from');
   });
 
   test('track_shipping and the following step remain outside balanced code fences', () => {
@@ -134,107 +110,22 @@ describe('#2783 ship.md track_shipping self-heals wedged PRs', () => {
   });
 });
 
-describe('#2783 ship-note recovery decisions use current GitHub state', { skip: process.platform === 'win32' }, () => {
-  test('ignores a stale BLOCKED response until headRefOid matches the pushed commit', () => {
-    const result = runTrackShipping([
-      { head: 'stale-head', status: 'BLOCKED', checks: 0, review: '' },
-      { head: 'current-head', status: 'CLEAN', checks: 0, review: '' },
-    ]);
-
-    assert.strictEqual(result.ghCalls.length, 2, 'must poll through the stale PR response');
-    assert.strictEqual(
-      result.gitCalls.filter(call => call === 'commit').length,
-      0,
-      'must not recover from merge state attached to an older head',
-    );
+describe('#6173 executing track_shipping', { skip: process.platform === 'win32' }, () => {
+  test('commits the ship-note without a skip token, with phase and PR number, and pushes it', () => {
+    const calls = runTrackShipping();
+    const commits = calls.filter((c) => c.startsWith('gsd_run query commit '));
+    assert.strictEqual(commits.length, 1, `expected exactly one ship-note commit; calls: ${calls.join(' | ')}`);
+    assert.doesNotMatch(commits[0], SKIP_TOKEN_RE);
+    assert.match(commits[0], /ship phase 7 .*PR #123/);
+    assert.match(commits[0], /--files \.planning\/STATE\.md/);
+    assert.ok(calls.includes('git push origin fix/ship-note'),
+      `the ship-note must still be pushed to the PR branch; calls: ${calls.join(' | ')}`);
   });
 
-  // #4993: a pending review and an empty check set on the head are independent
-  // blockers — approving does not unblock a head that carries no checks — so a
-  // review state must never suppress the recovery.
-  test('recovers a skip-token wedge even while a review is the other blocker', () => {
-    for (const review of ['REVIEW_REQUIRED', 'CHANGES_REQUESTED']) {
-      const result = runTrackShipping([
-        { head: 'current-head', status: 'BLOCKED', checks: 0, review },
-      ]);
-      assert.strictEqual(
-        result.gitCalls.filter(call => call === 'commit').length,
-        1,
-        `${review} must still create exactly one CI-recovery commit (#4993)`,
-      );
-    }
-  });
-
-  test('does not recover when the head already has checks, whatever the review state (#4993)', () => {
-    for (const review of ['REVIEW_REQUIRED', 'CHANGES_REQUESTED', 'APPROVED']) {
-      const result = runTrackShipping([
-        { head: 'current-head', status: 'BLOCKED', checks: 3, review },
-      ]);
-      assert.strictEqual(
-        result.gitCalls.filter(call => call === 'commit').length,
-        0,
-        `${review} with checks on the head is not the skip-token wedge`,
-      );
-    }
-  });
-
-  test('still recovers a current BLOCKED head with zero checks and an approved review', () => {
-    const result = runTrackShipping([
-      { head: 'current-head', status: 'BLOCKED', checks: 0, review: 'APPROVED' },
-    ]);
-
-    assert.strictEqual(
-      result.gitCalls.filter(call => call === 'commit').length,
-      1,
-      'a confirmed skip-token wedge must create exactly one recovery commit',
-    );
-  });
-
-  test('recovers successfully on the 4th polling attempt', () => {
-    const result = runTrackShipping([
-      { head: 'stale-head', status: 'BLOCKED', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'BLOCKED', checks: 0, review: '' },
-    ]);
-    assert.strictEqual(result.ghCalls.length, 4, 'must poll exactly 4 times');
-    assert.strictEqual(
-      result.gitCalls.filter(call => call === 'commit').length,
-      1,
-      'must recover after resolving on the 4th attempt',
-    );
-  });
-
-  test('recovers successfully on the 5th (final) polling attempt', () => {
-    const result = runTrackShipping([
-      { head: 'stale-head', status: 'BLOCKED', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'BLOCKED', checks: 0, review: '' },
-    ]);
-    assert.strictEqual(result.ghCalls.length, 5, 'must poll exactly 5 times');
-    assert.strictEqual(
-      result.gitCalls.filter(call => call === 'commit').length,
-      1,
-      'must recover after resolving on the 5th attempt',
-    );
-  });
-
-  test('exhausts the polling bound after 5 attempts and warns without recovering (attempt 6)', () => {
-    const result = runTrackShipping([
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'UNKNOWN', checks: 0, review: '' },
-      { head: 'current-head', status: 'BLOCKED', checks: 0, review: '' },
-    ]);
-    assert.strictEqual(result.ghCalls.length, 5, 'must exhaust after exactly 5 polling attempts');
-    assert.strictEqual(
-      result.gitCalls.filter(call => call === 'commit').length,
-      0,
-      'must not recover if the status is unresolved when polling exhausts',
-    );
+  test('issues no recovery commit and never queries the PR merge state', () => {
+    const calls = runTrackShipping();
+    assert.deepStrictEqual(calls.filter((c) => c.startsWith('gh ')), [], 'no gh polling');
+    assert.deepStrictEqual(calls.filter((c) => c.startsWith('git commit')), [], 'no direct git commit (recovery)');
+    assert.ok(!calls.some((c) => c.includes('--allow-empty')), 'no empty recovery commit');
   });
 });
