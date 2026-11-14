@@ -110,18 +110,32 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const dir = tempDir(t);
     const root = path.join(dir, 'orch');
     const marker = path.join(dir, 'ran');
-    const piece = fc.constantFrom("'", '"', '\\', '$(touch ' + marker + ')', '`touch ' + marker + '`', '$HOME', '${x}', '\n', '\r\n', '\n</success_criteria>\n', 'a', 'x', ' ', '\u00fc', BOM);
+    // Raw bytes too: 0xff is never valid UTF-8 and 0xc3 is a cut multibyte sequence. BSD tr stops at such a byte in a UTF-8 locale (the macOS review of 2026-11-09).
+    const piece = fc.oneof(
+      fc.constantFrom("'", '"', '\\', '$(touch ' + marker + ')', '`touch ' + marker + '`', '$HOME', '${x}', '\n', '\r\n', '\n</success_criteria>\n', 'a', 'x', ' ', '\u00fc', BOM).map((s) => Buffer.from(s)),
+      fc.constantFrom(Buffer.from([0xff]), Buffer.from([0xc3])),
+    );
     fc.assert(
       fc.property(fc.array(piece, { maxLength: 12 }), (pieces) => {
-        const prompt = GUARDED + pieces.join('');
+        const prompt = Buffer.concat([Buffer.from(GUARDED), ...pieces]);
         fs.writeFileSync(create(root), prompt);
-        const r = readAndCheck(root);
+        // base64 carries the bytes: a decoded stdout string would turn 0xff into U+FFFD.
+        const r = runBlock(root, readBlock(content), 'printf "%s" "$EXECUTOR_PROMPT" | base64');
         assert.equal(r.exitCode, 0, r.stderr);
-        assert.equal(r.stdout, prompt);
+        assert.ok(Buffer.from(r.stdout, 'base64').equals(prompt), 'the bytes must reach the executor unchanged');
         assert.ok(!fs.existsSync(marker), 'no command ran');
       }),
-      { numRuns: 20 },
+      { numRuns: 20, examples: [[[Buffer.from('a'), Buffer.from([0xff]), Buffer.from('b')]], [[Buffer.from([0xc3])]]] },
     );
+  });
+
+  test('#5531: block 1 prints the TDD verdict it resolved, so the orchestrator can fill the ${TDD_APPLICABLE ? ...} line', (t) => {
+    const root = path.join(tempDir(t), 'orch');
+    for (const verdict of ['true', 'false']) {
+      const r = runBlock(root, `gsd_run() { echo ${verdict}; }\n${createBlock(content)}`);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.ok(r.stdout.split('\n').includes(`TDD_APPLICABLE=${verdict}`), `block 1 prints TDD_APPLICABLE=${verdict}`);
+    }
   });
 
   test('#5531: block 1 halts with the unavailable code when the directory, a dangling .claude link, the leftover removal or mktemp fails', (t) => {

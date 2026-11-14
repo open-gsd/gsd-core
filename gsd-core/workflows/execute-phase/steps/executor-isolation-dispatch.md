@@ -205,9 +205,11 @@ find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_PREFIX}-*" -mmin +14
 find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 69; }
 PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 69; } # XXXXXX path-final on BSD/macOS (#1520)
 echo "PROMPT_FILE=$PROMPT_FILE"
+echo "TDD_APPLICABLE=$TDD_APPLICABLE"
 ```
 
-Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted. `mktemp` created that file empty, so a file tool that refuses to overwrite a file it has not read must read it first:
+Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted. Fill the template's conditional embed line (the one that opens with `${TDD_APPLICABLE`) from the `TDD_APPLICABLE=` value block 1 printed:
+the line `- tdd.md` when it is `true`, the empty string otherwise. Never guess it. `mktemp` created that file empty, so a file tool that refuses to overwrite a file it has not read must read it first:
 
 ```text
 <objective>
@@ -297,8 +299,9 @@ if [ "${#_PROMPT_HITS}" -ne 1 ]; then
   exit 69
 fi
 PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null)
-_PROMPT_BYTES=$(wc -c 2>/dev/null < "$PROMPT_FILE" || :)
-_PROMPT_NONNUL=$(tr -d '\000' 2>/dev/null < "$PROMPT_FILE" | wc -c || :)
+# Count bytes in the C locale: BSD tr stops at the first byte that is not valid in the user's locale.
+_PROMPT_BYTES=$(LC_ALL=C wc -c 2>/dev/null < "$PROMPT_FILE" || :)
+_PROMPT_NONNUL=$(LC_ALL=C tr -d '\000' 2>/dev/null < "$PROMPT_FILE" | LC_ALL=C wc -c || :)
 if [ -n "$_PROMPT_BYTES" ] && [ "$_PROMPT_BYTES" -ne "$_PROMPT_NONNUL" ]; then
   rm -rf -- "$PROMPT_FILE" || :
   echo "FATAL: executor prompt file for plan {plan_number} holds a NUL byte, which a shell variable cannot carry. Halting." >&2
