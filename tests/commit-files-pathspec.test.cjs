@@ -3489,15 +3489,23 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual(head, docs === 'false' ? ['code'] : ['.planning/STATE.md', 'code']);
     }
   });
-  test('the squash and merge-with-history commits refuse while a foreign path is staged', (t) => {
-    const guard = (marker) => bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker).find((l) => l.startsWith('git diff --cached --quiet ||'));
+  test('the squash and merge-with-history guards accept the staged REQUIREMENTS.md deletion and refuse a foreign path, also from a subdirectory under diff.relative', (t) => {
+    const guard = (marker) => bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker).find((l) => l.includes('diff --cached --quiet'));
     for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
       assert.ok(g, 'a clean-index guard line exists');
       const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489g-');
-      fs.writeFileSync(path.join(dir, 'seed'), 's'); git('add', 'seed'); git('commit', '-q', '-m', 'seed');
-      assert.equal(runFence(dir, g).exitCode, 0);
+      fs.mkdirSync(path.join(dir, '.planning')); fs.mkdirSync(path.join(dir, 'app')); fs.mkdirSync(path.join(dir, 'other'));
+      fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'r'); fs.writeFileSync(path.join(dir, 'app', 'a'), 'a'); fs.writeFileSync(path.join(dir, 'other', 'o'), 'o');
+      git('add', '-A'); git('commit', '-q', '-m', 'seed');
+      assert.equal(runFence(dir, g).exitCode, 0, 'clean index');
+      git('rm', '-q', '.planning/REQUIREMENTS.md');
+      assert.equal(runFence(dir, g).exitCode, 0, 'the milestone own deletion is accepted');
+      git('config', 'diff.relative', 'true');
+      fs.writeFileSync(path.join(dir, 'other', 'o'), 'o2'); git('add', 'other/o');
+      assert.equal(runFence(dir, g, path.join(dir, 'app')).exitCode, 1, 'a foreign path outside the cwd is refused');
+      git('reset', '-q', 'other/o');
       fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
-      assert.equal(runFence(dir, g).exitCode, 1);
+      assert.equal(runFence(dir, g).exitCode, 1, 'a stray path next to the deletion is refused');
     }
   });
   test('pr-branch.md preflight refuses a staged foreign path', (t) => {

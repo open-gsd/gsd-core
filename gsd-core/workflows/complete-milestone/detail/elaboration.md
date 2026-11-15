@@ -199,8 +199,8 @@ AskUserQuestion with options: Squash merge (Recommended), Merge with history, De
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
-# The squash commits record the whole index, so a foreign staged file would ride along.
-git diff --cached --quiet || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
+# The squash commits record the whole index, so a foreign staged file would ride along (the milestone's own REQUIREMENTS.md deletion is staged by design).
+git -C "$(git rev-parse --show-toplevel)" diff --cached --quiet -- . ':(exclude,glob)**/.planning/**/REQUIREMENTS.md' || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
 if [ "$BRANCHING_STRATEGY" = "phase" ]; then
@@ -233,8 +233,8 @@ git checkout "$CURRENT_BRANCH"
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
-# The merge commits record the whole index, so a foreign staged file would ride along.
-git diff --cached --quiet || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
+# The merge commits record the whole index, so a foreign staged file would ride along (the milestone's own REQUIREMENTS.md deletion is staged by design).
+git -C "$(git rev-parse --show-toplevel)" diff --cached --quiet -- . ':(exclude,glob)**/.planning/**/REQUIREMENTS.md' || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
 if [ "$BRANCHING_STRATEGY" = "phase" ]; then
