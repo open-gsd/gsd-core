@@ -48,8 +48,13 @@ describe('#6213 dispatch-isolation derives the recorded executor from the plan',
   after(() => { cleanup(root); cleanup(agentsDir); });
 
   function setConfig(config) {
-    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', ...config }));
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false }, ...config }));
   }
+
+  test('the pinned config switches the #5328 model guard off, so the verdicts below are the isolation ones', () => {
+    setConfig({});
+    assert.equal(require('../gsd-core/bin/lib/model-escalation.cjs').guardApplies(root), false);
+  });
 
   function writePlan(planNumber, hintLine) {
     const frontmatter = [
@@ -195,7 +200,7 @@ describe('#6213 a phase-level record, and a plan given without its phase, still 
   after(() => { cleanup(root); cleanup(agentsDir); });
 
   function setConfig(config) {
-    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', ...config }));
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false }, ...config }));
   }
 
   function resetPhases() {
@@ -367,7 +372,7 @@ describe('#6213 an executor_types list that cannot fit the record is truncated v
   before(() => {
     root = createTempGitProject('gsd-phase-level-trunc-');
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-phase-level-trunc-agents-'));
-    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
     const phaseDir = path.join(root, '.planning', 'phases', '02-api');
     fs.mkdirSync(phaseDir, { recursive: true });
     for (let i = 0; i < COUNT; i += 1) {
@@ -456,7 +461,7 @@ describe('#6213 the routing block prints only an executor name the record can ca
     for (const name of [...UNRECORDABLE, 'gsd-executor']) {
       fs.writeFileSync(path.join(agentsDir, `${name}.md`), `---\nname: ${name}\n---\nbody\n`);
     }
-    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
     fs.mkdirSync(path.join(root, '.planning', 'phases', '02-api'), { recursive: true });
     env = { ...process.env, ...homeSandboxEnv(root), GSD_TEST_MODE: '1', GSD_AGENTS_DIR: agentsDir, GSD_NOW_MS: String(WRITTEN_AT) };
   });
@@ -504,7 +509,7 @@ describe('#6213 the executor_types byte budget and entry cap (limit-1 / limit / 
   before(() => {
     root = createTempGitProject('gsd-budget-exec-');
     agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-budget-exec-agents-'));
-    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
     env = { ...process.env, ...homeSandboxEnv(root), GSD_TEST_MODE: '1', GSD_AGENTS_DIR: agentsDir, GSD_NOW_MS: String(WRITTEN_AT) };
     fs.mkdirSync(path.join(root, '.planning', 'phases', '02-api'), { recursive: true });
     baseBytes = dispatch().size;
