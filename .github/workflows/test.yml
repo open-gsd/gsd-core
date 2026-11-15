@@ -505,8 +505,11 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: node scripts/ci-compact-v8-coverage.cjs --temp-directory coverage/tmp --out coverage/compact/shard-${{ strategy.job-index }}.json
 
+      # #6144: the durations artifact is diagnostic scheduling/timeout-evidence
+      # data, not a test result — an upload failure must not fail the job.
       - name: Upload per-file unit test durations
         if: always() && matrix.scope == 'full'
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-timings-ubuntu-unit-job${{ strategy.job-index }}
@@ -791,8 +794,12 @@ jobs:
 
       # #5071: `always()` — a red or killed shard's completed files are still
       # real measurements, and a red run is exactly when fresh durations help.
+      # #6144: `continue-on-error` — the artifact is diagnostic scheduling/
+      # timeout-evidence data, not a test result; an upload failure must not
+      # fail the job.
       - name: Upload per-file test durations
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-timings-${{ matrix.os }}-job${{ strategy.job-index }}
