@@ -191,6 +191,12 @@ describe('#6214: behavior that must not change', () => {
     assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), 'gpt-x');
     assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 1), 'gpt-x');
   });
+
+  test('an inherit project stays on the session model until a real escalation', () => {
+    dir = mkProject({ model_profile: 'inherit', dynamic_routing: DR });
+    assert.strictEqual(forTierIn(dir, MAPPER, 'claude', 0), 'inherit');
+    assert.strictEqual(forTierIn(dir, MAPPER, 'claude', 1), 'claude-sonnet-4-5');
+  });
 });
 
 describe('#6214: property', () => {

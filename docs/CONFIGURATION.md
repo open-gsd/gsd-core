@@ -1833,6 +1833,8 @@ If `dynamic_routing.escalate_on_failure: false`, soft failures do **not** advanc
 
 `light → standard → heavy → heavy` (heavy stays at heavy; can't go further).
 
+Under `model_profile: "inherit"` the first spawn uses the session model (`inherit`). A real escalation still moves to `tier_models[<next tier>]`, because enabling `dynamic_routing` opts the agent into escalation.
+
 #### Resolution precedence (highest → lowest)
 
 1. **`model_overrides[<agent>]`** — full IDs accepted; targeted exception
@@ -1842,7 +1844,12 @@ If `dynamic_routing.escalate_on_failure: false`, soft failures do **not** advanc
 5. **`model_profile`** — per-agent column from active profile
 6. **Runtime default**
 
-This order holds for the first spawn and for every respawn that does not move the tier (`max_escalations: 0`, `escalate_on_failure: false`, or a `heavy` agent). `resolve-execution --attempt N` then reports the same model as `resolve-model` and the `init` payloads (#6214). A respawn that does escalate returns `tier_models[<escalated tier>]`. Only `model_overrides`, a non-Claude `model_policy` and the `"omit"` gate still outrank it.
+This order holds for the first spawn. It also holds for every respawn that does not move the tier, for example `max_escalations: 0`, `escalate_on_failure: false`, a `heavy` agent, or a `tier_models` with no entry for the next tier. `resolve-execution --attempt N` then reports the same model as `resolve-model` and the `init` payloads (#6214). A respawn that does escalate returns `tier_models[<escalated tier>]`. Three things still outrank it:
+- `model_overrides`
+- a non-Claude `model_policy`
+- an applied `"omit"`, which returns the escalated tier's alias on Claude Code and stays blank where it blanked the first spawn.
+
+An explicit non-Claude `runtime` in the project config outranks `"omit"`. Its escalated respawn uses `tier_models`.
 
 The `dynamic_routing` block is **disabled by default** — `enabled: false` (or omitting the block) preserves today's static resolution exactly.
 
