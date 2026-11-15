@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../scripts/gen-features.cjs');
-const { extractLinks, maskCode } = require('../scripts/gen-adr-index.cjs');
+const { extractLinks, labelledCloses, maskCode } = require('../scripts/gen-adr-index.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, nextRel, missingNext, repoPathOf, unresolvedAnchors, headingSet,
@@ -53,9 +53,13 @@ describe('heading anchors (#5427)', () => {
     assert.deepEqual([...headingSet('> ```\n> ## Fake\n> ```\n> ## Real')], ['real']);
   });
   test('a comment or indented code hides headings and <a id> anchors', () => {
-    const md = '<!-- <a id="c"></a> -->\n\n    <a name="ind"></a>\n<!--\n## Cm\n> ## Cq\nSet\n===\n-->\n'
-      + '<a id="ok"></a>';
+    const md = '<!-- <a id="c"></a> -->\n\n    <a name="ind"></a>\n'
+      + '<!--\n## Cm\n> ## Cq\nSet\n===\n-->\n<a id="ok"></a>';
     assert.deepEqual([...headingSet(md)], ['ok']);
+  });
+  test('only the id and name attributes make an anchor, not data-id or aria-name', () => {
+    assert.deepEqual([...headingSet('<a data-id="x" aria-name="y"></a>')], []);
+    assert.deepEqual([...headingSet('<a href="u" id="z" class="c"></a>')], ['z']);
   });
   test('four leading spaces is a code block, not a heading', () => {
     assert.equal(headingSet('    ## Code').size, 0);
@@ -286,13 +290,49 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
   });
   test('pins every form that is no longer a link and the forms that keep their results', () => {
     // each of these was a link for oldExtractLinks
-    for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)']) {
+    for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)',
+      '[a](x "t)")', '[a](<x)y>)']) {
       assert.ok(oldExtractLinks(s).length > 0, `old: ${s}`);
       assert.deepEqual(extractLinks(s), [], s);
     }
     assert.deepEqual(extractLinks('[a](x "t")'), [{ line: 1, target: 'x "t"' }]);
     assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);
     assert.deepEqual(extractLinks('![i](p.png)'), [{ line: 1, target: 'p.png' }]);
+  });
+  test('the one-pass label scan agrees with the backward scan on every short string', () => {
+    // the oracle is the quadratic scan the one-pass labelledCloses replaced
+    const escaped = (s, j) => {
+      let n = 0;
+      while (s[j - 1 - n] === '\\') n += 1;
+      return n % 2 === 1;
+    };
+    const hasOpener = (text, at) => {
+      if (escaped(text, at)) return false;
+      const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
+      let depth = 1;
+      for (let j = para.length - 1; j >= 0; j -= 1) {
+        if (escaped(para, j)) continue;
+        if (para[j] === ']') depth += 1;
+        else if (para[j] === '[' && !--depth) return true;
+      }
+      return false;
+    };
+    const alphabet = ['[', ']', '(', '\\', '\n', ' ', 'a'];
+    const strings = [''];
+    for (let i = 0; i < strings.length && strings[i].length < 7; i += 1) {
+      for (const c of alphabet) strings.push(strings[i] + c);
+    }
+    for (const s of strings) {
+      const expected = new Set();
+      for (let i = s.indexOf(']('); i >= 0; i = s.indexOf('](', i + 1)) {
+        if (hasOpener(s, i)) expected.add(i);
+      }
+      assert.deepEqual(labelledCloses(s), expected, JSON.stringify(s));
+    }
+  });
+  test('a link reports the line it is on', () => {
+    assert.deepEqual(extractLinks('[a](x)\n\n[b](y) [c](z)\r\n[d](w)').map((l) => l.line),
+      [1, 3, 3, 4]);
   });
 });
 

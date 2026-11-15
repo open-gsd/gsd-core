@@ -482,26 +482,23 @@ function maskInlineCodeSpans(line) {
 
 const ANGLE = /\s*<([^>\n]*)>/y;
 const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
-// True when the character at `j` is preceded by an odd run of backslashes.
-const isEscaped = (s, j) => {
-  let n = 0;
-  while (s[j - 1 - n] === '\\') n += 1;
-  return n % 2 === 1;
-};
 /**
- * True when the `]` at `at` closes a bracket pair opened earlier in its paragraph
- * (balanced, backslash escapes honoured): a stray `](x)` is text, not a link.
+ * The indexes of the `](` in `text` whose `]` closes a bracket pair opened earlier in
+ * its paragraph (balanced, backslash escapes honoured): a stray `](x)` is text, not a
+ * link. One forward pass keeps the count of open `[`; a blank line resets it, and a
+ * backslash escapes the next character (a backslash before a blank line escapes nothing).
  */
-function hasLabelOpener(text, at) {
-  if (isEscaped(text, at)) return false;
-  const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
-  let depth = 1;
-  for (let j = para.length - 1; j >= 0; j -= 1) {
-    if (isEscaped(para, j)) continue;
-    if (para[j] === ']') depth += 1;
-    else if (para[j] === '[' && !--depth) return true;
+function labelledCloses(text) {
+  const out = new Set();
+  let open = 0;
+  for (const m of text.matchAll(/\n[ \t\r]*\n|\\(?!\n[ \t\r]*\n)[^]|\[|\]/g)) {
+    if (m[0] === '[') open += 1;
+    else if (m[0] === ']' && open) {
+      if (text[m.index + 1] === '(') out.add(m.index);
+      open -= 1;
+    } else if (m[0][0] === '\n') open = 0;
   }
-  return false;
+  return out;
 }
 
 /**
@@ -513,8 +510,9 @@ function hasLabelOpener(text, at) {
  */
 function scanInlineLinks(text) {
   const out = [];
+  const closes = labelledCloses(text);
   for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
-    if (!hasLabelOpener(text, i)) continue;
+    if (!closes.has(i)) continue;
     ANGLE.lastIndex = i + 2;
     const angle = ANGLE.exec(text);
     let end = angle ? ANGLE.lastIndex : i + 2;
@@ -554,8 +552,9 @@ function scanInlineLinks(text) {
  *
  * These forms are no longer links, though the regex this replaced returned them:
  * `[a](x y)` (a bare destination with a space), `[a]()` (an empty destination),
- * `\[x](y)` and `[a\](x)` (an escaped bracket), and `[a](\)` and `[a](x\)y)` (an
- * escaped parenthesis).
+ * `\[x](y)` and `[a\](x)` (an escaped bracket), `[a](\)` and `[a](x\)y)` (an
+ * escaped parenthesis), and `[a](x "t)")` and `[a](<x)y>)` (a parenthesis inside a
+ * title or an angle destination).
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
  * RAW parenthesized capture, untrimmed and unresolved; callers normalize.
@@ -563,11 +562,14 @@ function scanInlineLinks(text) {
 function extractLinks(text) {
   const masked = maskCode(String(text));
   const out = [];
+  let line = 1;
+  let newline = masked.indexOf('\n'); // the next newline not yet counted into `line`
   for (const { at, dest, raw } of scanInlineLinks(masked)) {
     const open = masked.lastIndexOf('[', at - 1);
     const textOk = open >= 0 && !/[\][\n]/.test(masked.slice(open + 1, at));
     if (dest && textOk && !/[()\n]/.test(raw)) {
-      out.push({ line: masked.slice(0, at).split(/\r?\n/).length, target: raw });
+      for (; newline >= 0 && newline < at; newline = masked.indexOf('\n', newline + 1)) line += 1;
+      out.push({ line, target: raw });
     }
   }
   return out;
@@ -1284,5 +1286,5 @@ function main() {
 // effect of loading it.
 if (require.main === module) runMain(main);
 
-module.exports = { STATUSES, REASON, extractLinks, maskCode, scanInlineLinks, existsCaseExact,
-  realRootOrFallback };
+module.exports = { STATUSES, REASON, extractLinks, maskCode, scanInlineLinks, labelledCloses,
+  existsCaseExact, realRootOrFallback };

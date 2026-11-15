@@ -182,7 +182,7 @@ const unquote = (text, masked) => {
   return text.split(/\r?\n/)
     .map((l, i) => (/^ {0,3}>/.test(m[i]) ? l.replace(/^(?: {0,3}> ?)+/, '') : '')).join('\n');
 };
-const A_ID = /<a\s[^>]*?\b(?:id|name)\s*=\s*["']([^"'\s>]+)["']/gi;
+const A_ID = /<a\s(?:[^>]*?\s)?(?:id|name)\s*=\s*["']([^"'\s>]+)["']/gi;
 const headingSet = (source) => {
   const seen = new Map();
   const md = maskComments(source); // a comment renders nothing

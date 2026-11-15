@@ -81,6 +81,8 @@ describe('ci-test-scope.cjs', () => {
       '.github/pull_request_template.mdx', 'docs/sub/pull_request_template.md',
       // GitHub reads only the direct children of a template directory
       '.github/PULL_REQUEST_TEMPLATE/sub/x.md',
+      // the directories are exact; only the file name folds case
+      'DOCS/pull_request_template.md', '.GITHUB/PULL_REQUEST_TEMPLATE/x.md',
     ]) {
       const r = scopeFor([f]);
       assert.ok(!r.targeted_tests.includes('tests/pr-template-links.test.cjs'), f);

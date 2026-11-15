@@ -30,12 +30,12 @@ const WORKFLOW_LINT_TESTS = [
 
 // GitHub's default PR-template locations: the root, docs/ and .github/, as
 // pull_request_template.md or a file directly in a PULL_REQUEST_TEMPLATE/ directory (names
-// case-insensitive; GitHub reads no deeper level).
+// case-insensitive, the docs/ and .github/ directories exact; GitHub reads no deeper level).
 // CONTRIBUTING.md (the anchor target) and docs/registries/README.md (the registry-entry
 // link target) are docs whose links a test guards: they count as lightweight code
 // changes (like inert CI), so the nine TEMPLATE_LINK_OBSERVERS are selected.
 const isPrTemplate = filePath =>
-  /^(?:(?:\.github|docs)\/)?pull_request_template(?:\.md|\/[^/]+)$/i.test(filePath);
+  /^pull_request_template(?:\.md|\/[^/]+)$/i.test(filePath.replace(/^(?:\.github|docs)\//, ''));
 const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
   filePath === 'docs/registries/README.md' || isPrTemplate(filePath);
 const isLightweight = filePath => isCiYaml(filePath) || isTemplateLinkDoc(filePath);
