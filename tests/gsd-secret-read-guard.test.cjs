@@ -1214,6 +1214,19 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     });
   }
 
+  // The readings run on every command readsEachWay flags, which is wider than
+  // dollar-quoting: a quote in a command that also holds `((` flags it. These
+  // two rows hold no dollar-quoting and take the readings path.
+  test('blocks: a launch in a command the readings gate flags with no dollar-quoting (#5441)', () => {
+    const command = '(( n = 1 )); claude --agent "gsd-debugger" -p hi';
+    assertBlocked(runHook(bash(command)), command, { code: 'debugger-cli-spawn', tool: 'Bash' });
+  });
+
+  test('allows: the launch text quoted in a command the readings gate flags with no dollar-quoting (#5441)', () => {
+    const command = "(( n = 1 )); echo 'claude --agent gsd-debugger'";
+    assertAllowed(runHook(bash(command)), command);
+  });
+
   test('property: the quoting of the agent value never changes the verdict (#5441)', () => {
     const spellings = [
       (a) => a, (a) => `'${a}'`, (a) => `"${a}"`, (a) => `$'${a}'`, (a) => `$"${a}"`,

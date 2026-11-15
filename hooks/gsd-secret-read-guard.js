@@ -2533,14 +2533,18 @@ function isDebuggerAgent(value) {
 }
 
 // Returns the `--agent` value text of a debugger launch, or null. A command
-// holding dollar-quoting is read the way findSecretRead reads it (#5441): under
+// readsEachWay flags is read the way findSecretRead reads it (#5441): under
 // bash's, zsh's and dash's readings, then the plain one, and a launch any of
 // them finds is the answer, so `claude --agent $'gsd-debugger'` is a launch as
-// the unquoted spelling is. Each body the scan rescans (a substitution, an
-// `eval` operand, a `bash -c` body) comes back through here and picks its own
-// readings, so `bash -c $'claude --agent gsd-debugger'` is decoded by the
-// reading and then read again. A command holding none gets the plain scan
-// alone, which is the check as it was before #5441.
+// the unquoted spelling is. readsEachWay joins `\<newline>` continuations first
+// (bash joins them before it reads a quote), then flags dollar-quoting (`$'`,
+// `$"`), a `$${` or `$$(`, and a quote in a command that also holds `((` or
+// `$[`, so `(( n = 1 )); echo "x"` is read every way too. Each body the scan
+// rescans (a substitution, an `eval` operand, a `bash -c` body) comes back
+// through here and picks its own readings, so
+// `bash -c $'claude --agent gsd-debugger'` is decoded by the reading and then
+// read again. A command readsEachWay does not flag gets the plain scan alone,
+// which is the check as it was before #5441.
 //
 // A reading that could not finish (a stack overflow, a spent budget) does not
 // cost the other readings their say: when none of them finds a launch, its
