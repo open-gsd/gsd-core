@@ -4,7 +4,7 @@ GSD's SDK commits (`gsd-tools commit`, `commit-to-subrepo`, `pr-subrepo`) run `g
 pre-commit hooks. If a hook (a full lint, a type-check, `lint-staged` on a large change) takes longer than the
 timeout, GSD kills the commit. `gsd-tools commit` and `commit-to-subrepo` report `commit_timeout` with the
 `.git/index.lock` it may have left behind, and `pr-subrepo` reports the timeout as an error message that names
-the repo (it carries the generic `unknown` reason). The default is 30 seconds. This page raises it.
+the repo. The default is 30 seconds. This page raises it.
 
 ## 1. Confirm it is a timeout, not a hook failure
 
@@ -26,20 +26,6 @@ so a bad edit never removes the bound. These values are invalid:
 - zero, a negative number, or a fraction
 - a non-number, including a quoted number such as `"60000"`
 - a number above one hour
-
-## 3. Clean up after a past timeout
-
-A killed commit can leave the hook running and the lock in place. The lock may belong to a hook that still runs,
-for example a `lint-staged` job that has no git process active.
-
-1. Wait for the hook to end, or stop its processes (for example `lint-staged` or your linter).
-2. Check that no hook or git process still uses the repo.
-3. Remove the `index.lock` path named in the message.
-4. Retry the commit.
-
-After a `pr-subrepo` timeout, GSD tries to return to your previous branch and delete the new branch. The locked
-index can block both steps. If the new branch still exists, run `git -C <repo> checkout <previous-branch>` and then
-`git -C <repo> branch -D <branch>`. The changed files stay staged until you commit or unstage them.
 
 ## Notes
 

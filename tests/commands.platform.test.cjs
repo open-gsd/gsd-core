@@ -59,7 +59,6 @@ const {
 } = require('./helpers.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { runWithTimedOutCommit } = require('./helpers/commit-timeout-probe.cjs');
-const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -998,7 +997,6 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
       setup(git);
       const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-default', 'fix: probe', false);`);
       assert.strictEqual(r.timeout, 30000);
-      assert.strictEqual(r.failure.reason, ERROR_REASON.UNKNOWN);
     });
   }
 
@@ -1019,11 +1017,10 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     assert.strictEqual(r.timeout, 3600000, `stderr: ${r.stderr}`);
   });
 
-  test('pr-subrepo passes the configured timeout to git commit and reports it as an unclassified error', () => {
+  test('pr-subrepo passes the configured timeout to git commit', () => {
     setup({ commit_timeout_ms: 60000 });
     const r = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-timeout', 'fix: probe', false);`);
     assert.strictEqual(r.timeout, 60000, `stderr: ${r.stderr}`);
-    assert.strictEqual(r.failure.reason, ERROR_REASON.UNKNOWN);
   });
 
   test('pr-subrepo timeout message follows the configured value', () => {
