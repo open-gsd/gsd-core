@@ -154,6 +154,32 @@ describe('#5796 plugin ref publisher', () => {
     );
   });
 
+  test('accepts a lightweight or annotated release tag on HEAD', () => {
+    const root = makeFixtureRepo();
+    const head = git(root, ['rev-parse', 'HEAD']);
+    const bare = makeBareRemote();
+    git(root, ['tag', 'v1.0.0']);
+    const light = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: 'refs/tags/v1.0.0' });
+    assert.equal(light.ok, true, JSON.stringify(light));
+    assert.equal(git(root, ['rev-list', '--parents', '-n', '1', light.commit]), `${light.commit} ${head}`);
+    git(root, ['tag', '-a', 'v1.0.1', '-m', 'rel']);
+    const annotated = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: 'refs/tags/v1.0.1' });
+    assert.equal(annotated.ok, true, JSON.stringify(annotated));
+    assert.equal(git(root, ['rev-list', '--parents', '-n', '1', annotated.commit]), `${annotated.commit} ${head}`);
+  });
+
+  test('refuses a release tag that is not HEAD', () => {
+    const root = makeFixtureRepo();
+    git(root, ['tag', 'v0.9.0']);
+    write(root, 'README.md', 'second\n');
+    git(root, ['commit', '-q', '-am', 'second']);
+    const bare = makeBareRemote();
+    const res = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: 'refs/tags/v0.9.0' });
+    assert.equal(res.ok, false);
+    assert.match(res.error, /is not the source/);
+    assert.equal(git(bare, ['branch', '--list']), '');
+  });
+
   test('rejects a missing or option-like source', () => {
     const root = makeFixtureRepo();
     const bare = makeBareRemote();
@@ -259,6 +285,12 @@ describe('#5796 plugin ref publisher', () => {
     assert.ok(idx > verifyIdx, 'publish step runs after Verify publish');
     assert.ok(matching[0].run.includes('--source "refs/tags/v${VERSION}"'), 'publish step names the release tag');
     assert.equal(matching[0].env && matching[0].env.VERSION, '${{ inputs.version }}');
+    assert.equal(matching[0].id, 'plugin_ref');
+    assert.equal(matching[0]['continue-on-error'], true);
+    const last = steps[steps.length - 1];
+    assert.ok(String(last.if).includes("steps.plugin_ref.outcome == 'failure'"), 'last step reports a failed publish');
+    assert.ok(typeof last.run === 'string' && last.run.includes('exit 1'), 'last step fails the job');
+    assert.ok(!String(steps[syncIdx].if).includes('steps.plugin_ref'), 'sync step does not depend on the publish step');
     for (const [name, job] of Object.entries(wf.jobs)) {
       if (name === 'finalize') continue;
       assert.ok(!(job.steps || []).some(publishes), `${name} must not publish the plugin ref`);

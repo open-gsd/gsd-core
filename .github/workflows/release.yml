@@ -1008,13 +1008,16 @@ jobs:
       # that .claude-plugin/marketplace.json points at, so `claude plugin update`
       # materializes a tree whose runtime library is already built (#5796). Stable
       # finalize only: rc never publishes this ref. Runs after the npm publish and
-      # the release → main merge, and before the next sync, which checks out
-      # origin/next; --source names the pushed release tag and the script refuses
-      # to run unless it is the checked-out HEAD, so the compiled lib always
-      # matches the tree. It force-updates one commit parented on the release
-      # commit.
+      # the release → main auto-merge attempt, and before the next sync, which
+      # checks out origin/next; --source names the pushed release tag and the
+      # script refuses to run unless it is the checked-out HEAD, so the compiled
+      # lib always matches the tree. It force-updates one commit parented on the
+      # release commit. It is continue-on-error so a failed push cannot skip the
+      # next sync; the last step fails the job when it did not succeed.
       - name: Publish plugin ref (prebuilt bin/lib)
+        id: plugin_ref
         if: ${{ !inputs.dry_run }}
+        continue-on-error: true
         env:
           VERSION: ${{ inputs.version }}
         run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source "refs/tags/v${VERSION}"
@@ -1048,3 +1051,11 @@ jobs:
             echo "- PR created to merge back to main" >> "$GITHUB_STEP_SUMMARY"
             echo "- Install: \`npx @opengsd/gsd-core@latest\`" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # #5796: the plugin ref publish is continue-on-error so it cannot skip the
+      # next sync; fail the job here so a failed publish is still red.
+      - name: Fail if the plugin ref was not published
+        if: ${{ !inputs.dry_run && steps.plugin_ref.outcome == 'failure' }}
+        run: |
+          echo "::error::Publishing the prebuilt plugin ref failed; re-run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source refs/tags/v<version> from a checkout of that tag with npm run build:lib done (#5796)."
+          exit 1
