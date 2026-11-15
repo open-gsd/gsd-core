@@ -3014,10 +3014,17 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       // the strip calls whitespace alone GSD-only (an editor that saves an emptied target adds
       // a newline), and it trims blank space at either end of a file it otherwise leaves
       // alone. There is no GSD content to remove in either, so the link and its target are
-      // left as they are in both opt-in states.
+      // left as they are in both opt-in states. The strip drops leading line breaks, trims
+      // trailing blank space and ends the file with its first line ending, so the rows cover
+      // each end in both line-ending styles. A file the strip leaves byte-identical, such as
+      // 'model = "gpt-5"\r\n', never reaches the exemption; the property below covers it.
       const NO_GSD_SHAPES = [
         ['holds only whitespace', '\n'],
+        ['holds only a CRLF line ending', '\r\n'],
         ['holds user keys with no final newline', 'model = "gpt-5"'],
+        ['holds CRLF user keys with no final line ending', 'model = "gpt-5"\r\napproval_policy = "never"'],
+        ['starts with blank lines', '\n\nmodel = "gpt-5"\n'],
+        ['starts with CRLF blank lines', '\r\n\r\nmodel = "gpt-5"\r\n'],
       ];
       function linkNoGsdConfig(content) {
         runCodexInstall(codexHome);
