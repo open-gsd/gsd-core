@@ -2786,8 +2786,10 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     fs.writeFileSync(realHooksJson, JSON.stringify({ hooks: {} }, null, 2) + '\n', 'utf8');
     fs.unlinkSync(hooksJsonPath(codexHome));
     fs.symlinkSync(realHooksJson, hooksJsonPath(codexHome));
+    const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
 
-    assert.throws(() => runCodexInstall(codexHome), /symlink/i);
+    assert.throws(() => runCodexInstall(codexHome),
+      (err) => err instanceof Error && err.code === SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED);
 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(),
       'the symlink itself must survive an aborted install — never replaced by a plain file');
