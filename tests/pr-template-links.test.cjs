@@ -268,6 +268,7 @@ describe('angle-enclosed destinations (#5427)', () => {
   });
   test('inline: a bare destination nests parentheses 32 deep, no deeper', () => {
     const nested = (n) => `[a](x${'('.repeat(n)}${')'.repeat(n)})`;
+    assert.deepEqual(hrefsIn(nested(31)), [nested(31).slice(4, -1)]);
     assert.deepEqual(hrefsIn(nested(32)), [nested(32).slice(4, -1)]);
     assert.deepEqual(hrefsIn(nested(33)), []);
   });
@@ -302,7 +303,7 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
   test('pins every form that is no longer a link and the forms that keep their results', () => {
     // each of these was a link for oldExtractLinks
     for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)',
-      '[a](x "t)")', '[a](<x)y>)']) {
+      '[a](x "t)")', '[a](<x)y>)', '[a](x "t" y)', '[a](x "t)']) {
       assert.ok(oldExtractLinks(s).length > 0, `old: ${s}`);
       assert.deepEqual(extractLinks(s), [], s);
     }

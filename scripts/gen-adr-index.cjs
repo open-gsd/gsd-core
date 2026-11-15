@@ -505,9 +505,10 @@ function labelledCloses(text) {
 /**
  * Every inline-link destination in `text` (mask code first, see `maskCode`): an
  * angle-enclosed or bare destination (both honour `\` escapes; bare: balanced
- * parentheses up to 32 deep), then an optional title. Returns `{ at, dest, raw }` per link: `at` is the
- * index of the `]`, `dest` the destination (may be empty), `raw` the text between the parentheses.
- * The one scanner behind `extractLinks` and the PR-template link guard.
+ * parentheses up to 32 deep), then an optional title. Returns `{ at, dest, raw }`
+ * per link: `at` is the index of the `]`, `dest` the destination (may be empty),
+ * `raw` the text between the parentheses. The one scanner behind `extractLinks`
+ * and the PR-template link guard.
  */
 function scanInlineLinks(text) {
   const out = [];
@@ -560,8 +561,9 @@ function scanInlineLinks(text) {
  * These forms are no longer links, though the regex this replaced returned them:
  * `[a](x y)` (a bare destination with a space), `[a]()` (an empty destination),
  * `\[x](y)` and `[a\](x)` (an escaped bracket), `[a](\)` and `[a](x\)y)` (an
- * escaped parenthesis), and `[a](x "t)")` and `[a](<x)y>)` (a parenthesis inside a
- * title or an angle destination).
+ * escaped parenthesis), `[a](x "t)")` and `[a](<x)y>)` (a parenthesis inside a
+ * title or an angle destination), and any link whose title is doubled, unterminated
+ * or followed by other text: `[a](x "t" y)`, `[a](x "t)`.
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
  * RAW parenthesized capture, untrimmed and unresolved; callers normalize.
