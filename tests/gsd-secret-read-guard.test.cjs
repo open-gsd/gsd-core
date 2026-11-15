@@ -847,6 +847,36 @@ describe('gsd-secret-read-guard: container --env-file exemption (#4639)', () => 
     assert.equal(out.path, '--env-file=.env.foundation');
   });
 
+  // The scanner's own answer, in process: every hit has the shape
+  // { code, text }, and `text` is the file the flag names.
+  test('scanBashCommand reports --env-file <secret> as { code: env-file-secret, text: <file> }', () => {
+    const { scanBashCommand } = require(HOOK_PATH);
+    const hit = (file) => ({ code: 'env-file-secret', text: file });
+    assert.deepEqual(scanBashCommand('node --env-file .env app.js'), hit('.env'));
+    assert.deepEqual(scanBashCommand('node --env-file=.env.local scripts/check.mjs'), hit('.env.local'));
+    assert.deepEqual(scanBashCommand('uv run --env-file .env.local python check.py'), hit('.env.local'));
+    assert.equal(scanBashCommand('node --env-file .env.example app.js'), null);
+    assert.equal(scanBashCommand('docker run --env-file .env alpine printenv'), null);
+  });
+
+  // An --env-file denial names a secret file, so it ranks with a secret read
+  // where the scanner chooses between hits. Without that, the two commands
+  // below are still denied, but under another block's message.
+  test("an --env-file denial is not replaced by another reading's hit ($'…' in the command)", () => {
+    const { scanBashCommand } = require(HOOK_PATH);
+    // bash and zsh read $'--env-file' as the flag; dash reads it as a literal
+    // word and reports `.env` as a plain read.
+    assert.deepEqual(scanBashCommand("node $'--env-file' .env x"), { code: 'env-file-secret', text: '.env' });
+  });
+
+  test('an --env-file denial in a nested body is not replaced by a later secret read', () => {
+    const { scanBashCommand } = require(HOOK_PATH);
+    assert.deepEqual(
+      scanBashCommand('bash -c "node --env-file .env x"; cat .secrets'),
+      { code: 'env-file-secret', text: '.env' },
+    );
+  });
+
   test("nerdctl and docker-compose (hyphenated) are in the runtime set", () => {
     allow("nerdctl run --env-file .env.foundation --rm img");
     allow("docker-compose --env-file .env.foundation up -d");

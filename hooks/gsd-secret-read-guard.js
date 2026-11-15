@@ -2371,10 +2371,17 @@ const DIAGNOSTIC = Object.freeze({ READING_FAILED: 'reading-failed' });
 // either way, so what it costs is the name of a read only a later pass sees.
 let heldNested = null;
 
+// Whether `hit` names a secret file the command would read. An `--env-file`
+// denial (#5885) names one too, so it ranks with a secret read at both sites
+// below and its own message is the one reported.
+function namesRead(hit) {
+  return hit.code === 'secret-read' || hit.code === 'env-file-secret';
+}
+
 // The readings of `command`, then the plain scan, as described above.
 function readEachWay(command, depth) {
   const hit = scanEachWay(command, depth);
-  if (depth === 0 || hit === null || hit.code === 'secret-read') return hit;
+  if (depth === 0 || hit === null || namesRead(hit)) return hit;
   if (heldNested === null) heldNested = hit;
   return null;
 }
@@ -2400,7 +2407,7 @@ function scanEachWay(command, depth) {
       if (unfinishedBy(e)) scanUnfinished = true;
       else if (readingBug === null) readingBug = e;
     }
-    if (hit !== null && hit.code === 'secret-read') return hit;
+    if (hit !== null && namesRead(hit)) return hit;
     if (unreadable === null) unreadable = hit;
   }
   return scanCommand(command, depth, false) || unreadable;
