@@ -1227,6 +1227,63 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     assertAllowed(runHook(bash(command)), command);
   });
 
+  // #5441 was drift between two scans: #5285 gave the secret-read scan its
+  // readings and the debugger check kept the plain reading. This row holds both
+  // scans to one corpus. Each quoting shape spells `.env` for the secret-read
+  // scan and the agent name for the debugger check, behind each carrier, and a
+  // shape the secret-read scan decodes the debugger check must decode too. For
+  // the agent name, a backslash before the first character is decoded by zsh
+  // alone (zsh 5.9 drops the backslash of an unknown escape; bash keeps it); for
+  // `.env` every reading finds the read, since a backslash also separates path
+  // segments. So two more cell pairs each turn on one reading in BOTH scans, and
+  // the row then fails when either scan drops its bash (the locale shape), zsh or
+  // dash reading:
+  //   - zsh alone drops the backslash of `\l` and `\d` (bash 5.2 keeps both);
+  //   - dash 0.5.12 has no `$'…'`: it reads `$'\''}'` as `$`, `'\'` and `'}'`,
+  //     so the command after the `;` runs, where bash and zsh 5.9 read `$'\''`
+  //     as one quote character and stop on the unmatched `'` after the `}`.
+  const ONE_READING_CELLS = [
+    ['zsh alone decodes the escape', "cat $'.env.\\local'", "claude --agent $'gsd-\\debugger' -p hi"],
+    ['dash alone ends the quote before the command',
+      "echo $${$'\\''}'; cat .env", "echo $${$'\\''}'; claude --agent gsd-debugger -p hi"],
+  ];
+  test('parity: the debugger check decodes every quoting shape the secret-read scan decodes (#5441)', () => {
+    const hex = (w) => [...w].map((c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`).join('');
+    const oct = (w) => [...w].map((c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`).join('');
+    const ansiC = (c) => `$'${c.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+    const shapes = [
+      ['ANSI-C', (w) => `$'${w}'`],
+      ['locale', (w) => `$"${w}"`],
+      ['ANSI-C hex escapes', (w) => `$'${hex(w)}'`],
+      ['ANSI-C octal escapes', (w) => `$'${oct(w)}'`],
+      ['ANSI-C span joined to plain text', (w) => `${w.slice(0, 2)}$'${w.slice(2)}'`],
+      ['ANSI-C escape only zsh decodes', (w) => `$'\\${w}'`],
+    ];
+    const carriers = [
+      ['top level', (c) => c],
+      ['bash -c body', (c) => `bash -c ${ansiC(c)}`],
+      ['eval operand', (c) => `eval ${ansiC(c)}`],
+      ['inside $( )', (c) => `out=$(${c}); echo "$out"`],
+      ['behind (( ))', (c) => `(( n = 1 )); ${c}`],
+    ];
+    const codeOf = (r) => (r.status === 2 ? JSON.parse(r.stdout).code : null);
+    const mismatches = [];
+    for (const [shapeLabel, shape] of shapes) {
+      for (const [carrierLabel, carrier] of carriers) {
+        const label = `${shapeLabel} / ${carrierLabel}`;
+        const read = codeOf(runHook(bash(carrier(`cat ${shape('.env')}`))));
+        assert.equal(read, 'secret-read', `${label}: the secret-read scan decodes the shape`);
+        const spawn = codeOf(runHook(bash(carrier(`claude --agent ${shape('gsd-debugger')} -p hi`))));
+        if (spawn !== 'debugger-cli-spawn') mismatches.push(label);
+      }
+    }
+    for (const [label, readCommand, spawnCommand] of ONE_READING_CELLS) {
+      assert.equal(codeOf(runHook(bash(readCommand))), 'secret-read', `${label}: the secret-read scan decodes the cell`);
+      if (codeOf(runHook(bash(spawnCommand))) !== 'debugger-cli-spawn') mismatches.push(label);
+    }
+    assert.deepEqual(mismatches, [], 'shapes the secret-read scan decodes and the debugger check does not');
+  });
+
   test('property: the quoting of the agent value never changes the verdict (#5441)', () => {
     const spellings = [
       (a) => a, (a) => `'${a}'`, (a) => `"${a}"`, (a) => `$'${a}'`, (a) => `$"${a}"`,
