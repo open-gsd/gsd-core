@@ -1413,6 +1413,7 @@ describe('planning-inspect — halted plans (#5823)', () => {
     assert.deepStrictEqual(result.progress.completed_plans, { completed: 4, total: 5, percent: 80, scope: 'complete' });
     assert.deepStrictEqual(result.progress.halted_plans, { completed: 3, total: 5, percent: 60, scope: 'complete' });
   });
+
   test('resolves depends_on tokens in phase-plan-index\'s sorted plan order when two plans share a short form or canonical id', (t) => {
     const cwd = mkCwd();
     t.after(() => cleanup(cwd));
