@@ -10,8 +10,8 @@ the repo. The default is 30 seconds. This page raises it.
 
 A timeout reads `git commit timed out after 30s (killed mid-hook; a stale lock may remain at …)`. A hook that
 rejects the commit reads `commit_failed` with the hook's own message. Only the first is fixed by this page.
-`pr-subrepo` reports both cases as plain error messages ("git commit timed out after Ns in <repo> (...)" versus
-"Failed to commit in <repo>: ..."), so tell them apart by the message text.
+`pr-subrepo` prints a timeout as "git commit timed out after Ns in <repo> (...)" and a hook rejection as
+"Failed to commit in <repo>: ...". Only the first message is a timeout.
 
 ## 2. Set the timeout
 
