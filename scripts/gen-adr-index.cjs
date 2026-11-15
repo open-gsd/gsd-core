@@ -544,12 +544,18 @@ function scanInlineLinks(text) {
  * code masked out first so a code-shaped bracket/paren sequence is never
  * misread as a link (see `maskCode`).
  *
- * `[^\][\n]*` for the link-text class deliberately excludes BOTH bracket
- * characters, not just `]` — so `[see [1]](x.md)` does not match (nested
- * brackets are out of the inline-links-only scope this gate supports) and a
- * regex character class in prose like `[A-Z][A-Z0-9_]` cannot be misread as
- * one either. Reference-style links (`[text][ref]`) are correspondingly not
- * supported: the corpus has zero reference definitions to resolve against.
+ * `scanInlineLinks` finds each destination; two clauses narrow it. The link
+ * text (back to the nearest `[`) holds no `[`, `]` or newline, so `[see [1]](x.md)`
+ * is no link (nested brackets are out of the inline-links-only scope this gate
+ * supports) and a regex character class in prose like `[A-Z][A-Z0-9_]` is not
+ * one either. The raw target holds no parenthesis or newline and is not empty.
+ * Reference-style links (`[text][ref]`) are not supported: the corpus has zero
+ * reference definitions to resolve against.
+ *
+ * These forms are no longer links, though the regex this replaced returned them:
+ * `[a](x y)` (a bare destination with a space), `[a]()` (an empty destination),
+ * `\[x](y)` and `[a\](x)` (an escaped bracket), and `[a](\)` and `[a](x\)y)` (an
+ * escaped parenthesis).
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
  * RAW parenthesized capture, untrimmed and unresolved; callers normalize.
