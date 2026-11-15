@@ -102,6 +102,7 @@ describe('heading anchors, fence edges (#5427)', () => {
 // commonmark reader) finds in each input. markdown-it 13 (commonmark preset) agrees on every row
 // but two (it reads an indented line after a definition as code and a `<!--` in a code span line
 // as an unclosed comment). Rows are [input, links, anchors]; `x`, `y`, `z` are destinations.
+const [LSEP, PSEP] = [0x2028, 0x2029].map((c) => String.fromCharCode(c));
 const BLOCKS = [
   ['    [a](x)', [], []],
   ['p\n    [a](x)', ['x'], []],
@@ -193,8 +194,14 @@ const BLOCKS = [
   ['p\n***\n    [a](x)', [], []],
   ['--\n    [a](x)', ['x'], []],
   ['---\n    [a](x)', [], []],
-  ['```a b\n[a](x)\n```\n[a](y)', ['y'], []],
-  ['```a b\n[a](x)\n```\n[a](y)', ['y'], []],
+  [`\`\`\`a${LSEP}b\n[a](x)\n\`\`\`\n[a](y)`, ['y'], []],
+  [`\`\`\`a${PSEP}b\n[a](x)\n\`\`\`\n[a](y)`, ['y'], []],
+  ['```a b\n[a](x)\n```\n[a](y)', ['y'], []],
+  ['```a`b\n[a](x)', ['x'], []],
+  ['p\n1. a\n---', [], []],
+  ['p\n2. a\n---', [], ['p-2-a']],
+  ['p\n1.\n---', [], ['p-1']],
+  ['p\n*\n---', [], ['p-']],
   ['p\n__\n    [a](x)', ['x'], []],
   ['p\n___\n    [a](x)', [], []],
   ['~~\n    [a](x)', ['x'], []],
