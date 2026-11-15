@@ -316,7 +316,7 @@ one hard block this hook owns.
 defence-in-depth: it warns by default and denies a wrong or an omitted
 model only when set to `"deny"`. Its baseline is recomputed at every
 dispatch, for every workstream an `init --ws` of the same session recorded
-(names only, the newest eight) and for the one `GSD_WORKSTREAM` or the session's pointer
+(names only, the newest eight, only where the workstream's planning directory exists) and for the one `GSD_WORKSTREAM` or the session's pointer
 selects; a model that matches any of them passes. The check allows where it cannot
 establish the workstream `init` used: a session whose record holds an entry older
 than 12 hours, and, where workstreams exist, a dispatch with no session id.
