@@ -8,14 +8,14 @@ What a routed executor gets (model, effort, worktree isolation) and why: [About 
 
 ## When starting a project
 
-`/gsd-new-project` asks it in the AI Models round:
+`/gsd-new-project` asks it right after the AI Models questions, in interactive and auto (`--auto`) mode alike:
 
 | Answer | Writes | Effect |
 |---|---|---|
 | **Allow installed executors (Recommended)** | `workflow.agent_hint_routing: true` | A plan whose `agent_hint:` names an executor agent installed on this runtime runs on that agent. Plans without a hint run on `gsd-executor`. |
 | **gsd-executor only** | `workflow.agent_hint_routing: false` | Every plan runs on `gsd-executor`. `agent_hint:` is ignored. |
 
-If you start from saved defaults and pick **Modify some settings**, answer **Yes** to "Do you want to change the Executor setting?" to get the same question. Auto mode (`--auto`) asks nothing and keeps the default, allow.
+If you start from saved defaults and pick **Modify some settings**, answer **Yes** to "Do you want to change the Executor setting?" to get the same question. If no answer is given, the project gets your saved default from `~/.gsd/defaults.json`, or allow when there is none.
 
 ## In an existing project
 

@@ -121,8 +121,8 @@ function questionBlocks(text, header) {
   let at = text.indexOf(marker);
   while (at !== -1) {
     const start = text.lastIndexOf('{', at);
-    const end = text.indexOf(']', at);
-    blocks.push(text.slice(start, end + 1));
+    const end = text.indexOf('\n    ]', at); // the options array's own closing line
+    blocks.push(text.slice(start, end + 6));
     at = text.indexOf(marker, at + marker.length);
   }
   return blocks;
@@ -177,5 +177,21 @@ describe('#6211: /gsd-settings asks the executor policy', () => {
     const line = text.split('\n').find((l) => l.startsWith('- **Non-capability keys**'));
     assert.ok(line, 'settings.md must list its non-capability keys');
     assert.ok(line.includes('`workflow.agent_hint_routing`'), line);
+  });
+});
+
+describe('#6211: new-project auto mode asks the executor policy', () => {
+  const text = fs.readFileSync(
+    path.join(REPO, 'gsd-core', 'workflows', 'new-project', 'steps', 'auto-mode-config.md'), 'utf8');
+
+  test('auto mode asks one Executor question with both policies', () => {
+    const blocks = questionBlocks(text, 'Executor');
+    assert.equal(blocks.length, 1, 'exactly one Executor question');
+    assert.ok(blocks[0].includes(ALLOW) && blocks[0].includes(ONLY), blocks[0]);
+  });
+
+  test('the auto-mode config-new-project payload carries workflow.agent_hint_routing', () => {
+    const workflow = payloadWorkflow(text);
+    assert.ok(workflow.includes('"agent_hint_routing":true|false'), workflow);
   });
 });

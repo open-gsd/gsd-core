@@ -471,7 +471,7 @@ AskUserQuestion([
 
 For each selected setting across both blocks (and Drift Guard or Executor when
 answered "Yes"), ask only that question using the option set from Round 1 /
-Round 2 / the AI Models round below. Merge user answers over the saved
+Round 2 / the AI Models and Executor questions below. Merge user answers over the saved
 defaults — unchanged settings retain their saved values. Then skip to
 **Commit config.json**.
 
@@ -592,21 +592,8 @@ questions: [
       { label: "Standard tier…", description: "Choose Quality, Balanced, or Budget — flat tier applied to all agents" },
       { label: "Inherit", description: "Use the current session model for all agents (required for non-Claude runtimes: Codex, Antigravity, OpenCode /model, OpenRouter, local models)" }
     ]
-  },
-  {
-    header: "Executor",
-    question: "Executor for plans: use gsd-executor only, or allow other executors installed on this runtime (named by a plan's agent_hint)?",
-    multiSelect: false,
-    options: [
-      { label: "Allow installed executors (Recommended)", description: "A plan whose agent_hint names an executor agent installed on this runtime runs on that agent, with its own model override (else gsd-executor's model) and the same worktree isolation guard. GSD roles such as gsd-verifier are never used as executors. Plans without a hint run on gsd-executor." },
-      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored." }
-    ]
   }
 ]
-
-// Map the Executor answer → workflow.agent_hint_routing:
-//   "Allow installed executors (Recommended)" → true
-//   "gsd-executor only"                       → false
 
 **Conditional visibility — model_profile (Q2):**
   Only ask this question when Q1's answer is "Standard tier…".
@@ -633,6 +620,24 @@ questions: [
 //   Q1 "Standard tier…" + Q2 "Quality"  → model_profile = "quality"
 //   Q1 "Standard tier…" + Q2 "Balanced" → model_profile = "balanced"
 //   Q1 "Standard tier…" + Q2 "Budget"   → model_profile = "budget"
+
+// Executor policy (#6211): always asked, after the model-profile questions and
+// independent of them.
+questions: [
+  {
+    header: "Executor",
+    question: "Executor for plans: use gsd-executor only, or allow other executors installed on this runtime (named by a plan's agent_hint)?",
+    multiSelect: false,
+    options: [
+      { label: "Allow installed executors (Recommended)", description: "A plan whose agent_hint names an executor agent installed on this runtime runs on that agent, with its own model override (else gsd-executor's model) and the same worktree isolation guard. GSD roles such as gsd-verifier are never used as executors. Plans without a hint run on gsd-executor." },
+      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored." }
+    ]
+  }
+]
+
+// Map the Executor answer → workflow.agent_hint_routing:
+//   "Allow installed executors (Recommended)" → true
+//   "gsd-executor only"                       → false
 ```
 
 **PR body onboarding:** Ask which optional PRD-style sections `/gsd:ship` should append to generated PR bodies. Use the same `ship.pr_body_sections` mapping as Step 2a: selected sections get `enabled: true`, seeded-but-unselected sections get `enabled: false`, and selecting none writes an empty list. Prefer lean/agile PRD sections that make user value, acceptance criteria, Definition of Done, and stakeholder traceability explicit.

@@ -62,7 +62,7 @@ Parse current values (default to `true` if not present):
 - `git.repo_tagging` — milestone tagging mode: `"single"` (one `v[X.Y]` tag, default) or `"per_repo"` (record a release map and tag each `planning.sub_repos` repository separately; set via `gsd_run query config-set git.repo_tagging per_repo`, #3628)
 - `workflow.use_worktrees` — whether parallel executor agents run in worktree isolation (honored when the runtime declares a `dispatch.isolation` primitive — `harness-worktree` or `orchestrator-worktree`; runtimes declaring `none` default it to `false` and fail closed on an explicit `true` — #1521, #2486, #2584)
 - `workflow.compact_content` — load token-minimized instruction variants where they exist, trading rarely-needed elaboration for a smaller always-loaded instruction window (default: false if absent; #4139)
-- `workflow.agent_hint_routing` — executor policy: `true` lets a plan whose `agent_hint:` names an executor agent installed on the active runtime run on that agent (GSD non-executor roles are refused); `false` runs every plan on `gsd-executor` (default: true if absent; #1689, #6211)
+- `workflow.agent_hint_routing` — executor policy: `true` lets a plan's `agent_hint:` pick an installed executor agent (GSD roles refused); `false` runs every plan on `gsd-executor` (default: true if absent; #6211)
 - `model_policy.provider` — provider slug for model policy (default: `null`; known values: anthropic, openai, google, qwen; set via /gsd:config --advanced)
 - `model_policy.budget` — budget level for model policy (default: `null`; known values: high, medium, low; set via /gsd:config --advanced)
 - `model_policy.high` — model ID for high-cost tier (default: `null`; set via /gsd:config --advanced)
@@ -306,8 +306,8 @@ AskUserQuestion([
     header: "Executor",
     multiSelect: false,
     options: [
-      { label: "Allow installed executors (Recommended)", description: "A plan whose agent_hint names an executor agent installed on this runtime runs on that agent, with its own model override (else gsd-executor's model) and the same worktree isolation guard. GSD roles such as gsd-verifier are never used as executors. Writes workflow.agent_hint_routing=true." },
-      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored. Writes workflow.agent_hint_routing=false." }
+      { label: "Allow installed executors (Recommended)", description: "A plan's agent_hint may name an executor agent installed on this runtime; it gets its model override (else gsd-executor's) and the same worktree guard. GSD roles are never executors." },
+      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored." }
     ]
   },
   {
@@ -677,7 +677,7 @@ Quick commands:
 
 <success_criteria>
 - [ ] Current config read
-- [ ] User presented with 26 settings (profile + workflow toggles + features + git branching + git tagging + ctx warnings + compact content + executor policy), grouped into six sections: Planning, Execution, Docs & Output, Features, Model & Pipeline, Misc. `code_review_depth` is conditional on `code_review=on`. Model profile uses a two-question split (Q1: Adaptive / Standard tier / Inherit; Q2: Quality / Balanced / Budget — only when Standard tier chosen) to stay within the 4-option AskUserQuestion cap while exposing all 5 valid profiles (#3784). Drift Guard (`plan_review.source_grounding`) is in the Planning section.
+- [ ] User presented with 27 settings (profile + workflow toggles + features + git branching + git tagging + ctx warnings + compact content + executor policy; Review Depth and Graph auto-update are conditional), grouped into six sections: Planning, Execution, Docs & Output, Features, Model & Pipeline, Misc. `code_review_depth` is conditional on `code_review=on`. Model profile uses a two-question split (Q1: Adaptive / Standard tier / Inherit; Q2: Quality / Balanced / Budget — only when Standard tier chosen) to stay within the 4-option AskUserQuestion cap while exposing all 5 valid profiles (#3784). Drift Guard (`plan_review.source_grounding`) is in the Planning section.
 - [ ] Config updated with model_profile, workflow, and git sections
 - [ ] User offered to save as global defaults (~/.gsd/defaults.json)
 - [ ] Changes confirmed to user
