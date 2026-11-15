@@ -32,7 +32,7 @@ const path = require('node:path');
 
 const {
   REPO_ROOT,
-  GIT_TIMEOUT_MS,
+  EMITTED_RUNTIME_GIT_TIMEOUT_MS,
   safeDirArgs,
 } = require('./emitted-runtime.cjs');
 const { NEW_FILE_CAP, ACK_TRAILER_DELIM, normalizeAckReason } = require('./emitted-diff.cjs');
@@ -320,7 +320,7 @@ const BOUNDARY_VALUE_SEP = '\x1d'; // between multiple values of the SAME traile
  * — never an empty result — same "a git failure is a hard error" law as
  * every other git-touching helper in this test suite.
  */
-function boundaryTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+function boundaryTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS } = {}) {
   const result = runGit([...safeDirArgs(cwd), ...args], { cwd, timeoutMs });
   if (result.outcome === OUTCOME.EXITED && result.exitCode === 0) {
     return result.stdout;
@@ -413,7 +413,7 @@ function parseBoundaryMoveTrailerValues(values) {
  * @param {{baseRef: string, headRef?: string, cwd?: string, timeoutMs?: number}} opts
  * @returns {{declarations: Map<string, {reason: string}>, errors: string[]}}
  */
-function readBoundaryMoveTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+function readBoundaryMoveTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS } = {}) {
   let mergeBaseOut;
   try {
     mergeBaseOut = boundaryTrailerGit(['merge-base', baseRef, headRef], { cwd, timeoutMs });

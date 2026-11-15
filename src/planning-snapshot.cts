@@ -36,6 +36,9 @@ type VerificationStatus = verificationMod.VerificationStatus;
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 // #612: `resolvePhaseIdConvention` is the federated (workstream -> root)
 // `phase_id_convention` reader, from the same §7 owner module `planningPaths`
 // comes from. Resolved once in `buildPlanningSnapshot` — see the
@@ -504,11 +507,11 @@ function buildStateFields(statePath: string): StateFields {
  */
 function buildConfigField(cwd: string): { value: Record<string, unknown> | null; scope: Scope; exists: boolean } {
   const configPath = path.join(planningRoot(cwd), 'config.json');
-  if (!fs.existsSync(configPath)) {
-    return { value: null, scope: SCOPE.UNREADABLE, exists: false };
-  }
   try {
-    const raw = fs.readFileSync(configPath, 'utf-8');
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws and is
+    // reported as present-but-unreadable below.
+    const raw = readConfigFileBounded(configPath);
+    if (raw === null) return { value: null, scope: SCOPE.UNREADABLE, exists: false };
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return { value: parsed, scope: SCOPE.COMPLETE, exists: true };
   } catch {

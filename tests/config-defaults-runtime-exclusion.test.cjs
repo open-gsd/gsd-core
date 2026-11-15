@@ -10,10 +10,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempDir, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { diagnosticCodes } = require('./helpers/diagnostic-codes.cjs');
 const { MODEL_ALIAS_MAP, KNOWN_RUNTIMES } = require('../gsd-core/bin/lib/model-catalog.cjs');
 const {
-  MODEL_RESOLVER_DIAGNOSTIC,
   resolveModelInternal,
   _setInstallRuntimeMarkerForTests,
   _resetInstallRuntimeMarkerCacheForTests,
@@ -111,7 +109,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
       : command === 'config-set-model-profile' ? [command, 'balanced'] : [command];
     const result = runGsdTools(args, cwd, { ...env, GSD_RUNTIME: activeRuntime });
     assert.equal(result.exitCode, 0, result.error);
-    assert.equal(result.error ?? '', '', 'project creation must not emit an omit diagnostic');
+    assert.equal(result.error ?? '', '', 'project creation must not write to stderr');
     const response = JSON.parse(result.output);
     if (command === 'config-set-model-profile') assert.equal(response.updated, true);
     else assert.equal(response.created, true);
@@ -152,7 +150,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     test(`config-new-project preserves explicit resolve_model_ids=${value}`, () => {
       const config = seed({ resolve_model_ids: 'omit' }, 'config-new-project', { resolve_model_ids: value });
       assert.equal(config.resolve_model_ids, value);
-      assert.equal(resolve('gsd-executor').model, value === 'omit' ? '' : value ? MODEL_ALIAS_MAP.sonnet : 'sonnet');
+      assert.equal(resolve('gsd-executor').model, value === true ? MODEL_ALIAS_MAP.sonnet : 'sonnet');
     });
   }
 
@@ -258,7 +256,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     });
   }
 
-  test('existing project CLI resolution warns without either creation command rewriting its config', () => {
+  test('existing project omit survives both creation commands byte-for-byte', () => {
     fs.mkdirSync(path.join(project, '.planning'));
     const configPath = path.join(project, '.planning', 'config.json');
     const bytes = Buffer.from('{\n    "resolve_model_ids": "omit",\n    "model_profile": "balanced"\n}\n');
@@ -274,8 +272,8 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     });
     assert.equal(result.outcome, OUTCOME.EXITED);
     assert.equal(result.exitCode, 0);
-    assert.equal(JSON.parse(result.stdout).model, '');
-    assert.deepEqual(diagnosticCodes(result.stderr), [MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT]);
+    // #3703: an explicit project omit on Claude Code resolves the profile tier alias.
+    assert.equal(JSON.parse(result.stdout).model, 'sonnet');
     assert.deepEqual(fs.readFileSync(configPath), bytes);
   });
 

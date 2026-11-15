@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
+const fc = require('fast-check');
 const { createTempProject, cleanup, runGsdTools, delay } = require('./helpers.cjs');
 const { runGit, runHook: seamRunHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -722,6 +723,146 @@ describe('auto-update', () => {
         !fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
         'non-Shell Kimi tools must still bail at Gate 1',
       );
+    });
+  });
+
+  describe('hook — runtime query commit recognition (#5332)', {
+    skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false,
+  }, () => {
+    const runtimeCommands = [
+      ['gsd_run', () => 'gsd_run query commit "docs: complete plan" --files .planning/STATE.md'],
+      ['canonical multiline launcher', () => fs.readFileSync(
+        path.join(__dirname, '..', 'gsd-core/workflows/_runtime-launcher.snippet.sh'), 'utf8',
+      ) + '\ngsd_run query commit "docs: complete plan" --files .planning/STATE.md'],
+      ['gsd-tools.cjs', () => 'gsd-tools.cjs query commit "docs: complete plan" --files .planning/STATE.md'],
+      ['path-prefixed legacy launcher', () => '/opt/gsd/bin/gsd-tools query commit "docs: complete plan" --files .planning/STATE.md'],
+      ['quoted node entrypoint', () => 'node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query commit "docs: complete plan" --files .planning/STATE.md'],
+      ['single-quoted node entrypoint', () => "node '/tmp/GSD install/gsd-tools.cjs' query commit 'docs: complete plan' --files .planning/STATE.md"],
+      ['commit at end of command', () => 'gsd_run query commit'],
+      ...[';', '&&', '|', '(', '$(', '`', '\\'].map((prefix) => [
+        `left shell boundary ${prefix}`, () => `${prefix}gsd_run query commit`,
+      ]),
+      ...[')', '}', '>', '"', "'", '`'].map((suffix) => [
+        `right shell boundary ${suffix}`, () => `gsd_run query commit${suffix}`,
+      ]),
+    ];
+
+    for (const [name, command] of runtimeCommands) {
+      test(`dispatches for ${name}`, async (t) => {
+        const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+        t.after(() => cleanupHookRepo(tmpDir));
+        const mockBin = makeMockGraphifyBin(tmpDir);
+        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: command() } }, { pathPrepend: mockBin });
+        assert.strictEqual(result.status, 0);
+        const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
+        // Gate success writes synchronously; an unrecognized command fails here
+        // immediately instead of spending the detached-rebuild wait budget.
+        assert.ok(fs.existsSync(statusPath), `${name} must dispatch a rebuild`);
+        const status = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+        assert.strictEqual(status?.status, 'ok', 'the mock rebuild must finish successfully');
+        assert.strictEqual(status.exit_code, 0);
+        assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning/graphs/graph.json'), 'utf8')),
+          { nodes: [], edges: [] }, 'the detached rebuild must publish the graph');
+      });
+    }
+
+    for (const [name, command] of runtimeCommands.slice(0, 4)) {
+      for (const gate of ['auto_update=false', 'enabled=false', 'non-default branch', 'live lock']) {
+        test(`${name} respects ${gate}`, async (t) => {
+          const tmpDir = createTempGitRepo({
+            config: { graphify: { enabled: gate !== 'enabled=false', auto_update: gate !== 'auto_update=false' } },
+          });
+          const lockPath = path.join(tmpDir, '.planning/graphs/.rebuild.lock');
+          t.after(async () => {
+            // The live-lock fixture is ours; remove it before the existing
+            // cleanup helper waits for a detached subprocess that never ran.
+            if (gate === 'live lock') fs.unlinkSync(lockPath);
+            await cleanupHookRepo(tmpDir);
+          });
+          if (gate === 'non-default branch') gitOrThrow(['checkout', '-b', 'worktree-agent-probe'], { cwd: tmpDir });
+          if (gate === 'live lock') {
+            fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+            fs.writeFileSync(lockPath, String(process.pid));
+          }
+          const mockBin = makeMockGraphifyBin(tmpDir);
+          const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: command() } }, { pathPrepend: mockBin });
+          assert.strictEqual(result.status, 0);
+          assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+            `${gate} must suppress rebuilds for ${name}`);
+        });
+      }
+    }
+
+    for (const command of [
+      'gsd_run --cwd "/tmp/other project" query commit "docs: plan" --files .planning/STATE.md',
+      'gsd_run --cwd=/tmp/other query commit "docs: plan" --files .planning/STATE.md',
+      'gsd_run --ws feature query commit "docs: plan" --files .planning/STATE.md',
+      'gsd_run --raw query commit "docs: plan" --files .planning/STATE.md',
+      'gsd_run --cwd /tmp/other --raw query commit "docs: plan" --files .planning/STATE.md',
+    ]) {
+      test(`does not dispatch a global-flag command whose target context the hook cannot resolve: ${command}`, (t) => {
+        const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+        t.after(() => cleanupHookRepo(tmpDir));
+        const mockBin = makeMockGraphifyBin(tmpDir);
+        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command } }, { pathPrepend: mockBin });
+        assert.strictEqual(result.status, 0);
+        assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+          'a global-flag command must not dispatch against the hook process cwd');
+      });
+    }
+
+    for (const launcher of ['gsd_run', 'gsd-tools', 'node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs"']) {
+      for (const verb of ['commi', 'commits', 'config-get graphify.enabled', 'phase.complete 1', 'commit-to-subrepo "docs: plan" --files packages/foo']) {
+        test(`does not dispatch for ${launcher} query ${verb}`, (t) => {
+          const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+          t.after(() => cleanupHookRepo(tmpDir));
+          const mockBin = makeMockGraphifyBin(tmpDir);
+          const result = runHook(tmpDir, {
+            tool_name: 'Bash', tool_input: { command: `${launcher} query ${verb}` },
+          }, { pathPrepend: mockBin });
+          assert.strictEqual(result.status, 0);
+          assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+            'a non-commit query verb must not dispatch');
+        });
+      }
+    }
+
+    for (const command of [
+      'gsd_run query\ncommit "docs: plan" --files .planning/STATE.md',
+      'gsd_run\nquery commit "docs: plan" --files .planning/STATE.md',
+      'not_gsd_run query commit "docs: plan" --files .planning/STATE.md',
+      'other-gsd-tools.cjs query commit "docs: plan" --files .planning/STATE.md',
+      'gsd-toolsXcjs query commit "docs: plan" --files .planning/STATE.md',
+    ]) {
+      test(`does not dispatch for a split command or different executable: ${JSON.stringify(command)}`, (t) => {
+        const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+        t.after(() => cleanupHookRepo(tmpDir));
+        const mockBin = makeMockGraphifyBin(tmpDir);
+        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command } }, { pathPrepend: mockBin });
+        assert.strictEqual(result.status, 0);
+        assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+          'only a complete invocation of an accepted executable may dispatch');
+      });
+    }
+
+    test('commit-like suffixes never dispatch across runtime spellings (property)', async (t) => {
+      const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir);
+      const suffix = fc.array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789_-.'), { minLength: 1, maxLength: 16 })
+        .map((characters) => characters.join(''));
+      await fc.assert(fc.asyncProperty(
+        fc.constantFrom('gsd_run', 'gsd-tools', 'gsd-tools.cjs', 'node "/tmp/gsd-tools.cjs"'),
+        suffix,
+        fc.boolean(),
+        async (launcher, tail, hasArguments) => {
+          const command = `${launcher} query commit${tail}${hasArguments ? ' "docs: plan" --files .planning/STATE.md' : ''}`;
+          const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command } }, { pathPrepend: mockBin });
+          assert.strictEqual(result.status, 0);
+          assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+            `commit must be a whole verb: ${command}`);
+        },
+      ), { numRuns: 32, seed: 5332 });
     });
   });
 

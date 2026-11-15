@@ -87,28 +87,26 @@ See [`CONTRIBUTING.md` — "QA Matrix Requirements"](CONTRIBUTING.md#qa-matrix-r
 
 A counter-test that feeds a hostile or failing input satisfies the letter of contract 6 above and can still be worthless. If a function has an error or fallback branch — a guard that degrades permissively on bad input, a resolver that falls back to a default root, a lock that expires — the test for that branch must assert the **specific degraded verdict** the branch produces, not merely that the call completed without throwing or returned *some* value of the right type.
 
-**Non-compliant (the actual pre-fix shape of `tests/worktree-safety.test.cjs`'s `resolveWorktreeContext` timeout counter-test, per [#3050](https://github.com/open-gsd/gsd-core/issues/3050) finding 2 and epic [#3051](https://github.com/open-gsd/gsd-core/issues/3051) Phase 3, generalized here as [#3053](https://github.com/open-gsd/gsd-core/issues/3053) H4):**
+**Non-compliant (the pre-fix shape of the timeout counter-test, here written against `resolveProjectContext`, per [#3050](https://github.com/open-gsd/gsd-core/issues/3050) finding 2 and epic [#3051](https://github.com/open-gsd/gsd-core/issues/3051) Phase 3, generalized here as [#3053](https://github.com/open-gsd/gsd-core/issues/3053) H4):**
 
 ```javascript
 // A liveness test wearing a correctness test's name — it proves the call
 // survived a timeout, not that it degraded to the RIGHT shape.
-test('resolveWorktreeContext handles a timeout', () => {
-  const result = resolveWorktreeContext('/repo/wt', { execGit: makeTimeoutStub() });
-  assert.doesNotThrow(() => resolveWorktreeContext('/repo/wt', { execGit: makeTimeoutStub() }));
-  assert.strictEqual(typeof result.effectiveRoot, 'string'); // true of ANY string, including the wrong one
+test('resolveProjectContext handles a timeout', () => {
+  const ctx = resolveProjectContext('/repo/wt', { deps: { execGit: makeTimeoutStub() } });
+  assert.doesNotThrow(() => resolveProjectContext('/repo/wt', { deps: { execGit: makeTimeoutStub() } }));
+  assert.strictEqual(typeof ctx.projectRoot, 'string'); // true of ANY string, including the wrong one
 });
 ```
 
-**Compliant (the actual fixed test, `tests/worktree-safety.test.cjs`):**
+**Compliant (the fixed shape, asserting the degraded provenance `resolveProjectContext` reports):**
 
 ```javascript
-test('returns effectiveRoot=cwd, mode=current_directory, reason=git_timed_out on timeout, not throw', () => {
-  const result = resolveWorktreeContext('/tmp', { execGit: makeTimeoutStub() });
-  assert.deepStrictEqual(result, {
-    effectiveRoot: '/tmp',           // the specific degraded value, not just "a string"
-    mode: 'current_directory',
-    reason: 'git_timed_out',
-  });
+test('degrades to the start directory with reason=git_timed_out on timeout, not throw', () => {
+  const ctx = resolveProjectContext('/tmp', { deps: { execGit: makeTimeoutStub() } });
+  assert.strictEqual(ctx.worktreeRoot, '/tmp');   // the specific degraded value, not just "a string"
+  assert.strictEqual(ctx.provenance.reason, 'git_timed_out');
+  assert.strictEqual(ctx.provenance.degraded, true);
 });
 ```
 
@@ -202,9 +200,71 @@ const WORKER_TEARDOWN_MARGIN_MS = 10_000; // real headroom beyond the inner time
 const r = runHookSeam(WORKER_PATH, [], { timeoutMs: NPM_VIEW_TIMEOUT_MS + WORKER_TEARDOWN_MARGIN_MS });
 ```
 
-Import an existing class-norm constant from `tests/helpers/timeouts.cjs` (`PROBE_TIMEOUT_MS`, `GIT_TIMEOUT_MS`, `BUILD_TIMEOUT_MS`, `INSTALL_TIMEOUT_MS`) when the call is the same class of subprocess, or declare a local one with a comment justifying why it is a distinct class — see CONTRIBUTING.md's "Use Centralized Test Helpers" section.
+Import an existing class-norm constant from `tests/helpers/timeouts.cjs` (`PROBE_TIMEOUT_MS`, `GIT_TIMEOUT_MS`, `BUILD_TIMEOUT_MS`, `INSTALL_TIMEOUT_MS`, and the rest of its exports) when the call is the same class of subprocess. Otherwise declare a local one with a comment justifying why it is a distinct class — see CONTRIBUTING.md's "Use Centralized Test Helpers" section. A local constant must not reuse a `timeouts.cjs` export name. A file-local `GIT_TIMEOUT_MS` holding thirty seconds reads as the shared fifteen-second norm while meaning something else. Give it its own name, such as `QUICK_BRANCHING_GIT_TIMEOUT_MS`. A coincidental *value* is fine; a reused *name* is not.
 
-**Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`). A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
+#### Every new or changed timeout constant states its evidence
+
+A timeout constant is a claim about how long a class of call takes. Its comment must state the measurement behind it, not a round guess:
+
+1. **Observed range** — the worst observed duration for that class of call, with the p50/p99 where the data has them, and how many samples back it.
+2. **Worst platform** — the platform (`win32`, `darwin`, `linux`) where the worst observation came from.
+3. **Margin** — the ratio of the constant to that worst observation. It must be at least 2x.
+4. **Source** — where the numbers came from and over what window. One option is the CI `seam:spawn-stall` records in the `test-timings-*` artifacts (process-seam spawns of 2000ms or more, uploaded from the ubuntu, Windows and macOS lanes). The other is a harness run, naming the platforms it ran on.
+
+"No spawn of this class reached the 2000ms log threshold on any lane that ran it" is valid evidence. It is an upper bound: state it as `< 2000ms` and compute the margin against 2000. Evidence from a spawn the seam does not see counts for nothing, and neither does a lane that never ran the call. A `child_process` call made directly never reaches the log, so route new spawns through `tests/helpers/process-seam.cjs`.
+
+Three kinds of constant are exempt from the margin, but must say which kind they are:
+
+- **Fixture data** — a number placed inside a fixture document (a hook entry's `timeout` field, a manifest's `timeoutMs`). It is never passed to a spawn.
+- **Test backstop** — a `node:test` per-test `{ timeout }` that only turns a runaway into a failure; the test normally finishes in milliseconds.
+- **Mirror** — the same value as another module's own constant. A mirror re-exports that constant (`SEAM_DEFAULT_TIMEOUT_MS` is `process-seam.cjs`'s `DEFAULT_TIMEOUT_MS`). Restating the literal is not allowed.
+
+In `tests/helpers/timeouts.cjs` the evidence is data, not only prose. Every exported constant has a `TIMEOUT_EVIDENCE` entry: `measured` (observed maximum, worst platform, samples per platform, source, window, the platforms with no data, and the call sites the seam cannot see), or one of the exempt kinds with its reason. The comment cites that entry. `tests/timeout-evidence.test.cjs` fails when:
+
+- a constant has no entry;
+- an entry names no constant;
+- a measured constant is below 2x its worst observation;
+- a mirror no longer equals its source.
+
+The test checks only the recorded data. It never re-measures a spawn, so a class that gets slower does not fail it. It fails when the recorded evidence no longer supports the value: the value is lowered below 2x the observation, or a new measurement is recorded that breaks the 2x floor. New measurements come from re-reading the CI `seam:spawn-stall` log, then updating the entry and, if needed, the value.
+
+The fields of a `measured` entry:
+
+- `samples`: the number of log records seen per platform (win32, darwin, linux). The worst platform must have a count above 0.
+- `lanes`: used by a censored entry instead of `samples`. It counts the CI lanes per platform that ran the class's seam sites, because a censored entry has no records to count. A censored entry carries no `samples`.
+- `p50Ms`, `p99Ms`: optional percentiles of the recorded durations. Give both or neither, with `p50Ms <= p99Ms <= observedMaxMs`. A censored entry carries neither.
+- `unmeasuredPlatforms`: required. It lists every platform whose `samples` (or `lanes`) count is missing or 0, and only those.
+- `unseenSites`: required. The number of call sites of this constant that the process seam cannot see, so the log says nothing about them. When it is above 0, `unseenSitesTrackedBy` names the issue that moves them, written `#6058` or `#6058 #6059`.
+
+**Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`) for literals; `tests/timeout-evidence.test.cjs` for the evidence in `tests/helpers/timeouts.cjs`; code review for the comment shape of file-local constants. A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
+
+### One installer run per runtime configuration per file
+
+A real `bin/install.js` run is the most expensive thing a test can do. When several tests in one file install the **same** runtime configuration only to read different parts of the result, install it once with `installRuntimeFixture` from `tests/helpers/install-shared.cjs` (#4688):
+
+```javascript
+const { installRuntimeFixture } = require('./helpers/install-shared.cjs');
+
+test('settings.json registers the hooks', () => {
+  const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' });
+  // read-only assertions against configDir
+});
+
+test('settings.json registers the MCP companion', () => {
+  const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' }); // no second install
+  // read-only assertions against configDir
+});
+```
+
+| Behavior | Detail |
+|---|---|
+| Key | `runtime`, `scope`, `extraArgs` (order matters) and `extraEnv` (key order does not). Each distinct key installs once. |
+| Lifetime | One test file. `node --test` runs each file in its own process; every cached root is deleted when that process exits. |
+| Result | The same object `runMinimalInstall` returns (`configDir`, `root`, `manifest`, `stdout`, `stderr`), deep-frozen and shared by every caller with that key. |
+| Failure | A failed install throws exactly as `runMinimalInstall` does and is not cached; the next call retries. |
+| `root` | Rejected with a `TypeError`. A shared fixture owns its root. |
+
+**Use it only for read-only tests.** A test that writes into the installed tree, reinstalls, uninstalls, or seeds files before installing changes what every later test sees. Keep `runMinimalInstall` (a fresh root per call) for those. Do not register `t.after(() => cleanup(root))` on a shared fixture: it would delete the tree for the tests after it.
 
 ### Mutation testing — 80 % threshold
 

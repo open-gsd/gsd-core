@@ -10,7 +10,7 @@
  * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
  * Dependencies (leaf modules only):
- *   - node:fs / node:path (read the per-install .gsd-runtime marker + project config for the #2297 omit gate)
+ *   - node:path (project config path for the #2297 omit gate; read via config-loader's bounded reader, #5759)
  *   - ./runtime-name-policy.cjs (resolveRuntimeNameFromCandidates — canonicalize the active runtime)
  *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path)
  *   - ./config-loader.cjs    (loadConfig)
@@ -22,7 +22,7 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { loadConfig } = configLoaderModule;
+const { loadConfig, readConfigFileBounded } = configLoaderModule;
 
 // ─── Configuration Module (for CANONICAL_CONFIG_DEFAULTS used by effort/fast_mode resolvers) ─
 import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cjs';
@@ -31,9 +31,8 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cj
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 
-import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults } from './model-catalog.cjs';
+import { catalog, MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS, CLAUDE_AGENT_ALIASES, mergeEffortTierDefaults } from './model-catalog.cjs';
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalizeRuntimeName, hostBehaviorsFor } from './runtime-name-policy.cjs';
 import {
@@ -96,7 +95,11 @@ function projectExplicitlySetsOmit(cwd: string): boolean {
   const layers = wsDir === rootDir ? [rootDir] : [wsDir, rootDir]; // workstream > root
   for (const dir of layers) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')) as Record<string, unknown>;
+      // Same bounded regular-file reader as the loader (#5759): a FIFO/device/oversized
+      // layer throws instead of blocking, and an absent layer returns null.
+      const raw = readConfigFileBounded(path.join(dir, 'config.json'));
+      if (raw === null) continue;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
       const value = parsed?.['resolve_model_ids'];
       // First layer that sets the key wins (matches loadConfig's deep-merge
       // precedence). A layer that omits the key falls through to the next.
@@ -244,46 +247,20 @@ const CLAUDE_POLICY_ID_TO_ALIAS: Record<string, string> = {
 
 // Dedupe stderr warnings so repeated agent resolutions don't spam (#1133).
 const _modelPolicyUnmappableWarned = new Set<string>();
-const _projectModelOmitWarned = new Set<string>();
-const MODEL_RESOLVER_DIAGNOSTIC = Object.freeze({
-  PROJECT_MODEL_OMIT: 'project_model_omit',
-});
-// Existing omit may be authored or copied from shared defaults by an older
-// version. Neither origin can be inferred here. Keep a stable typed code on the
-// emitted diagnostic so tests and operators need not key behavior on prose.
-const PROJECT_MODEL_OMIT_WARNING = `gsd-tools: warning [${MODEL_RESOLVER_DIAGNOSTIC.PROJECT_MODEL_OMIT}]: ` +
-    'project config sets resolve_model_ids:"omit", so Claude agents ' +
-    'inherit the session model instead of model_profile tiers. This value may have been ' +
-    'copied from shared defaults by an older GSD version. If tier routing is intended, ' +
-    'remove resolve_model_ids or set it to false in the project config. Explicit omit ' +
-    'is still honored; the config is unchanged. (#5329)';
-
-function warnOnce(cache: Set<string>, key: string, message: string): void {
-  if (cache.has(key)) return;
-  cache.add(key);
-  try {
-    process.stderr.write(message + '\n');
-  } catch { /* stderr might be closed in a test harness */ }
-}
-
-function warnProjectModelOmit(cwd: string): void {
-  const key = path.resolve(planningDir(cwd));
-  warnOnce(_projectModelOmitWarned, key, PROJECT_MODEL_OMIT_WARNING);
-}
-
 function warnModelPolicyUnmappable(agentType: string, policyModel: string, tier: string): void {
   const key = `${agentType}::${policyModel}::${tier}`;
+  if (_modelPolicyUnmappableWarned.has(key)) return;
+  _modelPolicyUnmappableWarned.add(key);
   // MUST go to stderr — resolve-model's JSON result is parsed from stdout.
-  warnOnce(_modelPolicyUnmappableWarned, key,
+  process.stderr.write(
     `gsd: warning — model_policy resolved "${policyModel}" for ${agentType}, ` +
-    `but it has no Claude agent alias; using "${tier}" instead.`,
+    `but it has no Claude agent alias; using "${tier}" instead.\n`,
   );
 }
 
-// Test-only: reset model-policy diagnostics between cases (#1133, #5329).
+// Test-only: reset the model_policy warn-dedupe cache between cases (#1133).
 function _resetModelPolicyWarningCacheForTests(): void {
   _modelPolicyUnmappableWarned.clear();
-  _projectModelOmitWarned.clear();
 }
 
 // Dedupe stderr warnings for unmappable model_overrides Claude IDs (#2041 /
@@ -293,14 +270,16 @@ function _resetModelPolicyWarningCacheForTests(): void {
 const _modelOverrideUnmappableWarned = new Set<string>();
 function warnModelOverrideUnmappable(agentType: string, overrideValue: string): void {
   const key = `${agentType}::${overrideValue}`;
+  if (_modelOverrideUnmappableWarned.has(key)) return;
+  _modelOverrideUnmappableWarned.add(key);
   // Cap emission length so an oversized or secret-shaped value cannot leak in
   // full to stderr/logs (#2041 security review). MUST go to stderr — resolve-
   // model's JSON result is parsed from stdout.
   const safe = overrideValue.length > 64 ? overrideValue.slice(0, 64) + '…' : overrideValue;
-  warnOnce(_modelOverrideUnmappableWarned, key,
+  process.stderr.write(
     `gsd: warning — model_overrides value "${safe}" for ${agentType} is a fully-qualified ` +
     `Claude model ID with no tier alias; passing it through verbatim. Claude Code setups ` +
-    `whose Agent tool accepts only tier aliases will not honor it. (#4192)`,
+    `whose Agent tool accepts only tier aliases will not honor it. (#4192)\n`,
   );
 }
 
@@ -462,9 +441,10 @@ function computeProfileTier(config: Record<string, unknown>, agentType: string):
  *
  * Why this is not just "look at the resolved model": on every runtime the installer
  * configures with `resolve_model_ids: "omit"` — which is every non-Claude runtime, see
- * docs/CONFIGURATION.md — resolveModelInternal deliberately returns '' below. A guard
- * keyed on the model id therefore cannot tell a budget-tier run from a top-tier one
- * there, while the tier itself is computed ABOVE that early-return and stays knowable.
+ * docs/CONFIGURATION.md — resolveModelInternal returns '' below unless the runtime
+ * declares native tier aliases (#3703). A guard keyed on the model id therefore
+ * cannot tell a budget-tier run from a top-tier one there, while the tier itself is
+ * computed ABOVE that early-return and stays knowable.
  *
  * Honesty contract — this never guesses, because a guard that reports a wrong tier is
  * worse than one that reports none:
@@ -543,25 +523,31 @@ function resolveTierInternal(cwd: string, agentType: string): string {
   return resolveTierFromConfig(loadConfig(cwd), agentType);
 }
 
+/**
+ * The per-agent `model_overrides` entry resolveModelInternal would return for `agentType`, or null
+ * when it has none that applies (absent, empty/falsy, or an unmappable Claude ID). #6213: a caller
+ * that needs to know whether an override really governs the agent uses this one predicate.
+ */
+function resolveModelOverride(config: Record<string, unknown>, agentType: string): string | null {
+  const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
+  // Own-property guard (see resolveTierFromConfig): without it, an agentType of "toString" against
+  // `model_overrides: {}` returned the inherited Function.prototype.toString as the resolved "model".
+  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+    ? modelOverrides[agentType]
+    : undefined;
+  if (!override) return null;
+  return mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
+}
+
 function resolveModelInternal(cwd: string, agentType: string): string {
   const config = loadConfig(cwd);
 
   // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
   // the claude runtime, mirroring the model_policy path #1144; non-Claude
-  // runtimes and non-Claude values pass through verbatim).
-  const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
-  // Own-property guard (see resolveTierFromConfig above): without it, an
-  // agentType of "toString" against `model_overrides: {}` returned the
-  // inherited Function.prototype.toString as the resolved "model" — verified
-  // reachable purely via the CLI, no override value needed.
-  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
-    ? modelOverrides[agentType]
-    : undefined;
-  if (override) {
-    const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
-    if (mapped !== null) return mapped;
-    // Unmappable Claude ID — fall through to tier resolution (matches model_policy).
-  }
+  // runtimes and non-Claude values pass through verbatim). A truthy override
+  // that is unmappable falls through to tier resolution (matches model_policy).
+  const appliedOverride = resolveModelOverride(config, agentType);
+  if (appliedOverride !== null) return appliedOverride;
 
   // 2. Compute the tier (#2229: shared with resolveTierFromConfig so the tier a
   // workflow reads and the tier a model is resolved from can never diverge).
@@ -636,8 +622,7 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // materialized by the #4717 fill: step 3 reads the active runtime's tier
   // map, but only outranks the omit gate when that key canonicalizes to a
   // recognised non-Claude runtime.
-  const omitApplies = config['resolve_model_ids'] === 'omit'
-    && (projectExplicitlySetsOmit(cwd) || !hasNativeModelAliases(activeRuntime));
+  const omitApplies = omitAppliesFor(cwd, config, activeRuntime);
   // CANONICALIZED, not the raw field. Comparing the raw value against the literal
   // 'claude' made every spelling that is not exactly that string count as a
   // non-Claude opt-in and outrank the omit gate: `runtime:"Claude"`,
@@ -670,10 +655,19 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   // returned its own model id at step 3 above, before this gate — for those the
   // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
   if (omitApplies) {
-    // Only the Claude omission path loses profile routing. A non-Claude runtime,
-    // an explicit model pin, or an inherit tier needs no migration breadcrumb.
-    if (activeRuntime === 'claude' && tier && tier !== 'inherit') warnProjectModelOmit(cwd);
-    return '';
+    // #3703: "omit" means "emit no concrete model id", not "emit nothing". On a
+    // runtime whose descriptor declares native tier aliases
+    // (hostBehaviors.nativeModelAliases — the Agent tool takes `opus`/`sonnet`/
+    // `haiku` directly), a blank hands the choice to the host instead of the
+    // profile: Claude Code then spawns on CLAUDE_CODE_SUBAGENT_MODEL when set,
+    // or the session model, and a mapper profiled cheap runs on the
+    // orchestrator's tier. So those runtimes get a tier alias (omitTierAlias).
+    // It sits ahead of steps 4.5/4.75 on purpose: a model_profile_overrides.claude
+    // pin and a dynamic_routing tier model both name concrete models, which omit
+    // rules out; dynamic_routing still picks WHICH tier, and the alias names it.
+    // Every other runtime keeps "" and the #2517 omit-`model=` rule, because a
+    // tier alias there fails the spawn.
+    return hasNativeModelAliases(activeRuntime) ? omitTierAlias(config, agentType, 0) : '';
   }
 
   // 4.5. Claude-runtime tier override (#4192 Finding 1). Sits AFTER the omit
@@ -778,21 +772,14 @@ function assertValidGranularityOverride(
 }
 
 /**
- * #4505 — the ONE implementation of `dynamic_routing.tier_models` lookup.
- *
- * Returns the configured model for this agent's routing tier at `attempt`, or
- * null when dynamic routing does not apply (disabled, absent, no tier table, an
- * agent with no default routing tier, or no entry for the tier). Both entry
- * points call it, so the first-spawn value and the escalated value can never
- * drift apart — the "Generative Fix Divergence" this repo names by name.
- *
- * `attempt` 0 means "no escalation yet", which is the documented FIRST-SPAWN
- * case, NOT "skip dynamic routing":
- *   docs/features/dynamic-routing-with-failure-tier-escalation.md —
- *   "enabled: true — the resolver picks tier_models[default_tier] for the first
- *    spawn and escalates one tier up on orchestrator-detected soft failure."
+ * #3703 — the routing tier `dynamic_routing` picks for this agent at `attempt`
+ * (`light` / `standard` / `heavy`), or null when dynamic routing does not apply
+ * (same conditions as dynamicRoutingModel below, including a missing or empty
+ * `tier_models` entry for the routed tier). dynamicRoutingModel and the omit
+ * alias path (omitTierAlias) both start here, so the tier a routed model comes
+ * from and the tier an omit alias names cannot drift apart.
  */
-function dynamicRoutingModel(
+function dynamicRoutingTier(
   config: Record<string, unknown>,
   agentType: string,
   attempt: number,
@@ -821,9 +808,66 @@ function dynamicRoutingModel(
 
   // Own-property guard: `tier_models` is a config-supplied plain object, so a
   // prototype-chain key must not resolve an inherited member.
-  const alias = Object.hasOwn(tierModels, tier) ? tierModels[tier] : undefined;
-  if (typeof alias !== 'string' || alias.length === 0) return null;
-  return alias;
+  const model = Object.hasOwn(tierModels, tier) ? tierModels[tier] : undefined;
+  if (typeof model !== 'string' || model.length === 0) return null;
+  return tier;
+}
+
+/**
+ * #4505 — the ONE implementation of `dynamic_routing.tier_models` lookup.
+ *
+ * Returns the configured model for this agent's routing tier at `attempt`, or
+ * null when dynamic routing does not apply (disabled, absent, no tier table, an
+ * agent with no default routing tier, or no entry for the tier). Both entry
+ * points call it, so the first-spawn value and the escalated value can never
+ * drift apart — the "Generative Fix Divergence" this repo names by name.
+ *
+ * `attempt` 0 means "no escalation yet", which is the documented FIRST-SPAWN
+ * case, NOT "skip dynamic routing":
+ *   docs/features/dynamic-routing-with-failure-tier-escalation.md —
+ *   "enabled: true — the resolver picks tier_models[default_tier] for the first
+ *    spawn and escalates one tier up on orchestrator-detected soft failure."
+ */
+function dynamicRoutingModel(
+  config: Record<string, unknown>,
+  agentType: string,
+  attempt: number,
+): string | null {
+  const tier = dynamicRoutingTier(config, agentType, attempt);
+  if (tier === null) return null;
+  const tierModels = (config['dynamic_routing'] as Record<string, unknown>)['tier_models'] as Record<string, string>;
+  return tierModels[tier];
+}
+
+/**
+ * #3703 — the ONE omit decision. resolveModelInternal (step 4) and
+ * resolveModelForTier both read it, and so does resolveProviderEscalation, so a
+ * first spawn, an escalated spawn and the provider ladder agree on whether the
+ * omit gate applies. An attempt that does not escalate the tier goes through
+ * resolveModelInternal outright (#6214). Honors "omit" when the PROJECT set it
+ * (#2517 finding #4) or when the active runtime lacks native model aliases; a
+ * native-alias runtime ignores an "omit" that came only from the shared
+ * ~/.gsd/defaults.json (#2297).
+ */
+function omitAppliesFor(cwd: string, config: Record<string, unknown>, activeRuntime: string): boolean {
+  return config['resolve_model_ids'] === 'omit'
+    && (projectExplicitlySetsOmit(cwd) || !hasNativeModelAliases(activeRuntime));
+}
+
+/**
+ * #3703 — what a native-alias runtime emits when the omit gate applies: a tier
+ * alias, never a concrete model id. dynamic_routing still chooses the tier and
+ * escalates it on `attempt`, but the result is that tier's alias from the
+ * catalog's adaptiveTierMap, not the `tier_models` value. Without routing it is
+ * the profile tier. `inherit` and a tierless (unknown) agent return "": neither
+ * has an alias the profile can name.
+ */
+function omitTierAlias(config: Record<string, unknown>, agentType: string, attempt: number): string {
+  const tier = computeProfileTier(config, agentType);
+  if (tier === 'inherit' || !VALID_TIERS.has(tier ?? '')) return '';
+  const routingTier = dynamicRoutingTier(config, agentType, attempt);
+  if (routingTier === null) return tier as string;
+  return catalog.adaptiveTierMap[routingTier];
 }
 
 /**
@@ -832,6 +876,22 @@ function dynamicRoutingModel(
 function resolveModelForTier(cwd: string, agentType: string, attempt?: number): string {
   const config = loadConfig(cwd);
   const attemptN = Number.isInteger(attempt) && (attempt as number) > 0 ? (attempt as number) : 0;
+
+  // #6214: an attempt that does not move the dynamic_routing tier off the first
+  // spawn's tier IS the first spawn: attempt 0, a max_escalations cap of 0,
+  // escalate_on_failure:false, a saturated heavy tier, or routing off. It
+  // resolves through resolveModelInternal, so resolve-execution --attempt N, the
+  // provider ladder's `from` and the passive adapter report the model that
+  // resolve-model and init report. There model_overrides, model_policy, the
+  // runtime tier map, the omit gate and a model_profile_overrides.claude pin
+  // all outrank tier_models. Only a genuine escalation reaches the steps below.
+  const routedTier = dynamicRoutingTier(config, agentType, attemptN);
+  const firstSpawnTier = dynamicRoutingTier(config, agentType, 0);
+  if (routedTier === null || routedTier === firstSpawnTier) {
+    return resolveModelInternal(cwd, agentType);
+  }
+
+  const activeRuntime = resolveActiveRuntime(config);
 
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   // Own-property guard (see resolveTierFromConfig above): without it, an
@@ -842,19 +902,31 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
     ? modelOverrides[agentType]
     : undefined;
   if (override) {
-    const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
+    const mapped = mapClaudeOverrideForRuntime(override, activeRuntime, agentType);
     if (mapped !== null) return mapped;
     // Unmappable Claude ID — fall through to dynamic_routing / model_policy resolution.
   }
 
   // #4505: same active-runtime rule as resolveModelInternal step 3.
-  if (config['model_policy'] && resolveActiveRuntime(config) !== 'claude') {
+  if (config['model_policy'] && activeRuntime !== 'claude') {
     return resolveModelInternal(cwd, agentType);
   }
 
-  const alias = dynamicRoutingModel(config, agentType, attemptN);
-  if (alias !== null) return alias;
-  return resolveModelInternal(cwd, agentType);
+  // #3703: the same omit decision as resolveModelInternal step 4, so an
+  // escalated attempt cannot hand out what the first spawn's gate ruled out.
+  // A native-alias runtime escalates by tier ALIAS; any other runtime whose
+  // gate produced "" stays "" (an explicit non-Claude opt-in that resolved its
+  // own tier map at step 3 keeps today's dynamic_routing escalation).
+  if (omitAppliesFor(cwd, config, activeRuntime)) {
+    if (hasNativeModelAliases(activeRuntime)) {
+      return omitTierAlias(config, agentType, attemptN);
+    } else if (resolveModelInternal(cwd, agentType) === '') {
+      return '';
+    }
+  }
+
+  // routedTier is non-null past the #6214 guard, so tier_models names it.
+  return ((config['dynamic_routing'] as Record<string, unknown>)['tier_models'] as Record<string, string>)[routedTier];
 }
 
 /**
@@ -922,6 +994,14 @@ function resolveProviderEscalation(
   if (!applicable) return stay();
 
   const config = loadConfig(cwd);
+  // #3703: provider_escalation entries are concrete model ids from other
+  // providers, which an applied omit rules out. A native-alias runtime keeps
+  // its tier alias and a runtime whose gate blanked the model stays blank; an
+  // explicit non-Claude opt-in that resolved its own tier map keeps the ladder.
+  const activeRuntime = resolveActiveRuntime(config);
+  if (omitAppliesFor(cwd, config, activeRuntime) && (hasNativeModelAliases(activeRuntime) || from === '')) {
+    return stay();
+  }
   const dr = config['dynamic_routing'] as Record<string, unknown> | null | undefined;
   if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) return stay();
   if (dr['escalate_on_failure'] === false) return stay();
@@ -1135,14 +1215,14 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 
 export = {
   hasNativeModelAliases,
-  MODEL_RESOLVER_DIAGNOSTIC,
-  PROJECT_MODEL_OMIT_WARNING,
   resolveTierEntry,
   CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
   resolveModelInternal,
+  resolveModelOverride,
   resolveTierInternal,
   resolveTierFromConfig,
+  computeProfileTier,
   _resetModelPolicyWarningCacheForTests,
   _resetModelOverrideWarningCacheForTests,
   _setInstallRuntimeMarkerForTests,

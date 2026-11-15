@@ -15,6 +15,14 @@
  * reader (no third-party archive library), and caches the extracted binary
  * for reuse across runs.
  *
+ * The download retries a transient failure (HTTP 408/429/5xx, network error,
+ * request timeout) up to DOWNLOAD_ATTEMPTS times, sleeping DOWNLOAD_BACKOFF_MS
+ * between attempts (#6095). The attempt count and the DOWNLOAD_BACKOFF_MS
+ * sleeps are bounded; total wall time is not bounded by this module, because
+ * DOWNLOAD_TIMEOUT_MS is a per-hop socket idle timeout (a body that keeps
+ * trickling bytes never trips it). The CI job's timeout-minutes is the outer
+ * bound. A non-transient failure (404, too many redirects) fails at once.
+ *
  * Zip-slip defense: unlike `decompress`, which wrote extracted files using
  * PATHS TAKEN FROM THE ARCHIVE (the exact defect class in GHSA-mp2f-45pm-
  * 3cg9 — a malicious archive entry named e.g. `../../etc/passwd` gets
@@ -62,8 +70,17 @@ const MAX_REDIRECTS = 5;
 // SHELLCHECK_TIMEOUT_MS bound on the ShellCheck subprocess. A bare `timeout`
 // option on the request does NOT abort it by itself — Node only emits a
 // 'timeout' event, which must be handled by destroying the request (see the
-// `req.on('timeout', ...)` below).
+// `req.on('timeout', ...)` below). This is a per-hop IDLE timeout (socket
+// inactivity): a stalled hop fails after it, but a body that keeps trickling
+// bytes never trips it. downloadWithRetry bounds the attempt count and the
+// DOWNLOAD_BACKOFF_MS sleeps; total wall time is not bounded by this module
+// (the CI job's timeout-minutes is the outer bound).
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+
+// Total download attempts and the sleeps (ms) between them: a sleep of
+// DOWNLOAD_BACKOFF_MS[i] follows failed attempt i + 1 (#6095).
+const DOWNLOAD_ATTEMPTS = 3;
+const DOWNLOAD_BACKOFF_MS = [2000, 5000];
 
 /**
  * Issue one real HTTPS request. Exists as its own function purely so tests
@@ -95,7 +112,9 @@ function httpsGetFollowingRedirects(url, redirectsLeft = MAX_REDIRECTS, requestF
         if (status >= 300 && status < 400 && res.headers.location) {
           res.resume(); // drain so the socket can be reused/closed
           if (redirectsLeft <= 0) {
-            reject(new Error(`too many redirects fetching ${url}`));
+            const err = new Error(`too many redirects fetching ${url}`);
+            err.code = 'TOO_MANY_REDIRECTS';
+            reject(err);
             return;
           }
           const next = new URL(res.headers.location, url).toString();
@@ -104,7 +123,9 @@ function httpsGetFollowingRedirects(url, redirectsLeft = MAX_REDIRECTS, requestF
         }
         if (status !== 200) {
           res.resume();
-          reject(new Error(`unexpected HTTP ${status} fetching ${url}`));
+          const err = new Error(`unexpected HTTP ${status} fetching ${url}`);
+          err.status = status;
+          reject(err);
           return;
         }
         const chunks = [];
@@ -122,6 +143,48 @@ function httpsGetFollowingRedirects(url, redirectsLeft = MAX_REDIRECTS, requestF
       req.destroy(new Error(`timed out after ${DOWNLOAD_TIMEOUT_MS}ms fetching ${url}`));
     });
   });
+}
+
+/**
+ * True when a download failure is worth retrying: HTTP 408, 429 or 5xx, or an
+ * error with no HTTP status (network error, request timeout, socket reset).
+ * False for any other status (e.g. 404, a wrong pinned asset) and for
+ * `too many redirects`, which is deterministic.
+ */
+function isTransientDownloadError(err) {
+  const status = err && err.status;
+  if (typeof status === 'number') {
+    return status === 408 || status === 429 || (status >= 500 && status <= 599);
+  }
+  return !(err && err.code === 'TOO_MANY_REDIRECTS');
+}
+
+/**
+ * GET `url` via `getFn`, retrying a transient failure up to `attempts` times
+ * with `backoffMs[i]` sleeps between attempts. A non-transient error rejects
+ * at once; exhausting the attempts rejects with one Error listing every
+ * attempt. `sleep` and `getFn` are injectable so tests never wait.
+ */
+async function downloadWithRetry(
+  url,
+  {
+    attempts = DOWNLOAD_ATTEMPTS,
+    backoffMs = DOWNLOAD_BACKOFF_MS,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    getFn = httpsGetFollowingRedirects,
+  } = {},
+) {
+  const failures = [];
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await getFn(url);
+    } catch (e) {
+      if (!isTransientDownloadError(e)) throw e;
+      failures.push(`attempt ${attempt}: ${e.message}`);
+      if (attempt < attempts) await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)]);
+    }
+  }
+  throw new Error(failures.join('; '));
 }
 
 /**
@@ -204,7 +267,7 @@ async function resolveShellcheckBin() {
 
   let gz;
   try {
-    gz = await httpsGetFollowingRedirects(url);
+    gz = await downloadWithRetry(url);
   } catch (e) {
     throw new ExitError(1, `lint-workflow-shellcheck: failed to download ShellCheck (${url}): ${e.message}`);
   }
@@ -241,7 +304,11 @@ module.exports = {
   CACHED_BIN_PATH,
   MAX_REDIRECTS,
   DOWNLOAD_TIMEOUT_MS,
+  DOWNLOAD_ATTEMPTS,
+  DOWNLOAD_BACKOFF_MS,
   extractFileFromTar,
   httpsGetFollowingRedirects,
+  isTransientDownloadError,
+  downloadWithRetry,
   resolveShellcheckBin,
 };

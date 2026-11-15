@@ -559,7 +559,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.skip_discuss` | boolean | `false` | When `true`, `/gsd-autonomous` bypasses the discuss-phase entirely, writing minimal CONTEXT.md from the ROADMAP phase goal. Useful for projects where developer preferences are fully captured in PROJECT.md/REQUIREMENTS.md. Added in v1.28 |
 | `workflow.text_mode` | boolean | `false` | Replaces AskUserQuestion TUI menus with plain-text numbered lists. Required for Claude Code remote sessions (`/rc` mode) where TUI menus don't render. Can also be set per-session with `--text` flag on discuss-phase. Added in v1.28 |
 | `workflow.use_worktrees` | boolean | `true` | When `false`, disables git worktree isolation for parallel execution. Users who prefer sequential execution or whose environment does not support worktrees can disable this. Added in v1.31. **Branch-divergence note:** when your branch has diverged from `origin/HEAD`, GSD auto-degrades to sequential and prints a warning. See [`worktree.baseRef`](#worktree-settings) to restore parallel execution on a diverged branch. **Per-runtime note:** whether this key can be honored depends on the runtime's declared `dispatch.isolation` capability, not on its name (#2584). Runtimes whose own harness isolates each executor (**Claude Code**, **Cursor**) run parallel worktrees natively; runtimes exposing a headless exec with an explicit working directory (**Codex**, **OpenCode**, **Kimi**, **Kimi Code**) get worktrees GSD itself creates and merges — where a dispatch site can only drive the harness model, those hosts degrade to sequential with a warning rather than aborting. Every other runtime declares no isolation primitive, and forcing `use_worktrees: true` there still fails closed before any executor dispatch. `/gsd-health` reports such a value as warning `W025` (#2486). **Default on a non-Claude install:** if a worktree-capable non-Claude host is not isolating as described above, check whether the install stamped this key's default to `false` and set an explicit `use_worktrees: true`. See [Executor isolation per runtime](#executor-isolation-per-runtime). |
-| `workflow.agent_hint_routing` | boolean | `true` | Per-plan specialist executor routing (#1689). When `true`, a plan whose `agent_hint:` frontmatter names a subagent that resolves on the active runtime is dispatched to that specialist instead of `gsd-executor`. Default `true` — a no-op for plans without `agent_hint:`, so existing dispatch is unchanged. Set `false` to disable. See [PLAN.md `agent_hint`](reference/plan-md.md#per-plan-executor-routing). |
+| `workflow.agent_hint_routing` | boolean | `true` | Per-plan specialist executor routing (#1689). When `true`, a plan whose `agent_hint:` frontmatter names a subagent that resolves on the active runtime is dispatched to that specialist instead of `gsd-executor`. Default `true` — a no-op for plans without `agent_hint:`, so existing dispatch is unchanged. Set `false` to disable. A routed specialist is recorded as the plan's executor and its dispatch is guarded for worktree isolation exactly like `gsd-executor`; its model is `model_overrides["<hint>"]` or else `gsd-executor`'s; GSD role names other than `gsd-executor` are refused. Asked as the **Executor** question by `/gsd-new-project` (after the AI Models questions, interactive and `--auto`; `config-new-project` writes the answer, else the saved `~/.gsd/defaults.json` value, else `true`) and `/gsd-settings` (Execution section). See [How to choose which executors run your plans](how-to/choose-the-executor-policy.md), [PLAN.md `agent_hint`](reference/plan-md.md#per-plan-executor-routing) and [How to route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md). |
 | `workflow.compact_content` | boolean | `false` | Compact content mode (#4139, [ADR-4139](adr/4139-compact-content-seam.md)). Per-project boolean selecting the terser form of GSD's own shipped prompt content (workflows, templates, agent-skill payloads). Two mechanisms exist, chosen per stream. **Spine + detail** (top-level, eagerly-`@`-included workflows): six workflows branch on it today — `plan-phase` (#4402, the pilot), `execute-phase`, `docs-update`, `new-project`, `verify-work`, and `complete-milestone` (#4405) — each split into a spine plus a deferred `<workflow>/detail/*.md` elaboration: with the key off, the spine reads its own elaboration back in before continuing (byte-identical instruction set to before); with it on, that read is skipped. The remaining eagerly-`@`-included workflows were reviewed and recorded as not worth splitting (see `docs/PARTITION-RULES.md` § "Deciding whether a file is worth splitting") — either their size comes from safety-critical orchestration logic rather than deferrable narrative (`review.md`), or they're small enough that a split's fixed structural overhead would exceed the savings. **Variant swap** (#4406 — lazily-`Read` workflow subdirectory files and `gsd-core/templates/**` planning-artifact templates, which have no eager window to shrink): a `.compact.md` sibling next to the canonical file, resolved at the point of the existing `Read` per `gsd-core/references/compact-content-gate.md` § "Streams 1b and 4". Three call sites are wired today — `help --full`'s reference doc (`gsd-core/workflows/help/modes/full.md`) and the sequential-execution `SUMMARY.md`/`USER-SETUP.md` template reads in `execute-plan.md` — after a per-candidate reachability audit found most other size-based candidates were either genuinely unreferenced (deleted), reached only through an eager `@`-include or orchestrator build-time embed (left unconverted, same reasoning as the eagerly-included workflows above), or consumed only by a test fixture or a parser's documented grammar rather than a runtime `Read`. **Agent-skill payloads** (#4407 — the `gsd_run query agent-skills` CLI seam, `cmdAgentSkills` in `src/init.cts`): a `.compact.md` sibling next to each canonical `agents/<name>.md`, selected the same way as variant swap but resolved in code instead of prose, because this seam already runs through a real function call rather than an eagerly-loaded file — see `gsd-core/references/compact-content-gate.md` § "Stream 2". It fires only inside the `#2454` persona fallback for non-Claude, AGENTS-native runtimes with no named-subagent dispatch; Claude Code's own subagent dispatch never reaches this path, unchanged from today. An agent with no compact sibling registered falls back to the canonical persona and discloses the fallback inside the served payload itself. The token reduction each mechanism actually achieves is measured, not asserted: `npm run benchmark:compact-content` (spine/detail) and `npm run benchmark:compact-content-variants` (variant-swap) each report per-item and aggregate on/off token counts (a proxy-tokenizer delta — Anthropic publishes no tokenizer for Claude 3+, so the comparison is exact under a pinned tokenizer even though the absolute counts are not Claude's real ones) against their own committed baseline (`tests/fixtures/compact-content-benchmark-baseline.json`, #4404; `tests/fixtures/compact-content-variant-benchmark-baseline.json`, #4406). Both are reporting-only — neither ever fails CI. Discoverable, not just settable: `/gsd-new-project` asks a Compact Content question at init time, and `/gsd-settings`/`/gsd-config` toggle it on an already-initialized project (#4408) — `config-set`/`config-get` remain the direct route for scripting. |
 | `workflow.worktree_skip_hooks` | boolean | `false` | When `true`, executor agents in worktree mode pass `--no-verify` (skipping pre-commit hooks) and post-wave hook validation runs against the merged result instead. Opt-in escape hatch for projects whose hooks cannot run in agent worktrees. Default `false` runs hooks on every commit (#2924). |
 | `workflow.code_review` | boolean | `true` | Enable `/gsd-code-review` and `/gsd-code-review --fix` commands. When `false`, the commands exit with a configuration gate message. Added in v1.34 |
@@ -753,12 +753,16 @@ order. Default `false` keeps the original serial behavior byte-for-byte.
 
 ### Project-Root Resolution in Multi-Repo Workspaces
 
-When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels, never above `$HOME`):
+When `sub_repos` is set and `gsd-tools.cjs` or `gsd-tools query` is invoked from inside a listed child repo, both CLIs walk up to the parent workspace that owns `.planning/` before dispatching handlers. Resolution order (checked at each ancestor up to 10 levels):
 
 1. If the starting directory already has its own `.planning/`, it is the project root (no walk-up).
 2. Parent has `.planning/config.json` listing the starting directory's top-level segment in `sub_repos` (or the legacy `planning.sub_repos` shape).
 3. Parent has `.planning/config.json` with legacy `multiRepo: true` and the starting directory is inside a git repo.
 4. Parent has `.planning/` and an ancestor up to the candidate parent contains `.git` (heuristic fallback).
+
+The walk never reads above `$HOME`. When `$HOME` is a symlink, it stops there whether the path is spelled through the link or through its target. A starting directory at `$HOME` itself, with no `.planning/` of its own, resolves to itself.
+
+The isolation hooks resolve their project root through the same walk, so they keep the same `$HOME` boundary as `gsd-tools`.
 
 If none match, the starting directory is returned unchanged. Explicit `--project-dir /path/to/workspace` is idempotent under this resolution.
 
@@ -852,6 +856,7 @@ for a worked example.
 | `hooks.context_warning_threshold` | number | `35` | Percent of context window REMAINING at or below which the monitor emits CONTEXT WARNING. Must be greater than 0 and at most 100, and strictly greater than `hooks.context_critical_threshold` — `config-set` refuses 0, which no critical value can pair with. An out-of-domain value falls back **per key**; both keys revert to their defaults only when the RESOLVED pair violates `critical < warning`. Read from the root project config — a workstream-scoped `config-set` does not reach this hook. Inert on a runtime with no context-monitor hook installed, Codex among them (#2586); see [context-monitor.md](context-monitor.md) (#4285) |
 | `hooks.context_critical_threshold` | number | `25` | Percent of context window REMAINING at or below which the monitor escalates to CONTEXT CRITICAL. Must be at least 0 and less than 100, and strictly less than `hooks.context_warning_threshold` — `config-set` refuses 100, which no warning value can pair with. Setting only one of the pair is checked against the other's default, so tune both when moving either past the other. Same root-config scope, and the same installed-monitor prerequisite, as the key above (#4285) |
 | `hooks.workflow_guard` | boolean | `false` | Warn when file edits happen outside GSD workflow context (advises using `/gsd-quick` or `/gsd-fast`). When enabled, the hook's one hard block — `git add -f` on `agent-*`/`worktree-agent-*` branches — also fails closed on internal error (see `docs/explanation/security-model.md`, #3504) |
+| `hooks.secret_read_exempt` | array of strings | `[]` | Repo-relative paths of files the secret-read guard (`gsd-secret-read-guard.js`) lets agents read even though their names match a protected pattern — for example a committed placeholder template named `.env.production`. An exemption takes effect only while the file is committed in `HEAD` as a regular file and is a regular file (not a symlink) in the working tree; an untracked, staged-only or symlinked file stays blocked. Paths are exact: no globs, no absolute paths, no `..`; backslashes are read as `/` and a leading `./` is dropped. `config-set` refuses any other value. Read and Grep (`path`) resolve a relative path against the session directory; in Bash the file must be named by its absolute path, because a relative name can mean a different file after `cd` or inside `find -name`, and only when every command in the line is one of `cat`, `head`, `tail`, `grep`, `egrep`, `fgrep`, `rg`, `wc`, `diff`, `cmp`, `sort`, `uniq`, `cut`, `nl` or `od` (any other command, or a `$( )` / backtick body, withdraws the exemption for the whole line). A file inside a submodule cannot be exempted. A Grep `glob` is not widened. Read from the root project `.planning/config.json`. An unconfigured project blocks exactly as before. See [Let agents read a committed env template](how-to/let-agents-read-a-committed-env-template.md) (#4432) |
 | `statusline.show_last_command` | boolean | `false` | Append `last: /<cmd>` suffix to the statusline showing the most recently invoked slash command. Opt-in; reads the active session transcript to extract the latest `<command-name>` tag (closes #2538) |
 | `statusline.context_position` | string | `"end"` | Position of the context-window meter. `"end"` (default) renders at line tail; `"front"` renders immediately after the model name so the meter stays visible in narrow terminals. Closes #2937 |
 | `statusline.show_context_tokens` | boolean | `false` | Append the absolute token count (e.g. `(156k)`) after the context meter's percentage. Sums input, cache-creation, cache-read, and output tokens from the hook payload — a broader basis than the meter's percentage (which excludes output tokens), so the two figures can diverge slightly. Opt-in; the meter is unchanged when the flag is absent |
@@ -1164,7 +1169,7 @@ gsd-tools query config-set mempalace.cross_project_tunnels true
 |---------|------|---------|-------------|
 | `graphify.enabled` | boolean | `false` | Enable the project knowledge graph. When `true`, `/gsd-graphify` builds and queries a graph in `.planning/graphs/`. Added in v1.36 |
 | `graphify.build_timeout` | number (seconds) | `300` | Maximum seconds allowed for a `/gsd-graphify build` run before it aborts. Added in v1.36 |
-| `graphify.auto_update` | boolean | `false` | **Opt-in (issue #3347).** When `true` (and `graphify.enabled` is also `true`), the bundled PostToolUse hook `hooks/gsd-graphify-update.sh` auto-rebuilds the project knowledge graph in a detached background process after `git commit/merge/pull/rebase --continue/cherry-pick` on the default branch (`git.base_branch` override, else `main`/`master`/`trunk`). Hook returns instantly; the rebuild updates `.planning/graphs/{graph.json,graph.html,GRAPH_REPORT.md}` and writes `.planning/graphs/.last-build-status.json` (`{ts, status: "running"\|"ok"\|"failed", exit_code, duration_ms, head_at_build}`). PID-locked, CI-aware (`$CI` env suppresses), bails silently if `graphify` is not on `PATH`. Default `false` so existing behaviour is unchanged after upgrade. |
+| `graphify.auto_update` | boolean | `false` | **Opt-in (issue #3347).** When `true` (and `graphify.enabled` is also `true`), the bundled PostToolUse hook `hooks/gsd-graphify-update.sh` auto-rebuilds the project knowledge graph in a detached background process after `git commit/merge/pull/rebase --continue/cherry-pick` or an unflagged `query commit` through `gsd_run`, `gsd-tools`, or `gsd-tools.cjs` on the default branch (`git.base_branch` override, else `main`/`master`/`trunk`). Global-flag forms such as `gsd_run --cwd <path> query commit` are intentionally excluded because the hook cannot resolve their target checkout (#5935). The hook returns instantly; the rebuild updates `.planning/graphs/{graph.json,graph.html,GRAPH_REPORT.md}` and writes `.planning/graphs/.last-build-status.json` (`{ts, status: "running"\|"ok"\|"failed", exit_code, duration_ms, head_at_build}`). PID-locked, CI-aware (`$CI` env suppresses), bails silently if `graphify` is not on `PATH`. Default `false` so existing behaviour is unchanged after upgrade. |
 | `graphify.graph_path` | string (path) | _unset_ | **Umbrella/multi-repo support (issue #1825).** Overrides where `/gsd-graphify query\|status\|diff` read the knowledge graph from. Set to a path (relative to the project root, or absolute) pointing at a shared umbrella-level `graph.json` so a single curated cross-repo graph serves every sub-project without N drifting mirror copies. The diff snapshot (`.last-build-snapshot.json`) travels with the configured graph (same directory); the auto-update status sidecar stays project-local. Build stays project-scoped (`.planning/graphs/`) — build the umbrella graph in the umbrella project, then point sub-projects at it. When unset, behaviour is byte-identical to the historical `.planning/graphs/graph.json`. A clear, actionable error is returned when the configured file is missing. |
 
 #### Multi-developer setup
@@ -1736,13 +1741,14 @@ for the change to take effect. See issue #2256.
 
 ```text
 1. model_overrides[<agent>]              ← per-agent; full IDs; targeted exception
-2. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
-3. models[<phase_type>]                  ← coarse phase-level tier (this section)
-4. model_profile (per-agent col)         ← global tier strategy
-5. Runtime default                       ← when nothing else applies
+2. model_policy / runtime tier map       ← un-escalated attempts (see §Dynamic Routing)
+3. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
+4. models[<phase_type>]                  ← coarse phase-level tier (this section)
+5. model_profile (per-agent col)         ← global tier strategy
+6. Runtime default                       ← when nothing else applies
 ```
 
-The five layers compose top-down: `model_profile` is the base tier, `models[<phase_type>]` overrides at the phase level, `dynamic_routing` (when enabled) escalates per-attempt on soft failure, `model_overrides[<agent>]` carves per-agent exceptions at the top, and the runtime default applies when nothing else does. In the example above, all five research agents resolve to `sonnet` *except* `gsd-codebase-mapper`, which the per-agent override pins to `haiku`. `dynamic_routing` is disabled by default — when off (`enabled: false` or block omitted), this section's behavior is unchanged from today.
+The six layers compose top-down: `model_profile` is the base tier, `models[<phase_type>]` overrides at the phase level, `dynamic_routing` (when enabled) escalates per-attempt on soft failure, a `model_policy` preset or a non-Claude runtime's tier map names the concrete model for the tier, `model_overrides[<agent>]` carves per-agent exceptions at the top, and the runtime default applies when nothing else does. In the example above, all five research agents resolve to `sonnet` *except* `gsd-codebase-mapper`, which the per-agent override pins to `haiku`. `dynamic_routing` is disabled by default — when off (`enabled: false` or block omitted), this section's behavior is unchanged from today.
 
 #### Accepted values
 
@@ -1803,7 +1809,7 @@ Direct edits to `.planning/config.json` are looser — the resolver simply ignor
 
 #### Agent default tiers
 
-Each agent in `MODEL_PROFILES` declares one of three default tiers. The resolver picks `tier_models[default_tier]` for the first attempt.
+Each agent in `MODEL_PROFILES` declares one of three default tiers. The resolver picks `tier_models[default_tier]` for the first attempt, unless a higher layer in the precedence list below names the model.
 
 | Tier | Agents | Use case |
 |---|---|---|
@@ -1827,13 +1833,23 @@ If `dynamic_routing.escalate_on_failure: false`, soft failures do **not** advanc
 
 `light → standard → heavy → heavy` (heavy stays at heavy; can't go further).
 
+Under `model_profile: "inherit"` the first spawn uses the session model (`inherit`). A real escalation still moves to `tier_models[<next tier>]`, because enabling `dynamic_routing` opts the agent into escalation.
+
 #### Resolution precedence (highest → lowest)
 
 1. **`model_overrides[<agent>]`** — full IDs accepted; targeted exception
-2. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
-3. **`models[<phase_type>]`** — coarse phase-level (#3023)
-4. **`model_profile`** — per-agent column from active profile
-5. **Runtime default**
+2. **`model_policy`**, the active non-Claude runtime's tier map (`model_profile_overrides.<runtime>` included), the `resolve_model_ids: "omit"` gate, and a `model_profile_overrides.claude.<tier>` pin on Claude Code. This applies to un-escalated attempts only; see below.
+3. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
+4. **`models[<phase_type>]`** — coarse phase-level (#3023)
+5. **`model_profile`** — per-agent column from active profile
+6. **Runtime default**
+
+This order holds for the first spawn. It also holds for every respawn that does not move the tier, for example `max_escalations: 0`, `escalate_on_failure: false`, a `heavy` agent, or a `tier_models` with no entry for the next tier. `resolve-execution --attempt N` then reports the same model as `resolve-model` and the `init` payloads (#6214). A respawn that does escalate returns `tier_models[<escalated tier>]`. Three things still outrank it:
+- `model_overrides`
+- a non-Claude `model_policy`
+- an applied `"omit"`, which returns the escalated tier's alias on Claude Code and stays blank where it blanked the first spawn.
+
+An explicit non-Claude `runtime` in the project config outranks `"omit"`. Its escalated respawn uses `tier_models`.
 
 The `dynamic_routing` block is **disabled by default** — `enabled: false` (or omitting the block) preserves today's static resolution exactly.
 
@@ -1854,6 +1870,7 @@ The `dynamic_routing` block is **disabled by default** — `enabled: false` (or 
 The tier ladder above escalates *within one provider*. That does not help when the
 provider itself is what ran out: a heavier tier on the same throttled account is still
 throttled. `provider_escalation` is a separate, opt-in ladder for exactly that case.
+Under an applied `resolve_model_ids: "omit"` the ladder is skipped on Claude Code and on any runtime where the omit left the model blank (#3703).
 
 ```json
 {
@@ -2167,7 +2184,9 @@ The intent is the same as the Claude profile tiers -- use a stronger model for p
 |-------|----------|----------|
 | `false` (default) | Returns Claude aliases (`opus`, `sonnet`, `haiku`) | Claude Code with native Anthropic API |
 | `true` | Maps aliases to full Claude model IDs (`claude-opus-4-8`) | Claude Code with API that requires full IDs |
-| `"omit"` | Claude protection: yields an empty string when no runtime identity is known (or the value fails recognition); a runtime identified by its install marker resolves its own tier map instead | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo) |
+| `"omit"` | A runtime whose descriptor declares native tier aliases (`hostBehaviors.nativeModelAliases` — Claude Code) gets the profile's tier alias (`opus` / `sonnet` / `haiku`); a runtime identified by config, environment, or install marker that has a tier map resolves that map; every other runtime gets an empty string, and spawn sites omit `model=` | Non-Claude runtimes (Codex, OpenCode, Antigravity CLI, Kilo), or mixed-runtime projects that must not carry Claude model IDs |
+
+**`"omit"` on Claude Code.** An explicit project `resolve_model_ids: "omit"` no longer blanks the model; every agent is spawned on its profile tier: `resolve-model gsd-codebase-mapper` under `model_profile: "quality"` returns `{"model":"sonnet",…,"tier":"sonnet"}`, not a blank. A blank `model` would leave the choice to Claude Code — `CLAUDE_CODE_SUBAGENT_MODEL` when it is set, otherwise the session model — so the profile's routing would be lost. Under `"omit"` the tier alias takes precedence over `model_profile_overrides.claude.<tier>` pins and `dynamic_routing.tier_models`, because both name concrete models. With `dynamic_routing` enabled, routing still picks the tier and escalates it on a failed attempt, and the result is that tier's alias (`light` → `haiku`, `standard` → `sonnet`, `heavy` → `opus`), not the `tier_models` value. In that case `model` names the routed tier while `tier` (and `--pick tier`) still reports the profile tier, so the two can differ. `dynamic_routing.provider_escalation` does not swap providers under an applied `"omit"`: the attempt keeps its tier alias. `model_profile: "inherit"` and agents with no catalog entry still resolve to an empty string. A `"omit"` that comes only from the shared `~/.gsd/defaults.json` is ignored on Claude Code, as before.
 
 #### OpenCode 1.x and 2.x
 
@@ -2196,7 +2215,7 @@ commas, so annotations survive install, update and uninstall. It writes the `mcp
 
 `node gsd-tools.cjs query resolve-model <agent> --pick tier` returns the tier GSD resolved for that agent, independent of `resolve_model_ids`: `opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`. It is also emitted as a `tier` key in the command's full JSON output.
 
-`tier` is computed above the `resolve_model_ids: "omit"` gate, so it stays meaningful exactly where `model` does not — every non-Claude install (blank under `"omit"`) and any install where the runtime's tier map substitutes a name (e.g. `gpt-5.6-luna` for the haiku tier on Codex).
+`tier` is computed above the `resolve_model_ids: "omit"` gate, so it stays meaningful exactly where `model` does not — every runtime without native tier aliases or a tier map (blank under `"omit"`) and any install where the runtime's tier map substitutes a name (e.g. `gpt-5.6-luna` for the haiku tier on Codex).
 
 `tier` accounts for every step that can change which tier runs, including a `model_policy` preset — a preset resolves after the profile tier and can dispatch a different one, so `model_policy: {provider: anthropic, budget: low}` under a `balanced` profile reports `haiku`, not `sonnet`.
 
@@ -2270,11 +2289,11 @@ On the Claude runtime, tier resolution stays on Claude Code's adaptive tier alia
 
 1. `model_overrides[<agent>]` — explicit per-agent ID always wins.
 2. **Runtime-aware tier resolution** (this section) — when `runtime` is set and profile is not `inherit`. On non-Claude runtimes this is the built-in tier map merged with your `model_profile_overrides`; on the Claude runtime it applies only the `model_profile_overrides.claude.<tier>` entry you set (#4192) — never the built-in defaults, so unpinned installs keep resolving aliases.
-3. `resolve_model_ids: "omit"` — an explicit project-level `"omit"` yields an empty string unless the runtime identity (config, environment, or install marker) names a recognized non-Claude runtime, whose own tier map then applies.
+3. `resolve_model_ids: "omit"` — when the runtime identity (config, environment, or install marker) names a recognized non-Claude runtime, its own tier map applies. Otherwise an explicit project-level `"omit"` yields the profile's tier alias on a runtime with native tier aliases (Claude Code), and an empty string everywhere else.
 4. Claude-native default — `model_profile` tier as alias (current default).
 5. `inherit` — propagates literal `inherit` for `Task(model="inherit")` semantics.
 
-**Backwards compatibility.** A recognized Codex identity from the environment, project config or install marker resolves through the Codex tier map. An explicit project `resolve_model_ids: "omit"` keeps its existing precedence: a populated non-Claude tier entry can resolve before the omit gate; paths without such an entry keep the empty-model result.
+**Backwards compatibility.** A recognized Codex identity from the environment, project config or install marker resolves through the Codex tier map. An explicit project `resolve_model_ids: "omit"` keeps its existing precedence: a populated non-Claude tier entry can resolve before the omit gate; paths without such an entry follow step 3: the profile tier alias on Claude Code, an empty model elsewhere.
 
 **Unknown runtimes.** If `runtime` is set to a value with no built-in tier map and no `model_profile_overrides[<runtime>]`, GSD falls back to the Claude-alias safe default rather than emit a model ID the runtime cannot accept. To support a new runtime, populate `model_profile_overrides.<runtime>.{opus,sonnet,haiku}` with valid IDs.
 
@@ -2432,7 +2451,7 @@ Every reader and writer of this store resolves its root the same way: `GSD_HOME`
 
 When `/gsd-new-project`, `config-ensure-section`, or `config-set-model-profile` creates a new `config.json`, it reads global defaults and merges them as the starting configuration. Per-project settings always override globals. Project creation excludes the shared `runtime` key. A shared `resolve_model_ids: "omit"` is excluded only when the runtime creating the project has native model aliases (currently Claude Code). Every other runtime keeps the shared omit, preserving its existing resolution for unknown agents and the `inherit` profile as well as known agents. Boolean `true`/`false` defaults and any explicit new-project choice, including `"omit"`, are preserved.
 
-Existing project configs are left unchanged. If a project's `resolve_model_ids: "omit"` suppresses Claude tier routing, each resolving CLI invocation emits one warning per project scope naming the key and explaining that an older version may have copied it from shared defaults. The per-process scope follows the existing config-warning seam: separate CLI processes cannot share an in-memory dedupe, and resolution does not write marker state merely to silence later diagnostics. GSD cannot distinguish a copied value from an intentional one and continues to honor it. To restore tier routing when desired, remove the key or set it to `false` in the project config. Non-Claude runtime resolution keeps its existing behavior.
+Existing project configs are left unchanged, including a `resolve_model_ids: "omit"` that an older version copied from shared defaults. GSD cannot tell a copied value from an intentional one and honors it as explicit project intent. On Claude Code that omit still yields each known agent's tier alias (#3703), but custom agents resolve to an empty model and `model_profile_overrides.claude` pins and `dynamic_routing` tier models are skipped. To restore them, remove the key or set it to `false` in the project config.
 
 ### What a global file can and cannot set at runtime
 
