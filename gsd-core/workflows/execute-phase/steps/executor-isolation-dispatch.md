@@ -32,7 +32,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # primitive (#2652 review). The decision and whether it is HELD (a degrade an
 # earlier step recorded, reported as `none` with `held: true`) come from ONE call,
 # exactly as in the gate's own block.
-_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" 2>/dev/null)
+_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}")
 _ISOLATION_RC=$?
 _ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held:"+(Number.isSafeInteger(j.decidedAt)&&j.decidedAt>=0?j.decidedAt:""):"live"))}catch{process.stdout.write(" live")}})')
 _ISOLATION_RAW=${_ISOLATION_FIELDS% *}

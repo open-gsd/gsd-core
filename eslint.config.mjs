@@ -110,6 +110,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/host-runtime-detection.cjs',
       'gsd-core/bin/lib/handshake-serialized.cjs',
       'gsd-core/bin/lib/host-integration-sdk.cjs',
+      'gsd-core/bin/lib/executor-type.cjs',
       'gsd-core/bin/lib/install-effort-resolver.cjs',
       // #2875 Part 2 (epic #2866 Phase 6): tsc-generated runtime artifact —
       // lint the src/install-model-override-resolver.cts source, not this.

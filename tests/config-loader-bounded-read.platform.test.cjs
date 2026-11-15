@@ -170,7 +170,7 @@ describe('#5759 a FIFO or directory config.json must not hang configuration load
   });
 
   test('resolve_model_ids "omit" at the root with a FIFO workstream config: returns, and the omit still applies', () => {
-    fs.writeFileSync(rootConfig(), JSON.stringify({ resolve_model_ids: 'omit' }));
+    fs.writeFileSync(rootConfig(), JSON.stringify({ resolve_model_ids: 'omit', model_profile_overrides: { claude: { sonnet: 'claude-sonnet-4-5' } } }));
     makeFifo(wsConfig());
 
     const r = resolveModel(['--ws', 'ws1']);
@@ -178,7 +178,8 @@ describe('#5759 a FIFO or directory config.json must not hang configuration load
     assertExitedByItself(r);
     // The FIFO workstream layer is "does not set the key", so the omit check falls through
     // to the root layer, which sets it — without blocking on the pipe.
-    assert.strictEqual(JSON.parse(r.stdout).model, '');
+    // On claude an applied omit yields the tier alias and skips the pin (#3703).
+    assert.strictEqual(JSON.parse(r.stdout).model, 'sonnet');
   });
 
   test('loadConfigResolved on a FIFO root config reports config_unreadable and degraded, never not_configured', () => {
