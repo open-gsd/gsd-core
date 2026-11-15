@@ -389,7 +389,7 @@ describe('U5 evaluateTddReviewCheckpoint', () => {
 describe('U5 GREEN commit types: gate agrees with the tdd.md lookup (#5274)', () => {
   let re;
   before(() => {
-    // allow-test-rule: docs-parity #5274 — the gate and the tdd.md executor lookup must agree on which commit types are GREEN
+    // The gate and the tdd.md executor lookup must agree on which commit types are GREEN
     const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
     const line = splitLines(md).find((l) => /--grep="\^\(/.test(l));
     assert.ok(line, 'GREEN grep line present in tdd.md');
