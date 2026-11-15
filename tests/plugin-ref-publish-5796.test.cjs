@@ -39,7 +39,7 @@ function git(cwd, args) {
       GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
     },
   });
-  assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+  assert.equal(r.exitCode, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
   return String(r.stdout).trim();
 }
 
@@ -220,7 +220,7 @@ describe('#5796 plugin ref publisher', () => {
     const r = runGit(['config', '--get-all', key], {
       cwd: root, env: { ...process.env, ...publisher.pushAuthEnv('tok', process.env) },
     });
-    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.exitCode, 0, r.stderr);
     // git config --get-all lists every value including the empty reset marker;
     // git's http code treats an empty extraheader as "forget the earlier ones".
     // So the headers actually sent are the lines after the last empty line. This
@@ -340,7 +340,7 @@ describe('#5796 plugin ref publisher', () => {
     const r = runNode([
       path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'), '--branch', '-bad', '--remote', 'x', '--source', 'x',
     ], { cwd: ROOT });
-    assert.equal(r.status, 2);
+    assert.equal(r.exitCode, 2);
     assert.match(r.stderr, /branch/i);
   });
 
@@ -348,7 +348,7 @@ describe('#5796 plugin ref publisher', () => {
     const r = runNode([
       path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'), '--remote', 'x', '--branch', 'plugin',
     ], { cwd: ROOT });
-    assert.equal(r.status, 2);
+    assert.equal(r.exitCode, 2);
     assert.match(r.stderr, /source/);
   });
 
@@ -364,8 +364,16 @@ describe('#5796 plugin ref publisher', () => {
     const publishes = (step) => typeof step.run === 'string' && step.run.includes('publish-plugin-ref');
     assert.ok(wf.jobs.finalize, 'finalize job present');
     const steps = wf.jobs.finalize.steps;
-    const matching = steps.filter((s) => typeof s.run === 'string' && s.run.includes('scripts/publish-plugin-ref.cjs'));
-    assert.equal(matching.length, 1, 'finalize has exactly one publish step');
+    const matching = steps.filter((s) => s.id === 'plugin_ref');
+    assert.equal(matching.length, 1, 'finalize has exactly one plugin_ref step');
+    assert.equal(matching[0].name, 'Publish plugin ref (prebuilt bin/lib)');
+    assert.ok(
+      typeof matching[0].run === 'string' && matching[0].run.includes('scripts/publish-plugin-ref.cjs'),
+      'plugin_ref step runs the publisher',
+    );
+    const FAIL_STEP = 'Fail if the plugin ref was not published';
+    const mentioning = steps.filter((s) => publishes(s)).map((s) => s.name);
+    assert.deepEqual(mentioning, [matching[0].name, FAIL_STEP], 'only the publish and fail steps mention the publisher');
     assert.ok(String(matching[0].if).includes('!inputs.dry_run'), 'publish step is skipped on dry runs');
     const idx = steps.indexOf(matching[0]);
     const syncIdx = steps.findIndex((s) => typeof s.run === 'string' && s.run.includes('scripts/sync-next-version.cjs'));
@@ -384,6 +392,7 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(matching[0].id, 'plugin_ref');
     assert.equal(matching[0]['continue-on-error'], true);
     const last = steps[steps.length - 1];
+    assert.equal(last.name, FAIL_STEP);
     assert.ok(String(last.if).includes("steps.plugin_ref.outcome == 'failure'"), 'last step reports a failed publish');
     assert.ok(typeof last.run === 'string' && last.run.includes('exit 1'), 'last step fails the job');
     assert.ok(!String(steps[syncIdx].if).includes('steps.plugin_ref'), 'sync step does not depend on the publish step');
@@ -400,7 +409,7 @@ describe('#5796 plugin ref publisher', () => {
     );
     const src = tmp('plugin-ref-src-');
     const repo = path.join(src, 'repo');
-    git(src, ['clone', '-q', '--no-local', ROOT, repo]);
+    git(src, ['-c', 'safe.directory=*', 'clone', '-q', '--no-local', ROOT, repo]);
     fs.cpSync(
       path.join(ROOT, 'gsd-core', 'bin', 'lib'), path.join(repo, 'gsd-core', 'bin', 'lib'),
       { recursive: true },
@@ -417,7 +426,7 @@ describe('#5796 plugin ref publisher', () => {
     const r = runNode([
       path.join(cache, 'gsd-core', 'bin', 'gsd-tools.cjs'), 'generate-slug', 'hello world',
     ], { cwd: cache });
-    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.exitCode, 0, r.stderr);
     assert.doesNotMatch(r.stderr, /runtime library/);
     assert.equal(JSON.parse(r.stdout).slug, 'hello-world');
   });
