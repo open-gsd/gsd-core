@@ -1246,20 +1246,29 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
   // A reading that cannot finish must not be read as "no launch": decoded, this
   // body is thousands of nested `"$(`, which the bash reading overflows on. The
   // plain reading takes it as one literal word and finds nothing, so a scan that
-  // dropped the reading's error would answer null.
+  // dropped the reading's error would answer null. The module keeps its budgets
+  // across in-process calls, and a budget an earlier call left spent answers
+  // command-too-complex whatever the scan does, so the row sets them afresh
+  // (scanBashCommand sets every one) and checks that a plain command scans clean.
   test('a reading that cannot finish is not read as no launch (#5441)', () => {
-    const { scanDebuggerSpawn } = require(HOOK_PATH);
+    const { scanBashCommand, scanDebuggerSpawn } = require(HOOK_PATH);
     const command = `bash -c $'${'\\x22$('.repeat(20000)}'`;
-    let verdict;
+    assert.equal(scanBashCommand('true'), null);
+    assert.equal(scanDebuggerSpawn('echo hi'), null, 'the budgets are not spent before the row');
+    scanBashCommand('true');
+    let verdict = null;
+    let thrown = null;
     try {
       verdict = scanDebuggerSpawn(command);
     } catch (e) {
-      verdict = e;
+      thrown = e;
     }
-    assert.ok(
-      verdict instanceof RangeError || (verdict !== null && verdict.code === 'command-too-complex'),
-      `expected a stack overflow or command-too-complex, got ${JSON.stringify(verdict)}`,
-    );
+    if (thrown !== null) {
+      // main() denies a Bash command whose scan throws a RangeError as command-too-complex.
+      assert.ok(thrown instanceof RangeError, `expected a stack overflow, got ${thrown}`);
+    } else {
+      assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
+    }
   });
 });
 
