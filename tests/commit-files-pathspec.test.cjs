@@ -3529,8 +3529,9 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     const commit = bashFenceAfter('gsd-core/workflows/complete-milestone.md', '<step name="git_commit_milestone">', true).join('\n');
     const re = String.raw`[[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]]`;
     for (const f of [squash, merge, commit]) assert.ok(f.includes(re), 'the .planning REQUIREMENTS.md regex is the same in every fence');
+    for (const f of [squash, merge]) assert.ok(f.includes('STAGED=0'), 'both merge guards hold the STAGED=0 parser loop');
     const loop = (f) => f.slice(f.indexOf('STAGED=0'));
-    assert.ok(loop(squash).length > 0 && loop(squash) === loop(merge), 'the squash and merge guards run the same parser');
+    assert.equal(loop(squash), loop(merge), 'the squash and merge guards run the same parser');
   });
   test('pr-branch.md preflight refuses a staged foreign path', (t) => {
     const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/pr-branch.md'), 'utf8'));
