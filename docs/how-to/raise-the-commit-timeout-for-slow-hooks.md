@@ -2,9 +2,9 @@
 
 GSD's SDK commits (`gsd-tools commit`, `commit-to-subrepo`, `pr-subrepo`) run `git commit`, which runs your
 pre-commit hooks. If a hook (a full lint, a type-check, `lint-staged` on a large change) takes longer than the
-timeout, GSD kills the commit. `gsd-tools commit` and `commit-to-subrepo` report `commit_timeout` with the
-`.git/index.lock` it may have left behind, and `pr-subrepo` reports the timeout as an error message that names
-the repo. The default is 30 seconds. This page raises it.
+timeout, GSD kills the commit. `gsd-tools commit` and `commit-to-subrepo` report `commit_timeout`, and all three
+commands name the stale `index.lock` path the kill may have left behind. `pr-subrepo` reports the timeout as an
+error message that names the repo. The default is 30 seconds. This page raises it.
 
 ## 1. Confirm it is a timeout, not a hook failure
 
