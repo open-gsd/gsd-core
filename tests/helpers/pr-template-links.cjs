@@ -55,7 +55,11 @@ const maskIndentedCode = (raw, masked) => {
   return masked.split('\n').map((m, i) => {
     const blank = !m.trim();
     const indented = /^( {4}|\t)/.test(rawLines[i]);
-    if (!blank && !indented) inList = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.test(rawLines[i]);
+    // an item's text lines (indented 2 to 3 spaces) keep it open
+    if (!blank && !indented) {
+      const marker = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.test(rawLines[i]);
+      inList = marker || (inList && /^ {2}/.test(rawLines[i]));
+    }
     const code = indented && !blank && !inList && afterBlank;
     afterBlank = blank || code;
     return code ? m.replace(/\S/g, ' ') : m;

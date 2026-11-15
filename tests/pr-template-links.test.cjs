@@ -143,7 +143,8 @@ describe('link extractor, edge forms (#5427)', () => {
       '    code\n    [a](../x.md)'];
     for (const t of code) assert.deepEqual(hrefsIn(t), [], t);
     const text = ['para\n    [a](../x.md)', '- item\n\n    [a](../x.md)',
-      '- item\n\n      [a](../x.md)'];
+      '- item\n\n      [a](../x.md)', '- item\n  text\n\n    [a](../x.md)',
+      '1. item\n   text\n\n    [a](../x.md)'];
     for (const t of text) assert.deepEqual(hrefsIn(t), ['../x.md'], t);
   });
   test('a line that opens with an inline code span still yields its links', () => {
