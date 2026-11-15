@@ -3491,7 +3491,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     // The guard is every fence line before the branch switch.
     const guard = (marker) => { const l = bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
     for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
-      assert.ok(g.includes('STAGED='), 'a clean-index guard exists');
       const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489g-');
       for (const d of ['.planning', 'app', 'other', 'app/.planning']) fs.mkdirSync(path.join(dir, d), { recursive: true });
       for (const f of ['.planning/REQUIREMENTS.md', 'app/.planning/REQUIREMENTS.md', 'app/a', 'other/o']) fs.writeFileSync(path.join(dir, f), 'r');
@@ -3512,6 +3511,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       git('reset', '-q', 'HEAD', '--', '.planning/REQUIREMENTS.md'); git('checkout', '-q', '--', '.planning/REQUIREMENTS.md');
       fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'edited'); git('add', '.planning/REQUIREMENTS.md');
       assert.equal(runFence(dir, g).exitCode, 1, 'a staged edit of REQUIREMENTS.md is refused');
+      git('reset', '-q', '--hard', 'HEAD');
+      const odd = 'a\\b"q\tt';
+      fs.mkdirSync(path.join(dir, odd, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(dir, odd, '.planning', 'REQUIREMENTS.md'), 'r');
+      git('add', '-A'); git('commit', '-q', '-m', 'odd');
+      git('rm', '-q', `${odd}/.planning/REQUIREMENTS.md`);
+      assert.equal(runFence(dir, g).exitCode, 0, 'a backslash, quote and tab in the directory name does not make git quote the path past the guard');
     }
   });
   test('pr-branch.md preflight refuses a staged foreign path', (t) => {
