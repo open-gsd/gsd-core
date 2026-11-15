@@ -79,7 +79,7 @@ describe('isolation guards check the executor the dispatch record names', () => 
   let project;
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -99,6 +99,10 @@ describe('isolation guards check the executor the dispatch record names', () => 
   test('when the record names a hinted executor, gsd-executor itself is still guarded', () => {
     writeSentinel(project, { executor_type: HINTED });
     assert.strictEqual(claudeVerdict(project, 'gsd-executor'), 'block');
+  });
+
+  test('the pinned config switches the #5328 model guard off, so the verdicts below are the isolation ones', () => {
+    assert.equal(require('../gsd-core/bin/lib/model-escalation.cjs').guardApplies(project), false);
   });
 
   test('a non-executor agent is not guarded', () => {
@@ -164,7 +168,7 @@ describe('a record only governs a hinted executor while it applies and is well-f
   let project;
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-edge-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -267,7 +271,7 @@ describe('a phase-level record names its executors as executor_types (limit-1 / 
   const names = (n) => Array.from({ length: n }, (_, i) => typeName(i));
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-types-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -328,7 +332,7 @@ describe('a truncated phase-level record: executor_types_truncated is read stric
   const DROPPED = 'acme-dropped-executor';
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-trunc-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -356,7 +360,7 @@ describe('the canonical dispatch marker makes any subagent_type an executor disp
   let project;
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-marker-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -414,7 +418,7 @@ describe('every applicable candidate record names its executors, not only the ne
   let project;
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-cands-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -479,7 +483,7 @@ describe('every dispatch is classified against any recent record in the project'
   let project;
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-phaseless-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
@@ -1165,7 +1169,7 @@ describe('reader-side GSD role predicate and deny-message names', () => {
     let project;
     before(() => {
       project = createFixture({ prefix: 'gsd-hinted-exec-name-', planning: true, git: true, projectDoc: false });
-      fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+      fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
       writeSentinel(project);
     });
     after(() => { cleanup(project); });
@@ -1244,7 +1248,7 @@ describe('the reader tolerates a writer\'s atomic rename and judges a record by 
   let project;
   before(() => {
     project = createFixture({ prefix: 'gsd-hinted-exec-rename-', planning: true, git: true, projectDoc: false });
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   });
   after(() => { cleanup(project); });
 
