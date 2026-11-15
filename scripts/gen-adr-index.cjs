@@ -514,7 +514,8 @@ function linkDestination(text, at) {
   }
   return depth > 0 ? null : { dest: text.slice(at, end), end };
 }
-/** The end of the title at `at` (the whitespace before it included), or -1 when none starts there. */
+/** The end of the title at `at` (the whitespace before it included), or -1 when no title
+ * starts there. */
 function linkTitleEnd(text, at) {
   TITLE.lastIndex = at;
   return TITLE.test(text) ? TITLE.lastIndex : -1;

@@ -37,9 +37,9 @@ describe('heading anchors (#5427)', () => {
   });
   test('a heading slugify cannot reproduce gets no anchor, so a link to it fails', () => {
     const md = '## Café\n## Ü1\n## See [x](y)\n## A [b][c]\n## _emph_ x\n'
-      + '## Keep `snake_case` and snake_case';
+      + '## <kbd>Ctrl</kbd> key\n## A &amp; B\n## Keep `snake_case` and snake_case';
     assert.deepEqual([...headingSet(md)], ['keep-snake_case-and-snake_case']);
-    for (const a of ['caf', 'caf-1', 'see-xy', 'a-bc', '_emph_-x']) {
+    for (const a of ['caf', 'caf-1', 'see-xy', 'a-bc', '_emph_-x', 'kbdctrlkbd-key', 'a-amp-b']) {
       assert.equal(headingSet(md).has(a), false, a);
     }
   });

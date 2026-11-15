@@ -589,7 +589,7 @@ function classify(files, reachabilityDeps = {}) {
   const targeted = new Set();
   const reasons = [];
   let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
-  let lightweightChanged = false;       // CI YAML (#6075) / template-link docs
+  let inertCiChanged = false;           // CI YAML (#6075) / template-link docs
   let fullMatrix = false;
 
   for (const file of files) {
@@ -614,7 +614,7 @@ function classify(files, reachabilityDeps = {}) {
     // CI YAML and template-link docs (isTemplateLinkDoc) set a lightweight signal; neither
     // is product/pipeline code.
     if (isLightweight(file)) {
-      lightweightChanged = true;
+      inertCiChanged = true;
     }
 
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
@@ -701,7 +701,7 @@ function classify(files, reachabilityDeps = {}) {
 
   // code_changed: true when product/pipeline code, CI YAML or a template-link doc changed.
   // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.
-  const codeChanged = productOrPipelineChanged || lightweightChanged;
+  const codeChanged = productOrPipelineChanged || inertCiChanged;
 
   const targetedTests = existingTests([...targeted].sort());
 
@@ -712,7 +712,7 @@ function classify(files, reachabilityDeps = {}) {
   }
 
   // CI-YAML / template-link-doc-only: full_matrix must be false (override any RULES that fired).
-  if (lightweightChanged && !productOrPipelineChanged) {
+  if (inertCiChanged && !productOrPipelineChanged) {
     fullMatrix = false;
   }
 

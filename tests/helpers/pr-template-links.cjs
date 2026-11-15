@@ -8,8 +8,8 @@
 // Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
 // are never relative.
 // Anchors use scripts/gen-features.cjs `slugify` on the raw heading text. A heading it
-// cannot reproduce (a non-ASCII letter or digit, a link, `_` emphasis) gets no anchor, so
-// a link to it fails. Blockquote headings and `<a id>`/`<a name>` anchors count.
+// cannot reproduce (a non-ASCII letter or digit, a link, an HTML tag or entity, `_` emphasis)
+// gets no anchor, so a link to it fails. Blockquote headings and `<a id>`/`<a name>` anchors count.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -186,6 +186,7 @@ const setextHeadings = (md) => {
 const unslugable = (text) => {
   const bare = text.replace(/`[^`\n]*`/g, '');
   return /(?!\p{ASCII})[\p{L}\p{N}]/u.test(text) || /\]\(|\]\[/.test(bare)
+    || /<[A-Za-z/!]|&[A-Za-z0-9#]+;/.test(bare) // an HTML tag or entity renders to other text
     || /(?:^|\W)_|_(?:\W|$)/.test(bare);
 };
 // Blockquote content keeps its line number, so a quoted heading sorts and counts in place.

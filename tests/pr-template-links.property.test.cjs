@@ -192,7 +192,7 @@ describe('link grammar productions (#5427)', () => {
       assert.deepEqual(hrefsIn(`[a]: ${a}${c}${b}`), [], JSON.stringify(c));
     }));
   });
-  test('property: whitespace is spaces, tabs and one line ending; a blank line ends the link', () => {
+  test('property: whitespace is spaces, tabs and one line ending; a blank line ends it', () => {
     fc.assert(fc.property(d, eol, pad, pad, title, (x, e, p, q, t) => {
       const one = `${p}${e}${q}`;
       assert.deepEqual(hrefsIn(`[a](${one}${x}${one})`), [x]);
