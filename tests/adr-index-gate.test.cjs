@@ -462,6 +462,20 @@ test('the real repo corpus is clean and its index is current', () => {
   assert.equal(res.status, 0, `docs/adr/ must satisfy its own gate:\n${res.stderr}`);
 });
 
+test('the accepted carry ADR carries the maintainer date and sits in the Active index group (#5328)', () => {
+  // The maintainer accepted the carry ADR on 2026-11-11; the status line and the
+  // generated index row must say so, and the row must not stay under Proposed.
+  const file = '5328-agent-model-guard-workstream-carry.md';
+  const adrText = fs.readFileSync(path.join(REPO_ROOT, 'docs', 'adr', file), 'utf8');
+  assert.match(adrText, /^- \*\*Status:\*\* Accepted \(2026-11-11\)$/m);
+  const lines = indexRegionLines(fs.readFileSync(path.join(REPO_ROOT, 'docs', 'adr', 'README.md'), 'utf8'));
+  const row = lines.findIndex((l) => l.includes(`](${file})`));
+  const proposed = lines.indexOf('### Proposed');
+  assert.ok(row !== -1, 'the index must list the carry ADR');
+  assert.ok(row < proposed, 'the carry ADR row must sit above the Proposed group');
+  assert.match(lines[row], /\| Accepted \|/);
+});
+
 // --- insert-only invariant (#3251) ------------------------------------------
 //
 // The generated region is a shared, committed artifact rewritten by every
