@@ -18,7 +18,7 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runHook: runHookSeam, runGit, runNode } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { createTempDir, runGsdTools, cleanup, TOOLS_PATH } = require('./helpers.cjs');
+const { createTempDir, runGsdTools, cleanup, TOOLS_PATH, saveSessionEnv, clearSessionEnv, restoreSessionEnv } = require('./helpers.cjs');
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN } = require('../hooks/lib/isolation-deny-reason.js');
 const { runHook, mkProject, writeConfig } = require('./helpers/agent-isolation-guard-fixtures.cjs');
 
@@ -246,6 +246,27 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.ok(r.success, r.error);
     assert.equal(JSON.parse(r.output).model, 'gpt-5');
     assert.equal(JSON.parse(fs.readFileSync(escalationFile(project, 'gsd-executor'), 'utf8')).model, 'gpt-5');
+  });
+
+  // runGsdTools drops stderr on success, so these spawn the CLI directly from a directory other than the project (--cwd names the project).
+  test('resolve-execution prints no guard warning where the guard does not apply, and one where it applies but the root differs', (t) => {
+    const escalating = { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } };
+    const NOT_WRITTEN = /model-escalation record not written/; // other stderr lines (a global-defaults warning) may appear
+    const elsewhere = createTempDir('gsd-aig-elsewhere-');
+    t.after(() => cleanup(elsewhere));
+    const stderrOf = (agent) => {
+      const r = runNode([TOOLS_PATH, 'resolve-execution', agent, '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.equal(JSON.parse(r.stdout).model, 'gpt-5', 'the escalation itself proceeds');
+      return r.stderr;
+    };
+    setup(t, escalating);
+    assert.match(stderrOf('gsd-executor'), NOT_WRITTEN, 'positive control: a guarded type with the guard on warns when the root differs');
+    assert.doesNotMatch(stderrOf('gsd-debugger'), NOT_WRITTEN, 'an agent type the hook never checks');
+    writeConfig(project, JSON.stringify({ ...escalating, hooks: { agent_model_guard: false } }));
+    assert.doesNotMatch(stderrOf('gsd-executor'), NOT_WRITTEN, 'the guard is off');
+    writeConfig(project, JSON.stringify({ ...escalating, runtime: 'codex' }));
+    assert.doesNotMatch(stderrOf('gsd-executor'), NOT_WRITTEN, 'a runtime without native tier aliases');
   });
 
   test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
@@ -499,24 +520,32 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
   });
 
-  test('a session-scoped pointer selects the workstream from the payload session_id, as init resolves it', (t) => {
-    const keys = ['GSD_WORKSTREAM', 'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'];
-    const ambient = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    for (const k of keys) delete process.env[k];
-    t.after(() => { for (const k of keys) { if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]; } });
-    setup(t);
-    const ws = path.join(project, '.planning', 'workstreams', 'alpha');
-    fs.mkdirSync(ws, { recursive: true });
-    fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'haiku' } }));
+  // A process.env free of session and workstream identity for one test, restored after it.
+  function isolateSessionEnv(t) {
+    const saved = saveSessionEnv();
+    clearSessionEnv();
+    t.after(() => restoreSessionEnv(saved));
+  }
+  // Selects `name` as the workstream of session 'sess-ws' through the session-scoped pointer, cleared after the test.
+  function pointSessionAt(t, name) {
     const store = require('../gsd-core/bin/lib/active-workstream-store.cjs');
     process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
-    store.setActiveWorkstream(project, 'alpha');
+    store.setActiveWorkstream(project, name);
     delete process.env.CLAUDE_CODE_SESSION_ID;
     t.after(() => {
       process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
       store.setActiveWorkstream(project, null);
       delete process.env.CLAUDE_CODE_SESSION_ID;
     });
+  }
+
+  test('a session-scoped pointer selects the workstream from the payload session_id, as init resolves it', (t) => {
+    isolateSessionEnv(t);
+    setup(t);
+    const ws = path.join(project, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(ws, { recursive: true });
+    fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'haiku' } }));
+    pointSessionAt(t, 'alpha');
     const r = runGsdTools(['resolve-model', 'gsd-planner'], project, { GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: 'sess-ws' });
     assert.ok(r.success, r.error);
     assert.equal(JSON.parse(r.output).model, 'haiku', 'init resolves the session-pointed workstream');
@@ -559,23 +588,12 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   });
 
   test('a carried workstream and the session pointer: a model matching either baseline passes, the verdict names both', (t) => {
-    const keys = ['GSD_WORKSTREAM', 'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'];
-    const ambient = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    for (const k of keys) delete process.env[k];
-    t.after(() => { for (const k of keys) { if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]; } });
+    isolateSessionEnv(t);
     setupCarry(t, ISSUE_CONFIG, 'sess-ws');
     const beta = path.join(project, '.planning', 'workstreams', 'beta');
     fs.mkdirSync(beta, { recursive: true });
     fs.writeFileSync(path.join(beta, 'config.json'), JSON.stringify({ model_overrides: { 'gsd-planner': 'sonnet' } }));
-    const store = carryStore();
-    process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
-    store.setActiveWorkstream(project, 'beta');
-    delete process.env.CLAUDE_CODE_SESSION_ID;
-    t.after(() => {
-      process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
-      store.setActiveWorkstream(project, null);
-      delete process.env.CLAUDE_CODE_SESSION_ID;
-    });
+    pointSessionAt(t, 'beta');
     assert.ok(initQuick('sess-ws').success);
     assert.equal(evaluate(inSession('haiku', 'sess-ws')).action, 'allow');
     assert.equal(evaluate(inSession('sonnet', 'sess-ws')).action, 'allow');
@@ -587,23 +605,12 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   });
 
   function setupNonNativePointer(t, rootConfig) {
-    const keys = ['GSD_WORKSTREAM', 'GSD_SESSION_KEY', 'CODEX_THREAD_ID', 'CLAUDE_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'];
-    const ambient = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    for (const k of keys) delete process.env[k];
-    t.after(() => { for (const k of keys) { if (ambient[k] === undefined) delete process.env[k]; else process.env[k] = ambient[k]; } });
+    isolateSessionEnv(t);
     setupCarry(t, rootConfig, 'sess-ws');
     const beta = path.join(project, '.planning', 'workstreams', 'beta');
     fs.mkdirSync(beta, { recursive: true });
     fs.writeFileSync(path.join(beta, 'config.json'), JSON.stringify({ runtime: 'codex' }));
-    const store = carryStore();
-    process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
-    store.setActiveWorkstream(project, 'beta');
-    delete process.env.CLAUDE_CODE_SESSION_ID;
-    t.after(() => {
-      process.env.CLAUDE_CODE_SESSION_ID = 'sess-ws';
-      store.setActiveWorkstream(project, null);
-      delete process.env.CLAUDE_CODE_SESSION_ID;
-    });
+    pointSessionAt(t, 'beta');
     assert.ok(initQuick('sess-ws').success);
   }
 

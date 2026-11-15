@@ -83,7 +83,7 @@ import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
-import { writeEscalation, modelFamily, sessionRoot, guardApplies } from './model-escalation.cjs';
+import { writeEscalation, modelFamily, sessionRoot, escalationRoot, GUARDED_AGENT_TYPES, guardApplies as agentModelGuardApplies } from './model-escalation.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -611,9 +611,10 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
  * config, or a runtime without native tier aliases), as the hook then reads nothing.
  */
 function recordModelEscalation(cwd: string, agentType: string, model: string): void {
+  // The hook checks only the guarded agent types, and only where the guard applies at the root `cwd` resolves to: elsewhere nothing is read, so nothing is written or reported.
   try {
+    if (!GUARDED_AGENT_TYPES.has(agentType) || !agentModelGuardApplies(escalationRoot(cwd))) return;
     const root = sessionRoot(cwd);
-    if (!guardApplies(root)) return;
     writeEscalation(root, agentType, model, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
   } catch (e) {
     process.stderr.write(`gsd: model-escalation record not written: ${(e as Error).message}; under hooks.agent_model_guard "deny" the guard blocks ${model}\n`);
