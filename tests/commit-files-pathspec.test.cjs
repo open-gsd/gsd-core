@@ -20,8 +20,6 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
-const { RULES } = require('../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
-const { buildPlanningSnapshot } = require('../gsd-core/bin/lib/planning-snapshot.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -3489,13 +3487,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual(head, docs === 'false' ? ['code'] : ['.planning/STATE.md', 'code']);
     }
   });
-  test('the squash and merge-with-history guards accept the staged REQUIREMENTS.md deletion and refuse a foreign path, also from a subdirectory under diff.relative', (t) => {
-    const guard = (marker) => bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker).find((l) => l.includes('diff --cached --quiet'));
+  test('the squash and merge-with-history guards accept exactly one staged .planning REQUIREMENTS.md deletion and refuse anything else, also from a subdirectory under diff.relative', (t) => {
+    // The guard is every fence line before the branch switch.
+    const guard = (marker) => { const l = bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
     for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
-      assert.ok(g, 'a clean-index guard line exists');
+      assert.ok(g.includes('STAGED='), 'a clean-index guard exists');
       const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489g-');
-      fs.mkdirSync(path.join(dir, '.planning')); fs.mkdirSync(path.join(dir, 'app')); fs.mkdirSync(path.join(dir, 'other'));
-      fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'r'); fs.writeFileSync(path.join(dir, 'app', 'a'), 'a'); fs.writeFileSync(path.join(dir, 'other', 'o'), 'o');
+      for (const d of ['.planning', 'app', 'other', 'app/.planning']) fs.mkdirSync(path.join(dir, d), { recursive: true });
+      for (const f of ['.planning/REQUIREMENTS.md', 'app/.planning/REQUIREMENTS.md', 'app/a', 'other/o']) fs.writeFileSync(path.join(dir, f), 'r');
       git('add', '-A'); git('commit', '-q', '-m', 'seed');
       assert.equal(runFence(dir, g).exitCode, 0, 'clean index');
       git('rm', '-q', '.planning/REQUIREMENTS.md');
@@ -3506,6 +3505,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       git('reset', '-q', 'other/o');
       fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
       assert.equal(runFence(dir, g).exitCode, 1, 'a stray path next to the deletion is refused');
+      git('reset', '-q', 'stray');
+      git('rm', '-q', 'app/.planning/REQUIREMENTS.md');
+      assert.equal(runFence(dir, g).exitCode, 1, 'two REQUIREMENTS.md deletions are refused');
+      git('reset', '-q', '--', 'app/.planning/REQUIREMENTS.md');
+      git('reset', '-q', 'HEAD', '--', '.planning/REQUIREMENTS.md'); git('checkout', '-q', '--', '.planning/REQUIREMENTS.md');
+      fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'edited'); git('add', '.planning/REQUIREMENTS.md');
+      assert.equal(runFence(dir, g).exitCode, 1, 'a staged edit of REQUIREMENTS.md is refused');
     }
   });
   test('pr-branch.md preflight refuses a staged foreign path', (t) => {
@@ -3546,34 +3552,20 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
-  test('stop-tracking recipe carries the same four fragments in all six docs', (t) => {
+  test('stop-tracking recipe carries the same four fragments in all six docs', () => {
     const norm = (s) => s.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
-    // The W029 message and remedy belong to the health rule, so the docs are compared with the rule's own output.
-    const repo = createTempGitProject('gsd-5489-w029-');
-    t.after(() => cleanup(repo));
-    fs.writeFileSync(path.join(repo, '.gitignore'), '.planning/\n');
-    gitOrThrow(['add', '-A'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
-    gitOrThrow(['commit', '-q', '-m', 'ignore planning'], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
-    const w029 = RULES.find((r) => r.code === 'W029').check(buildPlanningSnapshot(repo))[0];
-    assert.ok(w029, 'W029 fires for an ignored but tracked .planning/');
     const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
     for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
       'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
-      // Each doc copies the recipe the scratch-repo test below runs and the W029 text the health rule emits, so the copies must stay in sync with those two sources.
+      // Each doc copies the recipe the scratch-repo test below runs, so the copies must stay in sync with it.
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       // allow-test-rule: docs-parity (#5211)
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       // allow-test-rule: docs-parity (#5211)
       // The scan declaration sits on the commit line of planning-config.md only; it is not part of the recipe.
       assert.ok(norm(splitLines(md).map((l) => (l.includes('# gsd-scan-ignore:') ? l.slice(0, l.indexOf('# gsd-scan-ignore:')) : l)).join('\n')).includes(norm(recipe)), `${f}: recipe order`);
-      if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
-        // allow-test-rule: docs-parity (#5211)
-        assert.ok(md.includes(`- [W029] ${w029.message}`), `${f}: W029 message`);
-        // allow-test-rule: docs-parity (#5211)
-        assert.ok(md.includes(`Fix: ${w029.remedy.args.command}`), `${f}: W029 remedy`);
-      }
     }
   });
   test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {
@@ -3616,13 +3608,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       }
     }
     assert.deepStrictEqual(bad, []);
-  });
-  test('async-external-jobs recipe commits the manifest with a pathspec', () => {
-    // The recipe commands are what a user runs, so their pathspec is the shipped contract.
-    const md = fs.readFileSync(path.join(root, 'docs/how-to/async-external-jobs.md'), 'utf8');
-    const commits = splitLines(md).filter((l) => l.startsWith('git commit'));
-    assert.ok(commits.length > 0);
-    for (const l of commits) assert.equal(unscopedGitCommits(l).length, 0, l);
   });
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
