@@ -3731,20 +3731,15 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.deepStrictEqual([r.status, r.commits, r.head], [0, 3, ['.planning/REQUIREMENTS.md']]);
     });
 
-    test('a failing git diff refuses, it is not reported as a skip', () => {
-      let teardown;
-      try {
-        const { dir, git } = initFixtureRepo((f) => { teardown = f; }, 'gsd-5489-');
-        fs.mkdirSync(path.join(dir, '.planning'));
-        fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'x');
-        git('add', '-A'); git('commit', '-q', '-m', 'seed');
-        git('rm', '-q', '.planning/REQUIREMENTS.md');
-        const failDiff = 'git() { case " $* " in *" diff "*) return 1;; esac; command git "$@"; }\n';
-        const r = runFence(dir, failDiff + fenceOf());
-        assert.deepStrictEqual([r.exitCode, Number(git('rev-list', '--count', 'HEAD'))], [1, 2]);
-      } finally {
-        if (teardown) teardown();
-      }
+    test('a failing git diff refuses, it is not reported as a skip', (t) => {
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489-');
+      fs.mkdirSync(path.join(dir, '.planning'));
+      fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'x');
+      git('add', '-A'); git('commit', '-q', '-m', 'seed');
+      git('rm', '-q', '.planning/REQUIREMENTS.md');
+      const failDiff = 'git() { case " $* " in *" diff "*) return 1;; esac; command git "$@"; }\n';
+      const r = runFence(dir, failDiff + fenceOf());
+      assert.deepStrictEqual([r.exitCode, Number(git('rev-list', '--count', 'HEAD'))], [1, 2]);
     });
 
     test('property: any directory name (newline, backslash, glob, space, non-ASCII) still commits its .planning deletion alone', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, () => {
