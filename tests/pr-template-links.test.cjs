@@ -136,6 +136,8 @@ const BLOCKS = [
   ['> [r]: x', ['x'], []],
   ['`a\n[b](x)`', [], []],
   ['\\`a\n[b](x)`', ['x'], []],
+  ['[x\n`a\nb`\ny](z)', ['z'], []],
+  ['[x\n    ```\n    ```\ny](z)', ['z'], []],
   ['[x\n# H\ny](z)', [], ['h']],
   ['[x\n> y](z)', [], []],
   ['[x\n\ny](z)', [], []],
@@ -472,7 +474,7 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
     };
     const hasOpener = (text, at) => {
       if (escaped(text, at)) return false;
-      const para = text.slice(0, at).split(/\n[ \t\r]*\n/).pop();
+      const para = text.slice(0, at); // a scan holds one paragraph: scanBlocks splits at blank lines
       let depth = 1;
       for (let j = para.length - 1; j >= 0; j -= 1) {
         if (escaped(para, j)) continue;

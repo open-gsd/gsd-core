@@ -362,11 +362,11 @@ function maskCode(text) {
 
 // The CommonMark link grammar (spec 0.31, inline links and link reference definitions): the one
 // owner of a destination, a title and the whitespace around them. Whitespace is spaces, tabs and
-// at most one line ending (LINK_WS); a link never holds a blank line (BLANK).
+// at most one line ending (LINK_WS). A link lies in one paragraph: `scanBlocks` finds the
+// paragraphs, so a scan holds no blank line.
 const LINK_WS = String.raw`[ \t]*(?:\r?\n[ \t]*)?`;
-const BLANK = /\n[ \t\r]*\n/;
-// A blank line, a backslash escape (not of a blank line's newline), `[` or `]`.
-const LABEL_TOKEN = new RegExp(`${BLANK.source}|\\\\(?!${BLANK.source})[^]|\\[|\\]`, 'g');
+// A backslash escape, `[` or `]`.
+const LABEL_TOKEN = /\\[^]|\[|\]/g;
 const LEAD = new RegExp(LINK_WS, 'y');
 const CLOSE = new RegExp(`${LINK_WS}\\)`, 'y');
 // An angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
@@ -405,8 +405,7 @@ function linkTitleEnd(text, at) {
 /**
  * The `](` in `text` whose `]` closes a bracket pair opened earlier in its paragraph
  * (balanced, backslash escapes honoured), as `]` index -> `[` index: a stray `](x)` is text,
- * not a link. One forward pass keeps the open `[`; a blank line resets them, and a backslash
- * escapes the next character (a backslash before a blank line escapes nothing).
+ * not a link. One forward pass keeps the open `[`; a backslash escapes the next character.
  */
 function labelPairs(text) {
   const out = new Map(); // the `]` of each `](` that closes a pair -> the `[` it closes
@@ -416,7 +415,7 @@ function labelPairs(text) {
     else if (m[0] === ']' && open.length) {
       const from = open.pop();
       if (text[m.index + 1] === '(') out.set(m.index, from);
-    } else if (m[0][0] === '\n') open.length = 0;
+    }
   }
   return out;
 }
@@ -445,7 +444,7 @@ function scanInlineLinks(text) {
     if (!d) continue;
     const title = linkTitleEnd(text, d.end);
     CLOSE.lastIndex = title < 0 ? d.end : title;
-    if (CLOSE.test(text) && !BLANK.test(text.slice(i + 2, CLOSE.lastIndex))) {
+    if (CLOSE.test(text)) {
       out.push({ at: i, dest: d.dest, raw: text.slice(i + 2, CLOSE.lastIndex - 1) });
       if (!image) inner = Math.max(inner, from);
     }
