@@ -406,6 +406,8 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
       'tests/release-tarball-smoke-workflow.test.cjs',
       'tests/ci-conformance-pr-gating.test.cjs',
       'tests/workflow-token-permissions.test.cjs',
+      // #5299: reads APPROVAL_LABELS from auto-close-unsolicited-prs.yml
+      'tests/registry-docs-approved-issue-parity.test.cjs',
     ];
     for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml', '.github/actions/x/action.yml']) {
       const result = assertInert([file]);
