@@ -3611,7 +3611,22 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       // With no test files the pathspec is empty and the commit would take the whole index.
       // allow-test-rule: docs-parity (#5211)
       assert.ok(add > 2 && lines[add - 1].startsWith('```bash') && /^If .*test.*commit/.test(lines[add - 3]), `${f}: a condition line precedes the test-file commit`);
+      // The condition covers its own fence only: no other commit may share it.
+      // allow-test-rule: docs-parity (#5211)
+      const fence = lines.slice(add, lines.indexOf('```', add));
+      assert.ok(!fence.some((l) => l.includes('gsd_run query commit')), `${f}: the test-file fence holds no other commit`);
     }
+  });
+  test('stop-tracking recipe (scratch repo): a failed git rm commits nothing', (t) => {
+    const fence = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
+    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489q-');
+    fs.writeFileSync(path.join(dir, 'code'), 'c');
+    git('add', '-A'); git('commit', '-q', '-m', 'seed');
+    // No tracked .planning file, so `git rm -r --cached .planning/` fails and the && must stop the commit.
+    // An empty index makes `git commit` fail anyway, so a wrapper records whether the recipe ran it.
+    const log = path.join(dir, 'commit.log');
+    runFence(dir, `git() { [ "$1" = commit ] && echo commit >> '${log}'; command git "$@"; }\n${fence}`);
+    assert.equal(fs.existsSync(log), false);
   });
   test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {
     const fence = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');

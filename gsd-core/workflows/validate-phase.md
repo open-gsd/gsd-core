@@ -158,11 +158,15 @@ If the auditor wrote test files, commit them:
 ```bash
 git add {test_files}
 git commit -m "test(phase-${PHASE}): add Nyquist validation tests" -- ':(literal){test_file}' ...
+```
+A `'` in a path becomes `'\''`.
 
+Always commit the validation strategy:
+
+```bash
 gsd_run query commit "docs(phase-${PHASE}): add/update validation strategy" \
   --files "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md"
 ```
-A `'` in a path becomes `'\''`.
 
 ## 8. Results + Routing
 
