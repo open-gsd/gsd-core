@@ -62,10 +62,11 @@ const maskIndentedCode = (raw, masked) => {
   return masked.split('\n').map((m, i) => {
     const blank = isBlank(m, rawLines[i]);
     const indented = /^( {4}|\t)/.test(rawLines[i]);
-    // an item's text lines (indented 2 to 3 spaces) keep it open
+    // An item stays open across its indented text and lazy continuation lines; only an
+    // unindented line after a blank line ends it.
     if (!blank && !indented) {
       const marker = LIST_ITEM.test(rawLines[i]);
-      inList = marker || (inList && /^ {2}/.test(rawLines[i]));
+      inList = marker || (inList && !(afterBlank && !/^ {2}/.test(rawLines[i])));
     }
     const code = indented && !blank && !inList && afterBlank;
     afterBlank = blank || code;
