@@ -260,6 +260,17 @@ describe('angle-enclosed destinations (#5427)', () => {
     assert.deepEqual(hrefsIn('[t](<https://x/a>)'), ['https://x/a']);
     assert.deepEqual(hrefsIn('[t]: <https://x/a>'), ['https://x/a']);
   });
+  test('inline: an escaped `>` stays inside the destination', () => {
+    assert.deepEqual(hrefsIn('[a](<../x\\>y>)'), ['../x\\>y']);
+  });
+  test('inline: a `<` with no `>` on its line hides no link on the next line', () => {
+    assert.deepEqual(hrefsIn('[a](<x [b](<y\n[c](<z w>)'), ['z w']);
+  });
+  test('inline: a bare destination nests parentheses 32 deep, no deeper', () => {
+    const nested = (n) => `[a](x${'('.repeat(n)}${')'.repeat(n)})`;
+    assert.deepEqual(hrefsIn(nested(32)), [nested(32).slice(4, -1)]);
+    assert.deepEqual(hrefsIn(nested(33)), []);
+  });
   test('absolute encoded form is accepted in both', () => {
     for (const t of [`[guide](<${ABS}>)`, `[guide]: <${ABS}>`]) {
       assert.deepEqual(hrefsIn(t).filter(isBadLink), []);

@@ -480,7 +480,8 @@ function maskInlineCodeSpans(line) {
   return out;
 }
 
-const ANGLE = /\s*<([^>\n]*)>/y;
+const ANGLE = /<((?:\\.|[^>\\\n])*)>/y;
+const MAX_PAREN_DEPTH = 32; // CommonMark's nesting limit for a bare destination; bounds the scan
 const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
 /**
  * The indexes of the `](` in `text` whose `]` closes a bracket pair opened earlier in
@@ -503,27 +504,33 @@ function labelledCloses(text) {
 
 /**
  * Every inline-link destination in `text` (mask code first, see `maskCode`): an
- * angle-enclosed or bare destination (bare: balanced parentheses to any depth, `\`
- * escapes), then an optional title. Returns `{ at, dest, raw }` per link: `at` is the
+ * angle-enclosed or bare destination (both honour `\` escapes; bare: balanced
+ * parentheses up to 32 deep), then an optional title. Returns `{ at, dest, raw }` per link: `at` is the
  * index of the `]`, `dest` the destination (may be empty), `raw` the text between the parentheses.
  * The one scanner behind `extractLinks` and the PR-template link guard.
  */
 function scanInlineLinks(text) {
   const out = [];
   const closes = labelledCloses(text);
+  let angleDead = 0; // no `<` before this index can start an angle destination (see below)
   for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
     if (!closes.has(i)) continue;
-    ANGLE.lastIndex = i + 2;
-    const angle = ANGLE.exec(text);
-    let end = angle ? ANGLE.lastIndex : i + 2;
+    let start = i + 2;
+    while (/\s/.test(text[start] ?? '')) start += 1;
+    let angle = null;
+    if (text[start] === '<' && start >= angleDead) {
+      ANGLE.lastIndex = start;
+      angle = ANGLE.exec(text);
+      // a `<` with no closing `>` on its line leaves none for a later `<` on that line
+      if (!angle) angleDead = text.indexOf('\n', start) + 1 || text.length;
+    }
+    let end = angle ? ANGLE.lastIndex : start;
     let dest = angle?.[1];
     if (!angle) {
       let depth = 0;
-      while (/\s/.test(text[end] ?? '')) end += 1;
-      const start = end;
       for (; end < text.length && !/\s/.test(text[end]); end += 1) {
         if (text[end] === '\\' && /\S/.test(text[end + 1] ?? '')) end += 1;
-        else if (text[end] === '(') depth += 1;
+        else if (text[end] === '(' && ++depth > MAX_PAREN_DEPTH) break;
         else if (text[end] === ')' && !depth--) break;
       }
       if (depth > 0) continue;
@@ -564,9 +571,11 @@ function extractLinks(text) {
   const out = [];
   let line = 1;
   let newline = masked.indexOf('\n'); // the next newline not yet counted into `line`
+  let seen = 0; // masked[0, seen) is read; `last` is the nearest `[`, `]` or newline in it
+  let last = -1;
   for (const { at, dest, raw } of scanInlineLinks(masked)) {
-    const open = masked.lastIndexOf('[', at - 1);
-    const textOk = open >= 0 && !/[\][\n]/.test(masked.slice(open + 1, at));
+    for (; seen < at; seen += 1) if ('[]\n'.includes(masked[seen])) last = seen;
+    const textOk = last >= 0 && masked[last] === '['; // the link text holds no `[`, `]` or newline
     if (dest && textOk && !/[()\n]/.test(raw)) {
       for (; newline >= 0 && newline < at; newline = masked.indexOf('\n', newline + 1)) line += 1;
       out.push({ line, target: raw });
