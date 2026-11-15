@@ -213,7 +213,7 @@ if [ "$BRANCHING_STRATEGY" = "phase" ]; then
     if [ "$COMMIT_DOCS" = "false" ]; then
       git reset HEAD .planning/ 2>/dev/null || true
     fi
-    git commit -m "feat: $branch for v[X.Y]"
+    git commit -m "feat: $branch for v[X.Y]"  # gsd-scan-ignore: #5211 squash merge: a clean-index guard precedes it
   done
 fi
 
@@ -223,7 +223,7 @@ if [ "$BRANCHING_STRATEGY" = "milestone" ]; then
   if [ "$COMMIT_DOCS" = "false" ]; then
     git reset HEAD .planning/ 2>/dev/null || true
   fi
-  git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"
+  git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"  # gsd-scan-ignore: #5211 squash merge: a clean-index guard precedes it
 fi
 
 git checkout "$CURRENT_BRANCH"
@@ -247,7 +247,7 @@ if [ "$BRANCHING_STRATEGY" = "phase" ]; then
     if [ "$COMMIT_DOCS" = "false" ]; then
       git reset HEAD .planning/ 2>/dev/null || true
     fi
-    git commit -m "Merge branch '$branch' for v[X.Y]"
+    git commit -m "Merge branch '$branch' for v[X.Y]"  # gsd-scan-ignore: #5211 merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it
   done
 fi
 
@@ -257,7 +257,7 @@ if [ "$BRANCHING_STRATEGY" = "milestone" ]; then
   if [ "$COMMIT_DOCS" = "false" ]; then
     git reset HEAD .planning/ 2>/dev/null || true
   fi
-  git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"
+  git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"  # gsd-scan-ignore: #5211 merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it
 fi
 
 git checkout "$CURRENT_BRANCH"

@@ -345,6 +345,20 @@ const stripComments = (raw) => {
   return raw.split('\n').map((line) => { const r = scanLine(line, q); q = r.quote; return r.cut === -1 ? line : line.slice(0, r.cut); }).join('\n');
 };
 
+// Lines of `raw` that carry a genuine declaration: the isDeclared predicate, read quote-aware across lines as stripComments does.
+const declaredLines = (raw) => {
+  const set = new Set();
+  let q = null;
+  raw.split('\n').forEach((line, n) => {
+    const r = scanLine(line, q);
+    q = r.quote;
+    if (r.cut === -1 || tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value))) return;
+    const reason = declarationReason(line.slice(r.cut));
+    if (reason !== null && ISSUE_REF_RE.test(reason)) set.add(n);
+  });
+  return set;
+};
+
 const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
 const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source', '--shallow-file']);
 // Index of the git subcommand after the git word at `gi`: redirections are skipped, a value option skips its separate value, every other `-option` is skipped (a safety guard fails closed: an option it does not know must not hide the subcommand); -1 when there is none.
@@ -365,6 +379,10 @@ const unscopedGitCommits = (raw, inline = false) => {
   const out = [];
   const text = stripComments(raw);
   const toks = tokenize(text);
+  // A commit whose source lines carry a declaration is a deliberate unscoped commit.
+  const declared = declaredLines(raw);
+  const lineOf = (pos) => text.slice(0, pos).split('\n').length - 1;
+  const isDeclaredSpan = (a, b) => { for (let n = lineOf(a); n <= lineOf(b); n += 1) if (declared.has(n)) return true; return false; };
   let skipTo = -1;
   for (let i = 0; i < toks.length; i += 1) {
     if (i <= skipTo || toks[i].op || toks[i].redir) continue;
@@ -373,7 +391,7 @@ const unscopedGitCommits = (raw, inline = false) => {
       while (k >= 0 && !toks[k].op) k -= 1;
       let w = k + 1;
       while (toks[w] && (toks[w].redir || toks[w].value === '{')) w += 1;
-      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }
     const c = gitSubcommandIdx(toks, i);
@@ -397,13 +415,13 @@ const unscopedGitCommits = (raw, inline = false) => {
     // A word after -m, -F, -C, -c or -t is that option's value (a message may start with `- `), not an option.
     const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a, n, all) => !/^-[mFCct]$/.test(all[n - 1] ?? '') && ((a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a)));
     const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
-    if ((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree || include) out.push(text.slice(toks[i].start, prev.end));
+    if (((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree || include) && !isDeclaredSpan(toks[i].start, prev.end)) out.push(text.slice(toks[i].start, prev.end));
   }
   // bash -c payloads per command line: an unquoted newline ends a command, a newline inside quotes does not.
   let from = 0;
   for (let k = 0; k < toks.length; k += 1) {
     if (k + 1 < toks.length && !/(?<!\\)\n/.test(text.slice(toks[k].end, toks[k + 1].start))) continue;
-    for (const p of shellDashCPayloads(text.slice(toks[from].start, toks[k].end))) out.push(...unscopedGitCommits(p, inline));
+    if (!isDeclaredSpan(toks[from].start, toks[k].end)) for (const p of shellDashCPayloads(text.slice(toks[from].start, toks[k].end))) out.push(...unscopedGitCommits(p, inline));
     from = k + 1;
   }
   return out;

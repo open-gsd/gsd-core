@@ -487,7 +487,7 @@ UNMERGED_PATHS_EOF
     continue
   fi
 
-  git commit -q -C "$HASH"
+  git commit -q -C "$HASH"  # gsd-scan-ignore: #5211 cherry-pick replay: the step-1 preflight refuses a tree with staged changes
 done
 ```
 

@@ -3388,29 +3388,19 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(unscopedGitCommits('git commit -m "first\n# body"\ngit commit -m "later"').length, 2);
   });
 
-  // Commits the scanner flags on purpose, each with its reason: whole-index commits (no pathspec) and whole-tree ones (`-- .`).
-  // Key: `<file>: <first line of the command>`.
-  const UNSCOPED_COMMIT_ALLOWLIST = new Map([
-    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $branch for v[X.Y]"', 'squash merge: a clean-index guard precedes it'],
-    ['gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"', 'squash merge: a clean-index guard precedes it'],
-    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$branch' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it'],
-    [`gsd-core/workflows/complete-milestone/detail/elaboration.md: git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"`, 'merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it'],
-    ['agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
-    ['pi/package-agents/gsd-executor.md: git commit -m "chore(wip): scratch" -- .', 'whole worktree: run from the worktree root'],
-    ["gsd-core/workflows/execute-phase.md: git commit -m 'chore(recover): recover worktree state' -- .", 'whole worktree: run from the worktree root'],
-    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- . \':!.planning\'', '/gsd-fast commits the current directory minus .planning (commit_docs=false)'],
-    ['gsd-core/workflows/fast.md: git commit -m "fix: {concise description of what changed}" -- .', '/gsd-fast commits the current directory'],
-    ['gsd-core/references/planning-config.md: git commit -m "chore: stop tracking planning docs"', 'commits the index removals: a -- .planning/ pathspec fails after git rm --cached; a staged-paths guard precedes it'],
-    ['gsd-core/workflows/pr-branch.md: git commit -q -C "$HASH"', 'cherry-pick replay: the step-1 preflight refuses a tree with staged changes'],
-    ['gsd-core/workflows/ship.md: git commit --allow-empty --only -m "chore: trigger CI (recover from ship-note skip-token)"', 'empty commit: --only records nothing from the index'],
-    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
-    ['gsd-core/workflows/undo.md: git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
-    ['gsd-core/workflows/undo.md: git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"', 'commits the staged `git revert --no-commit` result'],
-  ]);
+  // A deliberate unscoped commit (whole-index, or `-- .`) declares itself on its own line with `# gsd-scan-ignore: #NNN <reason>` (ADR-3409: no file allowlists).
+  test('a commit declared with gsd-scan-ignore: #NNN is not flagged; a declaration without an issue, inside a quoted message line, or as an argv token still is', () => {
+    assert.equal(unscopedGitCommits('git commit -m x -- .  # gsd-scan-ignore: #5211 whole worktree').length, 0);
+    assert.equal(unscopedGitCommits('echo "git commit -m x" >&2  # gsd-scan-ignore: #5211 advice').length, 0);
+    assert.equal(unscopedGitCommits("bash -c 'git commit -m x'  # gsd-scan-ignore: #5211 wrapper").length, 0);
+    assert.equal(unscopedGitCommits('git commit -m x -- .  # gsd-scan-ignore: no reason').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m "a\n# gsd-scan-ignore: #5211 inside" -- .').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m x -- . gsd-scan-ignore:#5211').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m x -- .  # gsd-scan-ignore: #5211 one\ngit commit -m y').length, 1);
+  });
 
   test('every git commit with arguments carries a -- pathspec', () => {
     const offenders = [];
-    const seen = new Set();
     for (const f of promptFiles()) {
       const md = fs.readFileSync(path.join(root, f), 'utf8');
       const lines = splitLines(md);
@@ -3418,17 +3408,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
         [lines.slice(b.openLineIdx + 1, b.closeLineIdx === -1 ? lines.length : b.closeLineIdx).join('\n'), false]);
       for (const s of scanInlineCodeSpans(stripFencedCode(md).text)) segments.push([s.content, true]);
       for (const [seg, inline] of segments) {
-        for (const cmd of unscopedGitCommits(seg, inline)) {
-          const key = `${f}: ${cmd.split('\n')[0]}`;
-          if (UNSCOPED_COMMIT_ALLOWLIST.has(key)) seen.add(key);
-          else offenders.push(key);
-        }
+        for (const cmd of unscopedGitCommits(seg, inline)) offenders.push(`${f}: ${cmd.split('\n')[0]}`);
       }
     }
-    assert.deepStrictEqual([...UNSCOPED_COMMIT_ALLOWLIST.keys()].filter((k) => !seen.has(k)), [],
-      'stale UNSCOPED_COMMIT_ALLOWLIST entries: remove them');
     assert.deepStrictEqual(offenders, [],
-      'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>`');
+      'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>` or declare it with `# gsd-scan-ignore: #NNN <reason>`');
   });
 
   const word = fc.stringMatching(/^[a-z0-9][a-z0-9._/]{0,7}$/);
@@ -3574,7 +3558,8 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       // allow-test-rule: docs-parity (#5211)
       for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
       // allow-test-rule: docs-parity (#5211)
-      assert.ok(norm(md).includes(norm(recipe)), `${f}: recipe order`);
+      // The scan declaration sits on the commit line of planning-config.md only; it is not part of the recipe.
+      assert.ok(norm(splitLines(md).map((l) => (l.includes('# gsd-scan-ignore:') ? l.slice(0, l.indexOf('# gsd-scan-ignore:')) : l)).join('\n')).includes(norm(recipe)), `${f}: recipe order`);
       if (['docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md'].includes(f)) {
         // allow-test-rule: docs-parity (#5211)
         assert.ok(md.includes(`- [W029] ${w029.message}`), `${f}: W029 message`);
