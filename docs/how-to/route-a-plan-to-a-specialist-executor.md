@@ -34,7 +34,7 @@ Routing is on by default. Confirm it:
 gsd config-get workflow.agent_hint_routing
 ```
 
-If it prints `false`, turn it back on with `gsd config-set workflow.agent_hint_routing true`.
+If it prints `false`, turn it back on with `gsd config-set workflow.agent_hint_routing true`, or answer **Allow installed executors** to the Executor question in `/gsd-settings` ([How to choose which executors run your plans](choose-the-executor-policy.md)).
 
 ## 4. Choose the specialist's model (optional)
 
