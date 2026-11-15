@@ -101,6 +101,10 @@ describe('an aged none keeps governing its phase in the Claude guard and the Cur
   });
   after(() => { cleanup(project); });
 
+  test('the pinned config switches the #5328 model guard off, so the verdicts below are the isolation ones', () => {
+    assert.equal(require('../gsd-core/bin/lib/model-escalation.cjs').guardApplies(project), false);
+  });
+
   const guardIsolation = (ageMs, phase) => guard.resolveIsolationState(project, { clock: clockAt(ageMs), dispatchIds: dispatchFor(phase) }).isolation;
   const cursorAllows = (ageMs, phase) => cursor.evaluateRootIsolation(project, 'gsd-executor', { clock: clockAt(ageMs), dispatchIds: dispatchFor(phase) });
 

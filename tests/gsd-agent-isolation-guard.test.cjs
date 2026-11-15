@@ -157,6 +157,13 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
     assert.equal(r.stdout, '');
   });
 
+  test('row 2 control: the pinned profile model is what keeps row 2 silent; another model warns (#5328)', () => {
+    const wrong = agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: 'haiku' } });
+    const r = runHook(wrong, harnessProject);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}`);
+    assert.match(r.stdout, /additionalContext/);
+  });
+
   test('row 3: isolation="" (empty) -> DENY', () => {
     const r = runHook(agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: '' } }), harnessProject);
     assert.equal(r.status, 2);
