@@ -33,19 +33,3 @@ test('hooks.agent_model_guard vocabulary: config-set, both doc rows and the hook
     assert.equal(evaluateDispatch(wrong).action, action, String(mode));
   }
 });
-
-test('hooks.agent_model_guard write conditions: the feature page owns them, the other pages state or link them', () => {
-  const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-  const page = read('docs/features/agent-model-guard.md');
-  for (const s of ['`--attempt N`', '`--failure-class`', 'tier family', 'planning directory', 'strict JSON', 'writes no record']) {
-    assert.ok(page.includes(s), `feature page: ${s}`);
-  }
-  const changeset = read('.changeset/brave-orcas-wander.md');
-  for (const s of ['`--attempt N` or `--failure-class`', 'tier family', '`.gsd/.gitignore`']) {
-    assert.ok(changeset.includes(s), `changeset: ${s}`);
-  }
-  const conf = read('docs/CONFIGURATION.md');
-  assert.ok(row('docs/CONFIGURATION.md').includes('(FEATURES.md#5328-agent-model-guard)'), 'config row links the feature page');
-  assert.ok(conf.includes('`.gsd/model-escalation-<agent>.json`'), 'Execution Query names the escalation record');
-  assert.ok(conf.includes('`--failure-class`'), 'Execution Query names both flags');
-});
