@@ -300,12 +300,19 @@ describe('#5796 plugin ref publisher', () => {
 
   test('returns ok:false when push fails', () => {
     const root = makeFixtureRepo();
+    // git echoes the missing remote path in its error, and the path carries the
+    // token text, so the scrub in publishPluginRef is what keeps it out.
     const res = publisher.publishPluginRef({
-      root, remote: path.join(os.tmpdir(), 'plugin-ref-no-such-remote-5796'), branch: 'plugin', source: 'HEAD',
+      root,
+      remote: path.join(os.tmpdir(), 'no-such-remote-sekret-5796'),
+      branch: 'plugin',
+      source: 'HEAD',
+      pushToken: 'sekret-5796',
     });
     assert.equal(res.ok, false);
-    assert.ok(res.error);
     assert.match(res.error, /git push/);
+    assert.ok(!res.error.includes('sekret-5796'), 'error must not contain the token');
+    assert.ok(res.error.includes('***'), 'the token must be replaced, not dropped');
   });
 
   test('branch name length boundary', () => {
@@ -371,7 +378,7 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(matching[0].env.PUSH_TOKEN, '${{ secrets.GSD_BOT_PR_TOKEN }}');
     assert.ok(matching[0].run.includes('GSD_PLUGIN_REF_PUSH_TOKEN'), 'publish step exports the push token');
     assert.ok(
-      matching[0].run.includes(`printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\\n'`),
+      matching[0].run.includes(`::add-mask::$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\\n')`),
       'publish step masks the derived header',
     );
     assert.equal(matching[0].id, 'plugin_ref');
