@@ -3226,6 +3226,23 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS);
       });
 
+      // The control for the check's other side: it runs only when the strip would change the
+      // file, so a read-only target the strip leaves as it is (no GSD content) is not refused.
+      test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 does not refuse a read-only link target the strip would leave unchanged', {
+        skip: READ_ONLY_SKIP,
+      }, () => {
+        runCodexInstall(codexHome);
+        const realConfig = linkConfigToml(userKeysOnly());
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+        // No restore needed, as in the read-only target test above.
+        fs.chmodSync(realConfig, 0o444);
+
+        assert.doesNotThrow(() => runCodexUninstall(codexHome));
+
+        assertLinkedTo(realConfig);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), USER_KEYS);
+      });
+
       test('uninstall without the opt-in leaves a link with no GSD content alone and does not refuse', () => {
         runCodexInstall(codexHome);
         const realConfig = linkConfigToml(userKeysOnly());
