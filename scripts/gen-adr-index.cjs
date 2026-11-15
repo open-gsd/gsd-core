@@ -485,6 +485,8 @@ function maskInlineCodeSpans(line) {
 // at most one line ending (LINK_WS); a link never holds a blank line (BLANK).
 const LINK_WS = String.raw`[ \t]*(?:\r?\n[ \t]*)?`;
 const BLANK = /\n[ \t\r]*\n/;
+// A blank line, a backslash escape (not of a blank line's newline), `[` or `]`.
+const LABEL_TOKEN = new RegExp(`${BLANK.source}|\\\\(?!${BLANK.source})[^]|\\[|\\]`, 'g');
 const LEAD = new RegExp(LINK_WS, 'y');
 const CLOSE = new RegExp(`${LINK_WS}\\)`, 'y');
 // An angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
@@ -529,7 +531,7 @@ function linkTitleEnd(text, at) {
 function labelledCloses(text) {
   const out = new Set();
   let open = 0;
-  for (const m of text.matchAll(/\n[ \t\r]*\n|\\(?!\n[ \t\r]*\n)[^]|\[|\]/g)) {
+  for (const m of text.matchAll(LABEL_TOKEN)) {
     if (m[0] === '[') open += 1;
     else if (m[0] === ']' && open) {
       if (text[m.index + 1] === '(') out.add(m.index);

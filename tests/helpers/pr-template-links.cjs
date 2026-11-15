@@ -28,7 +28,8 @@ const NEXT = `${REPO}blob/next/`;
 // the ADR gate's grammar (linkDestination, linkTitleEnd), the one owner of both forms.
 // A label holds no unescaped bracket, some text and no blank line.
 const REF_LABEL = String.raw`\[(?![ \t\r\n]*\])(?:\\[^]|[^\[\]\\])+\]:`;
-const REF_PREFIX = String.raw`^(?:[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t])))* *`
+const LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])`;
+const REF_PREFIX = String.raw`^(?:[ \t]*(?:>|${LIST_MARKER}(?=[ \t])))*[ \t]*`
   + REF_LABEL + LINK_WS + String.raw`(?!${REF_LABEL})`;
 const REF_HEAD = new RegExp(REF_PREFIX, 'gm');
 const REF_EOL = /[ \t]*$/ym;
@@ -47,17 +48,21 @@ const refsIn = (t) => [...t.matchAll(REF_HEAD)].flatMap((m) => {
 // Indented code (4+ spaces or a tab) follows a blank line or more code, and is not a list
 // item's continuation. Indentation and list state are judged on the RAW line, because
 // maskCode leaves a line that opens with an inline code span as blanks; blank-ness
-// is judged on the masked line.
+// is judged by isBlank.
+const LIST_ITEM = new RegExp(`^ {0,3}${LIST_MARKER}[ \\t]`);
+// A line is blank when maskCode leaves nothing and it does not open with an inline code span
+// (a line that is only a code span is text).
+const isBlank = (masked, rawLine) => !masked.trim() && !/^ {0,3}`+[^`\s]/.test(rawLine);
 const maskIndentedCode = (raw, masked) => {
   const rawLines = raw.split('\n');
   let afterBlank = true;
   let inList = false;
   return masked.split('\n').map((m, i) => {
-    const blank = !m.trim();
+    const blank = isBlank(m, rawLines[i]);
     const indented = /^( {4}|\t)/.test(rawLines[i]);
     // an item's text lines (indented 2 to 3 spaces) keep it open
     if (!blank && !indented) {
-      const marker = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/.test(rawLines[i]);
+      const marker = LIST_ITEM.test(rawLines[i]);
       inList = marker || (inList && /^ {2}/.test(rawLines[i]));
     }
     const code = indented && !blank && !inList && afterBlank;
@@ -71,7 +76,7 @@ const maskBlocks = (t) => maskIndentedCode(t, maskCode(t));
 const maskComments = (text) => {
   let t = text;
   for (let i = t.indexOf('<!--'); i >= 0; i = t.indexOf('<!--', i + 4)) {
-    const end = t.indexOf('-->', i + 4);
+    const end = t.indexOf('-->', i + 2); // `<!-->` and `<!--->` close at once
     if (end < 0 || maskBlocks(t)[i] !== '<') continue;
     t = t.slice(0, i) + t.slice(i, end + 3).replace(/\S/g, ' ') + t.slice(end + 3);
   }
@@ -161,16 +166,16 @@ const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
 
 // A paragraph followed by === or --- is a setext heading; maskCode supplies fences and code
 // spans, the raw lines the text.
-const blockStart =
-  /^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-*+][ \t]|\d{1,9}[.)][ \t]|(?:[*_-][ \t]*){3,}$)/;
+const blockStart = new RegExp(
+  String.raw`^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|${LIST_MARKER}[ \t]|(?:[*_-][ \t]*){3,}$)`,
+);
 const indentedStart = /^( {4}|\t)/;
 const setextHeadings = (md) => {
   const raw = md.split(/\r?\n/);
   const out = [];
   let para = [];
   maskCode(md).split(/\r?\n/).forEach((m, i) => {
-    // a line that is only a code span is text
-    const blank = !m.trim() && !/^ {0,3}`+[^`\s]/.test(raw[i]);
+    const blank = isBlank(m, raw[i]);
     if (para.length && /^ {0,3}(?:=+|-+)[ \t]*$/.test(m)) {
       out.push({ line: para[0] + 1, text: para.map((k) => raw[k].trim()).join(' ') });
       para = [];
