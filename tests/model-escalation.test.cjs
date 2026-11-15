@@ -132,11 +132,17 @@ test('modelFamily escapes catalog tier names', (t) => {
 });
 
 test('escalationRoot degrades to the raw cwd on a resolution error, as resolveSentinelRoot does', (t) => {
-  t.mock.method(require('../gsd-core/bin/lib/project-context.cjs'), 'resolveProjectContext', () => { throw new Error('git unavailable'); });
+  const mock = t.mock.method(require('../gsd-core/bin/lib/project-context.cjs'), 'resolveProjectContext', () => { throw new Error('git unavailable'); });
   const { escalationRoot } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const { resolveSentinelRoot } = require('../hooks/lib/isolation-sentinel.js');
-  const dir = createTempDir('gsd-esc-degrade-');
-  t.after(() => cleanup(dir));
-  assert.equal(escalationRoot(dir), dir, 'escalationRoot degrades to the cwd');
-  assert.equal(resolveSentinelRoot(dir), dir, 'resolveSentinelRoot degrades to the cwd');
+  const root = createTempDir('gsd-esc-degrade-');
+  t.after(() => cleanup(root));
+  fs.mkdirSync(path.join(root, '.planning'));
+  const sub = path.join(root, 'sub');
+  fs.mkdirSync(sub);
+  assert.equal(escalationRoot(sub), sub, 'escalationRoot degrades to the cwd');
+  assert.equal(resolveSentinelRoot(sub), sub, 'resolveSentinelRoot degrades to the cwd');
+  assert.ok(mock.mock.callCount() > 0, 'the degrade branch ran');
+  mock.mock.restore();
+  assert.notEqual(escalationRoot(sub), sub, 'positive control: without the error the project root wins');
 });

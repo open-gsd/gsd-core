@@ -52,10 +52,11 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   });
 
   function setup(t, config = ISSUE_CONFIG) {
-    project = mkProject('gsd-aig-model-');
-    writeConfig(project, JSON.stringify(config));
-    t.after(() => cleanup(project));
-    return project;
+    const dir = mkProject('gsd-aig-model-');
+    project = dir;
+    writeConfig(dir, JSON.stringify(config));
+    t.after(() => cleanup(dir));
+    return dir;
   }
   const dispatch = (subagent_type, model, extra = {}) =>
     ({ hook_event_name: 'PreToolUse', tool_name: 'Agent', cwd: project, tool_input: { subagent_type, ...(model ? { model } : {}), ...extra } });
@@ -559,9 +560,11 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   });
 
   // The init --ws carry lives under os.tmpdir(), keyed by project and session: clear every one a test makes.
+  const NOT_RECORDED = /not recorded for the Agent model guard/;
   const carryStore = () => require('../gsd-core/bin/lib/active-workstream-store.cjs');
   function clearCarries(t, ...sessions) {
-    t.after(() => { for (const s of sessions) carryStore().createSessionScopedPointerAdapter(project, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}${s}`).clear(); });
+    const dir = project;
+    t.after(() => { for (const s of sessions) carryStore().createSessionScopedPointerAdapter(dir, `${carryStore().INIT_WORKSTREAM_KEY_PREFIX}${s}`).clear(); });
   }
   function setupCarry(t, rootConfig, ...sessions) {
     pinWorkstreamEnv(t, undefined);
@@ -768,14 +771,17 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     setupCarry(t, ISSUE_CONFIG, 'sess-ws');
     const bare = run('');
     assert.equal(bare.exitCode, 0, bare.stderr);
+    assert.match(bare.stderr, NOT_RECORDED, 'no session id: the carry is skipped and says so');
     const withSession = run('sess-ws');
     assert.equal(withSession.exitCode, 0, withSession.stderr);
+    assert.doesNotMatch(withSession.stderr, NOT_RECORDED);
     assert.deepEqual(JSON.parse(bare.stdout), JSON.parse(withSession.stdout));
     assert.deepEqual(carryStore().peekInitWorkstream(project, 'sess-ws', PIN), ['alpha']);
     for (const config of [{ ...ISSUE_CONFIG, runtime: 'codex' }, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }]) {
       setupCarry(t, config);
       const quiet = run('');
       assert.equal(quiet.exitCode, 0, quiet.stderr);
+      assert.doesNotMatch(quiet.stderr, NOT_RECORDED, 'where the guard does not apply nothing is recorded and nothing is said');
     }
   });
 
@@ -897,11 +903,6 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
       assert.equal(w.action, 'warn', agent);
       assert.equal(w.expected, JSON.parse(r.output).model, agent);
     }
-  });
-
-  test('a runtime without native tier aliases is skipped by the hook', (t) => {
-    setup(t, { ...ISSUE_CONFIG, runtime: 'codex' });
-    assert.equal(evaluate(dispatch('gsd-planner', 'sonnet')).action, 'allow');
   });
 
   test('hook process: warn exits 0 with additionalContext; deny exits 2', (t) => {
