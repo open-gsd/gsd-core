@@ -2144,7 +2144,7 @@ Use `node gsd-tools.cjs resolve-execution <agent-type> [--effort <level>] [--fas
 for (before any clamp); `effort_rendered` is what actually shipped. `effort_clamped` is `true` only
 when the two differ, and `effort_clamp_reason` explains why (`null` when unclamped). `fast_mode_supported` tells you whether the configured runtime supports per-agent fast_mode propagation.
 
-`--attempt <n>` (and `--failure-class`) write the escalation record `.gsd/model-escalation-<agent>.json` and a `.gsd/.gitignore` block in the project when the model escalates past the baseline family. Only `gsd-executor`, `gsd-verifier`, `gsd-plan-checker` and `gsd-planner` write it, only where `hooks.agent_model_guard` applies (guard not `false`, a runtime with native tier aliases), and only when the project root is the session's working directory. See `hooks.agent_model_guard` in the config table above.
+`--attempt <n>` (and `--failure-class`) write the escalation record `.gsd/model-escalation-<agent>.json` in the project, git-ignored through `.gsd/.gitignore`, when the model escalates past the baseline family. Only `gsd-executor`, `gsd-verifier`, `gsd-plan-checker` and `gsd-planner` write it, only where `hooks.agent_model_guard` applies (guard not `false`, a runtime with native tier aliases), and only when the project root is the session's working directory. See `hooks.agent_model_guard` in the config table above.
 
 ---
 
