@@ -723,8 +723,12 @@ function scanBlocks(text) {
     }
     let blank = false;
     let fresh = null; // an item this line opens with nothing after its marker
-    let hrFrom = e.length; // a thematic break lies in the trailing run of `-*_` and blanks
-    while (hrFrom > 0 && '-*_ '.includes(e[hrFrom - 1])) hrFrom -= 1;
+    // a thematic break lies in the trailing run of one of `-*_` (blanks between): from `hrFrom`
+    let hrFrom = e.length;
+    const mark = e.trimEnd().slice(-1);
+    while (hrFrom > 0 && '-*_'.includes(mark) && (e[hrFrom - 1] === mark || e[hrFrom - 1] === ' ')) {
+      hrFrom -= 1;
+    }
     for (;;) {
       const j = next();
       if (j >= e.length) {
