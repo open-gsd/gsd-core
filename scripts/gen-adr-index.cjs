@@ -579,6 +579,7 @@ const FENCE_END = /(`+|~+)[ \t]*$/y;
 const SETEXT = /(?:=+|-+)[ \t]*$/y;
 const THEMATIC = /(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/y;
 const ITEM = /(?:[-+*]|\d{1,9}[.)])(?=[ \t]|$)/y;
+const SPACES = / */y;
 const hit = (re, s, at) => {
   re.lastIndex = at;
   return re.exec(s);
@@ -722,6 +723,8 @@ function scanBlocks(text) {
     }
     let blank = false;
     let fresh = null; // an item this line opens with nothing after its marker
+    let hrFrom = e.length; // a thematic break lies in the trailing run of `-*_` and blanks
+    while (hrFrom > 0 && '-*_ '.includes(e[hrFrom - 1])) hrFrom -= 1;
     for (;;) {
       const j = next();
       if (j >= e.length) {
@@ -742,6 +745,7 @@ function scanBlocks(text) {
       if (e[j] === '>') {
         closeRest();
         endLeaf();
+        if (stack.length) stack[stack.length - 1].empty = false;
         stack.push({ quote: true });
         matched = stack.length;
         pos = e[j + 1] === ' ' ? j + 2 : j + 1;
@@ -779,7 +783,7 @@ function scanBlocks(text) {
         leaf = null;
         break;
       }
-      if (hit(THEMATIC, e, j)) {
+      if (j >= hrFrom && hit(THEMATIC, e, j)) {
         closeRest();
         endLeaf();
         break;
@@ -787,15 +791,16 @@ function scanBlocks(text) {
       const item = hit(ITEM, e, j);
       if (item) {
         const after = j + item[0].length;
-        const empty = e.slice(after).trim() === '';
+        const gap = hit(SPACES, e, after)[0].length;
+        const empty = after + gap >= e.length;
         // an empty item, or an ordered one that does not start at 1, cannot interrupt a paragraph
         const late = /^\d/.test(item[0]) && parseInt(item[0], 10) !== 1;
         if (!(all && leaf && (empty || late))) {
           closeRest();
           endLeaf();
-          const gap = / */y.exec(e.slice(after))[0].length;
           const col = empty || gap > 4 ? after + 1 : after + gap;
           const entry = { col, empty };
+          if (stack.length) stack[stack.length - 1].empty = false;
           stack.push(entry);
           matched = stack.length;
           fresh = empty ? entry : null;
@@ -810,7 +815,8 @@ function scanBlocks(text) {
       }
       break;
     }
-    if (!blank) for (const c of stack) if (c !== fresh) c.empty = false;
+    const top = stack[stack.length - 1]; // only the innermost item can still be empty
+    if (!blank && top && top !== fresh) top.empty = false;
   });
   endLeaf();
   const join = (rows) => rows.map((l, i) => l + cr[i]).join('\n');
