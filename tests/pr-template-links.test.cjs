@@ -48,6 +48,15 @@ describe('heading anchors (#5427)', () => {
       + '`<a id="code">`\n## After';
     assert.deepEqual([...headingSet(md)], ['quoted', 'quoted-1', 'deep', 'after', 'manual', 'old']);
   });
+  test('a quoted heading inside a fence is code, a fenced quote block hides its own', () => {
+    assert.deepEqual([...headingSet('```\n> ## Fake\n```\n## Real')], ['real']);
+    assert.deepEqual([...headingSet('> ```\n> ## Fake\n> ```\n> ## Real')], ['real']);
+  });
+  test('a comment or indented code hides headings and <a id> anchors', () => {
+    const md = '<!-- <a id="c"></a> -->\n\n    <a name="ind"></a>\n<!--\n## Cm\n> ## Cq\nSet\n===\n-->\n'
+      + '<a id="ok"></a>';
+    assert.deepEqual([...headingSet(md)], ['ok']);
+  });
   test('four leading spaces is a code block, not a heading', () => {
     assert.equal(headingSet('    ## Code').size, 0);
   });
@@ -275,9 +284,12 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
       assert.deepEqual(extractLinks(text), oldExtractLinks(text), f);
     }
   });
-  test('pins the two intentional differences and the forms that keep their results', () => {
-    assert.deepEqual(extractLinks('[a](x y)'), []);
-    assert.deepEqual(extractLinks('[a]()'), []);
+  test('pins every form that is no longer a link and the forms that keep their results', () => {
+    // each of these was a link for oldExtractLinks
+    for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)']) {
+      assert.ok(oldExtractLinks(s).length > 0, `old: ${s}`);
+      assert.deepEqual(extractLinks(s), [], s);
+    }
     assert.deepEqual(extractLinks('[a](x "t")'), [{ line: 1, target: 'x "t"' }]);
     assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);
     assert.deepEqual(extractLinks('![i](p.png)'), [{ line: 1, target: 'p.png' }]);

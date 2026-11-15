@@ -176,12 +176,18 @@ const unslugable = (text) => {
     || /(?:^|\W)_|_(?:\W|$)/.test(bare);
 };
 // Blockquote content keeps its line number, so a quoted heading sorts and counts in place.
-const unquote = (md) => md.split(/\r?\n/)
-  .map((l) => (/^ {0,3}>/.test(l) ? l.replace(/^(?: {0,3}> ?)+/, '') : '')).join('\n');
+// A line that `masked` (maskBlocks) blanks is code, so it is no quote.
+const unquote = (text, masked) => {
+  const m = masked.split(/\r?\n/);
+  return text.split(/\r?\n/)
+    .map((l, i) => (/^ {0,3}>/.test(m[i]) ? l.replace(/^(?: {0,3}> ?)+/, '') : '')).join('\n');
+};
 const A_ID = /<a\s[^>]*?\b(?:id|name)\s*=\s*["']([^"'\s>]+)["']/gi;
-const headingSet = (md) => {
+const headingSet = (source) => {
   const seen = new Map();
-  const quoted = unquote(md);
+  const md = maskComments(source); // a comment renders nothing
+  const masked = maskBlocks(md);
+  const quoted = unquote(md, masked);
   const headings = [md, quoted].flatMap((t) => [...tokenizeHeadings(t), ...setextHeadings(t)])
     .sort((a, b) => a.line - b.line);
   const slugs = headings.filter(({ text }) => !unslugable(text)).map(({ text }) => {
@@ -190,7 +196,7 @@ const headingSet = (md) => {
     seen.set(s, n + 1);
     return n ? `${s}-${n}` : s;
   });
-  return new Set([...slugs, ...[...maskCode(md).matchAll(A_ID)].map((m) => m[1])]);
+  return new Set([...slugs, ...[...masked.matchAll(A_ID)].map((m) => m[1])]);
 };
 const headingsOfFile = (rel) => headingSet(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
 
