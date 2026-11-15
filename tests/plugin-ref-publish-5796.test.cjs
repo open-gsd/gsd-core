@@ -409,7 +409,12 @@ describe('#5796 plugin ref publisher', () => {
     );
     const src = tmp('plugin-ref-src-');
     const repo = path.join(src, 'repo');
-    git(src, ['-c', 'safe.directory=*', 'clone', '-q', '--no-local', ROOT, repo]);
+    // The clone's local transport spawns `git upload-pack` in ROOT with GIT_CONFIG_PARAMETERS
+    // cleared, so -c alone does not reach it; pass safe.directory to upload-pack too.
+    git(src, [
+      '-c', 'safe.directory=*', 'clone', '-q', '--no-local',
+      '--upload-pack=git -c safe.directory=* upload-pack', ROOT, repo,
+    ]);
     fs.cpSync(
       path.join(ROOT, 'gsd-core', 'bin', 'lib'), path.join(repo, 'gsd-core', 'bin', 'lib'),
       { recursive: true },
