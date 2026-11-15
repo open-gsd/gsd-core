@@ -123,6 +123,17 @@ describe('link extractor, edge forms (#5427)', () => {
     for (const t of texts) assert.deepEqual(hrefsIn(t), ['../x.md'], t);
     assert.deepEqual(hrefsIn('[a]:\n[b]: ../x.md'), ['../x.md']);
   });
+  test('a list marker has at most 9 digits (CommonMark) in all three block rules', () => {
+    const marker = (n) => `${'1'.repeat(n)}.`;
+    for (const n of [8, 9]) {
+      assert.deepEqual(hrefsIn(`${marker(n)} [a]: ../x.md`), ['../x.md'], `ref ${n}`);
+      assert.deepEqual(hrefsIn(`${marker(n)} item\n\n    [a](../x.md)`), ['../x.md'], `code ${n}`);
+      assert.deepEqual([...headingSet(`${marker(n)} a\n---`)], [], `setext ${n}`);
+    }
+    assert.deepEqual(hrefsIn(`${marker(10)} [a]: ../x.md`), []);
+    assert.deepEqual(hrefsIn(`${marker(10)} item\n\n    [a](../x.md)`), []);
+    assert.deepEqual([...headingSet(`${marker(10)} a\n---`)], [`${'1'.repeat(10)}-a`]);
+  });
   test('an escaped parenthesis in a bare destination is not nesting', () => {
     assert.deepEqual(hrefsIn('[a](rel\\(x)'), ['rel\\(x']);
     assert.deepEqual(hrefsIn('[a](rel\\)x "t")'), ['rel\\)x']);
@@ -266,6 +277,12 @@ describe('angle-enclosed destinations (#5427)', () => {
   test('inline: a `<` with no `>` on its line hides no link on the next line', () => {
     assert.deepEqual(hrefsIn('[a](<x [b](<y\n[c](<z w>)'), ['z w']);
   });
+  test('inline: an angle destination holds no `<`, and a run of `[a](<` is not rescanned', () => {
+    assert.deepEqual(hrefsIn('[a](<x<y>)'), []);
+    assert.deepEqual(hrefsIn('[a](<x [b](<y>)'), ['y']);
+    const run = '[a](<'.repeat(20000);
+    assert.deepEqual(hrefsIn(`${run}>`), []);
+  });
   test('inline: a bare destination nests parentheses 32 deep, no deeper', () => {
     const nested = (n) => `[a](x${'('.repeat(n)}${')'.repeat(n)})`;
     assert.deepEqual(hrefsIn(nested(31)), [nested(31).slice(4, -1)]);
@@ -303,7 +320,8 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
   test('pins every form that is no longer a link and the forms that keep their results', () => {
     // each of these was a link for oldExtractLinks
     for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)',
-      '[a](x "t)")', '[a](<x)y>)', '[a](x "t" y)', '[a](x "t)']) {
+      '[a](x "t)")', '[a](<x)y>)', '[a](<x<y>)', '[a](x "t" y)',
+      '[a](x "t)']) {
       assert.ok(oldExtractLinks(s).length > 0, `old: ${s}`);
       assert.deepEqual(extractLinks(s), [], s);
     }

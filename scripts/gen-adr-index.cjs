@@ -480,7 +480,8 @@ function maskInlineCodeSpans(line) {
   return out;
 }
 
-const ANGLE = /<((?:\\.|[^>\\\n])*)>/y;
+// CommonMark: an angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
+const ANGLE = /<((?:\\.|[^<>\\\n])*)>/y;
 const MAX_PAREN_DEPTH = 32; // CommonMark's nesting limit for a bare destination; bounds the scan
 const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
 /**
@@ -513,21 +514,19 @@ function labelledCloses(text) {
 function scanInlineLinks(text) {
   const out = [];
   const closes = labelledCloses(text);
-  let angleDead = 0; // no `<` before this index can start an angle destination (see below)
   for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
     if (!closes.has(i)) continue;
     let start = i + 2;
     while (/\s/.test(text[start] ?? '')) start += 1;
     let angle = null;
-    if (text[start] === '<' && start >= angleDead) {
+    if (text[start] === '<') {
       ANGLE.lastIndex = start;
       angle = ANGLE.exec(text);
-      // a `<` with no closing `>` on its line leaves none for a later `<` on that line
-      if (!angle) angleDead = text.indexOf('\n', start) + 1 || text.length;
     }
     let end = angle ? ANGLE.lastIndex : start;
     let dest = angle?.[1];
     if (!angle) {
+      if (text[start] === '<') continue; // a bare destination cannot start with `<`
       let depth = 0;
       for (; end < text.length && !/\s/.test(text[end]); end += 1) {
         if (text[end] === '\\' && /\S/.test(text[end + 1] ?? '')) end += 1;
@@ -562,7 +561,7 @@ function scanInlineLinks(text) {
  * `[a](x y)` (a bare destination with a space), `[a]()` (an empty destination),
  * `\[x](y)` and `[a\](x)` (an escaped bracket), `[a](\)` and `[a](x\)y)` (an
  * escaped parenthesis), `[a](x "t)")` and `[a](<x)y>)` (a parenthesis inside a
- * title or an angle destination), and any link whose title is doubled, unterminated
+ * title or an angle destination), `[a](<x<y>)` (a `<` inside an angle destination), and any link whose title is doubled, unterminated
  * or followed by other text: `[a](x "t" y)`, `[a](x "t)`.
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
