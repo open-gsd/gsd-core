@@ -30,6 +30,9 @@ describe('heading anchors (#5427)', () => {
     assert.deepEqual(
       [...headingSet('Para\n\n---\n# H\n---\n```\nFake\n---\n```\n- item\n---')], ['h']);
     assert.deepEqual([...headingSet('Set `commit_docs`\n===')], ['set-commit_docs']);
+    // the underline may be indented 3 spaces, not 4
+    assert.deepEqual([...headingSet('Title\n   ---')], ['title']);
+    assert.deepEqual([...headingSet('Title\n    ---')], []);
   });
   test('an em dash slugs like the features generator', () => {
     assert.deepEqual([...headingSet('## A — B')], [slugify('A — B')]);
@@ -142,7 +145,7 @@ describe('link extractor, edge forms (#5427)', () => {
     const code = ['    [a](../x.md)', '\t[a](../x.md)', 'text\n\n    [a](../x.md)',
       '    code\n    [a](../x.md)', '- item\n\ntext\n\n    [a](../x.md)'];
     for (const t of code) assert.deepEqual(hrefsIn(t), [], t);
-    const text = ['para\n    [a](../x.md)', '- item\n\n    [a](../x.md)',
+    const text = ['para\n    [a](../x.md)', 'text\n\n   [a](../x.md)', '- item\n\n    [a](../x.md)',
       '- item\n\n      [a](../x.md)', '- item\n  text\n\n    [a](../x.md)',
       '1. item\n   text\n\n    [a](../x.md)', '- item\ntext\n\n    [a](../x.md)',
       '- item\n text\n\n    [a](../x.md)'];
@@ -159,6 +162,10 @@ describe('link extractor, edge forms (#5427)', () => {
   test('<!--> and <!---> are complete comments; a tab follows a container marker', () => {
     for (const open of ['<!-->', '<!--->']) {
       assert.deepEqual(hrefsIn(`${open}\n[a](../x.md)\n<!-- c -->`), ['../x.md'], open);
+    }
+    // a code span is label text
+    for (const label of ['`x`', '`` a ``', 'a `x` b']) {
+      assert.deepEqual(hrefsIn(`[${label}]: ../x.md`), ['../x.md'], label);
     }
     for (const marker of ['>', '-', '1.', '> -']) {
       assert.deepEqual(hrefsIn(`${marker}\t[a]: ../x.md`), ['../x.md'], marker);
@@ -348,7 +355,8 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
       assert.deepEqual(hrefsIn(s), ['x'], s);
     }
     // a Unicode space is a destination character (CommonMark): the old regex agrees
-    for (const s of ['[a](x y)', '[a]( )', '[a](<x y>)', '[a](x\n"t"\n)']) {
+    const [nbsp, lineSep] = [0xa0, 0x2028].map((c) => String.fromCharCode(c));
+    for (const s of [`[a](x${nbsp}y)`, `[a](${lineSep})`, '[a](<x y>)', '[a](x\n"t"\n)']) {
       assert.deepEqual(extractLinks(s), oldExtractLinks(s), JSON.stringify(s));
     }
     assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);

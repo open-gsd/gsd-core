@@ -26,23 +26,28 @@ const NEXT = `${REPO}blob/next/`;
 
 // A reference definition: its marker and label are read here, its destination and title by
 // the ADR gate's grammar (linkDestination, linkTitleEnd), the one owner of both forms.
-// A label holds no unescaped bracket, some text and no blank line.
-const REF_LABEL = String.raw`\[(?![ \t\r\n]*\])(?:\\[^]|[^\[\]\\])+\]:`;
+// A label holds no unescaped bracket, some text (judged on the unmasked line: a code span is
+// text) and no blank line.
+const REF_LABEL = String.raw`\[((?:\\[^]|[^\[\]\\])+)\]:`;
 const LIST_MARKER = String.raw`(?:[-*+]|\d{1,9}[.)])`;
 const REF_PREFIX = String.raw`^(?:[ \t]*(?:>|${LIST_MARKER}(?=[ \t])))*[ \t]*`
   + REF_LABEL + LINK_WS + String.raw`(?!${REF_LABEL})`;
-const REF_HEAD = new RegExp(REF_PREFIX, 'gm');
+const REF_HEAD = new RegExp(REF_PREFIX, 'dgm');
 const REF_EOL = /[ \t]*$/ym;
-const endsLine = (t, e) => e >= 0 && Object.assign(REF_EOL, { lastIndex: e }).test(t);
+const LABEL_TEXT = /^(?=[^]*\S)(?:\\[^]|[^[\]\\])+$/; // some text, no unescaped bracket
+const endsLine = (u, e) => e >= 0 && Object.assign(REF_EOL, { lastIndex: e }).test(u);
 // The definition's destination when its title (or, failing that, its destination) ends the line.
+// `masked` (code blanked) finds a definition; `u` (comments blanked, code spans kept) is what
+// it says: backticks in a label or a destination are text, not code.
 // A definition that interrupts a paragraph is read too (GitHub shows it as text): the guard
 // fails closed.
-const refsIn = (t) => [...t.matchAll(REF_HEAD)].flatMap((m) => {
+const refsIn = (masked, u) => [...masked.matchAll(REF_HEAD)].flatMap((m) => {
+  if (!LABEL_TEXT.test(u.slice(...m.indices[1]))) return [];
   const at = m.index + m[0].length;
-  const d = linkDestination(t, at);
+  const d = linkDestination(u, at);
   if (!d || d.end === at) return []; // a bare destination is not empty
-  const end = [linkTitleEnd(t, d.end), d.end].find((e) => endsLine(t, e));
-  return end === undefined || BLANK.test(t.slice(m.index, end)) ? [] : [d.dest];
+  const end = [linkTitleEnd(u, d.end), d.end].find((e) => endsLine(u, e));
+  return end === undefined || BLANK.test(u.slice(m.index, end)) ? [] : [d.dest];
 });
 
 // Indented code (4+ spaces or a tab) follows a blank line or more code, and is not a list
@@ -105,11 +110,13 @@ const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.match
   });
 
 const hrefsIn = (text) => {
-  const t = maskBlocks(maskComments(text));
+  const uncommented = maskComments(text);
+  const t = maskBlocks(uncommented);
   // Attribute text of an HTML open tag is not prose: blanked for the link scan only
   // (the `<A>` of `[a](<A>)` has no attributes and stays).
   const prose = t.replace(PROSE_TAG, (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
-  return [...scanInlineLinks(prose).map(({ dest }) => dest), ...attrsIn(t), ...refsIn(t)];
+  const inline = scanInlineLinks(prose).map(({ dest }) => dest);
+  return [...inline, ...attrsIn(t), ...refsIn(t, uncommented)];
 };
 
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.

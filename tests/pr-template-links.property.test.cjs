@@ -173,7 +173,8 @@ describe('ADR gate extractLinks (#5427)', () => {
 describe('link grammar productions (#5427)', () => {
   const d = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._/-]{0,9}$/);
   // Unicode spaces are not CommonMark whitespace: they are ordinary destination characters.
-  const uniSpace = fc.constantFrom(' ', ' ', '　', '﻿', ' ');
+  const uniSpace = fc.constantFrom(0xa0, 0x2028, 0x3000, 0xfeff, 0x2003)
+    .map((c) => String.fromCharCode(c));
   const control = fc.constantFrom(...[...Array(0x20).keys(), 0x7f]
     .filter((c) => ![0x09, 0x0a, 0x0d].includes(c)).map((c) => String.fromCharCode(c)));
   const eol = fc.constantFrom('\n', '\r\n');
