@@ -523,25 +523,31 @@ function resolveTierInternal(cwd: string, agentType: string): string {
   return resolveTierFromConfig(loadConfig(cwd), agentType);
 }
 
+/**
+ * The per-agent `model_overrides` entry resolveModelInternal would return for `agentType`, or null
+ * when it has none that applies (absent, empty/falsy, or an unmappable Claude ID). #6213: a caller
+ * that needs to know whether an override really governs the agent uses this one predicate.
+ */
+function resolveModelOverride(config: Record<string, unknown>, agentType: string): string | null {
+  const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
+  // Own-property guard (see resolveTierFromConfig): without it, an agentType of "toString" against
+  // `model_overrides: {}` returned the inherited Function.prototype.toString as the resolved "model".
+  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+    ? modelOverrides[agentType]
+    : undefined;
+  if (!override) return null;
+  return mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
+}
+
 function resolveModelInternal(cwd: string, agentType: string): string {
   const config = loadConfig(cwd);
 
   // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
   // the claude runtime, mirroring the model_policy path #1144; non-Claude
-  // runtimes and non-Claude values pass through verbatim).
-  const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
-  // Own-property guard (see resolveTierFromConfig above): without it, an
-  // agentType of "toString" against `model_overrides: {}` returned the
-  // inherited Function.prototype.toString as the resolved "model" — verified
-  // reachable purely via the CLI, no override value needed.
-  const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
-    ? modelOverrides[agentType]
-    : undefined;
-  if (override) {
-    const mapped = mapClaudeOverrideForRuntime(override, resolveActiveRuntime(config), agentType);
-    if (mapped !== null) return mapped;
-    // Unmappable Claude ID — fall through to tier resolution (matches model_policy).
-  }
+  // runtimes and non-Claude values pass through verbatim). A truthy override
+  // that is unmappable falls through to tier resolution (matches model_policy).
+  const appliedOverride = resolveModelOverride(config, agentType);
+  if (appliedOverride !== null) return appliedOverride;
 
   // 2. Compute the tier (#2229: shared with resolveTierFromConfig so the tier a
   // workflow reads and the tier a model is resolved from can never diverge).
@@ -1212,8 +1218,10 @@ export = {
   CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
   resolveModelInternal,
+  resolveModelOverride,
   resolveTierInternal,
   resolveTierFromConfig,
+  computeProfileTier,
   _resetModelPolicyWarningCacheForTests,
   _resetModelOverrideWarningCacheForTests,
   _setInstallRuntimeMarkerForTests,
