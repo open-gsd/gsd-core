@@ -60,21 +60,30 @@ const LIST_ITEM = new RegExp(`^ {0,3}${LIST_MARKER}[ \\t]`);
 // closer). A line that is only a code span is text.
 const SPAN_OPENS = /^\s*(`+)(?!`)[^]*?(?<!`)\1(?!`)/;
 const isBlank = (masked, rawLine) => !masked.trim() && !SPAN_OPENS.test(rawLine);
+const INDENTED = /^( {4}|\t)/;
+// Per line: is it inside a list item? The one owner of list state. An item stays open across
+// its indented text and lazy continuation lines; only an unindented line after a blank line
+// ends it, and a line indented 4 or more leaves the state as it was.
+const openItems = (rawLines, blanks) => {
+  let open = false;
+  let afterBlank = true;
+  return rawLines.map((line, i) => {
+    if (!blanks[i] && !INDENTED.test(line)) {
+      open = LIST_ITEM.test(line) || (open && !(afterBlank && !/^ {2}/.test(line)));
+    }
+    afterBlank = blanks[i];
+    return open;
+  });
+};
 const maskIndentedCode = (raw, masked) => {
   const rawLines = raw.split('\n');
+  const maskedLines = masked.split('\n');
+  const blanks = maskedLines.map((m, i) => isBlank(m, rawLines[i]));
+  const inList = openItems(rawLines, blanks);
   let afterBlank = true;
-  let inList = false;
-  return masked.split('\n').map((m, i) => {
-    const blank = isBlank(m, rawLines[i]);
-    const indented = /^( {4}|\t)/.test(rawLines[i]);
-    // An item stays open across its indented text and lazy continuation lines; only an
-    // unindented line after a blank line ends it.
-    if (!blank && !indented) {
-      const marker = LIST_ITEM.test(rawLines[i]);
-      inList = marker || (inList && !(afterBlank && !/^ {2}/.test(rawLines[i])));
-    }
-    const code = indented && !blank && !inList && afterBlank;
-    afterBlank = blank || code;
+  return maskedLines.map((m, i) => {
+    const code = INDENTED.test(rawLines[i]) && !blanks[i] && !inList[i] && afterBlank;
+    afterBlank = blanks[i] || code;
     return code ? m.replace(/\S/g, ' ') : m;
   }).join('\n');
 };
@@ -179,17 +188,21 @@ const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
 const blockStart = new RegExp(
   String.raw`^ {0,3}(?:#{1,6}(?:[ \t]|$)|>|${LIST_MARKER}[ \t]|(?:[*_-][ \t]*){3,}$)`,
 );
-const indentedStart = /^( {4}|\t)/;
 const setextHeadings = (md) => {
   const raw = md.split(/\r?\n/);
   const out = [];
   let para = [];
-  maskCode(md).split(/\r?\n/).forEach((m, i) => {
-    const blank = isBlank(m, raw[i]);
-    if (para.length && /^ {0,3}(?:=+|-+)[ \t]*$/.test(m)) {
+  const masked = maskCode(md).split(/\r?\n/);
+  const blanks = masked.map((m, i) => isBlank(m, raw[i]));
+  const inList = openItems(raw, blanks); // a list item's lines head no setext heading
+  masked.forEach((m, i) => {
+    const blank = blanks[i];
+    if (inList[i] && !blank) {
+      para = [];
+    } else if (para.length && /^ {0,3}(?:=+|-+)[ \t]*$/.test(m)) {
       out.push({ line: para[0] + 1, text: para.map((k) => raw[k].trim()).join(' ') });
       para = [];
-    } else if (blank || blockStart.test(m) || (!para.length && indentedStart.test(m))) {
+    } else if (blank || blockStart.test(m) || (!para.length && INDENTED.test(m))) {
       para = [];
     } else {
       para.push(i);

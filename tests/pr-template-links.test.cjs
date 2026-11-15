@@ -33,6 +33,11 @@ describe('heading anchors (#5427)', () => {
     // the underline may be indented 3 spaces, not 4
     assert.deepEqual([...headingSet('Title\n   ---')], ['title']);
     assert.deepEqual([...headingSet('Title\n    ---')], []);
+    // a list item's text heads no setext heading, and an unindented rule ends the list
+    for (const md of ['- item\n  text\n---', '- item\n  text\n  ---', '- item\ntext\n---']) {
+      assert.deepEqual([...headingSet(md)], [], JSON.stringify(md));
+    }
+    assert.deepEqual([...headingSet('- item\n\nTitle\n---')], ['title']);
   });
   test('an em dash slugs like the features generator', () => {
     assert.deepEqual([...headingSet('## A — B')], [slugify('A — B')]);
