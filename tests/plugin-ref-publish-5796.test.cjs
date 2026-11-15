@@ -180,43 +180,87 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(git(bare, ['branch', '--list']), '');
   });
 
-  test('push auth env', () => {
-    assert.deepEqual(publisher.pushAuthEnv(undefined), {});
-    assert.deepEqual(publisher.pushAuthEnv(''), {});
-    const env = publisher.pushAuthEnv('tok');
-    assert.equal(env.GIT_CONFIG_COUNT, '2');
-    assert.equal(env.GIT_CONFIG_KEY_0, 'http.https://github.com/.extraheader');
-    assert.equal(env.GIT_CONFIG_KEY_1, 'http.https://github.com/.extraheader');
-    assert.equal(env.GIT_CONFIG_VALUE_0, '');
-    assert.equal(
-      env.GIT_CONFIG_VALUE_1,
-      `AUTHORIZATION: basic ${Buffer.from('x-access-token:tok').toString('base64')}`,
-    );
-    assert.ok(publisher.pushAuthEnv('a\nb').error);
+  test('pushAuthEnv rejects bad tokens', () => {
+    for (const ok of [undefined, '', null]) assert.deepEqual(publisher.pushAuthEnv(ok, {}), {});
+    for (const bad of ['a\nb', 'a\rb', 'a\0b', 5]) {
+      assert.ok(publisher.pushAuthEnv(bad, {}).error, JSON.stringify(bad));
+    }
   });
 
-  test('push token reaches git and never the error text', () => {
+  test('pushAuthEnv appends to an existing GIT_CONFIG_COUNT', () => {
+    const key = 'http.https://github.com/.extraheader';
+    const header = `AUTHORIZATION: basic ${Buffer.from('x-access-token:tok').toString('base64')}`;
+    const appended = publisher.pushAuthEnv('tok', {
+      GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*',
+    });
+    assert.deepEqual(appended, {
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_1: key, GIT_CONFIG_VALUE_1: '',
+      GIT_CONFIG_KEY_2: key, GIT_CONFIG_VALUE_2: header,
+    });
+    assert.ok(!('GIT_CONFIG_KEY_0' in appended) && !('GIT_CONFIG_VALUE_0' in appended));
+    assert.deepEqual(publisher.pushAuthEnv('tok', {}), {
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: key, GIT_CONFIG_VALUE_0: '',
+      GIT_CONFIG_KEY_1: key, GIT_CONFIG_VALUE_1: header,
+    });
+    assert.equal(publisher.pushAuthEnv('tok', { GIT_CONFIG_COUNT: 'x' }).GIT_CONFIG_COUNT, '2');
+  });
+
+  test('push auth env replaces a header persisted through includeIf', () => {
     const root = makeFixtureRepo();
-    const bare = makeBareRemote();
+    const key = 'http.https://github.com/.extraheader';
+    const creds = path.join(tmp('plugin-ref-creds-'), 'creds.config');
+    fs.writeFileSync(creds, '[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic OLD\n');
+    const gitDir = git(root, ['rev-parse', '--absolute-git-dir']);
+    // No trailing slash: git matches a gitdir: pattern against the .git dir path.
+    git(root, ['config', '--local', `includeIf.gitdir:${gitDir}.path`, creds]);
+    assert.deepEqual(git(root, ['config', '--get-all', key]).split('\n'), ['AUTHORIZATION: basic OLD']);
+    const header = `AUTHORIZATION: basic ${Buffer.from('x-access-token:tok').toString('base64')}`;
+    const r = runGit(['config', '--get-all', key], {
+      cwd: root, env: { ...process.env, ...publisher.pushAuthEnv('tok', process.env) },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    // git config --get-all lists every value including the empty reset marker;
+    // git's http code treats an empty extraheader as "forget the earlier ones".
+    // So the headers actually sent are the lines after the last empty line. This
+    // fails if the empty reset entry is removed: OLD would then be sent too.
+    const lines = String(r.stdout).replace(/\n$/, '').split('\n');
+    const afterReset = lines.slice(lines.lastIndexOf('') + 1);
+    assert.deepEqual(afterReset, [header]);
+    assert.ok(lines.includes(''), 'the reset entry is present');
+  });
+
+  test('scrubToken removes every printable form', () => {
     const token = 'sekret-5796';
     const b64 = Buffer.from(`x-access-token:${token}`).toString('base64');
-    const failed = publisher.publishPluginRef({
-      root, remote: path.join(os.tmpdir(), 'plugin-ref-no-such-remote-5796-token'),
-      branch: 'plugin', source: 'HEAD', pushToken: token,
-    });
-    assert.equal(failed.ok, false);
-    assert.ok(!failed.error.includes(token), 'error must not contain the token');
-    assert.ok(!failed.error.includes(b64), 'error must not contain the header value');
+    const header = `AUTHORIZATION: basic ${b64}`;
+    const out = publisher.scrubToken(`raw ${token} b64 ${b64} header ${header}`, token);
+    for (const form of [token, b64, header]) assert.ok(!out.includes(form), `${form} must be scrubbed`);
+    assert.ok(out.includes('***'));
+    assert.equal(publisher.scrubToken('plain text', ''), 'plain text');
+  });
+
+  test('publishes to a local remote with a push token set', () => {
+    const root = makeFixtureRepo();
+    const bare = makeBareRemote();
     const ok = publisher.publishPluginRef({
-      root, remote: bare, branch: 'plugin', source: 'HEAD', pushToken: token,
+      root, remote: bare, branch: 'plugin', source: 'HEAD', pushToken: 'sekret-5796',
     });
     assert.equal(ok.ok, true, JSON.stringify(ok));
+    assert.equal(git(bare, ['rev-parse', 'refs/heads/plugin']), ok.commit);
+  });
+
+  test('an invalid push token is a usage error that does not echo it', () => {
+    const root = makeFixtureRepo();
+    const bare = makeBareRemote();
     const bad = publisher.publishPluginRef({
       root, remote: bare, branch: 'plugin', source: 'HEAD', pushToken: 'a\nb',
     });
     assert.equal(bad.ok, false);
     assert.equal(bad.code, 'usage');
-    assert.ok(!bad.error.includes('a\nb'), 'error must not echo the token');
+    assert.equal(bad.error, 'invalid push token');
+    assert.equal(git(bare, ['branch', '--list']), '');
   });
 
   test('rejects a missing or option-like source', () => {
@@ -326,7 +370,10 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(matching[0].env && matching[0].env.VERSION, '${{ inputs.version }}');
     assert.equal(matching[0].env.PUSH_TOKEN, '${{ secrets.GSD_BOT_PR_TOKEN }}');
     assert.ok(matching[0].run.includes('GSD_PLUGIN_REF_PUSH_TOKEN'), 'publish step exports the push token');
-    assert.ok(matching[0].run.includes('::add-mask::'), 'publish step masks the derived header');
+    assert.ok(
+      matching[0].run.includes(`printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\\n'`),
+      'publish step masks the derived header',
+    );
     assert.equal(matching[0].id, 'plugin_ref');
     assert.equal(matching[0]['continue-on-error'], true);
     const last = steps[steps.length - 1];

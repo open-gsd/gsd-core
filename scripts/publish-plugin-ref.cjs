@@ -63,19 +63,23 @@ function basicAuthHeaderValue(token) {
 }
 
 // Git env-config entries that replace the checkout's persisted auth header for
-// one push. actions/checkout stores http.https://github.com/.extraheader in
-// .git/config and extraheader is multi-valued, so reset it with an empty value
-// first, then set the new one. The token goes through env, never argv: argv is
-// visible in the process table.
-function pushAuthEnv(token) {
+// one push. actions/checkout persists the header in git config (v6: in a
+// credentials file pulled in by includeIf.gitdir) under the multi-valued key
+// http.https://github.com/.extraheader. Command-scope env config is read last,
+// so an empty value resets that key and the value after it is the only one
+// sent. The entries are appended after any GIT_CONFIG_COUNT already in baseEnv.
+// The token goes through env, never argv: argv is visible in the process table.
+function pushAuthEnv(token, baseEnv = process.env) {
   if (token === undefined || token === null || token === '') return {};
-  if (typeof token !== 'string' || /[\r\n]/.test(token)) return { error: 'invalid push token' };
+  if (typeof token !== 'string' || /[\r\n\0]/.test(token)) return { error: 'invalid push token' };
+  const existing = baseEnv.GIT_CONFIG_COUNT;
+  const n = typeof existing === 'string' && /^\d+$/.test(existing) ? Number(existing) : 0;
   return {
-    GIT_CONFIG_COUNT: '2',
-    GIT_CONFIG_KEY_0: EXTRAHEADER_KEY,
-    GIT_CONFIG_VALUE_0: '',
-    GIT_CONFIG_KEY_1: EXTRAHEADER_KEY,
-    GIT_CONFIG_VALUE_1: basicAuthHeaderValue(token),
+    GIT_CONFIG_COUNT: String(n + 2),
+    [`GIT_CONFIG_KEY_${n}`]: EXTRAHEADER_KEY,
+    [`GIT_CONFIG_VALUE_${n}`]: '',
+    [`GIT_CONFIG_KEY_${n + 1}`]: EXTRAHEADER_KEY,
+    [`GIT_CONFIG_VALUE_${n + 1}`]: basicAuthHeaderValue(token),
   };
 }
 
@@ -193,7 +197,7 @@ function publishPluginRef({
   if (!isValidSource(source)) {
     return { ok: false, code: 'usage', error: `invalid source: ${JSON.stringify(source)}` };
   }
-  const auth = pushAuthEnv(pushToken);
+  const auth = pushAuthEnv(pushToken, process.env);
   if (auth.error) return { ok: false, code: 'usage', error: 'invalid push token' };
   const built = buildPluginRefCommit({ root, source });
   if (!built.ok) return built;
@@ -253,6 +257,7 @@ module.exports = {
   PLUGIN_REF_BRANCH,
   PUSH_TOKEN_ENV,
   pushAuthEnv,
+  scrubToken,
   isValidBranchName,
   buildPluginRefCommit,
   publishPluginRef,
