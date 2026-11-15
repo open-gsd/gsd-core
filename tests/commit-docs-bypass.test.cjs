@@ -164,7 +164,10 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
         'gsd-core/workflows/add-tests.md',
       ]) {
         const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
-        assert.match(text, /git commit -m [\s\S]*?-- ':\(literal\)/, rel);
+        // each commit runs up to the next backtick (code fence or inline span end)
+        const commits = text.match(/git commit -m [^`]{0,600}/g) ?? [];
+        assert.ok(commits.length > 0, `${rel} has no commit`);
+        for (const c of commits) assert.match(c, /-- (':\(literal\)|\.(\s|$))/, `${rel}: ${c.slice(0, 60)}`);
       }
     });
   });
