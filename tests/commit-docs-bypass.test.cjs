@@ -24,6 +24,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const fc = require('fast-check');
 const {
@@ -154,6 +155,17 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
       assert.equal(unscopedGitCommits('V=$(git commit -m x)').length, 1);
       assert.equal(unscopedGitCommits('cd x\nbash -c "git commit -m x"').length, 1);
       assert.equal(unscopedGitCommits("bash -c 'git commit -m x'").length, 1);
+    });
+
+    test('B11: shipped prompts commit only their named paths with a literal pathspec (#5211)', () => {
+      for (const rel of [
+        'agents/gsd-executor.md',
+        'agents/gsd-debug-session-manager.md',
+        'gsd-core/workflows/add-tests.md',
+      ]) {
+        const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+        assert.match(text, /git commit -m [\s\S]*?-- ':\(literal\)/, rel);
+      }
     });
   });
 
