@@ -33,10 +33,11 @@ describe('heading anchors (#5427)', () => {
     // the underline may be indented 3 spaces, not 4
     assert.deepEqual([...headingSet('Title\n   ---')], ['title']);
     assert.deepEqual([...headingSet('Title\n    ---')], []);
-    // a list item's text heads no setext heading, and an unindented rule ends the list
-    for (const md of ['- item\n  text\n---', '- item\n  text\n  ---', '- item\ntext\n---']) {
+    // an unindented rule is no underline of a list item's text; an indented one is, in the item
+    for (const md of ['- item\n  text\n---', '- item\ntext\n---']) {
       assert.deepEqual([...headingSet(md)], [], JSON.stringify(md));
     }
+    assert.deepEqual([...headingSet('- item\n  text\n  ---')], ['item-text']);
     assert.deepEqual([...headingSet('- item\n\nTitle\n---')], ['title']);
   });
   test('an em dash slugs like the features generator', () => {
@@ -52,7 +53,7 @@ describe('heading anchors (#5427)', () => {
     }
   });
   test('blockquote headings and <a id>/<a name> anchors count; code hides them', () => {
-    const md = '## Quoted\n> ## Quoted\n> > Deep\n> ---\n<a id="manual"></a> <a name=\'old\'>\n'
+    const md = '## Quoted\n> ## Quoted\n> > Deep\n> > ---\n<a id="manual"></a> <a name=\'old\'>\n'
       + '`<a id="code">`\n## After';
     assert.deepEqual([...headingSet(md)], ['quoted', 'quoted-1', 'deep', 'after', 'manual', 'old']);
   });
@@ -96,6 +97,97 @@ describe('heading anchors, fence edges (#5427)', () => {
   });
 });
 
+// Frozen oracle for the block structure: the links and heading anchors that pandoc 3.11 (its
+// commonmark reader) finds in each input. markdown-it 13 (commonmark preset) agrees on every row
+// but two (it reads an indented line after a definition as code and a `<!--` in a code span line
+// as an unclosed comment). Rows are [input, links, anchors]; `x`, `y`, `z` are destinations.
+const BLOCKS = [
+  ['    [a](x)', [], []],
+  ['p\n    [a](x)', ['x'], []],
+  ['p\n\n    [a](x)', [], []],
+  ['- p\n\n    [a](x)', ['x'], []],
+  ['- p\n\n      [a](x)', [], []],
+  ['-     [a](x)', [], []],
+  ['1. p\n   q\n\n       [a](x)', [], []],
+  ['1. p\n   q\n\n      [a](x)', ['x'], []],
+  ['> p\n    [a](x)', ['x'], []],
+  ['>     [a](x)', [], []],
+  ['> p\n>\n>     [a](x)', [], []],
+  ['> ```\n> [a](x)\n> ```', [], []],
+  ['- ```\n  [a](x)\n  ```', [], []],
+  ['```\n[a](x)\n```\n[a](y)', ['y'], []],
+  ['~~~\n[a](x)\n```\n[a](y)\n~~~', [], []],
+  ['````\n```\n[a](x)\n````\n[a](y)', ['y'], []],
+  ['<!--\n[a](x)\n\n[a](y)\n-->\n[a](z)', ['z'], []],
+  ['<!-- c --> [a](x)', [], []],
+  ['a <!-- c --> [a](x)', ['x'], []],
+  ['a <!--\n\n[a](x)', ['x'], []],
+  ['<div>\n[a](x)\n</div>\n\n[a](y)', ['y'], []],
+  ['<pre>\n\n[a](x)\n</pre>\n\n[a](y)', ['y'], []],
+  ['<span>\n[a](x)', [], []],
+  ['p\n<span>\n[a](x)', ['x'], []],
+  ['[r]: x\n[s]: y', ['x', 'y'], []],
+  ['p\n[r]: x', [], []],
+  ['[r]: x "t"\n[s]: y', ['x', 'y'], []],
+  ['[r]: x\n"t"', ['x'], []],
+  ['[r]:\nx\n"t"', ['x'], []],
+  ['[r]: x\n    [a](y)', ['x', 'y'], []],
+  ['- [r]: x', ['x'], []],
+  ['> [r]: x', ['x'], []],
+  ['`a\n[b](x)`', [], []],
+  ['\\`a\n[b](x)`', ['x'], []],
+  ['[x\n# H\ny](z)', [], ['h']],
+  ['[x\n> y](z)', [], []],
+  ['[x\n\ny](z)', [], []],
+  ['[x [a](y) z](w)', ['y'], []],
+  ['[![a](i)](l)', ['i', 'l'], []],
+  ['p\n- [a](x)', ['x'], []],
+  ['p\n2. [a](x)', ['x'], []],
+  ['-\n  [a](x)', ['x'], []],
+  ['-\n\n  [a](x)', ['x'], []],
+  ['`<!--` [a](x)', ['x'], []],
+  ['<!-- `x --> [a](x)', [], []],
+  ['> `<!--\n[a](x) <!-- c -->', [], []],
+  ['T\n===', [], ['t']],
+  ['T\n---', [], ['t']],
+  ['T\n    ---', [], []],
+  ['T\n   ---', [], ['t']],
+  ['- T\n  ---', [], ['t']],
+  ['- T\n---', [], []],
+  ['> T\n> ---', [], ['t']],
+  ['> T\n---', [], []],
+  ['> > T\n> ---', [], []],
+  ['[r]: x\n---', ['x'], []],
+  ['p\n-', [], ['p']],
+  ['```\nT\n---\n```', [], []],
+  ['<!--\nT\n---\n-->', [], []],
+  ['<div>\nT\n---', [], []],
+  ['T\n===\n===', [], ['t']],
+  ['- T\n\n  U\n  ---', [], ['u']],
+  ['<a id="x"></a>', [], ['x']],
+  ['`<a id="x">`', [], []],
+  ['    <a id="x">', [], []],
+  ['<!-- <a id="x"> -->', [], []],
+  ['p\n\n<!--\n<a id="x">', [], []],
+  ['- # H', [], ['h']],
+  ['> # H', [], ['h']],
+  ['1. # H', [], ['h']],
+  ['# A #', [], ['a']],
+  ['T\nU\n---', [], ['t-u']],
+  ['  T\n---', [], ['t']],
+  ['> T\n\n---', [], []],
+];
+describe('block structure agrees with a CommonMark reader (#5427)', () => {
+  test('each input gives the links and anchors the oracle found, with LF and CRLF', () => {
+    for (const [md, links, anchors] of BLOCKS) {
+      for (const text of [md, md.replace(/\n/g, '\r\n')]) {
+        assert.deepEqual(hrefsIn(text).sort(), links, JSON.stringify(text));
+        assert.deepEqual([...headingSet(text)].sort(), anchors, JSON.stringify(text));
+      }
+    }
+  });
+});
+
 describe('link extractor (#5427)', () => {
   test('an unbalanced parenthesis is not a link', () => {
     for (const text of ['[a](x_(b)', '[a](x_(b "t")', '[a](x_((b))', '[a](']) {
@@ -121,7 +213,7 @@ describe('link extractor, edge forms (#5427)', () => {
     assert.deepEqual(hrefsIn('<a title="[x](../old.md)" href="../h.md">t</a>'), ['../h.md']);
   });
   test('attributes tolerate whitespace around = and srcset lists every candidate', () => {
-    assert.deepEqual(hrefsIn('<a href = "../x.md"> <img src\n=\n\'y.png\'>'), ['../x.md', 'y.png']);
+    assert.deepEqual(hrefsIn('<a href = "../x.md"> <img src\n= \'y.png\'>'), ['../x.md', 'y.png']);
     assert.deepEqual(hrefsIn('<img srcset="a.png 1x, ../b.png 2x">'), ['a.png', '../b.png']);
     assert.deepEqual(hrefsIn('<source srcset = \'c.png\'>'), ['c.png']);
   });
@@ -129,17 +221,20 @@ describe('link extractor, edge forms (#5427)', () => {
     const texts = ['[a]:\n../x.md', '[a]:\r\n  ../x.md', '- [a]: ../x.md', '1. [a]: ../x.md',
       '> - [a]: ../x.md'];
     for (const t of texts) assert.deepEqual(hrefsIn(t), ['../x.md'], t);
-    assert.deepEqual(hrefsIn('[a]:\n[b]: ../x.md'), ['../x.md']);
+    // a label-shaped destination is a destination, and text follows it: no definition (CommonMark)
+    assert.deepEqual(hrefsIn('[a]:\n[b]: ../x.md'), []);
   });
   test('a list marker has at most 9 digits (CommonMark) in all three block rules', () => {
     const marker = (n) => `${'1'.repeat(n)}.`;
     for (const n of [8, 9]) {
       assert.deepEqual(hrefsIn(`${marker(n)} [a]: ../x.md`), ['../x.md'], `ref ${n}`);
-      assert.deepEqual(hrefsIn(`${marker(n)} item\n\n    [a](../x.md)`), ['../x.md'], `code ${n}`);
+      // the item's content starts after the marker and one space: text there continues it
+      const inItem = `${marker(n)} item\n\n${' '.repeat(n + 2)}[a](../x.md)`;
+      assert.deepEqual(hrefsIn(inItem), ['../x.md'], `item ${n}`);
       assert.deepEqual([...headingSet(`${marker(n)} a\n---`)], [], `setext ${n}`);
     }
     assert.deepEqual(hrefsIn(`${marker(10)} [a]: ../x.md`), []);
-    assert.deepEqual(hrefsIn(`${marker(10)} item\n\n    [a](../x.md)`), []);
+    assert.deepEqual(hrefsIn(`${marker(10)} item\n\n${' '.repeat(12)}[a](../x.md)`), []);
     assert.deepEqual([...headingSet(`${marker(10)} a\n---`)], [`${'1'.repeat(10)}-a`]);
   });
   test('an escaped parenthesis in a bare destination is not nesting', () => {
@@ -148,10 +243,11 @@ describe('link extractor, edge forms (#5427)', () => {
   });
   test('indented code is not scanned; paragraph and list continuations are', () => {
     const code = ['    [a](../x.md)', '\t[a](../x.md)', 'text\n\n    [a](../x.md)',
-      '    code\n    [a](../x.md)', '- item\n\ntext\n\n    [a](../x.md)'];
+      '    code\n    [a](../x.md)', '- item\n\ntext\n\n    [a](../x.md)',
+      '- item\n\n      [a](../x.md)'];
     for (const t of code) assert.deepEqual(hrefsIn(t), [], t);
     const text = ['para\n    [a](../x.md)', 'text\n\n   [a](../x.md)', '- item\n\n    [a](../x.md)',
-      '- item\n\n      [a](../x.md)', '- item\n  text\n\n    [a](../x.md)',
+      '- item\n  text\n\n    [a](../x.md)',
       '1. item\n   text\n\n    [a](../x.md)', '- item\ntext\n\n    [a](../x.md)',
       '- item\n text\n\n    [a](../x.md)'];
     for (const t of text) assert.deepEqual(hrefsIn(t), ['../x.md'], t);
@@ -276,7 +372,7 @@ describe('escaped brackets, empty destinations, reference labels (#5427)', () =>
     assert.deepEqual(hrefsIn('[a\\]b]: ../x.md'), ['../x.md']);
     assert.deepEqual(hrefsIn('[a\\]: ../x.md'), []);
     assert.deepEqual(hrefsIn('[a\\\\]: ../x.md'), ['../x.md']);
-    assert.deepEqual(hrefsIn('[a]:\n[b\\]c]: ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[a]:\n[b\\]c]: ../x.md'), []); // `[b\]c]:` is the destination of [a]
   });
 });
 

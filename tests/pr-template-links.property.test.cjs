@@ -5,7 +5,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const assert = require('node:assert/strict');
 
 const {
-  REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors,
+  REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
 const { extractLinks } = require('../scripts/gen-adr-index.cjs');
 const { isPrTemplate } = require('../scripts/ci-test-scope.cjs');
@@ -171,7 +171,8 @@ describe('ADR gate extractLinks (#5427)', () => {
 // definitions), not the guard's predicates: one owner reads the destination, the title and the
 // whitespace between them, for the inline form and the reference form alike.
 describe('link grammar productions (#5427)', () => {
-  const d = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._/-]{0,9}$/);
+  // never a lone `-`: that line is a setext underline
+  const d = fc.stringMatching(/^[A-Za-z0-9_][A-Za-z0-9._/-]{0,9}$/);
   // Unicode spaces are not CommonMark whitespace: they are ordinary destination characters.
   const uniSpace = fc.constantFrom(0xa0, 0x2028, 0x3000, 0xfeff, 0x2003)
     .map((c) => String.fromCharCode(c));
@@ -223,6 +224,58 @@ describe('link grammar productions (#5427)', () => {
       }
       assert.deepEqual(hrefsIn(`[${a}${e}${b}]: ${a}`), [a], 'one line ending');
       assert.deepEqual(hrefsIn(`[${a}${e}${e}${b}]: ${a}`), [], 'a blank line');
+    }));
+  });
+});
+
+// Documents built from blocks whose links and anchors CommonMark decides by the block's shape,
+// alone or inside block quotes and list items: the expected values come from this table.
+describe('block structure by construction (#5427)', () => {
+  // lines(d, t): the block's lines for destination d and heading word t; links: how many
+  // destinations a CommonMark reader finds; anchors(t): the heading slugs it finds.
+  const none = () => [];
+  const one = (t) => [t];
+  const SHAPES = [
+    { lines: (d) => [`p [a](${d})`], links: 1, anchors: none },
+    { lines: (d) => ['p', `[a](${d})`], links: 1, anchors: none },
+    { lines: (d) => ['p', `    [a](${d})`], links: 1, anchors: none }, // a continuation
+    { lines: (d) => [`    [a](${d})`], links: 0, anchors: none }, // indented code
+    { lines: (d) => ['```', `[a](${d})`, '```'], links: 0, anchors: none },
+    { lines: (d) => ['~~~', `[a](${d})`, '~~~'], links: 0, anchors: none },
+    { lines: (d) => ['<!--', `[a](${d})`, '-->'], links: 0, anchors: none },
+    { lines: (d) => [`<!-- [a](${d}) -->`], links: 0, anchors: none },
+    { lines: (d) => ['<div>', `[a](${d})`, '</div>'], links: 0, anchors: none },
+    { lines: (d) => [`[r]: ${d}`], links: 1, anchors: none },
+    { lines: (d) => ['p', `[r]: ${d}`], links: 0, anchors: none }, // no interrupt
+    { lines: (d, t) => [t, '---'], links: 0, anchors: one },
+    { lines: (d, t) => [t, '==='], links: 0, anchors: one },
+    { lines: (d, t) => [t, `${t}b`, '---'], links: 0, anchors: (t) => [`${t}-${t}b`] },
+    { lines: (d, t) => [`# ${t}`], links: 0, anchors: one },
+    { lines: (d, t) => [`<a id="${t}"></a>`], links: 0, anchors: one },
+    { lines: (d, t) => [`\`<a id="${t}">\``], links: 0, anchors: none },
+  ];
+  const wrap = {
+    quote: (lines) => lines.map((l) => `> ${l}`),
+    item: (lines) => lines.map((l, i) => (i ? `  ${l}` : `- ${l}`)),
+  };
+  const block = fc.record({
+    shape: fc.integer({ min: 0, max: SHAPES.length - 1 }),
+    wraps: fc.array(fc.constantFrom('quote', 'item'), { maxLength: 2 }),
+  });
+  test('property: links and anchors follow each block, wrapped in quotes and items', () => {
+    const docs = fc.array(block, { minLength: 1, maxLength: 6 });
+    fc.assert(fc.property(docs, fc.constantFrom('\n', '\r\n'), (list, eol) => {
+      const links = [];
+      const anchors = [];
+      const parts = list.map(({ shape, wraps }, k) => {
+        const { lines, links: n, anchors: slugs } = SHAPES[shape];
+        if (n) links.push(`d${k}`);
+        anchors.push(...slugs(`h${k}`));
+        return wraps.reduce((ls, w) => wrap[w](ls), lines(`d${k}`, `h${k}`)).join('\n');
+      });
+      const doc = parts.join('\n\n* * *\n\n').replace(/\n/g, eol); // a break ends any item
+      assert.deepEqual(hrefsIn(doc).sort(), links.sort(), JSON.stringify(doc));
+      assert.deepEqual([...headingSet(doc)].sort(), anchors.sort(), JSON.stringify(doc));
     }));
   });
 });
