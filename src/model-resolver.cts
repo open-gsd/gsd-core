@@ -880,7 +880,8 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
   // runtime tier map, the omit gate and a model_profile_overrides.claude pin
   // all outrank tier_models. Only a genuine escalation reaches the steps below.
   const routedTier = dynamicRoutingTier(config, agentType, attemptN);
-  if (routedTier === null || routedTier === dynamicRoutingTier(config, agentType, 0)) {
+  const firstSpawnTier = dynamicRoutingTier(config, agentType, 0);
+  if (routedTier === null || routedTier === firstSpawnTier) {
     return resolveModelInternal(cwd, agentType);
   }
 
@@ -912,17 +913,14 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
   // own tier map at step 3 keeps today's dynamic_routing escalation).
   if (omitAppliesFor(cwd, config, activeRuntime)) {
     if (hasNativeModelAliases(activeRuntime)) {
-      if (dynamicRoutingTier(config, agentType, attemptN) !== null) {
-        return omitTierAlias(config, agentType, attemptN);
-      }
+      return omitTierAlias(config, agentType, attemptN);
     } else if (resolveModelInternal(cwd, agentType) === '') {
       return '';
     }
   }
 
-  const alias = dynamicRoutingModel(config, agentType, attemptN);
-  if (alias !== null) return alias;
-  return resolveModelInternal(cwd, agentType);
+  // routedTier is non-null past the #6214 guard, so tier_models names it.
+  return ((config['dynamic_routing'] as Record<string, unknown>)['tier_models'] as Record<string, string>)[routedTier];
 }
 
 /**

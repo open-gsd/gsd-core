@@ -23,10 +23,9 @@ const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 
 const fc = require('./helpers/fast-check-setup.cjs');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const {
   resolveModelInternal,
@@ -35,7 +34,7 @@ const {
   _resetInstallRuntimeMarkerCacheForTests,
 } = require('../gsd-core/bin/lib/model-resolver.cjs');
 const { MODEL_PROFILES, RUNTIME_PROFILE_MAP } = require('../gsd-core/bin/lib/model-catalog.cjs');
-const { AGENT_DEFAULT_TIERS, nextTier } = require('../gsd-core/bin/lib/model-profiles.cjs');
+const { AGENT_DEFAULT_TIERS } = require('../gsd-core/bin/lib/model-profiles.cjs');
 
 const ENV_KEYS = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT', 'CLAUDE_CODE_SUBAGENT_MODEL'];
 
@@ -43,10 +42,11 @@ const DR = { enabled: true, tier_models: { light: 'claude-haiku-4-5', standard: 
 const MAPPER = 'gsd-codebase-mapper'; // default tier: light
 const PLANNER = 'gsd-planner'; // default tier: heavy
 const ISSUE_CONFIG = { model_profile: 'balanced', runtime: 'codex', dynamic_routing: DR };
+// The codex light-tier model the issue reports from resolve-model.
+const LUNA = 'gpt-5.6-luna';
 
 function mkProject(config) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6214-'));
-  fs.mkdirSync(path.join(dir, '.planning', 'phases'), { recursive: true });
+  const dir = createTempProject('gsd-6214-');
   fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(config));
   return dir;
 }
@@ -83,14 +83,14 @@ describe('#6214: attempt 0 agrees with resolve-model', () => {
   test('issue repro: attempt 0 agrees with resolve-model on codex', () => {
     dir = mkProject(ISSUE_CONFIG);
     assert.strictEqual(internalIn(dir, MAPPER, 'codex'), RUNTIME_PROFILE_MAP.codex.haiku.model);
-    assert.strictEqual(internalIn(dir, MAPPER, 'codex'), 'gpt-5.6-luna');
-    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), 'gpt-5.6-luna');
+    assert.strictEqual(internalIn(dir, MAPPER, 'codex'), LUNA);
+    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), LUNA);
   });
 
   test('a runtime declared only by GSD_RUNTIME (no config key) agrees at attempt 0', () => {
     dir = mkProject({ model_profile: 'balanced', dynamic_routing: DR });
     assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), internalIn(dir, MAPPER, 'codex'));
-    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), 'gpt-5.6-luna');
+    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), LUNA);
   });
 
   test('model_policy on claude outranks tier_models at attempt 0', () => {
@@ -111,15 +111,15 @@ describe('#6214: attempt 0 agrees with resolve-model', () => {
 
   test('explicit non-Claude opt-in under project omit agrees at attempt 0', () => {
     dir = mkProject({ ...ISSUE_CONFIG, resolve_model_ids: 'omit' });
-    assert.strictEqual(internalIn(dir, MAPPER, 'codex'), 'gpt-5.6-luna');
-    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), 'gpt-5.6-luna');
+    assert.strictEqual(internalIn(dir, MAPPER, 'codex'), LUNA);
+    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 0), LUNA);
   });
 
   test('provider escalation `from` is the resolve-model model', () => {
     dir = mkProject({ ...ISSUE_CONFIG, dynamic_routing: { ...DR, provider_escalation: ['gpt-x'] } });
     const r = withEnv(dir, 'codex', () => resolveProviderEscalation(dir, MAPPER, 0, false));
-    assert.strictEqual(r.from, 'gpt-5.6-luna');
-    assert.deepStrictEqual(r.attempted, ['gpt-5.6-luna']);
+    assert.strictEqual(r.from, LUNA);
+    assert.deepStrictEqual(r.attempted, [LUNA]);
   });
 
   test('CLI: resolve-execution --attempt 0 model equals resolve-model', () => {
@@ -129,8 +129,8 @@ describe('#6214: attempt 0 agrees with resolve-model', () => {
     assert.ok(picked.success, picked.error);
     const exec = runGsdTools(['resolve-execution', MAPPER, '--attempt', '0'], dir, env);
     assert.ok(exec.success, exec.error);
-    assert.strictEqual(picked.output.trim(), 'gpt-5.6-luna');
-    assert.strictEqual(JSON.parse(exec.output).model, 'gpt-5.6-luna');
+    assert.strictEqual(picked.output.trim(), LUNA);
+    assert.strictEqual(JSON.parse(exec.output).model, LUNA);
   });
 });
 
@@ -140,7 +140,7 @@ describe('#6214: an attempt that does not move the tier is the first spawn', () 
 
   test('max_escalations 0: attempt 1 equals attempt 0', () => {
     dir = mkProject({ ...ISSUE_CONFIG, dynamic_routing: { ...DR, max_escalations: 0 } });
-    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 1), 'gpt-5.6-luna');
+    assert.strictEqual(forTierIn(dir, MAPPER, 'codex', 1), LUNA);
   });
 
   test('max_escalations 1: attempt 1 escalates to tier_models', () => {
@@ -156,7 +156,7 @@ describe('#6214: an attempt that does not move the tier is the first spawn', () 
   test('escalate_on_failure false: every attempt equals attempt 0', () => {
     dir = mkProject({ ...ISSUE_CONFIG, dynamic_routing: { ...DR, escalate_on_failure: false } });
     for (const attempt of [0, 1, 3]) {
-      assert.strictEqual(forTierIn(dir, MAPPER, 'codex', attempt), 'gpt-5.6-luna', `attempt ${attempt}`);
+      assert.strictEqual(forTierIn(dir, MAPPER, 'codex', attempt), LUNA, `attempt ${attempt}`);
     }
   });
 
@@ -169,7 +169,7 @@ describe('#6214: an attempt that does not move the tier is the first spawn', () 
   });
 });
 
-describe('#6214: negative space', () => {
+describe('#6214: behavior that must not change', () => {
   let dir;
   afterEach(() => { if (dir) cleanup(dir); dir = null; });
 
@@ -194,46 +194,48 @@ describe('#6214: negative space', () => {
 });
 
 describe('#6214: property', () => {
-  test('property: an attempt that does not move the tier resolves the first spawn\'s model', () => {
-    const agents = Object.keys(MODEL_PROFILES).filter((a) => Object.hasOwn(AGENT_DEFAULT_TIERS, a));
-    const tierAfter = (tier, steps) => {
-      let t = tier;
-      for (let i = 0; i < steps; i += 1) {
-        const n = nextTier(t);
-        if (!n || n === t) break;
-        t = n;
-      }
-      return t;
-    };
+  test('property: an attempt that does not move the tier resolves the first spawn\'s model', (t) => {
+    const dirs = [];
+    t.after(() => { for (const d of dirs) cleanup(d); });
+    // Independent oracle: the documented ladder light -> standard -> heavy -> heavy.
+    const TIER_ORDER = ['light', 'standard', 'heavy'];
+    const agents = Object.keys(MODEL_PROFILES).filter((a) => TIER_ORDER.includes(AGENT_DEFAULT_TIERS[a]));
+    assert.ok(agents.length > 0, 'no agent declares a routing tier');
     fc.assert(fc.property(
-      fc.constantFrom('claude', 'codex', 'opencode'),
-      fc.constantFrom('quality', 'balanced', 'budget'),
-      fc.constantFrom(...agents),
-      fc.integer({ min: 0, max: 3 }),
-      fc.integer({ min: 0, max: 3 }),
-      fc.boolean(),
-      fc.boolean(),
-      fc.boolean(),
-      fc.boolean(),
-      (runtime, profile, agent, attempt, maxEsc, escalate, explicitRuntime, policy, claudePin) => {
+      fc.record({
+        runtime: fc.constantFrom('claude', 'codex', 'opencode'),
+        profile: fc.constantFrom('quality', 'balanced', 'budget'),
+        agent: fc.constantFrom(...agents),
+        attempt: fc.integer({ min: 0, max: 3 }),
+        maxEsc: fc.integer({ min: 0, max: 3 }),
+        escalate: fc.boolean(),
+        explicitRuntime: fc.boolean(),
+        policy: fc.boolean(),
+        claudePin: fc.boolean(),
+      }),
+      (s) => {
         const config = {
-          model_profile: profile,
-          dynamic_routing: { ...DR, max_escalations: maxEsc, escalate_on_failure: escalate },
+          model_profile: s.profile,
+          dynamic_routing: { ...DR, max_escalations: s.maxEsc, escalate_on_failure: s.escalate },
         };
-        if (explicitRuntime) config.runtime = runtime;
-        if (policy) config.model_policy = { provider: 'anthropic' };
-        if (claudePin) config.model_profile_overrides = { claude: { haiku: 'claude-haiku-4-5-20251001', sonnet: 'claude-sonnet-4-5-20250929' } };
+        if (s.explicitRuntime) config.runtime = s.runtime;
+        if (s.policy) config.model_policy = { provider: 'anthropic' };
+        if (s.claudePin) config.model_profile_overrides = { claude: { haiku: 'claude-haiku-4-5-20251001', sonnet: 'claude-sonnet-4-5-20250929' } };
         const dir = mkProject(config);
-        try {
-          const effective = escalate ? Math.min(attempt, maxEsc) : 0;
-          const defaultTier = AGENT_DEFAULT_TIERS[agent];
-          const first = internalIn(dir, agent, runtime);
-          if (tierAfter(defaultTier, effective) === defaultTier) {
-            assert.strictEqual(forTierIn(dir, agent, runtime, attempt), first);
-          }
-          assert.strictEqual(forTierIn(dir, agent, runtime, 0), first);
-        } finally {
-          cleanup(dir);
+        dirs.push(dir);
+        const effective = s.escalate ? Math.min(s.attempt, s.maxEsc) : 0;
+        const startIdx = TIER_ORDER.indexOf(AGENT_DEFAULT_TIERS[s.agent]);
+        const endIdx = Math.min(startIdx + effective, TIER_ORDER.length - 1);
+        const first = internalIn(dir, s.agent, s.runtime);
+        const got = forTierIn(dir, s.agent, s.runtime, s.attempt);
+        assert.strictEqual(forTierIn(dir, s.agent, s.runtime, 0), first);
+        if (endIdx === startIdx) {
+          assert.strictEqual(got, first);
+        } else if (s.policy && s.runtime !== 'claude') {
+          // A non-Claude model_policy pins every attempt.
+          assert.strictEqual(got, first);
+        } else {
+          assert.strictEqual(got, DR.tier_models[TIER_ORDER[endIdx]]);
         }
       },
     ), { numRuns: 60 });

@@ -1741,7 +1741,7 @@ for the change to take effect. See issue #2256.
 
 ```text
 1. model_overrides[<agent>]              ← per-agent; full IDs; targeted exception
-2. model_policy / runtime tier map       ← a non-Claude runtime's own model for the tier
+2. model_policy / runtime tier map       ← un-escalated attempts (see §Dynamic Routing)
 3. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
 4. models[<phase_type>]                  ← coarse phase-level tier (this section)
 5. model_profile (per-agent col)         ← global tier strategy
@@ -1836,7 +1836,7 @@ If `dynamic_routing.escalate_on_failure: false`, soft failures do **not** advanc
 #### Resolution precedence (highest → lowest)
 
 1. **`model_overrides[<agent>]`** — full IDs accepted; targeted exception
-2. **`model_policy`**, the active non-Claude runtime's tier map (`model_profile_overrides.<runtime>` included), the `resolve_model_ids: "omit"` gate, and a `model_profile_overrides.claude.<tier>` pin on Claude Code
+2. **`model_policy`**, the active non-Claude runtime's tier map (`model_profile_overrides.<runtime>` included), the `resolve_model_ids: "omit"` gate, and a `model_profile_overrides.claude.<tier>` pin on Claude Code. This applies to un-escalated attempts only; see below.
 3. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
 4. **`models[<phase_type>]`** — coarse phase-level (#3023)
 5. **`model_profile`** — per-agent column from active profile
