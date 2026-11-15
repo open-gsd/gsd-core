@@ -161,7 +161,7 @@ describe('gsd-agent-isolation-guard.js: applicability matrix (#3045)', () => {
     const wrong = agentPayload({ tool_input: { subagent_type: 'gsd-executor', isolation: 'worktree', model: 'haiku' } });
     const r = runHook(wrong, harnessProject);
     assert.equal(r.status, 0, `stdout: ${r.stdout}`);
-    assert.match(r.stdout, /additionalContext/);
+    assert.ok(JSON.parse(r.stdout).hookSpecificOutput?.additionalContext, 'a mismatched model warns');
   });
 
   test('row 3: isolation="" (empty) -> DENY', () => {
