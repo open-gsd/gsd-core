@@ -852,10 +852,11 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     for (const dir of [project, sub, other]) assert.equal(escalationRoot(dir), resolveSentinelRoot(dir), dir);
   });
 
-  test('one model-id charset: the CLI and the hook both read MODEL_ID_CHARSET_BODY from model-escalation, the hook adding [ and ]', (t) => {
+  test('one model-id charset: model-catalog owns MODEL_ID_CHARSET_BODY; the CLI and the hook both read it, the hook adding [ and ]', (t) => {
     setup(t);
-    const { MODEL_ID_CHARSET_BODY } = require('../gsd-core/bin/lib/model-escalation.cjs');
+    const { MODEL_ID_CHARSET_BODY } = require('../gsd-core/bin/lib/model-catalog.cjs');
     const cli = require('../gsd-core/bin/gsd-tools.cjs');
+    assert.equal(require('../gsd-core/bin/lib/model-escalation.cjs').MODEL_ID_CHARSET_BODY, MODEL_ID_CHARSET_BODY, 'model-escalation re-exports the owner');
     assert.equal(cli.MODEL_ID_CHARSET_BODY, MODEL_ID_CHARSET_BODY, 'gsd-tools reads the owner');
     for (let c = 0x20; c < 0x7f; c++) {
       const ch = String.fromCharCode(c);

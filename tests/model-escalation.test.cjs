@@ -68,7 +68,7 @@ test('property: escalationRoot resolves a directory at any depth inside a projec
 });
 
 test('property: the CLI pin accept regex is exactly "alphanumeric first, then MODEL_ID_CHARSET_BODY" from the owner', () => {
-  const { MODEL_ID_CHARSET_BODY } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { MODEL_ID_CHARSET_BODY } = require('../gsd-core/bin/lib/model-catalog.cjs');
   const { MODEL_ID_CHARSET_RE } = require('../gsd-core/bin/gsd-tools.cjs');
   const body = new RegExp(`^[${MODEL_ID_CHARSET_BODY}]*$`);
   fc.assert(fc.property(fc.string({ unit: 'binary-ascii', maxLength: 12 }), (id) =>
