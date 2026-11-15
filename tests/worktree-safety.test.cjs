@@ -6311,11 +6311,14 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
 
   // One line naming a hard reset: a word starting "hard" and a word starting "reset", in either order. That
   // covers the flag after the word (`git reset -q --hard`, "`git reset` with `--hard`"), the flag first ("a
-  // `--hard` reset"), the two words joined or apart (hard-reset, "a hard git reset"), the word first ("reset
-  // hard to the last task") and inflections (hard-resets, hard-resetting). Any other line holding such a pair
-  // fails too, "a hardware reset" included; reword it. The first alternative also lets the whole-file check
-  // below catch "hard" and "reset" split across a line break.
-  const HARD_RESET_SPELLING = /\bhard[-\s]+reset|\bhard.*\breset|\breset.*\bhard/i;
+  // `--hard` reset"), the two words apart (hard-reset, "a hard git reset"), joined with "hard" first (hardreset,
+  // hardReset), the word first ("reset hard to the last task") and inflections (hard-resets, hard-resetting).
+  // Any other line holding such a pair fails too, "a hardware reset" included; reword it. The first two
+  // alternatives also let the whole-file check below catch "hard" and "reset" split across a line break, in
+  // either order ("hard\nreset", "git reset\n--hard"), when only non-word characters (`\W`: spaces, newlines,
+  // backticks, hyphens; not an underscore) sit between them and the word before the break is exactly "hard" or
+  // "reset".
+  const HARD_RESET_SPELLING = /\bhard\W*reset|\breset\W+hard|\bhard.*\breset|\breset.*\bhard/i;
 
   test('executor prohibits `git reset --hard` with no exception (#5310)', () => {
     // The exemption named the startup <worktree_branch_check> step, which has been verify-only
