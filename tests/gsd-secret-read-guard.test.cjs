@@ -1284,19 +1284,49 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     assert.deepEqual(mismatches, [], 'shapes the secret-read scan decodes and the debugger check does not');
   });
 
-  test('property: the quoting of the agent value never changes the verdict (#5441)', () => {
-    const spellings = [
-      (a) => a, (a) => `'${a}'`, (a) => `"${a}"`, (a) => `$'${a}'`, (a) => `$"${a}"`,
-      (a) => `$'${a.replace('-', '\\x2d')}'`, (a) => `--agent=$'${a}'`,
+  // The quoting of the agent value never changes the verdict: seven spellings,
+  // each of the debugger and of another agent, every cell its own row.
+  const VALUE_SPELLINGS = [
+    ['bare', (a) => a],
+    ['single-quoted', (a) => `'${a}'`],
+    ['double-quoted', (a) => `"${a}"`],
+    ['ANSI-C quoted', (a) => `$'${a}'`],
+    ['locale-quoted', (a) => `$"${a}"`],
+    ['ANSI-C quoted with a hex-escaped dash', (a) => `$'${a.replace('-', '\\x2d')}'`],
+    ['ANSI-C quoted --agent=VALUE', (a) => `--agent=$'${a}'`],
+  ];
+  const launchWith = (value) => (value.startsWith('--agent=') ? `claude ${value} -p hi` : `claude --agent ${value} -p hi`);
+  for (const [label, spell] of VALUE_SPELLINGS) {
+    test(`blocks: the debugger as a ${label} agent value (#5441)`, () => {
+      assertBlocked(runHook(bash(launchWith(spell('gsd-debugger')))), label, { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+    test(`allows: another agent as a ${label} agent value (#5441)`, () => {
+      assertAllowed(runHook(bash(launchWith(spell('gsd-executor')))), label);
+    });
+  }
+
+  // Each character of the agent name is spelled at random as itself, `\xHH` or
+  // `\NNN`, inside one `$'…'`: bash and zsh give every such spelling the name.
+  test('property: escaping any characters of the agent name never changes the verdict (#5441)', () => {
+    const forms = [
+      (c) => c,
+      (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`,
+      (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, '0')}`,
     ];
+    const NAME_LENGTH = 'gsd-debugger'.length;
+    assert.equal('gsd-executor'.length, NAME_LENGTH);
     fc.assert(
-      fc.property(fc.integer({ min: 0, max: spellings.length - 1 }), fc.boolean(), (k, isDebugger) => {
-        const value = spellings[k](isDebugger ? 'gsd-debugger' : 'gsd-executor');
-        const command = value.startsWith('--agent=') ? `claude ${value} -p hi` : `claude --agent ${value} -p hi`;
-        const r = runHook(bash(command));
-        return isDebugger ? r.status === 2 : r.status === 0;
-      }),
-      { numRuns: 14 },
+      fc.property(
+        fc.boolean(),
+        fc.array(fc.integer({ min: 0, max: forms.length - 1 }), { minLength: NAME_LENGTH, maxLength: NAME_LENGTH }),
+        (isDebugger, picks) => {
+          const name = isDebugger ? 'gsd-debugger' : 'gsd-executor';
+          const value = `$'${[...name].map((c, i) => forms[picks[i]](c)).join('')}'`;
+          const r = runHook(bash(`claude --agent ${value} -p hi`));
+          return isDebugger ? r.status === 2 : r.status === 0;
+        },
+      ),
+      PROPERTY_RUNS,
     );
   });
 
