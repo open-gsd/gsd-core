@@ -320,12 +320,18 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
   test('pins every form that is no longer a link and the forms that keep their results', () => {
     // each of these was a link for oldExtractLinks
     for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)',
-      '[a](x "t)")', '[a](<x)y>)', '[a](<x<y>)', '[a](x "t" y)',
-      '[a](x "t)']) {
+      '[a](x "t)")', '[a](<x)y>)', '[a](<x<y>)', '[a](<x)',
+      '[a](<x>y)', '[a](x "t" y)', '[a](x "t)']) {
       assert.ok(oldExtractLinks(s).length > 0, `old: ${s}`);
       assert.deepEqual(extractLinks(s), [], s);
     }
     assert.deepEqual(extractLinks('[a](x "t")'), [{ line: 1, target: 'x "t"' }]);
+    for (const s of ['[a](x "t\\"u")', "[a](x 't\\'u')"]) {
+      assert.deepEqual(extractLinks(s), [{ line: 1, target: s.slice(4, -1) }], s);
+    }
+    for (const s of ['[a](x "t\\"u")', "[a](x 't\\'u')", '[a](x (t\\)u))']) {
+      assert.deepEqual(hrefsIn(s), ['x'], s);
+    }
     assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);
     assert.deepEqual(extractLinks('![i](p.png)'), [{ line: 1, target: 'p.png' }]);
   });

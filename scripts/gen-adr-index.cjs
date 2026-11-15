@@ -483,7 +483,7 @@ function maskInlineCodeSpans(line) {
 // CommonMark: an angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
 const ANGLE = /<((?:\\.|[^<>\\\n])*)>/y;
 const MAX_PAREN_DEPTH = 32; // CommonMark's nesting limit for a bare destination; bounds the scan
-const TAIL = /(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\s*\)/y;
+const TAIL = /(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)/y;
 /**
  * The indexes of the `](` in `text` whose `]` closes a bracket pair opened earlier in
  * its paragraph (balanced, backslash escapes honoured): a stray `](x)` is text, not a
@@ -561,8 +561,10 @@ function scanInlineLinks(text) {
  * `[a](x y)` (a bare destination with a space), `[a]()` (an empty destination),
  * `\[x](y)` and `[a\](x)` (an escaped bracket), `[a](\)` and `[a](x\)y)` (an
  * escaped parenthesis), `[a](x "t)")` and `[a](<x)y>)` (a parenthesis inside a
- * title or an angle destination), `[a](<x<y>)` (a `<` inside an angle destination), and any link whose title is doubled, unterminated
- * or followed by other text: `[a](x "t" y)`, `[a](x "t)`.
+ * title or an angle destination), `[a](<x<y>)` (a `<` inside an angle destination),
+ * `[a](<x)` (an unclosed `<`), `[a](<x>y)` (text after an angle destination), and any
+ * link whose title is doubled, unterminated or followed by other text: `[a](x "t" y)`,
+ * `[a](x "t)`. A title honours `\` escapes: `[a](x "t\"u")` stays a link.
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
  * RAW parenthesized capture, untrimmed and unresolved; callers normalize.
