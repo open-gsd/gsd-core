@@ -32,6 +32,17 @@
  * set was the defect; extracting it here removes any path by which it can
  * influence classify() at all.
  *
+ * ## The one exception: PR-template links (#5427)
+ *
+ * `RULES` holds one docs-to-tests rule, `PR template links (#5427)` (`isTemplateLinkDoc`
+ * in scripts/ci-test-scope.cjs), and this registry also lists
+ * tests/pr-template-links.test.cjs. Each serves a different consumer. This registry
+ * selects by a changed docs/ path for the `docs-lint` lane, so it never sees the root
+ * CONTRIBUTING.md or a PR template outside docs/. The RULE owns those files: it
+ * makes them a lightweight code change (the `test-inert` lane) that runs the nine
+ * TEMPLATE_LINK_OBSERVERS. A docs/ template or docs/registries/README.md reaches the
+ * guard through both lanes, once each.
+ *
  * ## Who reads this
  *
  * - .github/workflows/docs-required.yml (`docs-lint` job) — derives the
