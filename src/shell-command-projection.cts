@@ -1668,7 +1668,7 @@ export function readBoundedRegularFile(filePath: string, encoding: BufferEncodin
     if (length > stat.size) return undefined;
     return buffer.toString(encoding, 0, length);
   } catch {
-    return undefined; // no prior document (new file or unreadable): normalize it whole
+    return undefined; // absent, unreadable or refused: the caller decides what no text means
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch { /* already closed */ }

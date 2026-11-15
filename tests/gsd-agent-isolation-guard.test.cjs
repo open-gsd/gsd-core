@@ -87,7 +87,7 @@ function readSentinelRaw(dir) {
 }
 
 // Every isolation fixture's root config pins this profile (pinnedConfig), and the payload sends the executor's model
-// for it, so the isolation rows stay silent under the Agent-model guard whatever the default profile is (#5328 J5).
+// for it, so the isolation rows stay silent under the Agent-model guard whatever the default profile is (#5328).
 const PINNED_PROFILE = 'balanced';
 const pinnedConfig = (config) => JSON.stringify({ model_profile: PINNED_PROFILE, ...config });
 function agentPayload(overrides = {}) {
@@ -1945,7 +1945,7 @@ describe('gsd-agent-isolation-guard.js: #4734 — a non-git project root is neve
   });
 });
 
-describe('gsd-agent-isolation-guard.js: #5328 J5 — isolation fixtures stay silent under the Agent-model check', () => {
+describe('gsd-agent-isolation-guard.js: #5328 — isolation fixtures pin the profile the payload model comes from, so they stay silent under the Agent-model check', () => {
   test('isolation fixtures pin the profile the payload model comes from', (t) => {
     const dir = mkProject('gsd-aig-pin-');
     t.after(() => cleanup(dir));

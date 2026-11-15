@@ -1,5 +1,5 @@
 'use strict';
-// #5328 Nit 5: hooks.agent_model_guard has one vocabulary, warn | deny | false, across the config-set
+// #5328: hooks.agent_model_guard has one vocabulary, warn | deny | false, across the config-set
 // validator, both doc rows and the hook. Registered in scripts/docs-guard-registry.cjs (reads docs/CONFIGURATION.md).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
