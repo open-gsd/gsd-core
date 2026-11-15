@@ -1546,13 +1546,17 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   // apply. The other loader aliases stay on the walk below, which ADR-5057
   // makes the authority for gate config. `persist: false` because a read must
   // not rewrite config.json (#3648).
-  // A config file on the resolution path that exists but cannot be read or
-  // parsed is not reported as a value: the loader discards it and resolves
-  // defaults, so `true` would read as the user's setting. config-get fails
-  // with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent). The file
-  // can be the scoped config.json, the root config.json a workstream inherits
-  // from, or ~/.gsd/defaults.json when there is no .planning/; the loader has
-  // already named it on stderr.
+  // A config file the loader reports unusable (CONFIG_UNPARSEABLE /
+  // CONFIG_UNREADABLE) is not reported as a value: the loader discards it and
+  // resolves defaults, so `true` would read as the user's setting. config-get
+  // fails with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent).
+  // The file can be, for example, the scoped config.json, the root config.json
+  // a workstream inherits from, or ~/.gsd/defaults.json when there is no
+  // .planning/; the loader has already named it on stderr. The loader's
+  // workstream fallback (GSD_PROJECT and GSD_WORKSTREAM both set, a usable
+  // root) reports no fault in what it falls back to (the GSD_PROJECT
+  // config.json, or ~/.gsd/defaults.json when that project has no directory),
+  // so there config-get prints the defaults the runtime resolves.
   const loaderAlias = configLoader.configKeyAliasFor(kp);
   if (loaderAlias?.configGet === 'loader') {
     const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
