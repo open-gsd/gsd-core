@@ -9,8 +9,8 @@
  * library `gsd-core/bin/lib/**\/*.cjs` is a gitignored build artifact
  * (ADR-457), so a tree taken straight from `next`/`main` has no runtime
  * library and the self-heal cannot build one without `typescript`. This
- * script builds ONE orphan commit whose tree is the checkout's HEAD tree plus
- * every compiled `.cjs` under `gsd-core/bin/lib`, then force-updates
+ * script builds ONE commit, parented on HEAD, whose tree is HEAD's tree plus
+ * every untracked compiled `.cjs` under `gsd-core/bin/lib`, then force-updates
  * `refs/heads/<branch>` on the remote to it. It runs from release.yml
  * `finalize` after `npm run build:lib`; next/main never receive the compiled
  * files.
@@ -24,7 +24,7 @@
  * network call (the push) uses git's stall detection, which aborts only when
  * the transfer stops making progress.
  *
- * Usage: node scripts/publish-plugin-ref.cjs --remote <remote> [--branch plugin] [--root <dir>]
+ * Usage: node scripts/publish-plugin-ref.cjs --remote <remote> [--branch plugin]
  */
 
 const fs = require('node:fs');
@@ -58,7 +58,7 @@ function isValidBranchName(name) {
 
 // Non-interactive git. Never throws: a spawn error or a non-zero exit comes
 // back as { ok: false, error }.
-function git(root, args, options = {}) {
+function runGit(root, args, options = {}) {
   const r = spawnSync('git', args, {
     cwd: root,
     encoding: 'utf8',
@@ -78,13 +78,15 @@ function git(root, args, options = {}) {
 // commit-tree needs an identity; a CI checkout or a bench container may have
 // none configured. A configured identity or explicit GIT_* env wins.
 function withIdentity(root, env) {
-  const configured = git(root, ['config', 'user.email']);
+  const configured = runGit(root, ['config', 'user.email']);
   if (configured.ok && configured.stdout.trim()) return env;
   return { ...FALLBACK_IDENTITY, ...env };
 }
 
+// Every untracked file under the lib dir, whether or not a .gitignore line
+// names it; only the compiled .cjs files are kept.
 function listCompiledLib(root) {
-  const listed = git(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', LIB_DIR]);
+  const listed = runGit(root, ['ls-files', '-z', '--others', '--', LIB_DIR]);
   if (!listed.ok) return listed;
   return { ok: true, files: listed.stdout.split('\0').filter((p) => p.endsWith('.cjs')) };
 }
@@ -95,26 +97,30 @@ function buildPluginRefCommit({ root }) {
   }
   const compiled = listCompiledLib(root);
   if (!compiled.ok) return compiled;
-  const head = git(root, ['rev-parse', 'HEAD']);
+  const head = runGit(root, ['rev-parse', 'HEAD']);
   if (!head.ok) return head;
   const source = head.stdout.trim();
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-plugin-ref-'));
   const env = { ...process.env, GIT_INDEX_FILE: path.join(tmpDir, 'index') };
   try {
-    const read = git(root, ['read-tree', source], { env });
+    const read = runGit(root, ['read-tree', source], { env });
     if (!read.ok) return read;
     if (compiled.files.length > 0) {
       // Paths go over stdin, never argv (Windows argv limit).
-      const added = git(root, ['add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+      const added = runGit(root, ['add', '-f', '--pathspec-from-file=-', '--pathspec-file-nul'], {
         env,
         input: compiled.files.join('\0'),
       });
       if (!added.ok) return added;
     }
-    const tree = git(root, ['write-tree'], { env });
+    const tree = runGit(root, ['write-tree'], { env });
     if (!tree.ok) return tree;
-    const commit = git(root, ['commit-tree', tree.stdout.trim(), '-m', `plugin: prebuilt tree of ${source}`], {
+    // Parented on the source commit, not an orphan: an orphan makes every path
+    // new, including .github/workflows/*, and GitHub refuses a GITHUB_TOKEN push
+    // that creates or updates workflow files. Parented on the already-pushed
+    // release commit, the pushed delta only adds the compiled lib.
+    const commit = runGit(root, ['commit-tree', tree.stdout.trim(), '-p', source, '-m', `plugin: prebuilt tree of ${source}`], {
       env: withIdentity(root, env),
     });
     if (!commit.ok) return commit;
@@ -125,13 +131,13 @@ function buildPluginRefCommit({ root }) {
 }
 
 function publishPluginRef({ root, remote, branch = PLUGIN_REF_BRANCH }) {
-  if (!isValidBranchName(branch)) return { ok: false, error: `invalid branch name: ${JSON.stringify(branch)}` };
+  if (!isValidBranchName(branch)) return { ok: false, code: 'usage', error: `invalid branch name: ${JSON.stringify(branch)}` };
   if (typeof remote !== 'string' || remote.length === 0 || remote.startsWith('-')) {
-    return { ok: false, error: `invalid remote: ${JSON.stringify(remote)}` };
+    return { ok: false, code: 'usage', error: `invalid remote: ${JSON.stringify(remote)}` };
   }
   const built = buildPluginRefCommit({ root });
   if (!built.ok) return built;
-  const pushed = git(root, [
+  const pushed = runGit(root, [
     '-c', 'credential.interactive=false',
     '-c', `http.lowSpeedLimit=${PUSH_STALL_MIN_BYTES_PER_SEC}`,
     '-c', `http.lowSpeedTime=${PUSH_STALL_WINDOW_SECONDS}`,
@@ -145,7 +151,7 @@ function parseArgs(argv) {
   const opts = {};
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
-    if (flag === '--remote' || flag === '--branch' || flag === '--root') {
+    if (flag === '--remote' || flag === '--branch') {
       if (i + 1 >= argv.length) return { error: `${flag} needs a value` };
       opts[flag.slice(2)] = argv[i + 1];
       i += 1;
@@ -162,20 +168,16 @@ function main(argv) {
     process.stderr.write(`publish-plugin-ref: ${parsed.error}\n`);
     return 2;
   }
-  const { remote, root = process.cwd() } = parsed.opts;
+  const { remote } = parsed.opts;
   const branch = parsed.opts.branch === undefined ? PLUGIN_REF_BRANCH : parsed.opts.branch;
-  if (!isValidBranchName(branch)) {
-    process.stderr.write(`publish-plugin-ref: invalid branch name ${JSON.stringify(branch)}\n`);
-    return 2;
-  }
   if (!remote) {
     process.stderr.write('publish-plugin-ref: --remote is required\n');
     return 2;
   }
-  const res = publishPluginRef({ root, remote, branch });
+  const res = publishPluginRef({ root: process.cwd(), remote, branch });
   if (!res.ok) {
     process.stderr.write(`publish-plugin-ref: ${res.error}\n`);
-    return 1;
+    return res.code === 'usage' ? 2 : 1;
   }
   process.stdout.write(`${JSON.stringify(res)}\n`);
   return 0;

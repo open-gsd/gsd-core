@@ -11,34 +11,36 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
-const fc = require('fast-check');
+const yaml = require('js-yaml');
+const fc = require('./helpers/fast-check-setup.cjs');
+const { runGit, runNode } = require('./helpers/process-seam.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const publisher = require(path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'));
 
 const cleanups = [];
 afterEach(() => {
-  while (cleanups.length) fs.rmSync(cleanups.pop(), { recursive: true, force: true });
+  while (cleanups.length) cleanup(cleanups.pop());
 });
 
 function tmp(prefix) {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const d = createTempDir(prefix);
   cleanups.push(d);
   return d;
 }
 
 function git(cwd, args) {
-  return execFileSync('git', args, {
+  const r = runGit(args, {
     cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,
       GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
       GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
     },
-  }).trim();
+  });
+  assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+  return String(r.stdout).trim();
 }
 
 function write(root, rel, body) {
@@ -47,23 +49,28 @@ function write(root, rel, body) {
   fs.writeFileSync(abs, body);
 }
 
-// A repo shaped like gsd-core: tracked source + tracked lib file, with the
-// compiled lib (and unrelated junk) gitignored.
+// A repo shaped like gsd-core: tracked source + tracked lib file + a tracked
+// workflow, with some compiled lib outputs (and unrelated junk) gitignored and
+// one compiled output that no .gitignore line names.
 function makeFixtureRepo() {
   const root = tmp('plugin-ref-fixture-');
   git(root, ['init', '-q', '-b', 'main']);
   write(root, '.gitignore', [
     'node_modules/', '.gsd/', 'tsconfig.build.tsbuildinfo',
-    '/gsd-core/bin/lib/*', '!/gsd-core/bin/lib/tracked.cjs', '!/gsd-core/bin/lib/vendor/',
+    '/gsd-core/bin/lib/cli-exit.cjs',
+    '/gsd-core/bin/lib/health-diagnostic-rules/',
+    '/gsd-core/bin/lib/not-js.d.ts',
     'extra/',
   ].join('\n') + '\n');
   write(root, '.claude-plugin/plugin.json', '{"name":"gsd-core"}\n');
+  write(root, '.github/workflows/ci.yml', 'name: ci\n');
   write(root, 'gsd-core/bin/lib/tracked.cjs', 'module.exports = 1;\n');
   write(root, 'gsd-core/bin/lib/vendor/v.cjs', 'module.exports = 2;\n');
   write(root, 'README.md', 'x\n');
   git(root, ['add', '-A']);
   git(root, ['commit', '-q', '-m', 'init']);
-  // build outputs + junk, all ignored
+  // build outputs + junk
+  write(root, 'gsd-core/bin/lib/unlisted.cjs', 'module.exports = 5;\n');
   write(root, 'gsd-core/bin/lib/cli-exit.cjs', 'module.exports = 3;\n');
   write(root, 'gsd-core/bin/lib/health-diagnostic-rules/r.cjs', 'module.exports = 4;\n');
   write(root, 'gsd-core/bin/lib/not-js.d.ts', 'declare const x: 1;\n');
@@ -94,6 +101,7 @@ describe('#5796 plugin ref publisher', () => {
       '.claude-plugin/plugin.json', 'README.md', 'gsd-core/bin/lib/tracked.cjs',
       'gsd-core/bin/lib/vendor/v.cjs', 'gsd-core/bin/lib/cli-exit.cjs',
       'gsd-core/bin/lib/health-diagnostic-rules/r.cjs',
+      'gsd-core/bin/lib/unlisted.cjs',
     ]) assert.ok(files.includes(f), `${f} missing from ${files.join(',')}`);
   });
 
@@ -107,12 +115,21 @@ describe('#5796 plugin ref publisher', () => {
     ]) assert.ok(!files.includes(f), `${f} must not be in the plugin ref`);
   });
 
-  test('ref commit is an orphan and leaves the checkout untouched', () => {
+  test('ref commit is parented on HEAD and leaves the checkout untouched', () => {
     const root = makeFixtureRepo();
     const headBefore = git(root, ['rev-parse', 'HEAD']);
     const statusBefore = git(root, ['status', '--porcelain', '--ignored']);
     const res = publisher.buildPluginRefCommit({ root });
-    assert.equal(git(root, ['rev-list', '--parents', '-n', '1', res.commit]), res.commit);
+    assert.equal(
+      git(root, ['rev-list', '--parents', '-n', '1', res.commit]),
+      `${res.commit} ${headBefore}`,
+    );
+    const changed = git(root, ['diff', '--name-only', headBefore, res.commit]).split('\n').filter(Boolean);
+    assert.ok(changed.length > 0, 'the ref commit must add the compiled lib');
+    for (const line of changed) {
+      assert.ok(line.startsWith('gsd-core/bin/lib/'), `${line} must not differ from HEAD`);
+      assert.ok(!line.startsWith('.github/'), `${line} must not differ from HEAD`);
+    }
     assert.equal(git(root, ['rev-parse', 'HEAD']), headBefore);
     assert.equal(git(root, ['status', '--porcelain', '--ignored']), statusBefore);
     assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
@@ -120,7 +137,7 @@ describe('#5796 plugin ref publisher', () => {
 
   test('refuses to publish an unbuilt tree', () => {
     const root = makeFixtureRepo();
-    fs.rmSync(path.join(root, 'gsd-core/bin/lib/cli-exit.cjs'));
+    cleanup(path.join(root, 'gsd-core/bin/lib/cli-exit.cjs'));
     const bare = makeBareRemote();
     const res = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin' });
     assert.equal(res.ok, false);
@@ -149,6 +166,7 @@ describe('#5796 plugin ref publisher', () => {
     });
     assert.equal(res.ok, false);
     assert.ok(res.error);
+    assert.match(res.error, /git push/);
   });
 
   test('branch name length boundary', () => {
@@ -172,11 +190,11 @@ describe('#5796 plugin ref publisher', () => {
     fc.assert(fc.property(unsafe, (s) => publisher.isValidBranchName(s) === false));
   });
 
-  test('CLI rejects an invalid branch with a non-zero exit', () => {
-    const r = spawnSync(process.execPath, [
+  test('CLI rejects an invalid branch with a usage exit', () => {
+    const r = runNode([
       path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'), '--branch', '-bad', '--remote', 'x',
-    ], { encoding: 'utf8', timeout: 30000 });
-    assert.notEqual(r.status, 0);
+    ], { cwd: ROOT });
+    assert.equal(r.status, 2);
     assert.match(r.stderr, /branch/i);
   });
 
@@ -188,35 +206,43 @@ describe('#5796 plugin ref publisher', () => {
   });
 
   test('release workflow publishes only from finalize', () => {
-    // allow-test-rule: the workflow YAML is the runtime contract under test
-    const wf = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-    const jobs = wf.split(/^  (?=[a-z][a-z0-9-]*:\s*$)/m);
-    const byName = Object.fromEntries(jobs.map((j) => [j.split(':')[0], j]));
-    assert.ok(byName.finalize, 'finalize job present');
-    assert.match(byName.finalize, /scripts\/publish-plugin-ref\.cjs/);
-    assert.match(byName.finalize, /!inputs\.dry_run/);
-    for (const name of Object.keys(byName)) {
-      if (name !== 'finalize') {
-        assert.ok(!byName[name].includes('publish-plugin-ref'), `${name} must not publish the plugin ref`);
-      }
+    const wf = yaml.load(fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8'));
+    const publishes = (step) => typeof step.run === 'string' && step.run.includes('publish-plugin-ref');
+    assert.ok(wf.jobs.finalize, 'finalize job present');
+    const steps = wf.jobs.finalize.steps;
+    const matching = steps.filter((s) => typeof s.run === 'string' && s.run.includes('scripts/publish-plugin-ref.cjs'));
+    assert.equal(matching.length, 1, 'finalize has exactly one publish step');
+    assert.ok(String(matching[0].if).includes('!inputs.dry_run'), 'publish step is skipped on dry runs');
+    const idx = steps.indexOf(matching[0]);
+    assert.equal(steps[idx + 1] && steps[idx + 1].name, 'Summary', 'publish step is immediately before Summary');
+    for (const [name, job] of Object.entries(wf.jobs)) {
+      if (name === 'finalize') continue;
+      assert.ok(!(job.steps || []).some(publishes), `${name} must not publish the plugin ref`);
     }
   });
 
-  test('published plugin ref runs gsd-tools with no node_modules', (t) => {
-    if (!fs.existsSync(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'cli-exit.cjs'))) {
-      t.skip('repo checkout has no compiled lib');
-      return;
-    }
+  test('published plugin ref runs gsd-tools with no node_modules', () => {
+    assert.ok(
+      fs.existsSync(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'cli-exit.cjs')),
+      'compiled lib must exist (npm run build:lib)',
+    );
+    const src = tmp('plugin-ref-src-');
+    const repo = path.join(src, 'repo');
+    git(src, ['clone', '-q', '--no-local', ROOT, repo]);
+    fs.cpSync(
+      path.join(ROOT, 'gsd-core', 'bin', 'lib'), path.join(repo, 'gsd-core', 'bin', 'lib'),
+      { recursive: true },
+    );
     const bare = makeBareRemote();
-    const res = publisher.publishPluginRef({ root: ROOT, remote: bare, branch: 'plugin' });
+    const res = publisher.publishPluginRef({ root: repo, remote: bare, branch: 'plugin' });
     assert.equal(res.ok, true, JSON.stringify(res));
     const clone = tmp('plugin-cache-');
     git(clone, ['clone', '-q', '--branch', 'plugin', bare, path.join(clone, 'cache')]);
     const cache = path.join(clone, 'cache');
     assert.ok(!fs.existsSync(path.join(cache, 'node_modules')));
-    const r = spawnSync(process.execPath, [
+    const r = runNode([
       path.join(cache, 'gsd-core', 'bin', 'gsd-tools.cjs'), 'generate-slug', 'hello world',
-    ], { cwd: cache, encoding: 'utf8', timeout: 60000 });
+    ], { cwd: cache });
     assert.equal(r.status, 0, r.stderr);
     assert.doesNotMatch(r.stderr, /runtime library/);
     assert.equal(JSON.parse(r.stdout).slug, 'hello-world');
