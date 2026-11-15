@@ -955,6 +955,15 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$VERSION" --dist-tag latest
 
+      # Publish the moving `plugin` branch (HEAD tree + compiled gsd-core/bin/lib)
+      # that .claude-plugin/marketplace.json points at, so `claude plugin update`
+      # materializes a tree whose runtime library is already built (#5796). Stable
+      # finalize only: rc never publishes this ref. Runs after the npm publish is
+      # verified and force-updates a single orphan commit.
+      - name: Publish plugin ref (prebuilt bin/lib)
+        if: ${{ !inputs.dry_run }}
+        run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin
+
       # Auto-merge the release/hotfix → main PR when it is cleanly mergeable, so
       # the release's own branch lands on `main` without a manual merge click
       # every release (#2515). Symmetric with auto-backmerge.yml's merge-commit
