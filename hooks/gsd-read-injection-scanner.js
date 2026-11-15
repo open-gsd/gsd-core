@@ -22,8 +22,8 @@
 // hook source files — these legitimately contain injection-like strings.
 
 const path = require('path');
-const fs = require('fs');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // This is a PostToolUse advisory scanner over content the tool call already
 // returned; a crash while scanning must not retroactively block that Read/
@@ -343,7 +343,7 @@ process.stdin.on('end', () => {
       try {
         const cfgBase = data.cwd || process.cwd();
         const cfgPath = path.join(cfgBase, '.planning', 'config.json');
-        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        const cfg = JSON.parse(readConfigFileBounded(cfgPath, { required: true }));
         blocking = cfg.security?.injection_blocking === true;
       } catch { /* no config ⇒ advisory */ }
     }

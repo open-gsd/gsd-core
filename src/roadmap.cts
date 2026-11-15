@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { PHASE_ENTRY_BOLD_CLOSE_SRC, isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { PHASE_ENTRY_BOLD_CLOSE_SRC, isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { splitLines, detectEol, joinLines } from './text-lines.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -235,7 +235,7 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
     return null;
   }
 
-  const phaseName = headerMatch[1].trim();
+  const phaseName = stripInsertedMarker(headerMatch[1]);
   const headerIndex = headings[headingIndex].offset;
 
   const currentHeading = headings[headingIndex];
@@ -528,7 +528,7 @@ function collectAnalyzePhases(
     const phaseNum = match[1 + G];
     if (isSentinelPhase(phaseNum, bracketId)) continue;
     detailKeys.add(occurrenceKey(phaseNum, bracketId));
-    const phaseName = match[2 + G].replace(/\(INSERTED\)/i, '').trim();
+    const phaseName = stripInsertedMarker(match[2 + G]);
 
     // Extract goal from the section
     const sectionStart = match.index;

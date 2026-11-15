@@ -2271,6 +2271,116 @@ describe('bug #2946: unstarted-phase guard runs independent of STATE.md mileston
     );
   });
 
+  // #5726: the mismatch check reads the STATE milestone through the one owner,
+  // so a value that spells the requested version (quoted), a null/empty value and
+  // a `milestone:` line in the body are not drift. The matching-version control
+  // shows the guard fires identically with no WARNING.
+  test('a genuinely different STATE version (v2.0) still emits the mismatch WARNING (positive control)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap v1.0\n\n### Phase 2: Real Work\n**Goal:** Not started\n',
+    );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\nstatus: active\n---\n# State\n');
+    const result = runGsdTools(
+      ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--dry-run'],
+      tmpDir,
+    );
+    assert.ok(result.error.includes('WARNING:') && result.error.includes('v2.0'), result.error);
+  });
+
+  for (const [label, stateText] of [
+    ['a matching unquoted version (control)', '---\nmilestone: v1.0\nstatus: active\n---\n# State\n'],
+    ['a quoted matching version', '---\nmilestone: "v1.0"\nstatus: active\n---\n# State\n'],
+    ['an explicit null', '---\nmilestone: null\nstatus: active\n---\n# State\n'],
+    ['an empty quoted string', "---\nmilestone: ''\nstatus: active\n---\n# State\n"],
+    ['no frontmatter key and a fenced body example', '---\nstatus: active\n---\n# State\n\n```\nmilestone: v9.9\n```\n'],
+    ['a version spelled without the leading v', '---\nmilestone: 1.0\nstatus: active\n---\n# State\n'],
+    ['a no-frontmatter line with a trailing comment', 'milestone: v1.0 # current\n# State\n'],
+    ['a no-frontmatter double-quoted version (#5726)', 'milestone: "v1.0"\n# State\n'],
+    ['a no-frontmatter single-quoted version (#5726)', "milestone: 'v1.0'\n# State\n"],
+    ['a no-frontmatter empty quoted string reads as absent (#5726)', 'milestone: ""\n# State\n'],
+    ['a no-frontmatter quoted version with a trailing comment (#5726)', 'milestone: "v1.0" # note\n# State\n'],
+    ['a no-frontmatter quoted "null" reads as explicit null like the frontmatter path (#5726)', 'milestone: "null"\n# State\n'],
+    ['a no-frontmatter tilde reads as explicit null (#5726)', 'milestone: ~\n# State\n'],
+    ['a frontmatter quoted "null" reads as explicit null (FAILSAFE decodes it to null text) (#5726)', '---\nmilestone: "null"\nstatus: active\n---\n# State\n'],
+  ]) {
+    test(`no WARNING is emitted for ${label}`, () => {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'ROADMAP.md'),
+        '# Roadmap v1.0\n\n### Phase 2: Real Work\n**Goal:** Not started\n',
+      );
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateText);
+      const result = runGsdTools(
+        ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--dry-run'],
+        tmpDir,
+      );
+      assert.strictEqual(result.success, false, 'guard must still fire');
+      assert.ok(
+        !result.error.includes('WARNING:'),
+        `no WARNING expected for ${label}; got: ${result.error}`,
+      );
+    });
+  }
+
+  // #5726: a `#` inside quotes is literal content, and YAML escapes decode the
+  // way the frontmatter parser decodes them. Each names a version that is not v1.0.
+  for (const [label, stateText, named] of [
+    ['a no-frontmatter quoted version containing a hash', 'milestone: "v1.0 # x"\n# State\n', 'v1.0 # x'],
+    ['a no-frontmatter single-quoted version with a doubled quote', "milestone: 'it''s v1'\n# State\n", "it's v1"],
+    ['a no-frontmatter double-quoted version with an escaped quote', 'milestone: "a\\"b"\n# State\n', 'a"b'],
+  ]) {
+    test(`the mismatch WARNING names the decoded value for ${label} (#5726)`, () => {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'ROADMAP.md'),
+        '# Roadmap v1.0\n\n### Phase 2: Real Work\n**Goal:** Not started\n',
+      );
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateText);
+      const result = runGsdTools(
+        ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--dry-run'],
+        tmpDir,
+      );
+      assert.ok(
+        result.error.includes('WARNING:') && result.error.includes(named),
+        `expected a WARNING naming ${named}; got: ${result.error}`,
+      );
+    });
+  }
+
+  // #5726: the raw (no-frontmatter) line and the frontmatter field decode through
+  // the same YAML loader, so any milestone string rendered as a double-quoted,
+  // single-quoted or plain scalar reads identically on both paths.
+  test('a milestone scalar reads the same from raw STATE.md and from frontmatter (#5726)', () => {
+    const fc = require('fast-check');
+    const { extractCurrentMilestoneScoped } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+    const roadmap = '# Roadmap\n\n## v1.0 Shipped\n\n### Phase 1: A\n**Goal:** x\n\n## v2.0 Next\n\n### Phase 2: B\n**Goal:** y\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    const quotedChars = ['a', 'Z', '0', '1', '.', '-', 'v', ' ', '#', "'", '"', '\\', ':', '~'];
+    const plainChars = ['a', 'Z', '0', '1', '.', '-', 'v', '_'];
+    const spellings = {
+      double: (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+      single: (s) => `'${s.replace(/'/g, "''")}'`,
+      plain: (s) => s,
+    };
+    const read = (stateText) => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateText);
+      return JSON.stringify(extractCurrentMilestoneScoped(roadmap, tmpDir));
+    };
+    fc.assert(
+      fc.property(
+        fc.constantFrom('double', 'single', 'plain'),
+        fc.array(fc.constantFrom(...quotedChars), { maxLength: 12 }).map((a) => a.join('')),
+        fc.array(fc.constantFrom(...plainChars), { minLength: 1, maxLength: 8 }).map((a) => a.join('')),
+        (kind, quotedValue, plainValue) => {
+          const value = kind === 'plain' ? plainValue : quotedValue;
+          const rendered = spellings[kind](value);
+          return read(`milestone: ${rendered}\n# State\n`)
+            === read(`---\nmilestone: ${rendered}\nstatus: active\n---\n# State\n`);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
   test('guard is a no-op when the scoped ROADMAP has no Phase headings (fresh project)', () => {
     // STATE in sync, ROADMAP scopes for v1.0 but lists NO phase headings →
     // scan yields zero unstarted phases, guard must not fire.

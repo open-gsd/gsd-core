@@ -12,9 +12,11 @@ import { normalizeEol } from './text-lines.cjs';
 import { execGit, GIT_LOCATION_ENV_VARS, platformWriteSync, platformReadSync, platformEnsureDir, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { escapeRegex } from './pattern.cjs';
 import { commitTimeoutMs } from './git-commit-timeout.cjs';
+import { stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
-import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
+import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, ERROR_REASON } = ioMod;
@@ -59,7 +61,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { computeProfileTier, resolveModelOverride, resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import agentCommandRouterMod = require('./agent-command-router.cjs');
 const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
@@ -562,31 +564,50 @@ function cmdHistoryDigest(cwd: string, raw: boolean): void {
   }
 }
 
-function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolean): void {
+function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolean, fallbackAgent?: string): void {
   if (!agentType) {
     error('agent-type required');
   }
 
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  const model = resolveModelInternal(cwd, agentType);
+
+  // #6213: a hinted executor with no model_overrides entry and no catalog tier would otherwise
+  // resolve to the generic profile alias. With `--fallback-agent <catalog role>` it resolves as
+  // that role instead. The fallback must be an own key of MODEL_PROFILES, else the flag is ignored.
+  const agentModelsMap = MODEL_PROFILES as Record<string, unknown>;
+  // An override counts only when resolveModelInternal would actually use it (non-empty, mappable);
+  // an empty or unusable entry must not block the fallback.
+  const hasUsableOverride = resolveModelOverride(config, agentType) !== null;
+  let resolveAs = agentType;
+  let appliedFallback: string | null = null;
+  if (
+    typeof fallbackAgent === 'string' && fallbackAgent.length > 0 &&
+    Object.hasOwn(agentModelsMap, fallbackAgent) &&
+    !hasUsableOverride && computeProfileTier(config, agentType) === null
+  ) {
+    resolveAs = fallbackAgent;
+    appliedFallback = fallbackAgent;
+  }
+
+  const model = resolveModelInternal(cwd, resolveAs);
+  // The effort belongs to the hinted agent, not to the fallback role whose model it borrows.
   const effort = resolveEffortInternal(cwd, agentType);
 
   // Own-property guard: agentType is an unvalidated CLI positional, so a
   // prototype-chain value ("toString", "constructor") would otherwise return
   // an inherited truthy member from this plain object and misreport a
   // genuinely unknown agent as known (unknown_agent dropped from the result).
-  const agentModelsMap = MODEL_PROFILES as Record<string, unknown>;
-  const agentModels = Object.hasOwn(agentModelsMap, agentType) ? agentModelsMap[agentType] : undefined;
+  const agentModels = Object.hasOwn(agentModelsMap, resolveAs) ? agentModelsMap[resolveAs] : undefined;
   // #2229: `tier` is additive — existing keys and their values are untouched, so
   // every `--pick model` / `--pick profile` / `--raw` consumer is unaffected. It
   // exists because the model id is deliberately blank under resolve_model_ids:"omit",
   // which leaves a tier-sensitive guard with nothing to read.
-  const tier = resolveTierInternal(cwd, agentType);
+  const tier = resolveTierInternal(cwd, resolveAs);
   const result = agentModels
     ? { model, profile, effort, tier }
     : { model, profile, effort, tier, unknown_agent: true };
-  output(result, raw, model);
+  output(appliedFallback ? { ...result, fallback_agent: appliedFallback } : result, raw, model);
 }
 
 function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: boolean, override?: string): void {
@@ -2004,7 +2025,76 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
   return { removedEntries, removedPathspec, failures };
 }
 
-function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[]): void {
+/**
+ * #6043 (ADR-4908 §3): a committing verb commits in the checkout the process
+ * runs in. Returns the typed refusal when it cannot: not a git repository, or
+ * `cwd` / a path to commit resolves outside `ctx.worktreeRoot`.
+ * `cwd` and the worktree root are compared by realpath; a relative path is
+ * resolved lexically against the canonical `cwd`, so a `.planning` symlink
+ * inside the worktree stays inside; an absolute path is canonicalized through
+ * its nearest existing ancestor directory.
+ * A degraded context (git timed out or could not run) makes no claim about the
+ * worktree, so it never refuses.
+ */
+function commitRefusal(
+  ctx: ProjectContext,
+  cwd: string,
+  files: string[] | undefined,
+  filesRemoved: string[] | undefined,
+): { reason: 'not_git_repo' | 'outside_worktree'; message: string; skipped?: false } | null {
+  if (ctx.provenance.reason === 'not_git_repo') {
+    return { reason: 'not_git_repo', message: `commit refused: ${cwd} is not inside a git repository` };
+  }
+  if (ctx.provenance.degraded) return null;
+  const realOrSelf = (p: string): string => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return p;
+    }
+  };
+  // Nearest existing ancestor directory of an absolute path, realpath'd, with
+  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var,
+  // Windows 8.3 short names like RUNNER~1).
+  const canonicalAbsolute = (abs: string): string => {
+    const rest: string[] = [path.basename(abs)];
+    let ancestor = path.dirname(abs);
+    for (;;) {
+      try {
+        return path.join(fs.realpathSync.native(ancestor), ...rest);
+      } catch {
+        const parent = path.dirname(ancestor);
+        if (parent === ancestor) return abs;
+        rest.unshift(path.basename(ancestor));
+        ancestor = parent;
+      }
+    }
+  };
+  const norm = (p: string): string => {
+    const slashed = p.replace(/\\/g, '/');
+    return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
+  };
+  const inside = (target: string, root: string): boolean => isContainedIn(norm(target), norm(root), { sep: '/' });
+  const worktreeRoot = realOrSelf(path.resolve(ctx.worktreeRoot));
+  const realCwd = realOrSelf(path.resolve(cwd));
+  const declared = [...(files ?? []), ...(filesRemoved ?? [])];
+  const targets = declared.length > 0 ? declared : ['.planning/'];
+  // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
+  const resolveTarget = (t: string): string =>
+    path.isAbsolute(t) ? canonicalAbsolute(path.resolve(t)) : path.resolve(realCwd, t);
+  const escaping = !inside(realCwd, worktreeRoot)
+    ? realCwd
+    : targets.map(resolveTarget).find((abs) => !inside(abs, worktreeRoot));
+  if (escaping === undefined) return null;
+  return {
+    reason: 'outside_worktree',
+    skipped: false,
+    message: `commit refused: ${escaping} is outside the worktree ${worktreeRoot}; ` +
+      'pass the checkout that owns the path with --project-dir to commit there',
+  };
+}
+
+function cmdCommit(cwd: string, message: string | undefined, files: string[] | undefined, raw: boolean, amend: boolean, noVerify: boolean, filesRemoved?: string[], ctx?: ProjectContext): void {
   if (!message && !amend) {
     error('commit message required');
   }
@@ -2040,6 +2130,17 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     };
     output(result, raw, 'skipped');
     return;
+  }
+
+  // #6043: refuse before branching or staging, and only AFTER the commit_docs
+  // skip above, so a benign skip is never turned into an error.
+  const refusal = ctx ? commitRefusal(ctx, cwd, files, filesRemoved) : null;
+  if (refusal) {
+    error(refusal.message, refusal.reason === 'not_git_repo' ? ERROR_REASON.COMMIT_NOT_GIT_REPO : ERROR_REASON.COMMIT_OUTSIDE_WORKTREE, {
+      committed: false,
+      ...(refusal.skipped === false ? { skipped: false } : {}),
+      hash: null,
+    });
   }
 
   // Ensure branching strategy branch exists before first commit (#1278).
@@ -3818,7 +3919,8 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
     }
     case 'verification': {
       filePath = path.join(phaseDir as string, `${padded}-VERIFICATION.md`);
-      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\nstatus: pending\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — Verification\n\n## Goal-Backward Verification\n\n**Phase Goal:** [From ROADMAP.md]\n\n## Checks\n\n| # | Requirement | Status | Evidence |\n|---|------------|--------|----------|\n\n## Result\n\n_Pending verification_\n`;
+      // No verdict exists until the verifier runs; an absent status reads as missing.
+      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — Verification\n\n## Goal-Backward Verification\n\n**Phase Goal:** [From ROADMAP.md]\n\n## Checks\n\n| # | Requirement | Status | Evidence |\n|---|------------|--------|----------|\n\n## Result\n\n_Pending verification_\n`;
       break;
     }
     case 'phase-dir': {
@@ -3935,7 +4037,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       phasesByNumber.set(key, {
         number: key,
         ...(displayId ? { display_id: displayId } : {}),
-        name: phaseName.replace(/\(INSERTED\)/i, '').trim(),
+        name: stripInsertedMarker(phaseName),
         plans: 0,
         summaries: 0,
         phaseStatus: PHASE_STATUS.NOT_STARTED,

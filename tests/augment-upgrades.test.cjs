@@ -23,7 +23,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runNode } = require('./helpers/process-seam.cjs');
 
-const { runMinimalInstall, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
+const { installRuntimeFixture, installerEnv, INSTALL_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
@@ -63,9 +63,8 @@ test('negotiateHostCapabilities does NOT flatten dispatch for augment — namedD
 // ---------------------------------------------------------------------------
 
 for (const scope of ['global', 'local']) {
-  test(`augment --${scope}: settings.json contains GSD's managed hook entries (UPGRADE 2)`, (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'augment', scope });
-    t.after(() => cleanup(root));
+  test(`augment --${scope}: settings.json contains GSD's managed hook entries (UPGRADE 2)`, () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'augment', scope });
 
     const settingsPath = path.join(configDir, 'settings.json');
     assert.ok(fs.existsSync(settingsPath), `${settingsPath} must exist`);
@@ -149,9 +148,8 @@ test('mergeGsdMcpServerIntoSettings recovers a corrupted (non-object) mcpServers
 // ---------------------------------------------------------------------------
 
 for (const scope of ['global', 'local']) {
-  test(`augment --${scope}: settings.json registers the gsd MCP companion (UPGRADE 3)`, (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'augment', scope });
-    t.after(() => cleanup(root));
+  test(`augment --${scope}: settings.json registers the gsd MCP companion (UPGRADE 3)`, () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'augment', scope });
 
     const settingsPath = path.join(configDir, 'settings.json');
     assert.ok(fs.existsSync(settingsPath), `${settingsPath} must exist`);

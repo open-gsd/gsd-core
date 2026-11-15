@@ -101,7 +101,18 @@ const LOCK_RETRY_BACKOFF_MS = 25;
  * same path (different inode) is never deleted. dev/ino are null when the post-create stat could not be
  * taken (best-effort) — then release falls back to the token check alone.
  */
-interface LockHandle { path: string; token: string; dev: number | null; ino: number | null; }
+// dev/ino are bigint: an NTFS file id is 64 bits and a JS number keeps 53 (never serialized).
+interface LockHandle { path: string; token: string; dev: bigint | null; ino: bigint | null; }
+
+/** The exact (dev, ino) of `p`, or nulls when it cannot be statted. */
+function statIdentity(p: string): { dev: bigint | null; ino: bigint | null } {
+  try {
+    const st = fs.statSync(p, { bigint: true });
+    return { dev: typeof st.dev === 'bigint' ? st.dev : null, ino: typeof st.ino === 'bigint' ? st.ino : null };
+  } catch {
+    return { dev: null, ino: null };
+  }
+}
 
 /**
  * Parsed view of a lockfile body. `hostname` is null for a legacy lock (no hostname recorded) — treated
@@ -112,7 +123,7 @@ interface LockHandle { path: string; token: string; dev: number | null; ino: num
 interface ParsedLock { pid: number | null; hostname: string | null; startTime: string | null; ts: number | null; }
 
 /** Per-body IDENTITY used to confirm the lock being stolen is still the same instance just before steal. */
-interface LockIdentity { dev: number | null; ino: number | null; ts: number | null; }
+interface LockIdentity { dev: bigint | null; ino: bigint | null; ts: number | null; }
 
 // ---------------------------------------------------------------------------
 // Tokens + backoff
@@ -352,15 +363,8 @@ function readParsedLockBounded(lockPath: string): ParsedLock {
  * "changed" and retries rather than stealing. Never throws.
  */
 function lockIdentity(lockPath: string): LockIdentity {
-  let dev: number | null = null;
-  let ino: number | null = null;
-  try {
-    const st = fs.statSync(lockPath);
-    dev = typeof st.dev === 'number' ? st.dev : null;
-    ino = typeof st.ino === 'number' ? st.ino : null;
-  } catch {
-    return { dev: null, ino: null, ts: null }; // vanished/unstatable — treat as changed.
-  }
+  const { dev, ino } = statIdentity(lockPath);
+  if (dev === null || ino === null) return { dev: null, ino: null, ts: null }; // vanished/unstatable — treat as changed.
   const ts = readParsedLockBounded(lockPath).ts;
   return { dev, ino, ts };
 }
@@ -466,13 +470,7 @@ function acquireLock(lockPath: string, opts?: { maxAttempts?: number; waitForFre
       }
       // Capture the lock inode's (dev, ino) so releaseLock can confirm, immediately before rmSync, that
       // the path still holds OUR inode. Best-effort: a null dev/ino just falls back to the token check.
-      let dev: number | null = null;
-      let ino: number | null = null;
-      try {
-        const lst = fs.statSync(lockPath);
-        dev = typeof lst.dev === 'number' ? lst.dev : null;
-        ino = typeof lst.ino === 'number' ? lst.ino : null;
-      } catch { /* best-effort — release falls back to the token check alone */ }
+      const { dev, ino } = statIdentity(lockPath); // best-effort — null falls back to the token check alone
       return { path: lockPath, token, dev, ino };
     } catch (err) {
       // EEXIST → held (fall through to the steal decision). Any other error here is the create failing
@@ -480,9 +478,9 @@ function acquireLock(lockPath: string, opts?: { maxAttempts?: number; waitForFre
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
     }
     // Held — decide whether to steal.
-    let st: fs.Stats;
+    let st: fs.BigIntStats;
     try {
-      st = fs.statSync(lockPath);
+      st = fs.statSync(lockPath, { bigint: true });
     } catch {
       continue; // lock vanished between open and stat — retry the create immediately.
     }
@@ -492,7 +490,7 @@ function acquireLock(lockPath: string, opts?: { maxAttempts?: number; waitForFre
     // even if the file `mtime` is stale-old. A legacy/garbage/no-`ts` body — and a FUTURE/implausible
     // `ts` — falls back to the file `mtime` age so a planted/clock-skewed future ts can never deadlock.
     const parsed = readParsedLockBounded(lockPath);
-    const age = lockAgeMs(parsed.ts, st.mtimeMs);
+    const age = lockAgeMs(parsed.ts, Number(st.mtimeMs));
     if (age <= LOCK_STALE_MS) { // genuinely held (fresh) — blocked.
       const b = blocked(attempt);
       if (b === 'retry') continue;
@@ -500,8 +498,8 @@ function acquireLock(lockPath: string, opts?: { maxAttempts?: number; waitForFre
     }
 
     const decisionIdentity: LockIdentity = {
-      dev: typeof st.dev === 'number' ? st.dev : null,
-      ino: typeof st.ino === 'number' ? st.ino : null,
+      dev: typeof st.dev === 'bigint' ? st.dev : null,
+      ino: typeof st.ino === 'bigint' ? st.ino : null,
       ts: parsed.ts,
     };
 
@@ -566,12 +564,8 @@ function releaseLock(handle: LockHandle | null): void {
     // plain-token body (whole body === token) is also honored.
     if (lockBodyToken(body) !== handle.token && body !== handle.token) return; // not our token (PRIMARY).
     if (handle.dev !== null && handle.ino !== null) {
-      let cur: fs.Stats;
-      try {
-        cur = fs.statSync(handle.path);
-      } catch {
-        return; // vanished/unstatable between read and rmSync → nothing of ours to release.
-      }
+      const cur = statIdentity(handle.path);
+      if (cur.dev === null || cur.ino === null) return; // vanished/unstatable between read and rmSync → nothing of ours to release.
       if (cur.dev !== handle.dev || cur.ino !== handle.ino) return; // successor inode — not ours.
     }
     fs.rmSync(handle.path, { force: true });

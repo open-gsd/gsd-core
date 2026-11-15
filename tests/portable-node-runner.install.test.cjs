@@ -234,7 +234,8 @@ describe('#3662 runtime-resolving managed hook runners', () => {
           });
           assert.ok(typeof emitted === 'string', `${hook} (portable=${portableHooks}) emitted nothing`);
           assert.ok(
-            !/(^|\s)["']?node["']?(\s|$)/.test(emitted),
+            // The PowerShell runner (win32) names `node` as a Get-Command argument, not a bare launch token.
+            !/(^|\s)["']?node["']?(\s|$)/.test(emitted.replace('Get-Command node ', 'Get-Command ')),
             `${hook} (portable=${portableHooks}) carries a bare node token: ${emitted}`,
           );
         }
@@ -246,9 +247,11 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       withHome(t, home);
       for (const hook of MANAGED_JS_HOOKS) {
         const plain = hooksSurface.buildHookCommand(configDir, hook, { runtime: 'claude' });
+        // #5850: Windows always gets the PowerShell runner; POSIX hosts the chain.
+        const plainPrefix = process.platform === 'win32' ? '& ((@(' : '"$(for n in ';
         assert.ok(
-          typeof plain === 'string' && plain.startsWith('"$(for n in '),
-          `${hook} plain runner is not the resolve chain: ${plain}`,
+          typeof plain === 'string' && plain.startsWith(plainPrefix),
+          `${hook} plain runner is not the resolving runner: ${plain}`,
         );
         const portable = hooksSurface.buildHookCommand(configDir, hook, {
           portableHooks: true,
@@ -496,15 +499,15 @@ describe('#3662 runtime-resolving managed hook runners', () => {
       assert.equal(result.exitCode, 0, `bash -n rejected the emitted command (${foreign}): ${result.stderr}`);
     });
 
-    test('win32 projection keeps forward-slash paths in the chain', () => {
+    test('win32 projection keeps forward-slash paths in the PowerShell runner (#5850)', () => {
       const emitted = hooksSurface.buildHookCommand('C:\\Users\\u\\.claude', 'gsd-statusline.js', {
         runtime: 'claude',
         platform: 'win32',
         execPath: 'C:\\Program Files\\nodejs\\node.exe',
       });
       assert.ok(typeof emitted === 'string', `no command emitted: ${emitted}`);
-      assert.ok(emitted.includes('"$(for n in '), `win32 chain shape missing: ${emitted}`);
-      assert.ok(emitted.includes('C:/Program Files/nodejs/node.exe'), `forward-slash baked path missing: ${emitted}`);
+      assert.ok(emitted.startsWith("& ((@('C:/Program Files/nodejs/node.exe')"), `win32 PowerShell runner shape missing: ${emitted}`);
+      assert.ok(!emitted.includes('$(for'), `POSIX chain on win32: ${emitted}`);
       assert.ok(!emitted.includes('\\'), `backslash survived win32 projection: ${emitted}`);
     });
   });
