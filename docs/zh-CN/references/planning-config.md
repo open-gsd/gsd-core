@@ -106,7 +106,7 @@ CLI 在内部检查 `commit_docs` 配置和 gitignore 状态 —— 无需手动
 3. **已存在的跟踪文件：** 如果 `.planning/` 之前被跟踪：
    ```bash
    if git diff --cached --quiet -- ':!.planning'; then
-     git rm -r --cached .planning/
+     git rm -r --cached .planning/ &&
      git commit -m "chore: stop tracking planning docs"
    else
      echo "unrelated staged paths; unstage them first" >&2

@@ -37,7 +37,7 @@ in history, which makes this the common case rather than an edge case.
 
 ```bash
 if git diff --cached --quiet -- ':!.planning'; then
-  git rm -r --cached .planning/
+  git rm -r --cached .planning/ &&
   git commit -m "chore: stop tracking planning docs"
 else
   echo "unrelated staged paths; unstage them first" >&2

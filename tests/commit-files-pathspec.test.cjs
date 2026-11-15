@@ -3589,7 +3589,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
   test('stop-tracking recipe carries the same four fragments in all six docs', () => {
-    const norm = (s) => s.replace(/&&|;/g, ' ').replace(/\s+/g, ' ');
+    const norm = (s) => s.replace(/;/g, ' ').replace(/\s+/g, ' ');
     const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
     const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
@@ -3602,6 +3602,15 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       // allow-test-rule: docs-parity (#5211)
       // The scan declaration sits on the commit line of planning-config.md only; it is not part of the recipe.
       assert.ok(norm(splitLines(md).map((l) => (l.includes('# gsd-scan-ignore:') ? l.slice(0, l.indexOf('# gsd-scan-ignore:')) : l)).join('\n')).includes(norm(recipe)), `${f}: recipe order`);
+    }
+  });
+  test('add-tests.md and validate-phase.md guard the test-file commit with a condition line', () => {
+    for (const f of ['gsd-core/workflows/add-tests.md', 'gsd-core/workflows/validate-phase.md']) {
+      const lines = splitLines(fs.readFileSync(path.join(root, f), 'utf8'));
+      const add = lines.findIndex((l) => /^git add \{test[ _]files\}/.test(l));
+      // With no test files the pathspec is empty and the commit would take the whole index.
+      // allow-test-rule: docs-parity (#5211)
+      assert.ok(add > 2 && lines[add - 1].startsWith('```bash') && /^If .*test.*commit/.test(lines[add - 3]), `${f}: a condition line precedes the test-file commit`);
     }
   });
   test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {

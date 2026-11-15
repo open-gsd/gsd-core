@@ -153,6 +153,8 @@ gsd_run query verification.append-audit "${PHASE_DIR}/${PADDED_PHASE}-VALIDATION
 
 ## 7. Commit
 
+If the auditor wrote test files, commit them:
+
 ```bash
 git add {test_files}
 git commit -m "test(phase-${PHASE}): add Nyquist validation tests" -- ':(literal){test_file}' ...
