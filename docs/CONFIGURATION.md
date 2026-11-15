@@ -1741,13 +1741,14 @@ for the change to take effect. See issue #2256.
 
 ```text
 1. model_overrides[<agent>]              ← per-agent; full IDs; targeted exception
-2. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
-3. models[<phase_type>]                  ← coarse phase-level tier (this section)
-4. model_profile (per-agent col)         ← global tier strategy
-5. Runtime default                       ← when nothing else applies
+2. model_policy / runtime tier map       ← a non-Claude runtime's own model for the tier
+3. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
+4. models[<phase_type>]                  ← coarse phase-level tier (this section)
+5. model_profile (per-agent col)         ← global tier strategy
+6. Runtime default                       ← when nothing else applies
 ```
 
-The five layers compose top-down: `model_profile` is the base tier, `models[<phase_type>]` overrides at the phase level, `dynamic_routing` (when enabled) escalates per-attempt on soft failure, `model_overrides[<agent>]` carves per-agent exceptions at the top, and the runtime default applies when nothing else does. In the example above, all five research agents resolve to `sonnet` *except* `gsd-codebase-mapper`, which the per-agent override pins to `haiku`. `dynamic_routing` is disabled by default — when off (`enabled: false` or block omitted), this section's behavior is unchanged from today.
+The six layers compose top-down: `model_profile` is the base tier, `models[<phase_type>]` overrides at the phase level, `dynamic_routing` (when enabled) escalates per-attempt on soft failure, a `model_policy` preset or a non-Claude runtime's tier map names the concrete model for the tier, `model_overrides[<agent>]` carves per-agent exceptions at the top, and the runtime default applies when nothing else does. In the example above, all five research agents resolve to `sonnet` *except* `gsd-codebase-mapper`, which the per-agent override pins to `haiku`. `dynamic_routing` is disabled by default — when off (`enabled: false` or block omitted), this section's behavior is unchanged from today.
 
 #### Accepted values
 
@@ -1808,7 +1809,7 @@ Direct edits to `.planning/config.json` are looser — the resolver simply ignor
 
 #### Agent default tiers
 
-Each agent in `MODEL_PROFILES` declares one of three default tiers. The resolver picks `tier_models[default_tier]` for the first attempt.
+Each agent in `MODEL_PROFILES` declares one of three default tiers. The resolver picks `tier_models[default_tier]` for the first attempt, unless a higher layer in the precedence list below names the model.
 
 | Tier | Agents | Use case |
 |---|---|---|
@@ -1835,10 +1836,13 @@ If `dynamic_routing.escalate_on_failure: false`, soft failures do **not** advanc
 #### Resolution precedence (highest → lowest)
 
 1. **`model_overrides[<agent>]`** — full IDs accepted; targeted exception
-2. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
-3. **`models[<phase_type>]`** — coarse phase-level (#3023)
-4. **`model_profile`** — per-agent column from active profile
-5. **Runtime default**
+2. **`model_policy`**, the active non-Claude runtime's tier map (`model_profile_overrides.<runtime>` included), the `resolve_model_ids: "omit"` gate, and a `model_profile_overrides.claude.<tier>` pin on Claude Code
+3. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
+4. **`models[<phase_type>]`** — coarse phase-level (#3023)
+5. **`model_profile`** — per-agent column from active profile
+6. **Runtime default**
+
+This order holds for the first spawn and for every respawn that does not move the tier (`max_escalations: 0`, `escalate_on_failure: false`, or a `heavy` agent). `resolve-execution --attempt N` then reports the same model as `resolve-model` and the `init` payloads (#6214). A respawn that does escalate returns `tier_models[<escalated tier>]`. Only `model_overrides`, a non-Claude `model_policy` and the `"omit"` gate still outrank it.
 
 The `dynamic_routing` block is **disabled by default** — `enabled: false` (or omitting the block) preserves today's static resolution exactly.
 
