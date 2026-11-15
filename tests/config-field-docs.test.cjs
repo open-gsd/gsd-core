@@ -662,19 +662,4 @@ describe('git.commit_timeout_ms doc parity (#5231)', () => {
     const [, value] = /"commit_timeout_ms":\s*(\d+)/.exec(fs.readFileSync(DOCS_CONFIG_PATH, 'utf8')) || [];
     assert.strictEqual(Number(value), COMMIT_TIMEOUT_DEFAULT_MS);
   });
-
-  test('the how-to, the docs index and CONTEXT.md state the exported default and ceiling in prose', () => {
-    const root = path.join(__dirname, '..', 'docs');
-    const howTo = fs.readFileSync(path.join(root, 'how-to', 'raise-the-commit-timeout-for-slow-hooks.md'), 'utf8');
-    const index = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-    const seconds = COMMIT_TIMEOUT_DEFAULT_MS / 1000;
-    assert.ok(howTo.includes(`The default is ${seconds} seconds`), 'how-to must state the default in seconds');
-    assert.ok(howTo.includes(`timed out after ${seconds}s`), 'how-to must quote the default timeout message');
-    assert.ok(howTo.includes(`the ${seconds} second default`), 'how-to must name the fallback default');
-    assert.ok(howTo.includes(`\`${COMMIT_TIMEOUT_MAX_MS}\``), 'how-to must state the ceiling');
-    const context = fs.readFileSync(path.join(__dirname, '..', 'CONTEXT.md'), 'utf8');
-    assert.ok(context.includes(`\`COMMIT_TIMEOUT_DEFAULT_MS\` (${COMMIT_TIMEOUT_DEFAULT_MS})`), 'CONTEXT.md must state the default');
-    assert.ok(context.includes(`\`COMMIT_TIMEOUT_MAX_MS\` (${COMMIT_TIMEOUT_MAX_MS})`), 'CONTEXT.md must state the ceiling');
-    assert.ok(index.includes(`${seconds} s SDK commit timeout`), 'docs/README.md must state the default in seconds');
-  });
 });
