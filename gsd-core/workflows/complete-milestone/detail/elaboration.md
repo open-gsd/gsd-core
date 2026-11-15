@@ -200,17 +200,17 @@ AskUserQuestion with options: Squash merge (Recommended), Merge with history, De
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
 # The squash commits record the whole index, so a foreign staged file would ride along (the milestone's own REQUIREMENTS.md deletion is staged by design).
-TOP=$(git rev-parse --show-toplevel) || exit 1
-LIST=$(mktemp) || exit 1
-trap 'rm -f "$LIST"' EXIT
+REPO_TOP=$(git rev-parse --show-toplevel) || exit 1
+STAGED_LIST=$(mktemp) || exit 1
+trap 'rm -f "$STAGED_LIST"' EXIT
 # -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone.
-git -C "$TOP" diff --cached --name-status -z --no-renames > "$LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
+git -C "$REPO_TOP" diff --cached --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
 # Allowed: nothing staged, or exactly one staged .planning REQUIREMENTS.md deletion.
 STAGED=0; OWN=0
 while IFS= read -r -d '' st && IFS= read -r -d '' p; do
   STAGED=$((STAGED + 1))
   [ "$st" = D ] && [[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]] && OWN=$((OWN + 1))
-done < "$LIST"
+done < "$STAGED_LIST"
 [ "$STAGED" -eq "$OWN" ] && [ "$STAGED" -le 1 ] || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
@@ -245,17 +245,17 @@ git checkout "$CURRENT_BRANCH"
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
 # The merge commits record the whole index, so a foreign staged file would ride along (the milestone's own REQUIREMENTS.md deletion is staged by design).
-TOP=$(git rev-parse --show-toplevel) || exit 1
-LIST=$(mktemp) || exit 1
-trap 'rm -f "$LIST"' EXIT
+REPO_TOP=$(git rev-parse --show-toplevel) || exit 1
+STAGED_LIST=$(mktemp) || exit 1
+trap 'rm -f "$STAGED_LIST"' EXIT
 # -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone.
-git -C "$TOP" diff --cached --name-status -z --no-renames > "$LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
+git -C "$REPO_TOP" diff --cached --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
 # Allowed: nothing staged, or exactly one staged .planning REQUIREMENTS.md deletion.
 STAGED=0; OWN=0
 while IFS= read -r -d '' st && IFS= read -r -d '' p; do
   STAGED=$((STAGED + 1))
   [ "$st" = D ] && [[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]] && OWN=$((OWN + 1))
-done < "$LIST"
+done < "$STAGED_LIST"
 [ "$STAGED" -eq "$OWN" ] && [ "$STAGED" -le 1 ] || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
