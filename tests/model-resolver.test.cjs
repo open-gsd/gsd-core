@@ -4276,6 +4276,7 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
       },
     });
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), resolveModelInternal(tmpDir, 'gsd-executor'));
+    assert.notStrictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-custom-sonnet');
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 1), 'opus');
   });
 
