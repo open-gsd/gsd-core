@@ -480,10 +480,45 @@ function maskInlineCodeSpans(line) {
   return out;
 }
 
-// CommonMark: an angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
-const ANGLE = /<((?:\\.|[^<>\\\n])*)>/y;
+// The CommonMark link grammar (spec 0.31, inline links and link reference definitions): the one
+// owner of a destination, a title and the whitespace around them. Whitespace is spaces, tabs and
+// at most one line ending (LINK_WS); a link never holds a blank line (BLANK).
+const LINK_WS = String.raw`[ \t]*(?:\r?\n[ \t]*)?`;
+const BLANK = /\n[ \t\r]*\n/;
+const LEAD = new RegExp(LINK_WS, 'y');
+const CLOSE = new RegExp(`${LINK_WS}\\)`, 'y');
+// An angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
+const ANGLE = /<((?:\\[^\n\r]|[^<>\\\n\r])*)>/y;
+const TITLE = new RegExp(String.raw`(?:[ \t]+(?:\r?\n[ \t]*)?|\r?\n[ \t]*)(?:`
+  + String.raw`"(?:\\[^]|[^"\\])*"|'(?:\\[^]|[^'\\])*'|\((?:\\[^]|[^()\\])*\))`, 'y');
 const MAX_PAREN_DEPTH = 32; // CommonMark's nesting limit for a bare destination; bounds the scan
-const TAIL = /(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)/y;
+// A bare destination ends at a space or an ASCII control character, nothing else (not U+00A0).
+const endsBare = (ch) => ch === undefined || ch <= ' ' || ch === '\x7f';
+/**
+ * The destination at `at`: an angle form or a bare one (both honour `\` escapes; bare:
+ * balanced parentheses up to 32 deep). `{ dest, end }`, or null when none starts there; an
+ * empty bare destination has `end === at`.
+ */
+function linkDestination(text, at) {
+  if (text[at] === '<') {
+    ANGLE.lastIndex = at;
+    const angle = ANGLE.exec(text);
+    return angle && { dest: angle[1], end: ANGLE.lastIndex };
+  }
+  let end = at;
+  let depth = 0;
+  for (; !endsBare(text[end]); end += 1) {
+    if (text[end] === '\\' && !endsBare(text[end + 1])) end += 1;
+    else if (text[end] === '(' && ++depth > MAX_PAREN_DEPTH) return null;
+    else if (text[end] === ')' && !depth--) break;
+  }
+  return depth > 0 ? null : { dest: text.slice(at, end), end };
+}
+/** The end of the title at `at` (the whitespace before it included), or -1 when none starts there. */
+function linkTitleEnd(text, at) {
+  TITLE.lastIndex = at;
+  return TITLE.test(text) ? TITLE.lastIndex : -1;
+}
 /**
  * The indexes of the `](` in `text` whose `]` closes a bracket pair opened earlier in
  * its paragraph (balanced, backslash escapes honoured): a stray `](x)` is text, not a
@@ -504,41 +539,25 @@ function labelledCloses(text) {
 }
 
 /**
- * Every inline-link destination in `text` (mask code first, see `maskCode`): an
- * angle-enclosed or bare destination (both honour `\` escapes; bare: balanced
- * parentheses up to 32 deep), then an optional title. Returns `{ at, dest, raw }`
- * per link: `at` is the index of the `]`, `dest` the destination (may be empty),
- * `raw` the text between the parentheses. The one scanner behind `extractLinks`
- * and the PR-template link guard.
+ * Every inline-link destination in `text` (mask code first, see `maskCode`): a
+ * destination (`linkDestination`), then an optional title (`linkTitleEnd`), then `)`,
+ * all within one paragraph. Returns `{ at, dest, raw }` per link: `at` is the index
+ * of the `]`, `dest` the destination (may be empty), `raw` the text between the
+ * parentheses. The one scanner behind `extractLinks` and the PR-template link guard.
  */
 function scanInlineLinks(text) {
   const out = [];
   const closes = labelledCloses(text);
   for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
     if (!closes.has(i)) continue;
-    let start = i + 2;
-    while (/\s/.test(text[start] ?? '')) start += 1;
-    let angle = null;
-    if (text[start] === '<') {
-      ANGLE.lastIndex = start;
-      angle = ANGLE.exec(text);
-    }
-    let end = angle ? ANGLE.lastIndex : start;
-    let dest = angle?.[1];
-    if (!angle) {
-      if (text[start] === '<') continue; // a bare destination cannot start with `<`
-      let depth = 0;
-      for (; end < text.length && !/\s/.test(text[end]); end += 1) {
-        if (text[end] === '\\' && /\S/.test(text[end + 1] ?? '')) end += 1;
-        else if (text[end] === '(' && ++depth > MAX_PAREN_DEPTH) break;
-        else if (text[end] === ')' && !depth--) break;
-      }
-      if (depth > 0) continue;
-      dest = text.slice(start, end);
-    }
-    TAIL.lastIndex = end;
-    if (TAIL.test(text)) {
-      out.push({ at: i, dest, raw: text.slice(i + 2, TAIL.lastIndex - 1) });
+    LEAD.lastIndex = i + 2;
+    LEAD.test(text);
+    const d = linkDestination(text, LEAD.lastIndex);
+    if (!d) continue;
+    const title = linkTitleEnd(text, d.end);
+    CLOSE.lastIndex = title < 0 ? d.end : title;
+    if (CLOSE.test(text) && !BLANK.test(text.slice(i + 2, CLOSE.lastIndex))) {
+      out.push({ at: i, dest: d.dest, raw: text.slice(i + 2, CLOSE.lastIndex - 1) });
     }
   }
   return out;
@@ -557,14 +576,14 @@ function scanInlineLinks(text) {
  * Reference-style links (`[text][ref]`) are not supported: the corpus has zero
  * reference definitions to resolve against.
  *
- * These forms are no longer links, though the regex this replaced returned them:
- * `[a](x y)` (a bare destination with a space), `[a]()` (an empty destination),
- * `\[x](y)` and `[a\](x)` (an escaped bracket), `[a](\)` and `[a](x\)y)` (an
- * escaped parenthesis), `[a](x "t)")` and `[a](<x)y>)` (a parenthesis inside a
- * title or an angle destination), `[a](<x<y>)` (a `<` inside an angle destination),
- * `[a](<x)` (an unclosed `<`), `[a](<x>y)` (text after an angle destination), and any
- * link whose title is doubled, unterminated or followed by other text: `[a](x "t" y)`,
- * `[a](x "t)`. A title honours `\` escapes: `[a](x "t\"u")` stays a link.
+ * A form CommonMark reads as no link is no link here, though the regex this replaced
+ * returned it. A bare destination holds no space and no ASCII control character
+ * (`[a](x y)`, `[a](x\u0001y)`) and is not empty (`[a]()`). A bracket or parenthesis
+ * may be escaped (`\[x](y)`, `[a\](x)`, `[a](\)`, `[a](x\)y)`). An angle destination holds
+ * no `<`, closes with `>` and ends the destination (`[a](<x<y>)`, `[a](<x)`, `[a](<x>y)`).
+ * A title is closed once and ends the link (`[a](x "t" y)`, `[a](x "t)`). A title honours
+ * `\` escapes: `[a](x "t\"u")` stays a link. The raw-target clause drops a parenthesis in
+ * an angle destination or a title (`[a](<x)y>)`, `[a](x "t)")`).
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
  * RAW parenthesized capture, untrimmed and unresolved; callers normalize.
@@ -1299,4 +1318,4 @@ function main() {
 if (require.main === module) runMain(main);
 
 module.exports = { STATUSES, REASON, extractLinks, maskCode, scanInlineLinks, labelledCloses,
-  existsCaseExact, realRootOrFallback };
+  linkDestination, linkTitleEnd, LINK_WS, BLANK, existsCaseExact, realRootOrFallback };

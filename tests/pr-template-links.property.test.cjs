@@ -167,6 +167,65 @@ describe('ADR gate extractLinks (#5427)', () => {
   });
 });
 
+// Expected values follow CommonMark's productions (spec 0.31, inline links and link reference
+// definitions), not the guard's predicates: one owner reads the destination, the title and the
+// whitespace between them, for the inline form and the reference form alike.
+describe('link grammar productions (#5427)', () => {
+  const d = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._/-]{0,9}$/);
+  // Unicode spaces are not CommonMark whitespace: they are ordinary destination characters.
+  const uniSpace = fc.constantFrom(' ', ' ', '　', '﻿', ' ');
+  const control = fc.constantFrom(...[...Array(0x20).keys(), 0x7f]
+    .filter((c) => ![0x09, 0x0a, 0x0d].includes(c)).map((c) => String.fromCharCode(c)));
+  const eol = fc.constantFrom('\n', '\r\n');
+  const pad = fc.constantFrom('', ' ', '\t', '  ');
+  test('property: a Unicode space belongs to a bare destination, in both forms', () => {
+    fc.assert(fc.property(d, uniSpace, d, (a, w, b) => {
+      assert.deepEqual(hrefsIn(`[a](${a}${w}${b})`), [`${a}${w}${b}`]);
+      assert.deepEqual(hrefsIn(`[a](${w}${b})`), [`${w}${b}`]);
+      assert.deepEqual(hrefsIn(`[a]: ${a}${w}${b}`), [`${a}${w}${b}`]);
+    }));
+  });
+  test('property: an ASCII control character ends no link and starts none', () => {
+    fc.assert(fc.property(d, control, d, (a, c, b) => {
+      assert.deepEqual(hrefsIn(`[a](${a}${c}${b})`), [], JSON.stringify(c));
+      assert.deepEqual(hrefsIn(`[a](${c})`), [], JSON.stringify(c));
+      assert.deepEqual(hrefsIn(`[a]: ${a}${c}${b}`), [], JSON.stringify(c));
+    }));
+  });
+  test('property: whitespace is spaces, tabs and one line ending; a blank line ends the link', () => {
+    fc.assert(fc.property(d, eol, pad, pad, title, (x, e, p, q, t) => {
+      const one = `${p}${e}${q}`;
+      assert.deepEqual(hrefsIn(`[a](${one}${x}${one})`), [x]);
+      assert.deepEqual(hrefsIn(`[a](<${x}>${one}"t"${one})`), [x]);
+      for (const blank of [`${e}${p}${e}`, `${e}${p}${e}${q}${e}`]) {
+        assert.deepEqual(hrefsIn(`[a](${blank}${x})`), [], 'before the destination');
+        assert.deepEqual(hrefsIn(`[a](${x}${blank})`), [], 'after the destination');
+        assert.deepEqual(hrefsIn(`[a](${x} "t${blank}u")`), [], 'inside a title');
+        assert.deepEqual(hrefsIn(`[a](<${x}>${blank}${t.trim() || '"t"'})`), []);
+      }
+    }));
+  });
+  test('property: a reference destination is an angle form or a balanced bare one', () => {
+    fc.assert(fc.property(d, title, (x, t) => {
+      for (const bad of [`<${x}`, `<${x}${t}`, `${x})`, `${x}(`, `<${x}<y>`]) {
+        assert.deepEqual(hrefsIn(`[a]: ${bad}`), [], bad);
+      }
+      assert.deepEqual(hrefsIn(`[a]: ${x}(y)${t}`), [`${x}(y)`]);
+    }));
+  });
+  test('property: a reference label holds no unescaped [ , some text and no blank line', () => {
+    fc.assert(fc.property(d, d, eol, (a, b, e) => {
+      assert.deepEqual(hrefsIn(`[${a}[${b}]: ${a}`), [], 'unescaped [');
+      assert.deepEqual(hrefsIn(`[${a}\\[${b}]: ${a}`), [a], 'escaped [');
+      for (const blank of [' ', '  ', '\t', `${e}`]) {
+        assert.deepEqual(hrefsIn(`[${blank}]: ${a}`), [], JSON.stringify(blank));
+      }
+      assert.deepEqual(hrefsIn(`[${a}${e}${b}]: ${a}`), [a], 'one line ending');
+      assert.deepEqual(hrefsIn(`[${a}${e}${e}${b}]: ${a}`), [], 'a blank line');
+    }));
+  });
+});
+
 describe('escapes and empty destinations (#5427)', () => {
   const n = fc.integer({ min: 0, max: 5 });
   const bs = (k) => '\\'.repeat(k);

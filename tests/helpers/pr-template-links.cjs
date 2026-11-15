@@ -15,7 +15,8 @@ const path = require('node:path');
 
 const { slugify } = require('../../scripts/gen-features.cjs');
 const {
-  maskCode, scanInlineLinks, existsCaseExact, realRootOrFallback,
+  maskCode, scanInlineLinks, linkDestination, linkTitleEnd, LINK_WS, BLANK,
+  existsCaseExact, realRootOrFallback,
 } = require('../../scripts/gen-adr-index.cjs');
 const { tokenizeHeadings } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -23,12 +24,25 @@ const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'https://github.com/open-gsd/gsd-core/';
 const NEXT = `${REPO}blob/next/`;
 
-const REF_LABEL = String.raw`\[(?:\\.|[^\]\\\n])+\]:`;
+// A reference definition: its marker and label are read here, its destination and title by
+// the ADR gate's grammar (linkDestination, linkTitleEnd), the one owner of both forms.
+// A label holds no unescaped bracket, some text and no blank line.
+const REF_LABEL = String.raw`\[(?![ \t\r\n]*\])(?:\\[^]|[^\[\]\\])+\]:`;
 const REF_PREFIX = String.raw`^(?:[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?=[ \t])))* *`
-  + REF_LABEL + String.raw`[ \t]*(?:\r?\n[ \t]*)?`;
-const REF_DEST = String.raw`(?:<([^>\n]*)>|(?!${REF_LABEL})(\S+))`;
-const REF_TITLE = String.raw`(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*$`;
-const REFDEF = new RegExp(REF_PREFIX + REF_DEST + REF_TITLE, 'gm');
+  + REF_LABEL + LINK_WS + String.raw`(?!${REF_LABEL})`;
+const REF_HEAD = new RegExp(REF_PREFIX, 'gm');
+const REF_EOL = /[ \t]*$/ym;
+const endsLine = (t, e) => e >= 0 && Object.assign(REF_EOL, { lastIndex: e }).test(t);
+// The definition's destination when its title (or, failing that, its destination) ends the line.
+// A definition that interrupts a paragraph is read too (GitHub shows it as text): the guard
+// fails closed.
+const refsIn = (t) => [...t.matchAll(REF_HEAD)].flatMap((m) => {
+  const at = m.index + m[0].length;
+  const d = linkDestination(t, at);
+  if (!d || d.end === at) return []; // a bare destination is not empty
+  const end = [linkTitleEnd(t, d.end), d.end].find((e) => endsLine(t, e));
+  return end === undefined || BLANK.test(t.slice(m.index, end)) ? [] : [d.dest];
+});
 
 // Indented code (4+ spaces or a tab) follows a blank line or more code, and is not a list
 // item's continuation. Indentation and list state are judged on the RAW line, because
@@ -68,7 +82,7 @@ const ATTR = /\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))
 const URL_ATTRS = new Set(['href', 'src', 'srcset']);
 const firstCandidate = (c) => c.trim().split(/\s+/)[0];
 // A tag-shaped span right after `](` is a destination (`<x y>`), not a tag.
-const PROSE_TAG = new RegExp(`(?<!\\]\\(\\s*)${TAG.source}`, 'g');
+const PROSE_TAG = new RegExp(`(?<!\\]\\(${LINK_WS})${TAG.source}`, 'g');
 const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
   .filter(([, name]) => URL_ATTRS.has(name.toLowerCase()))
   .flatMap(([, name, ...v]) => {
@@ -80,11 +94,10 @@ const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.match
 
 const hrefsIn = (text) => {
   const t = maskBlocks(maskComments(text));
-  const refs = [...t.matchAll(REFDEF)].map((m) => m.slice(1).find((g) => g !== undefined));
   // Attribute text of an HTML open tag is not prose: blanked for the link scan only
   // (the `<A>` of `[a](<A>)` has no attributes and stays).
   const prose = t.replace(PROSE_TAG, (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
-  return [...scanInlineLinks(prose).map(({ dest }) => dest), ...attrsIn(t), ...refs];
+  return [...scanInlineLinks(prose).map(({ dest }) => dest), ...attrsIn(t), ...refsIn(t)];
 };
 
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.

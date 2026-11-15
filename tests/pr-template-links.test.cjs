@@ -321,7 +321,7 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
     // each of these was a link for oldExtractLinks
     for (const s of ['[a](x y)', '[a]()', '\\[x](y)', '[a\\](x)', '[a](\\)', '[a](x\\)y)',
       '[a](x "t)")', '[a](<x)y>)', '[a](<x<y>)', '[a](<x)',
-      '[a](<x>y)', '[a](x "t" y)', '[a](x "t)']) {
+      '[a](<x>y)', '[a](x "t" y)', '[a](x "t)', '[a](x\u0001y)', '[a](\u007f)']) {
       assert.ok(oldExtractLinks(s).length > 0, `old: ${s}`);
       assert.deepEqual(extractLinks(s), [], s);
     }
@@ -331,6 +331,10 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
     }
     for (const s of ['[a](x "t\\"u")', "[a](x 't\\'u')", '[a](x (t\\)u))']) {
       assert.deepEqual(hrefsIn(s), ['x'], s);
+    }
+    // a Unicode space is a destination character (CommonMark): the old regex agrees
+    for (const s of ['[a](x y)', '[a]( )', '[a](<x y>)', '[a](x\n"t"\n)']) {
+      assert.deepEqual(extractLinks(s), oldExtractLinks(s), JSON.stringify(s));
     }
     assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);
     assert.deepEqual(extractLinks('![i](p.png)'), [{ line: 1, target: 'p.png' }]);
