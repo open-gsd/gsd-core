@@ -150,7 +150,10 @@ describe('link extractor, edge forms (#5427)', () => {
   test('a line that opens with an inline code span still yields its links', () => {
     assert.deepEqual(hrefsIn('`code` [a](../x.md)'), ['../x.md']);
     // a line that is only a code span is text, so the indented line after it continues it
-    assert.deepEqual(hrefsIn('`x`\n    [a](../x.md)'), ['../x.md']);
+    for (const span of ['`x`', '` x `', '`` a ``']) {
+      assert.deepEqual(hrefsIn(`${span}\n    [a](../x.md)`), ['../x.md'], span);
+    }
+    assert.deepEqual(hrefsIn('```\ncode\n```\n    [a](../x.md)'), [], 'a closed fence is code');
   });
   test('<!--> and <!---> are complete comments; a tab follows a container marker', () => {
     for (const open of ['<!-->', '<!--->']) {
