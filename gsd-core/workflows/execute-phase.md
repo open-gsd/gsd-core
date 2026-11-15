@@ -505,9 +505,9 @@ if printf '%s' "$ORCH_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)'; t
   if [ "$_WT_HAS_COMMITS" -eq 1 ] || [ -n "$_WT_DIRTY_ALL" ]; then
     echo "" >&2
     echo "  To integrate before continuing:" >&2
-    [ -n "$_WT_DIRTY_ALL" ] && echo "    1. git add -A -- . && git commit -m 'chore(recover): recover worktree state' -- .   # from THIS worktree's root" >&2  # gsd-scan-ignore: #5211 whole worktree: run from the worktree root
-    echo "    2. cd <orchestrator worktree>   # a checkout whose branch is NOT agent-*/worktree-agent-*" >&2
-    echo "    3. git merge --no-ff $ORCH_BRANCH        # or: git cherry-pick <sha>...  for selected commits" >&2
+    [ -n "$_WT_DIRTY_ALL" ] && echo "    1. git add -A -- . && git commit -m 'chore(recover): recover worktree state' -- .   # from THIS worktree's root" >&2  # gsd-scan-ignore: #5211
+    echo "    2. cd <orchestrator worktree>   # branch NOT agent-*/worktree-agent-*" >&2
+    echo "    3. git merge --no-ff $ORCH_BRANCH   # or: git cherry-pick <sha>..." >&2
     echo "    4. re-run the phase from there" >&2
     echo "  Verify with: git log --oneline ${_WT_BASE:-HEAD}..$ORCH_BRANCH" >&2
   fi
