@@ -1206,6 +1206,8 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['ANSI-C quoted other agent', "claude --agent $'gsd-planner' -p hi"],
     ['ANSI-C quoted agent that only starts with the name', "claude --agent $'gsd-debugger-extra' -p hi"],
     ['the launch text in an ANSI-C quoted echo argument', "echo $'claude --agent gsd-debugger'"],
+    // The readings decode the value, and the binary must still be claude.
+    ['a decoded debugger name passed to a binary that is not claude', "grep --agent $'gsd-debugger' notes.txt"],
   ];
 
   for (const [label, command] of DOLLAR_QUOTED_ALLOWS) {
