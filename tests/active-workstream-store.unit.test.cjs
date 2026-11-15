@@ -1583,6 +1583,15 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.deepEqual(peekInitWorkstream(base, 'a_b', T), ['alpha']);
   });
 
+  test('the session id is cut to the 160-character token: 159 characters are not 160, 161 read as their first 160', (t) => {
+    const long = 'a'.repeat(159);
+    t.after(() => [long, `${long}b`].forEach((s) => createSessionScopedPointerAdapter(base, `${PREFIX}${s}`).clear()));
+    recordInitWorkstream(base, long, 'alpha', T);
+    assert.equal(peekInitWorkstream(base, `${long}b`, T), null, '159 characters must not read as 160');
+    recordInitWorkstream(base, `${long}b`, 'alpha', T);
+    assert.deepEqual(peekInitWorkstream(base, `${long}bc`, T), ['alpha'], '161 characters are cut to the 160-character token');
+  });
+
   test('an invalid workstream name is never recorded', () => {
     for (const name of ['', '../x', 'a b']) {
       assert.equal(recordInitWorkstream(base, 's1', name, T), false, name);
@@ -1619,6 +1628,22 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
     assert.equal(raw(`${PREFIX}s1`), `alpha ${T}\nbeta ${T + 1}`);
     recordInitWorkstream(base, 's1', 'alpha', T + 3);
     assert.deepEqual(peekInitWorkstream(base, 's1', T + 4), ['beta', 'alpha'], 'a repeated name moves to the newest slot');
+  });
+
+  test('two records of one session cannot lose an entry: a record that returns true is in the carry, and one that meets the lock returns false', (t) => {
+    const projection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    const read = projection.readBoundedRegularFile;
+    let inner;
+    // The first read of the session's carry happens inside recordInitWorkstream's read-modify-write: a second record arriving there is the parallel `init --ws`.
+    t.mock.method(projection, 'readBoundedRegularFile', (file, ...rest) => {
+      if (inner === undefined && file.endsWith(`${PREFIX}s1`)) inner = recordInitWorkstream(base, 's1', 'beta', T + 1);
+      return read(file, ...rest);
+    });
+    assert.equal(recordInitWorkstream(base, 's1', 'alpha', T), true);
+    assert.equal(inner, false, 'the second record could not take the lock');
+    assert.deepEqual(peekInitWorkstream(base, 's1', T + 2), ['alpha']);
+    assert.equal(recordInitWorkstream(base, 's1', 'beta', T + 1), true, 'the lock is released');
+    assert.deepEqual(peekInitWorkstream(base, 's1', T + 2), ['alpha', 'beta']);
   });
 
   test('one expired entry makes the whole carry unable to establish the workstream, even beside a fresh one', () => {
@@ -1735,11 +1760,7 @@ describe('recordInitWorkstream / peekInitWorkstream', () => {
 
   test('a stray directory named like a carry cannot turn a recorded carry into "not recorded"', (t) => {
     const session = path.basename(base); // unique to this test, so its carry file names one session directory only
-    t.after(() => createSessionScopedPointerAdapter(base, `${PREFIX}${session}`).clear());
-    recordInitWorkstream(base, session, 'alpha', T);
-    const sessions = path.join(os.tmpdir(), 'gsd-workstream-sessions');
-    const dir = fs.readdirSync(sessions).map((d) => path.join(sessions, d)).find((d) => fs.existsSync(path.join(d, `${PREFIX}${session}`)));
-    const stray = path.join(dir, `${PREFIX}x`);
+    const stray = path.join(carryDir(t, session), `${PREFIX}x`);
     fs.mkdirSync(stray);
     t.after(() => cleanup(stray));
     assert.equal(recordInitWorkstream(base, session, 'beta', T + P), true);

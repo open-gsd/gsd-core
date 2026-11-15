@@ -13,6 +13,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+// #5328: the shared hardened lock primitive serialises the carry's read-modify-write (recordInitWorkstream).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import lockMod = require('./capability-lock.cjs');
 import { probeTty, platformWriteSync, platformReadSync, platformEnsureDir, readBoundedRegularFile } from './shell-command-projection.cjs';
 import {
   isValidActiveWorkstreamName,
@@ -580,10 +583,17 @@ function recordInitWorkstream(cwd: string, session: string | undefined, name: st
   const { value } = validateActiveWorkstreamName(name);
   const recordable = (n: string | null): n is string => n !== null && validateWorkstreamName(n) && n.length <= INIT_WORKSTREAM_NAME_MAX_BYTES;
   if (!scoped || !adapter || !recordable(value)) return false;
-  const kept = parseInitWorkstream(readCarry(scoped.filePath)).filter((e) => e.name !== value && recordable(e.name) && withinAge(e.at, now, INIT_WORKSTREAM_PRUNE_AGE_MS));
-  kept.push({ name: value, at: now });
-  adapter.write(kept.slice(-INIT_WORKSTREAM_MAX_ENTRIES).map((e) => `${e.name} ${e.at}`).join('\n'));
-  return true;
+  // Two `init --ws` of one session (parallel calls) would each read the old carry and the second write would drop the first's entry. The lock file's name does not start with the key prefix, so the sweep never reads it as a carry.
+  const lock = lockMod.acquireLock(path.join(scoped.dirPath, `.lock-${key}`), { waitForFresh: true });
+  if (!lock) return false;
+  try {
+    const kept = parseInitWorkstream(readCarry(scoped.filePath)).filter((e) => e.name !== value && recordable(e.name) && withinAge(e.at, now, INIT_WORKSTREAM_PRUNE_AGE_MS));
+    kept.push({ name: value, at: now });
+    adapter.write(kept.slice(-INIT_WORKSTREAM_MAX_ENTRIES).map((e) => `${e.name} ${e.at}`).join('\n'));
+    return true;
+  } finally {
+    lockMod.releaseLock(lock);
+  }
 }
 
 /** The workstream names `session` recorded, oldest first; null when no carry is readable; [] when one exists and cannot be trusted: no parseable entry, or any entry older than INIT_WORKSTREAM_MAX_AGE_MS (the run it stands for may still dispatch, so the workstream cannot be established). */
