@@ -90,7 +90,15 @@ function parseConfigGetArgs(args) {
   const positional = [];
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--raw') { raw = true; continue; }
-    if (rest[i] === '--default') { defaultValue = rest[i + 1] ?? ''; i++; continue; }
+    if (rest[i] === '--default') {
+      // #5933: the CLI refuses a missing or `--`-led value, so the mirror must too.
+      defaultValue = rest[i + 1];
+      if (defaultValue === undefined || defaultValue.startsWith('--')) {
+        throw new Error(`parseConfigGetArgs: --default needs a value, got ${JSON.stringify(defaultValue)}`);
+      }
+      i++;
+      continue;
+    }
     positional.push(rest[i]);
   }
   return { keyPath: positional[0], raw, defaultValue };
