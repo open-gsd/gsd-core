@@ -115,14 +115,19 @@ if (done.scope === 'complete') {
 
 for (const phase of snapshot.phases) {
   for (const plan of phase.plans) {
+    if (plan.superseded) continue;
     if (plan.halted) render(`${plan.id}: halted`);
     else if (plan.blocked_by.length > 0) render(`${plan.id}: waiting on ${plan.blocked_by.join(', ')}`);
   }
 }
 ```
 
+The loop skips superseded rows because `halted` is set on them too, while
+`halted_count` and `progress.halted_plans` leave them out; without the skip, a
+retired plan would be listed as halted beside a count that does not include it.
+
 `halted: false` is a real answer only when no `summary_unreadable` diagnostic
-names that plan's SUMMARY, and three SUMMARY shapes read as not halted even
+names that plan's SUMMARY, and some SUMMARY shapes read as not halted even
 then. See
 [Halted plans](../CLI-TOOLS.md#halted-plans-counted-as-completed-flagged-beside-the-count-5823)
 for the full rules, including where `planning inspect` and `phase-plan-index`
