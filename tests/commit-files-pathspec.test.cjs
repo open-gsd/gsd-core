@@ -3604,18 +3604,18 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
 
-  test('a pasted-path placeholder in a commit pathspec is single-quoted in every shipped prompt, never double-quoted', () => {
-    const sites = ['agents/gsd-debug-session-manager.md', 'agents/gsd-debug-session-manager.compact.md', 'agents/gsd-executor.md', 'agents/gsd-debugger.md',
-      'pi/package-agents/gsd-debug-session-manager.md', 'pi/package-agents/gsd-executor.md', 'pi/package-agents/gsd-debugger.md', 'pi/package-skills/gsd-debug/SKILL.md',
-      'gsd-core/workflows/audit-fix.md', 'gsd-core/workflows/validate-phase.md'];
-    for (const f of sites) {
+  test('a pasted-path placeholder after a commit -- is a single-quoted :(literal) word in every shipped prompt: never unquoted, never double-quoted', () => {
+    const bad = [];
+    for (const f of promptFiles()) {
       // The prompt text is what the model pastes a path into, so its quoting is the shipped contract.
-      const md = fs.readFileSync(path.join(root, f), 'utf8');
-      // allow-test-rule: source-text-is-the-product (#5211)
-      assert.ok(md.includes(":(literal)"), `${f}: has a literal pathspec`);
-      // allow-test-rule: source-text-is-the-product (#5211)
-      assert.equal(/":\(literal\)[^"]{1,80}[}>]"/.test(md), false, `${f}: double-quoted placeholder`);
+      for (const l of splitLines(fs.readFileSync(path.join(root, f), 'utf8'))) {
+        const at = l.includes('git commit') ? l.indexOf(' -- ', l.indexOf('git commit')) : -1;
+        // Single-quoted spans and shell `${...}` expansions are fine; a `{...}` or `<...>` placeholder left over is an unquoted pasted path.
+        const rest = at === -1 ? '' : l.slice(at + 4).split('`')[0].replace(/'[^']{0,200}'/g, '').replace(/\$\{[^}]{0,80}\}/g, '');
+        if (/[{<][^}>]{1,80}[}>]/.test(rest) || /":\(literal\)[^"]{1,80}[}>]"/.test(l)) bad.push(`${f}: ${l.trim()}`);
+      }
     }
+    assert.deepStrictEqual(bad, []);
   });
   test('async-external-jobs recipe commits the manifest with a pathspec', () => {
     // The recipe commands are what a user runs, so their pathspec is the shipped contract.
