@@ -15646,6 +15646,7 @@ module.exports = {
     CODEX_EXTENDED_HOOK_EVENTS,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
+    stripGsdFromCodexConfigOnUninstall,
     migrateCodexHooksMapFormat,
     stripStaleGsdHookBlocks,
     hasUserNamespacedAotHooks,
