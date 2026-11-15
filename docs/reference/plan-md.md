@@ -94,7 +94,16 @@ agent_hint: well-me-flutter-engineer
 
 At dispatch, `execute-phase` resolves the hint against the **active runtime's agent directory** (both project-local and user-global, across the runtime's filename variants — `.md`, `.agent.md`, `.toml`, …) and dispatches the named subagent via `subagent_type`. If the field is absent, blank, or the named agent does not resolve, the plan dispatches to `gsd-executor` — byte-identical to behavior without the field. Routing is gated by `workflow.agent_hint_routing` (default-on; see [CONFIGURATION](../CONFIGURATION.md#workflow-toggles)).
 
-The specialist agent is an ordinary agent file (e.g. `agents/well-me-flutter-engineer.md` on Claude Code); there is no separate registration manifest.
+| Behavior | Rule |
+|---|---|
+| Recorded identity | The recorder derives the routed executor from the plan's own `agent_hint:` on disk. A plan-scoped record (`.gsd/dispatch-isolation-sentinel.json` and `.gsd/dispatch-isolation/<phase>--<plan>.json`) carries it as `executor_type`; a phase-level record lists the routed executors of every plan in the phase as `executor_types`. Routing (`resolve-agent --phase --plan`) and the record use the same resolution. |
+| Isolation | A dispatch is guarded as the plan's executor, exactly like `gsd-executor`, when its type is `gsd-executor`, any dispatch record in the project at most 24 hours old names it (whatever its phase or plan), or its prompt carries the `[gsd:dispatch phase="…" plan="…"]` marker. |
+| Model | `model_overrides["<hint>"]` when set; otherwise the model `gsd-executor` resolves to (`resolve-model <hint> --fallback-agent gsd-executor`). |
+| Effort | The specialist agent's own frontmatter. No `effort=` is passed. |
+| GSD role hints | A hint naming a GSD role other than `gsd-executor` (for example `gsd-verifier`, compared trimmed and case-insensitively) is refused with a warning; the plan uses `gsd-executor`. |
+| `orchestrator-worktree` backend | Not routed; always `gsd-executor`, with a note when a hint is set. |
+
+The specialist agent is an ordinary agent file (e.g. `agents/well-me-flutter-engineer.md` on Claude Code); there is no separate registration manifest. Steps: [How to route a plan to a specialist executor](../how-to/route-a-plan-to-a-specialist-executor.md). Background: [About executor identity](../explanation/executor-identity.md).
 
 ### Superseded plans
 

@@ -311,6 +311,7 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/context-monitor.md',
     'docs/zh-CN/context-monitor.md',
   ],
+  'tests/gen-cli-surface-manifest.test.cjs': ['docs/CLI-SURFACE-MANIFEST.json'],
   'tests/gen-state-md-docs.test.cjs': [
     'docs/reference/state-md.md',
     'docs/ja-JP/reference/state-md.md',

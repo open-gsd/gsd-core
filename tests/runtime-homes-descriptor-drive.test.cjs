@@ -14,12 +14,12 @@
  *   - existsSync (control probe-hit / probe-miss scenarios)
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const {
@@ -33,7 +33,30 @@ const {
   detectAntigravityDirAmbiguity,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
-const HOME = os.homedir();
+// #6034 (epic #4635 Phase 2): every test in this file runs against a FRESH, EMPTY
+// fixture home with every config-location variable scrubbed, so a default path
+// is derived from the fixture, never from the developer's real home (#4312: a
+// machine with ~/.gemini/antigravity-cli changed the antigravity default). The
+// hooks are file-level because every test here reads the process env. A test
+// that deliberately sets an override variable does so AFTER the scrub.
+// sandboxHome needs a node:test context for its t.after; a root hook has none,
+// so this adapter collects the restorers and afterEach runs them.
+let HOME;
+let restorers = [];
+
+beforeEach(() => {
+  restorers = [];
+  const fixtureHome = createTempDir('gsd-rhd-home-');
+  HOME = fixtureHome;
+  sandboxHome({ after: (fn) => restorers.push(fn) }, fixtureHome);
+  restorers.push(scrubConfigLocationEnv());
+  restorers.push(() => cleanup(fixtureHome));
+});
+
+afterEach(() => {
+  for (const restore of restorers.reverse()) restore();
+  restorers = [];
+});
 
 // ── Helper: run fn with process.env temporarily mutated ──────────────────────
 
@@ -54,98 +77,57 @@ function withEnv(overrides, fn) {
   }
 }
 
-// All env vars for all runtimes — cleared in each test that calls getGlobalConfigDir directly
-const ALL_ENV_KEYS = [
-  'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'CODEX_HOME',
-  'GROK_AGENTS_HOME', 'COPILOT_CONFIG_DIR', 'COPILOT_HOME', 'ANTIGRAVITY_CONFIG_DIR',
-  'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR', 'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR',
-  'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'KIMI_CONFIG_DIR',
-  'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'KILO_CONFIG_DIR', 'KILO_CONFIG',
-  'XDG_CONFIG_HOME', 'PI_CODING_AGENT_DIR',
-];
-
-function clearAllEnvKeys() {
-  const saved = {};
-  for (const k of ALL_ENV_KEYS) {
-    saved[k] = process.env[k];
-    delete process.env[k];
-  }
-  return saved;
-}
-
-function restoreEnvKeys(saved) {
-  for (const k of ALL_ENV_KEYS) {
-    if (saved[k] !== undefined) process.env[k] = saved[k];
-    else delete process.env[k];
-  }
-}
-
 // ── STEP 0: golden scenarios captured from old switch BEFORE edits ────────────
 
 // GOLDEN DEFAULTS (no env vars set, no existsSync probe hits).
 // kimi is NOT included here because it depends on real filesystem probing —
 // its probe-miss/hit scenarios are covered separately via injected existsSync.
 // antigravity default also depends on probing; the default assumes NO dirs exist.
-const GOLDEN_DEFAULTS = {
-  claude:      path.join(HOME, '.claude'),
-  cursor:      path.join(HOME, '.cursor'),
-  codex:       path.join(HOME, '.codex'),
-  grok:        path.join(HOME, '.agents'),
-  copilot:     path.join(HOME, '.copilot'),
-  antigravity: path.join(HOME, '.gemini', 'antigravity'),  // probe-miss → first candidate
-  windsurf:    path.join(HOME, '.codeium', 'windsurf'),
-  augment:     path.join(HOME, '.augment'),
-  trae:        path.join(HOME, '.trae'),
-  qwen:        path.join(HOME, '.qwen'),
-  hermes:      path.join(HOME, '.hermes'),
-  codebuddy:   path.join(HOME, '.codebuddy'),
-  cline:       path.join(HOME, '.cline'),
-  opencode:    path.join(HOME, '.config', 'opencode'),
-  kilo:        path.join(HOME, '.config', 'kilo'),
-  zcode:       path.join(HOME, '.zcode'),
-  pi:          path.join(HOME, '.pi', 'agent'),  // dot-home-nested, no probe (like windsurf)
+const GOLDEN_SEGMENTS = {
+  claude:      ['.claude'],
+  cursor:      ['.cursor'],
+  codex:       ['.codex'],
+  grok:        ['.agents'],
+  copilot:     ['.copilot'],
+  antigravity: ['.gemini', 'antigravity'],  // probe-miss → first candidate
+  windsurf:    ['.codeium', 'windsurf'],
+  augment:     ['.augment'],
+  trae:        ['.trae'],
+  qwen:        ['.qwen'],
+  hermes:      ['.hermes'],
+  codebuddy:   ['.codebuddy'],
+  cline:       ['.cline'],
+  opencode:    ['.config', 'opencode'],
+  kilo:        ['.config', 'kilo'],
+  zcode:       ['.zcode'],
+  pi:          ['.pi', 'agent'],  // dot-home-nested, no probe (like windsurf)
 };
+
+// Expected default for a runtime under the CURRENT fixture home.
+function goldenDefault(runtime) {
+  return path.join(HOME, ...GOLDEN_SEGMENTS[runtime]);
+}
 
 // ── GOLDEN DEFAULTS ────────────────────────────────────────────────────────────
 
 describe('descriptor-driven equivalence: defaults (no env vars, no probe hits)', () => {
-  // kimi is excluded: its default depends on real filesystem probing (probe-hit/miss
-  // vary by machine). kimi probe scenarios are covered in the generic-agents-root suite
-  // with injected existsSync.
-  // antigravity is excluded: it also depends on real fs probing (probe candidates
-  // ~/.gemini/antigravity, ~/.gemini/antigravity-ide, ~/.gemini/antigravity-cli);
-  // a machine that has antigravity-ide or antigravity-cli but not antigravity gets a
-  // different result. antigravity probe scenarios are covered in the dot-home-nested
-  // suite with injected existsSync.
-  for (const [runtime, expected] of Object.entries(GOLDEN_DEFAULTS).filter(
-    ([r]) => r !== 'antigravity',
-  )) {
+  // kimi is excluded: its default depends on filesystem probing, and its
+  // probe-hit/miss scenarios are covered in the generic-agents-root suite with
+  // injected existsSync. antigravity is included: the fixture home is empty, so
+  // its probe misses and the default is the first candidate on every machine.
+  for (const runtime of Object.keys(GOLDEN_SEGMENTS)) {
     test(`${runtime} default resolves to its golden config dir`, () => {
-      const saved = clearAllEnvKeys();
-      try {
-        assert.strictEqual(getGlobalConfigDir(runtime), expected, `${runtime} default → ${expected}`);
-      } finally {
-        restoreEnvKeys(saved);
-      }
+      const expected = goldenDefault(runtime);
+      assert.strictEqual(getGlobalConfigDir(runtime), expected, `${runtime} default → ${expected}`);
     });
   }
 
   test('an unknown runtime REFUSES instead of resolving to ~/.claude (#5169)', () => {
-    const saved = clearAllEnvKeys();
-    try {
-      assert.throws(() => getGlobalConfigDir('totally-unknown-runtime-xyz'), { name: 'UnknownRuntimeError' });
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.throws(() => getGlobalConfigDir('totally-unknown-runtime-xyz'), { name: 'UnknownRuntimeError' });
   });
 
   test('an absent runtime id resolves to the generic ~/.claude default (#5169)', () => {
-    const saved = clearAllEnvKeys();
-    try {
-      assert.strictEqual(getGlobalConfigDir(''), path.join(HOME, '.claude'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalConfigDir(''), path.join(HOME, '.claude'));
   });
 });
 
@@ -173,36 +155,21 @@ describe('descriptor-driven equivalence: env-var overrides', () => {
 
   for (const { runtime, envKey, value } of cases) {
     test(`${runtime}: ${envKey} override → ${value}`, () => {
-      const saved = clearAllEnvKeys();
       process.env[envKey] = value;
-      try {
-        assert.strictEqual(getGlobalConfigDir(runtime), value);
-      } finally {
-        restoreEnvKeys(saved);
-      }
+      assert.strictEqual(getGlobalConfigDir(runtime), value);
     });
   }
 
   // copilot: COPILOT_CONFIG_DIR takes precedence over COPILOT_HOME
   test('copilot: COPILOT_CONFIG_DIR override (first env wins)', () => {
-    const saved = clearAllEnvKeys();
     process.env['COPILOT_CONFIG_DIR'] = '/custom/copilot-dir';
     process.env['COPILOT_HOME'] = '/should/not/win';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('copilot')).replace(/\\/g, '/'), '/custom/copilot-dir');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('copilot')).replace(/\\/g, '/'), '/custom/copilot-dir');
   });
 
   test('copilot: COPILOT_HOME fallback when COPILOT_CONFIG_DIR absent', () => {
-    const saved = clearAllEnvKeys();
     process.env['COPILOT_HOME'] = '/custom/copilot-home';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('copilot')).replace(/\\/g, '/'), '/custom/copilot-home');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('copilot')).replace(/\\/g, '/'), '/custom/copilot-home');
   });
 });
 
@@ -514,98 +481,53 @@ describe('#3023 review finding 1: whitespace-only env override falls back to def
 describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
   // opencode
   test('opencode: OPENCODE_CONFIG (file-path) → dirname', () => {
-    const saved = clearAllEnvKeys();
     process.env['OPENCODE_CONFIG'] = '/home/u/cfg/opencode.json';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/home/u/cfg');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/home/u/cfg');
   });
 
   test('opencode: OPENCODE_CONFIG_DIR takes precedence over OPENCODE_CONFIG', () => {
-    const saved = clearAllEnvKeys();
     process.env['OPENCODE_CONFIG_DIR'] = '/dir/wins';
     process.env['OPENCODE_CONFIG'] = '/file/loses.json';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/dir/wins');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/dir/wins');
   });
 
   test('opencode: OPENCODE_CONFIG takes precedence over XDG_CONFIG_HOME', () => {
-    const saved = clearAllEnvKeys();
     process.env['OPENCODE_CONFIG'] = '/cfg/opencode.json';
     process.env['XDG_CONFIG_HOME'] = '/xdg/should/lose';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/cfg');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/cfg');
   });
 
   test('opencode: XDG_CONFIG_HOME → ~/.config/opencode subdir', () => {
-    const saved = clearAllEnvKeys();
     process.env['XDG_CONFIG_HOME'] = '/xdg';
-    try {
-      assert.strictEqual(getGlobalConfigDir('opencode'), path.join('/xdg', 'opencode'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalConfigDir('opencode'), path.join('/xdg', 'opencode'));
   });
 
   test('opencode: tilde in OPENCODE_CONFIG → dirname expands tilde', () => {
-    const saved = clearAllEnvKeys();
     process.env['OPENCODE_CONFIG'] = '~/cfg/opencode.json';
-    try {
-      assert.strictEqual(getGlobalConfigDir('opencode'), path.join(HOME, 'cfg'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalConfigDir('opencode'), path.join(HOME, 'cfg'));
   });
 
   // kilo
   test('kilo: KILO_CONFIG (file-path) → dirname', () => {
-    const saved = clearAllEnvKeys();
     process.env['KILO_CONFIG'] = '/home/u/cfg/kilo.json';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/home/u/cfg');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/home/u/cfg');
   });
 
   test('kilo: KILO_CONFIG_DIR takes precedence over KILO_CONFIG', () => {
-    const saved = clearAllEnvKeys();
     process.env['KILO_CONFIG_DIR'] = '/dir/wins';
     process.env['KILO_CONFIG'] = '/file/loses.json';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/dir/wins');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/dir/wins');
   });
 
   test('kilo: KILO_CONFIG takes precedence over XDG_CONFIG_HOME', () => {
-    const saved = clearAllEnvKeys();
     process.env['KILO_CONFIG'] = '/cfg/kilo.json';
     process.env['XDG_CONFIG_HOME'] = '/xdg/should/lose';
-    try {
-      assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/cfg');
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/cfg');
   });
 
   test('kilo: XDG_CONFIG_HOME → ~/.config/kilo subdir', () => {
-    const saved = clearAllEnvKeys();
     process.env['XDG_CONFIG_HOME'] = '/xdg';
-    try {
-      assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
   });
 });
 
@@ -1057,12 +979,7 @@ describe('descriptor-driven equivalence: explicitDir short-circuit', () => {
 
 describe('descriptor-driven equivalence: grok (not in registry)', () => {
   test('grok default → ~/.agents', () => {
-    const saved = clearAllEnvKeys();
-    try {
-      assert.strictEqual(getGlobalConfigDir('grok'), path.join(HOME, '.agents'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalConfigDir('grok'), path.join(HOME, '.agents'));
   });
 
   test('grok: GROK_AGENTS_HOME override', () => {
@@ -1082,12 +999,7 @@ describe('descriptor-driven equivalence: grok (not in registry)', () => {
 
 describe('descriptor-driven equivalence: unknown runtime refuses', () => {
   test('an unknown runtime refuses, with no CLAUDE_CONFIG_DIR set', () => {
-    const saved = clearAllEnvKeys();
-    try {
-      assert.throws(() => getGlobalConfigDir('no-such-runtime'), { name: 'UnknownRuntimeError' });
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.throws(() => getGlobalConfigDir('no-such-runtime'), { name: 'UnknownRuntimeError' });
   });
 
   test('an unknown runtime refuses even when CLAUDE_CONFIG_DIR is set (the Claude override never answers for another runtime)', () => {
@@ -1105,21 +1017,11 @@ describe('descriptor-driven equivalence: unknown runtime refuses', () => {
 
 describe('descriptor-driven global skills base', () => {
   test('hermes skills base is derived from descriptor artifact layout', () => {
-    const saved = clearAllEnvKeys();
-    try {
-      assert.strictEqual(getGlobalSkillsBase('hermes'), path.join(HOME, '.hermes', 'skills', 'gsd'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalSkillsBase('hermes'), path.join(HOME, '.hermes', 'skills', 'gsd'));
   });
 
   test('kilo skills base is derived from configHome.skillsHome descriptor', () => {
-    const saved = clearAllEnvKeys();
-    try {
-      assert.strictEqual(getGlobalSkillsBase('kilo'), path.join(HOME, '.kilo', 'skills'));
-    } finally {
-      restoreEnvKeys(saved);
-    }
+    assert.strictEqual(getGlobalSkillsBase('kilo'), path.join(HOME, '.kilo', 'skills'));
   });
 
   test('synthetic runtime skillsHome descriptor resolves without a runtime-name branch', () => {
@@ -1152,31 +1054,41 @@ describe('descriptor-driven parity: 13 non-probe registry runtimes × no-env-var
   // the registry internally) and compares against GOLDEN_DEFAULTS captured from
   // the old switch. Any discrepancy means a regression.
   // kimi is excluded because its default depends on real filesystem probing.
-  // antigravity is excluded because it also depends on real fs probing — a machine
-  // with ~/.gemini/antigravity-ide or ~/.gemini/antigravity-cli (but not
-  // ~/.gemini/antigravity) gets a different result. Probe scenarios are covered in
-  // the dot-home-nested suite with injected existsSync.
   // grok is excluded because it is not in the registry (hardcoded branch).
-  const registryRuntimes = Object.keys(GOLDEN_DEFAULTS).filter(
-    r => r !== 'grok' && r !== 'antigravity',
-  );
+  const registryRuntimes = Object.keys(GOLDEN_SEGMENTS).filter(r => r !== 'grok');
 
   for (const runtime of registryRuntimes) {
     test(`${runtime} via getGlobalConfigDir matches its golden default`, () => {
-      const saved = clearAllEnvKeys();
-      try {
-        assert.strictEqual(
-          getGlobalConfigDir(runtime),
-          GOLDEN_DEFAULTS[runtime],
-          `${runtime} via getGlobalConfigDir matches golden: ${GOLDEN_DEFAULTS[runtime]}`,
-        );
-      } finally {
-        restoreEnvKeys(saved);
-      }
+      assert.strictEqual(
+        getGlobalConfigDir(runtime),
+        goldenDefault(runtime),
+        `${runtime} via getGlobalConfigDir matches golden: ${goldenDefault(runtime)}`,
+      );
     });
   }
 });
 
+
+// ── #6034: the antigravity probe reads the SANDBOXED home, and ambient env is scrubbed ──
+
+describe('#6034: antigravity default follows the sandboxed home (probe reads the fixture)', () => {
+  test('antigravity default follows the sandboxed home\'s installed layout', () => {
+    fs.mkdirSync(path.join(HOME, '.gemini', 'antigravity-cli'), { recursive: true });
+    assert.strictEqual(
+      getGlobalConfigDir('antigravity'),
+      path.join(HOME, '.gemini', 'antigravity-cli'),
+    );
+  });
+
+  test('antigravity: the first probe hit wins when antigravity and antigravity-cli both exist', () => {
+    fs.mkdirSync(path.join(HOME, '.gemini', 'antigravity'), { recursive: true });
+    fs.mkdirSync(path.join(HOME, '.gemini', 'antigravity-cli'), { recursive: true });
+    assert.strictEqual(
+      getGlobalConfigDir('antigravity'),
+      path.join(HOME, '.gemini', 'antigravity'),
+    );
+  });
+});
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-3126-global-skills-base-runtime-path.test.cjs — consolidation epic #1969 (B3 #1972)
@@ -1226,44 +1138,27 @@ function withEnv(key, value, fn) {
 }
 
 describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
+  // Expected values derive from the fixture home the file-level hook installed
+  // (HOME), so they are computed inside the test, not at collection time.
   const defaults = [
-    ['claude',      path.join(os.homedir(), '.claude')],
-    ['cursor',      path.join(os.homedir(), '.cursor')],
-    ['codex',       path.join(os.homedir(), '.codex')],
-    ['copilot',     path.join(os.homedir(), '.copilot')],
-    ['antigravity', path.join(os.homedir(), '.gemini', 'antigravity')],
-    ['windsurf',    path.join(os.homedir(), '.codeium', 'windsurf')],
-    ['augment',     path.join(os.homedir(), '.augment')],
-    ['trae',        path.join(os.homedir(), '.trae')],
-    ['qwen',        path.join(os.homedir(), '.qwen')],
-    ['hermes',      path.join(os.homedir(), '.hermes')],
-    ['codebuddy',   path.join(os.homedir(), '.codebuddy')],
-    ['cline',       path.join(os.homedir(), '.cline')],
-    ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
-    ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
+    ['claude',      ['.claude']],
+    ['cursor',      ['.cursor']],
+    ['codex',       ['.codex']],
+    ['copilot',     ['.copilot']],
+    ['antigravity', ['.gemini', 'antigravity']],
+    ['windsurf',    ['.codeium', 'windsurf']],
+    ['augment',     ['.augment']],
+    ['trae',        ['.trae']],
+    ['qwen',        ['.qwen']],
+    ['hermes',      ['.hermes']],
+    ['codebuddy',   ['.codebuddy']],
+    ['cline',       ['.cline']],
+    ['opencode',    ['.config', 'opencode']],
+    ['kilo',        ['.config', 'kilo']],
   ];
-  for (const [runtime, expected] of defaults) {
+  for (const [runtime, segments] of defaults) {
     test(`${runtime} default configDir`, () => {
-      // Derive env-var list from the registry so new runtimes are auto-covered.
-      // GROK_AGENTS_HOME is kept explicitly (grok has no registry entry).
-      const { runtimes: _reg3126 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
-      const _regEnvKeys3126 = Object.values(_reg3126).flatMap((r) => {
-        const ch = r.runtime?.configHome;
-        if (!ch) return [];
-        const envs = Array.isArray(ch.env) ? ch.env : [];
-        const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
-        return [...envs, ...skillsEnvs];
-      });
-      const envKeys = [...new Set([..._regEnvKeys3126, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
-      const saved = {};
-      for (const k of envKeys) { saved[k] = process.env[k]; delete process.env[k]; }
-      try {
-        assert.strictEqual(getGlobalConfigDir(runtime), expected);
-      } finally {
-        for (const k of envKeys) {
-          if (saved[k] !== undefined) process.env[k] = saved[k];
-        }
-      }
+      assert.strictEqual(getGlobalConfigDir(runtime), path.join(HOME, ...segments));
     });
   }
   test('an unknown runtime REFUSES instead of falling back to ~/.claude (#5169)', () => {
