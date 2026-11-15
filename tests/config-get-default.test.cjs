@@ -2024,17 +2024,14 @@ describe('#6029 acceptance: /gsd-code-review resolve_depth in a project with no 
         });
       }
 
-      test(`${alias.key} / ${nestedKey}, empty config: the runtime value, or the --default when the runtime has none`, () => {
+      test(`${alias.key} / ${nestedKey}, empty config: the runtime value, and --default never outranks it`, () => {
         writeConfig({});
         const runtime = runtimeValue(alias);
-        if (runtime === undefined) {
-          assert.equal(configGet(alias.key, 'fallback-5470'), 'fallback-5470');
-          assert.equal(configGet(nestedKey, 'fallback-5470'), 'fallback-5470');
-        } else {
-          assert.equal(configGet(alias.key), String(runtime));
-          assert.equal(configGet(nestedKey), String(runtime));
-          assert.equal(configGet(alias.key, 'fallback-5470'), String(runtime), '--default never outranks a resolved value');
-        }
+        // Both routed keys have a CONFIG_DEFAULTS value, so the loader always resolves one.
+        assert.notStrictEqual(runtime, undefined);
+        assert.equal(configGet(alias.key), String(runtime));
+        assert.equal(configGet(nestedKey), String(runtime));
+        assert.equal(configGet(alias.key, 'fallback-5470'), String(runtime), '--default never outranks a resolved value');
       });
 
       // The literal walk finds a null under one spelling only.
