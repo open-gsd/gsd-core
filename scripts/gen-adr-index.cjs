@@ -726,7 +726,8 @@ function scanBlocks(text) {
     // a thematic break lies in the trailing run of one of `-*_` (blanks between): from `hrFrom`
     let hrFrom = e.length;
     const mark = e.trimEnd().slice(-1);
-    while (hrFrom > 0 && '-*_'.includes(mark) && (e[hrFrom - 1] === mark || e[hrFrom - 1] === ' ')) {
+    while (hrFrom > 0 && '-*_'.includes(mark)
+      && (e[hrFrom - 1] === mark || e[hrFrom - 1] === ' ')) {
       hrFrom -= 1;
     }
     for (;;) {

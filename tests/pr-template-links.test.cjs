@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../scripts/gen-features.cjs');
-const { extractLinks, labelledCloses, maskCode } = require('../scripts/gen-adr-index.cjs');
+const { extractLinks, labelledCloses } =require('../scripts/gen-adr-index.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, nextRel, missingNext, repoPathOf, unresolvedAnchors, headingSet,
@@ -187,6 +187,19 @@ const BLOCKS = [
   ['T\nU\n---', [], ['t-u']],
   ['  T\n---', [], ['t']],
   ['> T\n\n---', [], []],
+  // limit-1, limit and limit+1 of the 3-character runs and the 3-space marker indent
+  ['p\n**\n    [a](x)', ['x'], []],
+  ['p\n***\n    [a](x)', [], []],
+  ['p\n__\n    [a](x)', ['x'], []],
+  ['p\n___\n    [a](x)', [], []],
+  ['~~\n    [a](x)', ['x'], []],
+  ['~~~\n    [a](x)', [], []],
+  ['``\n    [a](x)', ['x'], []],
+  ['```\n    [a](x)', [], []],
+  ['   > [a](x)', ['x'], []],
+  ['    > [a](x)', [], []],
+  ['> T\n   > ---', [], ['t']],
+  ['> T\n    > ---', [], []],
 ];
 describe('block structure agrees with a CommonMark reader (#5427)', () => {
   test('each input gives the links and anchors the oracle found, with LF and CRLF', () => {
@@ -430,11 +443,43 @@ describe('angle-enclosed destinations (#5427)', () => {
   });
 });
 
-// The pre-#5427 ADR-gate extractor, frozen as the oracle for the shared-scanner rewrite.
+// The pre-#5427 ADR-gate extractor, frozen as the oracle for the shared-scanner rewrite: its
+// fence mask, its per-line code-span mask (naive rescan, same results) and its link regex.
+const oldSpanMask = (l) => {
+  const o = l.split('');
+  for (let i = 0; i < l.length;) {
+    if (l[i] !== '`') { i += 1; continue; }
+    const start = i;
+    while (l[i] === '`') i += 1;
+    for (let j = i; j < l.length;) {
+      const a = j;
+      while (j < l.length && l[j] !== '`') j += 1;
+      const b = j;
+      while (l[j] === '`') j += 1;
+      if (j - b === i - start) { o.fill(' ', start, j); i = j; break; }
+      if (j === a) j += 1;
+    }
+  }
+  return o.join('');
+};
+const oldMaskCode = (text) => {
+  let fence = null;
+  return text.split(/(\r?\n)/).map((p, k) => {
+    if (k % 2) return p;
+    if (fence) {
+      const close = p.match(fence[0] === '`' ? /^ {0,3}(`{3,})\s*$/ : /^ {0,3}(~{3,})\s*$/);
+      if (close && close[1].length >= fence.length) fence = null;
+      return ' '.repeat(p.length);
+    }
+    const open = p.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (open) { fence = open[1]; return ' '.repeat(p.length); }
+    return oldSpanMask(p);
+  }).join('');
+};
 const oldExtractLinks = (text) => {
   const out = [];
   const re = /!?\[[^\][\n]*\]\(([^()\n]*)\)/g;
-  maskCode(String(text)).split(/\r?\n/).forEach((l, i) => {
+  oldMaskCode(String(text)).split(/\r?\n/).forEach((l, i) => {
     re.lastIndex = 0;
     for (let m = re.exec(l); m !== null; m = re.exec(l)) out.push({ line: i + 1, target: m[1] });
   });
@@ -483,7 +528,8 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
     };
     const hasOpener = (text, at) => {
       if (escaped(text, at)) return false;
-      const para = text.slice(0, at); // a scan holds one paragraph: scanBlocks splits at blank lines
+      // a scan holds one paragraph: scanBlocks splits at blank lines
+      const para = text.slice(0, at);
       let depth = 1;
       for (let j = para.length - 1; j >= 0; j -= 1) {
         if (escaped(para, j)) continue;
