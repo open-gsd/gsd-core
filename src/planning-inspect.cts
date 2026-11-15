@@ -1480,7 +1480,8 @@ function buildPlanningInspectResult(cwd: string): {
       uat: { unresolved: uat.items, scope: uat.scope },
       plan_count: phase.planCount,
       summary_count: phase.summaryCount,
-      // #5823 (additive): live plans whose own SUMMARY says `status: halted`.
+      // #5823 (additive): live (non-superseded) plans whose `halted` is true.
+      // Which SUMMARY `halted` reads is described on `PlanRow.halted`.
       // `summary_count` is unchanged and still counts them (#2830's model).
       halted_count: plans.rows.filter((row) => !row.superseded && row.halted).length,
       plans: plans.rows,
