@@ -638,7 +638,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Record this plan's isolation immediately before its dispatch (#5516).** Restore the dispatched plan's **stored decision** from step 2.5 (`plan_id` := this plan's `id`, `USE_WORKTREES_FOR_PLAN` := the value stored for that plan, and `PLAN_FILES` / `PLAN_DELETIONS` re-extracted from this plan's JSON, since the later plans' decisions overwrote them) and run **Part 2** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`, so the single-slot sentinel names the plan being dispatched. Do not run it for any other plan, and do not batch it ahead of the dispatches.
 
-   **Executor routing (#1689/#3370).** Per plan, run `gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md` to set `EXECUTOR_TYPE` for `subagent_type="{EXECUTOR_TYPE}"` below.
+   **Executor routing (#1689/#3370).** Per plan, run `gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md` to set `EXECUTOR_TYPE`, `EXECUTOR_MODEL` for `subagent_type="{EXECUTOR_TYPE}"`.
 
    **TDD-applicability resolution (#4266/#4272).** Run `gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md`.
 
