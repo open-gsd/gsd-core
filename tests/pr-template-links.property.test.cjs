@@ -136,7 +136,8 @@ describe('PR template locations (#5427)', () => {
       assert.ok(isPrTemplate(`${dir}${name}.md`), `${dir}${name}.md`);
       assert.ok(isPrTemplate(`${dir}${name}/${f}.md`), `${dir}${name}/${f}.md`);
       for (const near of [`${dir}${name}.md.bak`, `${dir}${name}.mdx`, `${dir}${name}s/${f}.md`,
-        `${dir}${name}`, `${dir}sub/${name}.md`, `x${dir}${name}.md`, `${dir}${name}/`]) {
+        `${dir}${name}`, `${dir}sub/${name}.md`, `x${dir}${name}.md`, `${dir}${name}/`,
+        `${dir}${name}/${f}/${f}.md`]) {
         assert.ok(!isPrTemplate(near), near);
       }
     }));

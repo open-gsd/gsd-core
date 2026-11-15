@@ -209,7 +209,6 @@ changes. Other code-touching PRs run the default required matrix:
 
 - Ubuntu / Node 24 scoped tests
 - Ubuntu / Node 24 unit, integration, and security suites
-- Windows / Node 24 scoped Windows/path/shell tests
 - Ubuntu / Node 24 coverage
 
 PRs that touch workflow, package, test-runner, install, release, or Windows
@@ -225,25 +224,29 @@ The `changes` job treats these paths as code-touching:
 
 ```
 bin/**
+src/**
 gsd-core/**
 agents/**
 commands/**
 hooks/**
+skills/**
 tests/**
 scripts/**
+eslint-rules/**
 package.json
 package-lock.json
 tsconfig*.json
-.github/workflows/**
 .github/rulesets/**
+.github/**/*.y{a,}ml
 CONTRIBUTING.md
 docs/registries/README.md
 {,docs/,.github/}pull_request_template.md
-{,docs/,.github/}PULL_REQUEST_TEMPLATE/**
+{,docs/,.github/}PULL_REQUEST_TEMPLATE/*
 ```
 
-The last four lines are the template-link docs (`isTemplateLinkDoc`); the template
-names match in any case. They and CI YAML are the lightweight paths.
+The `CONTRIBUTING.md` line and the lines after it are the template-link docs
+(`isTemplateLinkDoc`); the template names match in any case. They and the CI YAML
+glob (`.github/**/*.y{a,}ml`) are the lightweight paths (`isLightweight`).
 
 This list should stay aligned with changeset/docs policy where those gates care
 about the same user-facing surfaces.

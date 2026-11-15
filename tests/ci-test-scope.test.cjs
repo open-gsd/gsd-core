@@ -79,6 +79,8 @@ describe('ci-test-scope.cjs', () => {
       'CONTRIBUTING.mdx', 'docs/registries/README.mdx', 'docs/registries/other.md',
       'docs/PULL_REQUEST_TEMPLATES/x.md', 'PULL_REQUEST_TEMPLATE.md.bak',
       '.github/pull_request_template.mdx', 'docs/sub/pull_request_template.md',
+      // GitHub reads only the direct children of a template directory
+      '.github/PULL_REQUEST_TEMPLATE/sub/x.md',
     ]) {
       const r = scopeFor([f]);
       assert.ok(!r.targeted_tests.includes('tests/pr-template-links.test.cjs'), f);

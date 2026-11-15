@@ -29,12 +29,13 @@ const WORKFLOW_LINT_TESTS = [
 ];
 
 // GitHub's default PR-template locations: the root, docs/ and .github/, as
-// pull_request_template.md or a PULL_REQUEST_TEMPLATE/ directory (names case-insensitive).
+// pull_request_template.md or a file directly in a PULL_REQUEST_TEMPLATE/ directory (names
+// case-insensitive; GitHub reads no deeper level).
 // CONTRIBUTING.md (the anchor target) and docs/registries/README.md (the registry-entry
 // link target) are docs whose links a test guards: they count as lightweight code
 // changes (like inert CI), so the nine TEMPLATE_LINK_OBSERVERS are selected.
 const isPrTemplate = filePath =>
-  /^(?:(?:\.github|docs)\/)?pull_request_template(?:\.md|\/.+)$/i.test(filePath);
+  /^(?:(?:\.github|docs)\/)?pull_request_template(?:\.md|\/[^/]+)$/i.test(filePath);
 const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
   filePath === 'docs/registries/README.md' || isPrTemplate(filePath);
 const isLightweight = filePath => isCiYaml(filePath) || isTemplateLinkDoc(filePath);
@@ -54,7 +55,8 @@ const TEMPLATE_LINK_OBSERVERS = [
 // YAML edit re-runs them in the targeted lane (never full_matrix). Several are
 // conformance-tier members; that does not flip full_matrix for a CI-YAML-only
 // change because classify() exempts isLightweight(file) from the windows-hint
-// escalation and forces full_matrix=false when only CI YAML changed.
+// escalation and forces full_matrix=false when only lightweight files (CI YAML,
+// template-link docs) changed.
 const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-218-release-version-validation.test.cjs',
   'tests/adr-230-pr-target-policy.test.cjs',
