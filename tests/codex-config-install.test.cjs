@@ -3056,6 +3056,47 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         });
       }
 
+      // The exemption as a property of the uninstall strip behind a link: a file with no GSD
+      // content comes back unchanged whatever its line endings and the blank space at either
+      // end, and a file holding a GSD block never does. The generated lines leave out what the
+      // strip treats as GSD content even without a marker: multi_agent,
+      // default_mode_request_user_input, the codex_hooks flag, and [features] or [agents] tables.
+      test('property: behind a link, the uninstall strip returns a file with no GSD content unchanged and always changes one holding GSD content', () => {
+        const { stripGsdFromCodexConfigOnUninstall } = require('../bin/install.js');
+        const gsdOnly = installGsdOnlyConfig();
+        linkConfigToml('');
+        assert.ok(fs.lstatSync(configTomlPath()).isSymbolicLink(), 'fixture: config.toml is a link');
+
+        const name = fc.stringMatching(/^[a-z][a-z0-9_]{0,8}$/);
+        const userLine = fc.oneof(
+          fc.constantFrom('', ' ', '\t', '  \t'),
+          name.map((n) => `user_${n} = "${n}"`),
+          fc.integer({ min: 0, max: 999 }).map((n) => `user_count = ${n}`),
+          name.map((n) => `[user_${n}]`),
+          name.map((n) => `# ${n}`),
+        );
+        const userFile = fc.tuple(
+          fc.array(fc.tuple(userLine, fc.constantFrom('\n', '\r\n')), { maxLength: 12 }),
+          fc.boolean(),
+        ).map(([lines, finalLineEnding]) => lines
+          .map(([text, eol], i) => text + (i < lines.length - 1 || finalLineEnding ? eol : ''))
+          .join(''));
+
+        fc.assert(
+          fc.property(userFile, (content) => {
+            assert.strictEqual(stripGsdFromCodexConfigOnUninstall(configTomlPath(), content), content);
+          }),
+          { numRuns: 200 },
+        );
+        fc.assert(
+          fc.property(userFile, fc.constantFrom('\n', '\r\n', '\n\n'), (userContent, separator) => {
+            const content = `${userContent}${separator}${gsdOnly}`;
+            assert.notStrictEqual(stripGsdFromCodexConfigOnUninstall(configTomlPath(), content), content);
+          }),
+          { numRuns: 200 },
+        );
+      });
+
       test('uninstall with GSD_ALLOW_SYMLINKED_DEST=1 leaves exactly the user keys in the target of a link that also holds them', () => {
         const realConfig = linkConfigToml(withUserKeys(installGsdOnlyConfig()));
         process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
