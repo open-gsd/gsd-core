@@ -60,7 +60,7 @@ import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { computeProfileTier, resolveModelOverride, resolveModelInternal, resolveTierInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import agentCommandRouterMod = require('./agent-command-router.cjs');
 const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
@@ -564,31 +564,50 @@ function cmdHistoryDigest(cwd: string, raw: boolean): void {
   }
 }
 
-function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolean): void {
+function cmdResolveModel(cwd: string, agentType: string | undefined, raw: boolean, fallbackAgent?: string): void {
   if (!agentType) {
     error('agent-type required');
   }
 
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  const model = resolveModelInternal(cwd, agentType);
+
+  // #6213: a hinted executor with no model_overrides entry and no catalog tier would otherwise
+  // resolve to the generic profile alias. With `--fallback-agent <catalog role>` it resolves as
+  // that role instead. The fallback must be an own key of MODEL_PROFILES, else the flag is ignored.
+  const agentModelsMap = MODEL_PROFILES as Record<string, unknown>;
+  // An override counts only when resolveModelInternal would actually use it (non-empty, mappable);
+  // an empty or unusable entry must not block the fallback.
+  const hasUsableOverride = resolveModelOverride(config, agentType) !== null;
+  let resolveAs = agentType;
+  let appliedFallback: string | null = null;
+  if (
+    typeof fallbackAgent === 'string' && fallbackAgent.length > 0 &&
+    Object.hasOwn(agentModelsMap, fallbackAgent) &&
+    !hasUsableOverride && computeProfileTier(config, agentType) === null
+  ) {
+    resolveAs = fallbackAgent;
+    appliedFallback = fallbackAgent;
+  }
+
+  const model = resolveModelInternal(cwd, resolveAs);
+  // The effort belongs to the hinted agent, not to the fallback role whose model it borrows.
   const effort = resolveEffortInternal(cwd, agentType);
 
   // Own-property guard: agentType is an unvalidated CLI positional, so a
   // prototype-chain value ("toString", "constructor") would otherwise return
   // an inherited truthy member from this plain object and misreport a
   // genuinely unknown agent as known (unknown_agent dropped from the result).
-  const agentModelsMap = MODEL_PROFILES as Record<string, unknown>;
-  const agentModels = Object.hasOwn(agentModelsMap, agentType) ? agentModelsMap[agentType] : undefined;
+  const agentModels = Object.hasOwn(agentModelsMap, resolveAs) ? agentModelsMap[resolveAs] : undefined;
   // #2229: `tier` is additive — existing keys and their values are untouched, so
   // every `--pick model` / `--pick profile` / `--raw` consumer is unaffected. It
   // exists because the model id is deliberately blank under resolve_model_ids:"omit",
   // which leaves a tier-sensitive guard with nothing to read.
-  const tier = resolveTierInternal(cwd, agentType);
+  const tier = resolveTierInternal(cwd, resolveAs);
   const result = agentModels
     ? { model, profile, effort, tier }
     : { model, profile, effort, tier, unknown_agent: true };
-  output(result, raw, model);
+  output(appliedFallback ? { ...result, fallback_agent: appliedFallback } : result, raw, model);
 }
 
 function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: boolean, override?: string): void {
@@ -3922,7 +3941,8 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
     }
     case 'verification': {
       filePath = path.join(phaseDir as string, `${padded}-VERIFICATION.md`);
-      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\nstatus: pending\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — Verification\n\n## Goal-Backward Verification\n\n**Phase Goal:** [From ROADMAP.md]\n\n## Checks\n\n| # | Requirement | Status | Evidence |\n|---|------------|--------|----------|\n\n## Result\n\n_Pending verification_\n`;
+      // No verdict exists until the verifier runs; an absent status reads as missing.
+      content = `---\nphase: "${padded}"\nname: "${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'}"\ncreated: ${today}\n---\n\n# Phase ${phase}: ${name || (phaseInfo?.['phase_name'] as string | undefined) || 'Unnamed'} — Verification\n\n## Goal-Backward Verification\n\n**Phase Goal:** [From ROADMAP.md]\n\n## Checks\n\n| # | Requirement | Status | Evidence |\n|---|------------|--------|----------|\n\n## Result\n\n_Pending verification_\n`;
       break;
     }
     case 'phase-dir': {

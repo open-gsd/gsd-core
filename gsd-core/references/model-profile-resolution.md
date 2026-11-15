@@ -54,12 +54,18 @@ No model parameter is passed at all — `planner_model` resolved to `"inherit"` 
 omitting it inherits the orchestrator's model. Passing either value through as an argument
 instead 404s on non-Claude runtimes.
 
-This is not cosmetic, and both values really occur. `model_profile: "inherit"` — and any
-opus-tier agent — resolves to the literal string `"inherit"`. `resolve_model_ids: "omit"`
-resolves to the **empty string** whenever the project sets it explicitly or the active
-runtime has no native tier aliases; an agent type absent from the profile table takes that
-same empty-string path, because it has no tier for the earlier steps to resolve. Emitting
-either value verbatim fails the spawn on every runtime without native tier aliases.
+This is not cosmetic, and both values really occur. `model_profile: "inherit"` resolves to
+the literal string `"inherit"`. `resolve_model_ids: "omit"` resolves to the **empty string**
+on a runtime that has neither native tier aliases nor a runtime tier map; an agent type
+absent from the profile table takes that same empty-string path, because it has no tier for
+the earlier steps to resolve. Emitting either value verbatim fails the spawn on every
+runtime without native tier aliases.
+
+On a runtime whose descriptor declares native tier aliases (`hostBehaviors.nativeModelAliases`
+— Claude Code), `"omit"` resolves to the agent's tier alias (`opus` / `sonnet` / `haiku`)
+rather than the empty string (#3703), so the bound field is non-empty and is passed as
+`model=`. A blank there would hand the choice to the host (on Claude Code,
+`CLAUDE_CODE_SUBAGENT_MODEL` when set), not to the profile.
 
 **#2684 — substitute a field your workflow actually bound.** `model="{…}"` must name a key
 your own `init.*` payload emits, a shell variable you assigned, or a field on your declared
@@ -69,10 +75,8 @@ silently invents a value, which is the invisible partial application ADR-1411 pr
 
 ## Profile semantics
 
-**Note:** Opus-tier agents resolve to `"inherit"` (not `"opus"`). This causes the agent to
-use the parent session's model, avoiding conflicts with organization policies that may
-block specific opus versions — and, per the rule above, means the `model=` parameter is
-omitted rather than set.
+Each profile resolves an agent to a tier alias (`opus` / `sonnet` / `haiku`) from the
+lookup table above; on the Claude runtime the alias is passed to `model=` as-is.
 
 If `model_profile` is `"adaptive"`, agents resolve to role-based assignments (opus/sonnet/
 haiku based on agent type).
