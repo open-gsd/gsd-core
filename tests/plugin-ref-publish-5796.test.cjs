@@ -94,7 +94,7 @@ function lsTree(repo, ref) {
 describe('#5796 plugin ref publisher', () => {
   test('ref tree contains tracked files and compiled lib', () => {
     const root = makeFixtureRepo();
-    const res = publisher.buildPluginRefCommit({ root });
+    const res = publisher.buildPluginRefCommit({ root, source: 'HEAD' });
     assert.equal(res.ok, true, JSON.stringify(res));
     const files = lsTree(root, res.commit);
     for (const f of [
@@ -107,7 +107,7 @@ describe('#5796 plugin ref publisher', () => {
 
   test('ref tree excludes ignored non-lib files', () => {
     const root = makeFixtureRepo();
-    const res = publisher.buildPluginRefCommit({ root });
+    const res = publisher.buildPluginRefCommit({ root, source: 'HEAD' });
     const files = lsTree(root, res.commit);
     for (const f of [
       'node_modules/dep/index.js', '.gsd/bug/queue.json', 'tsconfig.build.tsbuildinfo',
@@ -119,7 +119,7 @@ describe('#5796 plugin ref publisher', () => {
     const root = makeFixtureRepo();
     const headBefore = git(root, ['rev-parse', 'HEAD']);
     const statusBefore = git(root, ['status', '--porcelain', '--ignored']);
-    const res = publisher.buildPluginRefCommit({ root });
+    const res = publisher.buildPluginRefCommit({ root, source: 'HEAD' });
     assert.equal(
       git(root, ['rev-list', '--parents', '-n', '1', res.commit]),
       `${res.commit} ${headBefore}`,
@@ -135,11 +135,41 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
   });
 
+  test('refuses when HEAD is not the source', () => {
+    const root = makeFixtureRepo();
+    const shaA = git(root, ['rev-parse', 'HEAD']);
+    write(root, 'README.md', 'second\n');
+    git(root, ['commit', '-q', '-am', 'second']);
+    const shaB = git(root, ['rev-parse', 'HEAD']);
+    const bare = makeBareRemote();
+    const refused = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: shaA });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /is not the source/);
+    assert.equal(git(bare, ['branch', '--list']), '');
+    const ok = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: shaB });
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    assert.equal(
+      git(root, ['rev-list', '--parents', '-n', '1', ok.commit]),
+      `${ok.commit} ${shaB}`,
+    );
+  });
+
+  test('rejects a missing or option-like source', () => {
+    const root = makeFixtureRepo();
+    const bare = makeBareRemote();
+    for (const source of [undefined, '', '-x']) {
+      const res = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source });
+      assert.equal(res.ok, false, JSON.stringify(source));
+      assert.equal(res.code, 'usage', JSON.stringify(source));
+    }
+    assert.equal(git(bare, ['branch', '--list']), '');
+  });
+
   test('refuses to publish an unbuilt tree', () => {
     const root = makeFixtureRepo();
     cleanup(path.join(root, 'gsd-core/bin/lib/cli-exit.cjs'));
     const bare = makeBareRemote();
-    const res = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin' });
+    const res = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: 'HEAD' });
     assert.equal(res.ok, false);
     assert.match(res.error, /cli-exit\.cjs/);
     assert.equal(git(bare, ['branch', '--list']), '');
@@ -148,12 +178,12 @@ describe('#5796 plugin ref publisher', () => {
   test('force-updates a moving branch', () => {
     const root = makeFixtureRepo();
     const bare = makeBareRemote();
-    const first = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin' });
+    const first = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: 'HEAD' });
     assert.equal(first.ok, true, JSON.stringify(first));
     assert.equal(git(bare, ['rev-parse', 'refs/heads/plugin']), first.commit);
     write(root, 'README.md', 'changed\n');
     git(root, ['commit', '-q', '-am', 'second']);
-    const second = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin' });
+    const second = publisher.publishPluginRef({ root, remote: bare, branch: 'plugin', source: 'HEAD' });
     assert.equal(second.ok, true, JSON.stringify(second));
     assert.notEqual(second.commit, first.commit);
     assert.equal(git(bare, ['rev-parse', 'refs/heads/plugin']), second.commit);
@@ -162,7 +192,7 @@ describe('#5796 plugin ref publisher', () => {
   test('returns ok:false when push fails', () => {
     const root = makeFixtureRepo();
     const res = publisher.publishPluginRef({
-      root, remote: path.join(os.tmpdir(), 'plugin-ref-no-such-remote-5796'), branch: 'plugin',
+      root, remote: path.join(os.tmpdir(), 'plugin-ref-no-such-remote-5796'), branch: 'plugin', source: 'HEAD',
     });
     assert.equal(res.ok, false);
     assert.ok(res.error);
@@ -192,10 +222,18 @@ describe('#5796 plugin ref publisher', () => {
 
   test('CLI rejects an invalid branch with a usage exit', () => {
     const r = runNode([
-      path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'), '--branch', '-bad', '--remote', 'x',
+      path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'), '--branch', '-bad', '--remote', 'x', '--source', 'x',
     ], { cwd: ROOT });
     assert.equal(r.status, 2);
     assert.match(r.stderr, /branch/i);
+  });
+
+  test('CLI requires --source', () => {
+    const r = runNode([
+      path.join(ROOT, 'scripts', 'publish-plugin-ref.cjs'), '--remote', 'x', '--branch', 'plugin',
+    ], { cwd: ROOT });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /source/);
   });
 
   test('marketplace source parity', () => {
@@ -214,7 +252,13 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(matching.length, 1, 'finalize has exactly one publish step');
     assert.ok(String(matching[0].if).includes('!inputs.dry_run'), 'publish step is skipped on dry runs');
     const idx = steps.indexOf(matching[0]);
-    assert.equal(steps[idx + 1] && steps[idx + 1].name, 'Summary', 'publish step is immediately before Summary');
+    const syncIdx = steps.findIndex((s) => typeof s.run === 'string' && s.run.includes('scripts/sync-next-version.cjs'));
+    const verifyIdx = steps.findIndex((s) => s.name === 'Verify publish');
+    assert.ok(syncIdx >= 0 && verifyIdx >= 0, 'sync and verify steps present');
+    assert.ok(idx < syncIdx, 'publish step runs before the next sync checks out origin/next');
+    assert.ok(idx > verifyIdx, 'publish step runs after Verify publish');
+    assert.ok(matching[0].run.includes('--source "refs/tags/v${VERSION}"'), 'publish step names the release tag');
+    assert.equal(matching[0].env && matching[0].env.VERSION, '${{ inputs.version }}');
     for (const [name, job] of Object.entries(wf.jobs)) {
       if (name === 'finalize') continue;
       assert.ok(!(job.steps || []).some(publishes), `${name} must not publish the plugin ref`);
@@ -234,7 +278,9 @@ describe('#5796 plugin ref publisher', () => {
       { recursive: true },
     );
     const bare = makeBareRemote();
-    const res = publisher.publishPluginRef({ root: repo, remote: bare, branch: 'plugin' });
+    const res = publisher.publishPluginRef({
+      root: repo, remote: bare, branch: 'plugin', source: git(repo, ['rev-parse', 'HEAD']),
+    });
     assert.equal(res.ok, true, JSON.stringify(res));
     const clone = tmp('plugin-cache-');
     git(clone, ['clone', '-q', '--branch', 'plugin', bare, path.join(clone, 'cache')]);

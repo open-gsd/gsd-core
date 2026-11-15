@@ -1004,6 +1004,21 @@ jobs:
             echo "::warning::Release→main PR #$PR is not cleanly mergeable (state: $STATE). Left open for manual resolution."
           fi
 
+      # Publish the moving `plugin` branch (HEAD tree + compiled gsd-core/bin/lib)
+      # that .claude-plugin/marketplace.json points at, so `claude plugin update`
+      # materializes a tree whose runtime library is already built (#5796). Stable
+      # finalize only: rc never publishes this ref. Runs after the npm publish and
+      # the release → main merge, and before the next sync, which checks out
+      # origin/next; --source names the pushed release tag and the script refuses
+      # to run unless it is the checked-out HEAD, so the compiled lib always
+      # matches the tree. It force-updates one commit parented on the release
+      # commit.
+      - name: Publish plugin ref (prebuilt bin/lib)
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source "refs/tags/v${VERSION}"
+
       # Regression #2423: keep `next` at the last published release for final
       # releases, not just rc/hotfix. Without this, `next` drifts to whatever
       # rc.N the release branch forked from, and every npm script banner on
@@ -1018,17 +1033,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: node scripts/sync-next-version.cjs "$VERSION"
-
-      # Publish the moving `plugin` branch (HEAD tree + compiled gsd-core/bin/lib)
-      # that .claude-plugin/marketplace.json points at, so `claude plugin update`
-      # materializes a tree whose runtime library is already built (#5796). Stable
-      # finalize only: rc never publishes this ref. Runs last, after the npm
-      # publish, the release → main merge and the next sync, so a failed push is
-      # red without skipping them; it force-updates one commit parented on the
-      # release commit.
-      - name: Publish plugin ref (prebuilt bin/lib)
-        if: ${{ !inputs.dry_run }}
-        run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin
 
       - name: Summary
         env:
