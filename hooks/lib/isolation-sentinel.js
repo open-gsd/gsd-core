@@ -78,6 +78,105 @@ const SAFE_SENTINEL_KEY_RE = /^[A-Za-z0-9._-]{1,100}$/;
 // the read so a hostile or runaway record cannot be pulled into the hook.
 const SENTINEL_MAX_BYTES = 4096;
 
+// #6213: executor identity recorded with a dispatch decision. Same bare-name grammar as agent hints
+// (no path separators, no `..`, no leading `-`, bounded length). Kept here so the sentinel read path
+// needs no gsd-core/bin/lib require; src/executor-type.cts carries the writer-side copy; tests/hinted-executor-record.test.cjs asserts the two stay identical.
+const EXECUTOR_TYPE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+// #6213: a phase-level record (no plan) names every hinted executor routable within its phase as
+// `executor_types`. The reader keeps at most this many valid entries; the writer
+// (gsd-tools.cjs writeDispatchIsolationSentinel, via normalizeExecutorTypes) records at most this many.
+const MAX_EXECUTOR_TYPES = 64;
+
+// #6213: every non-gsd-executor dispatch's classification scan iterates at most MAX_SCANNED_DIR_ENTRIES directory
+// entries and parses at most MAX_SCANNED_RECORDS keyed record files (the newest by mtime among those not
+// already past the recency window). When either bound is hit the scan sets `scanOverflow` and
+// `isExecutorDispatch` fails closed (see there). The two bounds are equal: every parsed record is a
+// directory entry, so the record bound is reached only together with the entry bound, and a heavy day of
+// legitimate records (far under 1024 in 24 hours) never trips it. Each record file is still read through
+// the SENTINEL_MAX_BYTES bound.
+const MAX_SCANNED_DIR_ENTRIES = 1024;
+const MAX_SCANNED_RECORDS = MAX_SCANNED_DIR_ENTRIES;
+
+// Tolerance for a record stamped slightly in the future (clock skew between writer and reader).
+const CLOCK_SKEW_MS = 5000;
+
+// #6213: the one definition of which `subagent_type` strings identify GSD's executor (verified: only
+// agents/gsd-executor.md). A Set so a future sibling executor role is added here once; both isolation
+// hooks and `isExecutorDispatch` consume it.
+const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
+
+// #6213: every GSD role other than gsd-executor, i.e. the MODEL_PROFILES keys (gsd-core/bin/lib/model-profiles.cjs)
+// minus gsd-executor, lower-case. The writer refuses exactly these (as hints in `resolveRoutedExecutor`, and as
+// `record-dispatch-isolation --executor-type`), so one is never recorded as an executor; `recordNamesType` also
+// never lets a hand-written record classify one. A reader-side copy keeps this hook free of a gsd-core/bin/lib require;
+// tests/hinted-executor-isolation.test.cjs asserts the set equals the MODEL_PROFILES keys minus gsd-executor
+// in both directions, so a gsd-prefixed custom executor (gsd-rails-executor) is NOT a role here.
+const GSD_ROLE_NAMES = Object.freeze(new Set([
+  'gsd-planner',
+  'gsd-roadmapper',
+  'gsd-phase-researcher',
+  'gsd-project-researcher',
+  'gsd-research-synthesizer',
+  'gsd-debugger',
+  'gsd-codebase-mapper',
+  'gsd-verifier',
+  'gsd-plan-checker',
+  'gsd-integration-checker',
+  'gsd-nyquist-auditor',
+  'gsd-pattern-mapper',
+  'gsd-ui-researcher',
+  'gsd-ui-checker',
+  'gsd-ui-auditor',
+  'gsd-doc-writer',
+  'gsd-doc-verifier',
+  'gsd-dom-verifier',
+  'gsd-advisor-researcher',
+  'gsd-ai-researcher',
+  'gsd-assumptions-analyzer',
+  'gsd-code-fixer',
+  'gsd-code-reviewer',
+  'gsd-debug-session-manager',
+  'gsd-doc-classifier',
+  'gsd-doc-synthesizer',
+  'gsd-domain-researcher',
+  'gsd-eval-auditor',
+  'gsd-eval-planner',
+  'gsd-framework-selector',
+  'gsd-intel-updater',
+  'gsd-mempalace-curator',
+  'gsd-security-auditor',
+  'gsd-user-profiler',
+]));
+
+/**
+ * #6213: a GSD role name other than gsd-executor (gsd-verifier, gsd-planner, ...), trimmed and
+ * case-folded. A gsd-prefixed name outside GSD_ROLE_NAMES is a custom executor, not a role.
+ */
+function isGsdRoleName(v) {
+  if (typeof v !== 'string') return false;
+  return GSD_ROLE_NAMES.has(v.trim().toLowerCase());
+}
+
+/**
+ * True iff `name` ends in `.json`, folding case by UPPER-casing. Case-insensitive volumes (macOS) also fold
+ * U+017F (long s) to `s`, so `02.jſon` opens as `02.json`; toLowerCase() leaves it unchanged but
+ * toUpperCase() maps it to `S`, so this match covers every spelling the filesystem resolves to `.json`.
+ */
+function hasJsonSuffix(name) {
+  return typeof name === 'string' && name.toUpperCase().endsWith('.JSON');
+}
+
+/** #6213: the name a deny message may show for a `subagent_type`: the name when it is a valid executor type, else a fixed placeholder (an arbitrary, possibly multi-line or oversize string never enters the message). */
+function displayAgentName(v) {
+  return isValidExecutorType(v) ? v : '<invalid agent name>';
+}
+
+/** #6213: true iff `v` is an acceptable recorded executor type. */
+function isValidExecutorType(v) {
+  return typeof v === 'string' && EXECUTOR_TYPE_RE.test(v) && !v.includes('..');
+}
+
 /** #5682: strict allow-list for a phase/plan string that becomes a path segment. */
 function isSafeSentinelKey(s) {
   return typeof s === 'string' && SAFE_SENTINEL_KEY_RE.test(s) && s !== '.' && s !== '..';
@@ -198,8 +297,8 @@ function resolveSentinelRoot(cwd) {
  * Returns one of:
  *   { present: false }
  *   { present: true, stale: true,  malformed: true }
- *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, writtenAt }
- *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, writtenAt }
+ *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, writtenAt, executorType, executorTypes, executorTypesTruncated }
+ *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, writtenAt, executorType, executorTypes, executorTypesTruncated }
  *
  * A malformed/unparseable sentinel is treated as STALE, never fatal — the
  * caller's conservative fallback path covers both "absent" and "stale"
@@ -209,8 +308,12 @@ function resolveSentinelRoot(cwd) {
  * per the repo's clock-seam convention, so staleness is testable without
  * asserting on wall-clock time.
  */
-function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
+function readSentinel(cwd, { clock = Date, dispatchIds = null, subagentType = null, readText = readSentinelText } = {}) {
   const root = resolveSentinelRoot(cwd);
+  // #6213: the executor-identity scan feeds only `isExecutorDispatch`, which answers true for gsd-executor
+  // before it looks at any record, so a gsd-executor dispatch skips the scan; its enforcement read is the
+  // pre-#6213 read plus one bounded retry of a refused file. `readText` is a seam for tests (a replacement for `readSentinelText`).
+  const classify = !EXECUTOR_SUBAGENT_TYPES.has(subagentType);
 
   // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
   // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
@@ -223,27 +326,206 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null } = {}) {
   if (dispatchIds) {
     const planFile = keyedSentinelPath(root, dispatchIds.phase, dispatchIds.plan);
     if (planFile) {
-      const c = parseSentinelFile(planFile, clock, keyedDirs);
+      const c = parseSentinelFileRetrying(planFile, clock, keyedDirs, readText);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
     }
     const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
     if (phaseFile) {
-      const c = parseSentinelFile(phaseFile, clock, keyedDirs);
+      const c = parseSentinelFileRetrying(phaseFile, clock, keyedDirs, readText);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
     }
   }
 
-  const legacy = parseSentinelFile(sentinelPath(root), clock, [gsdDir]);
+  const legacy = parseSentinelFileRetrying(sentinelPath(root), clock, [gsdDir], readText);
+  // #6213: a legacy slot that exists and is recent but cannot be used (refused or malformed) may name a
+  // type: ENOENT is absent, anything else cannot be ruled out.
+  const legacyFuture = legacy.present && !legacy.malformed && legacy.writtenAt - clock.now() > CLOCK_SKEW_MS;
+  const legacyUnusable = classify && (!legacy.present || legacy.malformed || legacyFuture) && recentEntryExists(sentinelPath(root), clock);
   const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+  // #6213: executor-identity classification looks at EVERY recent well-formed record in the project,
+  // whatever its phase or plan: the keyed records under `.gsd/dispatch-isolation/` plus the legacy slot.
+  // Enforcement (below) is unaffected and still uses the record picked for this dispatch's identity.
+  const scanned = classify ? scanRecentKeyedRecords(root, clock, keyedDirs, readText) : [];
+  const scanOverflow = scanned.scanOverflow === true || legacyUnusable;
 
   const fresh = keyedCandidates.filter((c) => !c.stale);
   if (legacyApplies && !legacy.stale) fresh.push(legacy);
-  if (fresh.length > 0) return latestWritten(fresh);
+  // #6213: every well-formed candidate considered, for executor-identity classification only.
+  const considered = [...keyedCandidates, ...scanned, ...(legacy.present && !legacy.malformed ? [legacy] : [])];
+  if (fresh.length > 0) return withCandidates(latestWritten(fresh), considered, scanOverflow);
 
   // Nothing fresh: a stale keyed record still feeds the aged-none path; otherwise the legacy
   // slot is returned exactly as before.
-  if (keyedCandidates.length > 0) return latestWritten(keyedCandidates);
-  return legacy;
+  if (keyedCandidates.length > 0) return withCandidates(latestWritten(keyedCandidates), considered, scanOverflow);
+  return withCandidates(legacy, considered, scanOverflow);
+}
+
+/**
+ * #6213: every well-formed keyed record under `.gsd/dispatch-isolation/` whose contents agree with its
+ * own filename key, whatever its phase or plan. Never throws. An mtime-recent `.json` entry that cannot be
+ * used (refused by `parseSentinelFile`: oversize, hard-linked, unreadable; malformed; a filename that
+ * disagrees with its contents, judged by file identity so a case-insensitive volume is not misread; or a link, FIFO or device) sets `scanOverflow`, because the record may name
+ * the type; non-`.json` entries, directories and mtime-aged entries are ignored. A missing `.gsd` or record directory (ENOENT) is empty; a
+ * `.gsd` or record directory that exists but is a link, not a directory, or cannot be opened or read sets
+ * `scanOverflow` (the records cannot be ruled out). Recency (`AGED_NONE_MAX_MS` by `written_at`) is judged
+ * by `isExecutorDispatch`, not here.
+ *
+ * Bounded without trusting name order: the directory is iterated for at most MAX_SCANNED_DIR_ENTRIES
+ * entries (every entry counts); each `.json` regular file whose mtime is already past the recency window
+ * (plus the clock-skew allowance) is dropped without being read, so aged records cannot occupy the slots;
+ * the survivors are ordered newest mtime first and at most MAX_SCANNED_RECORDS are parsed. A refused parse
+ * is retried once (a writer's temp-file rename can straddle a read), and an entry that is gone (ENOENT) after
+ * the refusal is absent, not overflow. When the entry bound is hit or a recent entry is unusable (above), the
+ * returned array carries a
+ * non-enumerable `scanOverflow: true` and `isExecutorDispatch` fails closed.
+ */
+function scanRecentKeyedRecords(root, clock, keyedDirs, readText = readSentinelText) {
+  const out = [];
+  const setOverflow = () => Object.defineProperty(out, 'scanOverflow', { value: true, enumerable: false, configurable: true });
+  const dir = path.join(root, KEYED_SENTINEL_DIR);
+  const survivors = [];
+  let overflow = false;
+  let handle = null;
+  try {
+    // `.gsd` first: through a link, the record directory below would lstat as a real directory.
+    for (const target of [path.join(root, '.gsd'), dir]) {
+      let st;
+      try {
+        st = fs.lstatSync(target);
+      } catch (err) {
+        // An absent directory has no records (empty, not overflow); any other failure cannot be enumerated.
+        if (err && err.code === 'ENOENT') return out;
+        setOverflow();
+        return out;
+      }
+      if (!st.isDirectory() || st.isSymbolicLink()) {
+        setOverflow();
+        return out;
+      }
+    }
+    handle = fs.opendirSync(dir);
+    const now = clock.now();
+    let seen = 0;
+    for (let ent = handle.readSync(); ent !== null; ent = handle.readSync()) {
+      seen += 1;
+      if (seen > MAX_SCANNED_DIR_ENTRIES) { overflow = true; break; }
+      if (!hasJsonSuffix(ent.name)) continue;
+      let st;
+      try {
+        st = fs.lstatSync(path.join(dir, ent.name));
+      } catch (err) {
+        // An entry that vanished between readdir and lstat is absent; any other failure (a record directory
+        // that is readable but not searchable throws EACCES for every entry) cannot be ruled out.
+        if (!err || err.code !== 'ENOENT') overflow = true;
+        continue;
+      }
+      if (now - st.mtimeMs > AGED_NONE_MAX_MS + CLOCK_SKEW_MS) continue;
+      if (!st.isFile()) {
+        // A recent link, FIFO or device named `.json` is a record the reader refuses: it cannot be ruled out.
+        if (!st.isDirectory()) overflow = true;
+        continue;
+      }
+      survivors.push({ name: ent.name, mtimeMs: st.mtimeMs });
+    }
+  } catch {
+    // opendir/read failed (unreadable directory): the records cannot be ruled out, so fail closed.
+    setOverflow();
+    return out;
+  } finally {
+    if (handle) {
+      try { handle.closeSync(); } catch { /* nothing left to release */ }
+    }
+  }
+  survivors.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  // At most MAX_SCANNED_DIR_ENTRIES entries are iterated and MAX_SCANNED_RECORDS equals it, so the survivors
+  // never exceed MAX_SCANNED_RECORDS; the slice keeps the parse bound explicit.
+  for (const { name } of survivors.slice(0, MAX_SCANNED_RECORDS)) {
+    const file = path.join(dir, name);
+    const c = parseSentinelFileRetrying(file, clock, keyedDirs, readText);
+    if (!c.present) {
+      // An entry renamed or removed since the directory read is gone, not unusable; a refusal of one that
+      // is still there (after the retry) cannot be ruled out.
+      if (!entryIsGone(file)) overflow = true;
+      continue;
+    }
+    if (c.malformed || !c.phase) { overflow = true; continue; }
+    const expected = c.plan ? keyedSentinelPath(root, c.phase, c.plan) : phaseSentinelPath(root, c.phase);
+    if (expected && sameKeyedRecord(file, expected)) {
+      out.push(c);
+      // A recent file claiming a `written_at` beyond the skew allowance is not a usable recent record
+      // (`isRecentRecord` skips it), yet it may name the type: it cannot be ruled out.
+      if (c.writtenAt - clock.now() > CLOCK_SKEW_MS) overflow = true;
+    } else overflow = true;
+  }
+  if (overflow) setOverflow();
+  return out;
+}
+
+/**
+ * #6213: `parseSentinelFile` with one bounded retry (at most two attempts). A writer replaces a record with
+ * an atomic temp-file rename, and a read that straddles the rename is refused for that instant; the second
+ * attempt reads the replacement. A file that is gone (ENOENT) after a refusal is absent, so it is not
+ * retried. Never throws.
+ */
+function parseSentinelFileRetrying(file, clock, parentDirs, readText = readSentinelText) {
+  const first = parseSentinelFile(file, clock, parentDirs, readText);
+  if (first.present || entryIsGone(file)) return first;
+  return parseSentinelFile(file, clock, parentDirs, readText);
+}
+
+/** #6213: lstat of `file` fails with ENOENT (it is gone). Any other outcome, including success, is false. */
+function entryIsGone(file) {
+  try {
+    fs.lstatSync(file);
+    return false;
+  } catch (err) {
+    return !!(err && err.code === 'ENOENT');
+  }
+}
+
+/**
+ * #6213: is the record at `actual` the file its own contents key to (`expected`)? The same basename is the
+ * exact case. Otherwise the two paths must resolve to the same filesystem object (equal dev and ino from
+ * lstat), which is how a case-insensitive volume lets `phase1.json` hold a `Phase1` record; on a
+ * case-sensitive volume the expected path does not exist and this is false. A zero ino (some Windows
+ * volumes) cannot be compared, so it is never a match. Never throws.
+ */
+function sameKeyedRecord(actual, expected) {
+  if (path.basename(expected) === path.basename(actual)) return true;
+  try {
+    const a = fs.lstatSync(actual, { bigint: true });
+    const e = fs.lstatSync(expected, { bigint: true });
+    return a.ino !== 0n && a.dev === e.dev && a.ino === e.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * #6213: does `file` exist with an mtime inside the recency window (`AGED_NONE_MAX_MS` plus the clock-skew
+ * allowance)? ENOENT / ENOTDIR is absent; any other lstat failure cannot be ruled out. Never throws.
+ */
+function recentEntryExists(file, clock) {
+  try {
+    const st = fs.lstatSync(file);
+    return clock.now() - st.mtimeMs <= AGED_NONE_MAX_MS + CLOCK_SKEW_MS;
+  } catch (err) {
+    return !(err && (err.code === 'ENOENT' || err.code === 'ENOTDIR'));
+  }
+}
+
+/**
+ * #6213: expose every candidate `readSentinel` considered as a NON-ENUMERABLE `candidates` property,
+ * so the winning record's enumerable shape (and every deepEqual on it) is unchanged. A newer record
+ * for another plan wins enforcement but must not hide an older applicable record's executor identity.
+ * `scanOverflow` (non-enumerable too) says the classification scan hit a bound and did not see every
+ * fresh record.
+ */
+function withCandidates(winner, considered, scanOverflow = false) {
+  if (!winner) return winner;
+  if (considered.length > 0) Object.defineProperty(winner, 'candidates', { value: considered, enumerable: false, configurable: true });
+  if (scanOverflow) Object.defineProperty(winner, 'scanOverflow', { value: true, enumerable: false, configurable: true });
+  return winner;
 }
 
 /** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
@@ -277,8 +559,8 @@ function sameObject(a, b) {
  * is exactly as absent as a missing one. `readFileSync` would block forever on a FIFO with no
  * writer, follow a link to an endless device or to a file outside the project, and read without
  * bound. The writers only ever produce a fresh temp file renamed into place (link count 1). A
- * sentinel renamed over between the open and the fstat reads as nlink 0 and is refused for that one
- * dispatch, which is the conservative no-sentinel decision.
+ * sentinel renamed over between the open and the fstat reads as nlink 0 and is refused on that attempt;
+ * callers read through `parseSentinelFileRetrying`, so the second attempt reads the replacement.
  *
  * Parent directories are lstat-checked before the open and re-checked (same dev/ino, still a real
  * directory) after it, and the opened file must be the object the pre-open lstat saw. Node has no
@@ -329,8 +611,8 @@ function readSentinelText(file, parentDirs) {
  * `parentDirs` are the directories between the project root and the file that must be real
  * directories (not links); a refusal anywhere reads as `{ present: false }`.
  */
-function parseSentinelFile(file, clock, parentDirs = []) {
-  const raw = readSentinelText(file, parentDirs);
+function parseSentinelFile(file, clock, parentDirs = [], readText = readSentinelText) {
+  const raw = readText(file, parentDirs);
   if (raw === null) return { present: false };
 
   let parsed;
@@ -359,12 +641,14 @@ function parseSentinelFile(file, clock, parentDirs = []) {
   // applicable sentinel", not an allow.
   const plan = typeof parsed.plan === 'string' && parsed.plan.length > 0 ? parsed.plan : null;
 
+  const validTypes = Array.isArray(parsed.executor_types) ? parsed.executor_types.filter(isValidExecutorType) : [];
+
   const now = clock.now();
   const age = now - parsed.written_at;
   // Negative age beyond a small tolerance means the sentinel claims to be
   // written in the future — never trust it, but still surface the parsed
   // fields so callers can log an actionable reason.
-  const stale = age >= SENTINEL_STALE_MS || age < -5000;
+  const stale = age >= SENTINEL_STALE_MS || age < -CLOCK_SKEW_MS;
 
   return {
     present: true,
@@ -375,6 +659,14 @@ function parseSentinelFile(file, clock, parentDirs = []) {
     phase,
     plan,
     writtenAt: parsed.written_at,
+    // #6213: invalid or absent means "no recorded executor", never a malformed record.
+    executorType: isValidExecutorType(parsed.executor_type) ? parsed.executor_type : null,
+    // #6213: phase-level record; a non-array is empty, invalid entries are dropped, at most
+    // MAX_EXECUTOR_TYPES valid entries are kept.
+    executorTypes: validTypes.slice(0, MAX_EXECUTOR_TYPES),
+    // #6213: the writer dropped executor_types entries to fit the record (strict `=== true`), or the
+    // record lists more than MAX_EXECUTOR_TYPES valid entries so the reader drops the rest.
+    executorTypesTruncated: parsed.executor_types_truncated === true || validTypes.length > MAX_EXECUTOR_TYPES,
   };
 }
 
@@ -407,12 +699,15 @@ function parseSentinelFile(file, clock, parentDirs = []) {
  * that as a mismatch — see `sentinelAppliesToDispatch`, whose whole
  * contract depends on "missing" and "wrong" being distinguishable.
  *
- * Returns only the two-field `{ plan, phase }` shape existing callers
- * depend on — `parseDispatchIdentity`'s `source` field is discarded here.
+ * Returns the two-field `{ plan, phase }` shape existing callers depend on (its enumerable keys).
+ * `parseDispatchIdentity`'s `source` rides along as a NON-enumerable `source` property so
+ * `isExecutorDispatch` can tell a canonical marker from a prose fallback (#6213).
  */
 function extractDispatchIdentifiers(...texts) {
-  const { phase, plan } = parseDispatchIdentity(...texts);
-  return { plan, phase };
+  const { phase, plan, source } = parseDispatchIdentity(...texts);
+  const ids = { plan, phase };
+  Object.defineProperty(ids, 'source', { value: source, enumerable: false });
+  return ids;
 }
 
 /**
@@ -435,6 +730,52 @@ function sentinelAppliesToDispatch(sentinel, dispatchIds) {
   return true;
 }
 
+function recordNamesType(sentinel, subagentType) {
+  // #6213: a GSD role is never an executor, so a hand-written record naming one never classifies it.
+  if (isGsdRoleName(subagentType)) return false;
+  return sentinel.executorType === subagentType ||
+    (Array.isArray(sentinel.executorTypes) && sentinel.executorTypes.includes(subagentType));
+}
+
+/**
+ * #6213: is this a recent, well-formed dispatch record? `writtenAt` is not future-dated beyond
+ * `CLOCK_SKEW_MS` and at most `AGED_NONE_MAX_MS` old. Phase and plan are irrelevant here.
+ */
+function isRecentRecord(r, clock) {
+  if (!r || r.present !== true || r.malformed || typeof r.writtenAt !== 'number') return false;
+  const age = clock.now() - r.writtenAt;
+  return age >= -CLOCK_SKEW_MS && age <= AGED_NONE_MAX_MS;
+}
+
+/**
+ * #6213: is this an executor dispatch (both isolation guards ask this one question)? True when ANY of:
+ *   (a) `subagentType` is gsd-executor;
+ *   (b) ANY well-formed dispatch record in the project (the candidates `readSentinel` considered: keyed
+ *       records under `.gsd/dispatch-isolation/` and the legacy slot), at most `AGED_NONE_MAX_MS` old by
+ *       `written_at` (a record future-dated beyond `CLOCK_SKEW_MS` is not recent), whatever its phase or
+ *       plan, names the type in `executor_type` / `executor_types`;
+ *   (c) the dispatch's own prompt carries the canonical `[gsd:dispatch ...]` marker (not the prose
+ *       fallback) and `subagentType` is any non-empty string that is not a GSD role (`isGsdRoleName`): only
+ *       executor templates emit it.
+ * Fail closed (a type that passes `isValidExecutorType` and is not a GSD role, `isGsdRoleName`, is treated
+ * as an executor) when the scan overflowed (`scanOverflow`: too many directory entries, a recent `.json`
+ * record that cannot be used (refused, malformed, key-mismatched), a recent legacy slot that cannot be used
+ * (checked in `readSentinel`, not in the scan), or a `.gsd` / record directory that is a link, not a
+ * directory or unreadable), or when any recent record has `executor_types_truncated: true` (names were dropped, by the
+ * writer or by the reader's MAX_EXECUTOR_TYPES cap, so its list cannot rule a type out).
+ * Once true, the dispatch follows gsd-executor's enforcement path unchanged.
+ */
+function isExecutorDispatch(subagentType, sentinel, dispatchIds, { clock = Date } = {}) {
+  if (EXECUTOR_SUBAGENT_TYPES.has(subagentType)) return true;
+  if (typeof subagentType === 'string' && subagentType.length > 0 && !isGsdRoleName(subagentType) && !!dispatchIds && dispatchIds.source === 'marker') return true;
+  const records = (sentinel && Array.isArray(sentinel.candidates) ? sentinel.candidates : []).concat(sentinel ? [sentinel] : [])
+    .filter((r) => isRecentRecord(r, clock));
+  if (isValidExecutorType(subagentType) && !isGsdRoleName(subagentType) &&
+    ((sentinel && sentinel.scanOverflow === true) || records.some((r) => r.executorTypesTruncated === true))) return true;
+  return typeof subagentType === 'string' && subagentType.length > 0 &&
+    records.some((r) => recordNamesType(r, subagentType));
+}
+
 /**
  * #5479: does an AGED recorded sequential degrade still govern THIS dispatch?
  *
@@ -448,7 +789,7 @@ function sentinelAppliesToDispatch(sentinel, dispatchIds) {
  * phase the dispatch itself names:
  *   - the sentinel is present, well-formed, and records `isolation: 'none'` (an aged
  *     `harness-worktree`/`orchestrator-worktree` record authorizes nothing);
- *   - its `written_at` is not in the future (a forged or clock-skewed record is never trusted);
+ *   - its `written_at` is not more than `CLOCK_SKEW_MS` in the future (a forged or clock-skewed record is never trusted);
  *   - it carries a phase, the dispatch names a phase, and they are equal (a dispatch whose phase
  *     cannot be established is "cannot compare", which keeps today's fallback, never an allow).
  * A plan-scoped record speaks only for its own plan (or a plan-less dispatch): a `none` recorded for
@@ -466,7 +807,7 @@ function agedNoneGovernsDispatch(sentinel, dispatchIds, { clock = Date } = {}) {
   if (sentinel.isolation !== 'none') return false;
   if (typeof sentinel.writtenAt !== 'number') return false;
   const age = clock.now() - sentinel.writtenAt;
-  if (age < -5000 || age > AGED_NONE_MAX_MS) return false;
+  if (age < -CLOCK_SKEW_MS || age > AGED_NONE_MAX_MS) return false;
   if (!sentinel.phase || !dispatchIds || !dispatchIds.phase) return false;
   if (sentinel.plan && dispatchIds.plan && sentinel.plan !== dispatchIds.plan) return false;
   return sentinel.phase === dispatchIds.phase;
@@ -496,10 +837,21 @@ function buildSentinelDiscard(sentinel, dispatchIds) {
 }
 
 module.exports = {
+  EXECUTOR_SUBAGENT_TYPES,
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
   KEYED_SENTINEL_DIR,
   isSafeSentinelKey,
+  isValidExecutorType,
+  GSD_ROLE_NAMES,
+  isGsdRoleName,
+  hasJsonSuffix,
+  displayAgentName,
+  MAX_EXECUTOR_TYPES,
+  MAX_SCANNED_RECORDS,
+  MAX_SCANNED_DIR_ENTRIES,
+  CLOCK_SKEW_MS,
+  isExecutorDispatch,
   keyedSentinelPath,
   phaseSentinelPath,
   SENTINEL_STALE_MS,
