@@ -1741,13 +1741,14 @@ for the change to take effect. See issue #2256.
 
 ```text
 1. model_overrides[<agent>]              ← per-agent; full IDs; targeted exception
-2. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
-3. models[<phase_type>]                  ← coarse phase-level tier (this section)
-4. model_profile (per-agent col)         ← global tier strategy
-5. Runtime default                       ← when nothing else applies
+2. model_policy / runtime tier map       ← un-escalated attempts (see §Dynamic Routing)
+3. dynamic_routing.tier_models[<tier>]   ← when enabled (see §Dynamic Routing)
+4. models[<phase_type>]                  ← coarse phase-level tier (this section)
+5. model_profile (per-agent col)         ← global tier strategy
+6. Runtime default                       ← when nothing else applies
 ```
 
-The five layers compose top-down: `model_profile` is the base tier, `models[<phase_type>]` overrides at the phase level, `dynamic_routing` (when enabled) escalates per-attempt on soft failure, `model_overrides[<agent>]` carves per-agent exceptions at the top, and the runtime default applies when nothing else does. In the example above, all five research agents resolve to `sonnet` *except* `gsd-codebase-mapper`, which the per-agent override pins to `haiku`. `dynamic_routing` is disabled by default — when off (`enabled: false` or block omitted), this section's behavior is unchanged from today.
+The six layers compose top-down: `model_profile` is the base tier, `models[<phase_type>]` overrides at the phase level, `dynamic_routing` (when enabled) escalates per-attempt on soft failure, a `model_policy` preset or a non-Claude runtime's tier map names the concrete model for the tier, `model_overrides[<agent>]` carves per-agent exceptions at the top, and the runtime default applies when nothing else does. In the example above, all five research agents resolve to `sonnet` *except* `gsd-codebase-mapper`, which the per-agent override pins to `haiku`. `dynamic_routing` is disabled by default — when off (`enabled: false` or block omitted), this section's behavior is unchanged from today.
 
 #### Accepted values
 
@@ -1808,7 +1809,7 @@ Direct edits to `.planning/config.json` are looser — the resolver simply ignor
 
 #### Agent default tiers
 
-Each agent in `MODEL_PROFILES` declares one of three default tiers. The resolver picks `tier_models[default_tier]` for the first attempt.
+Each agent in `MODEL_PROFILES` declares one of three default tiers. The resolver picks `tier_models[default_tier]` for the first attempt, unless a higher layer in the precedence list below names the model.
 
 | Tier | Agents | Use case |
 |---|---|---|
@@ -1832,13 +1833,23 @@ If `dynamic_routing.escalate_on_failure: false`, soft failures do **not** advanc
 
 `light → standard → heavy → heavy` (heavy stays at heavy; can't go further).
 
+Under `model_profile: "inherit"` the first spawn uses the session model (`inherit`). A real escalation still moves to `tier_models[<next tier>]`, because enabling `dynamic_routing` opts the agent into escalation.
+
 #### Resolution precedence (highest → lowest)
 
 1. **`model_overrides[<agent>]`** — full IDs accepted; targeted exception
-2. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
-3. **`models[<phase_type>]`** — coarse phase-level (#3023)
-4. **`model_profile`** — per-agent column from active profile
-5. **Runtime default**
+2. **`model_policy`**, the active non-Claude runtime's tier map (`model_profile_overrides.<runtime>` included), the `resolve_model_ids: "omit"` gate, and a `model_profile_overrides.claude.<tier>` pin on Claude Code. This applies to un-escalated attempts only; see below.
+3. **`dynamic_routing.tier_models[<tier>]`** (when `enabled: true`)
+4. **`models[<phase_type>]`** — coarse phase-level (#3023)
+5. **`model_profile`** — per-agent column from active profile
+6. **Runtime default**
+
+This order holds for the first spawn. It also holds for every respawn that does not move the tier, for example `max_escalations: 0`, `escalate_on_failure: false`, a `heavy` agent, or a `tier_models` with no entry for the next tier. `resolve-execution --attempt N` then reports the same model as `resolve-model` and the `init` payloads (#6214). A respawn that does escalate returns `tier_models[<escalated tier>]`. Three things still outrank it:
+- `model_overrides`
+- a non-Claude `model_policy`
+- an applied `"omit"`, which returns the escalated tier's alias on Claude Code and stays blank where it blanked the first spawn.
+
+An explicit non-Claude `runtime` in the project config outranks `"omit"`. Its escalated respawn uses `tier_models`.
 
 The `dynamic_routing` block is **disabled by default** — `enabled: false` (or omitting the block) preserves today's static resolution exactly.
 

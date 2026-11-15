@@ -837,8 +837,8 @@ function dynamicRoutingModel(
  * #3703 — the ONE omit decision. resolveModelInternal (step 4) and
  * resolveModelForTier both read it, and so does resolveProviderEscalation, so a
  * first spawn, an escalated spawn and the provider ladder agree on whether the
- * omit gate applies. They share only this decision: their precedence outside
- * the gate still differs (#6214). Honors "omit" when the PROJECT set it
+ * omit gate applies. An attempt that does not escalate the tier goes through
+ * resolveModelInternal outright (#6214). Honors "omit" when the PROJECT set it
  * (#2517 finding #4) or when the active runtime lacks native model aliases; a
  * native-alias runtime ignores an "omit" that came only from the shared
  * ~/.gsd/defaults.json (#2297).
@@ -870,6 +870,21 @@ function omitTierAlias(config: Record<string, unknown>, agentType: string, attem
 function resolveModelForTier(cwd: string, agentType: string, attempt?: number): string {
   const config = loadConfig(cwd);
   const attemptN = Number.isInteger(attempt) && (attempt as number) > 0 ? (attempt as number) : 0;
+
+  // #6214: an attempt that does not move the dynamic_routing tier off the first
+  // spawn's tier IS the first spawn: attempt 0, a max_escalations cap of 0,
+  // escalate_on_failure:false, a saturated heavy tier, or routing off. It
+  // resolves through resolveModelInternal, so resolve-execution --attempt N, the
+  // provider ladder's `from` and the passive adapter report the model that
+  // resolve-model and init report. There model_overrides, model_policy, the
+  // runtime tier map, the omit gate and a model_profile_overrides.claude pin
+  // all outrank tier_models. Only a genuine escalation reaches the steps below.
+  const routedTier = dynamicRoutingTier(config, agentType, attemptN);
+  const firstSpawnTier = dynamicRoutingTier(config, agentType, 0);
+  if (routedTier === null || routedTier === firstSpawnTier) {
+    return resolveModelInternal(cwd, agentType);
+  }
+
   const activeRuntime = resolveActiveRuntime(config);
 
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
@@ -896,20 +911,16 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
   // A native-alias runtime escalates by tier ALIAS; any other runtime whose
   // gate produced "" stays "" (an explicit non-Claude opt-in that resolved its
   // own tier map at step 3 keeps today's dynamic_routing escalation).
-  // Outside this gate the two entry points still rank dynamic_routing differently (#6214).
   if (omitAppliesFor(cwd, config, activeRuntime)) {
     if (hasNativeModelAliases(activeRuntime)) {
-      if (dynamicRoutingTier(config, agentType, attemptN) !== null) {
-        return omitTierAlias(config, agentType, attemptN);
-      }
+      return omitTierAlias(config, agentType, attemptN);
     } else if (resolveModelInternal(cwd, agentType) === '') {
       return '';
     }
   }
 
-  const alias = dynamicRoutingModel(config, agentType, attemptN);
-  if (alias !== null) return alias;
-  return resolveModelInternal(cwd, agentType);
+  // routedTier is non-null past the #6214 guard, so tier_models names it.
+  return ((config['dynamic_routing'] as Record<string, unknown>)['tier_models'] as Record<string, string>)[routedTier];
 }
 
 /**
