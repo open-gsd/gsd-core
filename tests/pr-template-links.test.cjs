@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../scripts/gen-features.cjs');
-const { extractLinks, labelledCloses } =require('../scripts/gen-adr-index.cjs');
+const { extractLinks, labelledCloses } = require('../scripts/gen-adr-index.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, nextRel, missingNext, repoPathOf, unresolvedAnchors, headingSet,
@@ -74,7 +74,8 @@ describe('heading anchors (#5427)', () => {
     assert.equal(headingSet('    ## Code').size, 0);
   });
   test('indent limit is 3 spaces and level limit is 6 hashes', () => {
-    assert.deepEqual([...headingSet('   ### Three\n###### Six\n####### Seven')], ['three', 'six']);
+    assert.deepEqual([...headingSet('   ### Three\n##### Five\n###### Six\n####### Seven')],
+      ['three', 'five', 'six']);
   });
   test('keeps underscores like GitHub', () => {
     assert.ok(headingSet('## Set `commit_docs` true').has('set-commit_docs-true'));
@@ -190,6 +191,10 @@ const BLOCKS = [
   // limit-1, limit and limit+1 of the 3-character runs and the 3-space marker indent
   ['p\n**\n    [a](x)', ['x'], []],
   ['p\n***\n    [a](x)', [], []],
+  ['--\n    [a](x)', ['x'], []],
+  ['---\n    [a](x)', [], []],
+  ['```a b\n[a](x)\n```\n[a](y)', ['y'], []],
+  ['```a b\n[a](x)\n```\n[a](y)', ['y'], []],
   ['p\n__\n    [a](x)', ['x'], []],
   ['p\n___\n    [a](x)', [], []],
   ['~~\n    [a](x)', ['x'], []],
@@ -515,7 +520,9 @@ describe('ADR gate extractLinks over the shared scanner (#5427)', () => {
     }
     // a Unicode space is a destination character (CommonMark): the old regex agrees
     const [nbsp, lineSep] = [0xa0, 0x2028].map((c) => String.fromCharCode(c));
-    for (const s of [`[a](x${nbsp}y)`, `[a](${lineSep})`, '[a](<x y>)', '[a](x\n"t"\n)']) {
+    // a lone CR is text, so it does not stop a fence opener (the old mask opened on any text)
+    for (const s of [`[a](x${nbsp}y)`, `[a](${lineSep})`, '[a](<x y>)', '[a](x\n"t"\n)',
+      '```a\rb\n[a](x)\n```\n[a](y)']) {
       assert.deepEqual(extractLinks(s), oldExtractLinks(s), JSON.stringify(s));
     }
     assert.deepEqual(extractLinks('[a](<x y>)'), [{ line: 1, target: '<x y>' }]);

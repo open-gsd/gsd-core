@@ -574,7 +574,7 @@ const HTML_BLOCKS = [
     + String.raw`|</[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$`, 'y'), null, false],
 ];
 const ATX = /#{1,6}(?:[ \t]|$)/y;
-const FENCE = /(`{3,}|~{3,})(.*)$/y;
+const FENCE = /(`{3,}|~{3,})([^\n]*)$/y;
 const FENCE_END = /(`+|~+)[ \t]*$/y;
 const SETEXT = /(?:=+|-+)[ \t]*$/y;
 const THEMATIC = /(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/y;
