@@ -63,10 +63,10 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 COMMIT_DOCS=$(gsd_run query config-get commit_docs --raw 2>/dev/null || echo "true")
 if [ "$COMMIT_DOCS" = "false" ]; then
   git add -A -- . ':!.planning'
-  git commit -m "fix: {concise description of what changed}" -- . ':!.planning'  # gsd-scan-ignore: #5211 /gsd-fast commits the current directory minus .planning (commit_docs=false)
+  git commit -m "fix: {concise description of what changed}" -- . ':!.planning'  # gsd-scan-ignore: #5211 the fast workflow commits the current directory minus .planning (commit_docs=false)
 else
   git add -A -- .
-  git commit -m "fix: {concise description of what changed}" -- .  # gsd-scan-ignore: #5211 /gsd-fast commits the current directory
+  git commit -m "fix: {concise description of what changed}" -- .  # gsd-scan-ignore: #5211 the fast workflow commits the current directory
 fi
 ```
 
