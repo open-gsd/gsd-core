@@ -4267,7 +4267,7 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-planner', 0), 'custom-model-id');
   });
 
-  test('dynamic_routing.tier_models used normally when model_policy absent', () => {
+  test('without model_policy, codex attempt 0 is resolve-model and an escalation uses tier_models (#6214)', () => {
     writeConfig(tmpDir, {
       runtime: 'codex',
       dynamic_routing: {
@@ -4275,7 +4275,8 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
         tier_models: { light: 'haiku', standard: 'my-custom-sonnet', heavy: 'opus' },
       },
     });
-    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-custom-sonnet');
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), resolveModelInternal(tmpDir, 'gsd-executor'));
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 1), 'opus');
   });
 
   test('model_policy with Claude runtime does not interrupt dynamic_routing', () => {
