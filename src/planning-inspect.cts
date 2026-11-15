@@ -98,7 +98,9 @@ import securityMod = require('./security.cjs');
 const { tryWithinRoot, PathAcceptance, isContainedIn } = securityMod;
 // #5823: the halt predicate and its propagation come from their #2830 owner,
 // and depends_on tokens resolve through phase-plan-index's own resolver, so
-// this reader and `phase-plan-index` cannot disagree about either.
+// this reader and `phase-plan-index` share both rules. Where their answers
+// still differ (a SUMMARY this reader refuses to read, for one), docs/CLI-TOOLS.md
+// lists the cases under "Halted plans".
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planDependencyGraphMod = require('./plan-dependency-graph.cjs');
 const { computeHaltPropagation, isSummaryFileHalted, isSummaryFileBlocked, buildSummaryFileIndex } = planDependencyGraphMod;
