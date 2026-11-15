@@ -163,6 +163,7 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
         'agents/gsd-debug-session-manager.md',
         'gsd-core/workflows/add-tests.md',
       ]) {
+        // allow-test-rule: source-text-is-the-product (see #5211)
         const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
         // each commit runs up to the next backtick (code fence or inline span end)
         const commits = text.match(/git commit -m [^`]{0,600}/g) ?? [];
