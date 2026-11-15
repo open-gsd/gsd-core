@@ -180,6 +180,45 @@ describe('#5796 plugin ref publisher', () => {
     assert.equal(git(bare, ['branch', '--list']), '');
   });
 
+  test('push auth env', () => {
+    assert.deepEqual(publisher.pushAuthEnv(undefined), {});
+    assert.deepEqual(publisher.pushAuthEnv(''), {});
+    const env = publisher.pushAuthEnv('tok');
+    assert.equal(env.GIT_CONFIG_COUNT, '2');
+    assert.equal(env.GIT_CONFIG_KEY_0, 'http.https://github.com/.extraheader');
+    assert.equal(env.GIT_CONFIG_KEY_1, 'http.https://github.com/.extraheader');
+    assert.equal(env.GIT_CONFIG_VALUE_0, '');
+    assert.equal(
+      env.GIT_CONFIG_VALUE_1,
+      `AUTHORIZATION: basic ${Buffer.from('x-access-token:tok').toString('base64')}`,
+    );
+    assert.ok(publisher.pushAuthEnv('a\nb').error);
+  });
+
+  test('push token reaches git and never the error text', () => {
+    const root = makeFixtureRepo();
+    const bare = makeBareRemote();
+    const token = 'sekret-5796';
+    const b64 = Buffer.from(`x-access-token:${token}`).toString('base64');
+    const failed = publisher.publishPluginRef({
+      root, remote: path.join(os.tmpdir(), 'plugin-ref-no-such-remote-5796-token'),
+      branch: 'plugin', source: 'HEAD', pushToken: token,
+    });
+    assert.equal(failed.ok, false);
+    assert.ok(!failed.error.includes(token), 'error must not contain the token');
+    assert.ok(!failed.error.includes(b64), 'error must not contain the header value');
+    const ok = publisher.publishPluginRef({
+      root, remote: bare, branch: 'plugin', source: 'HEAD', pushToken: token,
+    });
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    const bad = publisher.publishPluginRef({
+      root, remote: bare, branch: 'plugin', source: 'HEAD', pushToken: 'a\nb',
+    });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.code, 'usage');
+    assert.ok(!bad.error.includes('a\nb'), 'error must not echo the token');
+  });
+
   test('rejects a missing or option-like source', () => {
     const root = makeFixtureRepo();
     const bare = makeBareRemote();
@@ -285,6 +324,9 @@ describe('#5796 plugin ref publisher', () => {
     assert.ok(idx > verifyIdx, 'publish step runs after Verify publish');
     assert.ok(matching[0].run.includes('--source "refs/tags/v${VERSION}"'), 'publish step names the release tag');
     assert.equal(matching[0].env && matching[0].env.VERSION, '${{ inputs.version }}');
+    assert.equal(matching[0].env.PUSH_TOKEN, '${{ secrets.GSD_BOT_PR_TOKEN }}');
+    assert.ok(matching[0].run.includes('GSD_PLUGIN_REF_PUSH_TOKEN'), 'publish step exports the push token');
+    assert.ok(matching[0].run.includes('::add-mask::'), 'publish step masks the derived header');
     assert.equal(matching[0].id, 'plugin_ref');
     assert.equal(matching[0]['continue-on-error'], true);
     const last = steps[steps.length - 1];

@@ -1013,14 +1013,24 @@ jobs:
       # script refuses to run unless it is the checked-out HEAD, so the compiled
       # lib always matches the tree. It force-updates one commit parented on the
       # release commit. It is continue-on-error so a failed push cannot skip the
-      # next sync; the last step fails the job when it did not succeed.
+      # next sync; the last step fails the job when it did not succeed. It pushes
+      # with GSD_BOT_PR_TOKEN when set (passed to git through env config, never
+      # argv or .git/config), because GITHUB_TOKEN may not update workflow files.
       - name: Publish plugin ref (prebuilt bin/lib)
         id: plugin_ref
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
         env:
           VERSION: ${{ inputs.version }}
-        run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source "refs/tags/v${VERSION}"
+          PUSH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN }}
+        run: |
+          if [ -n "$PUSH_TOKEN" ]; then
+            echo "::add-mask::$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
+            export GSD_PLUGIN_REF_PUSH_TOKEN="$PUSH_TOKEN"
+          else
+            echo "::warning::GSD_BOT_PR_TOKEN is not set; pushing the plugin ref with GITHUB_TOKEN, which GitHub refuses when the push updates workflow files (#5796)."
+          fi
+          node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source "refs/tags/v${VERSION}"
 
       # Regression #2423: keep `next` at the last published release for final
       # releases, not just rc/hotfix. Without this, `next` drifts to whatever
@@ -1041,6 +1051,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
+          PLUGIN_REF: ${{ steps.plugin_ref.outcome }}
         run: |
           echo "## Release v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
           if [ "$DRY_RUN" = "true" ]; then
@@ -1050,12 +1061,15 @@ jobs:
             echo "- Tagged \`v${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- PR created to merge back to main" >> "$GITHUB_STEP_SUMMARY"
             echo "- Install: \`npx @opengsd/gsd-core@latest\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Plugin ref \`plugin\`: ${PLUGIN_REF}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # #5796: the plugin ref publish is continue-on-error so it cannot skip the
       # next sync; fail the job here so a failed publish is still red.
       - name: Fail if the plugin ref was not published
         if: ${{ !inputs.dry_run && steps.plugin_ref.outcome == 'failure' }}
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          echo "::error::Publishing the prebuilt plugin ref failed; re-run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source refs/tags/v<version> from a checkout of that tag with npm run build:lib done (#5796)."
+          echo "::error::Publishing the prebuilt plugin ref failed; re-run: node scripts/publish-plugin-ref.cjs --remote origin --branch plugin --source refs/tags/v${VERSION} from a checkout of that tag with npm run build:lib done (#5796)."
           exit 1

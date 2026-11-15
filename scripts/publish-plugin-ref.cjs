@@ -19,6 +19,12 @@
  * The commit is assembled in a temporary index (GIT_INDEX_FILE), so the
  * caller's HEAD, index and working tree are left exactly as they were.
  *
+ * Push credentials: when GSD_PLUGIN_REF_PUSH_TOKEN is set (release.yml passes
+ * GSD_BOT_PR_TOKEN), the push authenticates with it instead of the checkout's
+ * persisted GITHUB_TOKEN, which GitHub may refuse for pushes that touch workflow
+ * files. The token reaches git only through env config for that one push and is
+ * scrubbed from every error string.
+ *
  * No git call here carries a wall-clock timeout. Each hang source is removed
  * instead: stdin is closed (or carries the exact input), git may not prompt for
  * credentials, the index is private so nothing waits on a lock, and the one
@@ -36,6 +42,8 @@ const { spawnSync } = require('node:child_process');
 const PLUGIN_REF_BRANCH = 'plugin';
 const LIB_DIR = 'gsd-core/bin/lib';
 const SENTINEL = `${LIB_DIR}/cli-exit.cjs`;
+const PUSH_TOKEN_ENV = 'GSD_PLUGIN_REF_PUSH_TOKEN';
+const EXTRAHEADER_KEY = 'http.https://github.com/.extraheader';
 const BRANCH_MAX_LENGTH = 100;
 // One path component: no `/`, no leading `-` (option injection) or `.`.
 const BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
@@ -49,6 +57,34 @@ const FALLBACK_IDENTITY = {
   GIT_COMMITTER_NAME: 'github-actions[bot]',
   GIT_COMMITTER_EMAIL: '41898282+github-actions[bot]@users.noreply.github.com',
 };
+
+function basicAuthHeaderValue(token) {
+  return `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
+}
+
+// Git env-config entries that replace the checkout's persisted auth header for
+// one push. actions/checkout stores http.https://github.com/.extraheader in
+// .git/config and extraheader is multi-valued, so reset it with an empty value
+// first, then set the new one. The token goes through env, never argv: argv is
+// visible in the process table.
+function pushAuthEnv(token) {
+  if (token === undefined || token === null || token === '') return {};
+  if (typeof token !== 'string' || /[\r\n]/.test(token)) return { error: 'invalid push token' };
+  return {
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: EXTRAHEADER_KEY,
+    GIT_CONFIG_VALUE_0: '',
+    GIT_CONFIG_KEY_1: EXTRAHEADER_KEY,
+    GIT_CONFIG_VALUE_1: basicAuthHeaderValue(token),
+  };
+}
+
+function scrubToken(text, token) {
+  if (!token) return text;
+  const header = basicAuthHeaderValue(token);
+  const b64 = header.slice(header.lastIndexOf(' ') + 1);
+  return String(text).split(header).join('***').split(b64).join('***').split(token).join('***');
+}
 
 function isValidBranchName(name) {
   return typeof name === 'string'
@@ -147,7 +183,9 @@ function buildPluginRefCommit({ root, source: sourceRef }) {
   }
 }
 
-function publishPluginRef({ root, remote, branch = PLUGIN_REF_BRANCH, source }) {
+function publishPluginRef({
+  root, remote, branch = PLUGIN_REF_BRANCH, source, pushToken = process.env[PUSH_TOKEN_ENV],
+}) {
   if (!isValidBranchName(branch)) return { ok: false, code: 'usage', error: `invalid branch name: ${JSON.stringify(branch)}` };
   if (typeof remote !== 'string' || remote.length === 0 || remote.startsWith('-')) {
     return { ok: false, code: 'usage', error: `invalid remote: ${JSON.stringify(remote)}` };
@@ -155,6 +193,8 @@ function publishPluginRef({ root, remote, branch = PLUGIN_REF_BRANCH, source }) 
   if (!isValidSource(source)) {
     return { ok: false, code: 'usage', error: `invalid source: ${JSON.stringify(source)}` };
   }
+  const auth = pushAuthEnv(pushToken);
+  if (auth.error) return { ok: false, code: 'usage', error: 'invalid push token' };
   const built = buildPluginRefCommit({ root, source });
   if (!built.ok) return built;
   const pushed = runGit(root, [
@@ -162,8 +202,8 @@ function publishPluginRef({ root, remote, branch = PLUGIN_REF_BRANCH, source }) 
     '-c', `http.lowSpeedLimit=${PUSH_STALL_MIN_BYTES_PER_SEC}`,
     '-c', `http.lowSpeedTime=${PUSH_STALL_WINDOW_SECONDS}`,
     'push', '--force', remote, `${built.commit}:refs/heads/${branch}`,
-  ], { label: 'push' });
-  if (!pushed.ok) return pushed;
+  ], { label: 'push', env: { ...process.env, ...auth } });
+  if (!pushed.ok) return { ok: false, error: scrubToken(pushed.error, pushToken) };
   return { ...built, branch, remote };
 }
 
@@ -211,6 +251,8 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   PLUGIN_REF_BRANCH,
+  PUSH_TOKEN_ENV,
+  pushAuthEnv,
   isValidBranchName,
   buildPluginRefCommit,
   publishPluginRef,
