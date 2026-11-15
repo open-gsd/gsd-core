@@ -94,6 +94,13 @@ export const VALID_TIERS: Set<string> = new Set([...Object.values(_catalog.adapt
 // model_policy.runtime_tiers), which does not accept 'inherit' as a tier.
 export const ADAPTIVE_TIER_VALUES: Set<string> = new Set(Object.values(_catalog.adaptiveTierMap));
 
+/**
+ * The model-id character-class body (#3714): gsd-tools.cjs derives its pin accept regex and sanitizer from it, and
+ * hooks/lib/agent-model-check.js its echo sanitizer. Plain characters and `x-y` ranges only: it is interpolated raw
+ * into both `[BODY]` and `[^BODY]`.
+ */
+export const MODEL_ID_CHARSET_BODY = 'A-Za-z0-9._:/@-';
+
 /** Per-profile model slots for each agent. */
 export interface AgentModelProfiles {
   quality: string;
