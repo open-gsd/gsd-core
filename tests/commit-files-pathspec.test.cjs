@@ -3512,6 +3512,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       fs.writeFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'edited'); git('add', '.planning/REQUIREMENTS.md');
       assert.equal(runFence(dir, g).exitCode, 1, 'a staged edit of REQUIREMENTS.md is refused');
       git('reset', '-q', '--hard', 'HEAD');
+      if (process.platform === 'win32') continue; // a quote and a tab are illegal in a Windows file name
       const odd = 'a\\b"q\tt';
       fs.mkdirSync(path.join(dir, odd, '.planning'), { recursive: true });
       fs.writeFileSync(path.join(dir, odd, '.planning', 'REQUIREMENTS.md'), 'r');
@@ -3519,6 +3520,17 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       git('rm', '-q', `${odd}/.planning/REQUIREMENTS.md`);
       assert.equal(runFence(dir, g).exitCode, 0, 'a backslash, quote and tab in the directory name does not make git quote the path past the guard');
     }
+  });
+  test('the three REQUIREMENTS.md fences match the staged path with the same regex, and the two merge guards share one parser', () => {
+    const el = 'gsd-core/workflows/complete-milestone/detail/elaboration.md';
+    const guard = (marker) => { const l = bashFenceAfter(el, marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
+    const squash = guard('**Squash merge:**');
+    const merge = guard('**Merge with history:**');
+    const commit = bashFenceAfter('gsd-core/workflows/complete-milestone.md', '<step name="git_commit_milestone">', true).join('\n');
+    const re = String.raw`[[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]]`;
+    for (const f of [squash, merge, commit]) assert.ok(f.includes(re), 'the .planning REQUIREMENTS.md regex is the same in every fence');
+    const loop = (f) => f.slice(f.indexOf('STAGED=0'));
+    assert.ok(loop(squash).length > 0 && loop(squash) === loop(merge), 'the squash and merge guards run the same parser');
   });
   test('pr-branch.md preflight refuses a staged foreign path', (t) => {
     const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/pr-branch.md'), 'utf8'));
