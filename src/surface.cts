@@ -493,13 +493,10 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
           tempDirsToClean.push(rewritten);
         }
       }
-      // #2911: honor kind.home as a FALLBACK-preferred override (e.g. Codex
-      // skills -> $HOME/.agents), never a blanket replacement — kinds without
-      // a `home` must keep resolving against layout.configDir. This must stay
-      // in lockstep with _copyStaged's root selection in src/install-engine.cts;
-      // the parity test in tests/runtime-artifact-layout-surface.test.cjs
-      // enforces that the two writers never diverge again.
-      const dest = assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath);
+      // Share the install-root owner with _copyStaged and the install/uninstall
+      // plans. The positive-path writer parity test includes applySurface.
+      const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(layout.configDir, kind);
+      const dest = assertDestWithinConfigHome(installRoot, kind.destSubpath);
       stagedKinds.push({ kind, staged, dest });
     }
 

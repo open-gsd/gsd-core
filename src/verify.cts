@@ -22,11 +22,14 @@ import modelProfilesMod = require('./model-profiles.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { findOrphanSummaries, findUnsummarizedPlans } = coreUtilsMod;
-import { execGit, platformReadSync as safeReadFile } from './shell-command-projection.cjs';
+import { execGit, execArgvQuarantined, platformReadSync as safeReadFile } from './shell-command-projection.cjs';
+import { readOnlyGitEnv } from './read-only-git-env.cjs';
 import { tryWithinRoot } from './security.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
+import { scanBaselineNotation, parseCriteriaAllowMarkers } from './criterion-baseline.cjs';
+import { replayBaselineCriteria, REPLAY_LIMITS, type ReplayReport } from './criterion-replay.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import type { GateExitMode } from './gate-exit.cjs';
@@ -852,10 +855,9 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
 
   // Allow markers may sit anywhere in the plan (same as the sibling scanners).
   // The reason must be non-empty: `R1 - -->` is not an auditable exit.
-  const allow = new Set<string>();
-  const allowRe = /<!--\s*plan-criteria-allow:\s*(R[1-6])\s+-\s+([^>]*\S)\s*-->/g;
-  let am: RegExpExecArray | null;
-  while ((am = allowRe.exec(content || '')) !== null) allow.add(am[1]);
+  // #4309: the marker parser is shared with the baseline-notation scanner
+  // (it also honors B1/B2; this scanner only ever asks about R ids).
+  const allow = parseCriteriaAllowMarkers(content || '');
 
   const record = (bucket: string[], rule: string, message: string, seen: Set<string>): void => {
     if (allow.has(rule) || seen.has(message)) return;
@@ -1327,7 +1329,7 @@ function scanPlanTruncation(content: string): string[] {
   return errors;
 }
 
-function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
+function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean, opts: { replay?: boolean } = {}): void {
   if (!filePath) {
     error('file path required');
   }
@@ -1428,6 +1430,38 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   errors.push(...quantScan.errors);
   warnings.push(...quantScan.warnings);
 
+  // #4309: criterion baseline notation (B1 non-discriminating, B2 legacy
+  // comment). Parse failures are statuses only and never change validity.
+  const baselineScan = scanBaselineNotation(content);
+  errors.push(...baselineScan.errors);
+  warnings.push(...baselineScan.warnings);
+
+  // #4310: opt-in replay (ADR-4310). Advisory: mismatches are warnings, statuses never change validity.
+  let replayReport: ReplayReport | null = null;
+  if (opts.replay === true) {
+    const projectDir = path.resolve(cwd);
+    const head = execGit(['rev-parse', 'HEAD'], { cwd: projectDir, timeout: 5000 });
+    const headSha = head.exitCode === 0 && /^[0-9a-f]{40}$/.test(head.stdout) ? head.stdout : null;
+    const replayEnv = { ...process.env, ...readOnlyGitEnv(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_PAGER: 'cat', PAGER: 'cat' };
+    // Fail closed: an operand that exists but cannot be shown to resolve inside the project is refused.
+    const isInsideRoot = (candidate: string): boolean => {
+      const st = statEvidence(path.resolve(projectDir, candidate));
+      return st.kind === 'none' || (st.kind === 'found' && tryWithinRoot(candidate, projectDir) !== null);
+    };
+    replayReport = replayBaselineCriteria(content, {
+      isInsideRoot,
+      run: (argv, { timeoutMs }) => execArgvQuarantined(argv[0], argv.slice(1), {
+        cwd: projectDir,
+        env: replayEnv,
+        timeout: timeoutMs,
+        maxBuffer: REPLAY_LIMITS.OUTPUT_CAP_BYTES,
+      }),
+      now: () => Date.now(),
+      headSha,
+    });
+    warnings.push(...replayReport.warnings);
+  }
+
   emitVerbVerdict(
     validityVerdict(errors.length === 0, {
       valid: errors.length === 0,
@@ -1436,6 +1470,18 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
       task_count: tasks.length,
       tasks,
       frontmatter_fields: Object.keys(fm),
+      // #4309: appended keys (additive payload).
+      baseline_notation_count: baselineScan.notationCount,
+      baseline_findings: baselineScan.findings,
+      baseline_statuses: baselineScan.statuses,
+      ...(replayReport === null ? {} : {
+        replay: {
+          head_sha: replayReport.head_sha,
+          results: replayReport.results,
+          mismatch_count: replayReport.mismatch_count,
+          statuses: replayReport.statuses,
+        },
+      }),
     }),
     'status',
     raw,

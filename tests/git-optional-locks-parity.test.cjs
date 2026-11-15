@@ -56,15 +56,14 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const helpers = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { REAL_REPO_GIT_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode, runGit, runHook } = require('./helpers/process-seam.cjs');
+const { GIT_FIXTURE_TIMEOUT_MS, GIT_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { recordSpawns, gitSubcommand } = require('./helpers/git-optional-locks-probe.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
@@ -573,11 +572,12 @@ describe('#5048 a real repo shows the variable changes what git does', () => {
     function commitTrackedChange(dir) {
       fs.appendFileSync(path.join(dir, 'tracked.txt'), 'changed\n');
       gitOrThrow(['add', 'tracked.txt'], { cwd: dir });
-      const result = childProcess.spawnSync('git', ['-C', dir, 'commit', '-q', '-m', 'after the renders'], {
-        encoding: 'utf8',
-        timeout: REAL_REPO_GIT_TIMEOUT_MS,
+      // Class: shared git fixture construction (GIT_FIXTURE_TIMEOUT_MS); its evidence is
+      // TIMEOUT_EVIDENCE.GIT_FIXTURE_TIMEOUT_MS in tests/helpers/timeouts.cjs.
+      const result = runGit(['-C', dir, 'commit', '-q', '-m', 'after the renders'], {
+        timeoutMs: GIT_FIXTURE_TIMEOUT_MS,
       });
-      assert.equal(result.status, 0, `the commit failed after the renders: ${result.stderr}`);
+      assert.equal(result.exitCode, 0, `the commit failed after the renders: ${result.stderr}\n${result.summary}`);
       assert.ok(
         !fs.existsSync(path.join(dir, '.git', 'index.lock')),
         'a render left .git/index.lock behind, so the next writer would fail with File exists',
@@ -642,10 +642,15 @@ describe('#5048 a real repo shows the variable changes what git does', () => {
       try {
         const lock = path.join(dir, '.git', 'index.lock');
         const before = digestIndex(dir);
-        const statusWithoutLocks = () => childProcess.spawnSync(
-          'git', ['-C', dir, 'status', '--porcelain'],
-          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: REAL_REPO_GIT_TIMEOUT_MS },
-        );
+        // Class: single git plumbing call (GIT_TIMEOUT_MS); its evidence is
+        // TIMEOUT_EVIDENCE.GIT_TIMEOUT_MS in tests/helpers/timeouts.cjs.
+        const statusWithoutLocks = () => {
+          const result = runGit(
+            ['-C', dir, 'status', '--porcelain'],
+            { timeoutMs: GIT_TIMEOUT_MS },
+          );
+          assert.ok(result.outcome === 'exited', `git status did not exit cleanly: ${result.outcome}`);
+        };
 
         fs.writeFileSync(lock, '');
         for (let i = 0; i < RENDERS; i++) statusWithoutLocks();
@@ -726,13 +731,14 @@ describe('#5048 a real repo shows the variable changes what git does', () => {
           fs.cpSync(path.join(__dirname, '..', 'hooks', 'lib'), path.join(hooksDir, 'lib'), { recursive: true });
           fs.copyFileSync(path.join(__dirname, '..', 'hooks', hook), path.join(hooksDir, hook));
           assert.equal(fs.existsSync(path.join(root, 'gsd-core')), false, 'the fixture must have no gsd-core tree');
-          const result = childProcess.spawnSync(process.execPath, [path.join(hooksDir, hook)], {
+          // Class: staged hook script run (STAGED_HOOK_SCRIPT_TIMEOUT_MS); its evidence is
+          // TIMEOUT_EVIDENCE.STAGED_HOOK_SCRIPT_TIMEOUT_MS in tests/helpers/timeouts.cjs.
+          const result = runHook(path.join(hooksDir, hook), [], {
             input: JSON.stringify(payload),
             cwd: root,
-            encoding: 'utf8',
-            timeout: REAL_REPO_GIT_TIMEOUT_MS,
+            timeoutMs: STAGED_HOOK_SCRIPT_TIMEOUT_MS,
           });
-          assert.equal(result.status, 0, `${hook} did not load without the artifact: ${result.stderr}`);
+          assert.equal(result.exitCode, 0, `${hook} did not load without the artifact: ${result.stderr}\n${result.summary}`);
           assert.doesNotMatch(result.stderr, /Cannot find module/);
         } finally {
           helpers.cleanup(root);

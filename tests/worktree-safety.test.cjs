@@ -22,7 +22,6 @@ const path = require('node:path');
 const childProcess = require('node:child_process');
 const fc = require('fast-check');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { createFixture } = require('./fixtures/index.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -41,8 +40,6 @@ const CORE_PATH = path.join(
 );
 
 const {
-  resolveWorktreeContext,
-  resolveWorktreeLinkage,
   parseWorktreePorcelain,
   planWorktreePrune,
   executeWorktreePrunePlan,
@@ -59,6 +56,7 @@ const {
 } = require(WORKTREE_SAFETY_PATH);
 
 const isWindows = process.platform === 'win32';
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
 
 // ─── Shared stubs ─────────────────────────────────────────────────────────────
 
@@ -103,196 +101,59 @@ function makeTimeoutStub() {
   };
 }
 
-// ─── resolveWorktreeContext ───────────────────────────────────────────────────
-
-describe('resolveWorktreeContext', () => {
-  test('prefers current directory when .planning exists', () => {
-    const context = resolveWorktreeContext('/repo/wt', {
-      existsSync: () => true,
-      execGit: () => ({ exitCode: 1, stdout: '', stderr: '' }),
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo/wt');
-    assert.strictEqual(context.reason, 'has_local_planning');
-    assert.strictEqual(context.mode, 'current_directory');
+// ─── execGitDefault real spawn seam (#3050, #6043) ───────────────────────────
+// Root resolution moved to the Project Context Module (ADR-4908); its contract
+// tests live in tests/project-context.test.cjs. What stays here is the half of
+// #3050 only a real spawn seam can prove: with deps.execGit omitted,
+// resolveProjectContext falls through to shell-command-projection's execGit and
+// the shared isSpawnTimeout predicate, driven by mocking the actual primitive
+// (node:child_process.spawnSync) to return the Windows and POSIX timeout shapes.
+describe('resolveProjectContext over the real spawn seam (#3050)', () => {
+  afterEach(() => {
+    mock.restoreAll();
   });
 
-  test('maps linked worktree to common-dir parent',
-    { skip: isWindows ? 'POSIX-rooted fixture paths cannot be expressed on Windows path.resolve' : false },
-    () => {
-    const context = resolveWorktreeContext('/repo/wt', {
-      existsSync: () => false,
-      execGit: (args) => {
-        if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git/worktrees/wt', stderr: '' };
-        if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '../.git', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: '' };
-      },
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo');
-    assert.strictEqual(context.reason, 'linked_worktree');
-    assert.strictEqual(context.mode, 'linked_worktree_root');
+  test('Windows-shaped timeout (no signal, error.code ETIMEDOUT) is detected as a real timeout', () => {
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: '',
+      signal: null,
+      error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+    }));
+
+    const ctx = resolveProjectContext('/repo');
+    assert.strictEqual(ctx.provenance.reason, 'git_timed_out');
+    assert.strictEqual(ctx.provenance.degraded, true);
+    assert.strictEqual(ctx.worktreeRoot, path.resolve('/repo'));
   });
 
-  test('falls back when git metadata is unavailable', () => {
-    const context = resolveWorktreeContext('/repo/wt', {
-      existsSync: () => false,
-      execGit: () => ({ exitCode: 1, stdout: '', stderr: '' }),
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo/wt');
-    assert.strictEqual(context.reason, 'not_git_repo');
+  test('POSIX-shaped timeout (SIGTERM + error.code ETIMEDOUT) is also detected as a real timeout', () => {
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: '',
+      signal: 'SIGTERM',
+      error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+    }));
+
+    assert.strictEqual(resolveProjectContext('/repo').provenance.reason, 'git_timed_out');
   });
 
-  test('keeps cwd for main worktree checkout', () => {
-    const context = resolveWorktreeContext('/repo/main', {
-      existsSync: () => false,
-      execGit: (args) => {
-        if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: '' };
-      },
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo/main');
-    assert.strictEqual(context.reason, 'main_worktree');
-    assert.strictEqual(context.mode, 'current_directory');
-  });
+  test('externally-delivered SIGTERM with no ETIMEDOUT error is NOT reported as a timeout', () => {
+    // Boundary: the timeout carve-out must not swallow a plain non-zero exit
+    // that merely happens to carry a signal, absent an ETIMEDOUT error.
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: 'fatal: not a git repository',
+      signal: 'SIGTERM',
+      error: null,
+    }));
 
-  // Counter-test: timeout returns the canonical degraded shape, not just an object (Contract 6)
-  test('returns effectiveRoot=cwd, mode=current_directory, reason=git_timed_out on timeout, not throw', () => {
-    let threw = false;
-    let result;
-    try {
-      result = resolveWorktreeContext('/tmp', { execGit: makeTimeoutStub() });
-    } catch {
-      threw = true;
-    }
-    assert.strictEqual(threw, false, 'must not throw on timeout');
-    assert.deepStrictEqual(result, {
-      effectiveRoot: '/tmp',
-      mode: 'current_directory',
-      reason: 'git_timed_out',
-    });
-  });
-
-  // ─── #3050 DEFECT 2: timeout must be distinguishable from not_git_repo ─────
-  test('git rev-parse --git-dir/--git-common-dir TIMES OUT → reason "git_timed_out" (#3050)', () => {
-    const execGit = (args) => {
-      if (args.includes('--git-dir')) return { ...makeTimeoutStub()(args), timedOut: true };
-      return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', timedOut: false };
-    };
-    const context = resolveWorktreeContext('/repo', { execGit, existsSync: () => false });
-    assert.strictEqual(context.reason, 'git_timed_out');
-    assert.notStrictEqual(context.reason, 'not_git_repo');
-    assert.strictEqual(context.effectiveRoot, '/repo');
-  });
-
-  // ─── #3050 item 7: drive the REAL spawn seam, not a hand-set execGit stub ──
-  // Every test above injects deps.execGit with a hand-set `timedOut`, so the
-  // production execGitDefault → shell-command-projection's execGit →
-  // isSpawnTimeout chain is never actually exercised, and a Windows-shaped
-  // timeout (spawnSync reports no `signal`, only `error.code === 'ETIMEDOUT'`)
-  // is unexercised on this half. This test omits deps.execGit entirely so
-  // resolveWorktreeContext falls through to the real execGitDefault, and
-  // mocks node:child_process.spawnSync — the actual primitive
-  // shell-command-projection.cjs's execGit wraps — to return that exact
-  // Windows shape.
-  describe('execGitDefault (real spawn seam)', () => {
-    afterEach(() => {
-      mock.restoreAll();
-    });
-
-    test('Windows-shaped timeout (no signal, error.code ETIMEDOUT) is detected as a real timeout (#3050)', () => {
-      mock.method(childProcess, 'spawnSync', () => ({
-        status: null,
-        stdout: '',
-        stderr: '',
-        signal: null,
-        error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-      }));
-
-      const context = resolveWorktreeContext('/repo', { existsSync: () => false });
-      assert.strictEqual(context.reason, 'git_timed_out');
-      assert.strictEqual(context.effectiveRoot, '/repo');
-    });
-
-    test('POSIX-shaped timeout (SIGTERM + error.code ETIMEDOUT) is also detected as a real timeout', () => {
-      mock.method(childProcess, 'spawnSync', () => ({
-        status: null,
-        stdout: '',
-        stderr: '',
-        signal: 'SIGTERM',
-        error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-      }));
-
-      const context = resolveWorktreeContext('/repo', { existsSync: () => false });
-      assert.strictEqual(context.reason, 'git_timed_out');
-    });
-
-    test('externally-delivered SIGTERM with no ETIMEDOUT error is NOT reported as a timeout', () => {
-      // Boundary: the timeout carve-out must not swallow a plain non-zero exit
-      // that merely happens to carry a signal, absent an ETIMEDOUT error.
-      mock.method(childProcess, 'spawnSync', () => ({
-        status: null,
-        stdout: '',
-        stderr: 'fatal: not a git repository',
-        signal: 'SIGTERM',
-        error: null,
-      }));
-
-      const context = resolveWorktreeContext('/repo', { existsSync: () => false });
-      assert.notStrictEqual(context.reason, 'git_timed_out');
-    });
-  });
-});
-
-// ─── resolveWorktreeLinkage (#3045) ──────────────────────────────────────────
-// resolveWorktreeContext's `has_local_planning` shortcut answers "is there a
-// usable project root right here", not "is this a linked worktree" — a linked
-// worktree created to isolate an executor is a full checkout, so it normally
-// has its OWN checked-out .planning/ too. resolveWorktreeLinkage is the
-// shortcut-free primitive the isolation guard (hooks/gsd-cursor-subagent-start.js)
-// needs instead: it must report "linked_worktree_root" for such a worktree even
-// though .planning exists locally — exactly the case that would defeat the guard
-// if resolveWorktreeContext were reused as-is.
-describe('resolveWorktreeLinkage', () => {
-  test('reports linked_worktree_root even when .planning exists locally (the case resolveWorktreeContext would misclassify)',
-    { skip: isWindows ? 'POSIX-rooted fixture paths cannot be expressed on Windows path.resolve' : false },
-    () => {
-      // deliberately no `existsSync` dep at all — resolveWorktreeLinkage must
-      // never consult the filesystem for .planning; only git-dir comparison.
-      const linkage = resolveWorktreeLinkage('/repo/wt', {
-        execGit: (args) => {
-          if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git/worktrees/wt', stderr: '' };
-          if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '../.git', stderr: '' };
-          return { exitCode: 1, stdout: '', stderr: '' };
-        },
-      });
-      assert.strictEqual(linkage.mode, 'linked_worktree_root');
-      assert.strictEqual(linkage.reason, 'linked_worktree');
-      assert.strictEqual(linkage.effectiveRoot, '/repo');
-    });
-
-  test('reports main_worktree for the primary checkout', () => {
-    const linkage = resolveWorktreeLinkage('/repo/main', {
-      execGit: (args) => {
-        if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: '' };
-      },
-    });
-    assert.strictEqual(linkage.mode, 'current_directory');
-    assert.strictEqual(linkage.reason, 'main_worktree');
-  });
-
-  test('git timeout → git_timed_out, never throws', () => {
-    const linkage = resolveWorktreeLinkage('/repo', { execGit: makeTimeoutStub() });
-    assert.strictEqual(linkage.reason, 'git_timed_out');
-    assert.strictEqual(linkage.effectiveRoot, '/repo');
-  });
-
-  test('not a git repo → not_git_repo', () => {
-    const linkage = resolveWorktreeLinkage('/repo', {
-      execGit: () => ({ exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }),
-    });
-    assert.strictEqual(linkage.reason, 'not_git_repo');
+    const ctx = resolveProjectContext('/repo');
+    assert.notStrictEqual(ctx.provenance.reason, 'git_timed_out');
+    assert.strictEqual(ctx.provenance.degraded, false);
   });
 });
 
@@ -305,8 +166,8 @@ describe('resolveWorktreeLinkage', () => {
 // with directly, so a future edit that reintroduces a local, diverging copy
 // of the timeout check in worktree-base-ref.cts will make this test fail
 // rather than silently drift. (worktree-safety.cjs's own half of this parity
-// — execGitDefault via resolveWorktreeContext — is covered separately above,
-// by "execGitDefault (real spawn seam)", which drives the real
+// — execGit via resolveProjectContext — is covered separately above,
+// by "resolveProjectContext over the real spawn seam", which drives the real
 // node:child_process.spawnSync primitive rather than a synthetic result.)
 describe('shared isSpawnTimeout predicate — parity for worktree-base-ref evaluateWorktreeBaseDegrade (#3050)', () => {
   const { isSpawnTimeout } = require(path.join(
@@ -4985,19 +4846,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
 
 });
 
-// ─── MOVE 2: resolveWorktreeRoot and pruneOrphanedWorktrees (#1268 T0) ────────
+// ─── MOVE 2: pruneOrphanedWorktrees (#1268 T0) ────────────────────────────────
 
-describe('worktree-safety: resolveWorktreeRoot and pruneOrphanedWorktrees relocation identity', () => {
+describe('worktree-safety: pruneOrphanedWorktrees relocation identity', () => {
   const worktreeSafety = require(WORKTREE_SAFETY_PATH);
   const core = require(CORE_PATH);
-
-  test('core.resolveWorktreeRoot === worktreeSafety.resolveWorktreeRoot (by reference)', () => {
-    assert.strictEqual(
-      core.resolveWorktreeRoot,
-      worktreeSafety.resolveWorktreeRoot,
-      'core.resolveWorktreeRoot must be the same function reference as worktreeSafety.resolveWorktreeRoot'
-    );
-  });
 
   test('core.pruneOrphanedWorktrees === worktreeSafety.pruneOrphanedWorktrees (by reference)', () => {
     assert.strictEqual(
@@ -5005,35 +4858,6 @@ describe('worktree-safety: resolveWorktreeRoot and pruneOrphanedWorktrees reloca
       worktreeSafety.pruneOrphanedWorktrees,
       'core.pruneOrphanedWorktrees must be the same function reference as worktreeSafety.pruneOrphanedWorktrees'
     );
-  });
-});
-
-describe('worktree-safety: resolveWorktreeRoot behaviour', () => {
-  const worktreeSafety = require(WORKTREE_SAFETY_PATH);
-
-  // NOTE: createTempGitProject() always seeds .planning/ (createFixture's
-  // planning:true default), which makes resolveWorktreeContext short-circuit
-  // on the has_local_planning branch (src/worktree-safety.cts:203-216) BEFORE
-  // ever calling git — so a fixture built with it can never reach the
-  // git-based main_worktree path this test's name is about. Use a git fixture
-  // WITHOUT .planning/ (and without the projectDoc PROJECT.md, which — since
-  // projectDoc defaults to `git` in createFixture — would otherwise silently
-  // recreate the .planning/ directory it's writing into) so resolveWorktreeRoot
-  // actually reaches resolveWorktreeLinkage's real git rev-parse comparison.
-  test('resolveWorktreeRoot(git repo with no local .planning) reaches the git-based main_worktree path, returns {root: dir, reason: main_worktree}', (t) => {
-    const dir = createFixture({ prefix: 'gsd-wt-root-', planning: false, git: true, projectDoc: false });
-    t.after(() => cleanup(dir));
-    const result = worktreeSafety.resolveWorktreeRoot(dir);
-    assert.deepStrictEqual(result, { root: dir, reason: 'main_worktree' });
-  });
-
-  test('resolveWorktreeRoot propagates git_timed_out via the injected execGit seam (#3050)', () => {
-    const result = worktreeSafety.resolveWorktreeRoot('/repo/wt', {
-      existsSync: () => false,
-      execGit: makeTimeoutStub(),
-    });
-    assert.strictEqual(result.reason, 'git_timed_out');
-    assert.strictEqual(result.root, '/repo/wt');
   });
 });
 
@@ -5947,6 +5771,60 @@ describe('git-cmd.js isGitSubcommand: should NOT match commit', () => {
       assert.ok(!isGitSubcommand(cmd, 'commit'), `Expected NO match for: ${cmd}`);
     });
   }
+});
+
+// ── #5821: --no-advice, --config-env, --attr-source before the subcommand ────
+// git accepts all three ahead of the subcommand; `--config-env` and
+// `--attr-source` take one argument, attached with `=` or as the next word.
+describe('git-cmd.js #5821 global options before the subcommand', () => {
+  const spellings = [
+    ['--no-advice'],
+    ['--config-env=k=V'],
+    ['--config-env', 'k=V'],
+    ['--attr-source=HEAD'],
+    ['--attr-source', 'HEAD'],
+  ];
+  for (const opt of spellings) {
+    test(`commit is recognised after ${opt.join(' ')}`, () => {
+      assert.equal(isGitSubcommand(['git', ...opt, 'commit', '-m', 'x'].join(' '), 'commit'), true);
+    });
+    test(`push is not commit after ${opt.join(' ')}`, () => {
+      assert.equal(isGitSubcommand(['git', ...opt, 'push'].join(' '), 'commit'), false);
+    });
+    test(`checkout -b yields the branch after ${opt.join(' ')}`, () => {
+      assert.equal(extractBranchArgument(['git', ...opt, 'checkout', '-b', 'feat'].join(' ')), 'feat');
+    });
+  }
+
+  test('the three options combine with each other and with existing options', () => {
+    assert.equal(
+      isGitSubcommand('git --no-pager --no-advice --config-env k=V --attr-source HEAD -C d commit -m x', 'commit'),
+      true,
+    );
+  });
+
+  test('an unknown global option still stops the walk (fail closed)', () => {
+    assert.equal(isGitSubcommand('git --no-such-option commit -m x', 'commit'), false);
+    assert.equal(isGitSubcommand('git --no-advice --no-such-option commit -m x', 'commit'), false);
+    assert.equal(extractBranchArgument('git --no-such-option checkout -b feat'), null);
+  });
+
+  test('an argument-taking option with no argument does not throw', () => {
+    assert.equal(isGitSubcommand('git --config-env', 'commit'), false);
+    assert.equal(isGitSubcommand('git --attr-source', 'commit'), false);
+    assert.equal(extractBranchArgument('git --attr-source'), null);
+  });
+
+  test('property: the options in any order, either spelling, still reach commit', () => {
+    const optionArb = fc.constantFrom(
+      ['--no-advice'], ['--no-pager'], ['--config-env=k=V'], ['--config-env', 'k=V'],
+      ['--attr-source=HEAD'], ['--attr-source', 'HEAD'], ['-C', 'd'],
+    );
+    fc.assert(fc.property(fc.array(optionArb, { maxLength: 6 }), (opts) => {
+      const cmd = ['git', ...opts.flat(), 'commit', '-m', 'x'].join(' ');
+      return isGitSubcommand(cmd, 'commit') === true;
+    }));
+  });
 });
 
 // ── gsd-validate-commit.sh source check ──────────────────────────────────────

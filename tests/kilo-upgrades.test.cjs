@@ -35,7 +35,7 @@ const { spawnSync } = require('node:child_process');
 const { runNode, runGit } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const { runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { installRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 const { convertClaudeToKiloFrontmatter } = require('../bin/install.js');
@@ -61,9 +61,8 @@ function parseFrontmatter(content) {
 // ---------------------------------------------------------------------------
 
 for (const scope of ['global', 'local']) {
-  test(`kilo --${scope}: installs .../plugins/gsd-core.js byte-identical to the repo source (UPGRADE 1)`, (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'kilo', scope });
-    t.after(() => cleanup(root));
+  test(`kilo --${scope}: installs .../plugins/gsd-core.js byte-identical to the repo source (UPGRADE 1)`, () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'kilo', scope });
 
     const installedPluginPath = path.join(configDir, 'plugins', 'gsd-core.js');
     assert.ok(fs.existsSync(installedPluginPath), `${installedPluginPath} must exist`);
@@ -246,9 +245,8 @@ const KILO_AGENT_PERMISSION_KEYS = [
 ];
 
 for (const scope of ['global', 'local']) {
-  test(`kilo --${scope}: native agents/*.md subagent projection with mode: subagent (UPGRADE 4)`, (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'kilo', scope });
-    t.after(() => cleanup(root));
+  test(`kilo --${scope}: native agents/*.md subagent projection with mode: subagent (UPGRADE 4)`, () => {
+    const { configDir } = installRuntimeFixture({ runtime: 'kilo', scope });
 
     const agentsDir = path.join(configDir, 'agents');
     assert.ok(fs.existsSync(agentsDir), `${agentsDir} must exist`);
@@ -342,9 +340,8 @@ const PLUGIN_GUARD_HOOKS = [
 ];
 
 for (const scope of ['global', 'local']) {
-  test(`kilo --${scope}: stages the guard hook scripts where the native plugin resolves them (#2305)`, (t) => {
-    const { manifest, configDir, root } = runMinimalInstall({ runtime: 'kilo', scope });
-    t.after(() => cleanup(root));
+  test(`kilo --${scope}: stages the guard hook scripts where the native plugin resolves them (#2305)`, () => {
+    const { manifest, configDir } = installRuntimeFixture({ runtime: 'kilo', scope });
 
     // The shared hooks bundle lands in the config dir, next to gsd-core/.
     for (const hook of PLUGIN_GUARD_HOOKS) {
@@ -380,8 +377,7 @@ for (const scope of ['global', 'local']) {
 }
 
 test('kilo: a disallowed write through the REAL installed tree is rejected by the worktree-path guard (#2305)', async (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'kilo', scope: 'global' });
-  t.after(() => cleanup(root));
+  const { configDir } = installRuntimeFixture({ runtime: 'kilo', scope: 'global' });
 
   // Build a GSD-shaped executor worktree: gsd-worktree-path-guard hard-blocks
   // only when cwd is a linked worktree on a worktree-agent-* branch and the

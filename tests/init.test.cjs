@@ -6239,3 +6239,46 @@ describe('#5676: init progress and init manager under milestone-prefixed', () =>
     assert.deepStrictEqual(phases.map((p) => [bare(p.number), p.deps_satisfied]), [['1', true], ['2', true], ['3', true]]);
   });
 });
+
+describe('init --validate plan-count check (#5786)', () => {
+  const MISMATCH = (says) => `Plan count mismatch: STATE.md says ${says}, disk has 2`;
+  const ROWS = [
+    ['#5786 row 1: compound `Plan: 1 of 5` warns', ['Plan: 1 of 5'], [MISMATCH(5)]],
+    ['#5786 row 2: compound `Plan: 2 of 2` matches, no warning', ['Plan: 2 of 2'], []],
+    ['#5786 row 3: hybrid `Current Plan: 1 of 5` warns', ['Current Plan: 1 of 5'], [MISMATCH(5)]],
+    ['#5786 row 4: lone `Total Plans in Phase: 5` keeps its warning', ['Total Plans in Phase: 5'], [MISMATCH(5)]],
+    ['#5786 row 5: `Current Plan: 1` + `Total Plans in Phase: 5` warns', ['Current Plan: 1', 'Total Plans in Phase: 5'], [MISMATCH(5)]],
+    ['#5786 row 6: explicit Total (2) beats `Plan: 1 of 5`', ['Current Plan: 1', 'Total Plans in Phase: 2', 'Plan: 1 of 5'], []],
+    ['#5786 row 7: explicit Total (5) beats `Plan: 1 of 2`', ['Current Plan: 1', 'Total Plans in Phase: 5', 'Plan: 1 of 2'], [MISMATCH(5)]],
+    ['#5786 row 7a: explicit Total (2) beats `Plan: 1 of 5` with no Current Plan, no warning', ['Plan: 1 of 5', 'Total Plans in Phase: 2'], []],
+    ['#5786 row 7b: explicit Total (5) beats `Plan: 1 of 2` with no Current Plan, warns', ['Plan: 1 of 2', 'Total Plans in Phase: 5'], [MISMATCH(5)]],
+    ['#5786 row 8: no recorded count, no warning', [], []],
+    ['#5786 row 9: `Plan: 1 of ?` has no readable count, no warning', ['Plan: 1 of ?'], []],
+    ['#5786 row 10: trailing prose after `of 5` still reads 5', ['Plan: 1 of 5 in current phase'], [MISMATCH(5)]],
+    ['#5786 row 11: `Total Plans in Phase: TBD`, no warning', ['Total Plans in Phase: TBD'], []],
+    ['#5786 boundary limit-1: `Plan: 1 of 1` says 1', ['Plan: 1 of 1'], [MISMATCH(1)]],
+    ['#5786 boundary limit: `Plan: 1 of 2` matches', ['Plan: 1 of 2'], []],
+    ['#5786 boundary limit+1: `Plan: 1 of 3` says 3', ['Plan: 1 of 3'], [MISMATCH(3)]],
+    ['#5786 unconvertible Total beside `Current Plan: 1 of 2` falls back to 2, no warning', ['Current Plan: 1 of 2', 'Total Plans in Phase: 9007199254740993'], []],
+    ['#5786 unconvertible Total beside `Current Plan: 1 of 5` falls back to 5, warns', ['Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'], [MISMATCH(5)]],
+  ];
+
+  for (const sub of ['execute-phase', 'plan-phase']) {
+    for (const [name, positionLines, expected] of ROWS) {
+      test(`${sub} ${name}`, (t) => {
+        const tmp = fs.realpathSync(createFixture());
+        t.after(() => cleanup(tmp));
+        seedPhase(tmp, '03-api', { '03-01-PLAN.md': '# Plan', '03-02-PLAN.md': '# Plan' });
+        fs.writeFileSync(
+          path.join(tmp, '.planning', 'STATE.md'),
+          ['# Project State', '', '## Current Position', '', 'Phase: 3', ...positionLines, ''].join('\n'),
+        );
+        const result = runGsdTools(`init ${sub} 3 --validate`, tmp);
+        assert.ok(result.success, `Command failed: ${result.error}`);
+        const output = JSON.parse(result.output);
+        assert.strictEqual(output.state_validation_ran, true);
+        assert.deepStrictEqual(output.state_warnings, expected);
+      });
+    }
+  }
+});

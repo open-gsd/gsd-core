@@ -765,7 +765,7 @@ function cmdWriteProfile(cwd: string, options: CmdWriteProfileOptions, raw: bool
   }
 
   platformEnsureDir(path.dirname(outputPath));
-  platformWriteSync(outputPath, template);
+  platformWriteSync(outputPath, template, { allowSpecialTarget: Boolean(options.output) });
 
   const result = {
     profile_path: outputPath,
@@ -946,7 +946,7 @@ function cmdGenerateDevPreferences(cwd: string, options: CmdGenerateDevPreferenc
   }
 
   platformEnsureDir(path.dirname(outputPath));
-  platformWriteSync(outputPath, template);
+  platformWriteSync(outputPath, template, { allowSpecialTarget: Boolean(options.output) });
 
   const result = {
     command_path: outputPath,
@@ -1082,6 +1082,9 @@ function cmdGenerateClaudeProfile(cwd: string, options: CmdGenerateClaudeProfile
 
   let action: string;
 
+  // Only a path the user typed after --output may be a device or pipe (/dev/stdout); the
+  // global and config-derived targets keep refusing special files (#5759).
+  const userChosenTarget = !options.global && Boolean(options.output);
   let existingContent = safeReadFile(targetPath);
   if (existingContent !== null) {
     const startMarker = '<!-- GSD:profile-start -->';
@@ -1098,10 +1101,10 @@ function cmdGenerateClaudeProfile(cwd: string, options: CmdGenerateClaudeProfile
       existingContent = existingContent.trimEnd() + '\n\n' + sectionContent + '\n';
       action = 'appended';
     }
-    platformWriteSync(targetPath, existingContent);
+    platformWriteSync(targetPath, existingContent, { allowSpecialTarget: userChosenTarget });
   } else {
     platformEnsureDir(path.dirname(targetPath));
-    platformWriteSync(targetPath, sectionContent + '\n');
+    platformWriteSync(targetPath, sectionContent + '\n', { allowSpecialTarget: userChosenTarget });
     action = 'created';
   }
 
@@ -1220,7 +1223,7 @@ function cmdGenerateClaudeMd(cwd: string, options: CmdGenerateClaudeMdOptions, r
     existingContent = sections.join('\n\n') + '\n';
     action = 'created';
     platformEnsureDir(path.dirname(outputPath));
-    platformWriteSync(outputPath, existingContent);
+    platformWriteSync(outputPath, existingContent, { allowSpecialTarget: Boolean(options.output) });
   } else if (!/<!-- GSD:[a-z]+-start/.test(existingContent) && !options.force) {
     // #1098: the target instruction file already exists and contains NO GSD
     // section markers — it is a hand-crafted CLAUDE.md/AGENTS.md, not a
@@ -1277,7 +1280,7 @@ function cmdGenerateClaudeMd(cwd: string, options: CmdGenerateClaudeMdOptions, r
       fileContent = fileContent.trimEnd() + '\n\n' + buildClaudeMdProfilePlaceholder(resolveRuntime(cwd)) + '\n';
     }
 
-    platformWriteSync(outputPath, fileContent);
+    platformWriteSync(outputPath, fileContent, { allowSpecialTarget: Boolean(options.output) });
   }
 
   const finalContent = safeReadFile(outputPath);
