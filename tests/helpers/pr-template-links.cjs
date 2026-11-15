@@ -51,8 +51,10 @@ const refsIn = (t) => [...t.matchAll(REF_HEAD)].flatMap((m) => {
 // is judged by isBlank.
 const LIST_ITEM = new RegExp(`^ {0,3}${LIST_MARKER}[ \\t]`);
 // A line is blank when maskCode leaves nothing and it does not open with an inline code span
-// (a run of 1 or 2 backticks; 3 or more open a fence). A line that is only a code span is text.
-const isBlank = (masked, rawLine) => !masked.trim() && !/^ {0,3}`{1,2}(?!`)/.test(rawLine);
+// (a backtick run closed by a run of equal length later on the line; a fence line has no such
+// closer). A line that is only a code span is text.
+const SPAN_OPENS = /^\s*(`+)(?!`)[^]*?(?<!`)\1(?!`)/;
+const isBlank = (masked, rawLine) => !masked.trim() && !SPAN_OPENS.test(rawLine);
 const maskIndentedCode = (raw, masked) => {
   const rawLines = raw.split('\n');
   let afterBlank = true;
