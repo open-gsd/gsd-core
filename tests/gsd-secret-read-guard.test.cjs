@@ -1490,16 +1490,24 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   }
 
   // A read next to such a nest is denied too, as command-too-complex: the grammar scan
-  // that would find it cannot finish.
+  // that would find it cannot finish. Behind 1,200 heredoc tags, whether the scans finish
+  // depends on where the stack runs out: with more stack they do, and find the read. That
+  // row takes either code; both are a block.
   const front = 'echo "$(case x in x) cat .env;; esac)"; ';
   const deep = `${'$('.repeat(1001)}x${')'.repeat(1001)}`;
-  for (const [where, cmd] of [
-    ['in front of two nests past the depth limit in a delimiter', `${front}cat <<E${deep}F${deep}\nE\n`],
-    ['in front of a nest of 1,200 heredoc tags', `${front}echo $(${'cat <<E$('.repeat(1200)}`],
-    ['after a nest past the depth limit', `echo ${deep}; ${front}`],
+  for (const [where, cmd, stackBound] of [
+    ['in front of two nests past the depth limit in a delimiter', `${front}cat <<E${deep}F${deep}\nE\n`, false],
+    ['in front of a nest of 1,200 heredoc tags', `${front}echo $(${'cat <<E$('.repeat(1200)}`, true],
+    ['after a nest past the depth limit', `echo ${deep}; ${front}`, false],
   ]) {
-    test(`a read ${where}: denies as command-too-complex`, () => {
-      assertBlocked(runHook(bash(cmd)), where, { code: 'command-too-complex', tool: 'Bash' });
+    test(`a read ${where}: denies as command-too-complex${stackBound ? ' where the stack runs out, else as secret-read' : ''}`, () => {
+      const r = runHook(bash(cmd));
+      let code = 'command-too-complex';
+      if (stackBound) {
+        code = r.status === 2 ? JSON.parse(r.stdout).code : undefined;
+        assert.ok(['command-too-complex', 'secret-read'].includes(code), `${where}: code ${code}`);
+      }
+      assertBlocked(r, where, { code, tool: 'Bash', ...(code === 'secret-read' ? { path: '.env' } : {}) });
     });
   }
 
