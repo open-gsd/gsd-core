@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
-import { extractTaskCommitRefs, commitIsAncestor, commitHistoryComplete, commitIsKnown, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
+import { extractTaskCommitRefs, commitIsAncestor, commitIsKnown, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
 import { platformWriteSync, toPosixPath } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
@@ -23,10 +23,11 @@ export type SealPlans = Record<string, Partial<SealEntry>>;
 export const REPO_TEXT_MAX_BYTES = 64 * 1024;
 /**
  * #5354: most distinct SUMMARY task commits probed per plan. The git spawns per plan:
- * - each id costs one `git merge-base`, and one `git rev-parse --verify` when git does not know it;
- *   the loop stops at the first id that is not gone, so at most 2 * SUMMARY_REFS_MAX;
- * - one `git rev-parse --is-shallow-repository` per repo (the root and each `planning.sub_repos` entry), at most once per run (the caller's `historyComplete` memo);
- * - when every id exists, one `git log --no-walk` over the ids, one for their commit times, one `git --version` and one `git log` over HEAD.
+ * - R is the number of repos the scope owner walks: 1, or the `planning.sub_repos` entries plus the root (at most MAX_SUB_REPOS + 1);
+ * - each id costs at most R `git merge-base` and, when git does not know it, R `git rev-parse --verify`, plus one `git rev-parse --show-toplevel`
+ *   per walk when `planning.sub_repos` is set; the loop stops at the first id that is not gone, so at most (2 * R + 2) * SUMMARY_REFS_MAX;
+ * - one `git rev-parse --is-shallow-repository` per repo, at most once per run (the caller's `historyComplete` memo);
+ * - when every id exists, one `git log --no-walk` over the ids, one for their commit times, one `git --version` and one `git log` over HEAD, plus R probes that find the repo holding the ids.
  */
 export const SUMMARY_REFS_MAX = 64;
 
@@ -64,14 +65,6 @@ export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>,
   if (st.kind === 'found' && !st.value.isFile()) throw new Error(`${SEAL_FILE} exists and is not a regular file`);
   platformWriteSync(file, content, { atomic: true });
 }
-
-/**
- * Whether the history `projectDir` keeps its commits in is complete (non-shallow), in every repo of a
- * `planning.sub_repos` workspace (the scope owner's walk). Exit 128 on a commit means "object not found" only
- * then: in a shallow clone or outside a repo it says nothing about squashing, so it must not turn an un-squashed
- * skipper into `NotEvaluable` or a reachable seal into a squashed one.
- */
-export const historyIsComplete = commitHistoryComplete;
 
 export type CommitReachability = 'reachable' | 'unreachable' | 'missing';
 

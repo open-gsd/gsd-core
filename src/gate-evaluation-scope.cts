@@ -490,9 +490,14 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   if (ids.length === 0 || !ids.every(isSafeRefArgument)) return null;
   const runner: HistoryGitRunner = execGit ?? execGitSeam;
   // The HEAD listing sets its own `maxBuffer`; the shared `makeGit` and `GitRunner` keep their form.
-  const git = makeGit(projectDir, runner);
-  const unboundedGit = makeGit(projectDir, (args, opts) => runner(args, { ...opts, maxBuffer: Infinity }));
   try {
+    // The repo that holds the ids answers (the walk of `commitIsAncestor`); the two lists run the same repos in the same order.
+    const gits = commitGits(projectDir, runner);
+    const unboundedGits = commitGits(projectDir, (args, opts) => runner(args, { ...opts, maxBuffer: Infinity }));
+    const holder = gits.length === 1 ? 0 : gits.findIndex((g) => ids.every((id) => gitOrNo(g, ['rev-parse', '--verify', '--quiet', `${id}^{commit}`]) !== null));
+    if (holder < 0) return null;
+    const git = gits[holder];
+    const unboundedGit = unboundedGits[holder];
     // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
     const named = parseHeadLog(git(['log', '--no-walk=unsorted', HEAD_LOG_FORMAT, ...ids, '--']));
     // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.

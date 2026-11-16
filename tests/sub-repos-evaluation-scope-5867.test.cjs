@@ -20,6 +20,9 @@ const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
   commitIsAncestor,
+  commitHistoryComplete,
+  commitIsKnown,
+  subjectsOccurOnHead,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
 const IDENTITY = {
@@ -557,5 +560,48 @@ describe('#5867 the check evaluation-scope verb and commitIsAncestor', () => {
     const ws = makeWorkspace(['api']);
     const known = commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
     assert.equal(commitIsAncestor(ws.root, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', known), null);
+  });
+
+  test('[happy] commitIsKnown finds a commit only the second sub-repo holds, and says false when none does', () => {
+    const ws = makeWorkspace(['api', 'web']);
+    commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    const inWeb = commit(ws.repos.web, 'w.js', 'feat(01-01): w', 1_700_000_100);
+    assert.equal(commitIsKnown(ws.root, inWeb), true);
+    assert.equal(commitIsKnown(ws.root, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'), false);
+  });
+
+  test('[negative] commitIsKnown is null for an unsafe argument and for an unreadable sub_repos entry, never false', () => {
+    const ws = makeWorkspace(['api']);
+    const sha = commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    assert.equal(commitIsKnown(ws.root, '--all'), null);
+    // One repo says "no" and the other cannot answer: not a "no".
+    write(ws.root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: ['api', 'ghost'] } }));
+    assert.equal(commitIsKnown(ws.root, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'), null);
+    for (const bad of [[1], ['../outside']]) {
+      write(ws.root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: bad } }));
+      assert.equal(commitIsKnown(ws.root, sha), null, JSON.stringify(bad));
+    }
+  });
+
+  test('[negative] commitHistoryComplete is true for complete sub-repos and false for an unreadable sub_repos entry', () => {
+    const ws = makeWorkspace(['api']);
+    commit(ws.repos.api, 'a.js', 'feat(01-01): a', 1_700_000_000);
+    assert.equal(commitHistoryComplete(ws.root), true);
+    for (const bad of [[1], ['../outside'], ['ghost']]) {
+      write(ws.root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: bad } }));
+      assert.equal(commitHistoryComplete(ws.root), false, JSON.stringify(bad));
+    }
+  });
+
+  test('[regression] subjectsOccurOnHead reads the sub-repo that holds the ids, not the workspace root', () => {
+    const ws = makeWorkspace(['other', 'app']);
+    commit(ws.repos.other, 'o.js', 'chore: other', 1_700_000_000);
+    commit(ws.repos.app, 'base.js', 'chore: base', 1_700_000_000);
+    ws.repos.app.git('checkout', '-q', '-b', 'side');
+    const side = commit(ws.repos.app, 'a.js', 'feat(01-01): add a', 1_700_000_100);
+    ws.repos.app.git('checkout', '-q', 'main');
+    assert.equal(subjectsOccurOnHead(ws.root, [side]), false);
+    commit(ws.repos.app, 'a2.js', 'feat(01-01): add a', 1_700_000_200);
+    assert.equal(subjectsOccurOnHead(ws.root, [side]), true);
   });
 });

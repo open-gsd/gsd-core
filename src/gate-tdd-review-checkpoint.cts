@@ -35,8 +35,8 @@ import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from
 import type { GateResult } from './gate-verdict.cjs';
 import { resolvePhaseDir } from './gate-phase-context.cjs';
 import { readDirEvidence, readPlanSetEvidence, readTextEvidence, evidenceFromError, evidenceNone } from './gate-evidence.cjs';
-import { resolveEvaluationScope, commitIsAncestor, isFullSha } from './gate-evaluation-scope.cjs';
-import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, historyIsComplete, commitIsGone, commitReachability, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
+import { resolveEvaluationScope, commitIsAncestor, commitHistoryComplete, isFullSha } from './gate-evaluation-scope.cjs';
+import { SEAL_FILE, readSeal, writeSeal, summaryCommitsAllUnreachable, commitIsGone, commitReachability, type SealEntry, type SealPlans } from './gate-tdd-review-seal.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
 const { frontmatterKeyHasValue, extractFrontmatter } = frontmatterMod;
@@ -333,7 +333,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   const evidence = Object.create(null) as Record<string, SealEntry>;
   // One shallow-clone probe per run: history completeness is the same for every plan.
   let complete: boolean | undefined;
-  const historyComplete = (): boolean => complete ??= historyIsComplete(projectDir);
+  const historyComplete = (): boolean => complete ??= commitHistoryComplete(projectDir);
   for (const planPath of tddPlanFiles) {
     const { row, evidence: sealEvidence } = planRow(projectDir, phaseDir, planPath, seal, dependents, historyComplete);
     rows.push(row);

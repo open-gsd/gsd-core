@@ -8,10 +8,14 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { commitReachability, commitIsGone } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+const { commitHistoryComplete } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
 const git = (dir, ...args) => gitOrThrow(['-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: dir });
 
@@ -31,16 +35,8 @@ describe('commitReachability', () => {
   });
 });
 
-/**
- * #5354 review 798bd4e6 Minor 2: a `planning.sub_repos` workspace keeps its history in the sub-repos, so
- * completeness and existence are asked of the same repos `commitIsAncestor` walks.
- */
+/** A `planning.sub_repos` workspace keeps its history in the sub-repos, so completeness and existence are asked of the repos `commitIsAncestor` walks. */
 describe('planning.sub_repos workspaces', () => {
-  const { historyIsComplete } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
-  const fs = require('node:fs');
-  const os = require('node:os');
-  const path = require('node:path');
-
   const configure = (root, subRepos) => {
     fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ planning: { sub_repos: subRepos } }));
@@ -65,8 +61,8 @@ describe('planning.sub_repos workspaces', () => {
     const old = shallowApp(t, root);
     assert.equal(git(root, 'rev-parse', '--is-shallow-repository').trim(), 'false', 'positive control: root is complete');
     assert.equal(commitReachability(root, old, 'HEAD'), 'missing');
-    assert.equal(historyIsComplete(root), false);
-    assert.equal(commitIsGone(commitReachability(root, old, 'HEAD'), () => historyIsComplete(root)), false);
+    assert.equal(commitHistoryComplete(root), false);
+    assert.equal(commitIsGone(commitReachability(root, old, 'HEAD'), () => commitHistoryComplete(root)), false);
   });
 
   test('the seal case: a root that is no repo, with complete sub-repos, reads a vanished commit as gone', (t) => {
@@ -75,8 +71,8 @@ describe('planning.sub_repos workspaces', () => {
     fs.mkdirSync(path.join(root, 'app'));
     git(path.join(root, 'app'), 'init', '-q');
     git(path.join(root, 'app'), 'commit', '-q', '--allow-empty', '-m', 'first');
-    assert.equal(historyIsComplete(root), true);
-    assert.equal(commitIsGone(commitReachability(root, 'f'.repeat(40), 'HEAD'), () => historyIsComplete(root)), true);
+    assert.equal(commitHistoryComplete(root), true);
+    assert.equal(commitIsGone(commitReachability(root, 'f'.repeat(40), 'HEAD'), () => commitHistoryComplete(root)), true);
   });
 
   test('a commit only a sub-repo holds is not missing', (t) => {
