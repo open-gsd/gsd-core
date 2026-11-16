@@ -1195,6 +1195,7 @@ describe('commit --files-removed: index states absent by design are never remova
     git(['add', path.join(PENDING, 'mine.md')]);
     const staged = git(['ls-files', '-s', '--', path.join(PENDING, 'mine.md')]);
     assert.notEqual(staged, git(['ls-tree', 'HEAD', '--', path.join(PENDING, 'mine.md')]).replace(/\t/, ' '), 'fixture: the staged blob must differ from HEAD');
+    fs.unlinkSync(path.join(tmpDir, PENDING, 'mine.md'));
 
     const result = runGsdTools(
       ['commit', 'docs: bad declaration', '--files-removed', '.planning/todos/pending/mine.md', '.planning/todos/pending/present.md'],
