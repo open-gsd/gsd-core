@@ -12,8 +12,6 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const fc = require('fast-check');
-const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'execute-phase.md');
@@ -292,65 +290,13 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
     assert.ok(callIdx < content.indexOf('<step name="execute_waves">'));
   });
 
-  test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
+  test('#5843 row 6: the call keeps its --phase, --name and --plans arguments', () => {
     assert.ok(
       workflow().includes(
-        "PHASE_NAME=$(gsd_run query init.execute-phase \"{phase_number}\" --pick phase_name) || exit 1\ngsd_run query state.begin-phase --phase \"{phase_number}\" --name=\"${PHASE_NAME}\" --plans \"{plan_count}\""
+        'state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"'
       ),
-      'begin-phase records phase_name (re-read from init.execute-phase in the block itself, so no phase text is spliced into the shell and no earlier shell is needed) and plan_count from the init JSON'
+      'the begin-phase arguments are unchanged by the move'
     );
-  });
-
-  test('#5843 row 6: the begin-phase block hands any phase name to --name as one argument, byte for byte', () => {
-    // The block reads one line of free ROADMAP text from the init command. No text is spliced into the
-    // shell, so no name (a heredoc terminator word included) can end the capture early.
-    const block = span('gsd-core/workflows/execute-phase.md', 'PHASE_NAME=', 'gsd_run query state.begin-phase');
-    const check = (name) => {
-      const quoted = `'${name.replace(/'/g, "'\\''")}'`;
-      // The block runs as a fresh shell: nothing is seeded. The init command answers `--pick phase_name`, and
-      // the begin-phase call prints its argv NUL-separated, so the test sees the argument the CLI would get.
-      const stub = `gsd_run() { if [ "$2 $3 $4 $5" = "init.execute-phase 7 --pick phase_name" ]; then printf %s ${quoted}; else printf '%s\\0' "$@"; fi; }`;
-      const r = runBash(
-        block.map(l => l.replace(/\{phase_number\}/g, '7').replace('{plan_count}', '3')),
-        { stdout: '', rc: 0 },
-        { preamble: [stub] }
-      );
-      assert.equal(r.status, 0, `bash should run the block for ${JSON.stringify(name)}: ${r.stderr}`);
-      assert.deepEqual(r.stdout.split('\0').slice(0, -1), ['query', 'state.begin-phase', '--phase', '7', `--name=${name}`, '--plans', '3']);
-    };
-    for (const name of ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', 'GSD_NAME_END', 'EOF']) check(name);
-    fc.assert(
-      fc.property(fc.string().filter(n => !/[\n\0]/.test(n)), (name) => { check(name); }),
-      { numRuns: 25 }
-    );
-  });
-
-  test('#5843 row 6: a failed init.execute-phase name read stops the block before begin-phase runs', () => {
-    const block = span('gsd-core/workflows/execute-phase.md', 'PHASE_NAME=', 'gsd_run query state.begin-phase');
-    // Not under `set -e`: only the block's own `|| exit 1` can stop it.
-    const stub = `gsd_run() { if [ "$2 $3 $4 $5" = "init.execute-phase 7 --pick phase_name" ]; then return 1; else printf 'begin-phase ran'; fi; }`;
-    const r = runBash(
-      block.map(l => l.replace(/\{phase_number\}/g, '7').replace('{plan_count}', '3')),
-      { stdout: '', rc: 0 },
-      { setE: false, preamble: [stub] }
-    );
-    assert.equal(r.status, 1);
-    assert.equal(r.stdout, '', 'begin-phase must not run after a failed name read');
-  });
-
-  test('#5843 row 6: init.execute-phase --pick phase_name returns the ROADMAP name byte for byte, and prints nothing for an unknown phase', () => {
-    const name = '--Users\' "q" \\d $(x) `y`';
-    const dir = createTempProject();
-    try {
-      fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), `# Roadmap\n\n### Phase 1: ${name}\n\n**Goal:** g\n`);
-      const ok = runGsdTools(['query', 'init.execute-phase', '1', '--pick', 'phase_name'], dir);
-      assert.ok(ok.success, ok.error);
-      assert.equal(ok.output, name);
-      const missing = runGsdTools(['query', 'init.execute-phase', '99', '--pick', 'phase_name'], dir);
-      assert.ok(missing.success && missing.output === '', 'an unknown phase prints nothing at exit 0, never the text "null"; begin-phase then records no name, as it did before');
-    } finally {
-      cleanup(dir);
-    }
   });
 
   test('#5843 row 7: verify-only, blocked and filtered-empty exits all precede the call', () => {

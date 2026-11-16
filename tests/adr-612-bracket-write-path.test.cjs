@@ -1852,16 +1852,6 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(state.includes('Phase: 02 (User Dashboard) — EXECUTING'), true);
   });
 
-  test('begin-phase takes a phase name that starts with -- in the --name=<value> form (#5843)', () => {
-    const dir = project('adr-612-state-dashname-');
-    writeBracketFixture(dir);
-
-    run(['state', 'begin-phase', '--phase', '02', '--name=--legacy cleanup', '--plans', '2'], dir);
-
-    const state = fs.readFileSync(planning(dir, 'STATE.md'), 'utf8');
-    assert.equal(state.includes('Phase: 02 (--legacy cleanup) — EXECUTING'), true);
-  });
-
   test('a repeated bracket begin-phase is a resume and preserves mid-flight counters', () => {
     const dir = project('adr-612-state-resume-');
     writeBracketFixture(dir);

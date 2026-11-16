@@ -188,8 +188,7 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
         state.cmdStateRecordSession(cwd, { stopped_at: strArg(a, 'stopped-at'), resume_file: strArg(a, 'resume-file') }, raw);
       },
       'begin-phase': () => {
-        // `--name=<value>` lets a phase name that starts with `--` reach the command (execute-phase.md passes the free ROADMAP text this way).
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['phase', 'name', 'plans'], eqFlags: ['name'], positionals: 2 }, error);
+        const a = parseNamedArgsOrExit(args, { valueFlags: ['phase', 'name', 'plans'], positionals: 2 }, error);
         state.cmdStateBeginPhase(cwd, strArg(a, 'phase'), strArg(a, 'name'), parsePlans(args, strArg(a, 'plans'), error), raw);
       },
       'signal-waiting': () => {
