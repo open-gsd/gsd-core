@@ -2410,9 +2410,12 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     : [];
   // `preStaged` is `--relative`: it never lists a path staged outside `cwd` (a project nested in its repo), and the carry makes the commit
   // unscoped, so it also needs the index to hold no path outside `cwd` (the whole index lists those, the `--relative` one does not).
-  const stagedCount = (...relative: string[]): number =>
-    execGit(['diff', '--cached', '--name-only', '-z', ...relative], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).stdout.split('\0').filter(Boolean).length;
-  const nothingOutsideCwd = migrationStaged.length === 0 || stagedCount() === stagedCount('--relative');
+  // `--no-relative` keeps the whole-index count whole under a user's `diff.relative=true`; a failed probe counts as "paths outside" (NaN never equals).
+  const stagedCount = (relative: '--relative' | '--no-relative'): number => {
+    const r = execGit(['diff', '--cached', '--name-only', '-z', relative], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+    return r.exitCode === 0 ? r.stdout.split('\0').filter(Boolean).length : Number.NaN;
+  };
+  const nothingOutsideCwd = migrationStaged.length === 0 || stagedCount('--no-relative') === stagedCount('--relative');
   const carried = nothingOutsideCwd && [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
   stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));
 

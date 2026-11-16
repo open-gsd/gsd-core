@@ -635,25 +635,47 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.match(git(tmpDir, 'diff', '--cached', '--', `${rel}/.gitignore`), /\+mine\//, 'the user\'s staged edit is still staged');
   });
 
-  // The carry makes the commit unscoped, so a path the user staged outside a project nested in its repo must turn it off.
-  test('a file staged outside a nested project is not carried into a scoped commit beside the migration', (t) => {
-    const tmpDir = createTempGitProject();
-    t.after(() => cleanup(tmpDir));
-    const sub = path.join(tmpDir, 'sub');
-    fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
-    fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), STATE_MD);
-    fs.writeFileSync(path.join(sub, '.planning', 'state.json'), '{}\n');
-    git(tmpDir, 'add', '-A');
-    git(tmpDir, 'commit', '-q', '-m', 'seed');
-    assert.ok(runGsdTools(BEGIN, sub).success);
-    assert.match(git(tmpDir, 'diff', '--cached', '--name-only'), /sub\/\.planning\/\.gitignore/, 'the boundary staged the migration');
-    fs.writeFileSync(path.join(tmpDir, 'outside.txt'), 'mine\n');
-    git(tmpDir, 'add', 'outside.txt');
-    fs.appendFileSync(path.join(sub, '.planning', 'STATE.md'), '\nedited\n');
-    const c = runGsdTools(['commit', 'docs: final', '--files', '.planning/STATE.md'], sub);
+  // The carry makes the commit unscoped, so a path the user staged outside a project nested in its repo must turn it off,
+  // also under the user's `diff.relative=true` (it makes a plain `git diff --cached` list paths relative to cwd too).
+  for (const relative of ['false', 'true']) {
+    test(`a file staged outside a nested project is not carried into a scoped commit beside the migration (diff.relative=${relative})`, (t) => {
+      const tmpDir = createTempGitProject();
+      t.after(() => cleanup(tmpDir));
+      const sub = path.join(tmpDir, 'sub');
+      fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), STATE_MD);
+      fs.writeFileSync(path.join(sub, '.planning', 'state.json'), '{}\n');
+      git(tmpDir, 'add', '-A');
+      git(tmpDir, 'commit', '-q', '-m', 'seed');
+      git(tmpDir, 'config', 'diff.relative', relative);
+      assert.ok(runGsdTools(BEGIN, sub).success);
+      assert.match(git(tmpDir, 'diff', '--cached', '--name-only', '--no-relative'), /sub\/\.planning\/\.gitignore/, 'the boundary staged the migration');
+      fs.writeFileSync(path.join(tmpDir, 'outside.txt'), 'mine\n');
+      git(tmpDir, 'add', 'outside.txt');
+      fs.appendFileSync(path.join(sub, '.planning', 'STATE.md'), '\nedited\n');
+      const c = runGsdTools(['commit', 'docs: final', '--files', '.planning/STATE.md'], sub);
+      assert.ok(c.success, `final commit must succeed: ${c.error}`);
+      assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--no-relative', '--format=', 'HEAD').trim().split('\n'), ['sub/.planning/STATE.md']);
+      assert.match(git(tmpDir, 'diff', '--cached', '--name-only', '--no-relative'), /outside\.txt/, 'the user\'s staged file is still staged');
+    });
+  }
+
+  // A `.planning/<dir>/` that is no project matches the migration's pathspecs too: a staged state.json removal or rule-file edit there is the user's.
+  test('a staged change under a non-project .planning directory is not carried into a scoped commit', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'intel'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'intel', 'state.json'), '{}\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'intel', '.gitignore'), 'x/\n');
+    git(tmpDir, 'add', '.planning/intel');
+    git(tmpDir, 'commit', '-q', '-m', 'intel', '--', '.planning/intel');
+    git(tmpDir, 'rm', '-q', '--cached', '.planning/intel/state.json');
+    fs.appendFileSync(path.join(tmpDir, '.planning', 'intel', '.gitignore'), 'mine/\n');
+    git(tmpDir, 'add', '.planning/intel/.gitignore');
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
     assert.ok(c.success, `final commit must succeed: ${c.error}`);
-    assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['sub/.planning/STATE.md']);
-    assert.match(git(tmpDir, 'diff', '--cached', '--name-only'), /outside\.txt/, 'the user\'s staged file is still staged');
+    assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), [`${rel}/STATE.md`]);
+    assert.match(git(tmpDir, 'diff', '--cached', '--name-only'), /intel\/state\.json/, 'the user\'s staged removal is still staged');
   });
 
   test('a user negation keeps a tracked state.json tracked', (t) => {
