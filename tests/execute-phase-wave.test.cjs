@@ -293,7 +293,7 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
     assert.ok(
       workflow().includes(
-        "PHASE_NAME=$(cat <<'GSD_EOF'\n{phase_name}\nGSD_EOF\n)\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name \"${PHASE_NAME}\" --plans \"{plan_count}\""
+        "IFS= read -r PHASE_NAME <<'GSD_EOF'\n{phase_name}\nGSD_EOF\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name \"${PHASE_NAME}\" --plans \"{plan_count}\""
       ),
       'begin-phase records phase_name (read through a quoted heredoc, so no shell metacharacter in it runs) and plan_count from the init JSON'
     );
