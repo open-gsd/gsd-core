@@ -286,6 +286,13 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(row, /Also cite each `D-NN` recorded in this loop in the `must_haves`\/`truths` of the plan that implements it/);
   });
 
+  // The row tells the re-spawned planner to edit RESEARCH.md, so plan-phase's revision prompt must hand it over.
+  test('plan-phase\'s revision prompt hands the planner RESEARCH.md, which the row tells it to edit', () => {
+    const prompt = span(read('gsd-core/workflows/plan-phase.md'), '<revision_context>', /<\/revision_context>/);
+    const reading = span(prompt, '<required_reading>', /<\/required_reading>/);
+    assert.match(reading, /- \{research_path\} \(Technical Research\)/);
+  });
+
   // revision-loop.md's Resolve step is the shared protocol plan-phase imports. Quick's checker is handed only
   // PLAN.md and finds research by phase number, so Dimension 11 skips there and no such conflict reaches quick.
   const resolve = once(() => {
