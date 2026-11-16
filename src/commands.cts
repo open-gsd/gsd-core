@@ -2389,7 +2389,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // hold glob characters, so they are literal pathspecs downstream.
   const migrationStaged = explicitFiles && preStaged.size > 0
     ? execGit(
-        ['diff', '--cached', '--name-status', '-z', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
+        ['diff', '--cached', '--name-status', '-z', '--no-renames', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
         { cwd, timeout: GIT_PROBE_TIMEOUT_MS },
       ).stdout.split('\0').filter(Boolean)
         // status, path pairs: the migration only removes a state.json, so a staged edit of one (a copy a `!` rule keeps tracked) is the user's
