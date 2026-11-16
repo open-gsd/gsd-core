@@ -2153,6 +2153,8 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // Pre-execution workflows (discuss, plan, research) commit artifacts but the branch
   // was previously only created during execute-phase — too late.
   const branchingStrategy = config['branching_strategy'] as string | undefined;
+  // Reported in the result so a caller (and a test) reads the resolved branch as data, not stderr prose.
+  let resolvedBranch: string | null = null;
   if (branchingStrategy && branchingStrategy !== 'none') {
     let branchName: string | null = null;
     // #4055: the phase directory (cwd-relative POSIX path from
@@ -2215,6 +2217,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
           .replace('{slug}', generateSlugInternal(milestone.name) || 'milestone');
       }
     }
+    resolvedBranch = branchName;
     if (branchName) {
       // #4055: state-3 discriminator for the create arm. `rev-parse --verify`
       // alone cannot distinguish "branch never existed" (create is the #1278
@@ -2905,6 +2908,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     hash,
     reason: 'committed',
     ...(skippedFiles.length > 0 ? { skipped_files: skippedFiles } : {}),
+    ...(resolvedBranch ? { resolved_branch: resolvedBranch } : {}),
   };
   output(result, raw, hash || 'committed');
 }
