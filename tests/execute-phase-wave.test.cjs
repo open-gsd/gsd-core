@@ -12,8 +12,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const fc = require('fast-check');
+const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'execute-phase.md');
@@ -295,27 +295,31 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
     assert.ok(
       workflow().includes(
-        "IFS= read -r PHASE_NAME <<'PHASE_END'\n{phase_name}\nPHASE_END\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name \"${PHASE_NAME}\" --plans \"{plan_count}\""
+        "IFS= read -r PHASE_NAME <<'GSD_NAME_END'\n{phase_name}\nGSD_NAME_END\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name \"${PHASE_NAME}\" --plans \"{plan_count}\""
       ),
       'begin-phase records phase_name (read through a quoted heredoc, so no shell metacharacter in it runs) and plan_count from the init JSON'
     );
   });
 
   test('#5843 row 6: the begin-phase block hands any phase name to --name byte for byte', () => {
-    const lines = workflow().split('\n');
-    const start = lines.findIndex(l => l.startsWith('IFS= read -r PHASE_NAME <<'));
-    const end = lines.findIndex((l, i) => i > start && l.startsWith('gsd_run query state.begin-phase'));
-    assert.ok(start >= 0 && end > start, 'the begin-phase block should exist');
-    const block = lines.slice(start, end + 1).join('\n');
-    const names = ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', 'PHASE_END '];
-    for (const name of names) {
-      const script = 'PHASE_NUMBER=7\ngsd_run() { printf "%s\\n" "$@"; }\n' + block.replace('{phase_name}', () => name).replace('{plan_count}', '3');
-      const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
+    // The block passes one line of free ROADMAP text through unchanged. The heredoc terminator is the one
+    // line a name cannot hold, so it is read from the block, not typed here.
+    const block = span('gsd-core/workflows/execute-phase.md', 'IFS= read -r PHASE_NAME', 'gsd_run query state.begin-phase');
+    const terminator = /<<'([A-Z_]+)'/.exec(block[0])[1];
+    const check = (name) => {
+      const r = runBash(
+        block.map(l => l.replace('{phase_name}', () => name).replace('{plan_count}', '3')),
+        { stdout: '', rc: 0 },
+        { preamble: ['PHASE_NUMBER=7'], probe: 'printf %s "$PHASE_NAME"' }
+      );
       assert.equal(r.status, 0, `bash should run the block for ${JSON.stringify(name)}: ${r.stderr}`);
-      assert.deepEqual(r.stdout.split('\n').slice(0, -1),
-        ['query', 'state.begin-phase', '--phase', '7', '--name', name, '--plans', '3'],
-        `--name must equal ${JSON.stringify(name)}`);
-    }
+      assert.equal(r.stdout, name, `PHASE_NAME must equal ${JSON.stringify(name)}`);
+    };
+    for (const name of ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', terminator + ' ']) check(name);
+    fc.assert(
+      fc.property(fc.string().filter(n => !/[\n\0]/.test(n) && n !== terminator), (name) => { check(name); }),
+      { numRuns: 25 }
+    );
   });
 
   test('#5843 row 7: verify-only, blocked and filtered-empty exits all precede the call', () => {
