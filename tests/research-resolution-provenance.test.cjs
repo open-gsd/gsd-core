@@ -282,8 +282,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(row, /on the question it answers in RESEARCH\.md/);
     assert.match(row, /With no such `D-NN`, return `## REVISION_CONFLICT`/);
     // A D-NN recorded mid-loop is a trackable decision: cited only in RESEARCH.md, Dimension 7 and plan-phase's
-    // step 13a decision-coverage gate would fail it next.
-    assert.match(row, /Also cite each `D-NN` recorded in this loop in the `must_haves`\/`truths` of the plan that implements it/);
+    // step 13a decision-coverage gate would fail it next. Dimension 7 reads a task's action, and the gate scans
+    // `<action>` bodies (XML_DECISION_TAG_NAMES), so the action is the one place both find it.
+    assert.match(row, /Also cite each `D-NN` recorded in this loop in the `<action>` of the task that implements it/);
+    assert.doesNotMatch(row, /must_haves`\/`truths` of the plan/, 'Dimension 7 does not read must_haves or truths');
   });
 
   // The row tells the re-spawned planner to edit RESEARCH.md, so plan-phase's revision prompt must hand it over.
@@ -306,7 +308,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     // Step 6 does not run when the re-spawn returns another conflict and the loop escalates, so the
     // recorded answer is committed where it is written.
     assert.match(resolve(), /commit CONTEXT\.md at once \(`gsd_run query commit "docs\(\{phase\}\): record research rulings" --files \{context_path\}`\): the planner's Step 6 commit does not run when the loop escalates/);
-    assert.match(resolve(), /The re-spawned planner cites it in RESEARCH\.md and in the `must_haves`\/`truths` of the plan that implements it/);
+    assert.match(resolve(), /The re-spawned planner cites it in RESEARCH\.md and in the `<action>` of the task that implements it/);
     assert.match(resolve(), /record each answer under the checker's CONTEXT\.md `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`/);
     assert.match(resolve(), /`\/gsd:discuss-phase` or `\/gsd:plan-phase --research`/, 'leaving the loop stays open to the user');
     // The checker reads the CONTEXT.md path plan-phase resolved at init; a file created mid-loop never reaches it.
