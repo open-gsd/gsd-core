@@ -373,8 +373,8 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       const [lane] = laneDirs(sb);
       fs.writeFileSync(path.join(sb.tmp, lane, 'kept'), 'lane-only finding');
       fs.writeFileSync(sb.review, '---\nstatus: issues_found\n---\n');
-      // a FRESH shell: commit_review inherits nothing from dispatch but the persisted state (no FIX_AUTO)
-      bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${stepFence(REVIEW, 'commit_review')}`);
+      // a FRESH shell: commit_review inherits nothing from dispatch but the persisted state and FIX_AUTO
+      bash(`${envOf(sb)}; FIX_AUTO=true; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${stepFence(REVIEW, 'commit_review')}`);
       fs.writeFileSync(sb.review, '---\nstatus: clean\n---\n'); // the re-review overwrites REVIEW.md; the lane finding must survive in the state
       const out = bash([
         `${envOf(sb)}`, fixPath, readSnippet(),
@@ -409,8 +409,8 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       const lanes = path.join(sb.tmp, 'gsd-review-lanes-abc123'); fs.mkdirSync(lanes);
       persistLaneEvidence(sb.review, 'abc123', auto ? 'auto' : 'once', 'block', sb.tmp);
       if (reviewText !== null) fs.writeFileSync(sb.review, reviewText);
-      // Only what a fresh shell would still know: no LANE_RUN_DIR, no EXTERNAL_EVIDENCE_BLOCK, no FIX_AUTO.
-      bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${fence}`);
+      // Only what a fresh shell would still know: FIX_AUTO, no LANE_RUN_DIR, no EXTERNAL_EVIDENCE_BLOCK.
+      bash(`${envOf(sb)}; FIX_AUTO=true; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${fence}`);
       return { state: fs.existsSync(sb.state), lanes: fs.existsSync(lanes) };
     });
     const VALID = '---\nstatus: issues_found\n---\n';
@@ -455,6 +455,9 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       bash(`${envOf(sb)}; FIX_FLAG=false; ${REVIEW_PATH_EXPR}\n${REMOVALS.check_empty_scope()}`);
       bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}\n${REMOVALS.spawn_reviewer()}`);
       assert.strictEqual(fs.existsSync(sb.state), true);
+      // commit_review of a run without --fix --auto, with no lane dir of its own, leaves another run's state alone
+      bash(`${envOf(sb)}; FIX_AUTO=false; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${stepFence(REVIEW, 'commit_review')}`);
+      assert.strictEqual(fs.existsSync(sb.state), true, 'commit_review without --fix --auto keeps another run\'s persisted state');
     });
   });
 
@@ -479,34 +482,8 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
       assert.match(persist.stderr, /could not read the block from stdin/);
       assert.strictEqual(fs.existsSync(lanes), true, 'the dir the reviewer cites survives until commit_review');
       assert.strictEqual(fs.existsSync(sb.state), true, 'a state is left so the clear can find the dir');
-      bash(`${envOf(sb)}; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${stepFence(REVIEW, 'commit_review')}`);
+      bash(`${envOf(sb)}; FIX_AUTO=true; ${REVIEW_PATH_EXPR}; COMMIT_DOCS=false\n${stepFence(REVIEW, 'commit_review')}`);
       assert.deepStrictEqual([fs.existsSync(lanes), fs.existsSync(sb.state), fs.existsSync(path.join(sb.victim, 'keep'))], [false, false, true]);
-    });
-  });
-
-  test('every REVIEW_PATH assignment makes a relative PHASE_DIR absolute, so the state key never depends on the verb caller\'s cwd', { skip: !HAS_BASH }, (t) => {
-    sandbox(t, (sb) => {
-      const sites = [FIX, REVIEW].flatMap((src) => src.replace(/\r\n/g, '\n').split('\n')
-        .flatMap((l, i, all) => (l.trim() === REVIEW_PATH_EXPR ? [[l, all[i + 1]]] : [])));
-      assert.strictEqual(sites.length, 4, 'one assignment in code-review-fix.md, three in code-review.md');
-      for (const [assign, next] of sites) {
-        assert.match(next.trim(), /^case "\$REVIEW_PATH" in \/\*\)/, `the line after "${assign.trim()}" makes the path absolute`);
-        const out = bash(`cd "${sb.dir}"; PHASE_DIR=ph; PADDED_PHASE=01\n${assign}\n${next}\nprintf '%s' "$REVIEW_PATH"`);
-        assert.strictEqual(out.stdout, `${sb.dir}/ph/01-REVIEW.md`);
-      }
-    });
-  });
-
-  test('a state persisted under a relative PHASE_DIR is read and cleared from another cwd', { skip: !HAS_BASH }, (t) => {
-    sandbox(t, (sb) => {
-      const [assign, next] = [REVIEW_PATH_EXPR, FIX.replace(/\r\n/g, '\n').split('\n').find((l) => l.startsWith('case "$REVIEW_PATH" in /*)'))];
-      const lanes = sb.lane('abc123');
-      const other = fs.mkdtempSync(path.join(sb.dir, 'cwd-'));
-      const out = bash([`export TMPDIR="${sb.tmp}"; cd "${sb.dir}"; PHASE_DIR=ph; PADDED_PHASE=01`, assign, next,
-        `printf '%s' blk | gsd_run lane-evidence-persist "$REVIEW_PATH" abc123 auto`,
-        `cd "${other}"`, 'gsd_run lane-evidence-read "$REVIEW_PATH"', 'gsd_run lane-evidence-clear "$REVIEW_PATH"'].join('\n'));
-      assert.strictEqual(out.stdout, 'blk', 'the read from the other cwd finds the state');
-      assert.deepStrictEqual([fs.existsSync(lanes), fs.existsSync(laneStatePath(path.join(sb.dir, 'ph', '01-REVIEW.md'), sb.tmp))], [false, false], 'the clear from the other cwd removes both');
     });
   });
 
@@ -523,12 +500,23 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   test('lane-evidence-clear: empty, whitespace, shell-metacharacter and flag-shaped argv fail soft', (t) => {
     const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
     const probe = path.join(dir, 'pwned');
-    for (const arg of ['', '   ', `;touch ${probe};`, '$(touch ' + probe + ')', '--weird', '--json-errors']) {
+    for (const arg of ['', '   ', `;touch ${probe};`, '$(touch ' + probe + ')', '--json-errors']) {
       const r = runNode([GSD_TOOLS, 'lane-evidence-clear', arg], { cwd: dir });
       assert.ok(r.exitCode === 0 || /Usage: lane-evidence-clear/.test(r.stderr), `${JSON.stringify(arg)}: exit ${r.exitCode}, ${r.stderr}`);
       assert.doesNotMatch(r.stderr, /\n\s+at /, `${JSON.stringify(arg)} leaked a stack trace`);
     }
     assert.strictEqual(fs.existsSync(probe), false, 'argv was never shell-evaluated');
+  });
+
+  test('lane-evidence-clear: an unknown second argument or a third argument is a usage error', (t) => {
+    const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
+    const review = path.join(dir, '01-REVIEW.md');
+    for (const extra of [['--weird'], ['--keep-auto', 'x']]) {
+      const r = runNode([GSD_TOOLS, 'lane-evidence-clear', review, ...extra], { cwd: dir });
+      assert.notStrictEqual(r.exitCode, 0, JSON.stringify(extra));
+      assert.match(r.stderr, /Usage: lane-evidence-clear/);
+    }
+    assert.strictEqual(runNode([GSD_TOOLS, 'lane-evidence-clear', review, '--keep-auto'], { cwd: dir }).exitCode, 0);
   });
 });
 

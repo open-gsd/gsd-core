@@ -92,8 +92,8 @@ export default tseslint.config(
       'node_modules/**',
       '**/dist/**',
       '.worktrees/**',
-      // #5019: the harness directory (recorded evidence plus its deliberately buggy fixture) stays unlinted.
-      'docs/issueevidence/5019-reviewer-hop-harness/**',
+      // #5019: the harness's deliberately buggy fixture stays unlinted.
+      'docs/issueevidence/5019-reviewer-hop-harness/lib/fixture/**',
       '.claude/**',
       'coverage/**',
       // #4141: Stryker's sandbox (tempDirName in stryker.config.mjs, also gitignored

@@ -81,7 +81,6 @@ Compute review and fix report paths:
 
 ```bash
 REVIEW_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW.md"
-case "$REVIEW_PATH" in /*) ;; *) REVIEW_PATH="$PWD/$REVIEW_PATH";; esac
 FIX_REPORT_PATH="${PHASE_DIR}/${PADDED_PHASE}-REVIEW-FIX.md"
 ```
 </step>

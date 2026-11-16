@@ -68,8 +68,9 @@ describe('#5019 lane-evidence grammar (property)', () => {
       try { persistLaneEvidence(sb.review, sfx, mode, 'b', sb.tmp); } catch { persisted = false; }
       cleanup(sb.state); // the raw state is written below, whatever persist did
       fs.writeFileSync(sb.state, `${sfx}\n${mode}\nblock`);
-      const stderr = process.stderr.write; process.stderr.write = () => true;
-      let got; try { got = readLaneEvidence(sb.review, sb.tmp); } finally { process.stderr.write = stderr; }
+      const quiet = t.mock.method(process.stderr, 'write', () => true);
+      const got = readLaneEvidence(sb.review, sb.tmp);
+      quiet.mock.restore();
       cleanup(dir);
       assert.strictEqual(got === 'block', persisted && mode === 'auto', JSON.stringify([sfx, mode]));
       return true;

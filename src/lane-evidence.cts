@@ -1,13 +1,15 @@
 /**
- * Lane evidence — the one owner of the #5019 persisted external-reviewer evidence (write, read, clear).
+ * Lane evidence — the one owner of the #5019 persisted external-reviewer evidence
+ * (write, read, clear).
  *
- * `code-review` persists the evidence block at dispatch (`lane-evidence-persist`); `code-review-fix`
- * re-surfaces it per re-review (`lane-evidence-read`); both workflows remove it (`lane-evidence-clear`).
- * State lives in `${TMPDIR}/gsd-review-lane-evidence-<key>`, keyed to the review file, never in the
- * project or its git metadata. Content: `<suffix>\n<auto|once>\n<block>`, where `<suffix>` is the 6-char
- * mktemp suffix of the lane scratch dir `${TMPDIR}/gsd-review-lanes-<suffix>` and `auto` keeps both for the
- * `--fix --auto` loop. STATE_RE is the only parser of the file; persist checks each argument
- * against the same two patterns, anchored.
+ * `code-review` persists the evidence block at dispatch (`lane-evidence-persist`);
+ * `code-review-fix` re-surfaces it per re-review (`lane-evidence-read`); both workflows remove it
+ * (`lane-evidence-clear`). State lives in `${TMPDIR}/gsd-review-lane-evidence-<key>`, keyed to the
+ * review file, never in the project or its git metadata. Content: `<suffix>\n<auto|once>\n<block>`,
+ * where `<suffix>` is the 6-char mktemp suffix of the lane scratch dir
+ * `${TMPDIR}/gsd-review-lanes-<suffix>` and `auto` keeps both for the `--fix --auto` loop.
+ * STATE_RE is the only parser of the file; persist checks each argument against the same two
+ * patterns, anchored.
  *
  * The suffix is data read back from disk, never a path: only a 6-char alphanumeric value names a
  * directory, and a symlinked or foreign-owned entry is skipped, so no value reaches outside TMPDIR.
@@ -44,27 +46,33 @@ function ownedLaneDir(tmpDir: string, suffix: string): string | null {
     return st.isDirectory() && ownedByCurrentUser(st) ? dir : null;
   } catch { return null; } // missing: nothing to act on
 }
-/** False only when removing an owned lane dir failed: its suffix lives in the state, so the caller must keep the state. */
+/** False only when removing an owned lane dir failed: its suffix lives in the state,
+ *  so the caller must keep the state. */
 function removeLaneDir(tmpDir: string, suffix: string): boolean {
   const dir = ownedLaneDir(tmpDir, suffix);
   if (!dir) return true;
   try { fs.rmSync(dir, { recursive: true, force: true }); return true; } catch { return false; }
 }
 
-/** The parsed state, or null when absent or not a regular file we own (a present one that is not ours is `rejected`). */
+/** The parsed state, or null when absent. A present state that is not a regular file we own,
+ *  or is malformed, is `rejected`. */
 function loadState(file: string): { suffix: string; mode: string; block: string; mtimeMs: number } | 'rejected' | null {
   let st: fs.Stats;
   try { st = fs.lstatSync(file); } catch { return null; }
   if (!st.isFile() || !ownedByCurrentUser(st)) return 'rejected';
   let text: string;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return 'rejected'; } // a race or EACCES fails soft, like clear
+  // a race or EACCES fails soft, like clear
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return 'rejected'; }
   const m = STATE_RE.exec(text);
   return m ? { suffix: m[1], mode: m[2], block: m[3], mtimeMs: st.mtimeMs } : 'rejected';
 }
 
 export function persistLaneEvidence(reviewPath: string, suffix: string, mode: string, block: string, tmpDir: string = defaultTmp()): void {
-  if (!SUFFIX_RE.test(suffix) || !MODE_RE.test(mode)) throw new Error('Usage: lane-evidence-persist <review-path> <suffix: 6 alphanumeric chars> <auto|once>, block on stdin');
-  if (block === '') { removeLaneDir(tmpDir, suffix); return; } // no evidence cites the dir, so nothing may keep it
+  if (!SUFFIX_RE.test(suffix) || !MODE_RE.test(mode)) {
+    throw new Error('Usage: lane-evidence-persist <review-path> <suffix: 6 alphanumeric chars> <auto|once>, block on stdin');
+  }
+  // no evidence cites the dir, so nothing may keep it
+  if (block === '') { removeLaneDir(tmpDir, suffix); return; }
   const file = laneStatePath(reviewPath, tmpDir);
   const tmp = `${file}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
@@ -83,7 +91,8 @@ export function readLaneEvidence(reviewPath: string, tmpDir: string = defaultTmp
   const s = loadState(file);
   if (s === null) return '';
   if (s !== 'rejected' && s.mode === 'auto' && now() - s.mtimeMs < MAX_AGE_MS && ownedLaneDir(tmpDir, s.suffix)) {
-    try { const t = new Date(now()); fs.utimesSync(file, t, t); } catch { /* freshness refresh is best effort */ }
+    // freshness refresh is best effort
+    try { const t = new Date(now()); fs.utimesSync(file, t, t); } catch { /* ignored */ }
     return s.block;
   }
   process.stderr.write(`Warning: lane evidence ${file} rejected (idle for 6h, not an --auto state, not a regular file we own, malformed, or lane dir missing, a symlink or foreign); re-reviewing without it.\n`);
@@ -105,15 +114,16 @@ export function clearLaneEvidence(reviewPath: string, opts: { keepAuto?: boolean
   } catch { /* best effort: the fences ran with no `set -e` */ }
 }
 
-/** CLI arm for `gsd-tools lane-evidence-persist <review-path> <suffix> <auto|once>` (block on stdin). */
+/** CLI arm for `gsd-tools lane-evidence-persist <review-path> <suffix> <auto|once>`; block on stdin. */
 export function cmdLaneEvidencePersist(args: string[], error: (msg: string) => void): void {
   const [reviewPath, suffix, mode] = args;
   if (!reviewPath || !suffix || !mode) { error('Usage: lane-evidence-persist <review-path> <suffix> <auto|once>'); return; }
   let block: string;
   try { block = fs.readFileSync(0, 'utf8'); } catch (e) {
-    // The reviewer may still cite the lane dir, so keep it now; a `once` state (read ignores it) lets the
-    // clear in commit_review find and remove it later. Recorded before `error`, which may exit.
-    try { persistLaneEvidence(reviewPath, suffix, 'once', 'unreadable'); } catch { /* bad suffix: nothing to record */ }
+    // The reviewer may still cite the lane dir, so keep it now; a `once` state (read ignores it)
+    // lets the clear in commit_review find and remove it later. Recorded before `error`, which may
+    // exit. A bad suffix throws: nothing to record.
+    try { persistLaneEvidence(reviewPath, suffix, 'once', 'unreadable'); } catch { /* ignored */ }
     error(`lane-evidence-persist: could not read the block from stdin: ${(e as Error).message}`);
     return;
   }
@@ -128,7 +138,10 @@ export function cmdLaneEvidenceRead(reviewPath: string | undefined, error: (msg:
 
 /** CLI arm for `gsd-tools lane-evidence-clear <review-path> [--keep-auto]`. */
 export function cmdLaneEvidenceClear(args: string[], error: (msg: string) => void): void {
-  const [reviewPath, flag] = args;
-  if (!reviewPath) { error('Usage: lane-evidence-clear <review-path> [--keep-auto]'); return; }
+  const [reviewPath, flag, ...extra] = args;
+  if (!reviewPath || extra.length > 0 || (flag !== undefined && flag !== '--keep-auto')) {
+    error('Usage: lane-evidence-clear <review-path> [--keep-auto]');
+    return;
+  }
   clearLaneEvidence(reviewPath, { keepAuto: flag === '--keep-auto' });
 }

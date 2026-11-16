@@ -2490,8 +2490,7 @@ A `--fix --auto` `code-review` run persists at dispatch (an empty block persists
 reviewer agent fails. A run without `--fix --auto` persists nothing and keeps the single lane-directory removal in `commit_review` it had before; `code-review-fix` reads before each re-review and clears at every exit after `REVIEW_PATH`
 is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
 
-The key is the review path as the caller passes it, so the workflows make `REVIEW_PATH`
-absolute before calling a verb. A failed state write keeps the lane directory, because the initial reviewer still cites it.
+The key is `sha256(path.resolve(reviewPath))`, resolved against the verb's working directory. A failed state write keeps the lane directory, because the initial reviewer still cites it.
 `lane-evidence-clear` removes a malformed state.
 The state is bound to the review path, not to one REVIEW.md; `code-review-fix` frames the block it reads UNVERIFIED.
 
