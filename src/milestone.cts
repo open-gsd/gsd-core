@@ -535,15 +535,17 @@ function applyQuickTasksReset(content: string): { content: string; warning: { fi
 // reason: why the close refuses. Tests and callers branch on it, never on gate_message (raw gate output).
 type ShipGateBlock = { cap_id: string; phase: string; reason: 'unevaluable' | 'window_unreadable' | 'predicate_blocked'; gate_message: string; details: Record<string, unknown> | null };
 type ShipGateWarning =
-  | { kind: 'not_check_predicate'; capId: string }
-  | { kind: 'skipped_phase'; capId: string; phase: string; detail: string }
-  | { kind: 'capability_load_failed'; capId: string }
-  | { kind: 'scope_unreadable' };
+  | { kind: 'not_check_predicate'; cap_id: string }
+  | { kind: 'skipped_phase'; cap_id: string; phase: string; detail: string }
+  | { kind: 'capability_load_failed'; cap_id: string }
+  | { kind: 'scope_unreadable' }
+  | { kind: 'no_phase_dirs' };
 
 // capability_load_failed is not rendered here: resolveActiveHooksForPoint already wrote that stderr line.
 function renderShipGateWarning(w: Exclude<ShipGateWarning, { kind: 'capability_load_failed' }>): string {
-  if (w.kind === 'not_check_predicate') return `warning: ship:pre gate of ${formatDiagnosticToken(w.capId)} is not a check.predicate; ship.md enforces it, milestone complete cannot\n`;
-  if (w.kind === 'skipped_phase') return `warning: ship:pre gate of ${formatDiagnosticToken(w.capId)} skipped for phase ${formatDiagnosticToken(w.phase)}: ${formatDiagnosticToken(w.detail)}\n`;
+  if (w.kind === 'not_check_predicate') return `warning: ship:pre gate of ${formatDiagnosticToken(w.cap_id)} is not a check.predicate; ship.md enforces it, milestone complete cannot\n`;
+  if (w.kind === 'skipped_phase') return `warning: ship:pre gate of ${formatDiagnosticToken(w.cap_id)} skipped for phase ${formatDiagnosticToken(w.phase)}: ${formatDiagnosticToken(w.detail)}\n`;
+  if (w.kind === 'no_phase_dirs') return `warning: ship:pre gates not run: the milestone has no phase directory\n`;
   return `warning: ship:pre gates not re-checked: milestone window scope is "${SCOPE.UNREADABLE}"\n`;
 }
 
@@ -572,12 +574,12 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
   const warnings: ShipGateWarning[] = [];
   const { activeHooks, loadFailedCapIds } = resolveActiveHooksForPoint(cwd, 'ship:pre');
   // A capability that failed to load has no hook left to gate: the typed entry keeps it from reading as clean.
-  for (const capId of new Set(loadFailedCapIds)) warnings.push({ kind: 'capability_load_failed', capId });
+  for (const capId of new Set(loadFailedCapIds)) warnings.push({ kind: 'capability_load_failed', cap_id: capId });
   const gates = activeHooks.filter((hook) => hook.kind === 'gate' && hook.blocking === true && !SHIP_MD_OWNED_GATE_CAPS.has(hook.capId));
   // UNREADABLE: the phase set is unresolvable, so each gate is unevaluable: halt blocks, else it warns (once).
   if (scope === SCOPE.UNREADABLE) {
     for (const hook of gates) {
-      if ((hook.check as { predicate?: unknown } | undefined)?.predicate === undefined) warnings.push({ kind: 'not_check_predicate', capId: hook.capId });
+      if ((hook.check as { predicate?: unknown } | undefined)?.predicate === undefined) warnings.push({ kind: 'not_check_predicate', cap_id: hook.capId });
       else if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase: '*', reason: 'window_unreadable', gate_message: `milestone window scope is "${SCOPE.UNREADABLE}": the phase set cannot be resolved, so this gate was not run`, details: null });
       else if (!warnings.some((w) => w.kind === 'scope_unreadable')) warnings.push({ kind: 'scope_unreadable' });
     }
@@ -595,11 +597,13 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
       if (found) tokenByDir.set(path.basename(found.directory), found.phase_number);
     }
   }
+  // No phase directory: the loop below never runs, so say so instead of reading as a clean preview.
+  if (gates.length > 0 && phaseDirs.length === 0) warnings.push({ kind: 'no_phase_dirs' });
   for (const hook of gates) {
     const predicate = (hook.check as { predicate?: unknown } | undefined)?.predicate;
     if (predicate === undefined) {
       // check.query is enforced by ship.md alone (a blocking agentVerdict gate cannot exist: the registry validator rejects it).
-      warnings.push({ kind: 'not_check_predicate', capId: hook.capId });
+      warnings.push({ kind: 'not_check_predicate', cap_id: hook.capId });
       continue;
     }
     for (const dir of phaseDirs) {
@@ -608,8 +612,13 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
       // An unevaluable gate blocks under onError:'halt', else warns.
       const failGate = (detail: string): void => {
         if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase, reason: 'unevaluable', gate_message: detail, details: null });
-        else warnings.push({ kind: 'skipped_phase', capId: hook.capId, phase, detail });
+        else warnings.push({ kind: 'skipped_phase', cap_id: hook.capId, phase, detail });
       };
+      // gate-args reads a `--`-prefixed value as the next flag, so the gate would run with an empty PHASE_NUMBER.
+      if (phase.startsWith('--')) {
+        failGate(`phase token "${phase}" starts with "--" and cannot be passed as a flag value`);
+        continue;
+      }
       const result = evaluateCheckPredicate({
         projectDir: cwd,
         args: ['--predicate', JSON.stringify(predicate), '--phase-dir', phaseDirPath, '--phase-number', phase],

@@ -16,11 +16,11 @@ function openWorkStep() {
   return collectSection(auditMilestoneMd(), (h) => h.text.startsWith('5.6.'))?.body;
 }
 
-// The entry field names step 5.6 reports: the parenthesised list of the sentence that names `gaps.open_work`.
+// The entry field names step 5.6 reports: the parenthesised code-span list right before `gaps.open_work`.
 function openWorkStepFields() {
-  const sentence = splitLines(openWorkStep()).join(' ').split('. ').find((s) => s.includes('`gaps.open_work`'));
-  const list = sentence.slice(sentence.indexOf('(') + 1);
-  return scanInlineCodeSpans(list.slice(0, list.indexOf(')'))).map((span) => span.content);
+  const text = splitLines(openWorkStep()).join(' ');
+  const before = text.slice(0, text.indexOf('`gaps.open_work`'));
+  return scanInlineCodeSpans(before.slice(before.lastIndexOf('(') + 1, before.lastIndexOf(')'))).map((span) => span.content);
 }
 
 // The lines between <success_criteria> and </success_criteria> of the workflow.
