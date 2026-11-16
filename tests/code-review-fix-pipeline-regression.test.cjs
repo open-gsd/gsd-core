@@ -734,7 +734,8 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   // #5527: the converged REVIEW.md must be committed even when the fix report is invalid or
   // missing, else a tracked rewritten REVIEW.md stays dirty and /gsd-ship asks to commit or
   // stash. The fence is EXECUTED with a stub gsd_run that records its argv.
-  test('T7 — commit_fix_report EXECUTED: --auto REVIEW.md committed when fix report is invalid/missing/valid', { skip: BASH_SKIP }, (t) => {
+  test('T7 — commit_fix_report EXECUTED: --auto REVIEW.md committed ' +
+    'when fix report is invalid/missing/valid', { skip: BASH_SKIP }, (t) => {
     const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
     const fence = stepFence(src, 'commit_fix_report');
 
@@ -786,7 +787,8 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
 
   // #5527 observable: run the fence against a real repo and the real `query commit`, then read
   // `git status`. A stubbed argv proves the call, not that REVIEW.md lands or what stays dirty.
-  test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; only a malformed report stays', { skip: BASH_SKIP }, (t) => {
+  test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; ' +
+    'only a malformed report stays', { skip: BASH_SKIP }, (t) => {
     const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'commit_fix_report');
     const git = (cwd, ...args) => gitOrThrow(args, { cwd });
     const REVIEW = '.planning/01-REVIEW.md';
