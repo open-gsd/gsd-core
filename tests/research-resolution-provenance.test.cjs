@@ -259,6 +259,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(item[0], /CONTEXT\.md `<decisions>` \(not Discretion\)/);
     assert.match(item[0], /any heading/);
     assert.match(item[0], /one answering it/, 'the checklist must carry the body\'s relevance condition');
+    // verify-work tells the checker to skip Dimension 11; an unconditional checklist item would contradict it.
+    assert.match(item[0], /Research resolution checked \(unless skipped\):/);
   });
 });
 
