@@ -1544,7 +1544,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
 }
 
 /**
- * Detect the phase number for a commit from its `--files` path list.
+ * Detect the phase number for a commit from its declared path list (`--files` plus `--files-removed`).
  *
  * #2539: the extraction is anchored to the directory segment immediately under
  * `.planning/phases/` or `.planning/milestones/<version>-phases/`, then run

@@ -306,6 +306,27 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
     assert.deepStrictEqual(nameStatus(), ['D\t.planning/todos/pending/mine.md']);
   });
 
+  // A never-tracked path is a no-op removal, so the call commits nothing. The phase has no history,
+  // so the create arm fires and the checked-out branch is the typed observable.
+  test('a removal-only commit under a phase dir resolves that phase for branching_strategy: phase', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-x');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), 'plan\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 1: X\nGoal: x\n');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ commit_docs: true, branching_strategy: 'phase', phase_branch_template: 'gsd/phase-{phase}-{slug}' }),
+    );
+    runGsdTools(
+      ['commit', 'docs(01): remove spent backup', '--files-removed', '.planning/phases/01-x/01-REVIEW-FIX.iter1.md'],
+      tmpDir,
+    );
+    assert.strictEqual(
+      gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim(),
+      'gsd/phase-01-x',
+    );
+  });
+
   test('a deletion staged by this call is rolled back when a later entry fails', () => {
     // Ordering: the good removal is processed first, then the contradicted one.
     fs.copyFileSync(path.join(tmpDir, COMPLETED, 'mine.md'), path.join(tmpDir, PENDING, 'stays-put.md'));
