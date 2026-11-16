@@ -258,7 +258,8 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     const row = splitLines(plannerRevision()).find((l) => l.startsWith('| research_resolution |'));
     assert.ok(row, 'the revision strategy table must carry a research_resolution row');
     assert.match(row, /Cite a `D-NN` already under CONTEXT\.md `<decisions>`, outside Claude's Discretion/);
-    assert.match(row, /add RESEARCH\.md and CONTEXT\.md to the Step 6 commit/, 'Step 6 commits only PLAN.md files, so the citation and the recorded answer would stay uncommitted');
+    assert.match(row, /add RESEARCH\.md to the Step 6 commit/, 'Step 6 commits only PLAN.md files, so the citation would stay uncommitted');
+    assert.match(row, /the orchestrator commits CONTEXT\.md when it records an answer/);
     // The citation is a mark on the question, so "never mark it" would forbid the route itself.
     assert.match(row, /That citation is the only mark you write on a question/);
     assert.doesNotMatch(row, /never mark the question closed/);
@@ -286,6 +287,9 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   test('the Resolve step records the user\'s answer as a D-NN, so adopting the alternative clears the blocker inside the loop', () => {
     assert.match(resolve(), /For a `research_resolution` conflict, adopting the alternative means the user rules here/);
     assert.match(resolve(), /ask each question the conflict names/);
+    // Step 6 does not run when the re-spawn returns another conflict and the loop escalates, so the
+    // recorded answer is committed where it is written.
+    assert.match(resolve(), /commit CONTEXT\.md at once \(`gsd_run query commit "docs\(\{phase\}\): record research rulings" --files \{context_path\}`\): the planner's Step 6 commit does not run when the loop escalates/);
     assert.match(resolve(), /The re-spawned planner cites it in RESEARCH\.md and in the `must_haves`\/`truths` of the plan that implements it/);
     assert.match(resolve(), /record each answer under the checker's CONTEXT\.md `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`/);
     assert.match(resolve(), /`\/gsd:discuss-phase` or `\/gsd:plan-phase --research`/, 'leaving the loop stays open to the user');

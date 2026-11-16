@@ -146,8 +146,10 @@ so they restate the operative rules inline; this section is the authority they m
    `required_property` still fails, and that choice belongs to the cap escalation.
    For a `research_resolution` conflict, adopting the alternative means the user rules here: ask
    each question the conflict names, and record each answer under the checker's CONTEXT.md
-   `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`. The re-spawned planner
-   cites it in RESEARCH.md and in the `must_haves`/`truths` of the plan that implements it. With no
+   `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`, and commit CONTEXT.md at
+   once (`gsd_run query commit "docs({phase}): record research rulings" --files {context_path}`):
+   the planner's Step 6 commit does not run when the loop escalates. The re-spawned planner cites
+   it in RESEARCH.md and in the `must_haves`/`truths` of the plan that implements it. With no
    CONTEXT.md there is nowhere to record, so the user leaves the loop for `/gsd:discuss-phase`,
    which writes one; with one, the user may still leave for `/gsd:discuss-phase` or
    `/gsd:plan-phase --research`. Leaving ends the workflow once it names the command: no re-spawn
