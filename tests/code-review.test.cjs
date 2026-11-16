@@ -40,7 +40,7 @@ function extractBashBlocks(content) {
 }
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -760,8 +760,8 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
       // Run from a file, not `bash -c`: the driver outgrew the Windows command-line limit (~8K), which
       // surfaced as `syntax error: unexpected end of file`. stdin stays free for the stubbed `cat >/dev/null`.
       fs.writeFileSync(path.join(tmpDir, 'driver.sh'), driver);
-      const result = require('node:child_process').spawnSync('bash', ['driver.sh'], { cwd: tmpDir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-      assert.equal(result.status, 0, `driver failed: stdout=${result.stdout} stderr=${result.stderr}`);
+      const result = runHook('driver.sh', [], { interpreter: 'bash', cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS });
+      assertSeamExit(assert, result, 0, `driver failed: stdout=${result.stdout}`);
       assert.match(result.stdout, /CODE_REVIEW_POINT=\[execute:post\]/,
         `CODE_REVIEW_POINT must be computed and survive within the SAME fence that later uses it for --point, got: ${result.stdout}`);
       assert.match(result.stdout, /EXPLICIT_JOINED=\[codex\]/,
@@ -1033,8 +1033,11 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
 
   function runReducer(dispatchJson) {
     const script = `DISPATCH_JSON=${JSON.stringify(dispatchJson)}\n${extractEvidenceReducer()}\necho "$EVIDENCE_LIST"`;
-    const result = require('node:child_process').spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+    const result = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+    // A timeout must not pass as an empty-output run: fail with the outcome named.
+    assert.notEqual(result.outcome, OUTCOME.TIMED_OUT, `reducer timed out: ${result.summary}`);
+    assert.notEqual(result.outcome, OUTCOME.SPAWN_FAILED, `reducer failed to spawn: ${result.summary}`);
+    return { stdout: result.stdout, stderr: result.stderr, status: result.exitCode };
   }
 
   test('EVIDENCE_LIST reducer warns on a whole-dispatch rejection (B1), not just per-lane failures', () => {
