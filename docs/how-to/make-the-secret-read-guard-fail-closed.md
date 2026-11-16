@@ -3,7 +3,9 @@
 `gsd-secret-read-guard.js` fails open on its own failure: if the hook throws, or
 its stdin does not close within 3 s, it allows the tool call. This page makes
 those two failures block instead, for a guard registered in Claude Code's
-`settings.json`.
+`settings.json`. A Bash command nested too deep for the guard's parser is not
+such a failure: it is denied as `command-too-complex` with or without this
+page's setting.
 
 ## Before you start
 
