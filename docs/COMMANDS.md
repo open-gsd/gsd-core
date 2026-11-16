@@ -2491,7 +2491,7 @@ reviewer agent fails. A run without `--fix --auto` persists nothing and keeps th
 is computed (its phase-validation exits precede that, and a nonexistent phase has no evidence to remove).
 
 The key is `sha256(path.resolve(reviewPath))`, resolved against the verb's working directory. A failed state write keeps the lane directory, because the initial reviewer still cites it.
-`lane-evidence-clear` removes a malformed state.
+`lane-evidence-clear` removes a malformed state. It leaves the lane directory that state may name, because the suffix of a malformed state cannot be trusted.
 The state is bound to the review path, not to one REVIEW.md; `code-review-fix` frames the block it reads UNVERIFIED.
 
 **Prerequisites:** none — they read no project state and need no resolvable project root

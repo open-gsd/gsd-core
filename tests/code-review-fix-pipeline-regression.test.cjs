@@ -610,13 +610,22 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
   });
 
   // Hostile argv reaches the verb as opaque data (runNode: no shell): each must exit cleanly, never leak a stack.
-  test('lane-evidence-clear: empty, whitespace, shell-metacharacter and flag-shaped argv fail soft', (t) => {
+  test('lane-evidence verbs: empty, whitespace, shell-metacharacter and flag-shaped argv fail soft', (t) => {
     const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
     const probe = path.join(dir, 'pwned');
-    for (const arg of ['', '   ', `;touch ${probe};`, '$(touch ' + probe + ')', '--json-errors']) {
-      const r = runNode([GSD_TOOLS, 'lane-evidence-clear', arg], { cwd: dir });
-      assert.ok(r.exitCode === 0 || /Usage: lane-evidence-clear/.test(r.stderr), `${JSON.stringify(arg)}: exit ${r.exitCode}, ${r.stderr}`);
-      assert.doesNotMatch(r.stderr, /\n\s+at /, `${JSON.stringify(arg)} leaked a stack trace`);
+    const review = path.join(dir, '01-REVIEW.md');
+    const hostile = ['', '   ', `;touch ${probe};`, '$(touch ' + probe + ')', '--json-errors'];
+    // persist is fed a lone hostile review path (missing suffix and mode) and, for each hostile
+    // value, an empty suffix and an empty mode: all stop at the usage check before stdin is read.
+    const argvs = [];
+    for (const verb of ['lane-evidence-clear', 'lane-evidence-read', 'lane-evidence-persist']) {
+      for (const arg of hostile) argvs.push([verb, arg]);
+    }
+    for (const arg of hostile) argvs.push(['lane-evidence-persist', arg, 'abc123', 'auto'], ['lane-evidence-persist', review, arg, 'auto'], ['lane-evidence-persist', review, 'abc123', arg]);
+    for (const argv of argvs) {
+      const r = runNode([GSD_TOOLS, ...argv], { cwd: dir });
+      assert.ok(r.exitCode === 0 || /Usage: lane-evidence-/.test(r.stderr), `${JSON.stringify(argv)}: exit ${r.exitCode}, ${r.stderr}`);
+      assert.doesNotMatch(r.stderr, /\n\s+at /, `${JSON.stringify(argv)} leaked a stack trace`);
     }
     assert.strictEqual(fs.existsSync(probe), false, 'argv was never shell-evaluated');
   });
@@ -627,7 +636,7 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     for (const extra of [['--weird'], ['--keep-auto', 'x']]) {
       const r = runNode([GSD_TOOLS, 'lane-evidence-clear', review, ...extra], { cwd: dir });
       assert.notStrictEqual(r.exitCode, 0, JSON.stringify(extra));
-      assert.match(r.stderr, /Usage: lane-evidence-clear/);
+      assert.match(r.stderr, /unknown flag "--weird"|unexpected positional argument "x"/);
     }
     assert.strictEqual(runNode([GSD_TOOLS, 'lane-evidence-clear', review, '--keep-auto'], { cwd: dir }).exitCode, 0);
   });

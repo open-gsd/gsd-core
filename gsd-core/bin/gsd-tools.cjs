@@ -1361,15 +1361,18 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   // #5019: one owner for persisting, re-reading and removing the lane evidence.
   function routeLaneEvidencePersist({ args, error }) {
+    parseNamedArgsOrExit(args, specFor('lane-evidence-persist'), error);
     laneEvidence.cmdLaneEvidencePersist(args.slice(1), error);
   }
 
   function routeLaneEvidenceRead({ args, error }) {
+    parseNamedArgsOrExit(args, specFor('lane-evidence-read'), error);
     laneEvidence.cmdLaneEvidenceRead(args[1], error);
   }
 
   function routeLaneEvidenceClear({ args, error }) {
-    laneEvidence.cmdLaneEvidenceClear(args.slice(1), error);
+    const parsed = parseNamedArgsOrExit(args, specFor('lane-evidence-clear'), error);
+    laneEvidence.cmdLaneEvidenceClear(args[1], parsed['keep-auto'], error);
   }
 
   function routeSkillsRoot({ args, raw, error }) {

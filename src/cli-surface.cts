@@ -149,6 +149,10 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // ─── small readers ─────────────────────────────────────────────────────────
   'current-timestamp': { positionals: 2 },
   'runtime-identity': { positionals: 1 },
+  // #5019: lane evidence verbs; the router reads --keep-auto here, not the module.
+  'lane-evidence-persist': { positionals: 4 },
+  'lane-evidence-read': { positionals: 2 },
+  'lane-evidence-clear': { positionals: 2, booleanFlags: ['keep-auto'] },
   // The runtime is a bare token OR a flag, in either order, so the bare token is a free word.
   'project-instruction-file': { positionals: 1, freePositionals: true, valueFlags: ['runtime'], eqFlags: ['runtime'] },
   'list-todos': { positionals: 2 },

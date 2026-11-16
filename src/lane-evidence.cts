@@ -139,12 +139,8 @@ export function cmdLaneEvidenceRead(reviewPath: string | undefined, error: (msg:
   process.stdout.write(readLaneEvidence(reviewPath));
 }
 
-/** CLI arm for `gsd-tools lane-evidence-clear <review-path> [--keep-auto]`. */
-export function cmdLaneEvidenceClear(args: string[], error: (msg: string) => void): void {
-  const [reviewPath, flag, ...extra] = args;
-  if (!reviewPath || extra.length > 0 || (flag !== undefined && flag !== '--keep-auto')) {
-    error('Usage: lane-evidence-clear <review-path> [--keep-auto]');
-    return;
-  }
-  clearLaneEvidence(reviewPath, { keepAuto: flag === '--keep-auto' });
+/** CLI arm for `gsd-tools lane-evidence-clear <review-path> [--keep-auto]`; the router parsed the flag. */
+export function cmdLaneEvidenceClear(reviewPath: string | undefined, keepAuto: boolean | undefined, error: (msg: string) => void): void {
+  if (!reviewPath) { error('Usage: lane-evidence-clear <review-path> [--keep-auto]'); return; }
+  clearLaneEvidence(reviewPath, { keepAuto: keepAuto === true });
 }
