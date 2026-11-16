@@ -295,7 +295,7 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
     assert.ok(
       workflow().includes(
-        "IFS= read -r PHASE_NAME <<'GSD_EOF'\n{phase_name}\nGSD_EOF\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name \"${PHASE_NAME}\" --plans \"{plan_count}\""
+        "IFS= read -r PHASE_NAME <<'PHASE_END'\n{phase_name}\nPHASE_END\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name \"${PHASE_NAME}\" --plans \"{plan_count}\""
       ),
       'begin-phase records phase_name (read through a quoted heredoc, so no shell metacharacter in it runs) and plan_count from the init JSON'
     );
@@ -307,7 +307,7 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
     const end = lines.findIndex((l, i) => i > start && l.startsWith('gsd_run query state.begin-phase'));
     assert.ok(start >= 0 && end > start, 'the begin-phase block should exist');
     const block = lines.slice(start, end + 1).join('\n');
-    const names = ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', 'GSD_EOF '];
+    const names = ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', 'PHASE_END '];
     for (const name of names) {
       const script = 'PHASE_NUMBER=7\ngsd_run() { printf "%s\\n" "$@"; }\n' + block.replace('{phase_name}', () => name).replace('{plan_count}', '3');
       const r = spawnSync('bash', ['-c', script], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
