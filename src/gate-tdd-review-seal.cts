@@ -27,7 +27,7 @@ export const REPO_TEXT_MAX_BYTES = 64 * 1024;
  * - each id costs at most R `git merge-base` and, when git does not know it, R `git rev-parse --verify`, plus one `git rev-parse --show-toplevel`
  *   per walk when `planning.sub_repos` is set; the loop stops at the first id that is not gone, so at most (2 * R + 2) * SUMMARY_REFS_MAX;
  * - one `git rev-parse --is-shallow-repository` per repo, at most once per run (the caller's `historyComplete` memo);
- * - when every id exists, one `git log --no-walk` over the ids, one for their commit times, one `git --version` and one `git log` over HEAD, plus R probes that find the repo holding the ids.
+ * - when every id exists, one `git log --no-walk` over the ids, one for their commit times, one `git --version` and one `git log` over HEAD, plus up to R * (ids) `git rev-parse --verify` probes that find the repo holding the ids (none when R is 1).
  */
 export const SUMMARY_REFS_MAX = 64;
 
