@@ -327,6 +327,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.ok(binding, 'plan-phase must bind the record channel');
     const rest = read('gsd-core/workflows/plan-phase.md').split(binding)[1].split('\n')[1];
     assert.match(`${binding} ${rest}`, /plan-phase closes it, on the leave-the-loop exit too \(fence below, then stop\)/);
+    // The close fence runs only when CONVERGENCE_ENABLED is "true", and nothing persists across fences, so the
+    // export list it states must name it, or the close silently does nothing and the line stays open.
+    const close = read('gsd-core/workflows/plan-phase.md').replace(/\s+/g, ' ');
+    assert.match(close, /close its record — nothing persists across fences, so export `REVIEWS_FILE`, `CONVERGENCE_ENABLED`, the same `CONFLICT_DIMENSION`\/`CONFLICT_PLAN`/);
   });
 
   // A re-spawn under --auto can only return the same conflict, and the cap gate has no --auto choice of its
