@@ -397,6 +397,29 @@ function isAncestor(git: Git, sha: string, of: string): boolean {
 }
 
 /**
+ * The repos the commits of `projectDir` live in, in the order they are asked. A single-repo project is
+ * `projectDir` itself (the exact argv, no hardening). A `planning.sub_repos` workspace (#5867) is the
+ * workspace root, when it is a repo itself, then each sub-repo. A repo that does not hold a commit
+ * cannot answer (exit 128 -> unanswered); the first repo that holds the commits is authoritative (a
+ * clone's answer is the same). Throws `ScopeUnreadable` when the config or a sub-repo path is bad.
+ */
+function commitGits(projectDir: string, runner: GitRunner): Git[] {
+  const names = readSubRepoNames(projectDir);
+  if (names.length === 0) return [makeGit(projectDir, runner)];
+  let rootGit: Git | null = null;
+  try {
+    const rootTop = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING)(['rev-parse', '--show-toplevel']);
+    if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING);
+  } catch (error) {
+    if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
+  }
+  return [
+    ...(rootGit === null ? [] : [rootGit]),
+    ...names.map((name) => makeGit(containedSubRepoDir(projectDir, name), runner, SUB_REPO_GIT_HARDENING)),
+  ];
+}
+
+/**
  * Whether commit `sha` is an ancestor of commit `of` (#5275): ancestry, never log position or commit
  * date, so a history merged from worktree branches is judged by what it descends from. `null` means
  * git could not answer (missing, hung, a bad object): the caller must not read that as "no".
@@ -405,24 +428,7 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
   if (!isSafeRefArgument(sha) || !isSafeRefArgument(of)) return null;
   const runner = execGit ?? execGitSeam;
   try {
-    const names = readSubRepoNames(projectDir);
-    if (names.length === 0) return isAncestor(makeGit(projectDir, runner), sha, of);
-    // #5867: the commits of a `planning.sub_repos` workspace live in the sub-repos (and the
-    // workspace root, when it is a repo itself). A repo that does not hold the commit cannot answer
-    // (exit 128 -> unanswered). The first repo that holds both commits is authoritative (a clone's
-    // answer is the same).
-    let rootGit: Git | null = null;
-    try {
-      const rootTop = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING)(['rev-parse', '--show-toplevel']);
-      if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING);
-    } catch (error) {
-      if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
-    }
-    const gits: Git[] = [
-      ...(rootGit === null ? [] : [rootGit]),
-      ...names.map((name) => makeGit(containedSubRepoDir(projectDir, name), runner, SUB_REPO_GIT_HARDENING)),
-    ];
-    for (const git of gits) {
+    for (const git of commitGits(projectDir, runner)) {
       try {
         return isAncestor(git, sha, of);
       } catch (error) {
@@ -432,6 +438,43 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
       }
     }
     return null;
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return null;
+    throw error;
+  }
+}
+
+/**
+ * Whether every repo `commitIsAncestor` walks has its full history (#5354): a shallow repo cuts commits
+ * off, so no repo's "not found" says a commit was squashed away. Anything but a clear `false` answer
+ * from every repo (a timeout, no git, a bad `planning.sub_repos`) is "not complete".
+ */
+export function commitHistoryComplete(projectDir: string): boolean {
+  try {
+    return commitGits(projectDir, execGitSeam).every((git) => git(['rev-parse', '--is-shallow-repository']) === 'false');
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return false;
+    throw error;
+  }
+}
+
+/**
+ * Whether any repo `commitIsAncestor` walks holds commit `sha` (#5354). `false` only when every repo says
+ * it does not; `null` when git could not answer for one (a timeout, no git, an unsafe argument): not a "no".
+ */
+export function commitIsKnown(projectDir: string, sha: string): boolean | null {
+  if (!isSafeRefArgument(sha)) return null;
+  try {
+    let unanswered = false;
+    for (const git of commitGits(projectDir, execGitSeam)) {
+      try {
+        if (gitOrNo(git, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]) !== null) return true;
+      } catch (error) {
+        if (!(error instanceof ScopeUnreadable)) throw error;
+        unanswered = true;
+      }
+    }
+    return unanswered ? null : false;
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;

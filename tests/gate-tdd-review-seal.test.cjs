@@ -31,6 +31,65 @@ describe('commitReachability', () => {
   });
 });
 
+/**
+ * #5354 review 798bd4e6 Minor 2: a `planning.sub_repos` workspace keeps its history in the sub-repos, so
+ * completeness and existence are asked of the same repos `commitIsAncestor` walks.
+ */
+describe('planning.sub_repos workspaces', () => {
+  const { historyIsComplete } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+
+  const configure = (root, subRepos) => {
+    fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ planning: { sub_repos: subRepos } }));
+  };
+  const sha = (dir, ref = 'HEAD') => git(dir, 'rev-parse', ref).trim();
+  const track = (t, dir) => { t.after(() => cleanup(dir)); return dir; };
+
+  /** `app`: a shallow clone (depth 1, file:// so git honours it) of a two-commit origin; `old` is the commit it cut off. */
+  function shallowApp(t, root) {
+    const origin = track(t, createTempGitProject('gate-5354-origin-'));
+    git(origin, 'commit', '-q', '--allow-empty', '-m', 'old, unlike any commit of the root');
+    const old = sha(origin);
+    git(origin, 'commit', '-q', '--allow-empty', '-m', 'second');
+    git(root, 'clone', '-q', '--depth', '1', `file://${origin}`, 'app');
+    assert.equal(git(path.join(root, 'app'), 'rev-parse', '--is-shallow-repository').trim(), 'true', 'positive control: app is shallow');
+    return old;
+  }
+
+  test('a shallow sub-repo under a complete root: history is not complete and a commit it cut off is never gone', (t) => {
+    const root = track(t, createTempGitProject('gate-5354-subrepo-'));
+    configure(root, ['app']);
+    const old = shallowApp(t, root);
+    assert.equal(git(root, 'rev-parse', '--is-shallow-repository').trim(), 'false', 'positive control: root is complete');
+    assert.equal(commitReachability(root, old, 'HEAD'), 'missing');
+    assert.equal(historyIsComplete(root), false);
+    assert.equal(commitIsGone(commitReachability(root, old, 'HEAD'), () => historyIsComplete(root)), false);
+  });
+
+  test('the seal case: a root that is no repo, with complete sub-repos, reads a vanished commit as gone', (t) => {
+    const root = track(t, fs.mkdtempSync(path.join(os.tmpdir(), 'gate-5354-norepo-')));
+    configure(root, ['app']);
+    fs.mkdirSync(path.join(root, 'app'));
+    git(path.join(root, 'app'), 'init', '-q');
+    git(path.join(root, 'app'), 'commit', '-q', '--allow-empty', '-m', 'first');
+    assert.equal(historyIsComplete(root), true);
+    assert.equal(commitIsGone(commitReachability(root, 'f'.repeat(40), 'HEAD'), () => historyIsComplete(root)), true);
+  });
+
+  test('a commit only a sub-repo holds is not missing', (t) => {
+    const root = track(t, createTempGitProject('gate-5354-known-'));
+    configure(root, ['app']);
+    fs.mkdirSync(path.join(root, 'app'));
+    git(path.join(root, 'app'), 'init', '-q');
+    git(path.join(root, 'app'), 'commit', '-q', '--allow-empty', '-m', 'only in app');
+    // No repo holds both commits, so the ancestry answer is null; the sub-repo still knows its own commit.
+    assert.equal(commitReachability(root, sha(path.join(root, 'app')), sha(root)), null);
+  });
+});
+
 describe('commitIsGone', () => {
   test('reads a reachability answer as squashed only when the commit is gone', () => {
     assert.equal(commitIsGone('reachable', () => true), false);

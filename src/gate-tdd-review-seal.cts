@@ -9,8 +9,8 @@
 
 import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
-import { extractTaskCommitRefs, commitIsAncestor, isSafeRefArgument, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
-import { execGit, platformWriteSync, toPosixPath } from './shell-command-projection.cjs';
+import { extractTaskCommitRefs, commitIsAncestor, commitHistoryComplete, commitIsKnown, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
+import { platformWriteSync, toPosixPath } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { summaryCandidates } = coreUtilsMod;
@@ -25,7 +25,7 @@ export const REPO_TEXT_MAX_BYTES = 64 * 1024;
  * #5354: most distinct SUMMARY task commits probed per plan. The git spawns per plan:
  * - each id costs one `git merge-base`, and one `git rev-parse --verify` when git does not know it;
  *   the loop stops at the first id that is not gone, so at most 2 * SUMMARY_REFS_MAX;
- * - one `git rev-parse --is-shallow-repository`, at most once per run (the caller's `historyComplete` memo);
+ * - one `git rev-parse --is-shallow-repository` per repo (the root and each `planning.sub_repos` entry), at most once per run (the caller's `historyComplete` memo);
  * - when every id exists, one `git log --no-walk` over the ids, one for their commit times, one `git --version` and one `git log` over HEAD.
  */
 export const SUMMARY_REFS_MAX = 64;
@@ -66,14 +66,12 @@ export function writeSeal(phaseDir: string, evidence: Record<string, SealEntry>,
 }
 
 /**
- * Whether `projectDir` has a complete (non-shallow) history. Exit 128 on a commit means "object not found" only
+ * Whether the history `projectDir` keeps its commits in is complete (non-shallow), in every repo of a
+ * `planning.sub_repos` workspace (the scope owner's walk). Exit 128 on a commit means "object not found" only
  * then: in a shallow clone or outside a repo it says nothing about squashing, so it must not turn an un-squashed
  * skipper into `NotEvaluable` or a reachable seal into a squashed one.
  */
-export function historyIsComplete(projectDir: string): boolean {
-  const shallow = execGit(['rev-parse', '--is-shallow-repository'], { cwd: projectDir });
-  return !shallow.timedOut && shallow.exitCode === 0 && shallow.stdout === 'false';
-}
+export const historyIsComplete = commitHistoryComplete;
 
 export type CommitReachability = 'reachable' | 'unreachable' | 'missing';
 
@@ -85,9 +83,7 @@ export type CommitReachability = 'reachable' | 'unreachable' | 'missing';
 export function commitReachability(projectDir: string, sha: string, of: string): CommitReachability | null {
   const ancestor = commitIsAncestor(projectDir, sha, of);
   if (ancestor !== null) return ancestor ? 'reachable' : 'unreachable';
-  if (!isSafeRefArgument(sha)) return null;
-  const known = execGit(['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], { cwd: projectDir });
-  return !known.timedOut && known.exitCode === 1 ? 'missing' : null;
+  return commitIsKnown(projectDir, sha) === false ? 'missing' : null;
 }
 
 /**
