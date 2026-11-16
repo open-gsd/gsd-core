@@ -1905,7 +1905,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if (lines.ambiguous) {
       return { error: {
         reason: ERROR_REASON.AMBIGUOUS_PLAN_POSITION,
-        message: `state planned-phase: Plan and Current Plan record different plan positions (${lines.currentPlan} vs ${lines.plan}). ` +
+        message: `state planned-phase: Plan and Current Plan record different plan positions (Plan ${lines.plan}, Current Plan ${lines.currentPlan}). ` +
           'Correct one of them and retry.',
       } };
     }

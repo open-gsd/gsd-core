@@ -5478,7 +5478,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
 
   test('#5320 adversarial planning-state fixtures: each is read and written as the README of the fixture directory states', () => {
     // The input classes (fenced code, duplicate keys, NUL, malformed frontmatter, CRLF and mixed endings) are the parser checklist of CONTRIBUTING.md "Adversarial fixtures".
-    // the fs and path declared near line 3646 are not in scope here (ReferenceError), so they are required locally
+    // fs and path from an earlier describe block are not in scope here (ReferenceError), so they are required locally
     const fs = require('node:fs');
     const path = require('node:path');
     const dir = path.join(__dirname, 'fixtures', 'adversarial', 'planning-state');
