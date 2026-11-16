@@ -186,7 +186,7 @@ number (the executor derives it from its on-disk plan commit ledger and records 
 instrument — the executor's own narration is never the last word. For each `*-SUMMARY.md`:
 ```bash
 BASE=$(grep -oE '^plan_head_before: [0-9a-f]{7,40}' "$SUMMARY_FILE" | awk '{print $2}')
-CLAIMED=$(grep -oE '^commits: [0-9]+' "$SUMMARY_FILE" | grep -oE '[0-9]+' || echo absent)
+CLAIMED=$(grep -oE '^[[:space:]]*commits: [0-9]+' "$SUMMARY_FILE" | head -n 1 | grep -oE '[0-9]+' || echo absent)
 ACTUAL=$(git rev-list --count "${BASE}"..HEAD)
 AFTER=$(grep -oE '^plan_head_after: [0-9a-f]{7,40}' "$SUMMARY_FILE" | awk '{print $2}')
 ```
