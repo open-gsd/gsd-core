@@ -310,13 +310,14 @@ describe('resolveBaselineRef — stale pull_request pin advances to the merged b
   });
 
   test('a package the PR itself adds is absent from the resolved baseline (real additions still diff)', (t) => {
-    const { dir, pin } = makeMergeRefFixture(t, {
+    const { dir, pin, tip } = makeMergeRefFixture(t, {
       baseLocks: [lockOf('vuln')],
       prLock: lockOf('top0', 'pr-added'),
     });
     process.env.AUDIT_BASELINE_REF = pin;
     process.env.GITHUB_BASE_REF = 'next';
     const resolved = resolveBaselineRef(dir);
+    assert.strictEqual(resolved, tip); // advanced to the base side, not left on the pin and not HEAD
     assert.doesNotMatch(git(['show', `${resolved}:package-lock.json`], dir), /pr-added/);
   });
 
