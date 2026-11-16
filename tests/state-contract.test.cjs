@@ -830,6 +830,29 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(git(tmpDir, 'show', `HEAD:${rel}/state.json`), '{}\n\n', 'the edit committed; the file stays tracked');
   });
 
+  // The skip branch runs only after `git add` fails, so a tracked state.json must reach it through a failing add
+  // (an unreadable file) to show that a tracked, ignored path is never skipped: `check-ignore` exits 1 for it.
+  test('commit --files fails closed, not skipped, when staging a tracked and ignored state.json fails', {
+    skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0) ? 'needs a user that file modes bind' : false,
+  }, (t) => {
+    const { tmpDir, rel } = boundary(t);
+    const file = path.join(tmpDir, rel, 'state.json');
+    fs.writeFileSync(file, '{}\n');
+    git(tmpDir, 'add', '-f', `${rel}/state.json`);
+    git(tmpDir, 'commit', '-q', '-m', 'track');
+    fs.appendFileSync(file, '\n');
+    fs.chmodSync(file, 0o000);
+    let out;
+    try {
+      out = JSON.parse(runGsdTools(['commit', 'docs: n', '--files', `${rel}/state.json`], tmpDir).output);
+    } finally {
+      fs.chmodSync(file, 0o644);
+    }
+    assert.strictEqual(out.committed, false);
+    assert.strictEqual(out.reason, 'staging_failed');
+    assert.strictEqual(out.skipped_files, undefined);
+  });
+
   // Input matrix of the `--files` parse the skip branch sits behind: a value that is empty, blank,
   // flag-shaped or full of shell metacharacters is data (skipped like any missing file), never a command.
   const ODD_FILES = [
