@@ -94,8 +94,8 @@ export default tseslint.config(
       'node_modules/**',
       '**/dist/**',
       '.worktrees/**',
-      // #5019: the evidence harness's lib (its deliberately buggy fixture and its slicer) stays unlinted.
-      'docs/issueevidence/5019-reviewer-hop-harness/lib/**',
+      // #5019: the harness's deliberately buggy fixture stays unlinted.
+      'docs/issueevidence/5019-reviewer-hop-harness/lib/fixture/**',
       '.claude/**',
       'coverage/**',
       // #4141: Stryker's sandbox (tempDirName in stryker.config.mjs, also gitignored
@@ -755,6 +755,19 @@ export default tseslint.config(
       // #4244 (origin #4020 / #4220): scripts/run-tests.cjs is the actual site
       // of the shipped Windows CI hang — registered here (not only on
       // tests/**/*.cjs below) so the rule covers the real bug's own location.
+      'local/no-unbounded-dirname-walk': 'error',
+    },
+  },
+
+  // #5019: the evidence harness's hand-written slicer is linted like a script.
+  {
+    files: ['docs/issueevidence/5019-reviewer-hop-harness/lib/shipped.cjs'],
+    plugins: { local: localPlugin },
+    languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
+    rules: {
+      'local/no-private-binary-resolution': 'error',
+      'local/require-registered-exit': 'error',
+      'local/no-exact-case-env-access': 'error',
       'local/no-unbounded-dirname-walk': 'error',
     },
   },

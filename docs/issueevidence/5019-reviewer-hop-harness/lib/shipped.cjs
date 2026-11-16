@@ -10,7 +10,7 @@ const [, , verb, wt, project, arm = 'head'] = process.argv;
 const rd = (f) => fs.readFileSync(path.join(wt, 'gsd-core', 'workflows', f), 'utf8');
 const FIX = rd('code-review-fix.md'), REVIEW = rd('code-review.md');
 const GSD_TOOLS = path.join(wt, 'gsd-core', 'bin', 'gsd-tools.cjs');
-const fail = (m) => { console.error(m); process.exit(2); };
+const fail = (m) => { throw new Error(m); };
 
 const lines = (src, from, to) => {
   const l = src.replace(/\r\n/g, '\n').split('\n'), a = l.findIndex((x) => x.includes(from));
