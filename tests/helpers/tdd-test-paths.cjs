@@ -33,6 +33,7 @@ const SHARED_TEST_PATHS = [
 const SHARED_NON_TEST_PATHS = [
   'placement.go', 'crates/core/src/scan.rs', 'test_utils/foo.py', 'src/test_utils/factory.py',
   'mytests/a.js', 'src/contests/b.js', 'src/__tests__x/a.js',
+  'bin/test', 'src/contest.js', // a file named like a test directory, a letter off `*.test.*`
   'src/a.test.d/impl.js', // `*` stays inside one path segment in both readers
 ];
 
