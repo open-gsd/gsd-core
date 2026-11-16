@@ -2537,7 +2537,9 @@ function chargeSeparators(n) {
 // the command is bounded as a whole. The others — the debugger-spawn check, the
 // exemption's read-only check and a process substitution's first segment —
 // charge separators only: their cost is per segment, a tokenize alone is cheap
-// per character, and they read text the scan has already charged.
+// per character, and they read text the scan has already charged. Under a
+// splitting `env -S` reading the debugger-spawn check charges characters as well
+// (#5514): it recurses into `eval` and shell bodies once per reading.
 function tokenizeCharged(str, reading, chargeCharacters = false) {
   if (chargeCharacters) chargeScan(str.length);
   const result = tokenize(str, reading);
@@ -2757,7 +2759,10 @@ function isDebuggerAgent(value) {
 
 // Returns the `--agent` value text of a debugger launch, or null.
 function findDebuggerCliSpawn(command, depth) {
-  const { tokens, nested } = tokenizeCharged(command);
+  // Under a splitting `env -S` reading the check charges its characters too: it
+  // runs once per reading, and uncharged it is work the readings repeat outside
+  // the command's budget (#5514). The first reading charges as before #5514.
+  const { tokens, nested } = tokenizeCharged(command, undefined, envSReading.split);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -3112,9 +3117,11 @@ function main() {
       // one budget set here for the command, so the readings together do no more
       // work than one scan may. A read or a launch a pass finds is emitted before
       // the next reading runs, so nothing a later reading does can lose it. Any
-      // other block (`command-too-complex`, an undecodable `$'…'` word) is held
-      // and emitted after the last reading, unless a later one names a read or a
-      // launch, as findSecretRead ranks its own readings. Each of the two scans
+      // other block (`command-too-complex`, an undecodable `$'…'` word) is
+      // emitted at once too while no split option has been met, as `next` emits
+      // it; once one has, it is held and emitted after the last reading, unless a
+      // later one names a read or a launch, as findSecretRead ranks its own
+      // readings. Each of the two scans
       // (the secret scan with its heredoc readings, then the spawn check) runs
       // under its own catch. A stack overflow there is held as
       // `command-too-complex`, the deny the catch below gives one; any other
@@ -3125,7 +3132,7 @@ function main() {
       let held = null;
       const deny = (block) => {
         if (block === null) return;
-        if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn') emitBlock(block.code, tool, block.text);
+        if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn' || !splitSeen) emitBlock(block.code, tool, block.text);
         if (held === null) held = block;
       };
       const attempt = (scan) => {

@@ -1690,13 +1690,20 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
 
     // 200,000 separators after the string: one reading's scan and spawn check charge
     // 400,002 of the 524,288, so either reading alone fits, and the reading after
-    // the first does not get a budget of its own.
+    // the first does not get a budget of its own. (In process the GNU split reading
+    // applies, whose spawn check charges the command's characters as well.)
     test('a command that spends most of the budget under the first reading gets no fresh budget for the next', () => {
       const command = `env -S true; ${'x;'.repeat(200000)}`;
       assert.equal(scanBashCommand(command), null);
       assert.equal(scanDebuggerSpawn(command), null);
-      assert.deepEqual(workSpent(), { scan: command.length, reader: 0, separators: 400002, exhausted: false }, 'one reading fits');
+      assert.deepEqual(workSpent(), { scan: 2 * command.length, reader: 0, separators: 400002, exhausted: false }, 'one reading fits');
       assertBlocked(runEntry(command), 'two readings on one budget', TOO_COMPLEX);
+    });
+
+    // With no env -S option no later reading can name a read, so a block that is not a
+    // read or a launch is emitted at once, as `next` emits it, before the spawn check runs.
+    test('with no env -S option, a block that is not a read or a launch is emitted as next emits it', () => {
+      assertBlocked(runEntry("claude --agent gsd-debugger -p x; echo $'abc"), 'launch, then an unterminated $\'…\'', { code: 'ansi-c-unterminated' });
     });
   });
 
