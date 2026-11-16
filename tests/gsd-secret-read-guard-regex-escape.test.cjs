@@ -64,6 +64,10 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     // escape carries a regex-only character.
     "grep -E 'foo bar|\\.env' list.txt",
     "grep 'x .env' list.txt",
+    // A grep pattern operand is a name, not a file read (#5884), so a bare escape
+    // there is allowed.
+    "grep '\\.env' list.txt",
+    "grep -E 'foo\\.env' list.txt",
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
@@ -93,8 +97,7 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     'cmd /c "type config\\.env"',
     // Fail-safe: a bare escape, or one whose word carries only characters legal
     // in a Windows name, is a Windows relative path as readily as a pattern.
-    "grep '\\.env' list.txt",
-    "grep -E 'foo\\.env' list.txt",
+    // (A grep pattern operand is a name, not a read, since #5884: see allows.)
     "cat 'config(1)\\.env'",
     "cat 'a+b\\.env'",
   ];
