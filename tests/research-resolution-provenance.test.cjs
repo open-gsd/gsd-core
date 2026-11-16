@@ -309,6 +309,9 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   test('the Resolve step records the user\'s answer as a D-NN, so adopting the alternative clears the blocker inside the loop', () => {
     assert.match(resolve(), /For a `research_resolution` conflict, adopting the alternative means the user rules here/);
     assert.match(resolve(), /ask each question the conflict names/);
+    // A plain `- D-02:` bullet goes untracked and `- **D-02** — …` makes the step 13a gate return could-not-parse;
+    // the CONTEXT.md template's form parses.
+    assert.match(resolve(), /in the template's bullet form `- \*\*D-NN:\*\* <ruling>`/);
     // Step 6 does not run when the re-spawn returns another conflict and the loop escalates, so the
     // recorded answer is committed where it is written.
     assert.match(resolve(), /commit CONTEXT\.md at once \(`gsd_run query commit "docs\(\{phase\}\): record research rulings" --files \{context_path\}`\): the planner's Step 6 commit does not run when the loop escalates/);
