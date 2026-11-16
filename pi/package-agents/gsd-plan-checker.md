@@ -597,7 +597,7 @@ issue:
 
 ## Dimension 11: Research Resolution (#1602, #5438)
 
-**Question:** Does every research question cite a recorded user decision?
+**Question:** Does every open question (step 1) cite a recorded user decision?
 
 **Skip if:** No RESEARCH.md exists for this phase.
 
@@ -606,7 +606,7 @@ Only the user closes a question: discuss-phase or the orchestrator records the r
 **Process:**
 1. Collect every question RESEARCH.md leaves needing an answer or a user ruling before planning, under any heading, in prose or a list, whatever status it claims (resolved, decided, closed). Not one: a fact settled with a cited source (no source settles a ruling); a question with a sourced recommendation in an area CONTEXT.md lists under Claude's Discretion; an `[ASSUMED]` fact, even unconfirmed (a ruling is never a fact). None → PASS.
 2. A question passes only when every `D-NN` it cites is under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and one answers it.
-3. Every other question is a BLOCKER, however marked, in any case: no `D-NN`; a `D-NN` CONTEXT.md lacks or holds outside `<decisions>`; only `D-NN`s deciding something else; or resting only on a plan, a "planning-time disposition", the research itself, or another agent's output.
+3. Every other question is a BLOCKER, however marked, in any letter case: no `D-NN`; a `D-NN` CONTEXT.md lacks or holds outside `<decisions>`; only `D-NN`s deciding something else; or resting only on a plan, a "planning-time disposition", the research itself, or another agent's output.
 4. A `(RESOLVED)` heading suffix is never evidence. No CONTEXT.md: every question is a BLOCKER.
 
 **Example — unresolved questions:**
@@ -614,12 +614,12 @@ Only the user closes a question: discuss-phase or the orchestrator records the r
 issue:
   dimension: research_resolution
   severity: blocker
-  required_property: "Each open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), one of which answers it"
+  required_property: "Each open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), one answering it"
   description: "01-RESEARCH.md: 'Hash prefix — keep or change?' cites no D-NN"
   fix_hint: "Cite a D-NN under <decisions> that answers it: 'RESOLVED (D-NN): <ruling>'. Else the user rules (orchestrator records a D-NN, or /gsd:discuss-phase then /gsd:plan-phase --research), or a source settles a factual gap"
 ```
 
-**Example — self-resolved (BLOCKER); real D-01 decides the cache backend:**
+**Example — self-resolved (BLOCKER); real D-01 decides cache backend:**
 ```markdown
 ## Open Questions (RESOLVED)
 
@@ -627,7 +627,7 @@ issue:
 2. **Cache TTL** — RESOLVED (D-01): 5 minutes
 ```
 
-**Example — PASS if `<decisions>` records D-03 and D-04:**
+**Example — PASS if `<decisions>` has D-03 and D-04:**
 ```markdown
 ## Open Questions
 
