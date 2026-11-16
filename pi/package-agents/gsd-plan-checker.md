@@ -615,7 +615,7 @@ issue:
   dimension: research_resolution
   severity: blocker
   required_property: "Each open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), one answering it"
-  description: "01-RESEARCH.md: 'Hash prefix — keep or change?' cites no D-NN"
+  description: "01-RESEARCH.md: 'Hash prefix?' cites no D-NN"
   fix_hint: "Cite a D-NN under <decisions> that answers it: 'RESOLVED (D-NN): <ruling>'. Else the user rules (orchestrator records a D-NN, or /gsd:discuss-phase then /gsd:plan-phase --research), or a source settles a factual gap"
 ```
 
@@ -1066,7 +1066,7 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
-- [ ] Research resolution checked: every open question, any heading, cites only `D-NN`s under
+- [ ] Research resolution checked (unless skipped): each question, any heading, cites only `D-NN`s under
       CONTEXT.md `<decisions>` (not Discretion), one answering it
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
