@@ -5371,7 +5371,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           fc.pre(count >= 0);
           // independent oracle
           let want = null;
-          if ((!plan && !cur && !total) || [plan, cur].some((s) => s?.kind === 'NofX')) want = 'plans_no_line';
+          // a `Current Plan: N of X` beside a Total Plans in Phase line is left as written: the count lands on the Total line
+          if ((!plan && !cur && !total) || plan?.kind === 'NofX' || (cur?.kind === 'NofX' && !total)) want = 'plans_no_line';
           else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = 'ambiguous_plan_position';
           else if (!newPhase && recorded > count) want = 'plans_below_position';
           const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
@@ -5422,6 +5423,23 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     const r = planned(line, 6);
     return r.data?.reason === 'plans_no_line' && r.content === doc(line) && r.updated.length === 0;
   };
+
+  test('plannedPhase unit: `Current Plan: N of X` beside Total Plans in Phase records the count and keeps the line; a line only the frontmatter holds is refused', () => {
+    const beside = transitionCore(
+      doc('Current Plan: 2 of 5.5').replace('Status:', 'Total Plans in Phase: 5\nStatus:'),
+      { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 },
+      deps,
+    );
+    assert.strictEqual(beside.data?.error, undefined);
+    assert.ok(beside.content.split('\n').includes('Current Plan: 2 of 5.5'));
+    assert.ok(beside.content.split('\n').includes('Total Plans in Phase: 6'));
+    // the reader sees the frontmatter line, the writer edits the body only: nothing may be written and exit 0
+    const fm = `---\nPlan: 1 of 3\n---\n${doc('Status: Ready')}`;
+    const r = transitionCore(fm, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
+    assert.strictEqual(r.data?.reason, 'plans_no_line');
+    assert.strictEqual(r.content, fm);
+    assert.strictEqual(r.updated.length, 0);
+  });
 
   test('plannedPhase property: a lower-case word after `of` is no total, so the line is refused', () => {
     fc.assert(

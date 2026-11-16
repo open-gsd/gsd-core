@@ -1882,7 +1882,9 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     } };
   }
   // `N of` with no readable total (`2 of 5.5`, `1 of ?x`, `2 of`): the count has no slot, and rewriting would leave a second " of" in the line.
+  // A `Current Plan` beside a recorded `Total Plans in Phase:` is never rewritten (the count lands on the Total line), so it is not refused.
   for (const [name, value, pos] of [['Plan', lines.plan, planPos], ['Current Plan', lines.currentPlan, legacy]] as const) {
+    if (name === 'Current Plan' && totalRecorded) continue;
     if (pos?.legacy && /^\d+\s+of(?:\s|$)/.test(value ?? '')) {
       return { error: {
         reason: ERROR_REASON.PLANS_NO_LINE,
@@ -2793,8 +2795,17 @@ function plannedPhaseCore(
   );
   if (body !== beforePos) updated.push('Current Position');
   // The plan lines are written once, on the first-match line advance-plan reads, wherever it sits.
-  if (planned.plan !== undefined) body = stateReplaceField(body, 'Plan', planned.plan) || body;
-  if (planned.currentPlan !== undefined) body = stateReplaceField(body, 'Current Plan', planned.currentPlan) || body;
+  // The reader sees frontmatter lines too, the writer edits the body only: a line only the reader sees has no line to land on.
+  for (const [name, value] of [['Plan', planned.plan], ['Current Plan', planned.currentPlan]] as const) {
+    if (value === undefined) continue;
+    const written = stateReplaceField(body, name, value);
+    if (written === null) {
+      return { content, updated: [], data: { error: true, reason: ERROR_REASON.PLANS_NO_LINE,
+        message: `state planned-phase: --plans cannot write \`${name}:\`: the line sits in the frontmatter, outside \`## Current Position\`. ` +
+          'Move it into the body and retry.' } };
+    }
+    body = written;
+  }
   if (!updated.includes('Current Position') && posSlice(body) !== posBefore) updated.push('Current Position');
   if (stateExtractField(body, 'Plan') !== stateExtractField(beforePos, 'Plan')) updated.push('Plan');
   if (stateExtractField(body, 'Current Plan') !== stateExtractField(beforePos, 'Current Plan')) updated.push('Current Plan');
