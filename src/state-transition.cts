@@ -1805,7 +1805,8 @@ function readPlanValue(raw: string | null | undefined): PlanPosition | null {
 
 /**
  * The three plan lines of a document, read once from the whole document (frontmatter included)
- * exactly as `advancePlanCore` reads them (#5320). `ambiguous`: `Current Plan` and `Plan` both
+ * exactly as `advancePlanCore` reads them (#5320). `transitionCore` has already masked fenced code
+ * (`FENCE_MASKED_TRANSITIONS`), so a fenced `Plan:` line never reaches this reader. `ambiguous`: `Current Plan` and `Plan` both
  * read and record different plan numbers (differing totals are not a disagreement).
  */
 function readPlanLines(content: string) {
@@ -1930,6 +1931,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
   if (lines.currentPlan !== null) {
     if (legacy?.legacy && totalRecorded) currentPlan = samePhase ? undefined : '0';
     else if (legacy) currentPlan = carry(legacy);
+    else if (!samePhase && startsDigit(lines.currentPlan)) currentPlan = totalRecorded ? '0' : fresh;
     else if (!planPos && !totalRecorded && !digitLed(lines.currentPlan) && !digitLed(lines.plan)) currentPlan = fresh;
   }
   let plan: string | undefined;

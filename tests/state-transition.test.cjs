@@ -5479,6 +5479,9 @@ describe('#5320 plan-count / plan-position owner parity', () => {
         assert.strictEqual(lineOf(r.content), 'Plan: 0 of 6 in current phase', `${line} total=${total}`);
       }
     }
+    // the same holds for a digit-led `Current Plan:` value: beside a Total line it is the bare legacy `0`
+    assert.ok(onNewPhase('Current Plan: 3/5', true).content.split('\n').includes('Current Plan: 0'));
+    assert.ok(onNewPhase('Current Plan: 3/5', false).content.split('\n').includes('Current Plan: 0 of 6 in current phase'));
   });
 
   test('plannedPhase property: a lower-case word after `of` is no total, so the line is refused', () => {
