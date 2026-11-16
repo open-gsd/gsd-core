@@ -2975,7 +2975,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
 describe('validate agents against a real fresh Codex install (#5496)', () => {
   const { createTempDir } = require('./helpers.cjs');
   const { OUTCOME } = require('./helpers/process-seam.cjs');
-  const { PROBE_TIMEOUT_MS, GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, TIMEOUT_EVIDENCE } = require('./helpers/timeouts.cjs');
+  const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, TIMEOUT_EVIDENCE } = require('./helpers/timeouts.cjs');
   const { MIN_TIMEOUT_MARGIN } = require('./helpers/timeout-evidence.cjs');
   // #6143: Tests run 43090201759 (windows-latest, shard 1/3) killed this spawn at 15020ms, so its true duration
   // was at least that; a sibling spawn in the same job took 10972ms.
@@ -2993,7 +2993,8 @@ describe('validate agents against a real fresh Codex install (#5496)', () => {
     assert.ok(fs.existsSync(tools), 'the install must ship gsd-tools.cjs');
     const r = spawnNode([tools, 'validate', 'agents', '--json'], {
       cwd: codexHome,
-      timeoutMs: PROBE_TIMEOUT_MS,
+      // One gsd-tools.cjs subcommand via runNode (GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS), not a light probe.
+      timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
       env: { ...process.env, GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, HOME: codexHome, USERPROFILE: codexHome, GSD_HOME: codexHome },
     });
     // The exit code is not asserted (violations may exit non-zero); a timeout or spawn failure must name itself.

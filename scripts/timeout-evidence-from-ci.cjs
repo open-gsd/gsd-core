@@ -72,8 +72,9 @@ const HARNESS_ONLY = new Set(['SCAN_USAGE_ERROR_TIMEOUT_MS', 'MALFORMED_INPUT_HO
  * share the value by command and argv, exactly as when the values are equal).
  * LOOP_HOOK_POINT_CLI_TIMEOUT_MS was 60000 in the window; runGsdTools (tests/helpers.cjs) ran at
  * the process seam's 60000 fallback then and is bound to this constant (now 80000) at HEAD.
+ * GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS was 30000 in the window; #6143 raised it to 32000.
  */
-const HISTORICAL_VALUES = { LOOP_HOOK_POINT_CLI_TIMEOUT_MS: [60000] };
+const HISTORICAL_VALUES = { LOOP_HOOK_POINT_CLI_TIMEOUT_MS: [60000], GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS: [30000] };
 
 const EXCLUSION_KINDS = ['UNDER_TEST', 'EXEMPT'];
 const GIT_OR_THROW = 'tests/helpers/git-fixture.cjs gitOrThrow forwards options.timeoutMs to runGit (process seam)';
