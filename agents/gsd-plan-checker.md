@@ -1065,7 +1065,7 @@ Plan verification complete when:
   - [ ] Locked decisions have implementing tasks
   - [ ] No tasks contradict locked decisions
   - [ ] Deferred ideas not included in plans
-- [ ] Research resolution checked (unless skipped): each question, any heading, cites only `D-NN`s under
+- [ ] Research resolution checked (unless skipped): each step-1 question, any heading, cites only `D-NN`s under
       CONTEXT.md `<decisions>` (not Discretion), one answering it
 - [ ] Overall status determined (passed | issues_found)
 - [ ] Architectural tier compliance checked (tasks match responsibility map tiers)
