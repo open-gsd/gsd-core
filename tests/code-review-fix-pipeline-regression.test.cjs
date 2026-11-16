@@ -615,8 +615,9 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     const probe = path.join(dir, 'pwned');
     const review = path.join(dir, '01-REVIEW.md');
     const hostile = ['', '   ', `;touch ${probe};`, '$(touch ' + probe + ')', '--json-errors'];
-    // persist is fed a lone hostile review path (missing suffix and mode) and, for each hostile
-    // value, an empty suffix and an empty mode: all stop at the usage check before stdin is read.
+    // persist is fed a lone hostile review path (missing suffix and mode), then each hostile value
+    // in turn as review path, suffix and mode with the other two slots valid. Stdin is empty;
+    // a bad suffix or mode stops at the persistLaneEvidence usage error.
     const argvs = [];
     for (const verb of ['lane-evidence-clear', 'lane-evidence-read', 'lane-evidence-persist']) {
       for (const arg of hostile) argvs.push([verb, arg]);
