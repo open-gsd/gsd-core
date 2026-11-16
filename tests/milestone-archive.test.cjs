@@ -1763,17 +1763,15 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.ok(lines.slice(pre, before('PROJECT_MD_REVIEW')).some((l) => l.includes('would_refuse')), 'the preflight reads would_refuse');
   });
 
-  test('G29 the refusal the workflow matches is the one the command prints', () => {
+  test('G29 the reason the workflow branches on is the one the command fails with', () => {
     const md = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'), 'utf-8');
-    const para = splitLines(md).find((l) => l.includes('milestone complete refused'));
-    assert.ok(para, 'the close step must describe the refusal');
+    const para = splitLines(md).find((l) => l.includes('If the command fails with reason'));
+    assert.ok(para, 'the close step must branch on the refusal reason');
     assert.doesNotMatch(para, /starting/);
-    const phrase = para.match(/error contains `([^`]{1,200})`/);
-    assert.ok(phrase, 'the paragraph must quote the phrase the error contains');
+    const named = para.match(/fails with reason `([a-z_]{1,60})`/);
+    assert.ok(named, 'the paragraph must name the reason in backticks');
     writeGateCap(home, { command: 'exit 3' });
-    const r = runGsdTools('milestone complete v1.0 --name MVP --confirm', tmpDir, env());
-    assert.equal(r.success, false);
-    assert.ok(r.error.includes(phrase[1]), r.error);
+    assert.equal(refusal(complete()).reason, named[1]);
   });
 
   test('G30 the unstarted-phase guard and the gate token map read the same milestone window', () => {
