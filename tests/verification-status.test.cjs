@@ -5892,3 +5892,84 @@ describe('#5118 G: workflows surface verification-status errors instead of readi
     }
   });
 });
+
+// ─── #5931: the exact tier also tries the scaffolder's own file-name token ────
+//
+// `extractPhaseToken` keeps a project code and the padding as written (`XR-03`, `5`) while
+// `cmdScaffold` names files with `normalizePhaseName` (`03`, `05`). The exact tier compared only the
+// literal token, so a project-coded or unpadded directory's own `NN-UAT.md` / `NN-VERIFICATION.md`
+// lost to a sibling that sorts first (`NN-HUMAN-UAT.md`, `NN-CORRECTION-VERIFICATION.md`).
+describe('#5931: a project-coded or unpadded phase dir resolves the scaffolder-written artifact name', () => {
+  const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+  const optionsFor = (dirName) => ({ phaseToken: phaseId.extractPhaseToken(dirName), phaseDirName: dirName });
+
+  test('XR-03-demo: 03-UAT.md wins over 03-HUMAN-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['03-HUMAN-UAT.md', '03-UAT.md'], optionsFor('XR-03-demo')),
+      '03-UAT.md',
+    );
+  });
+
+  test('XR-03-demo: 03-VERIFICATION.md wins over 03-CORRECTION-VERIFICATION.md', () => {
+    assert.strictEqual(
+      resolveVerificationFile(['03-CORRECTION-VERIFICATION.md', '03-VERIFICATION.md'], optionsFor('XR-03-demo')),
+      '03-VERIFICATION.md',
+    );
+  });
+
+  test('XR-03-demo: a literal code-carrying XR-03-UAT.md still wins over 03-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['03-UAT.md', 'XR-03-UAT.md', '03-HUMAN-UAT.md'], optionsFor('XR-03-demo')),
+      'XR-03-UAT.md',
+    );
+  });
+
+  test('5-demo: the padded 05-UAT.md wins over 05-HUMAN-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['05-HUMAN-UAT.md', '05-UAT.md'], optionsFor('5-demo')),
+      '05-UAT.md',
+    );
+  });
+
+  test('03-demo (no code, padded) is unchanged: 03-UAT.md wins over 03-HUMAN-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['03-HUMAN-UAT.md', '03-UAT.md'], optionsFor('03-demo')),
+      '03-UAT.md',
+    );
+  });
+
+  test('XR-03-demo holding only 03-HUMAN-UAT.md still falls back to it', () => {
+    assert.strictEqual(resolveUatFile(['03-HUMAN-UAT.md'], optionsFor('XR-03-demo')), '03-HUMAN-UAT.md');
+  });
+
+  test('XR-03-demo: a cross-phase stray 04-UAT.md stays excluded', () => {
+    assert.strictEqual(
+      resolveUatFile(['04-UAT.md', '03-HUMAN-UAT.md'], optionsFor('XR-03-demo')),
+      '03-HUMAN-UAT.md',
+    );
+    assert.strictEqual(resolveUatFile(['04-UAT.md'], optionsFor('XR-03-demo')), null);
+  });
+
+  // PARITY: for every directory spelling, the name the scaffolder writes (`normalizePhaseName` of the
+  // phase argument, `src/commands.cts` cmdScaffold) is the one the resolver selects over a sibling.
+  for (const [dirName, phaseArg] of [
+    ['XR-03-demo', '3'],
+    ['XR-03-demo', 'XR-03'],
+    ['5-demo', '5'],
+    ['05-demo', '5'],
+    ['03-demo', '3'],
+    ['7A-demo', '7A'],
+  ]) {
+    test(`parity: dir ${dirName}, scaffold --phase ${phaseArg}: the scaffolder's file names are selected`, () => {
+      const written = phaseId.normalizePhaseName(phaseArg);
+      assert.strictEqual(
+        resolveUatFile([`${written}-HUMAN-UAT.md`, `${written}-UAT.md`], optionsFor(dirName)),
+        `${written}-UAT.md`,
+      );
+      assert.strictEqual(
+        resolveVerificationFile([`${written}-CORRECTION-VERIFICATION.md`, `${written}-VERIFICATION.md`], optionsFor(dirName)),
+        `${written}-VERIFICATION.md`,
+      );
+    });
+  }
+});
