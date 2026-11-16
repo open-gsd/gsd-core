@@ -735,7 +735,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       const rres = runGsdTools(
         ['query', 'commit', 'msg', ...args(real.dir), '--raw'],
         real.dir,
-        { HOME: real.dir, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull }
+        { ...GIT_ENV, HOME: real.dir }
       );
       const state = (x) => ({
         head: splitLines(x.g('ls-tree', '-r', '--name-only', 'HEAD')).filter(Boolean).sort(),
