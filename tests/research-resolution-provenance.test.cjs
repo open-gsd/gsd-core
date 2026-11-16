@@ -336,12 +336,14 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   // A re-spawn under --auto can only return the same conflict, and the cap gate has no --auto choice of its
   // own; proceeding there would ship the plans with the blocker open, the opposite of what the docs promise.
   test('under --auto nothing is recorded and nothing re-spawns: the blocker escalates at once and the workflow stops', () => {
-    assert.match(resolve(), /Record only what the user said\. Under `--auto` no one is asked, so record nothing and do not re-spawn/);
+    assert.match(resolve(), /Record only what the user said\. Under `--auto` no one is asked, so record no answer and do not re-spawn/);
     assert.match(resolve(), /Escalate at once, and at that gate stop the workflow rather than proceed/);
     assert.doesNotMatch(resolve(), /the Repeat rule below escalates it/, 'the --auto route no longer spends a planner run to reach the Repeat rule');
     // The section's closing rule must agree, or "asking is the route everywhere" contradicts the --auto clause.
     const route = read('gsd-core/references/revision-loop.md').replace(/\s+/g, ' ');
     assert.match(route, /Asking the user is the route everywhere but `--auto`, where a `research_resolution` conflict escalates and stops/);
+    // Step 2 still writes the REVIEWS.md conflict line under --auto; what --auto skips is recording an answer.
+    assert.match(route, /recording is in addition to asking, never instead of it/);
   });
 });
 
