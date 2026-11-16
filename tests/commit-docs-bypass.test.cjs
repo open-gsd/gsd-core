@@ -1318,6 +1318,28 @@ describe('#3587 per-phase commit_docs override', () => {
         { numRuns: 30, seed: 5505 },
       );
     });
+
+    // The skip branch of `--files` runs only after `git add` fails. A tracked state.json must never reach it: `check-ignore`
+    // exits 1 for a tracked path. The add is failed through the git seam (ADR-3574: no chmod, which root bypasses).
+    test('#5505: a failing add of a tracked, ignored state.json fails closed and is never skipped', (t) => {
+      const { interceptGit } = require('./helpers/git-fixture.cjs');
+      withTempGitProject((cwd) => {
+        const rel = '.planning/state.json';
+        fs.writeFileSync(path.join(cwd, rel), '{}\n');
+        git(['add', '-f', '--', rel], cwd);
+        git(['commit', '-q', '-m', 'track'], cwd);
+        fs.appendFileSync(path.join(cwd, '.git', 'info', 'exclude'), '/state.json\n/.planning/state.json\n');
+        fs.appendFileSync(path.join(cwd, rel), '\n');
+        interceptGit(t, (args, _opts, fn) => (fn === 'spawnSync' && args[0] === 'add'
+          ? { status: 1, signal: null, stdout: '', stderr: 'fatal: index busy', output: [null, '', 'fatal: index busy'], pid: 0 }
+          : undefined));
+        const out = runCommit(cwd, 'docs: n', [rel]);
+        t.mock.restoreAll();
+        assert.strictEqual(out.committed, false);
+        assert.strictEqual(out.reason, 'staging_failed');
+        assert.strictEqual(out.skipped_files, undefined);
+      });
+    });
   });
 });
   });

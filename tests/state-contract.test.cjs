@@ -619,11 +619,18 @@ describe('state.json never dirties the tree (#5505)', () => {
   });
 
   // The migration is per scope: a sibling workstream copy is untracked only when its own scope allows it.
-  test('the migration leaves a sibling workstream copy tracked when its scope opts out or negates the rule', (t) => {
+  test('the migration untracks every sibling copy but those whose scope opts out or negates the rule', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     const ws = (name) => path.join(tmpDir, '.planning', 'workstreams', name);
-    for (const name of ['ws1', 'ws2', 'ws3', 'ws4', 'ws5', 'ws6']) {
+    const project = (name) => path.join(tmpDir, '.planning', name);
+    for (const name of ['pA', 'pB']) {
+      fs.mkdirSync(project(name), { recursive: true });
+      fs.writeFileSync(path.join(project(name), 'STATE.md'), STATE_MD);
+      fs.writeFileSync(path.join(project(name), 'state.json'), '{}\n');
+    }
+    fs.writeFileSync(path.join(project('pA'), 'config.json'), '{"commit_docs": false}\n');
+    for (const name of ['ws1', 'ws2', 'ws3', 'ws4', 'ws5', 'ws6', 'ws7']) {
       fs.mkdirSync(ws(name), { recursive: true });
       fs.writeFileSync(path.join(ws(name), 'STATE.md'), STATE_MD);
       fs.writeFileSync(path.join(ws(name), 'state.json'), '{}\n');
@@ -637,8 +644,10 @@ describe('state.json never dirties the tree (#5505)', () => {
     git(tmpDir, 'commit', '-q', '-m', 'seed');
     assert.ok(runGsdTools([...BEGIN, '--ws', 'ws1'], tmpDir).success);
     assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/workstreams/ws1/state.json'), '', 'the active scope migrates');
-    for (const name of ['ws2', 'ws3', 'ws4', 'ws5', 'ws6']) {
-      assert.strictEqual(git(tmpDir, 'ls-files', '--', `.planning/workstreams/${name}/state.json`).trim(), `.planning/workstreams/${name}/state.json`, `${name} keeps its copy tracked`);
+    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/workstreams/ws7/state.json'), '', 'a sibling with no opt-out migrates too');
+    assert.strictEqual(git(tmpDir, 'ls-files', '--', '.planning/pB/state.json'), '', 'a project sibling with no opt-out migrates');
+    for (const rel of ['workstreams/ws2', 'workstreams/ws3', 'workstreams/ws4', 'workstreams/ws5', 'workstreams/ws6', 'pA']) {
+      assert.strictEqual(git(tmpDir, 'ls-files', '--', `.planning/${rel}/state.json`).trim(), `.planning/${rel}/state.json`, `${rel} keeps its copy tracked`);
     }
   });
 
@@ -828,29 +837,6 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(out.committed, true);
     assert.strictEqual(out.skipped_files, undefined);
     assert.strictEqual(git(tmpDir, 'show', `HEAD:${rel}/state.json`), '{}\n\n', 'the edit committed; the file stays tracked');
-  });
-
-  // The skip branch runs only after `git add` fails, so a tracked state.json must reach it through a failing add
-  // (an unreadable file) to show that a tracked, ignored path is never skipped: `check-ignore` exits 1 for it.
-  test('commit --files fails closed, not skipped, when staging a tracked and ignored state.json fails', {
-    skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0) ? 'needs a user that file modes bind' : false,
-  }, (t) => {
-    const { tmpDir, rel } = boundary(t);
-    const file = path.join(tmpDir, rel, 'state.json');
-    fs.writeFileSync(file, '{}\n');
-    git(tmpDir, 'add', '-f', `${rel}/state.json`);
-    git(tmpDir, 'commit', '-q', '-m', 'track');
-    fs.appendFileSync(file, '\n');
-    fs.chmodSync(file, 0o000);
-    let out;
-    try {
-      out = JSON.parse(runGsdTools(['commit', 'docs: n', '--files', `${rel}/state.json`], tmpDir).output);
-    } finally {
-      fs.chmodSync(file, 0o644);
-    }
-    assert.strictEqual(out.committed, false);
-    assert.strictEqual(out.reason, 'staging_failed');
-    assert.strictEqual(out.skipped_files, undefined);
   });
 
   // Input matrix of the `--files` parse the skip branch sits behind: a value that is empty, blank,

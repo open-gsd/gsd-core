@@ -245,7 +245,6 @@ module.exports = {
   "tests/shipped-reference-cites.test.cjs",
   "tests/skill-manifest.test.cjs",
   "tests/smart-entry.unit.test.cjs",
-  "tests/state-contract.test.cjs",
   "tests/state-document.test.cjs",
   "tests/state-transition.test.cjs",
   "tests/state.platform.test.cjs",

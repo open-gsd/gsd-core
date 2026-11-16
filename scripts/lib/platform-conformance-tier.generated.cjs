@@ -294,7 +294,6 @@ module.exports = {
   "tests/skill-manifest.test.cjs",
   "tests/slug-derivation-drift-guard.test.cjs",
   "tests/smart-entry.unit.test.cjs",
-  "tests/state-contract.test.cjs",
   "tests/state-contract.unit.test.cjs",
   "tests/state-todos-render.test.cjs",
   "tests/state.platform.test.cjs",
