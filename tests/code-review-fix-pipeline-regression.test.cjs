@@ -611,6 +611,28 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.strictEqual(expected.filter(Boolean).length, 4, 'iter2, iter02, iter12, iter3');
   });
 
+  // The disposition step's backup loop under zsh, whose default NOMATCH aborts an unmatched glob
+  // with `no matches found`. No backup is the common case: every non---auto run.
+  test('T6j — #5506: the disposition backup loop runs under zsh',
+    { skip: !have('zsh') && 'zsh is not on PATH' }, (t) => {
+    const DISP = 'gsd-core/workflows/execute-phase/steps/code-review-disposition.md';
+    const loop = span(DISP, '_fix_any=0', '[ "$NG_WAS_SET" = true ]').join('\n');
+    const fixAny = (name) => {
+      const dir = createTempDir('gsd-5506-disp-zsh-');
+      t.after(() => cleanup(dir));
+      if (name) fs.writeFileSync(path.join(dir, name), 'x');
+      const script = ['set -euo pipefail', '_pd="' + dir + '"', 'PADDED=01', loop,
+        'echo "fix_any=$_fix_any"', '[[ -o NULL_GLOB ]] && echo NG=on || echo NG=off'].join('\n');
+      const res = runHook('-c', [script], { interpreter: 'zsh', timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, (name || 'no backup') + ': ' + res.stderr);
+      assert.match(res.stdout, /NG=off/, 'the caller NULL_GLOB state is restored');
+      return /fix_any=(\d)/.exec(res.stdout)[1];
+    };
+    assert.strictEqual(fixAny(null), '0', 'no backup');
+    assert.strictEqual(fixAny('01-REVIEW-FIX.iter2.md'), '1', 'a digit backup');
+    assert.strictEqual(fixAny('01-REVIEW-FIX.iter2-notes.md'), '0', 'a notes-only name');
+  });
+
   // The stub is only worth its place if cmdCommit does what it does: run both over the same
   // scenarios and compare the printed token, the files in HEAD and the working-tree status.
   test('T6i — #5506: the commit stub behaves like the real `query commit` CLI',

@@ -772,14 +772,19 @@ fi
 # ledger and a converged loop leaves `status: clean`, so a fully fixed phase recorded nothing.
 _fix_any=0
 [ -f "${_pd}/${PADDED}-REVIEW-FIX.md" ] && _fix_any=1
-# Backups count too -- a converged loop's earlier iterations live only there. An unmatched glob
-# expands to the literal pattern, which `-f` rejects.
+# Backups count too -- a converged loop's earlier iterations live only there. No backup is the
+# common case, and zsh's default NOMATCH aborts an unmatched glob (`no matches found`): nullglob
+# makes it expand to nothing in both shells, via the #2962 idiom of the cleanup_iteration_backups
+# step in code-review-fix.md, which restores the caller's setting.
+NG_WAS_SET=false; { shopt -q nullglob || [[ -o NULL_GLOB ]]; } 2>/dev/null && NG_WAS_SET=true
+shopt -s nullglob 2>/dev/null || true; setopt NULL_GLOB 2>/dev/null || true
 # $(printf '%s' "$PADDED") per lint-workflow-shellcheck's #4109 remedy: a bare $VAR in a `for x in`
 # splits differently under bash and zsh.
 for _f in "${_pd}/$(printf '%s' "$PADDED")-REVIEW-FIX.iter"*.md; do
   _n=${_f##*/}; _n=${_n#*.iter}; _n=${_n%.md}
   case "$_n" in ''|*[!0-9]*) ;; *) [ -f "$_f" ] && _fix_any=1 ;; esac
 done
+[ "$NG_WAS_SET" = true ] || shopt -u nullglob 2>/dev/null || unsetopt NULL_GLOB 2>/dev/null || :
 # The word for an empty status names WHICH empty it is, for the same reason block 1 does: a
 # review that was read and could not be parsed is 'unparsed', an absent one is 'none'.
 _st="${REVIEW_STATUS:-none}"; [ -z "$REVIEW_STATUS" ] && [ "$REVIEW_READ" = "1" ] && _st="unparsed"
