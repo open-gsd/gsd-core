@@ -499,21 +499,33 @@ function isSecretBasename(name) {
 // lower case once at the top so `.ENV` / `.Secrets` match on the
 // case-insensitive filesystems (macOS, Windows) where they ARE the secret file
 // — the same stance as the write guard's `/i` patterns.
-function namesSecretByName(tok) {
+function namesSecretByName(tok, backslashSeparates = true) {
   if (typeof tok !== 'string' || tok === '') return false;
   const lower = tok.toLowerCase();
-  if (isSecretBasename(lastSegment(lower))) return true;
+  if (isSecretBasename(lastSegment(lower, backslashSeparates))) return true;
   const colon = lower.lastIndexOf(':');
-  return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
+  return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1), backslashSeparates));
 }
 
 // A secret-by-name token is still allowed when the project listed that exact
 // committed file under `hooks.secret_read_exempt` (#4432). The exemption is
 // consulted only on the secret-classified branch, so an ordinary token costs
 // no I/O.
-function namesSecret(tok) {
-  if (!namesSecretByName(tok)) return false;
+function namesSecret(tok, backslashSeparates = true) {
+  if (!namesSecretByName(tok, backslashSeparates)) return false;
   return !isExemptSecret(tok);
+}
+
+// A drive prefix (`C:\`) or a UNC prefix (`\\host`): the only Bash operand
+// shapes whose `\` is a path separator. Every other `\` in a Bash word reaches
+// the program literally, so the `\` of a regex escape in a quoted grep pattern
+// (`'migrations/|\.env'`) is not one (#5883).
+const WINDOWS_SHAPED_RE = /^(?:[A-Za-z]:\\|\\\\)/;
+
+// namesSecret for a word of a Bash command. The Read tool and Grep glob arms
+// call namesSecret directly and keep reading `\` as a separator.
+function namesSecretOperand(tok) {
+  return namesSecret(tok, typeof tok === 'string' && WINDOWS_SHAPED_RE.test(tok));
 }
 
 // ---------------------------------------------------------------------------
@@ -1795,14 +1807,14 @@ function operandNamesSecret(text) {
   if (v.startsWith('--')) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
-    return namesSecret(v);
+    return namesSecretOperand(v);
   }
-  if (!/^-[^-]./.test(v)) return namesSecret(v);
-  if (namesSecret(v.slice(2))) return true;
+  if (!/^-[^-]./.test(v)) return namesSecretOperand(v);
+  if (namesSecretOperand(v.slice(2))) return true;
   let end = 1;
   while (end < v.length && CLUSTER_FLAG_CHAR_RE.test(v[end])) end++;
-  if (end > 2 && namesSecret(v.slice(end))) return true;
-  return v[end] === '=' && namesSecret(v.slice(end + 1));
+  if (end > 2 && namesSecretOperand(v.slice(end))) return true;
+  return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -2452,7 +2464,7 @@ function scanCommand(command, depth, reading) {
           k++;
           if (t.text.endsWith('<<<')) hereStrings.push(target.text); // stdin data for a shell
           // Input redirects are reads regardless of the command's exemption.
-          else if (t.read && namesSecret(target.text)) return secretRead(target.text);
+          else if (t.read && namesSecretOperand(target.text)) return secretRead(target.text);
         }
         continue;
       }
