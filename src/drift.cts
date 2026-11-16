@@ -4,16 +4,18 @@
  * Detects structural drift between a committed codebase and the
  * `.planning/codebase/STRUCTURE.md` map produced by `gsd-codebase-mapper`.
  *
- * Six categories of drift element:
- *   - new_dir    → a newly-added file whose directory prefix does not appear
- *                  in any generated document
- *   - barrel     → a newly-added barrel export at
- *                  (packages|apps)/<name>/src/index.(ts|tsx|js|mjs|cjs)
- *   - migration  → a newly-added migration file under one of the recognized
- *                  migration directories (supabase, prisma, drizzle, src/migrations, …)
- *   - route      → a newly-added route module under a `routes/` or `api/` dir
- *   - modified   → a modified file whose directory prefix IS mapped
- *   - deleted    → a deleted file whose directory prefix IS mapped
+ * Seven categories of drift element:
+ *   - new_dir      → a newly-added file whose directory prefix does not appear
+ *                    in any generated document
+ *   - new_root_file → a newly-added file at the repository root (no directory
+ *                    separator) named by no generated document (#6236)
+ *   - barrel       → a newly-added barrel export at
+ *                    (packages|apps)/<name>/src/index.(ts|tsx|js|mjs|cjs)
+ *   - migration    → a newly-added migration file under one of the recognized
+ *                    migration directories (supabase, prisma, drizzle, src/migrations, …)
+ *   - route        → a newly-added route module under a `routes/` or `api/` dir
+ *   - modified     → a modified file whose directory prefix IS mapped
+ *   - deleted      → a deleted file whose directory prefix IS mapped
  *
  * Inverse-territory rule (#4886, #5134): an addition is drift OUTSIDE mapped
  * territory (the map cannot describe what did not exist); a modification or
@@ -24,7 +26,9 @@
  *
  * Each file is counted at most once; when a file matches multiple categories
  * the most specific category wins
- * (deleted > modified > migration > route > barrel > new_dir).
+ * (deleted > modified > migration > route > barrel > new_dir). A path either
+ * contains a separator or it does not, so `new_root_file` shares `new_dir`'s
+ * priority: no file can match both, and dedup/sort behaviour is unchanged.
  *
  * Every path that leaves this module (`affectedPaths`, the `--paths` argument,
  * message bullets) passes `sanitizePaths` (#4923); dropped paths are reported
@@ -55,12 +59,14 @@ import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted'] as const);
+const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'new_root_file', 'barrel', 'migration', 'route', 'modified', 'deleted'] as const);
 
 // Category priority when a single file matches multiple rules.
-// Higher index = more specific = wins.
+// Higher index = more specific = wins. `new_root_file` shares `new_dir`'s
+// priority (#6236): a path either has a separator or it does not, so the two
+// can never both match one file and dedup behaviour is unchanged.
 const CATEGORY_PRIORITY: Record<string, number> = {
-  new_dir: 0, barrel: 1, route: 2, migration: 3, modified: 4, deleted: 5,
+  new_dir: 0, new_root_file: 0, barrel: 1, route: 2, migration: 3, modified: 4, deleted: 5,
 };
 
 const BARREL_RE = /^(packages|apps)\/[^/]+\/src\/index\.(ts|tsx|js|mjs|cjs)$/;
@@ -300,7 +306,10 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
       let category: string | null = specific;
       if (!category) {
         if (!isPathMapped(file, corpus)) {
-          category = 'new_dir';
+          // `file` is already posixNormalize'd, so a backslash-separated
+          // (Windows) spelling also reduces to the `/`-separator test. A
+          // root-level file adds no directory: report it as a new file (#6236).
+          category = file.includes('/') ? 'new_dir' : 'new_root_file';
         } else {
           continue; // mapped, known, ordinary file — not drift
         }
@@ -407,6 +416,7 @@ function buildMessage(
   ];
   const labels: Record<string, string> = {
     new_dir: 'New directories',
+    new_root_file: 'New files',
     barrel: 'New barrel exports',
     migration: 'New migrations',
     route: 'New route modules',

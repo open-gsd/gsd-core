@@ -285,11 +285,29 @@ describe('detectDrift — categories (#5134)', () => {
     );
   });
 
-  test('T10: DRIFT_CATEGORIES lists the six categories in priority order', () => {
+  test('T10: DRIFT_CATEGORIES lists the seven categories in priority order', () => {
     assert.deepStrictEqual(
       [...DRIFT_CATEGORIES],
-      ['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted'],
+      ['new_dir', 'new_root_file', 'barrel', 'migration', 'route', 'modified', 'deleted'],
     );
+  });
+
+  test('a root-level file is a new file, not a new directory (#6236)', () => {
+    const r = run({
+      addedFiles: ['engine.py', 'newpkg/thing.ts'],
+      documents: docs('# Structure\n\nnothing mapped\n'),
+    });
+    assert.deepStrictEqual(
+      r.elements.map((e) => `${e.category}:${e.path}`),
+      ['new_dir:newpkg/thing.ts', 'new_root_file:engine.py'],
+    );
+    const lines = r.message.split('\n');
+    const dirsAt = lines.indexOf('New directories:');
+    const filesAt = lines.indexOf('New files:');
+    assert.ok(dirsAt >= 0, `missing New directories label in ${JSON.stringify(r.message)}`);
+    assert.strictEqual(lines[dirsAt + 1], '  - newpkg/thing.ts');
+    assert.ok(filesAt >= 0, `missing New files label in ${JSON.stringify(r.message)}`);
+    assert.strictEqual(lines[filesAt + 1], '  - engine.py');
   });
 
   test('T10: the message labels modified and deleted files', () => {
@@ -1227,7 +1245,7 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
 
     const { data, raw } = drift();
     const shown = 'ev\\u001b[2Jil\\u202efdp.js';
-    assert.deepStrictEqual(data.elements, [{ category: 'new_dir', path: shown }]);
+    assert.deepStrictEqual(data.elements, [{ category: 'new_root_file', path: shown }]);
     assert.deepStrictEqual(data.withheld_paths, [shown]);
     assert.strictEqual(data.withheld_count, 1);
     assert.deepStrictEqual(data.affected_paths, []);
@@ -1243,7 +1261,7 @@ describe('verify codebase-drift CLI — display safety and document reads (#5134
     write('n'.repeat(210) + '.js', 'x\n');
     commitAll('add a long name');
     const { data } = drift();
-    assert.deepStrictEqual(data.elements, [{ category: 'new_dir', path: 'n'.repeat(199) + '…' }]);
+    assert.deepStrictEqual(data.elements, [{ category: 'new_root_file', path: 'n'.repeat(199) + '…' }]);
   });
 
   for (const total of [49, 50, 51]) {

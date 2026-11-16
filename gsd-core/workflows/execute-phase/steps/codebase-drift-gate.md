@@ -43,6 +43,8 @@ Codebase drift detected: {N} structural element(s) since last mapping.
 
 New directories:
   - {path}
+New files:
+  - {path}
 New barrel exports:
   - {path}
 New migrations:

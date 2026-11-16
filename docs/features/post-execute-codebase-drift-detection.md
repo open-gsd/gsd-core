@@ -17,6 +17,7 @@ order: 27.2
 **What counts as drift:** additions are drift outside mapped territory;
 modifications and deletions are drift inside it.
 - New directory outside mapped paths (`new_dir`)
+- New file at the repository root, outside mapped paths (`new_root_file`)
 - New barrel export at `(packages|apps)/*/src/index.*` (`barrel`)
 - New migration file (supabase/prisma/drizzle/src/migrations/…) (`migration`)
 - New route module under `routes/` or `api/` (`route`)
@@ -53,7 +54,7 @@ git errors, mapper spawn failure) logs a single line and the phase
 continues. Drift detection cannot fail verification.
 
 **Requirements:**
-- REQ-DRIFT-01: System MUST detect the six drift categories from `git diff
+- REQ-DRIFT-01: System MUST detect the seven drift categories from `git diff
   --name-status last_mapped_commit..HEAD`
 - REQ-DRIFT-02: Action fires only when element count ≥ `workflow.drift_threshold`
 - REQ-DRIFT-03: `warn` action MUST NOT spawn any agent
