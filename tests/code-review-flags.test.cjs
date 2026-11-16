@@ -59,6 +59,42 @@ describe('parseCodeReviewFlags', () => {
     assert.strictEqual(flags.depth, '');
   });
 
+  // #6240: a bare `--files a.py,b.py` was silently dropped, so a narrowed
+  // review fell back to SUMMARY/git-diff scoping and reported success. The
+  // space-separated form must parse identically to the `=` form — and a bare
+  // `--files` with no usable value must be refused, never silently ignored.
+  test('--files a.py,b.py (space form, #6240) sets files like the = form', () => {
+    const flags = parseCodeReviewFlags(['184', '--files', 'a.py,b.py']);
+    assert.strictEqual(flags.files, 'a.py,b.py');
+  });
+
+  test('--files space form produces the same IR as the = form (#6240)', () => {
+    assert.deepStrictEqual(
+      parseCodeReviewFlags(['2', '--fix', '--files', 'src/a.ts,src/b.ts', '--all']),
+      parseCodeReviewFlags(['2', '--fix', '--files=src/a.ts,src/b.ts', '--all']),
+    );
+  });
+
+  test('--files space form consumes exactly its value token (#6240)', () => {
+    const flags = parseCodeReviewFlags(['--files', 'a.py,b.py', '--fix']);
+    assert.strictEqual(flags.files, 'a.py,b.py');
+    assert.strictEqual(flags.fix, true);
+  });
+
+  test('bare --files at end of argv is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--files']),
+      /Missing value for --files \(use --files=<file1,file2> or --files <file1,file2>\)/,
+    );
+  });
+
+  test('bare --files followed by another flag is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--files', '--fix']),
+      /Missing value for --files \(use --files=<file1,file2> or --files <file1,file2>\)/,
+    );
+  });
+
   test('first positional argument (phase number) is ignored', () => {
     const flags = parseCodeReviewFlags(['2', '--fix']);
     assert.strictEqual(flags.fix, true);

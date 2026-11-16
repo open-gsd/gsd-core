@@ -27,7 +27,7 @@ Arguments:
   - quick: Pattern-matching only (~2 min)
   - standard: Per-file analysis with language-specific checks (~5-15 min, default)
   - deep: Cross-file analysis including import graphs and call chains (~15-30 min)
-- `--files file1,file2,...` (optional) — explicit comma-separated file list, skips SUMMARY/git scoping (highest precedence for scoping)
+- `--files file1,file2,...` (or `--files=file1,file2,...`) (optional) — explicit comma-separated file list, skips SUMMARY/git scoping (highest precedence for scoping)
 - `--fix` (optional) — after review completes (or if REVIEW.md already exists), auto-apply fixes found. Spawns gsd-code-fixer agent. Accepts sub-flags:
   - `--all` — include Info findings in fix scope (default: Critical + Warning only)
   - `--auto` — enable fix + re-review iteration loop, capped at 3 iterations
@@ -45,7 +45,7 @@ Phase: the `<arguments>` block (first positional argument is phase number)
 
 Optional flags parsed from the `<arguments>` block:
 - `--depth=VALUE` — Depth override (quick|standard|deep). If provided, overrides workflow.code_review_depth config.
-- `--files=file1,file2,...` — Explicit file list override. Has highest precedence for file scoping per D-08. When provided, workflow skips SUMMARY.md extraction and git diff fallback entirely.
+- `--files file1,file2,...` / `--files=file1,file2,...` — Explicit file list override (both forms accepted). Has highest precedence for file scoping per D-08. When provided, workflow skips SUMMARY.md extraction and git diff fallback entirely.
 
 Context files (CLAUDE.md, SUMMARY.md, phase state) are resolved inside the workflow via `gsd-tools query init.phase-op` and delegated to agent via `<required_reading>` blocks.
 
