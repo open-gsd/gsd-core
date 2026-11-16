@@ -438,10 +438,10 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.strictEqual(clean.calls, '', 'clean: no commit attempted');
     assert.ok(!clean.review && !clean.fix, 'clean: backups removed');
 
-    // Silent successes: nothing to warn about, nothing extra committed.
+    // Silent successes: nothing to warn about, and the fence asked for exactly one commit.
     for (const mode of ['nothing', 'committed']) {
       const quiet = drive('true', 'issues_found', mode);
-      assert.strictEqual(quiet.count, '1', mode + ': the stub commits nothing');
+      assert.strictEqual(splitLines(quiet.calls).filter(Boolean).length, 1, mode + ': one call');
       assert.ok(quiet.review && quiet.fix, mode + ': backups are retained on disk');
       assert.doesNotMatch(quiet.stdout, /^(Warning|Note)/m, mode + ': no warning or note');
     }
