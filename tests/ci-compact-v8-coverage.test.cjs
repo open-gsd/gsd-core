@@ -10,7 +10,7 @@ const { pathToFileURL, fileURLToPath } = require('node:url');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { compact, parseArgs, INCLUDE_GLOBS, EXCLUDE_GLOBS } = require('../scripts/ci-compact-v8-coverage.cjs');
+const { compact, parseArgs, INCLUDE_GLOBS, EXCLUDE_GLOBS, MERGE_BATCH_SIZE } = require('../scripts/ci-compact-v8-coverage.cjs');
 
 function scriptCoverage(cwd, rel, count, isBlockCoverage = true) {
   return {
@@ -41,6 +41,73 @@ async function withFixtureAsync(fn) {
     cleanup(cwd);
   }
 }
+
+const canonical = (cwd, file) => {
+  const { result } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return result
+    .map((s) => [
+      relOf(cwd, s.url),
+      JSON.stringify(
+        s.functions.map((f) => ({
+          functionName: f.functionName,
+          isBlockCoverage: f.isBlockCoverage,
+          ranges: f.ranges.map((r) => ({ startOffset: r.startOffset, endOffset: r.endOffset, count: r.count })),
+        })),
+      ),
+    ])
+    .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+};
+
+// Per-offset execution counts, the contract merge grouping preserves. Ranges are painted in array order
+// (normalized pre-order: outer before inner, so inner ranges overwrite). Zero counts are kept: v8-to-istanbul
+// marks a line uncovered only through a zero-count range, so a lost never-called function must show up here.
+const offsetCounts = (cwd, file) => {
+  const { result } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return result
+    .map((s) => {
+      const painted = new Map();
+      for (const f of s.functions) {
+        for (const r of f.ranges) {
+          for (let o = r.startOffset; o < r.endOffset; o++) painted.set(o, r.count);
+        }
+      }
+      const counts = [...painted].sort((x, y) => x[0] - y[0]);
+      return [relOf(cwd, s.url), counts];
+    })
+    .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+};
+
+// Multi-range generators (a superset of V8 output: they also emit shapes V8 normalization never would). Function slot i owns root [i*100, i*100+90]; block-level functions add two
+// sibling blocks and optionally a block nested in the first. Counts are small so equal sums (ties) are frequent.
+const genFiles = ['gsd-core/bin/lib/a.cjs', 'gsd-core/bin/lib/b.cjs', 'scripts/c.cjs', 'tests/t.cjs', 'node_modules/x/i.js'];
+const countArb = fc.nat({ max: 6 });
+const v8Function = (slot, shape) => {
+  const root = slot * 100;
+  const functionName = `fn${slot}`;
+  if (shape === null) {
+    // NODE_V8_COVERAGE collects detailed (block) coverage, so V8 reports isBlockCoverage:false only for a function it never compiled, which is never called: one range, count 0. Mixed inputs outside this invariant are not something V8 produces, and @bcoe/v8-coverage's block-over-function preference would drop the function-level counts.
+    return { functionName, isBlockCoverage: false, ranges: [{ startOffset: root, endOffset: root + 90, count: 0 }] };
+  }
+  const ranges = [
+    { startOffset: root, endOffset: root + 90, count: shape.rootCount },
+    { startOffset: root + 10, endOffset: root + 30, count: shape.ifCount },
+  ];
+  if (shape.nestedCount !== null) ranges.push({ startOffset: root + 12, endOffset: root + 20, count: shape.nestedCount });
+  ranges.push({ startOffset: root + 30, endOffset: root + 50, count: shape.elseCount });
+  return { functionName, isBlockCoverage: true, ranges };
+};
+const shapeArb = fc.oneof(
+  fc.constant(null),
+  fc.record({ rootCount: countArb, ifCount: countArb, elseCount: countArb, nestedCount: fc.option(countArb, { nil: null }) }),
+);
+const fileCoverageArb = fc
+  .tuple(fc.constantFrom(...genFiles), fc.array(shapeArb, { minLength: 1, maxLength: 3 }))
+  .map(([file, shapes]) => ({ file, functions: shapes.map((shape, slot) => v8Function(slot, shape)) }));
+const multiRangeDumpArb = fc.uniqueArray(fileCoverageArb, { minLength: 1, maxLength: 2, selector: (s) => s.file });
+const dumpBody = (cwd, dump) =>
+  JSON.stringify({
+    result: dump.map((s) => ({ scriptId: '1', url: pathToFileURL(path.join(cwd, s.file)).href, functions: s.functions })),
+  });
 
 async function inDir(dir, fn) {
   const prev = process.cwd();
@@ -193,31 +260,8 @@ test('a never-called function has no block flag whatever the dump count (#5985 p
   });
 });
 
-test("sharded compaction equals one-pass compaction (the gate's composition contract)", () => {
-  const files = ['gsd-core/bin/lib/a.cjs', 'gsd-core/bin/lib/b.cjs', 'scripts/c.cjs', 'tests/t.cjs', 'node_modules/x/i.js'];
-  // NODE_V8_COVERAGE collects detailed (block) coverage, so V8 reports isBlockCoverage:false only for a function it never compiled, which is never called: one range, count 0. Mixed inputs outside this invariant are not something V8 produces, and @bcoe/v8-coverage's block-over-function preference would drop the function-level counts.
-  const entryArb = fc.oneof(
-    fc.record({ file: fc.constantFrom(...files), count: fc.nat({ max: 50 }), isBlockCoverage: fc.constant(true) }),
-    fc.record({ file: fc.constantFrom(...files), count: fc.constant(0), isBlockCoverage: fc.constant(false) }),
-  );
-  const dumpArb = fc.array(entryArb, { maxLength: 4 });
-  const arbitrary = fc.tuple(fc.array(dumpArb, { minLength: 2, maxLength: 6 }), fc.nat());
-
-  const canonical = (cwd, file) => {
-    const { result } = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return result
-      .map((s) => [
-        relOf(cwd, s.url),
-        JSON.stringify(
-          s.functions.map((f) => ({
-            functionName: f.functionName,
-            isBlockCoverage: f.isBlockCoverage,
-            ranges: f.ranges.map((r) => ({ startOffset: r.startOffset, endOffset: r.endOffset, count: r.count })),
-          })),
-        ),
-      ])
-      .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
-  };
+test("sharded compaction preserves the one-pass per-offset counts (the gate's composition contract)", () => {
+  const arbitrary = fc.tuple(fc.array(multiRangeDumpArb, { minLength: 2, maxLength: 6 }), fc.nat());
 
   withFixture((cwd) => {
     let n = 0;
@@ -227,8 +271,8 @@ test("sharded compaction equals one-pass compaction (the gate's composition cont
         const at = (...p) => path.join(base, ...p);
         const cut = (split % (dumps.length - 1)) + 1;
         for (const dir of ['all', 'shardA', 'shardB', 'g']) fs.mkdirSync(at(dir), { recursive: true });
-        dumps.forEach((entries, i) => {
-          const body = JSON.stringify({ result: entries.map((e) => scriptCoverage(cwd, e.file, e.count, e.isBlockCoverage)) });
+        dumps.forEach((dump, i) => {
+          const body = dumpBody(cwd, dump);
           fs.writeFileSync(at('all', `d${i}.json`), body);
           fs.writeFileSync(at(i < cut ? 'shardA' : 'shardB', `d${i}.json`), body);
         });
@@ -238,7 +282,7 @@ test("sharded compaction equals one-pass compaction (the gate's composition cont
         fs.copyFileSync(at('cA', 'shard.json'), at('g', 'a.json'));
         fs.copyFileSync(at('cB', 'shard.json'), at('g', 'b.json'));
         compact({ tempDirectory: at('g'), outFile: at('out', 'gate.json'), cwd });
-        assert.deepEqual(canonical(cwd, at('out', 'gate.json')), canonical(cwd, at('out', 'all.json')));
+        assert.deepEqual(offsetCounts(cwd, at('out', 'gate.json')), offsetCounts(cwd, at('out', 'all.json')));
       }),
     );
   });
@@ -353,5 +397,157 @@ test('c8 report json-summary is identical over raw and compacted dumps', async (
     assert.ok(fromRaw['gsd-core/bin/lib/never.cjs'], '--all must report the never-executed file');
     assert.ok(fromRaw['gsd-core/bin/lib/a.cjs'].branches.total > 0, 'fixture must exercise branch coverage');
     assert.deepEqual(fromCompacted, fromRaw);
+  });
+});
+
+const realMerge = createRequire(require.resolve('c8/package.json'))('@bcoe/v8-coverage').mergeProcessCovs;
+
+test('compaction folds dumps into the accumulator in bounded batches instead of holding every dump (#6140)', () => {
+  withFixture((cwd) => {
+    for (let i = 0; i < 13; i++) {
+      const result = [scriptCoverage(cwd, 'gsd-core/bin/lib/a.cjs', i + 1), scriptCoverage(cwd, 'scripts/b.cjs', 1)];
+      fs.writeFileSync(path.join(cwd, 'raw', `d${String(i).padStart(2, '0')}.json`), JSON.stringify({ result }));
+    }
+    const sizes = [];
+    const out = path.join(cwd, 'out', 'c.json');
+    compact({
+      tempDirectory: path.join(cwd, 'raw'),
+      outFile: out,
+      cwd,
+      batchSize: 4,
+      mergeProcessCovs: (inputs) => {
+        sizes.push(inputs.length);
+        return realMerge(inputs);
+      },
+    });
+    assert.deepEqual(sizes, [4, 5, 5, 2]);
+    const merged = JSON.parse(fs.readFileSync(out, 'utf8'));
+    const byUrl = new Map(merged.result.map((s) => [relOf(cwd, s.url), s]));
+    assert.equal(byUrl.get('gsd-core/bin/lib/a.cjs').functions[0].ranges[0].count, 91);
+    assert.equal(byUrl.get('scripts/b.cjs').functions[0].ranges[0].count, 13);
+  });
+});
+
+test('batch boundaries: batchSize-1, batchSize and batchSize+1 dumps (#6140)', () => {
+  withFixture((cwd) => {
+    const expectedCalls = { 3: 1, 4: 1, 5: 2 };
+    for (const n of [3, 4, 5]) {
+      const dir = path.join(cwd, `n${n}`);
+      fs.mkdirSync(dir);
+      for (let i = 0; i < n; i++) {
+        const result = [scriptCoverage(cwd, 'gsd-core/bin/lib/a.cjs', i + 1), scriptCoverage(cwd, 'scripts/b.cjs', 2)];
+        fs.writeFileSync(path.join(dir, `d${i}.json`), JSON.stringify({ result }));
+      }
+      let calls = 0;
+      const batched = path.join(cwd, `out-b${n}`, 'c.json');
+      compact({
+        tempDirectory: dir,
+        outFile: batched,
+        cwd,
+        batchSize: 4,
+        mergeProcessCovs: (inputs) => {
+          calls++;
+          return realMerge(inputs);
+        },
+      });
+      assert.equal(calls, expectedCalls[n], `merge calls for ${n} dumps`);
+      const onePass = path.join(cwd, `out-o${n}`, 'c.json');
+      compact({ tempDirectory: dir, outFile: onePass, cwd, batchSize: n });
+      assert.deepEqual(canonical(cwd, batched), canonical(cwd, onePass), `${n} dumps`);
+    }
+  });
+});
+
+test('batched compaction preserves every per-offset count of the one-pass merge, for any batch size (#6140)', () => {
+  const arbitrary = fc.tuple(fc.array(multiRangeDumpArb, { minLength: 1, maxLength: 9 }), fc.integer({ min: 1, max: 8 }));
+  withFixture((cwd) => {
+    let n = 0;
+    fc.assert(
+      fc.property(arbitrary, ([dumps, batchSize]) => {
+        const base = path.join(cwd, `p${n++}`);
+        const dir = path.join(base, 'all');
+        fs.mkdirSync(dir, { recursive: true });
+        dumps.forEach((dump, i) => {
+          fs.writeFileSync(path.join(dir, `d${String(i).padStart(2, '0')}.json`), dumpBody(cwd, dump));
+        });
+        const batched = path.join(base, 'out', 'batched.json');
+        const onePass = path.join(base, 'out', 'one.json');
+        compact({ tempDirectory: dir, outFile: batched, cwd, batchSize });
+        compact({ tempDirectory: dir, outFile: onePass, cwd, batchSize: dumps.length });
+        assert.deepEqual(offsetCounts(cwd, batched), offsetCounts(cwd, onePass));
+      }),
+    );
+  });
+});
+
+test('merge grouping may change range structure but never a per-offset count (#6140)', () => {
+  withFixture((cwd) => {
+    // Sibling blocks end up with equal summed counts after the first merge, so normalization joins them and a
+    // later merge wraps them in a synthetic range. If @bcoe/v8-coverage ever becomes associative, the canonical()
+    // inequality below fails: revisit the exactness paragraph in scripts/ci-compact-v8-coverage.cjs.
+    const dumps = [
+      { root: 5, ifCount: 3, elseCount: 2 },
+      { root: 5, ifCount: 2, elseCount: 3 },
+      { root: 1, ifCount: 0, elseCount: 1 },
+    ];
+    dumps.forEach((d, i) => {
+      const functions = [
+        {
+          functionName: 'f',
+          isBlockCoverage: true,
+          ranges: [
+            { startOffset: 0, endOffset: 100, count: d.root },
+            { startOffset: 10, endOffset: 30, count: d.ifCount },
+            { startOffset: 30, endOffset: 50, count: d.elseCount },
+          ],
+        },
+      ];
+      const url = pathToFileURL(path.join(cwd, 'scripts/a.cjs')).href;
+      fs.writeFileSync(path.join(cwd, 'raw', `d${i}.json`), JSON.stringify({ result: [{ scriptId: '1', url, functions }] }));
+    });
+    const run = (batchSize) => {
+      const out = path.join(cwd, `out${batchSize}`, 'c.json');
+      compact({ tempDirectory: path.join(cwd, 'raw'), outFile: out, cwd, batchSize });
+      return out;
+    };
+    const three = run(3);
+    const two = run(2);
+    assert.notDeepEqual(canonical(cwd, three), canonical(cwd, two));
+    assert.deepEqual(offsetCounts(cwd, three), offsetCounts(cwd, two));
+  });
+});
+
+test('batchSize must be a positive integer', () => {
+  withFixture((cwd) => {
+    fs.writeFileSync(path.join(cwd, 'raw', 'd0.json'), JSON.stringify({ result: [scriptCoverage(cwd, 'scripts/b.cjs', 1)] }));
+    const run = (batchSize) => compact({ tempDirectory: path.join(cwd, 'raw'), outFile: path.join(cwd, 'out', 'c.json'), cwd, batchSize });
+    for (const bad of [0, -1, 1.5, NaN, '4']) assert.throws(() => run(bad), RangeError, `batchSize ${String(bad)}`);
+    assert.doesNotThrow(() => run(1));
+  });
+});
+
+test('the default batch size folds MERGE_BATCH_SIZE-1 and MERGE_BATCH_SIZE dumps in one merge and one more dump in a second (#6140)', () => {
+  withFixture((cwd) => {
+    const expectedCalls = { [MERGE_BATCH_SIZE - 1]: 1, [MERGE_BATCH_SIZE]: 1, [MERGE_BATCH_SIZE + 1]: 2 };
+    for (const n of [MERGE_BATCH_SIZE - 1, MERGE_BATCH_SIZE, MERGE_BATCH_SIZE + 1]) {
+      const dir = path.join(cwd, `n${n}`);
+      fs.mkdirSync(dir);
+      for (let i = 0; i < n; i++) {
+        fs.writeFileSync(path.join(dir, `d${String(i).padStart(3, '0')}.json`), JSON.stringify({ result: [scriptCoverage(cwd, 'scripts/b.cjs', 1)] }));
+      }
+      let calls = 0;
+      const out = path.join(cwd, `out${n}`, 'c.json');
+      compact({
+        tempDirectory: dir,
+        outFile: out,
+        cwd,
+        mergeProcessCovs: (inputs) => {
+          calls++;
+          return realMerge(inputs);
+        },
+      });
+      assert.equal(calls, expectedCalls[n], `${n} dumps`);
+      assert.equal(JSON.parse(fs.readFileSync(out, 'utf8')).result[0].functions[0].ranges[0].count, n);
+    }
   });
 });

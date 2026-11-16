@@ -148,6 +148,8 @@ The 12 loop extension points are a **closed, additive-only vocabulary**. Every `
 
 A valid point is necessary but not sufficient: each host workflow decides, per point, which hook **kinds** its dispatch text handles, and a point may dispatch a subset. The registry build derives the real answer from the host workflows (`getWiredKinds()` in `scripts/gen-loop-host-contract.cjs`) and rejects a manifest declaring a kind the point does not dispatch — so an unsupported combination is a build-time error naming the point, the kind, and the kinds that point does cover. It is never a hook that renders and is then silently dropped.
 
+`execute:pre` dispatches all three kinds, once per `/gsd-execute-phase` run, after plan discovery and before STATE.md records the phase start; it is not reached when no plan will be dispatched. A step there is **advisory** and never blocks — a precondition that must stop execution before any plan runs is a `gate` with `blocking: true`.
+
 `verify:pre` dispatches all three kinds. A step there is **advisory**: it runs before UAT begins and never blocks it — a precondition that must halt verification is a `gate`. Its `produces` artefact names are consumed **additively** by the verify workflow's `extract_tests` step, which can deepen what UAT covers but cannot suppress a checkpoint. See [Develop a capability](../how-to/develop-a-capability.md#check-the-point-dispatches-your-kind) for the authoring workflow.
 
 | Point | Phase | Position |

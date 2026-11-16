@@ -125,7 +125,7 @@ describe('#5759 parity — absent, corrupt, precedence are unchanged', () => {
 
   test('loader precedence: a workstream value over a root omit means omit does not apply', () => {
     fs.writeFileSync(rootConfig(), JSON.stringify({ resolve_model_ids: 'omit' }));
-    fs.writeFileSync(wsConfig(), JSON.stringify({ resolve_model_ids: 'keep' }));
+    fs.writeFileSync(wsConfig(), JSON.stringify({ resolve_model_ids: 'keep', model_profile_overrides: { claude: { sonnet: 'claude-sonnet-4-5' } } }));
     const r = runNode([TOOLS_PATH, 'resolve-model', 'gsd-executor', '--ws', 'ws1'], {
       cwd: tmpDir,
       env: installSpawnEnv({ GSD_RUNTIME: 'claude', GSD_WORKSTREAM: '' }),
@@ -133,11 +133,11 @@ describe('#5759 parity — absent, corrupt, precedence are unchanged', () => {
     });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     assert.strictEqual(r.exitCode, 0, r.summary);
-    assert.notStrictEqual(JSON.parse(r.stdout).model, '', 'the workstream layer set the key, so root omit must not apply');
+    assert.strictEqual(JSON.parse(r.stdout).model, 'claude-sonnet-4-5', 'the workstream layer set the key, so root omit must not apply and the claude pin resolves');
   });
 
   test('resolve-model: a root "omit" with a workstream that does not set the key falls through to root', () => {
-    fs.writeFileSync(rootConfig(), JSON.stringify({ resolve_model_ids: 'omit' }));
+    fs.writeFileSync(rootConfig(), JSON.stringify({ resolve_model_ids: 'omit', model_profile_overrides: { claude: { sonnet: 'claude-sonnet-4-5' } } }));
     fs.writeFileSync(wsConfig(), JSON.stringify({}));
     const r = runNode([TOOLS_PATH, 'resolve-model', 'gsd-executor', '--ws', 'ws1'], {
       cwd: tmpDir,
@@ -146,7 +146,8 @@ describe('#5759 parity — absent, corrupt, precedence are unchanged', () => {
     });
     assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     assert.strictEqual(r.exitCode, 0, r.summary);
-    assert.strictEqual(JSON.parse(r.stdout).model, '');
+    // omit applies (#3703): the claude tier alias, not the pinned id.
+    assert.strictEqual(JSON.parse(r.stdout).model, 'sonnet');
   });
 });
 

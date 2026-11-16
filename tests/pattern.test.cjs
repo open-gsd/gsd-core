@@ -28,10 +28,10 @@ const { escapeRegex, literalPattern, compileUserPattern, MAX_USER_PATTERN_LEN } 
 
 /**
  * A single `node -e` inline probe script testing RegExp.escape fallback
- * semantics -- one subprocess, no fan-out. Coincides numerically with
- * tests/helpers/timeouts.cjs's GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS but
- * describes a different operation (an inline node -e probe, not a
- * gsd-tools.cjs CLI subcommand spawn) -- kept local.
+ * semantics -- one subprocess, no fan-out. It is not the gsd-tools CLI
+ * moderate class of tests/helpers/timeouts.cjs: it describes a different
+ * operation (an inline node -e probe, not a gsd-tools.cjs CLI subcommand
+ * spawn) -- kept local.
  */
 const REGEXP_ESCAPE_PROBE_TIMEOUT_MS = 30_000;
 

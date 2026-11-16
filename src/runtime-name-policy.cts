@@ -288,6 +288,9 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   'kimi-code': ['kimi-code', 'kimicode', 'kimi_code'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
   cline: ['cline', 'cline-cli'],
+  pi: ['pi'],
+  vscode: ['vscode'],
+  zcode: ['zcode'],
 };
 
 function normalizeRuntimeToken(value: string): string {
