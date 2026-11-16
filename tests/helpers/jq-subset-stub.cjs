@@ -51,6 +51,8 @@ const FILTERS = new Map([
   ],
   // #5221: roadmap.update-plan-progress completion step (executor, execute-plan, execute-phase).
   ['.reason//""', (d) => alt(get(d, 'reason'), '')],
+  // #5843: execute-phase begin-phase reads the ROADMAP display name from the init JSON.
+  ['.phase_name//""', (d) => alt(get(d, 'phase_name'), '')],
 ]);
 
 function main(argv) {

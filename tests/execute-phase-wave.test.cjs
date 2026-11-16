@@ -295,29 +295,29 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
     assert.ok(
       workflow().includes(
-        "IFS= read -r PHASE_NAME <<'GSD_NAME_END'\n{phase_name}\nGSD_NAME_END\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name=\"${PHASE_NAME}\" --plans \"{plan_count}\""
+        "PHASE_NAME=$(printf '%s' \"$INIT\" | jq -r '.phase_name//\"\"')\ngsd_run query state.begin-phase --phase \"${PHASE_NUMBER}\" --name=\"${PHASE_NAME}\" --plans \"{plan_count}\""
       ),
-      'begin-phase records phase_name (read through a quoted heredoc, so no shell metacharacter in it runs) and plan_count from the init JSON'
+      'begin-phase records phase_name (read from the init JSON in $INIT, so no phase text is spliced into the shell) and plan_count from the init JSON'
     );
   });
 
   test('#5843 row 6: the begin-phase block hands any phase name to --name byte for byte', () => {
-    // The block passes one line of free ROADMAP text through unchanged. The heredoc terminator is the one
-    // line a name cannot hold, so it is read from the block, not typed here.
-    const block = span('gsd-core/workflows/execute-phase.md', 'IFS= read -r PHASE_NAME', 'gsd_run query state.begin-phase');
-    const terminator = /<<'([A-Z_]+)'/.exec(block[0])[1];
+    // The block reads one line of free ROADMAP text from the init JSON. No text is spliced into the
+    // shell, so no name (a heredoc terminator word included) can end the capture early.
+    const block = span('gsd-core/workflows/execute-phase.md', 'PHASE_NAME=', 'gsd_run query state.begin-phase');
     const check = (name) => {
+      const init = JSON.stringify({ phase_name: name }).replace(/'/g, "'\\''");
       const r = runBash(
-        block.map(l => l.replace('{phase_name}', () => name).replace('{plan_count}', '3')),
+        block.map(l => l.replace('{plan_count}', '3')),
         { stdout: '', rc: 0 },
-        { preamble: ['PHASE_NUMBER=7'], probe: 'printf %s "$PHASE_NAME"' }
+        { preamble: ['PHASE_NUMBER=7', `INIT='${init}'`], probe: 'printf %s "$PHASE_NAME"' }
       );
       assert.equal(r.status, 0, `bash should run the block for ${JSON.stringify(name)}: ${r.stderr}`);
       assert.equal(r.stdout, name, `PHASE_NAME must equal ${JSON.stringify(name)}`);
     };
-    for (const name of ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', terminator + ' ']) check(name);
+    for (const name of ['Users\' dashboard', 'Setup (v2', '  Fix \\d "quoted" $(x) `y`  ', 'Phase N', 'GSD_NAME_END', 'EOF']) check(name);
     fc.assert(
-      fc.property(fc.string().filter(n => !/[\n\0]/.test(n) && n !== terminator), (name) => { check(name); }),
+      fc.property(fc.string().filter(n => !/[\n\0]/.test(n)), (name) => { check(name); }),
       { numRuns: 25 }
     );
   });
