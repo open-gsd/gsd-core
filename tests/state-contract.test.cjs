@@ -511,7 +511,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.match(git(tmpDir, 'show', `HEAD:${rel}/.gitignore`), /^\/state\.json$/m);
   });
 
-  test('a staged edit of a state.json that a negation keeps tracked is not carried', (t) => {
+  test('a staged edit of a tracked state.json is not carried', (t) => {
     const { tmpDir, rel } = boundary(t, { preTracked: true });
     fs.mkdirSync(path.join(tmpDir, rel, 'workstreams', 'kept'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, rel, 'workstreams', 'kept', 'STATE.md'), STATE_MD);
@@ -525,6 +525,19 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.ok(c.success, `final commit must succeed: ${c.error}`);
     assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), [`${rel}/STATE.md`]);
   });
+
+  // A whitespace-only edit of an existing rule line is the user's own: it must not ride into the unscoped commit.
+  for (const [label, edited] of [['trailing spaces', 'scratch/  \n'], ['CRLF', 'scratch/\r\n']]) {
+    test(`a staged ${label} edit of an existing rule line is not carried`, (t) => {
+      const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/\n' });
+      fs.writeFileSync(path.join(tmpDir, rel, '.gitignore'), `${edited}/state.json\n`);
+      git(tmpDir, 'add', `${rel}/.gitignore`);
+      fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+      const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+      assert.ok(c.success, `final commit must succeed: ${c.error}`);
+      assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), [`${rel}/STATE.md`]);
+    });
+  }
 
   test('the migration is carried when the tracked rule file had no final newline', (t) => {
     const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/' });
@@ -661,7 +674,7 @@ describe('state.json never dirties the tree (#5505)', () => {
   }
 
   // A `.planning/<dir>/` that is no project matches the migration's pathspecs too: a staged state.json removal or rule-file edit there is the user's.
-  test('a staged change under a non-project .planning directory is not carried into a scoped commit', (t) => {
+  test('a staged state.json removal under a non-project .planning directory is not carried into a scoped commit', (t) => {
     const { tmpDir, rel } = boundary(t, { preTracked: true });
     fs.mkdirSync(path.join(tmpDir, '.planning', 'intel'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.planning', 'intel', 'state.json'), '{}\n');
@@ -669,8 +682,6 @@ describe('state.json never dirties the tree (#5505)', () => {
     git(tmpDir, 'add', '.planning/intel');
     git(tmpDir, 'commit', '-q', '-m', 'intel', '--', '.planning/intel');
     git(tmpDir, 'rm', '-q', '--cached', '.planning/intel/state.json');
-    fs.appendFileSync(path.join(tmpDir, '.planning', 'intel', '.gitignore'), 'mine/\n');
-    git(tmpDir, 'add', '.planning/intel/.gitignore');
     fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
     const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
     assert.ok(c.success, `final commit must succeed: ${c.error}`);

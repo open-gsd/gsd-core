@@ -2398,24 +2398,27 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         .filter((p) => isStateJsonRuleFile(cwd, p) || isStateJsonPublishPath(cwd, p))
         // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
         // any other staged line in it is the user's own edit and stays out of this commit. The diff, unlike `git show`
-        // output, survives execGit's trimming of a trailing blank line and an empty file. `--no-color --no-ext-diff --no-textconv`: the text is parsed,
+        // output, survives execGit's trimming of a trailing blank line and an empty file. Whitespace edits stay visible. `--no-color --no-ext-diff --no-textconv`: the text is parsed,
         // so the user's color.ui=always, diff.external or textconv driver must not reach it.
         .filter((p) => {
           if (!isStateJsonRuleFile(cwd, p)) return true;
-          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '--ignore-space-at-eol', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
           const body = diff.stdout.split('\n');
           const changed = body.slice(body.findIndex((l) => l.startsWith('@@'))).filter((l) => /^[+-]/.test(l));
+          // a last line without its newline shows as the same line removed and added: that pair is the migration's own append, not an edit
+          if (changed.length === 3 && changed[0].slice(1) === changed[1].slice(1) && changed[0][0] === '-' && changed[1][0] === '+') changed.splice(0, 2);
           return diff.exitCode === 0 && changed.length === 1 && changed[0] === `+${ignoreRuleLine('state.json')}`;
         })
     : [];
   // `preStaged` is `--relative`: it never lists a path staged outside `cwd` (a project nested in its repo), and the carry makes the commit
   // unscoped, so it also needs the index to hold no path outside `cwd` (the whole index lists those, the `--relative` one does not).
-  // `--no-relative` keeps the whole-index count whole under a user's `diff.relative=true`; a failed probe counts as "paths outside" (NaN never equals).
-  const stagedCount = (relative: '--relative' | '--no-relative'): number => {
-    const r = execGit(['diff', '--cached', '--name-only', '-z', relative], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+  // `-c diff.relative=false` keeps the whole-index count whole under a user's `diff.relative=true` (and git before 2.28 lacks `--no-relative`);
+  // a failed probe counts as "paths outside" (NaN never equals).
+  const stagedCount = (relative: '--relative' | ''): number => {
+    const r = execGit(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z', ...(relative ? [relative] : [])], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
     return r.exitCode === 0 ? r.stdout.split('\0').filter(Boolean).length : Number.NaN;
   };
-  const nothingOutsideCwd = migrationStaged.length === 0 || stagedCount('--no-relative') === stagedCount('--relative');
+  const nothingOutsideCwd = migrationStaged.length === 0 || stagedCount('') === stagedCount('--relative');
   const carried = nothingOutsideCwd && [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
   stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));
 
