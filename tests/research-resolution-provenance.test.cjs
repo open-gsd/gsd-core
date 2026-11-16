@@ -332,6 +332,16 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   });
 });
 
+// With no CONTEXT.md, Dimension 11 makes every open research question a BLOCKER that only a ruling recorded by
+// discuss-phase clears, so the option that skips it says so where the user chooses.
+describe('plan-phase\'s no-context option names the Dimension 11 consequence (#5438)', () => {
+  test('both forms of "Continue without context" say open research questions block until discuss-phase', () => {
+    const lines = splitLines(read('gsd-core/workflows/plan-phase.md')).filter((l) => /Continue without context.* — Plan using research \+ requirements only/.test(l));
+    assert.equal(lines.length, 2, 'the text-mode list and the AskUserQuestion options each carry the option');
+    for (const l of lines) assert.match(l, /; open research questions block until discuss-phase$/);
+  });
+});
+
 // verify-work's gap-closure loop hands the checker only the fix plans: no CONTEXT.md, and its inline conflict
 // handler has no route to record a user ruling. Dimension 11 would block every research question there with
 // no way to clear it, so the loop scopes the dimension out. The spine states it because a compact-content run

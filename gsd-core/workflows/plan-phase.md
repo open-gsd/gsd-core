@@ -262,7 +262,7 @@ If `TEXT_MODE` is true, present as a plain-text numbered list:
 ```
 No CONTEXT.md found for Phase {X}. Plans will use research and requirements only — your design preferences won't be included.
 
-1. Continue without context — Plan using research + requirements only
+1. Continue without context — Plan using research + requirements only; open research questions block until discuss-phase
 [If DISCUSS_MODE is "assumptions":]
 2. Gather context (assumptions mode) — Analyze codebase and surface assumptions before planning
 [If DISCUSS_MODE is "discuss" or unset:]
@@ -275,7 +275,7 @@ Otherwise use AskUserQuestion:
 - header: "No context"
 - question: "No CONTEXT.md found for Phase {X}. Plans will use research and requirements only — your design preferences won't be included. Continue or capture context first?"
 - options:
-  - "Continue without context" — Plan using research + requirements only
+  - "Continue without context" — Plan using research + requirements only; open research questions block until discuss-phase
   If `DISCUSS_MODE` is `"assumptions"`:
   - "Gather context (assumptions mode)" — Analyze codebase and surface assumptions before planning
   If `DISCUSS_MODE` is `"discuss"` (or unset):
