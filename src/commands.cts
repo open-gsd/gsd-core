@@ -29,7 +29,7 @@ const { loadConfig, isGitIgnored, resolveCommitDocsTiers } = configLoaderMod;
 import { GIT_PROBE_TIMEOUT_MS, ignoreRuleLine } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, isStateJsonRuleFile, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
@@ -2393,15 +2393,15 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         { cwd, timeout: GIT_PROBE_TIMEOUT_MS },
       ).stdout.split('\0').filter(Boolean)
         // status, path pairs: the migration only removes a state.json, so a staged edit of one (a copy a `!` rule keeps tracked) is the user's
-        .flatMap((x, i, all) => (i % 2 === 1 && (all[i - 1] === 'D') === !x.endsWith('.gitignore') ? [x] : []))
+        .flatMap((x, i, all) => (i % 2 === 1 && (all[i - 1] === 'D') === !isStateJsonRuleFile(cwd, x) ? [x] : []))
         // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
-        .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
+        .filter((p) => isStateJsonRuleFile(cwd, p) || isStateJsonPublishPath(cwd, p))
         // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
         // any other staged line in it is the user's own edit and stays out of this commit. The diff, unlike `git show`
         // output, survives execGit's trimming of a trailing blank line and an empty file. `--no-color --no-ext-diff --no-textconv`: the text is parsed,
         // so the user's color.ui=always, diff.external or textconv driver must not reach it.
         .filter((p) => {
-          if (!p.endsWith('.gitignore')) return true;
+          if (!isStateJsonRuleFile(cwd, p)) return true;
           const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '--ignore-space-at-eol', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
           const body = diff.stdout.split('\n');
           const changed = body.slice(body.findIndex((l) => l.startsWith('@@'))).filter((l) => /^[+-]/.test(l));

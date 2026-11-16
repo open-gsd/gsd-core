@@ -626,6 +626,15 @@ function isStateJsonPublishPath(cwd: string, rel: string): boolean {
 }
 
 /**
+ * True when `rel` is the committed rule file (`ignoreInTree`) that sits beside a publish path's
+ * `state.json`: the `.gitignore` the migration stages. `.planning/<dir>/.gitignore` of a non-project dir is not one.
+ */
+function isStateJsonRuleFile(cwd: string, rel: string): boolean {
+  const posix = toPosixPath(rel);
+  return /(^|\/)\.gitignore$/.test(posix) && isStateJsonPublishPath(cwd, posix.replace(/\.gitignore$/, 'state.json'));
+}
+
+/**
  * Tick the first line-anchored unchecked row for `planId` in `text` (the
  * `phase complete` / `roadmap update-plan-progress` bullet flip): a bullet
  * mutation through `updateBullet`, so never a fenced line or mid-line match.
@@ -638,6 +647,7 @@ function tickAnchoredPlanRow(text: string, planId: string): string {
 export = {
   toPosixPath,
   isStateJsonPublishPath,
+  isStateJsonRuleFile,
   STATE_JSON_PATHSPECS,
   STATE_JSON_IGNORE_PATHSPECS,
   PLANNING_PROJECT_MARKERS,

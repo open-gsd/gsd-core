@@ -48,6 +48,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('fast-check');
 
 const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -566,6 +567,31 @@ describe('state.json never dirties the tree (#5505)', () => {
     const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
     assert.ok(c.success, `final commit must succeed: ${c.error}`);
     assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
+  // Property: whatever the rule file held before, a scoped commit carries the migration iff the staged change of the rule file is
+  // the single added `/state.json` line. Any extra staged line (blank, trailing spaces, CR) is the user's own and stays staged.
+  test('property: the rule file is carried iff its staged change is only the added /state.json line', async (t) => {
+    const line = fc.constantFrom('scratch/', '*.log', '');
+    const extra = fc.constantFrom('', 'mine/', 'x  ', 'y\r');
+    await fc.assert(fc.asyncProperty(
+      fc.array(line, { maxLength: 2 }), fc.boolean(), fc.constantFrom('\n', '\r\n'), fc.array(extra, { maxLength: 3 }),
+      async (prior, finalNewline, eol, extras) => {
+        const body = prior.join(eol);
+        const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: body && finalNewline ? body + eol : body });
+        fs.appendFileSync(path.join(tmpDir, rel, '.gitignore'), extras.map((l) => `${l}\n`).join(''));
+        git(tmpDir, 'add', `${rel}/.gitignore`);
+        fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+        const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+        assert.ok(c.success, `final commit must succeed: ${c.error}`);
+        const committed = git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n');
+        if (extras.length === 0) {
+          assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '', 'the migration was carried');
+        } else {
+          assert.deepStrictEqual(committed, [`${rel}/STATE.md`], 'the user\'s staged lines stay out of the commit');
+        }
+      },
+    ), { numRuns: 12, examples: [[[], true, '\n', []], [['scratch/'], true, '\n', ['', 'mine/', 'x  ']]] });
   });
 
   test('tracked modified state.json migrates for a workstream copy too', (t) => {

@@ -1627,6 +1627,19 @@ describe('state.json publish paths (#5505)', () => {
     }
   });
 
+  // Parity: the rule file is a rule file exactly when the `state.json` beside it is a publish path.
+  test('isStateJsonRuleFile holds exactly for the .gitignore beside a publish path', (t) => {
+    const cwd = fresh(t);
+    mkdirs(cwd, '.planning/proj', '.planning/intel');
+    fs.writeFileSync(path.join(cwd, '.planning', 'proj', 'STATE.md'), '');
+    for (const stateJson of ['.planning/state.json', '.planning/workstreams/w/state.json', '.planning/proj/state.json', '.planning/intel/state.json']) {
+      const rule = stateJson.replace(/state\.json$/, '.gitignore');
+      assert.strictEqual(coreUtils.isStateJsonRuleFile(cwd, rule), coreUtils.isStateJsonPublishPath(cwd, stateJson), rule);
+    }
+    assert.strictEqual(coreUtils.isStateJsonRuleFile(cwd, '.planning/state.json'), false, 'the state.json itself is not a rule file');
+    assert.strictEqual(coreUtils.isStateJsonRuleFile(cwd, '.planning/x.gitignore'), false, 'only a file named .gitignore counts');
+  });
+
   test('PLANNING_PROJECT_MARKERS is the frozen marker list', () => {
     assert.deepStrictEqual([...coreUtils.PLANNING_PROJECT_MARKERS],
       ['STATE.md', 'ROADMAP.md', 'PROJECT.md', 'config.json', 'phases', 'workstreams']);
