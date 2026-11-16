@@ -46,9 +46,6 @@ const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatte
 /** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
 const INTERPOLATION_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
 
-/** The `reason` a thrown gate-command error carries, so a caller branches on a value and never on message text. */
-const GATE_COMMAND_REASON = Object.freeze({ SINGLE_QUOTED_NON_INERT: 'single_quoted_non_inert' });
-
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
 
 interface PredicateContext {
@@ -68,7 +65,7 @@ interface BoundedShellResult {
 }
 
 interface PredicateDeps {
-  /** `env` holds PHASE_NUMBER, PHASE_DIR and PHASE_REQ_IDS: the shell expands `${PHASE_*}` from it, so a value that is not shell-inert never becomes command text. */
+  /** `env` holds PHASE_NUMBER, PHASE_DIR and PHASE_REQ_IDS: the shell expands `${PHASE_*}` from it, so a value never becomes command text. */
   runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): BoundedShellResult;
   /** All distinct matches for the artifact, in any order; `[]` when absent. Entries must be realpaths: the evaluator dedupes by string, so a symlink to one file counts once only if both names resolve to the same path. */
   findPhaseArtifact(phaseDir: string, artifactSuffix: string): string[];
@@ -83,31 +80,15 @@ interface PredicateResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PLACEHOLDER_SRC = `\\$\\{(${INTERPOLATION_VAR_NAMES.map(escapeRegex).join('|')})\\}`;
-const INTERPOLATION_RE = new RegExp(PLACEHOLDER_SRC, 'g');
-const PLACEHOLDER_AT_RE = new RegExp(PLACEHOLDER_SRC, 'y');
-// Characters that no shell treats as syntax, bare or quoted. A value made of these only is safe as command text.
-const SHELL_INERT_RE = /^[A-Za-z0-9._/@+=:,-]*$/;
+const PLACEHOLDER_AT_RE = new RegExp(`\\$\\{(${INTERPOLATION_VAR_NAMES.map(escapeRegex).join('|')})\\}`, 'y');
 
 /**
- * Paste a placeholder's value into the command text only when the value is shell-inert, so a gate that
- * single-quotes it ('${PHASE_NUMBER}') still receives it. Any other value stays a `${...}` for `sh` to
- * expand from the environment, where it is data and never parsed as command text.
+ * Throw when a placeholder sits in the single-quote state of the command: `sh` never expands inside single
+ * quotes, so the gate would test the literal text `${PHASE_DIR}` and pass on a path that does not exist. The
+ * throw is the gate's existing "unevaluable" path (a `usage` failure). The walk follows the POSIX quote states
+ * (single, double, backslash), so an apostrophe inside double quotes pairs with nothing.
  */
-function interpolate(command: string, env: Record<string, string>): string {
-  return command.replace(INTERPOLATION_RE, (whole, name: string): string => {
-    const value = env[name] ?? '';
-    return SHELL_INERT_RE.test(value) ? value : whole;
-  });
-}
-
-/**
- * Throw when a placeholder sits in the single-quote state of the command and its value is not shell-inert:
- * `sh` never expands inside single quotes, so the gate would test the literal text `${PHASE_DIR}` and pass on
- * a path that does not exist. The throw is the gate's existing "unevaluable" path (onError). The walk follows
- * the POSIX quote states (single, double, backslash), so an apostrophe inside double quotes pairs with nothing.
- */
-function assertNoSingleQuotedNonInert(command: string, env: Record<string, string>): void {
+function assertNoSingleQuotedPlaceholder(command: string): void {
   let state: 'none' | 'single' | 'double' = 'none';
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
@@ -117,10 +98,8 @@ function assertNoSingleQuotedNonInert(command: string, env: Record<string, strin
       } else if (c === '$') {
         PLACEHOLDER_AT_RE.lastIndex = i;
         const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
-        if (name !== undefined && !SHELL_INERT_RE.test(env[name] ?? '')) {
-          throw Object.assign(new Error(`gate command single-quotes \${${name}}, whose value is not shell-inert: double-quote the placeholder`), {
-            reason: GATE_COMMAND_REASON.SINGLE_QUOTED_NON_INERT,
-          });
+        if (name !== undefined) {
+          throw new Error(`gate command single-quotes \${${name}}, which sh never expands: double-quote the placeholder`);
         }
       }
     } else if (c === '\\') {
@@ -166,16 +145,15 @@ function evaluateCommandExitZero(
     timeoutMs = Math.floor(rawTimeout * 1000);
   }
 
-  // Every value reaches `sh` as an environment value (unset => ''); see interpolate for what is also pasted.
+  // GSD pastes nothing into the command text: every value reaches `sh` as an environment value (unset => '').
   const env = { PHASE_NUMBER: ctx.phaseNumber ?? '', PHASE_DIR: ctx.phaseDir ?? '', PHASE_REQ_IDS: ctx.phaseReqIds ?? '' };
-  assertNoSingleQuotedNonInert(command, env);
-  const interpolated = interpolate(command, env);
-  const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs, env });
+  assertNoSingleQuotedPlaceholder(command);
+  const res = deps.runBoundedShell({ command, cwd: ctx.cwd, timeoutMs, env });
 
   if (res.timedOut) {
     return {
       block: true,
-      message: trimToMax(`command timed out after ${Math.round(timeoutMs / 1000)}s: ${res.stderr || interpolated}`),
+      message: trimToMax(`command timed out after ${Math.round(timeoutMs / 1000)}s: ${res.stderr || command}`),
       details: { kind: 'command-exit-zero', timedOut: true, signal: res.signal },
     };
   }
@@ -324,11 +302,9 @@ function evaluatePredicate(predicate: unknown, context: unknown, deps: unknown):
 export = {
   evaluatePredicate,
   evaluateCommandExitZero,
-  interpolate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
   INTERPOLATION_VAR_NAMES,
-  GATE_COMMAND_REASON,
 };

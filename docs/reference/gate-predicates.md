@@ -73,12 +73,10 @@ contract.
 **Interpolation.** Three placeholders come from the gate context; all others
 are left untouched for `sh` to interpret. Each reaches `sh` as an environment
 variable of the same name, so `"${PHASE_DIR}"` expands to the exact value even
-when it holds shell syntax. A value made only of letters, digits and `. _ / @ + = : , -`
-is also pasted into the command text, so a gate that single-quotes it
-(`'${PHASE_NUMBER}'`) still receives it. Double-quote every placeholder in the
-command: an unquoted value splits at spaces. A placeholder inside single quotes
-whose value holds any other character makes the evaluator throw (`unevaluable`),
-because `sh` does not expand inside single quotes.
+when it holds shell syntax. GSD pastes no value into the command text. Double-quote
+every placeholder in the command: an unquoted value splits at spaces. A placeholder
+inside single quotes makes the evaluator throw (`unevaluable`), because `sh` does
+not expand inside single quotes.
 
 | Placeholder | Source | Workflow flag |
 |---|---|---|
@@ -119,7 +117,7 @@ model".
 - Missing, non-string, empty, or whitespace-only `command`.
 - `command` longer than 4096 chars.
 - `timeout` present but not a positive finite number.
-- A placeholder inside single quotes whose value is not made only of letters, digits and `. _ / @ + = : , -`.
+- A placeholder inside single quotes.
 - Unknown `kind`.
 
 ### `artifact-frontmatter-equals`

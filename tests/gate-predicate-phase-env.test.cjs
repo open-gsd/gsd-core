@@ -74,18 +74,14 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
     assert.equal(fs.existsSync(path.join(root, 'PWNED')), false);
   });
 
-  test('a single-quoted placeholder with an ordinary value still expands', () => {
-    const dir = path.join(root, '.planning', 'phases', '01-x');
-    fs.mkdirSync(dir, { recursive: true });
-    assert.equal(evaluate("test '${PHASE_NUMBER}' = 01", dir).block, false);
-    assert.equal(evaluate("test '${PHASE_NUMBER}' = 02", dir).block, true);
-  });
-
-  test('a single-quoted placeholder whose value holds a space fails closed instead of testing literal text', () => {
+  test('a single-quoted placeholder fails closed, whatever its value, instead of testing literal text', () => {
     const dir = path.join(root, '.planning', 'phases', '01 x');
     fs.mkdirSync(dir, { recursive: true });
     const quoted = evaluate("test ! -f '${PHASE_DIR}/OPEN_WORK'", dir);
     assert.equal(quoted.failure?.code, 'usage', JSON.stringify(quoted));
+    const ordinary = path.join(root, '.planning', 'phases', '02-y');
+    fs.mkdirSync(ordinary, { recursive: true });
+    assert.equal(evaluate("test '${PHASE_NUMBER}' = 02", ordinary, '02').failure?.code, 'usage');
     assert.equal(evaluate('test ! -f "${PHASE_DIR}/OPEN_WORK"', dir).block, false);
     // An apostrophe in an earlier double-quoted word must not hide the single-quoted placeholder.
     assert.equal(evaluate(`echo "it's"; test ! -f '\${PHASE_DIR}/OPEN_WORK'`, dir).failure?.code, 'usage');
