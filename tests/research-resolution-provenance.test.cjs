@@ -130,8 +130,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.match(excluded, /a fact settled with a cited source/, 'research findings are not questions');
     assert.match(excluded, /no source settles a ruling/, 'a source must not close a question that needs a ruling');
     assert.match(excluded, /a question with a sourced recommendation in an area CONTEXT\.md lists under Claude's Discretion/, 'the exclusion binds per question, and CONTEXT.md decides what is delegated');
-    // A fact awaiting confirmation is confirmed by a human-verify checkpoint or discuss-phase, not
-    // here; a ruling written into the Assumptions Log is still a ruling, so it is still collected.
+    // A fact awaiting confirmation is not a question here: the question its error would raise is listed under
+    // Open Questions on its own. A ruling written into the Assumptions Log is still a ruling, so it is still collected.
     assert.match(excluded, /`\[ASSUMED\]` fact, even unconfirmed \(a ruling is never a fact\)/, 'an Assumptions Log fact is not a question, even awaiting confirmation; a ruling is never one');
   });
 
@@ -399,12 +399,17 @@ describe('researcher never resolves its own questions (#5438)', () => {
   test('the Assumptions Log holds facts, and a choice needing a ruling goes under Open Questions', () => {
     const log = span(fence().body, '## Assumptions Log', /\n## /);
     assert.match(log, /facts\s+that\s+need\s+user\s+confirmation/);
-    assert.match(log, /not\s+an\s+assumption:\s+list\s+it\s+under\s+Open\s+Questions/);
-    // Dimension 11 does not collect these rows, so the header names what confirms them instead.
+    assert.match(log, /not[\s>]+an[\s>]+assumption:[\s>]+list[\s>]+it[\s>]+under[\s>]+Open[\s>]+Questions/);
+    // Dimension 11 does not collect these rows, and only the planner's human-verify checkpoint for an `[ASSUMED]`
+    // package confirms one; discuss-phase runs before research and never reads RESEARCH.md. So the header says
+    // what is true, and a fact whose error would change the plan raises its question under Open Questions.
     // A blockquote: a wrap carries its `> ` into the gap between two words.
-    assert.match(log, /a[\s>]+human-verify[\s>]+checkpoint[\s>]+or[\s>]+discuss-phase[\s>]+confirms[\s>]+them,[\s>]+so[\s>]+they[\s>]+are[\s>]+not[\s>]+open[\s>]+questions/);
+    assert.match(log, /The[\s>]+planner[\s>]+gates[\s>]+`\[ASSUMED\]`[\s>]+packages[\s>]+behind[\s>]+a[\s>]+human-verify[\s>]+checkpoint;[\s>]+nothing[\s>]+else[\s>]+confirms[\s>]+an[\s>]+assumed[\s>]+fact/);
+    assert.match(log, /when[\s>]+an[\s>]+error[\s>]+in[\s>]+one[\s>]+would[\s>]+change[\s>]+the[\s>]+plan,[\s>]+also[\s>]+list[\s>]+the[\s>]+question[\s>]+it[\s>]+raises[\s>]+under[\s>]+Open[\s>]+Questions/);
+    assert.doesNotMatch(log, /discuss-phase[\s>]+confirms/, 'discuss-phase runs before research and confirms no assumption');
     assert.doesNotMatch(log, /decisions\s+that\s+need\s+user\s+confirmation/, 'the log header must not call its rows pending decisions');
     assert.match(fence().after, /`\[ASSUMED\]`\s+fact\s+stays\s+in\s+the\s+Assumptions\s+Log,\s+even\s+awaiting\s+confirmation/);
+    assert.match(fence().after, /when\s+an\s+error\s+in\s+it\s+would\s+change\s+the\s+plan,\s+also\s+list\s+the\s+question\s+it\s+raises\s+there/);
   });
 
   test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
