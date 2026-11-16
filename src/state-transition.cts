@@ -2796,14 +2796,16 @@ function plannedPhaseCore(
   if (body !== beforePos) updated.push('Current Position');
   // The plan lines are written once, on the first-match line advance-plan reads, wherever it sits.
   // The reader sees frontmatter lines too, the writer edits the body only: a line only the reader sees has no line to land on.
-  for (const [name, value] of [['Plan', planned.plan], ['Current Plan', planned.currentPlan]] as const) {
-    if (value === undefined) continue;
-    const written = stateReplaceField(body, name, value);
-    if (written === null) {
-      return { content, updated: [], data: { error: true, reason: ERROR_REASON.PLANS_NO_LINE,
-        message: `state planned-phase: --plans cannot write \`${name}:\`: the line sits in the frontmatter, outside \`## Current Position\`. ` +
-          'Move it into the body and retry.' } };
-    }
+  const frontmatterOnly = (name: string): StateTransitionResult => ({ content, updated: [], data: { error: true, reason: ERROR_REASON.PLANS_NO_LINE,
+    message: `state planned-phase: --plans cannot write \`${name}:\`, which only the frontmatter holds. Move the line into the body and retry.` } });
+  if (planned.plan !== undefined) {
+    const written = stateReplaceField(body, 'Plan', planned.plan);
+    if (written === null) return frontmatterOnly('Plan');
+    body = written;
+  }
+  if (planned.currentPlan !== undefined) {
+    const written = stateReplaceField(body, 'Current Plan', planned.currentPlan);
+    if (written === null) return frontmatterOnly('Current Plan');
     body = written;
   }
   if (!updated.includes('Current Position') && posSlice(body) !== posBefore) updated.push('Current Position');
