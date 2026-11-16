@@ -293,7 +293,7 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: the call keeps its --phase, --name and --plans arguments', () => {
     assert.ok(
       workflow().includes(
-        'state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"'
+        'state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "{plan_count}"'
       ),
       'the begin-phase arguments are unchanged by the move'
     );
