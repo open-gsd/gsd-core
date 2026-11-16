@@ -259,4 +259,26 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
     gitOrThrow(['commit', '-m', 'test(1-01): add the failing Go test'], { cwd: dir });
     assert.deepEqual(redCommits().map((c) => c.subject), ['test(1-01): add the failing Go test']);
   });
+
+  test('through the resolver: a nested RED commit is found, a nested implementation-only commit is not (#5181)', (t) => {
+    const dir = createTempGitProject('gsd-5181-resolver-');
+    t.after(() => cleanup(dir));
+    const specs = shippedRedPathspec();
+    const redSubjects = () => resolveEvaluationScope(dir, { kind: 'plan', planId: '1-01' }, { pathspecs: specs, commitsOnly: true, maxCommits: 1 })
+      .commits.map((c) => c.subject);
+    const commitFile = (rel, subject) => {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), 'x\n');
+      gitOrThrow(['add', '-A'], { cwd: dir });
+      gitOrThrow(['commit', '-m', subject], { cwd: dir });
+    };
+
+    commitFile('crates/core/src/scan.rs', 'feat(1-01): implementation only');
+    assert.deepEqual(redSubjects(), [], 'a nested implementation-only commit is not a RED commit');
+    for (const rel of ['crates/core/tests/scan_test.rs', 'src/__tests__/util.js', 'pkg/api/test_x.py']) {
+      const subject = `test(1-01): RED ${rel}`;
+      commitFile(rel, subject);
+      assert.deepEqual(redSubjects(), [subject], `${rel} must be found as the RED commit`);
+    }
+  });
 });
