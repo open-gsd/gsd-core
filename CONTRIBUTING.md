@@ -666,6 +666,34 @@ last and is the only way to opt back in.
 This covers child processes. A test that calls the installer in-process still clears the parent's
 config-location variables with `scrubConfigLocationEnv()` from `tests/helpers.cjs`.
 
+#### In-process: `sandboxHome` and `scrubConfigLocationEnv` together
+
+A test that calls a resolver directly (`getGlobalConfigDir`, `readGsdEffectiveAgentTools`, the
+installer's staging functions) reads the parent process, so it needs both halves from
+`tests/helpers.cjs`:
+
+```javascript
+const { createTempDir, cleanup, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
+
+test('claude default config dir', (t) => {
+  const home = createTempDir('my-home-');
+  t.after(() => cleanup(home));
+  sandboxHome(t, home);                 // HOME + USERPROFILE, restored after the test
+  t.after(scrubConfigLocationEnv());    // CLAUDE_CONFIG_DIR, GSD_HOME and the rest, restored after
+
+  assert.strictEqual(getGlobalConfigDir('claude'), path.join(home, '.claude'));
+});
+```
+
+Derive the expected value from the fixture home, never from `os.homedir()` read at module load. A
+fixture home also decides what a layout probe finds: an empty one gives the probe-miss default on
+every machine, and planting a directory in it (`.gemini/antigravity-cli`) tests the probe-hit case
+on purpose. Without the fixture, the result depends on which runtimes the developer has installed
+(#4312).
+
+If the code under test also searches upward for `.planning/config.json`, start it inside a
+`createHermeticRoot()` directory as well (#4613).
+
 ### Test Structure
 
 ```javascript

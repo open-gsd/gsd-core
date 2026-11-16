@@ -71,7 +71,7 @@ const { readConfigFileBounded } = require('./lib/config-read.js');
 // hooks/lib/cursor-workspace.js. Staged next to these scripts by
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
@@ -94,9 +94,8 @@ const MSG_ABSENT =
 // dispatches named subagents by their real agent name, identically to
 // Claude. So GSD's executor surfaces as subagent_type === "gsd-executor" on
 // Cursor too, the same identifier hooks/gsd-agent-isolation-guard.js checks
-// for on Claude. A Set, not a bare string compare, so a future sibling
-// executor role can be added here without touching the matching logic below.
-const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
+// for on Claude. EXECUTOR_SUBAGENT_TYPES is imported above from
+// hooks/lib/isolation-sentinel.js, the single definition shared with the Claude hook.
 
 /**
  * Runs `realpathFn`, never throwing. A path that cannot be resolved (does not
@@ -271,21 +270,28 @@ function getWorkspaceRoots(data) {
 
 /**
  * Decide whether to deny this subagentStart. Returns
- * `{ action: 'allow' } | { action: 'deny', reason: string }`.
+ * `{ action: 'allow' } | { action: 'deny', reason: string }`. A deny whose reason names the type also
+ * carries `agentName` (its `displayAgentName`); it stays on the internal decision: `main()` prints a fixed
+ * set of fields to Cursor.
  *
  * Applicability (must positively determine all of the following to deny —
  * otherwise allow):
- *   1. `subagent_type` is not confidently a NON-executor (a present,
- *      non-empty string that isn't in EXECUTOR_SUBAGENT_TYPES short-circuits
- *      to allow immediately, before any project/isolation resolution runs —
- *      mirrors hooks/gsd-agent-isolation-guard.js checking subagent_type
- *      first, and matters here specifically: an unreadable config must never
- *      deny a dispatch this guard was never going to enforce against),
+ *   1. the dispatch is not confidently a NON-executor dispatch (a present,
+ *      non-empty `subagent_type` outside EXECUTOR_SUBAGENT_TYPES that
+ *      `isExecutorDispatch` (hooks/lib/isolation-sentinel.js) does not classify
+ *      as an executor dispatch, #6213, short-circuits to allow before any
+ *      isolation resolution runs — mirrors hooks/gsd-agent-isolation-guard.js,
+ *      and matters here specifically: an unreadable config must never deny a
+ *      dispatch this guard was never going to enforce against),
  *   2. a workspace root is resolvable from `workspace_roots`,
  *   3. that root is a GSD project (`.planning/config.json` exists there),
  *   4. the resolved dispatch isolation is `harness-worktree`,
- *   5. `subagent_type` identifies a GSD executor (or is missing/malformed —
- *      see the cannot-determine case below),
+ *   5. the dispatch is an executor dispatch (`isExecutorDispatch`: gsd-executor,
+ *      a type a dispatch record names as its routed executor, or a dispatch
+ *      carrying the canonical `[gsd:dispatch ...]` marker and whose type is not
+ *      a GSD role (a GSD role returns before the record scan); or
+ *      `subagent_type` is missing/malformed — see the cannot-determine case
+ *      below),
  *   6. the session is NOT actually isolated (resolveIsolationEvidence).
  *
  * No workspace root at all degrades to allow (step 2), mirroring
@@ -326,29 +332,50 @@ function getWorkspaceRoots(data) {
  * "a workspace root is resolvable", plural — resolveIsolationDecision
  * evaluates EVERY entry of `workspace_roots` via evaluateRootIsolation() and
  * denies on the first one that fails. `subagent_type` is still resolved
- * exactly once, up front, before any root is touched (applicability step 1
- * stays a single check, not per-root — an unreadable config on one root must
- * never even be attempted for a confirmed non-executor dispatch).
+ * exactly once, up front, before any root is touched, and a non-gsd-executor
+ * type is classified once across every root with `isExecutorDispatch` (a
+ * record in one root can name it); applicability step 1 stays a single check,
+ * not per-root — an unreadable config on one root must never even be
+ * attempted for a confirmed non-executor dispatch.
  */
 function resolveIsolationDecision(data, { clock = Date, realpath = fs.realpathSync } = {}) {
   const subagentType = data.subagent_type;
   const isConfirmedNonExecutor = typeof subagentType === 'string'
     && subagentType.length > 0
     && !EXECUTOR_SUBAGENT_TYPES.has(subagentType);
-  if (isConfirmedNonExecutor) return { action: 'allow' };
-
-  const roots = getWorkspaceRoots(data);
-  if (roots.length === 0) return { action: 'allow' };
-
+  let roots = getWorkspaceRoots(data);
+  const preReadByRoot = new Map();
   // #3045 SECURITY F2: best-effort plan/phase extraction from this
   // dispatch's own `task` text (Cursor carries the same prompt content the
   // Claude Agent() dispatch does — see extractDispatchIdentifiers), so a
   // fresh sentinel that disagrees with THIS dispatch is treated as
   // inapplicable rather than trusted.
   const dispatchIds = extractDispatchIdentifiers(data.task);
+  if (isConfirmedNonExecutor) {
+    // #6213: a plan's `agent_hint` routes it to a hinted executor. isExecutorDispatch classifies it
+    // (a record naming the type, or the canonical dispatch marker); a classified dispatch follows
+    // gsd-executor's enforcement path. Every other non-executor stays allowed.
+    // The dispatch is classified ONCE across every root (a record in one root can name the type); once
+    // classified, every root is evaluated exactly as for gsd-executor, so a root without its own
+    // record is not narrowed away.
+    // A GSD role (gsd-verifier, gsd-planner, ...) is never an executor dispatch: skip the record scan.
+    if (isGsdRoleName(subagentType)) return { action: 'allow' };
+    const classified = roots.some((root) => {
+      try {
+        fs.accessSync(path.join(root, '.planning', 'config.json'), fs.constants.F_OK);
+      } catch {
+        return false;
+      }
+      const read = readSentinel(root, { clock, dispatchIds });
+      preReadByRoot.set(root, read);
+      return isExecutorDispatch(subagentType, read, dispatchIds, { clock });
+    });
+    if (!classified) roots = [];
+  }
+  if (roots.length === 0) return { action: 'allow' };
 
   for (const root of roots) {
-    const verdict = evaluateRootIsolation(root, subagentType, { clock, dispatchIds, realpath });
+    const verdict = evaluateRootIsolation(root, subagentType, { clock, dispatchIds, realpath, sentinel: preReadByRoot.get(root) || null });
     if (verdict.action === 'deny') return verdict;
   }
   return { action: 'allow' };
@@ -473,7 +500,7 @@ function resolveFallbackIsolation(root, configPath) {
  * resolveIsolationDecision (#3045 finding 1) so every root in a multi-root
  * workspace runs the identical check.
  */
-function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds = null, realpath = fs.realpathSync } = {}) {
+function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds = null, realpath = fs.realpathSync, sentinel: preRead = null } = {}) {
   const configPath = path.join(root, '.planning', 'config.json');
   let isGsdProject;
   try {
@@ -515,7 +542,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
   // Hoisted (readSentinel never throws) so the "present, fresh, but did not
   // apply" case (#4594 row 15) can be reported on every deny path below
   // instead of silently discarded.
-  const sentinel = readSentinel(root, { clock, dispatchIds });
+  // #6213: the hinted-executor pre-check's read is passed through so match and enforcement agree.
+  const sentinel = preRead || readSentinel(root, { clock, dispatchIds, subagentType });
   const applies = sentinelAppliesToDispatch(sentinel, dispatchIds);
   const sentinelDiscarded = buildSentinelDiscard(sentinel, dispatchIds);
 
@@ -546,8 +574,8 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
   if (declaredIsolation !== 'harness-worktree') return { action: 'allow' };
 
   // isConfirmedNonExecutor already excluded "present, non-empty, unrecognized
-  // string" above — reaching here means subagentType is either the confirmed
-  // executor or missing/malformed (cannot rule it out).
+  // string" above — reaching here means subagentType is gsd-executor, a
+  // dispatch isExecutorDispatch classified, or missing/malformed (cannot rule it out).
   if (typeof subagentType !== 'string' || subagentType.length === 0) {
     return {
       action: 'deny',
@@ -573,11 +601,12 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
         `GSD subagent isolation guard: this project's dispatch isolation resolves to ` +
         `"harness-worktree", but whether "${root}" is running in an isolated Cursor worktree ` +
         `could not be determined (git did not respond). Refusing to allow subagent_type=` +
-        `"${subagentType}" to spawn without being able to verify isolation — a guard that ` +
+        `"${displayAgentName(subagentType)}" to spawn without being able to verify isolation — a guard that ` +
         `cannot verify must not answer "safe" (#3050). Retry once git is responsive.` +
         (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
       reasonCode: REASON_CODE.CANNOT_DETERMINE_ISOLATION,
       sentinelDiscarded,
+      agentName: displayAgentName(subagentType),
     };
   }
 
@@ -585,7 +614,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
     action: 'deny',
     reason:
       `GSD subagent isolation guard: this project's dispatch isolation resolves to ` +
-      `"harness-worktree", but subagent_type="${subagentType}" is about to spawn in "${root}", ` +
+      `"harness-worktree", but subagent_type="${displayAgentName(subagentType)}" is about to spawn in "${root}", ` +
       `which is not an isolated Cursor worktree — it would edit the user's primary checkout ` +
       `directly, with no consent and no warning. Start an isolated session first (the ` +
       `"--worktree" CLI flag or the "/worktree" chat command; Cursor manages these worktrees ` +
@@ -593,6 +622,7 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
       (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
     reasonCode: REASON_CODE.NOT_ISOLATED_WORKTREE,
     sentinelDiscarded,
+    agentName: displayAgentName(subagentType),
   };
 }
 
