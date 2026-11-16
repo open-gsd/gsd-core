@@ -591,7 +591,7 @@ if [ "$AUTO_MODE" = "true" ]; then
       fi
       rm -f "${BACKUP_FILES[@]}" 2>/dev/null || true
     fi
-    BACKUP_ACTION="remove spent"; BACKUP_FLAG=--files-removed
+    BACKUP_ACTION="remove spent"
     BACKUP_HINT="the files are already deleted, so commit the removal yourself (git add -u -- <the listed files>)"
     BACKUP_SKIP_HINT=" — $BACKUP_HINT"
   else
@@ -599,7 +599,7 @@ if [ "$AUTO_MODE" = "true" ]; then
     if [ "$COMMIT_DOCS" = "true" ] && [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
       COMMIT_BACKUPS=("${BACKUP_FILES[@]}")
     fi
-    BACKUP_ACTION="retain"; BACKUP_FLAG=--files
+    BACKUP_ACTION="retain"
     BACKUP_HINT="a rejected commit can leave them staged (git restore --staged)"
     BACKUP_SKIP_HINT=""
   fi
@@ -607,9 +607,16 @@ if [ "$AUTO_MODE" = "true" ]; then
   if [ "${#COMMIT_BACKUPS[@]}" -gt 0 ]; then
     # --raw prints the hash, or "committed", "nothing", "skipped" or "failed".
     # A commit_docs policy skip exits 0 with "skipped": judge by output, not exit code.
-    BACKUP_COMMIT=$(gsd_run query commit \
-      "docs(${PADDED_PHASE}): ${BACKUP_ACTION} code review iteration backups" \
-      "$BACKUP_FLAG" "${COMMIT_BACKUPS[@]}" --raw) || BACKUP_COMMIT=failed
+    # A removal declares the deleted paths with --files-removed; a retain stages them with --files.
+    if [ "$FINAL_STATUS" = "clean" ]; then
+      BACKUP_COMMIT=$(gsd_run query commit \
+        "docs(${PADDED_PHASE}): ${BACKUP_ACTION} code review iteration backups" \
+        --files-removed "${COMMIT_BACKUPS[@]}" --raw) || BACKUP_COMMIT=failed
+    else
+      BACKUP_COMMIT=$(gsd_run query commit \
+        "docs(${PADDED_PHASE}): ${BACKUP_ACTION} code review iteration backups" \
+        --files "${COMMIT_BACKUPS[@]}" --raw) || BACKUP_COMMIT=failed
+    fi
     case "$BACKUP_COMMIT" in
       nothing|committed) ;; # unchanged, or committed without a hash
       skipped)
