@@ -152,8 +152,10 @@ so they restate the operative rules inline; this section is the authority they m
    `/gsd:discuss-phase` or `/gsd:plan-phase --research`. Leaving ends the workflow once it names the
    command: no re-spawn follows, so close this conflict's line now (Close, below) with
    ` | resolved: user left the loop for {command}`, and leave the plans on disk as they are. A later
-   checker run raises Dimension 11 again for any question still open. Record only what the user said: under `--auto`, where no one is
-   asked, record nothing, so the same conflict returns and the Repeat rule below escalates it.
+   checker run raises Dimension 11 again for any question still open. Record only what the user
+   said. Under `--auto` no one is asked, so record nothing and do not re-spawn: the planner could
+   only return the same conflict. Escalate at once, and at that gate stop the workflow rather than
+   proceed, which would ship the plans with this blocker open.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
    open is a live blocker, never a stale artifact.
@@ -175,7 +177,8 @@ Both escalate through the same gate the iteration cap uses. A conflict still nev
 revision iteration — the cap on conflicts is separate from, and additional to, the cap on
 revisions.
 
-**No workflow hands a conflict to a loop and returns.** Asking the user is the route everywhere;
+**No workflow hands a conflict to a loop and returns.** Asking the user is the route everywhere
+but `--auto`, where a `research_resolution` conflict escalates and stops (Resolve, above);
 recording is in addition to asking, never instead of it. `plan-phase` in particular never invokes
 `/gsd:plan-review-convergence` — it runs *inside* that loop, so invoking it would be a cycle, and
 "was I invoked by convergence?" is not a question the orchestrator can answer at runtime.
