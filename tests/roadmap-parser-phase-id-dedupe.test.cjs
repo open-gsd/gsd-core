@@ -79,12 +79,21 @@ describe('scanMilestonePhaseIds: one phase, one id (#5895)', () => {
     };
     const document = (headingIds, bulletIds) =>
       `# Roadmap\n\n## Milestone v1.0\n\n${bulletIds.map((id) => bullet(id, `W ${id}`)).join('')}\n${headingIds.map((id) => heading(id, `W ${id}`)).join('\n')}`;
-    const summaryOf = (roadmap) => classifyProject(project(roadmap)).next.summary;
+    const classify = (roadmap) => classifyProject(project(roadmap));
 
-    const consistent = summaryOf(document(['1', '2', '2.1', '3'], ['1', '2', '2.1', '3']));
-    const mixed = summaryOf(document(['01', '02', '02.1', '03'], ['1', '2', '2.1', '3']));
-    assert.equal(consistent, 'Phase 3 of 4 — needs a plan');
-    assert.equal(mixed, consistent);
+    const consistent = classify(document(['1', '2', '2.1', '3'], ['1', '2', '2.1', '3']));
+    const mixed = classify(document(['01', '02', '02.1', '03'], ['1', '2', '2.1', '3']));
+    // The typed signal the position text is built from: four phases, not five.
+    assert.equal(consistent.signals.milestone_phases.length, 4);
+    assert.equal(mixed.signals.milestone_phases.length, 4);
+    // The rendered `Phase N of M` text is compared, never pinned to a literal.
+    assert.equal(mixed.summary, consistent.summary);
+  });
+
+  test('9 and 10, and 0.1 and 2.1, keep their numeric order through comparePhaseNum', () => {
+    const { comparePhaseNum } = require('../gsd-core/bin/lib/phase-id.cjs');
+    const declared = ids(['10', '9', '2.1', '0.1', '2'].map((id) => heading(id)).join('\n'));
+    assert.deepEqual([...declared].sort((a, b) => comparePhaseNum(a, b)), ['0.1', '2', '2.1', '9', '10']);
   });
 
   test('property: respelling decimal ids padded or unpadded never changes how many phases are declared', () => {
