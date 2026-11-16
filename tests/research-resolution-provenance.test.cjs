@@ -322,6 +322,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   // open and plan-review-convergence counts it until MAX_CYCLES.
   test('leaving the loop closes the conflict line and ends the workflow, so convergence does not count it for good', () => {
     assert.match(resolve(), /Leaving ends the workflow once it names the command/);
+    // plan-review-convergence runs plan-phase inline and its reviewers never re-run Dimension 11, so with the line
+    // closed it would converge over the open question unless leaving ends it too.
+    assert.match(resolve(), /without `## PLANNING COMPLETE`, and ends any `\/gsd:plan-review-convergence` run around it too/);
+    assert.match(resolve(), /so it must stop, never converge over the open question/);
     assert.match(resolve(), /close this conflict's line now \(Close, below\) with ` \| resolved: user left the loop for \{command\}`/);
     assert.match(resolve(), /leave the plans on disk as they are/);
     assert.match(resolve(), /A later checker run raises Dimension 11 again for any question still open/);
