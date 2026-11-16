@@ -333,6 +333,29 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
     assert.strictEqual(out.resolved_branch, 'gsd/phase-01-x');
   });
 
+  test('branching_strategy: phase with a removal outside any phase dir resolves no branch', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ commit_docs: true, branching_strategy: 'phase', phase_branch_template: 'gsd/phase-{phase}-{slug}' }),
+    );
+    const res = runGsdTools(['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'], tmpDir);
+    const out = JSON.parse(res.output);
+    assert.strictEqual(out.committed, true, res.output);
+    assert.ok(!('resolved_branch' in out), `no phase resolves no branch: ${res.output}`);
+  });
+
+  test('branching_strategy: milestone reports the resolved milestone branch', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ commit_docs: true, branching_strategy: 'milestone', milestone_branch_template: 'gsd/{milestone}-{slug}' }),
+    );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n- 🚧 **v1.0 Alpha** - Phases 1-1 (in progress)\n');
+    const res = runGsdTools(['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'], tmpDir);
+    const out = JSON.parse(res.output);
+    assert.strictEqual(out.committed, true, res.output);
+    assert.strictEqual(out.resolved_branch, 'gsd/v1.0-alpha');
+  });
+
   test('a deletion staged by this call is rolled back when a later entry fails', () => {
     // Ordering: the good removal is processed first, then the contradicted one.
     fs.copyFileSync(path.join(tmpDir, COMPLETED, 'mine.md'), path.join(tmpDir, PENDING, 'stays-put.md'));
@@ -1222,7 +1245,6 @@ describe('commit --files-removed: index states absent by design are never remova
     git(['add', path.join(PENDING, 'mine.md')]);
     const staged = git(['ls-files', '-s', '--', path.join(PENDING, 'mine.md')]);
     assert.notEqual(staged, git(['ls-tree', 'HEAD', '--', path.join(PENDING, 'mine.md')]).replace(/\t/, ' '), 'fixture: the staged blob must differ from HEAD');
-    fs.unlinkSync(path.join(tmpDir, PENDING, 'mine.md'));
 
     const result = runGsdTools(
       ['commit', 'docs: bad declaration', '--files-removed', '.planning/todos/pending/mine.md', '.planning/todos/pending/present.md'],

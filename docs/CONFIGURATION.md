@@ -823,7 +823,7 @@ The `<phase-id>` segment accepts the same phase-number shapes GSD uses elsewhere
 lookup), so `phase_commit_docs.3` and `phase_commit_docs.03` refer to the same entry.
 
 **Resolution order** (highest wins) when `gsd-tools commit` / `query commit` resolves the phase from
-the committed `--files` paths:
+the committed `--files` and `--files-removed` paths:
 
 1. `phase_commit_docs.<phase-id>` for the phase being committed
 2. explicit `commit_docs` / `planning.commit_docs` in config.json
