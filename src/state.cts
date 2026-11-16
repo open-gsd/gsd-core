@@ -6545,7 +6545,10 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     const result = transitionCore(content, intent, deps);
     // #5320: --plans cannot be recorded (no line to land on, or below the recorded plan position); exit before the write.
     if (result.data?.['error']) {
-      error(String(result.data['message']), errorReasonOf(result.data?.['reason']) ?? ERROR_REASON.UNKNOWN);
+      const reason = errorReasonOf(result.data['reason']);
+      // Cannot happen short of a writer bug: planLinesForPlanned refuses only with ERROR_REASON members.
+      if (reason === undefined) throw new Error(`planned-phase: refusal reason ${String(result.data['reason'])} is not an ERROR_REASON member`);
+      error(String(result.data['message']), reason);
     }
     precomputedUpdated = result.updated;
     if (resolvePhaseIdConvention(cwd) === 'bracket') {
