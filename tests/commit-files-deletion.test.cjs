@@ -327,6 +327,18 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
     );
   });
 
+  // Near case of the test above: a removal outside any phase dir resolves no phase, so no branch is created.
+  test('a removal-only commit outside a phase dir keeps the checked-out branch under branching_strategy: phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ commit_docs: true, branching_strategy: 'phase', phase_branch_template: 'gsd/phase-{phase}-{slug}' }),
+    );
+    const branch = () => gitOrThrow(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
+    const before = branch();
+    runGsdTools(['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'], tmpDir);
+    assert.strictEqual(branch(), before);
+  });
+
   test('a deletion staged by this call is rolled back when a later entry fails', () => {
     // Ordering: the good removal is processed first, then the contradicted one.
     fs.copyFileSync(path.join(tmpDir, COMPLETED, 'mine.md'), path.join(tmpDir, PENDING, 'stays-put.md'));
