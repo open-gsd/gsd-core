@@ -14,8 +14,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
-const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { execFileSync, spawnSync } = require('child_process');
+const { createTempGitProject, cleanup, runGsdTools, TOOLS_PATH } = require('./helpers.cjs');
 const fc = require('fast-check');
 const { parseNamedArgs } = require('../gsd-core/bin/lib/command-arg-projection.cjs');
 const { specFor } = require('../gsd-core/bin/lib/cli-surface.cjs');
@@ -304,6 +304,31 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
     );
     assert.strictEqual(JSON.parse(result.output).committed, true, result.output);
     assert.deepStrictEqual(nameStatus(), ['D\t.planning/todos/pending/mine.md']);
+  });
+
+  // The phase's history makes the create arm refuse (#4055), so the observable is the
+  // disclosure naming the phase branch: it is printed only once the phase resolves from --files-removed.
+  test('a removal-only commit under a phase dir resolves that phase for branching_strategy: phase', () => {
+    const phaseDir = path.join('.planning', 'phases', '01-x');
+    const backup = path.join(phaseDir, '01-REVIEW-FIX.iter1.md');
+    fs.mkdirSync(path.join(tmpDir, phaseDir), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, backup), 'backup\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 1: X\nGoal: x\n');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ commit_docs: true, branching_strategy: 'phase', phase_branch_template: 'gsd/phase-{phase}-{slug}' }),
+    );
+    gitOrThrow(['add', '.planning/'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'seed phase backup'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    fs.unlinkSync(path.join(tmpDir, backup));
+
+    const res = spawnSync(
+      process.execPath,
+      [TOOLS_PATH, 'commit', 'docs(01): remove spent backup', '--files-removed', backup.split(path.sep).join('/')],
+      { cwd: tmpDir, encoding: 'utf8', timeout: GIT_TIMEOUT_MS },
+    );
+    assert.strictEqual(JSON.parse(res.stdout).committed, true, res.stdout + res.stderr);
+    assert.match(res.stderr, /phase branch "gsd\/phase-01-x" is absent and will not be recreated/);
   });
 
   test('a deletion staged by this call is rolled back when a later entry fails', () => {

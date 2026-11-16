@@ -841,7 +841,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; ' +
     'only a malformed report stays', { skip: BASH_SKIP }, (t) => {
     const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'commit_fix_report');
-    const git = (cwd, ...args) => gitOrThrow(args, { cwd, ...T6_OPTS });
+    const git = (cwd, ...args) => gitOrThrow(args, { cwd });
     const REVIEW = '.planning/01-REVIEW.md';
     const FIX = '.planning/01-REVIEW-FIX.md';
 
@@ -868,11 +868,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         // Typed seam: the value the dirty-tree warning is gated on, not the warning's wording.
         'printf "\\n@@DIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}"',
       ]);
-      const res = runHook('-c', [script], {
-        interpreter: 'bash',
-        timeoutMs: SEAM_DEFAULT_TIMEOUT_MS,
-        env: GIT_ENV,
-      });
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
       assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
       return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*)@@/.exec(res.stdout)[1] };
     };

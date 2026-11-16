@@ -2024,6 +2024,11 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
   return { removedEntries, removedPathspec, failures };
 }
 
+// The one owner of which paths a commit declares: --files plus --files-removed.
+function declaredPaths(files: string[] | undefined, filesRemoved: string[] | undefined): string[] {
+  return [...(files ?? []), ...(filesRemoved ?? [])];
+}
+
 /**
  * #6043 (ADR-4908 §3): a committing verb commits in the checkout the process
  * runs in. Returns the typed refusal when it cannot: not a git repository, or
@@ -2076,7 +2081,7 @@ function commitRefusal(
   const inside = (target: string, root: string): boolean => isContainedIn(norm(target), norm(root), { sep: '/' });
   const worktreeRoot = realOrSelf(path.resolve(ctx.worktreeRoot));
   const realCwd = realOrSelf(path.resolve(cwd));
-  const declared = [...(files ?? []), ...(filesRemoved ?? [])];
+  const declared = declaredPaths(files, filesRemoved);
   const targets = declared.length > 0 ? declared : ['.planning/'];
   // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
   const resolveTarget = (t: string): string =>
@@ -2108,7 +2113,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   }
 
   // A removal-only commit (--files-removed) still names its phase dir: resolve the tier from both lists.
-  const phaseFiles = [...(files ?? []), ...(filesRemoved ?? [])];
+  const phaseFiles = declaredPaths(files, filesRemoved);
   const config = loadConfig(cwd);
 
   // Check commit_docs config — #3587: resolved through the tier 1
