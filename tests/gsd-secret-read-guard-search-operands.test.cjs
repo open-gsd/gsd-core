@@ -103,6 +103,8 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     'grep -e pat .env',
     'grep --regexp=pat .env',
     'rg -e pat .env',
+    // rg's -r takes a replacement value, so the word after it is not the pattern.
+    "rg -r '.env' src",
     // An unknown option withdraws the carve-out for the segment. `-C` is one:
     // BSD grep's optional number would make `.env` a file there.
     'grep -C 3 .env',
@@ -154,7 +156,9 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
 
   test('property: the pattern positional is exempt only while no option supplies the pattern', () => {
     fc.assert(fc.property(NAME, SAFE_FLAGS, fc.constantFrom('grep', 'egrep', 'fgrep', 'rg'), (name, flags, tool) => {
-      const safe = tool === 'rg' ? flags.replace(/-A 2 /, '') : flags;
+      // rg's `-r` takes a replacement VALUE (grep's means recursive), so the
+      // quoted word after it is that value and stays checked.
+      const safe = tool === 'rg' ? flags.replace(/-rn? /, '') : flags;
       assertAllowed(`${tool} ${safe}'${name}' src`);
       assertBlocked(`${tool} ${safe}'${name}' ${name}`);
       assertBlocked(`${tool} ${safe}-e pat ${name}`);
