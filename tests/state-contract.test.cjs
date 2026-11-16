@@ -815,16 +815,19 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(out.skipped_files, undefined);
   });
 
-  test('commit --files still stages a tracked file that is also ignored', (t) => {
+  test('commit --files still stages a tracked state.json that is also ignored', (t) => {
     const { tmpDir, rel } = boundary(t);
-    fs.writeFileSync(path.join(tmpDir, rel, 'notes.log'), 'a\n');
-    git(tmpDir, 'add', '-f', `${rel}/notes.log`);
+    fs.writeFileSync(path.join(tmpDir, rel, 'state.json'), '{}\n');
+    git(tmpDir, 'add', '-f', `${rel}/state.json`);
     git(tmpDir, 'commit', '-q', '-m', 'track');
-    fs.appendFileSync(path.join(tmpDir, '.gitignore'), '*.log\n');
-    fs.appendFileSync(path.join(tmpDir, rel, 'notes.log'), 'b\n');
-    const c = runGsdTools(['commit', 'docs: n', '--files', `${rel}/notes.log`], tmpDir);
-    assert.ok(c.success, `tracked-and-ignored file must stage: ${c.error}`);
-    assert.strictEqual(JSON.parse(c.output).committed, true);
+    fs.appendFileSync(path.join(tmpDir, rel, 'state.json'), '\n');
+    git(tmpDir, 'check-ignore', '--no-index', '-q', '--', `${rel}/state.json`);
+    const c = runGsdTools(['commit', 'docs: n', '--files', `${rel}/state.json`], tmpDir);
+    assert.ok(c.success, `tracked-and-ignored state.json must stage: ${c.error}`);
+    const out = JSON.parse(c.output);
+    assert.strictEqual(out.committed, true);
+    assert.strictEqual(out.skipped_files, undefined);
+    assert.strictEqual(git(tmpDir, 'show', `HEAD:${rel}/state.json`), '{}\n\n', 'the edit committed; the file stays tracked');
   });
 
   // Input matrix of the `--files` parse the skip branch sits behind: a value that is empty, blank,
