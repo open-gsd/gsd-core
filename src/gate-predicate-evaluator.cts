@@ -99,6 +99,7 @@ function interpolate(command: string, ctx: PredicateContext): string {
  */
 function prefixedCap(prefix: string, text: string, keep: 'head' | 'tail'): string {
   const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
+  // Guard for a malformed `exitCode` (a long non-numeric string); a real prefix is under 45 characters.
   if (budget <= 0) return capCodeUnits(prefix, COMMAND_MAX_OUTPUT_CHARS, 'head');
   return prefix + capCodeUnits(text, budget, keep);
 }

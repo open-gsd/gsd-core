@@ -12,9 +12,10 @@
 
 /**
  * Cut `text` to at most `max` UTF-16 code units, keeping the head or the tail,
- * without leaving half a surrogate pair: when the cut orphans a high surrogate
- * (head) or a low surrogate (tail), that half is dropped too. Text that fits is
- * returned whole; a non-positive `max` keeps nothing.
+ * without leaving half a surrogate pair: the head cut drops a trailing high
+ * surrogate and the tail cut drops a leading low surrogate, whether the cut
+ * split a pair or the edge already held a lone half. Text that fits is returned
+ * whole; a non-positive `max` keeps nothing.
  */
 export function capCodeUnits(text: string, max: number, keep: 'head' | 'tail'): string {
   if (text.length <= max) return text;
