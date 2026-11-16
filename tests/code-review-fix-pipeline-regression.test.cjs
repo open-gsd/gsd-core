@@ -19,6 +19,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runNode, runGit, runHook } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { have } = require('./helpers/bash-probe.cjs');
 const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
@@ -26,7 +27,8 @@ const { PROBE_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeout
 
 // Every real-git fixture below runs under no developer or system git config (core.hooksPath,
 // status.showUntrackedFiles), so the stub, the fence and the real CLI see the same git settings.
-const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+const GIT_CONFIG_OFF = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+const GIT_ENV = isolatedEnv({ home: os.tmpdir(), override: GIT_CONFIG_OFF });
 const T6_OPTS = { timeoutMs: PROBE_TIMEOUT_MS, env: GIT_ENV };
 // The fence is POSIX bash: bash on PATH and not win32 (same gate as the property test).
 const { posixBashSkip } = require('./helpers/posix-bash-gate.cjs');
@@ -717,6 +719,18 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
           w(P);
         },
       },
+      // The converged arm passes --files-removed only: the per-phase tier must still resolve.
+      'phase_commit_docs false with --files-removed under .planning/phases (real CLI only)': {
+        body: stubs.skipped, args: ['--files-removed', P], expect: 'skipped',
+        setup: (w, g, d) => {
+          fs.mkdirSync(path.join(d, '.planning/phases/01-x'), { recursive: true });
+          w(P);
+          g('add', P);
+          g('commit', '-q', '-m', 'track backup');
+          w('.planning/config.json', '{"phase_commit_docs":{"01":false}}');
+          fs.unlinkSync(path.join(d, P));
+        },
+      },
     };
     const build = (sc) => {
       const { dir, git: g } = initRepo(t, 'gsd-5506-parity-');
@@ -742,7 +756,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       const rres = runGsdTools(
         ['query', 'commit', 'msg', ...args(real.dir), '--raw'],
         real.dir,
-        { ...GIT_ENV, HOME: real.dir }
+        isolatedEnv({ home: real.dir, override: GIT_CONFIG_OFF })
       );
       const state = (x) => ({
         head: splitLines(x.g('ls-tree', '-r', '--name-only', 'HEAD')).filter(Boolean).sort(),

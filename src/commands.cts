@@ -2107,6 +2107,8 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     sanitizedMessage = sanitizeForPrompt(sanitizedMessage);
   }
 
+  // A removal-only commit (--files-removed) still names its phase dir: resolve the tier from both lists.
+  const phaseFiles = [...(files ?? []), ...(filesRemoved ?? [])];
   const config = loadConfig(cwd);
 
   // Check commit_docs config — #3587: resolved through the tier 1
@@ -2117,7 +2119,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // and improvising raw git fallbacks (#3678).
   const commitDocsPolicy = resolveCommitDocsPolicy(
     config,
-    detectPhaseNumberFromFiles(files),
+    detectPhaseNumberFromFiles(phaseFiles),
     () => isGitIgnored(cwd, '.planning'),
   );
   if (!commitDocsPolicy.resolved) {
@@ -2166,7 +2168,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // token parsing (it is the single owner shared by the other 6 call sites
       // — see #2528 for the parallel drift problem in phase-locator/phase),
       // so this is the canonical path-segment-bound read, not a fourth copy.
-      const phaseNum = detectPhaseNumberFromFiles(files);
+      const phaseNum = detectPhaseNumberFromFiles(phaseFiles);
       // #3734: a 999.x/0.x backlog sentinel is a parking-lot entry, not a real
       // phase — the phase arm must never branch-mutate for it (isSentinelPhaseId
       // is the invariant's single owner, src/phase-id.cts).
