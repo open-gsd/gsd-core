@@ -765,8 +765,9 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // Claude Code's `onFailure: "block"` denies when a hook fails to start, times
   // out or exits with an unexpected code; it cannot see a failure this hook
   // catches and exits 0 on. GSD_SECRET_READ_GUARD_ON_CRASH=deny lets a host
-  // route those two failures, the outer catch and the stdin timer, through the
-  // #3911 crash() seam as DENY. Unset, or any other value, keeps ALLOW. The
+  // route those failures, the outer catch, a failed reading and the stdin
+  // timer, through the #3911 crash() seam as DENY. Unset, or any other value,
+  // keeps ALLOW. The
   // stdin-timer cells need a held-open pipe, a raw child process, so they live
   // in tests/gsd-secret-read-guard-stdin-timer.test.cjs.
   const DENY_ENV = { [ON_CRASH_ENV]: 'deny' };
@@ -802,6 +803,32 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     const r = runHook(bash(command), { env: DENY_ENV });
     assert.equal(r.status, 2, `expected block (exit 2), got exit ${r.status}; stdout=${r.stdout.slice(0, 200)}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+
+  // The fixture makes the `$'…'` decoders throw on a span holding FAULT, a bug
+  // in one reading that the readings' own catch records (readingBug) rather
+  // than letting it reach the outer catch.
+  const THROWING_DECODER = path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs');
+  const FAULTY_READING = String.raw`echo $'\x41FAULT'; ls`;
+  const runFaulty = (extraEnv) => runHook(bash(FAULTY_READING), { env: { NODE_OPTIONS: `--require ${THROWING_DECODER}`, ...extraEnv } });
+
+  test('opted in: a reading that fails blocks as guard-error, after its diagnostic', () => {
+    const r = runFaulty(DENY_ENV);
+    assert.equal(r.status, 2, `expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.equal(out.code, 'guard-error');
+    const newline = r.stderr.indexOf('\n');
+    const { DIAGNOSTIC } = require(HOOK_PATH);
+    assert.deepEqual(JSON.parse(r.stderr.slice(0, newline)), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
+    assert.equal(r.stderr.slice(newline + 1), out.reason, 'the diagnostic line, then the plain reason');
+  });
+
+  test('unset: the same failed reading is allowed, and its diagnostic is still written', () => {
+    const r = runFaulty({});
+    assertAllowed(r, 'a faulty reading, no read');
+    const { DIAGNOSTIC } = require(HOOK_PATH);
+    assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
   });
 
   test('opted in: verdicts on a parsed payload are unchanged', () => {

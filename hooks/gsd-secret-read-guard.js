@@ -2917,6 +2917,10 @@ function main() {
       if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
+        // A reading that failed is a hook error the catch below never sees, so
+        // it takes the host's crash policy too (#5784): the allow above by
+        // default, a guard-error block when the host opted in.
+        crashFor('a shell reading failed');
       }
       allow(undefined);
     } catch (e) {
