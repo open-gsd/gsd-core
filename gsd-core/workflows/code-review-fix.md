@@ -584,19 +584,22 @@ if [ "$AUTO_MODE" = "true" ]; then
   if [ "$FINAL_STATUS" = "clean" ]; then
     # Converged: the backups are spent scratch and go.
     if [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
-      for _f in "${BACKUP_FILES[@]}"; do
-        [ "$COMMIT_DOCS" = "true" ] || continue
-        if git ls-files --error-unmatch -- "$_f" >/dev/null 2>&1; then COMMIT_BACKUPS+=("$_f"); fi
-      done
+      if [ "$COMMIT_DOCS" = "true" ]; then
+        for _f in "${BACKUP_FILES[@]}"; do
+          if git ls-files --error-unmatch -- "$_f" >/dev/null 2>&1; then COMMIT_BACKUPS+=("$_f"); fi
+        done
+      fi
       rm -f "${BACKUP_FILES[@]}" 2>/dev/null || true
     fi
     BACKUP_ACTION="remove spent"; BACKUP_FLAG=--files-removed
+    BACKUP_HINT="the files are already deleted, so commit the removal yourself (git add -u --)"
   else
     echo "Iteration backups retained (final review status: ${FINAL_STATUS}) — post-mortem trail."
     if [ "$COMMIT_DOCS" = "true" ] && [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
       COMMIT_BACKUPS=("${BACKUP_FILES[@]}")
     fi
     BACKUP_ACTION="retain"; BACKUP_FLAG=--files
+    BACKUP_HINT="a rejected commit can leave them staged (git restore --staged)"
   fi
   # The guard is load-bearing: `query commit` given no path commits all of .planning/.
   if [ "${#COMMIT_BACKUPS[@]}" -gt 0 ]; then
@@ -611,8 +614,8 @@ if [ "$AUTO_MODE" = "true" ]; then
         echo "Note: commit skipped by the commit_docs policy (per-phase override or" \
           "gitignored .planning); iteration backups not committed: ${COMMIT_BACKUPS[*]}" ;;
       ''|*[!0-9a-f]*)
-        echo "Warning: iteration backup commit failed (${BACKUP_COMMIT:-no output}); a" \
-          "rejected commit can leave them staged (git restore --staged): ${COMMIT_BACKUPS[*]}" ;;
+        echo "Warning: iteration backup commit failed (${BACKUP_COMMIT:-no output});" \
+          "${BACKUP_HINT}: ${COMMIT_BACKUPS[*]}" ;;
     esac
   fi
 fi

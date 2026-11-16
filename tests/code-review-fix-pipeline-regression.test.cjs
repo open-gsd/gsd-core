@@ -505,6 +505,14 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         }
       }
     }
+
+    // A failed removal commit: the files are already deleted, so unstaging cannot help. The
+    // warning must tell the user to commit the removal.
+    const failDir = seedBackupRepo(t, 'gsd-5506-converged-fail-', 'clean', true);
+    const failed = runFence(failDir, { commitDocs: 'true', body: ' return 1; }' });
+    assert.match(failed.stdout, /commit failed/);
+    assert.match(failed.stdout, /commit the removal yourself/);
+    assert.doesNotMatch(failed.stdout, /git restore --staged/);
   });
 
   test(
