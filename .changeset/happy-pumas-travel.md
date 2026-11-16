@@ -2,4 +2,4 @@
 type: Fixed
 pr: 5461
 ---
-**The TDD RED-commit gate now recognizes nested test paths** — a Cargo workspace task halted with `TDD GATE TRIPPED: missing RED commit`, and the gate now also ignores case, counts `test/` and keeps `*.test.*` and `test_*.py` inside one path segment (#5181).
+**The TDD RED-commit gate now recognizes nested test paths** — `TDD GATE TRIPPED: missing RED commit` halted a Cargo task; the gate now ignores case, counts `test/`, keeps `*.test.*` and `test_*.py` in one segment (#5181).

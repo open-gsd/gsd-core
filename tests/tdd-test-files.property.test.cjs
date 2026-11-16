@@ -15,7 +15,8 @@
  *       basename match, not a directory one
  *   (d) git (`log -- TEST_FILE_PATHSPECS`) and `isTestFilePath` agree on random nested,
  *       mixed-case paths seeded into one repo
- *   (e) empty segments and edge separators (`//`, a leading or trailing `/`) change nothing
+ *   (e) empty segments and edge separators (`//`, a leading or trailing `/`) change nothing,
+ *       and `''`, `/`, `//` and `\` are not test files
  */
 
 const { describe, test } = require('node:test');
@@ -65,15 +66,6 @@ describe('#5181 tdd-test-files matcher properties', () => {
     }));
   });
 
-  test('(e) empty segments and edge separators do not change the answer', () => {
-    const segment = fc.oneof(filler, fc.constantFrom('tests', '__tests__', 'test_a.py', 'a.test.js', 'x.js'));
-    fc.assert(fc.property(fc.array(segment, { minLength: 1, maxLength: 5 }), (segments) => {
-      const messy = `/${segments.join('//')}/`;
-      assert.equal(isTestFilePath(messy), isTestFilePath(segments.join('/')), `${messy} must match its clean form`);
-      assert.equal(isTestFilePath(messy.replaceAll('/', '\\')), isTestFilePath(segments.join('/')));
-    }));
-  });
-
   test('(b) depth invariance: every glob instance is a test file at any depth', () => {
     fc.assert(fc.property(fc.constantFrom(...samples), fillers, ([glob, sample], parents) => {
       const p = [...parents, sample].join('/');
@@ -111,5 +103,15 @@ describe('#5181 tdd-test-files matcher properties', () => {
       const hits = new Set(out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
       for (const rel of files) assert.equal(hits.has(rel), isTestFilePath(rel), `${rel}: git ${hits.has(rel)} vs router`);
     }), { numRuns: 25 });
+  });
+
+  test('(e) empty segments and edge separators do not change the answer', () => {
+    for (const empty of ['', '/', '//', '\\']) assert.equal(isTestFilePath(empty), false, `${JSON.stringify(empty)} is no test file`);
+    const segment = fc.oneof(filler, fc.constantFrom('tests', '__tests__', 'test_a.py', 'a.test.js', 'x.js'));
+    fc.assert(fc.property(fc.array(segment, { minLength: 1, maxLength: 5 }), (segments) => {
+      const messy = `/${segments.join('//')}/`;
+      assert.equal(isTestFilePath(messy), isTestFilePath(segments.join('/')), `${messy} must match its clean form`);
+      assert.equal(isTestFilePath(messy.replaceAll('/', '\\')), isTestFilePath(segments.join('/')));
+    }));
   });
 });
