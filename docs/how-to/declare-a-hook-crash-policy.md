@@ -77,8 +77,10 @@ can choose between the two (the third case below).
   that registers it with Claude Code's `onFailure: "block"` wants the
   guard's own failures to block too, and `onFailure` cannot see a failure the
   hook catches and exits 0 on, so the host sets
-  `GSD_SECRET_READ_GUARD_ON_CRASH=deny`. The hook routes both of its failure
-  paths through the declared policy, the outer catch and its stdin timer:
+  `GSD_SECRET_READ_GUARD_ON_CRASH=deny`. The hook routes its three failure
+  paths through the declared policy: the outer catch, a shell reading that
+  throws (caught where the readings run, so it never reaches the outer catch),
+  and its stdin timer:
 
   ```js
   const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
