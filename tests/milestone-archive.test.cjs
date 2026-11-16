@@ -1430,7 +1430,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   afterEach(() => { cleanup(tmpDir); cleanup(home); });
 
   test('G1 blocking predicate exit 3 refuses with typed reason and mutates nothing', () => {
-    writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 01 || { echo 2 open items >&2; exit 3; }' });
+    writeGateCap(home, { command: 'test "${GSD_PHASE_NUMBER}" != 01 || { echo 2 open items >&2; exit 3; }' });
     const before = snapshot();
     const err = refusal(complete());
     assert.deepEqual(err.blocked.map(typed), [{ cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', details: EXIT3 }]);
@@ -1530,7 +1530,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
 
   test('G12 a phase directory outside the milestone is not evaluated', () => {
     fs.mkdirSync(phaseDir('05-later'), { recursive: true });
-    writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 05' });
+    writeGateCap(home, { command: 'test "${GSD_PHASE_NUMBER}" != 05' });
     assert.deepEqual(wouldRefuse(), []);
     assert.equal(complete().success, true);
   });
@@ -1554,8 +1554,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     for (const e of entries) assert.deepEqual(Object.keys(e).sort(), [...named].sort());
   });
 
-  test('G14 ${PHASE_NUMBER} and ${PHASE_DIR} reach the gate per phase', () => {
-    writeGateCap(home, { command: 'printf "%s|%s" "${PHASE_NUMBER}" "${PHASE_DIR}" > "${PHASE_DIR}/seen"; exit 3' });
+  test('G14 ${GSD_PHASE_NUMBER} and ${GSD_PHASE_DIR} reach the gate per phase', () => {
+    writeGateCap(home, { command: 'printf "%s|%s" "${GSD_PHASE_NUMBER}" "${GSD_PHASE_DIR}" > "${GSD_PHASE_DIR}/seen"; exit 3' });
     assert.deepEqual(wouldRefuse().map((b) => b.phase), ['01', '02']);
     for (const [num, dir] of [['01', '01-foundation'], ['02', '02-build']]) {
       assert.equal(fs.readFileSync(path.join(phaseDir(dir), 'seen'), 'utf-8'), `${num}|${phaseDir(dir)}`);
@@ -1568,7 +1568,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n## v1.0 MVP\n\nNotes.\n\n## v2.0 Next\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n### Phase 2: Build\n**Goal:** Build\n');
     fs.mkdirSync(phaseDir('05-later'), { recursive: true });
-    writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 05' });
+    writeGateCap(home, { command: 'test "${GSD_PHASE_NUMBER}" != 05' });
     assert.equal(complete().success, false, 'fixture must be TRUNCATED: the close refuses without --force');
     assert.equal(archived(), false);
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['05']);
@@ -1641,7 +1641,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n## v1.0 MVP\n\nNotes.\n\n## v2.0 Next\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
     fs.mkdirSync(phaseDir('--x'), { recursive: true });
-    writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != 05' });
+    writeGateCap(home, { command: 'test "${GSD_PHASE_NUMBER}" != 05' });
     const blocked = gateResult('--force').blocked.filter((b) => b.phase === '--x');
     assert.deepEqual(blocked.map((b) => [b.phase, b.reason]), [['--x', 'unevaluable']]);
   });
@@ -1665,7 +1665,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
       '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** a\n\n### Phase 1.1: Hotfix\n**Goal:** b\n');
     cleanup(phaseDir('02-build'));
     fs.mkdirSync(phaseDir('01.1-hotfix'), { recursive: true });
-    writeGateCap(home, { command: 'echo "${PHASE_NUMBER}" >&2; exit 3' });
+    writeGateCap(home, { command: 'echo "${GSD_PHASE_NUMBER}" >&2; exit 3' });
     assert.deepEqual(wouldRefuse().map((b) => b.phase), ['01', '01.1']);
   });
 
@@ -1674,7 +1674,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     fs.mkdirSync(phaseDir('03-$(touch pwned)'), { recursive: true });
     fs.writeFileSync(path.join(phaseDir('03-$(touch pwned)'), 'OPEN_WORK'), '');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
-    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
+    writeGateCap(home, { command: 'test ! -f "${GSD_PHASE_DIR}/OPEN_WORK" || exit 3' });
     assert.deepEqual(wouldRefuse().map((b) => [b.phase, b.reason, b.details.exitCode]), [['03', 'predicate_blocked', 3]]);
     assert.equal(fs.existsSync(path.join(tmpDir, 'pwned')), false);
   });
@@ -1685,7 +1685,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
       { ids: ['1'], dirs: ['CK-01-foundation'], phases: '### Phase 1: Foundation\n**Goal:** a\n' },
       { ids: ['1', '2'], dirs: ['01-foundation', '02-24-7-autonomy'], phases: '### Phase 1: Foundation\n**Goal:** a\n\n### Phase 2: Build\n**Goal:** b\n' },
     ];
-    writeGateCap(home, { command: 'echo "${PHASE_NUMBER}" >&2; exit 3' });
+    writeGateCap(home, { command: 'echo "${GSD_PHASE_NUMBER}" >&2; exit 3' });
     for (const { ids, dirs, phases } of scenarios) {
       for (const d of fs.readdirSync(path.join(tmpDir, '.planning', 'phases'))) cleanup(phaseDir(d));
       for (const d of dirs) fs.mkdirSync(phaseDir(d), { recursive: true });
@@ -1725,14 +1725,14 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   test('G22b a shell-hostile project root is data: every phase runs the gate and no command in the root executes', (t) => {
     const root = projectAt(t, 'r$(touch pwned)');
     for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(root, '.planning', 'phases', d, 'OPEN_WORK'), '');
-    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
+    writeGateCap(home, { command: 'test ! -f "${GSD_PHASE_DIR}/OPEN_WORK" || exit 3' });
     const { blocked } = gateResult('', root);
     assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.exitCode]), [['01', 'predicate_blocked', 3], ['02', 'predicate_blocked', 3]]);
     assert.equal(fs.existsSync(path.join(root, 'pwned')), false);
   });
 
   test('G22c roots and phase dirs holding shell characters run the gate; other predicate kinds are unaffected', (t) => {
-    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
+    writeGateCap(home, { command: 'test ! -f "${GSD_PHASE_DIR}/OPEN_WORK" || exit 3' });
     for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(phaseDir(d), 'OPEN_WORK'), '');
     for (const name of ['r with space', 'ré café', "o'brien", 'r#1', 'r (x)']) {
       const { blocked } = gateResult('', projectAt(t, name));
@@ -1789,7 +1789,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   test('G23 a project-code-prefixed phase dir yields the prefixed token', () => {
     cleanup(phaseDir('01-foundation'));
     fs.mkdirSync(phaseDir('CK-01-foundation'), { recursive: true });
-    writeGateCap(home, { command: 'echo "${PHASE_NUMBER}" >&2; exit 3' });
+    writeGateCap(home, { command: 'echo "${GSD_PHASE_NUMBER}" >&2; exit 3' });
     assert.deepEqual(wouldRefuse().map((b) => b.phase), ['CK-01', '02']);
   });
 
@@ -1797,7 +1797,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n## v1.0 MVP\n\nNotes.\n\n## v2.0 Next\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
     fs.mkdirSync(phaseDir('notes'), { recursive: true });
-    writeGateCap(home, { command: 'test "${PHASE_NUMBER}" != notes' });
+    writeGateCap(home, { command: 'test "${GSD_PHASE_NUMBER}" != notes' });
     assert.ok(refusal(complete('--force')).blocked.some((b) => b.phase === 'notes'));
   });
 

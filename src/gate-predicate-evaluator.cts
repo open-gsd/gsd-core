@@ -44,7 +44,10 @@ const COMMAND_MAX_LENGTH = 4096;
 const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatter-equals']);
 
 /** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
-const INTERPOLATION_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
+const INTERPOLATION_VAR_NAMES = Object.freeze(['GSD_PHASE_NUMBER', 'GSD_PHASE_DIR', 'GSD_PHASE_REQ_IDS']);
+
+/** The pre-#5482 spellings. They collide with ordinary shell variables, so a command that uses one is refused. */
+const LEGACY_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
 
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
 
@@ -65,7 +68,7 @@ interface BoundedShellResult {
 }
 
 interface PredicateDeps {
-  /** `env` holds PHASE_NUMBER, PHASE_DIR and PHASE_REQ_IDS: the shell expands `${PHASE_*}` from it, so a value never becomes command text. */
+  /** `env` holds GSD_PHASE_NUMBER, GSD_PHASE_DIR and GSD_PHASE_REQ_IDS: the shell expands `${GSD_PHASE_*}` from it, so a value never becomes command text. */
   runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): BoundedShellResult;
   /** All distinct matches for the artifact, in any order; `[]` when absent. Entries must be realpaths: the evaluator dedupes by string, so a symlink to one file counts once only if both names resolve to the same path. */
   findPhaseArtifact(phaseDir: string, artifactSuffix: string): string[];
@@ -80,7 +83,20 @@ interface PredicateResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PLACEHOLDER_AT_RE = new RegExp(`\\$\\{(${INTERPOLATION_VAR_NAMES.map(escapeRegex).join('|')})\\}`, 'y');
+const namesPattern = (names: readonly string[]): string => `\\$\\{?(${names.map(escapeRegex).join('|')})\\b`;
+const PLACEHOLDER_AT_RE = new RegExp(namesPattern(INTERPOLATION_VAR_NAMES), 'y');
+const LEGACY_PLACEHOLDER_RE = new RegExp(namesPattern(LEGACY_VAR_NAMES));
+
+/**
+ * Throw when the command uses a pre-#5482 name (`${PHASE_DIR}` or `$PHASE_DIR`), in any quoting form: GSD no
+ * longer sets it, so the shell would expand an empty or foreign value. The message names the replacement.
+ */
+function assertNoLegacyPlaceholder(command: string): void {
+  const name = LEGACY_PLACEHOLDER_RE.exec(command)?.[1];
+  if (name !== undefined) {
+    throw new Error(`gate command uses \${${name}}, which GSD no longer sets: write "\${GSD_${name}}" (double-quoted); sh expands it from the environment`);
+  }
+}
 
 /**
  * Throw when a placeholder sits in the single-quote state of the command: `sh` never expands inside single
@@ -99,7 +115,7 @@ function assertNoSingleQuotedPlaceholder(command: string): void {
         PLACEHOLDER_AT_RE.lastIndex = i;
         const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
         if (name !== undefined) {
-          throw new Error(`gate command single-quotes \${${name}}, which sh never expands: write "\${${name}}" in double quotes; sh expands it from the environment`);
+          throw new Error(`gate command single-quotes \${${name}}, which sh never expands: write "\${${name}}" in double quotes`);
         }
       }
     } else if (c === '\\') {
@@ -146,7 +162,8 @@ function evaluateCommandExitZero(
   }
 
   // GSD pastes nothing into the command text: every value reaches `sh` as an environment value (unset => '').
-  const env = { PHASE_NUMBER: ctx.phaseNumber ?? '', PHASE_DIR: ctx.phaseDir ?? '', PHASE_REQ_IDS: ctx.phaseReqIds ?? '' };
+  const env = { GSD_PHASE_NUMBER: ctx.phaseNumber ?? '', GSD_PHASE_DIR: ctx.phaseDir ?? '', GSD_PHASE_REQ_IDS: ctx.phaseReqIds ?? '' };
+  assertNoLegacyPlaceholder(command);
   assertNoSingleQuotedPlaceholder(command);
   const res = deps.runBoundedShell({ command, cwd: ctx.cwd, timeoutMs, env });
 

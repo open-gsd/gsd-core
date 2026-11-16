@@ -33,13 +33,13 @@ the project root as its cwd and the inherited process environment.
 node "${GSD_CAP_DIR}/checks/pre-ship.js"
 ```
 
-The command can use three loop-context placeholders. Each is also an environment variable of the same name, so write them double-quoted (`"${PHASE_DIR}"`): an unquoted value splits at spaces. A manifest that wrote `'${PHASE_NUMBER}'` in single quotes now reports `unevaluable`: change it to `"${PHASE_NUMBER}"`.
+The command can read three loop-context environment variables. Write them double-quoted (`"${GSD_PHASE_DIR}"`): an unquoted value splits at spaces, and a single-quoted use reports `unevaluable`. The old names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` are no longer set. A command that uses one is refused, and the message names the replacement. Migration: `'${PHASE_NUMBER}'` becomes `"${GSD_PHASE_NUMBER}"`.
 
-| Placeholder | Meaning |
+| Variable | Meaning |
 |---|---|
-| `${PHASE_NUMBER}` | the active phase number (e.g. `03`) |
-| `${PHASE_DIR}` | the active phase directory |
-| `${PHASE_REQ_IDS}` | the phase's requirement ids |
+| `GSD_PHASE_NUMBER` | the active phase number (e.g. `03`) |
+| `GSD_PHASE_DIR` | the active phase directory |
+| `GSD_PHASE_REQ_IDS` | the phase's requirement ids |
 
 Anything else (`${HOME}`, `$VAR`, etc.) is left for `sh` to interpret against
 the inherited env.
@@ -58,7 +58,7 @@ config key with `when`:
       "check": {
         "predicate": {
           "kind": "command-exit-zero",
-          "command": "node \"${GSD_CAP_DIR}/checks/pre-ship.js\" \"${PHASE_DIR}\"",
+          "command": "node \"${GSD_CAP_DIR}/checks/pre-ship.js\" \"${GSD_PHASE_DIR}\"",
           "timeout": 30
         }
       },
@@ -96,7 +96,7 @@ into a loop point:
 
 ```bash
 gsd_run check predicate \
-  --predicate '{"kind":"command-exit-zero","command":"node checks/pre-ship.js \"${PHASE_DIR}\"","timeout":30}' \
+  --predicate '{"kind":"command-exit-zero","command":"node checks/pre-ship.js \"${GSD_PHASE_DIR}\"","timeout":30}' \
   --phase-dir ".planning/phases/03-my-phase" \
   --phase-number "03" \
   --raw
@@ -128,7 +128,7 @@ gsd_run loop render-hooks ship:pre --raw
 A blocking `ship:pre` predicate gate (except `security` and `broken-windows`,
 which `ship.md` enforces itself) also guards the milestone close:
 `milestone complete --confirm` re-checks it once per milestone phase (with
-`${PHASE_NUMBER}`/`${PHASE_DIR}` set to that phase) and refuses while it
+`${GSD_PHASE_NUMBER}`/`${GSD_PHASE_DIR}` set to that phase) and refuses while it
 blocks; `--force` does not bypass it, and `--dry-run` runs it too to list what
 would refuse. Your command therefore runs again at close, once per phase, so
 keep it read-only and idempotent.

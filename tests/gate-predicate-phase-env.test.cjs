@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Parity test for the gate shell boundary (#5482): `evaluateCheckPredicate` hands ${PHASE_DIR},
- * ${PHASE_NUMBER} and ${PHASE_REQ_IDS} to the real `sh -c` as environment values. A value that holds
+ * Parity test for the gate shell boundary (#5482): `evaluateCheckPredicate` hands ${GSD_PHASE_DIR},
+ * ${GSD_PHASE_NUMBER} and ${GSD_PHASE_REQ_IDS} to the real `sh -c` as environment values. A value that holds
  * shell syntax is data, whatever the gate's caller (ship.md step 6, `milestone complete`) derived it from.
  * The owner is `evaluateCommandExitZero`; a caller keeps no guard of its own.
  */
@@ -40,7 +40,7 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
       t.skip('this file system refuses symlinks');
       return;
     }
-    const result = evaluate('test -d "${PHASE_DIR}"', path.join(root, '.planning', 'phases', '01-x'));
+    const result = evaluate('test -d "${GSD_PHASE_DIR}"', path.join(root, '.planning', 'phases', '01-x'));
     assert.equal(result.block, false, JSON.stringify(result));
     assert.equal(fs.existsSync(path.join(root, 'PWNED')), false);
   });
@@ -49,7 +49,7 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
     const name = '01-x . -exec touch PWNED3 {} +';
     const dir = path.join(root, '.planning', 'phases', name);
     fs.mkdirSync(dir, { recursive: true });
-    const result = evaluate('find "${PHASE_DIR}" -maxdepth 0 -type d | grep -q .', dir);
+    const result = evaluate('find "${GSD_PHASE_DIR}" -maxdepth 0 -type d | grep -q .', dir);
     assert.equal(result.block, false, JSON.stringify(result));
     assert.equal(fs.existsSync(path.join(root, 'PWNED3')), false);
   });
@@ -57,7 +57,7 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
   test('a hostile directory name is the exact value the gate reads', () => {
     const dir = path.join(root, '.planning', 'phases', '01-$(touch PWNED) `id` ; # \'s\'');
     fs.mkdirSync(dir, { recursive: true });
-    const result = evaluate('touch "${PHASE_DIR}/ok"', dir);
+    const result = evaluate('touch "${GSD_PHASE_DIR}/ok"', dir);
     assert.equal(result.block, false, JSON.stringify(result));
     assert.equal(fs.existsSync(path.join(dir, 'ok')), true);
     assert.equal(fs.existsSync(path.join(root, 'PWNED')), false);
@@ -67,9 +67,9 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
     const dir = path.join(root, '.planning', 'phases', '01-x');
     fs.mkdirSync(dir, { recursive: true });
     const hostile = '1 $(touch PWNED) `id` ; # \'s\' "q"';
-    assert.equal(evaluate('printf %s "${PHASE_NUMBER}" > "${PHASE_DIR}/number"', dir, hostile).block, false);
+    assert.equal(evaluate('printf %s "${GSD_PHASE_NUMBER}" > "${GSD_PHASE_DIR}/number"', dir, hostile).block, false);
     assert.equal(fs.readFileSync(path.join(dir, 'number'), 'utf-8'), hostile);
-    assert.equal(evaluate('printf %s "${PHASE_REQ_IDS}" > "${PHASE_DIR}/reqs"', dir, '01', hostile).block, false);
+    assert.equal(evaluate('printf %s "${GSD_PHASE_REQ_IDS}" > "${GSD_PHASE_DIR}/reqs"', dir, '01', hostile).block, false);
     assert.equal(fs.readFileSync(path.join(dir, 'reqs'), 'utf-8'), hostile);
     assert.equal(fs.existsSync(path.join(root, 'PWNED')), false);
   });
@@ -77,18 +77,18 @@ describe('command-exit-zero placeholders reach sh as data (#5482)', () => {
   test('a single-quoted placeholder fails closed, whatever its value, instead of testing literal text', () => {
     const dir = path.join(root, '.planning', 'phases', '01 x');
     fs.mkdirSync(dir, { recursive: true });
-    const quoted = evaluate("test ! -f '${PHASE_DIR}/OPEN_WORK'", dir);
+    const quoted = evaluate("test ! -f '${GSD_PHASE_DIR}/OPEN_WORK'", dir);
     assert.equal(quoted.failure?.code, 'usage', JSON.stringify(quoted));
     const ordinary = path.join(root, '.planning', 'phases', '02-y');
     fs.mkdirSync(ordinary, { recursive: true });
-    assert.equal(evaluate("test '${PHASE_NUMBER}' = 02", ordinary, '02').failure?.code, 'usage');
-    assert.equal(evaluate('test ! -f "${PHASE_DIR}/OPEN_WORK"', dir).block, false);
+    assert.equal(evaluate("test '${GSD_PHASE_NUMBER}' = 02", ordinary, '02').failure?.code, 'usage');
+    assert.equal(evaluate('test ! -f "${GSD_PHASE_DIR}/OPEN_WORK"', dir).block, false);
     // An apostrophe in an earlier double-quoted word must not hide the single-quoted placeholder.
-    assert.equal(evaluate(`echo "it's"; test ! -f '\${PHASE_DIR}/OPEN_WORK'`, dir).failure?.code, 'usage');
-    assert.equal(evaluate(`echo "it's"; test ! -f "\${PHASE_DIR}/OPEN_WORK"; echo 'y'`, dir).block, false);
+    assert.equal(evaluate(`echo "it's"; test ! -f '\${GSD_PHASE_DIR}/OPEN_WORK'`, dir).failure?.code, 'usage');
+    assert.equal(evaluate(`echo "it's"; test ! -f "\${GSD_PHASE_DIR}/OPEN_WORK"; echo 'y'`, dir).block, false);
   });
 
   test('an unset placeholder expands to the empty string and other variables are left for sh', () => {
-    assert.equal(evaluate('test -z "${PHASE_REQ_IDS}" && test -n "${PATH}"', path.join(root, '.planning', 'phases')).block, false);
+    assert.equal(evaluate('test -z "${GSD_PHASE_REQ_IDS}" && test -n "${PATH}"', path.join(root, '.planning', 'phases')).block, false);
   });
 });

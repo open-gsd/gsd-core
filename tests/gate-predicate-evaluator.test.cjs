@@ -164,18 +164,18 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
 // ─── interpolation ────────────────────────────────────────────────────────────
 
 describe('evaluatePredicate — interpolation', () => {
-  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} reach the shell as environment values and the text is not rewritten', () => {
+  test('${GSD_PHASE_DIR}, ${GSD_PHASE_NUMBER}, ${GSD_PHASE_REQ_IDS} reach the shell as environment values and the text is not rewritten', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${PHASE_DIR} ${PHASE_NUMBER} ${PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check ${GSD_PHASE_DIR} ${GSD_PHASE_NUMBER} ${GSD_PHASE_REQ_IDS}' },
       baseCtx,
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check ${PHASE_DIR} ${PHASE_NUMBER} ${PHASE_REQ_IDS}');
+    assert.equal(shell.calls[0].command, 'check ${GSD_PHASE_DIR} ${GSD_PHASE_NUMBER} ${GSD_PHASE_REQ_IDS}');
     assert.deepEqual(shell.calls[0].env, {
-      PHASE_DIR: '/proj/.planning/phases/03-x',
-      PHASE_NUMBER: '03',
-      PHASE_REQ_IDS: 'R-1',
+      GSD_PHASE_DIR: '/proj/.planning/phases/03-x',
+      GSD_PHASE_NUMBER: '03',
+      GSD_PHASE_REQ_IDS: 'R-1',
     });
   });
 
@@ -183,12 +183,24 @@ describe('evaluatePredicate — interpolation', () => {
     const shell = fakeShell({ exitCode: 0 });
     const phaseDir = '/proj/.planning/phases/01-$(touch pwned) x';
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check "${PHASE_DIR}" ${PHASE_NUMBER}' },
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_DIR}" ${GSD_PHASE_NUMBER}' },
       { ...baseCtx, phaseDir },
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check "${PHASE_DIR}" ${PHASE_NUMBER}');
-    assert.equal(shell.calls[0].env.PHASE_DIR, phaseDir);
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_DIR}" ${GSD_PHASE_NUMBER}');
+    assert.equal(shell.calls[0].env.GSD_PHASE_DIR, phaseDir);
+  });
+
+  test('the pre-#5482 spelling is refused in every quoting form, and the message names the GSD_ replacement', () => {
+    const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a', phaseReqIds: 'R-1' };
+    const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+    for (const name of ['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']) {
+      const named = { message: new RegExp(`uses \\$\\{${name}\\}.*write "\\$\\{GSD_${name}\\}"`) };
+      for (const form of [`'\${${name}}'`, `"\${${name}}"`, `\${${name}}`, `"$${name}"`]) {
+        assert.throws(() => run(`test -n ${form}`), named, form);
+      }
+    }
+    assert.doesNotThrow(() => run('test -n "${PHASE_DIR_OTHER}"'));
   });
 
   test('every placeholder single-quoted throws, whatever its value; double-quoted does not', () => {
@@ -206,13 +218,13 @@ describe('evaluatePredicate — interpolation', () => {
     const quoted = { message: /single-quotes/ };
 
     test('a single-quoted placeholder after an apostrophe in double quotes still throws', () => {
-      assert.throws(() => run(`echo "it's"; test ! -f '\${PHASE_DIR}/x'`), quoted);
+      assert.throws(() => run(`echo "it's"; test ! -f '\${GSD_PHASE_DIR}/x'`), quoted);
     });
     test('a double-quoted placeholder between an apostrophe and a later single-quoted word does not throw', () => {
-      assert.doesNotThrow(() => run(`echo "it's"; test -f "\${PHASE_DIR}/x"; echo 'y'`));
+      assert.doesNotThrow(() => run(`echo "it's"; test -f "\${GSD_PHASE_DIR}/x"; echo 'y'`));
     });
     test('a backslash-escaped apostrophe opens no single-quote span', () => {
-      assert.doesNotThrow(() => run(`echo \\' "\${PHASE_DIR}" \\'`));
+      assert.doesNotThrow(() => run(`echo \\' "\${GSD_PHASE_DIR}" \\'`));
     });
   });
 
@@ -221,19 +233,19 @@ describe('evaluatePredicate — interpolation', () => {
     const phaseDir = '/tmp/x $(touch PWNED) `id` y';
     const ctx = { cwd: process.cwd(), phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
     const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
-    assert.equal(run(`test "\${PHASE_NUMBER}" = 07 && test "\${PHASE_DIR}" = '${phaseDir}'`).block, false);
-    assert.equal(run('test "${PHASE_NUMBER}" = 08').block, true);
+    assert.equal(run(`test "\${GSD_PHASE_NUMBER}" = 07 && test "\${GSD_PHASE_DIR}" = '${phaseDir}'`).block, false);
+    assert.equal(run('test "${GSD_PHASE_NUMBER}" = 08').block, true);
   });
 
   test('undefined context var => empty string, in the text and in the environment', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check ${GSD_PHASE_REQ_IDS}' },
       { cwd: '/proj' },
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check ${PHASE_REQ_IDS}');
-    assert.deepEqual(shell.calls[0].env, { PHASE_DIR: '', PHASE_NUMBER: '', PHASE_REQ_IDS: '' });
+    assert.equal(shell.calls[0].command, 'check ${GSD_PHASE_REQ_IDS}');
+    assert.deepEqual(shell.calls[0].env, { GSD_PHASE_DIR: '', GSD_PHASE_NUMBER: '', GSD_PHASE_REQ_IDS: '' });
   });
 
   test('foreign ${HOME} placeholder left untouched (shell interprets)', () => {
@@ -369,7 +381,7 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
   test('strings without the 3 placeholders pass through unchanged', () => {
     fc.assert(
       fc.property(
-        fc.string({ maxLength: 40 }).filter((s) => s.trim().length > 0 && !/\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/.test(s)),
+        fc.string({ maxLength: 40 }).filter((s) => s.trim().length > 0 && !/\$\{(GSD_PHASE_NUMBER|GSD_PHASE_DIR|GSD_PHASE_REQ_IDS)\}/.test(s)),
         (cmd) => {
         const shell = fakeShell({ exitCode: 0 });
         evaluatePredicate(
@@ -385,7 +397,7 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
   });
 
   // The ctx field behind each placeholder: one loop covers every name, so a new placeholder cannot skip the property.
-  const CTX_FIELD = { PHASE_NUMBER: 'phaseNumber', PHASE_DIR: 'phaseDir', PHASE_REQ_IDS: 'phaseReqIds' };
+  const CTX_FIELD = { GSD_PHASE_NUMBER: 'phaseNumber', GSD_PHASE_DIR: 'phaseDir', GSD_PHASE_REQ_IDS: 'phaseReqIds' };
 
   for (const name of INTERPOLATION_VAR_NAMES) {
     test(`${name}: any value reaches the environment and never the command text`, () => {

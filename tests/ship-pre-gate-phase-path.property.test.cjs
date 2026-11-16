@@ -3,7 +3,7 @@
 /**
  * Property-based test for the #5482 shell boundary in `milestone complete`.
  *
- * A command-exit-zero ship:pre gate sees ${PHASE_DIR} as data. Whatever characters the phase directory
+ * A command-exit-zero ship:pre gate sees ${GSD_PHASE_DIR} as data. Whatever characters the phase directory
  * name holds, the double-quoted placeholder must name that directory: the gate finds the OPEN_WORK file
  * inside it, exits 3, and no command hidden in the name runs.
  *
@@ -33,7 +33,7 @@ describe('ship:pre command gate treats the phase directory name as data (#5482)'
     home = createTempDir('gsd-5482-prop-home-');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n\n**Status:** In progress\n');
-    writeGateCap(home, { command: 'test ! -f "${PHASE_DIR}/OPEN_WORK" || exit 3' });
+    writeGateCap(home, { command: 'test ! -f "${GSD_PHASE_DIR}/OPEN_WORK" || exit 3' });
     rootEntries = fs.readdirSync(tmpDir).sort();
   });
   after(() => { cleanup(tmpDir); cleanup(home); });
