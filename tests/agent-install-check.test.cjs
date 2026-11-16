@@ -341,25 +341,6 @@ describe('getAgentsDir', () => {
     assert.strictEqual(result.agents_installed, true);
   });
 
-  test('Codex follows a symlinked manifest next to a real local agents directory (#5911)', (t) => {
-    const projectRoot = createTempDir('gsd-local-codex-');
-    const sharedRoot = createTempDir('gsd-shared-codex-');
-    const globalHome = createTempDir('gsd-global-codex-');
-    const localConfigDir = path.join(projectRoot, '.codex');
-    const localAgentsDir = path.join(localConfigDir, 'agents');
-    t.after(() => cleanup(projectRoot));
-    t.after(() => cleanup(sharedRoot));
-    t.after(() => cleanup(globalHome));
-    markLocalGsdInstall(sharedRoot);
-    createCompleteAgents(localAgentsDir);
-    createCompleteAgents(path.join(globalHome, 'agents'));
-    process.env['CODEX_HOME'] = globalHome;
-    if (!symlinkOrSkip(t, path.join(sharedRoot, 'gsd-file-manifest.json'), path.join(localConfigDir, 'gsd-file-manifest.json'), 'file')) return;
-
-    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
-    assert.strictEqual(result.agents_dir, localAgentsDir);
-  });
-
   test('a symlinked local agents directory without a manifest still does not override global agents (#2602)', (t) => {
     const projectRoot = createTempDir('gsd-local-codex-');
     const globalHome = createTempDir('gsd-global-codex-');
@@ -1409,11 +1390,12 @@ describe('checkAgentsInstalled — unchanged by the manifest-reader substitution
   });
 
   // A5 — getAgentsDir's local-install probe is deliberately NOT rewired to
-  // readInstallManifest: it stays an lstat-based (symlink-unaware) presence
-  // check (agent-install-check.cts:123, "Not touched" in 40-design.md's
-  // blast-radius table), so a manifest path that is itself a SYMLINK is
-  // still ignored, exactly as before the substitution.
-  test('A5: getAgentsDir still ignores a symlinked manifest', (t) => {
+  // readInstallManifest: it stays a stat-based presence check
+  // (agent-install-check.cts:123, "Not touched" in 40-design.md's
+  // blast-radius table). Since #5911 that probe follows links, so a manifest
+  // path that is itself a SYMLINK to a regular file counts as present, like a
+  // symlinked agents directory.
+  test('A5: getAgentsDir follows a symlinked manifest (#5911)', (t) => {
     const projectRoot = createTempDir('gsd-local-codex-schema-');
     const globalHome = createTempDir('gsd-global-codex-schema-');
     const localConfigDir = path.join(projectRoot, '.codex');
@@ -1439,12 +1421,11 @@ describe('checkAgentsInstalled — unchanged by the manifest-reader substitution
       throw error;
     }
 
-    // getAgentsDir's own probe (`fs.lstatSync(manifestPath).isFile()`) sees
-    // the manifest path as a symlink, not a regular file — isFile() is false
-    // for the link itself even though its target is a regular file — so the
-    // local install is NOT selected; the global fallback wins instead.
-    assert.strictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), path.join(globalHome, 'agents'));
-    assert.notStrictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), localAgentsDir);
+    // getAgentsDir's own probe (`fs.statSync(manifestPath).isFile()`) follows
+    // the link to its regular-file target, so the local install is selected
+    // and the global fallback does not win.
+    assert.strictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), localAgentsDir);
+    assert.notStrictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), path.join(globalHome, 'agents'));
   });
 });
 
