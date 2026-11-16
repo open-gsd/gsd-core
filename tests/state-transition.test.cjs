@@ -5372,7 +5372,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           // independent oracle
           let want = null;
           // a `Current Plan: N of X` beside a Total Plans in Phase line is left as written: the count lands on the Total line
-          if ((!plan && !cur && !total) || plan?.kind === 'NofX' || (cur?.kind === 'NofX' && !total)) want = 'plans_no_line';
+          // a new phase discards the old position, so an unreadable `N of X` is rewritten there, not refused
+          if ((!plan && !cur && !total) || (!newPhase && (plan?.kind === 'NofX' || (cur?.kind === 'NofX' && !total)))) want = 'plans_no_line';
           else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = 'ambiguous_plan_position';
           else if (!newPhase && recorded > count) want = 'plans_below_position';
           const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
@@ -5463,6 +5464,21 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(beside.data?.error, undefined);
     assert.ok(beside.content.split('\n').includes('Plan: 3/5'));
     assert.ok(beside.content.split('\n').includes('Total Plans in Phase: 6'));
+  });
+
+  test('plannedPhase unit: a new phase rewrites an unreadable digit-led or `N of X` plan line to plan 0', () => {
+    const onNewPhase = (line, total) => transitionCore(
+      doc(total ? `${line}\nTotal Plans in Phase: 5` : line).replace('Phase: 19', 'Phase: 18'),
+      { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 },
+      deps,
+    );
+    for (const line of ['Plan: 3/5', 'Plan: 3.', 'Plan: 2 of 5.5', 'Plan: 2 of five', 'Plan: 2 of']) {
+      for (const total of [false, true]) {
+        const r = onNewPhase(line, total);
+        assert.strictEqual(r.data?.error, undefined, `${line} total=${total}`);
+        assert.strictEqual(lineOf(r.content), 'Plan: 0 of 6 in current phase', `${line} total=${total}`);
+      }
+    }
   });
 
   test('plannedPhase property: a lower-case word after `of` is no total, so the line is refused', () => {

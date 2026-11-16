@@ -1882,10 +1882,11 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     } };
   }
   // `N of` with no readable total (`2 of 5.5`, `1 of ?x`, `2 of`): the count has no slot, and rewriting would leave a second " of" in the line.
+  // A new phase discards the old position and writes `0 of M in current phase`, so only a same-phase replan refuses.
   // A `Current Plan` beside a recorded `Total Plans in Phase:` is never rewritten (the count lands on the Total line), so it is not refused.
   for (const [name, value, pos] of [['Plan', lines.plan, planPos], ['Current Plan', lines.currentPlan, legacy]] as const) {
     if (name === 'Current Plan' && totalRecorded) continue;
-    if (pos?.legacy && /^\d+\s+of(?:\s|$)/.test(value ?? '')) {
+    if (samePhase && pos?.legacy && /^\d+\s+of(?:\s|$)/.test(value ?? '')) {
       return { error: {
         reason: ERROR_REASON.PLANS_NO_LINE,
         message: `state planned-phase: --plans cannot replace the total in \`${name}: ${value}\`. ` +
@@ -1920,8 +1921,10 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
   }
   const carry = (pos: PlanPosition): string => renderPlanTotal(samePhase ? pos : null, count);
   const fresh = renderPlanTotal(null, count);
-  // A value that starts with digits but reads no position (`3/5`, `3.`) holds recorded progress: leave it as written, as advance-plan does.
-  const digitLed = (v: string | null): boolean => /^\d/.test(v ?? '');
+  // On a same-phase replan, a value that starts with digits but reads no position (`3/5`, `3.`) holds recorded progress: leave it as written, as advance-plan does.
+  // A new phase starts at plan 0, so a digit-led `Plan:` value is rewritten even beside a `Total Plans in Phase:` line.
+  const startsDigit = (v: string | null): boolean => /^\d/.test(v ?? '');
+  const digitLed = (v: string | null): boolean => samePhase && startsDigit(v);
   let currentPlan: string | undefined;
   if (lines.currentPlan !== null) {
     if (legacy?.legacy && totalRecorded) currentPlan = samePhase ? undefined : '0';
@@ -1929,7 +1932,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     else if (!planPos && !totalRecorded && !digitLed(lines.currentPlan) && !digitLed(lines.plan)) currentPlan = fresh;
   }
   let plan: string | undefined;
-  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy || totalRecorded || digitLed(lines.plan) || digitLed(lines.currentPlan) ? undefined : fresh;
+  if (lines.plan !== null) plan = planPos ? carry(planPos) : !samePhase && startsDigit(lines.plan) ? fresh : legacy || totalRecorded || digitLed(lines.plan) || digitLed(lines.currentPlan) ? undefined : fresh;
   // Every line left as written and no Total line: the count has no slot, so the command fails rather than report success.
   if (!totalRecorded && plan === undefined && currentPlan === undefined) {
     return { error: {
