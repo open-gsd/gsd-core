@@ -430,14 +430,15 @@ Key design decisions for --auto (addresses ALL review HIGH concerns):
 1. **Re-review scope**: Uses REVIEW_FILES_ARRAY from original REVIEW.md frontmatter, falling back to full phase scope. Scope is NOT lost between iterations. Uses portable while-read loop (bash 3.2+ compatible, handles spaces in paths).
 2. **Artifact semantics**: REVIEW.md is overwritten by each re-review (latest review state). REVIEW-FIX.md is overwritten by each fixer iteration (latest fix state with iteration count). There is ONE final version of each artifact, not per-iteration copies.
    Backup files (.iterN.md) preserve history for post-mortem analysis if iterations degrade. On
-   successful convergence (#3190) the backups are spent scratch and removed, never committed; on
-   degradation (hit MAX_ITERATIONS / fixer failure) they are retained for post-mortem and, with
-   `commit_docs` on, committed (#5506). The removal happens in `cleanup_iteration_backups`, after
+   successful convergence (#3190) the backups are spent scratch and removed; on degradation (hit
+   MAX_ITERATIONS / fixer failure) they are retained for post-mortem. With `commit_docs` on, both
+   changes are committed (#5506): the retained backups, and the removal of backups that are
+   tracked. The removal happens in `cleanup_iteration_backups`, after
    `record_disposition` has read them — they are the only surviving record of what an earlier
    iteration fixed, since this artifact keeps one final version rather than per-iteration copies.
 3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT
    committed until step 7 (after ALL iterations complete). One docs commit for the fix report, not
-   one per iteration (plus a separate one for retained backups on degradation). In --auto the
+   one per iteration (plus a separate one for the backups, see above). In --auto the
    fix-report commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the
    two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md
    content, and the --auto re-review loop overwrote it each iteration. In --auto, REVIEW.md is also
@@ -534,7 +535,8 @@ Only runs if AUTO_MODE is true. If AUTO_MODE is false, skip this step entirely.
 **Removes the `.iterN.md` scratch — deliberately AFTER `record_disposition`, not at the end of the
 loop.** #3190's rule is unchanged: on convergence the backups are spent scratch and go; on degradation
 they are retained for post-mortem and, when `COMMIT_DOCS` is true, committed so the tree stays
-clean. The timing of the removal changed, and it was load-bearing. This workflow keeps ONE final
+clean. For the same reason a converged run commits the removal of backups that an earlier degraded
+run committed. The timing of the removal changed, and it was load-bearing. This workflow keeps ONE final
 version of `REVIEW.md` and `REVIEW-FIX.md` rather than per-iteration copies, so the
 backups are the only surviving record of what an earlier iteration fixed — and the re-review drops a
 finding once it is fixed, so the final review does not carry it either. Deleting them inside the loop
@@ -572,32 +574,46 @@ if [ "$AUTO_MODE" = "true" ]; then
     case "$_n" in ''|*[!0-9]*) ;; *) BACKUP_FILES+=("$_f") ;; esac
   done
   [ "$NG_WAS_SET" = true ] || shopt -u nullglob 2>/dev/null || unsetopt NULL_GLOB 2>/dev/null || :
+  # #5506: with COMMIT_DOCS=true each change this step makes to tracked files is committed, so the
+  # tree stays clean: a degraded run commits the backups it retains, and a converged run commits
+  # the removal of backups an earlier degraded run committed. Untracked backups are only deleted.
+  COMMIT_BACKUPS=()
   # Anything but a proven-clean final review RETAINS the backups. An unreadable or unparseable
   # review is not evidence of convergence, and retaining costs a few scratch files where deleting
   # costs the post-mortem trail the retention rule exists for.
   if [ "$FINAL_STATUS" = "clean" ]; then
-    # Converged: the backups are spent scratch, removed and never committed, whatever
-    # COMMIT_DOCS says (#5506: a converged run leaves no backups and no commit).
-    if [ "${#BACKUP_FILES[@]}" -gt 0 ]; then rm -f "${BACKUP_FILES[@]}" 2>/dev/null || true; fi
+    # Converged: the backups are spent scratch and go.
+    if [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
+      for _f in "${BACKUP_FILES[@]}"; do
+        [ "$COMMIT_DOCS" = "true" ] || continue
+        if git ls-files --error-unmatch -- "$_f" >/dev/null 2>&1; then COMMIT_BACKUPS+=("$_f"); fi
+      done
+      rm -f "${BACKUP_FILES[@]}" 2>/dev/null || true
+    fi
+    BACKUP_ACTION="remove spent"; BACKUP_FLAG=--files-removed
   else
     echo "Iteration backups retained (final review status: ${FINAL_STATUS}) — post-mortem trail."
-    # #5506: untracked backups leave a dirty tree. Commit them so the trail stays recoverable.
     if [ "$COMMIT_DOCS" = "true" ] && [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
-      # --raw prints the hash, or "committed", "nothing", "skipped" or "failed".
-      # A commit_docs policy skip exits 0 with "skipped": judge by output, not exit code.
-      BACKUP_COMMIT=$(gsd_run query commit \
-        "docs(${PADDED_PHASE}): retain code review iteration backups" \
-        --files "${BACKUP_FILES[@]}" --raw) || BACKUP_COMMIT=failed
-      case "$BACKUP_COMMIT" in
-        nothing|committed) ;; # unchanged, or committed without a hash
-        skipped)
-          echo "Note: commit skipped by the commit_docs policy (per-phase override or" \
-            "gitignored .planning); iteration backups not committed: ${BACKUP_FILES[*]}" ;;
-        ''|*[!0-9a-f]*)
-          echo "Warning: iteration backup commit failed (${BACKUP_COMMIT:-no output}); a" \
-            "rejected commit can leave them staged (git restore --staged): ${BACKUP_FILES[*]}" ;;
-      esac
+      COMMIT_BACKUPS=("${BACKUP_FILES[@]}")
     fi
+    BACKUP_ACTION="retain"; BACKUP_FLAG=--files
+  fi
+  # The guard is load-bearing: `query commit` given no path commits all of .planning/.
+  if [ "${#COMMIT_BACKUPS[@]}" -gt 0 ]; then
+    # --raw prints the hash, or "committed", "nothing", "skipped" or "failed".
+    # A commit_docs policy skip exits 0 with "skipped": judge by output, not exit code.
+    BACKUP_COMMIT=$(gsd_run query commit \
+      "docs(${PADDED_PHASE}): ${BACKUP_ACTION} code review iteration backups" \
+      "$BACKUP_FLAG" "${COMMIT_BACKUPS[@]}" --raw) || BACKUP_COMMIT=failed
+    case "$BACKUP_COMMIT" in
+      nothing|committed) ;; # unchanged, or committed without a hash
+      skipped)
+        echo "Note: commit skipped by the commit_docs policy (per-phase override or" \
+          "gitignored .planning); iteration backups not committed: ${COMMIT_BACKUPS[*]}" ;;
+      ''|*[!0-9a-f]*)
+        echo "Warning: iteration backup commit failed (${BACKUP_COMMIT:-no output}); a" \
+          "rejected commit can leave them staged (git restore --staged): ${COMMIT_BACKUPS[*]}" ;;
+    esac
   fi
 fi
 ```

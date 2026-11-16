@@ -443,19 +443,41 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   });
 
   test(
-    'T6d — #5506: a converged run removes every backup and commits nothing, any COMMIT_DOCS',
+    'T6d — #5506: a converged run removes every backup; with COMMIT_DOCS=true it commits the '
+      + 'removal of tracked ones, and nothing else',
     { skip: BASH_SKIP }, (t) => {
+    // A degraded run commits its backups, so a later converged run may find them tracked. Deleting
+    // them without a commit leaves ` D` entries that /gsd-ship refuses (maintainer ruling, 11-11).
+    const backups = ['01-REVIEW.iter2.md', '01-REVIEW-FIX.iter2.md'];
     for (const commitDocs of ['true', 'false']) {
       for (const committed of [true, false]) {
         const label = 'COMMIT_DOCS=' + commitDocs + (committed ? ', tracked' : ', untracked');
         const dir = seedBackupRepo(t, 'gsd-5506-converged-', 'clean', committed);
-        runFence(dir, { commitDocs, body: ' echo "$*" >> gsd-calls.log; return 1; }' });
-        assert.ok(!fs.existsSync(path.join(dir, 'gsd-calls.log')), label + ': no commit attempted');
-        const commits = gitOrThrow(['rev-list', '--count', 'HEAD'],
-          { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS }).trim();
-        assert.strictEqual(commits, '1', label + ': no new commit');
-        for (const f of ['01-REVIEW.iter2.md', '01-REVIEW-FIX.iter2.md']) {
+        runFence(dir, { commitDocs, body: ' echo "$*" >> gsd-calls.log;' + REAL_COMMIT_BODY });
+        const log = path.join(dir, 'gsd-calls.log');
+        const calls = fs.existsSync(log)
+          ? splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean) : [];
+        if (calls.length) fs.unlinkSync(log);
+        const git = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+        for (const f of backups) {
           assert.ok(!fs.existsSync(path.join(dir, f)), label + ': ' + f + ' removed');
+        }
+        // COMMIT_DOCS=false with tracked backups is out of the ruling: removal is not committed.
+        if (commitDocs === 'true' || !committed) {
+          assert.strictEqual(git('status', '--porcelain'), '', label + ': the tree is clean');
+        }
+        if (commitDocs === 'true' && committed) {
+          assert.strictEqual(calls.length, 1, label + ': one commit call');
+          assert.match(calls[0], /--files-removed/, label + ': the removal is declared');
+          assert.strictEqual(git('rev-list', '--count', 'HEAD').trim(), '2', label + ': one commit');
+          assert.strictEqual(git('log', '-1', '--format=%s').trim(),
+            'docs(01): remove spent code review iteration backups');
+          for (const f of backups) {
+            assert.ok(!headFiles(dir).includes(f), label + ': ' + f + ' gone from HEAD');
+          }
+        } else {
+          assert.deepStrictEqual(calls, [], label + ': no commit attempted');
+          assert.strictEqual(git('rev-list', '--count', 'HEAD').trim(), '1', label + ': no new commit');
         }
       }
     }
