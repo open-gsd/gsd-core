@@ -302,7 +302,9 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
       ['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'],
       tmpDir,
     );
-    assert.strictEqual(JSON.parse(result.output).committed, true, result.output);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.committed, true, result.output);
+    assert.ok(!('resolved_branch' in parsed), `no branching strategy resolves no branch: ${result.output}`);
     assert.deepStrictEqual(nameStatus(), ['D\t.planning/todos/pending/mine.md']);
   });
 
