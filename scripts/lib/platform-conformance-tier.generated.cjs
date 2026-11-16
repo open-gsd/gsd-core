@@ -94,6 +94,7 @@ module.exports = {
   "tests/eslint-rules.test.cjs",
   "tests/execute-phase-cross-block-state.test.cjs",
   "tests/execute-phase-decimal-arithmetic.test.cjs",
+  "tests/execute-phase-wave.test.cjs",
   "tests/execute-phase-worktree-guard.test.cjs",
   "tests/execute-plan-update-codebase-map-diff-base.test.cjs",
   "tests/executed-plan.test.cjs",
