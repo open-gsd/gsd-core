@@ -920,10 +920,10 @@ else
   echo "No REVIEW.md to commit. Please retry with /gsd:code-review ${PHASE_ARG}"
 fi
 
-# #4209 R5, #5019: the lane dir is removed here, now that the agent has read every evidence path it cited.
-# A `--fix --auto` run persisted its evidence state at dispatch. A valid REVIEW.md keeps the state and
-# the lane dir for code-review-fix.md's re-reviews, which remove both when the loop ends. Otherwise
-# both go now. A persist that failed to read the block left a `once` state naming the dir, so this
+# #4209 R5, #5019: the lane dir is removed here, now that the agent has read every evidence
+# path it cited. A `--fix --auto` run persisted its evidence state at dispatch. A valid
+# REVIEW.md keeps the state and the lane dir for code-review-fix.md's re-reviews, which remove
+# both when the loop ends. Otherwise both go now. A persist that failed to read the block left a `once` state naming the dir, so this
 # clear removes that dir too. Any other run persisted nothing and keeps the single removal it always
 # had (no-op when no lane was dispatched); it never touches another run's persisted state.
 if [ "${FIX_AUTO:-}" = "true" ]; then
