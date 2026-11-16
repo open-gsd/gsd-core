@@ -630,13 +630,19 @@ describe('#5019 — --auto re-review keeps the external reviewer lane evidence',
     assert.strictEqual(fs.existsSync(probe), false, 'argv was never shell-evaluated');
   });
 
-  test('lane-evidence-clear: an unknown second argument or a third argument is a usage error', (t) => {
+  test('lane-evidence verbs: an unknown flag or one positional past the registry bound is a usage error', (t) => {
     const dir = createTempDir('gsd-5019-'); t.after(() => cleanup(dir));
     const review = path.join(dir, '01-REVIEW.md');
-    for (const extra of [['--weird'], ['--keep-auto', 'x']]) {
-      const r = runNode([GSD_TOOLS, 'lane-evidence-clear', review, ...extra], { cwd: dir });
-      assert.notStrictEqual(r.exitCode, 0, JSON.stringify(extra));
-      assert.match(r.stderr, /unknown flag "--weird"|unexpected positional argument "x"/);
+    const cases = [
+      [['lane-evidence-clear', review, '--weird'], /unknown flag "--weird"/],
+      [['lane-evidence-clear', review, '--keep-auto', 'x'], /unexpected positional argument "x"/],
+      [['lane-evidence-read', review, 'x'], /unexpected positional argument "x"/],
+      [['lane-evidence-persist', review, 'abc123', 'auto', 'x'], /unexpected positional argument "x"/],
+    ];
+    for (const [argv, message] of cases) {
+      const r = runNode([GSD_TOOLS, ...argv], { cwd: dir });
+      assert.notStrictEqual(r.exitCode, 0, JSON.stringify(argv));
+      assert.match(r.stderr, message, JSON.stringify(argv));
     }
     assert.strictEqual(runNode([GSD_TOOLS, 'lane-evidence-clear', review, '--keep-auto'], { cwd: dir }).exitCode, 0);
   });

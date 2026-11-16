@@ -2495,7 +2495,7 @@ The key is `sha256(path.resolve(reviewPath))`, resolved against the verb's worki
 The state is bound to the review path, not to one REVIEW.md; `code-review-fix` frames the block it reads UNVERIFIED.
 
 **Prerequisites:** none — they read no project state and need no resolvable project root
-**Produces:** `lane-evidence-read` prints the block exactly as stored, or nothing; the others print nothing. All exit 0 whether or not there was anything to do; non-zero only for a usage error (an empty `<review-path>`, an invalid `<suffix>` or mode) and, for `lane-evidence-persist`, an unreadable stdin block (the lane directory is kept under a `once` state that `commit_review` then clears)
+**Produces:** `lane-evidence-read` prints the block exactly as stored, or nothing; the others print nothing. All exit 0 whether or not there was anything to do; non-zero only for a usage error (an empty `<review-path>`, an invalid `<suffix>` or mode, an unknown flag or an extra argument) and, for `lane-evidence-persist`, an unreadable stdin block (the lane directory is kept under a `once` state that `commit_review` then clears)
 
 ```bash
 printf '%s' "$EXTERNAL_EVIDENCE_BLOCK" | gsd_run lane-evidence-persist "$REVIEW_PATH" "$SUFFIX" auto
