@@ -545,6 +545,18 @@ describe('state.json never dirties the tree (#5505)', () => {
     });
   }
 
+  // The carry check reads the rule file's diff text: under color.ui=always (and an external diff driver) the text carries ANSI codes
+  // and the check must still see the one added line.
+  test('the migration is carried under color.ui=always and an external diff driver', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/\n' });
+    git(tmpDir, 'config', 'color.ui', 'always');
+    git(tmpDir, 'config', 'diff.external', 'false');
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
   test('tracked modified state.json migrates for a workstream copy too', (t) => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
     const c = runGsdTools(['commit', 'docs: ws', '--files', `${rel}/STATE.md`], tmpDir);

@@ -2398,10 +2398,11 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         .filter((p) => isStateJsonPublishPath(cwd, p.replace(/\.gitignore$/, 'state.json')))
         // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
         // any other staged line in it is the user's own edit and stays out of this commit. The diff, unlike `git show`
-        // output, survives execGit's trimming of a trailing blank line and an empty file.
+        // output, survives execGit's trimming of a trailing blank line and an empty file. `--no-color --no-ext-diff`: the text is parsed,
+        // so the user's color.ui=always or diff.external must not reach it.
         .filter((p) => {
           if (!p.endsWith('.gitignore')) return true;
-          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '-U0', '--ignore-space-at-eol', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '--no-color', '--no-ext-diff', '-U0', '--ignore-space-at-eol', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
           const body = diff.stdout.split('\n');
           const changed = body.slice(body.findIndex((l) => l.startsWith('@@'))).filter((l) => /^[+-]/.test(l));
           return diff.exitCode === 0 && changed.length === 1 && changed[0] === `+${ignoreRuleLine('state.json')}`;
