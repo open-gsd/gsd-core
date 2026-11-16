@@ -661,14 +661,14 @@ describe('state.json never dirties the tree (#5505)', () => {
       git(tmpDir, 'commit', '-q', '-m', 'seed');
       git(tmpDir, 'config', 'diff.relative', relative);
       assert.ok(runGsdTools(BEGIN, sub).success);
-      assert.match(git(tmpDir, 'diff', '--cached', '--name-only', '--no-relative'), /sub\/\.planning\/\.gitignore/, 'the boundary staged the migration');
+      assert.match(git(tmpDir, '-c', 'diff.relative=false', 'diff', '--cached', '--name-only'), /sub\/\.planning\/\.gitignore/, 'the boundary staged the migration');
       fs.writeFileSync(path.join(tmpDir, 'outside.txt'), 'mine\n');
       git(tmpDir, 'add', 'outside.txt');
       fs.appendFileSync(path.join(sub, '.planning', 'STATE.md'), '\nedited\n');
       const c = runGsdTools(['commit', 'docs: final', '--files', '.planning/STATE.md'], sub);
       assert.ok(c.success, `final commit must succeed: ${c.error}`);
-      assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--no-relative', '--format=', 'HEAD').trim().split('\n'), ['sub/.planning/STATE.md']);
-      assert.match(git(tmpDir, 'diff', '--cached', '--name-only', '--no-relative'), /outside\.txt/, 'the user\'s staged file is still staged');
+      assert.deepStrictEqual(git(tmpDir, '-c', 'diff.relative=false', 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['sub/.planning/STATE.md']);
+      assert.match(git(tmpDir, '-c', 'diff.relative=false', 'diff', '--cached', '--name-only'), /outside\.txt/, 'the user\'s staged file is still staged');
     });
   }
 
