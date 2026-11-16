@@ -25,6 +25,8 @@
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
  *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
  *   so the blocker clears inside the loop; with no CONTEXT.md, or under `--auto`, nothing is recorded.
+ * - verify-work's gap-closure checker skips Dimension 11: that loop has no CONTEXT.md and no route
+ *   to record a ruling, so the spine and the checker prompt both scope the dimension out.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
  *   `D-NN` that decides something else, are a BLOCKER example.
  * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
@@ -290,6 +292,24 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   test('under --auto nothing is recorded, so the blocker escalates rather than passing on an answer nobody gave', () => {
     assert.match(resolve(), /Record only what the user said: under `--auto`, where no one is asked, record nothing/);
     assert.match(resolve(), /the same conflict returns and the Repeat rule below escalates it/);
+  });
+});
+
+// verify-work's gap-closure loop hands the checker only the fix plans: no CONTEXT.md, and its inline conflict
+// handler has no route to record a user ruling. Dimension 11 would block every research question there with
+// no way to clear it, so the loop scopes the dimension out. The spine states it because a compact-content run
+// never reads the detail file; the detail file states it because that is the prompt a full run sends.
+describe('verify-work\'s gap-closure checker skips Dimension 11 (#5438)', () => {
+  const skip = /Skip Dimension 11 \(research resolution\)/i;
+  test('the spine tells the checker to skip it, so a compact-content run does too', () => {
+    const step = span(read('gsd-core/workflows/verify-work.md'), '<step name="verify_gap_plans">', /<\/step>/);
+    assert.match(step, skip);
+    assert.match(step, /no CONTEXT\.md and has no route to record a user ruling/);
+  });
+
+  test('the checker prompt carries the same scope line', () => {
+    const prompt = span(read('gsd-core/workflows/verify-work/detail/elaboration.md'), '<verification_context>', /<\/verification_context>/);
+    assert.match(prompt, /\*\*Scope:\*\* Gap-closure plans\. Skip Dimension 11 \(research resolution\)/);
   });
 });
 

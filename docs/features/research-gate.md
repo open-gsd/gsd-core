@@ -10,7 +10,7 @@ group: v1.32 Features
 
 **Resolved means user-decided:** an open question counts as resolved only when every `D-NN` it cites sits under the phase's CONTEXT.md `<decisions>`, outside Claude's Discretion, and one answers it. Only discuss-phase, or the orchestrator recording the user's answer, writes such a `D-NN`; a mark the researcher wrote itself, a `(RESOLVED)` heading suffix included, resolves nothing. A cited source settles a factual gap, so that is not an open question, but no source settles a choice that needs a user ruling. In an area CONTEXT.md leaves to Claude's Discretion, a sourced recommendation is enough.
 
-**Enforcement point:** plan-checker Dimension 11, in plan-phase's verify loop after the planner runs (#5438). No plan-phase step gates at entry. The gate runs only when that loop does: `--skip-verify`, `workflow.plan_check: false` and `--research-phase` (research only) skip the plan checker, and with it this gate.
+**Enforcement point:** plan-checker Dimension 11, in plan-phase's verify loop after the planner runs (#5438). No plan-phase step gates at entry. The gate runs only when that loop does: `--skip-verify`, `workflow.plan_check: false` and `--research-phase` (research only) skip the plan checker, and with it this gate. verify-work's gap-closure check also skips this dimension: those plans add no research, and that loop has no route to record a user ruling.
 
 **Requirements:**
 - REQ-RESGATE-01: System MUST check RESEARCH.md for unresolved open questions when it verifies the plans
