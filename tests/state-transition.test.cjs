@@ -5417,6 +5417,13 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     const huge = planned('Plan: 99999999999999999999 of 5', 3);
     assert.strictEqual(huge.data.reason, 'plans_below_position');
     assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
+    // Boundary of the safe-integer limit: limit-1 and limit are accepted, limit+1 is refused with nothing written.
+    for (const n of [Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER]) {
+      assert.strictEqual(planned(`Plan: ${n} of 5`, Number.MAX_SAFE_INTEGER).data?.reason, undefined, `position ${n} is accepted`);
+    }
+    const over = planned('Plan: 9007199254740992 of 5', Number.MAX_SAFE_INTEGER);
+    assert.strictEqual(over.data.reason, 'plans_below_position');
+    assert.strictEqual(over.content, doc('Plan: 9007199254740992 of 5'));
   });
 
   // A value that reads `N of` but holds no total is refused with nothing written: the count has no slot, and a second " of" would corrupt the line.

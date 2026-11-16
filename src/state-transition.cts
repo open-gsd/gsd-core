@@ -1806,7 +1806,8 @@ function readPlanValue(raw: string | null | undefined): PlanPosition | null {
 /**
  * The three plan lines of a document, read once from the whole document (frontmatter included)
  * exactly as `advancePlanCore` reads them (#5320). `transitionCore` has already masked fenced code
- * (`FENCE_MASKED_TRANSITIONS`), so a fenced `Plan:` line never reaches this reader. `ambiguous`: `Current Plan` and `Plan` both
+ * (`FENCE_MASKED_TRANSITIONS`), so a fenced `Plan:` line never reaches this reader from those consumers;
+ * `readRecordedPlanTotal` and `readPlanPosition` read their input unmasked. `ambiguous`: `Current Plan` and `Plan` both
  * read and record different plan numbers (differing totals are not a disagreement).
  */
 function readPlanLines(content: string) {
@@ -1870,7 +1871,7 @@ export function readRecordedPlanTotal(content: string): number | null {
  * plan line `advancePlanCore` reads (`undefined`: leave the line as written). `Plan:` is never written
  * bare, a bare `Current Plan:` beside a recorded `Total Plans in Phase:` stays the legacy pair, and an
  * unreadable line of a same-phase replan is rewritten only when no other plan line reads and no `Total Plans in Phase:` line records the count;
- * a new phase rewrites it to `0 of M in current phase` (a bare `Current Plan:` to `0`), with or without that line.
+ * a new phase rewrites it to `0 of M in current phase` (a bare `Current Plan:` beside a recorded `Total Plans in Phase:` to `0`).
  */
 function planLinesForPlanned(content: string, count: number, samePhase: boolean, totalRecorded: boolean):
   { error: { reason: typeof ERROR_REASON.PLANS_NO_LINE | typeof ERROR_REASON.PLANS_BELOW_POSITION | typeof ERROR_REASON.AMBIGUOUS_PLAN_POSITION; message: string } } | { error?: undefined; plan?: string; currentPlan?: string } {
