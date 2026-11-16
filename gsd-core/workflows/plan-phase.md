@@ -1229,7 +1229,7 @@ fi
 
 - Counter not spent: `iteration_count`.
 - Record channel: `$REVIEWS_FILE`'s `## Plan-Revision Conflicts` section. plan-phase wrote the
-  line, so plan-phase closes it.
+  line, so plan-phase closes it, on the leave-the-loop exit too (fence below, then stop).
 - After re-spawning, return to this step, not the checker.
 - Escalates via the iteration cap on repeated `required_property`, and on the THIRD conflict
   return of this loop whatever property it names.

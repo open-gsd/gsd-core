@@ -149,7 +149,10 @@ so they restate the operative rules inline; this section is the authority they m
    `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`. The re-spawned planner
    cites it. With no CONTEXT.md there is nowhere to record, so the user leaves the loop for
    `/gsd:discuss-phase`, which writes one; with one, the user may still leave for
-   `/gsd:discuss-phase` or `/gsd:plan-phase --research`. Record only what the user said: under `--auto`, where no one is
+   `/gsd:discuss-phase` or `/gsd:plan-phase --research`. Leaving ends the workflow once it names the
+   command: no re-spawn follows, so close this conflict's line now (Close, below) with
+   ` | resolved: user left the loop for {command}`, and leave the plans on disk as they are. A later
+   checker run raises Dimension 11 again for any question still open. Record only what the user said: under `--auto`, where no one is
    asked, record nothing, so the same conflict returns and the Repeat rule below escalates it.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
