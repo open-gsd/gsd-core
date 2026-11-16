@@ -1652,9 +1652,9 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
     repo.git('reset', '--hard', base);
     commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
-    // Replace the closing time field of each record (`<sha>\x1f<parents>\x1f<subject>\x1f<ct>\x1e`) with a non-number, or with nothing.
+    // Replace the time field of each record (`<sha>\x1f<ct>\x1f<subject>\x1e`) with a non-number, or with nothing.
     for (const bad of ['x', '']) {
-      const garble = (record) => record.split('\x1f').slice(0, 3).concat(bad).join('\x1f');
+      const garble = (record) => { const [sha, , ...subject] = record.split('\x1f'); return [sha, bad, ...subject].join('\x1f'); };
       const garbled = intercept(gitReporting('2.36.9').runner, (args, run) => {
         const result = run();
         return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
