@@ -531,7 +531,10 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.strictEqual(mixedCalls.length, 1, 'mixed: one commit call');
     assert.doesNotMatch(mixedCalls[0], /iter3/, 'mixed: the untracked backup is not declared');
     assert.match(mixedCalls[0], /01-REVIEW\.iter2\.md/, 'mixed: the tracked backup is declared');
-    assert.ok(!fs.existsSync(path.join(mixed, '01-REVIEW.iter3.md')), 'mixed: untracked backup deleted');
+    assert.ok(
+      !fs.existsSync(path.join(mixed, '01-REVIEW.iter3.md')),
+      'mixed: untracked backup deleted',
+    );
   });
 
   test(
@@ -844,7 +847,11 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         // Typed seam: the value the dirty-tree warning is gated on, not the warning's wording.
         'printf "\\n@@DIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}"',
       ]);
-      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS, env: GIT_ENV });
+      const res = runHook('-c', [script], {
+        interpreter: 'bash',
+        timeoutMs: SEAM_DEFAULT_TIMEOUT_MS,
+        env: GIT_ENV,
+      });
       assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
       return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*)@@/.exec(res.stdout)[1] };
     };
