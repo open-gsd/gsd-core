@@ -1926,10 +1926,18 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
   if (lines.currentPlan !== null) {
     if (legacy?.legacy && totalRecorded) currentPlan = samePhase ? undefined : '0';
     else if (legacy) currentPlan = carry(legacy);
-    else if (!planPos && !totalRecorded && !digitLed(lines.currentPlan)) currentPlan = fresh;
+    else if (!planPos && !totalRecorded && !digitLed(lines.currentPlan) && !digitLed(lines.plan)) currentPlan = fresh;
   }
   let plan: string | undefined;
-  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy || totalRecorded || digitLed(lines.plan) ? undefined : fresh;
+  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy || totalRecorded || digitLed(lines.plan) || digitLed(lines.currentPlan) ? undefined : fresh;
+  // Every line left as written and no Total line: the count has no slot, so the command fails rather than report success.
+  if (!totalRecorded && plan === undefined && currentPlan === undefined) {
+    return { error: {
+      reason: ERROR_REASON.PLANS_NO_LINE,
+      message: 'state planned-phase: --plans has no line to land on: the plan line starts with digits but reads no position. ' +
+        'Write it as `Plan: N of M` (or add a `Total Plans in Phase:` line) and retry.',
+    } };
+  }
   return { plan, currentPlan };
 }
 

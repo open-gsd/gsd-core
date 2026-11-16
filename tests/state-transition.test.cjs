@@ -5446,12 +5446,23 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(rc.content, fmCurrent);
   });
 
-  test('plannedPhase unit: a digit-led value that reads no position keeps its recorded progress on a same-phase replan', () => {
+  test('plannedPhase unit: a digit-led value that reads no position is refused when no Total line can hold the count', () => {
     for (const line of ['Plan: 3/5', 'Plan: 3.', 'Plan: 3:', 'Current Plan: 3/5']) {
       const r = planned(line, 6);
-      assert.strictEqual(r.data?.error, undefined, line);
+      assert.strictEqual(r.data?.reason, 'plans_no_line', line);
       assert.ok(r.content.split('\n').includes(line), `${line} is left as written`);
     }
+    // a digit-led sibling is recorded progress: the unreadable line beside it is not rewritten over it
+    for (const both of ['Plan: Not started\nCurrent Plan: 3/5', 'Current Plan: Not started\nPlan: 3/5']) {
+      const r = planned(both, 6);
+      assert.strictEqual(r.data?.reason, 'plans_no_line', both);
+      for (const l of both.split('\n')) assert.ok(r.content.split('\n').includes(l), `${l} is left as written`);
+    }
+    // a Total line records the count, so the digit-led line stays as written and the command succeeds
+    const beside = planned('Plan: 3/5\nTotal Plans in Phase: 5', 6);
+    assert.strictEqual(beside.data?.error, undefined);
+    assert.ok(beside.content.split('\n').includes('Plan: 3/5'));
+    assert.ok(beside.content.split('\n').includes('Total Plans in Phase: 6'));
   });
 
   test('plannedPhase property: a lower-case word after `of` is no total, so the line is refused', () => {
