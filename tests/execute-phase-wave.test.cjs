@@ -290,12 +290,12 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
     assert.ok(callIdx < content.indexOf('<step name="execute_waves">'));
   });
 
-  test('#5843 row 6: the call keeps its --phase, --name and --plans arguments', () => {
+  test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
     assert.ok(
       workflow().includes(
-        'state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "{plan_count}"'
+        'state.begin-phase --phase "${PHASE_NUMBER}" --name "{phase_name}" --plans "{plan_count}"'
       ),
-      'the begin-phase arguments are unchanged by the move'
+      'begin-phase records phase_name and plan_count from the init JSON'
     );
   });
 
