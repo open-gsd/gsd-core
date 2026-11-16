@@ -114,7 +114,10 @@ export function clearLaneEvidence(reviewPath: string, opts: { keepAuto?: boolean
   } catch { /* best effort: the fences ran with no `set -e` */ }
 }
 
-/** CLI arm for `gsd-tools lane-evidence-persist <review-path> <suffix> <auto|once>`; block on stdin. */
+/**
+ * CLI arm for `gsd-tools lane-evidence-persist <review-path> <suffix> <auto|once>`;
+ * the block comes on stdin.
+ */
 export function cmdLaneEvidencePersist(args: string[], error: (msg: string) => void): void {
   const [reviewPath, suffix, mode] = args;
   if (!reviewPath || !suffix || !mode) { error('Usage: lane-evidence-persist <review-path> <suffix> <auto|once>'); return; }
