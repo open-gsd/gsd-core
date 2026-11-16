@@ -1261,7 +1261,7 @@ fi
 
 **Otherwise (revised plans, not `## REVISION_CONFLICT`):** if this re-spawn followed a
 resolved conflict, close its record — nothing persists across fences, so export `REVIEWS_FILE`,
-the same `CONFLICT_DIMENSION`/`CONFLICT_PLAN` used to open it, and `CONFLICT_RESOLUTION` (a
+`CONVERGENCE_ENABLED`, the same `CONFLICT_DIMENSION`/`CONFLICT_PLAN` used to open it, and `CONFLICT_RESOLUTION` (a
 one-line summary). Then run:
 
 ```bash
