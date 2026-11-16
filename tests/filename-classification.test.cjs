@@ -17,7 +17,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { finalExtension, normalizeWindowsBasename } = require('../hooks/lib/filename-classification.js');
+const { finalExtension, normalizeWindowsBasename, lastSegment } = require('../hooks/lib/filename-classification.js');
 
 test('finalExtension: a dotless string is its own final extension', () => {
   assert.equal(finalExtension('example'), 'example');
@@ -139,5 +139,32 @@ test('fc: normalizeWindowsBasename never ends with a dot or space, is always a p
       },
     ),
     { seed: 42, numRuns: 200 },
+  );
+});
+
+test('lastSegment: the segment after the last `/` or `\\`, trailing separators ignored', () => {
+  assert.equal(lastSegment('.env'), '.env');
+  assert.equal(lastSegment('a/b/.env'), '.env');
+  assert.equal(lastSegment('a\\b\\.env'), '.env');
+  assert.equal(lastSegment('a/.env//'), '.env');
+  assert.equal(lastSegment('a/.env\\/'), '.env');
+  assert.equal(lastSegment('///'), '');
+  assert.equal(lastSegment(''), '');
+});
+
+test('fc: lastSegment matches the regex form it replaced (#5285: `/[\\/]+$/` is quadratic in a run of separators)', () => {
+  const reference = (tok) => {
+    const s = tok.replace(/[\\/]+$/, '');
+    const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+    return i === -1 ? s : s.slice(i + 1);
+  };
+  fc.assert(
+    fc.property(
+      fc.array(fc.constantFrom('/', '\\', 'a', '.', ' ', 'e'), { maxLength: 24 }).map((cs) => cs.join('')),
+      (s) => {
+        assert.equal(lastSegment(s), reference(s));
+      },
+    ),
+    { seed: 5285, numRuns: 500 },
   );
 });
