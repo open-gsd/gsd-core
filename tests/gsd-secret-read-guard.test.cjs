@@ -3019,7 +3019,7 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
   const faulty = (command) => {
     const r = runHookSeam(HOOK_PATH, [], {
       input: JSON.stringify(bash(command)),
-      env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs')}` },
+      env: hookEnv({ NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-decoder.cjs')}` }),
       timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
     });
     return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
