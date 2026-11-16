@@ -147,6 +147,15 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.doesNotMatch(dim11(), /planning run|recorded before/, 'a run boundary the checker cannot locate gives one input two verdicts');
   });
 
+  // Step 1 excludes sourced facts, Discretion-area recommendations and [ASSUMED] facts; a Question line asking about
+  // every "research question" would have a model that anchors on it block those too.
+  test('the Question line asks about the questions step 1 collects, not every research question', () => {
+    const q = splitLines(dim11()).find((l) => l.startsWith('**Question:**'));
+    assert.ok(q, 'Dimension 11 must carry a Question line');
+    assert.match(q, /every open question \(step 1\) cite a recorded user decision/);
+    assert.doesNotMatch(q, /research question/);
+  });
+
   test('no CONTEXT.md leaves every question a BLOCKER', () => {
     assert.ok(steps().some((s) => /No CONTEXT\.md: every question is a BLOCKER/.test(s)), 'Process must say what happens without CONTEXT.md');
   });
@@ -156,7 +165,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
     assert.ok(blocker, 'Process must carry a BLOCKER step');
     const cases = {
       'every other question': /every other question/i,
-      'any marking, any letter case': /however marked, in any case/,
+      'any marking, any letter case': /however marked, in any letter case/,
       'no D-NN': /no `D-NN`/,
       'a D-NN CONTEXT.md lacks': /CONTEXT\.md lacks/,
       'a D-NN outside <decisions>': /outside `<decisions>`/,
@@ -187,7 +196,7 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
       assert.match(prop, /cites only D-NNs/);
       assert.match(prop, /CONTEXT\.md <decisions> \(not Discretion\)/, 'the binding property must carry the rule step 2 enforces, or the planner can satisfy it where the checker refuses');
       assert.doesNotMatch(prop, /planning run|recorded before/, 'the binding property must hold only what the checker can see');
-      assert.match(prop, /one of which answers it/);
+      assert.match(prop, /one answering it/);
     }
   });
 
