@@ -110,6 +110,7 @@ describe('config-field-docs', () => {
       security_enforcement: 'workflow.security_enforcement',
       security_asvs_level: 'workflow.security_asvs_level',
       security_block_on: 'workflow.security_block_on',
+      security_audit_phase: 'workflow.security_audit_phase',
       inline_plan_threshold: 'workflow.inline_plan_threshold', // #3801
     };
 
