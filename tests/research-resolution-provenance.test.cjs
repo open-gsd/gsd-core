@@ -271,6 +271,9 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     // conflict only with no such D-NN.
     assert.match(row, /on the question it answers in RESEARCH\.md/);
     assert.match(row, /With no such `D-NN`, return `## REVISION_CONFLICT`/);
+    // A D-NN recorded mid-loop is a trackable decision: cited only in RESEARCH.md, Dimension 7 and plan-phase's
+    // step 13a decision-coverage gate would fail it next.
+    assert.match(row, /Also cite each `D-NN` recorded in this loop in the `must_haves`\/`truths` of the plan that implements it/);
   });
 
   // revision-loop.md's Resolve step is the shared protocol plan-phase imports. Quick's checker is handed only
@@ -283,6 +286,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   test('the Resolve step records the user\'s answer as a D-NN, so adopting the alternative clears the blocker inside the loop', () => {
     assert.match(resolve(), /For a `research_resolution` conflict, adopting the alternative means the user rules here/);
     assert.match(resolve(), /ask each question the conflict names/);
+    assert.match(resolve(), /The re-spawned planner cites it in RESEARCH\.md and in the `must_haves`\/`truths` of the plan that implements it/);
     assert.match(resolve(), /record each answer under the checker's CONTEXT\.md `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`/);
     assert.match(resolve(), /`\/gsd:discuss-phase` or `\/gsd:plan-phase --research`/, 'leaving the loop stays open to the user');
     // The checker reads the CONTEXT.md path plan-phase resolved at init; a file created mid-loop never reaches it.
