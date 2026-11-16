@@ -513,6 +513,19 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.match(failed.stdout, /commit failed/);
     assert.match(failed.stdout, /commit the removal yourself/);
     assert.doesNotMatch(failed.stdout, /git restore --staged/);
+    assert.match(failed.stdout, /git add -u -- <the listed files>/, 'the hint names the paths');
+
+    // One tracked and one untracked backup: only the tracked one is declared (the real CLI refuses
+    // an untracked path in --files-removed), and the untracked one is still deleted.
+    const mixed = seedBackupRepo(t, 'gsd-5506-converged-mix-', 'clean', true);
+    fs.writeFileSync(path.join(mixed, '01-REVIEW.iter3.md'), 'scratch');
+    runFence(mixed, { body: ' echo "$*" >> gsd-calls.log;' + REAL_COMMIT_BODY });
+    const mixedCalls = splitLines(fs.readFileSync(path.join(mixed, 'gsd-calls.log'), 'utf8'))
+      .filter(Boolean);
+    assert.strictEqual(mixedCalls.length, 1, 'mixed: one commit call');
+    assert.doesNotMatch(mixedCalls[0], /iter3/, 'mixed: the untracked backup is not declared');
+    assert.match(mixedCalls[0], /01-REVIEW\.iter2\.md/, 'mixed: the tracked backup is declared');
+    assert.ok(!fs.existsSync(path.join(mixed, '01-REVIEW.iter3.md')), 'mixed: untracked backup deleted');
   });
 
   test(

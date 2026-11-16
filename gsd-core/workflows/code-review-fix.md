@@ -592,7 +592,7 @@ if [ "$AUTO_MODE" = "true" ]; then
       rm -f "${BACKUP_FILES[@]}" 2>/dev/null || true
     fi
     BACKUP_ACTION="remove spent"; BACKUP_FLAG=--files-removed
-    BACKUP_HINT="the files are already deleted, so commit the removal yourself (git add -u --)"
+    BACKUP_HINT="the files are already deleted, so commit the removal yourself (git add -u -- <the listed files>)"
   else
     echo "Iteration backups retained (final review status: ${FINAL_STATUS}) — post-mortem trail."
     if [ "$COMMIT_DOCS" = "true" ] && [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
