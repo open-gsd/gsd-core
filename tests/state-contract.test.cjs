@@ -53,7 +53,7 @@ const fc = require('fast-check');
 const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
-const { STATE_CONTRACT_VERSION } = require('../gsd-core/bin/lib/state-contract.cjs');
+const { STATE_CONTRACT_VERSION, publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -495,7 +495,6 @@ describe('state.json never dirties the tree (#5505)', () => {
       assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '', 'no GSD-written file is left behind');
       assert.strictEqual(git(tmpDir, 'ls-files', '--', `${rel}/state.json`), '', 'the removal was committed');
       assert.strictEqual(git(tmpDir, 'ls-files', '--', `${rel}/.gitignore`).trim(), `${rel}/.gitignore`, 'the committed rule was carried');
-      const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
       assert.strictEqual(publishStateContract(tmpDir).published, true);
       assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '', 'a second boundary is a no-op');
     });
