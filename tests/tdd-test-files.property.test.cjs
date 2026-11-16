@@ -13,14 +13,18 @@
  *       number of non-test parent directories (0, 1, 2, ... deep)
  *   (c) paths built only from non-test names are never test files, and `test_*.py` is a
  *       basename match, not a directory one
- *   (d) every pathspec handed to git is one bare glob behind the depth-free, case-folding
- *       `:(glob,icase)**\/` prefix, so git reads the same set at any depth
+ *   (d) git (`log -- TEST_FILE_PATHSPECS`) and `isTestFilePath` agree on random nested,
+ *       mixed-case paths seeded into one repo
  */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { isTestFilePath, TEST_FILE_GLOBS, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createTempGitProject, cleanup } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isTestFilePath, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
 const { SAMPLES_BY_GLOB } = require('./helpers/tdd-test-paths.cjs');
 
 // A directory segment that is not a test directory name (`test`, `tests`, `__tests__`).
@@ -57,10 +61,37 @@ describe('#5181 tdd-test-files matcher properties', () => {
     }));
   });
 
-  test('(d) each pathspec is the depth-free, case-folding prefix plus one bare glob', () => {
-    assert.ok(Array.isArray(TEST_FILE_GLOBS), 'TEST_FILE_GLOBS must be exported');
-    fc.assert(fc.property(fc.constantFrom(...TEST_FILE_GLOBS.keys()), (i) => {
-      assert.equal(TEST_FILE_PATHSPECS[i], `:(glob,icase)**/${TEST_FILE_GLOBS[i]}`);
-    }));
+  test('(d) git and isTestFilePath agree on random nested, mixed-case paths', () => {
+    // The #5181 defect: git read the list differently from the router. One repo and one commit per run.
+    const dirNames = fc.oneof(filler, fc.constantFrom('tests', 'test', '__tests__', 'testing', 'mytests', 'a.test.d', 'test_utils'));
+    const stems = fc.stringMatching(/^[a-z]{1,6}$/).filter((s) => !['con', 'nul', 'aux', 'prn'].includes(s));
+    const names = fc.tuple(
+      fc.constantFrom('', 'test_'), stems,
+      fc.constantFrom('.js', '.py', '.go', '.test.js', '.spec.ts', '_test.go', '_test.py', '_test.exs', '_spec.rb', '_test.rb'),
+    ).map((parts) => parts.join(''));
+    const recase = (s, mode) => (mode === 'upper' ? s.toUpperCase() : mode === 'cap' ? s[0].toUpperCase() + s.slice(1) : s);
+    const withCase = (arb) => fc.tuple(arb, fc.constantFrom('lower', 'upper', 'cap')).map(([s, mode]) => recase(s, mode));
+    const pathArb = fc.tuple(fc.array(withCase(dirNames), { maxLength: 3 }), withCase(names))
+      .map(([dirs, name]) => [...dirs, name].join('/'));
+    // Names carry an extension and directories do not, so a file never shadows a directory;
+    // uniqueness is on the lowercased path, so a case-folding disk cannot collide two files.
+    const paths = fc.uniqueArray(pathArb, { minLength: 1, maxLength: 25, selector: (p) => p.toLowerCase() });
+    fc.assert(fc.property(paths, (files) => {
+      const dir = createTempGitProject('gsd-5181-agree-');
+      try {
+        for (const rel of files) {
+          const abs = path.join(dir, rel);
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, 'x\n');
+        }
+        gitOrThrow(['add', '-A'], { cwd: dir });
+        gitOrThrow(['commit', '-m', 'test(1-01): seed'], { cwd: dir });
+        const out = gitOrThrow(['log', '--format=', '--name-only', '--', ...TEST_FILE_PATHSPECS], { cwd: dir });
+        const hits = new Set(out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+        for (const rel of files) assert.equal(hits.has(rel), isTestFilePath(rel), `${rel}: git ${hits.has(rel)} vs router`);
+      } finally {
+        cleanup(dir);
+      }
+    }), { numRuns: 25 });
   });
 });
