@@ -50,7 +50,8 @@ const FILTERS = new Map([
     (d) => alt(get(d, 'message'), get(d, 'data', 'message'), 'Decision coverage gate failed.'),
   ],
   // #5221: roadmap.update-plan-progress completion step (executor, execute-plan, execute-phase).
-  ['.reason//""', (d) => alt(get(d, 'reason'), '')],]);
+  ['.reason//""', (d) => alt(get(d, 'reason'), '')],
+]);
 
 function main(argv) {
   const flags = new Set();
