@@ -760,7 +760,9 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
     fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
     assert.ok(begin(sub).success);
     assert.deepEqual(
-      splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).filter((l) => l.includes('unowned')),
+      splitLines(fs.existsSync(excludeFile(tmpDir)) ? fs.readFileSync(excludeFile(tmpDir), 'utf-8') : '').filter((l) =>
+        l.includes('unowned'),
+      ),
       [],
     );
   });

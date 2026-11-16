@@ -557,6 +557,17 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
   });
 
+  // textconv rewrites the diff text too: a user `diff=<driver>` attribute on the rule file must not reach the parsed text.
+  test('the migration is carried under a user textconv driver on the rule file', (t) => {
+    const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/\n' });
+    fs.writeFileSync(path.join(tmpDir, '.git', 'info', 'attributes'), '.gitignore diff=scrub\n');
+    git(tmpDir, 'config', 'diff.scrub.textconv', 'echo scrubbed #');
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', `${rel}/STATE.md`], tmpDir);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
+  });
+
   test('tracked modified state.json migrates for a workstream copy too', (t) => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true });
     const c = runGsdTools(['commit', 'docs: ws', '--files', `${rel}/STATE.md`], tmpDir);
