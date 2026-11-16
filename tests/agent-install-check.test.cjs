@@ -265,18 +265,18 @@ describe('getAgentsDir', () => {
     const projectRoot = createTempDir('gsd-local-codex-');
     const globalHome = createTempDir('gsd-global-codex-');
     const localAgentsDir = path.join(projectRoot, '.codex', 'agents');
-    const realLstatSync = fs.lstatSync;
+    const realStatSync = fs.statSync;
     t.after(() => cleanup(projectRoot));
     t.after(() => cleanup(globalHome));
     fs.mkdirSync(localAgentsDir, { recursive: true });
     markLocalGsdInstall(path.dirname(localAgentsDir));
     createCompleteAgents(path.join(globalHome, 'agents'));
     process.env['CODEX_HOME'] = globalHome;
-    t.mock.method(fs, 'lstatSync', function injectedLocalProbeFailure(target, ...args) {
+    t.mock.method(fs, 'statSync', function injectedLocalProbeFailure(target, ...args) {
       if (target === localAgentsDir) {
         throw Object.assign(new Error('injected EACCES'), { code: 'EACCES' });
       }
-      return realLstatSync.call(fs, target, ...args);
+      return realStatSync.call(fs, target, ...args);
     });
 
     const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
@@ -284,7 +284,22 @@ describe('getAgentsDir', () => {
     assert.strictEqual(result.agents_installed, true);
   });
 
-  test('Codex does not follow a symlinked local agents directory', (t) => {
+  // #5911: a project that links one shared GSD install (a symlink, or a directory junction on
+  // Windows) resolves to the linked local agents dir; the manifest requirement (#2602) stays.
+  function symlinkOrSkip(t, target, linkPath, type) {
+    try {
+      fs.symlinkSync(target, linkPath, type === 'dir' && process.platform === 'win32' ? 'junction' : type);
+      return true;
+    } catch (error) {
+      if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+        t.skip('symlink creation is not available on this platform');
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  test('Codex follows a symlinked local agents directory when a real manifest is present (#5911)', (t) => {
     const projectRoot = createTempDir('gsd-local-codex-');
     const globalHome = createTempDir('gsd-global-codex-');
     const localConfigDir = path.join(projectRoot, '.codex');
@@ -297,15 +312,83 @@ describe('getAgentsDir', () => {
     markLocalGsdInstall(localConfigDir);
     createCompleteAgents(path.join(globalHome, 'agents'));
     process.env['CODEX_HOME'] = globalHome;
-    try {
-      fs.symlinkSync(symlinkTarget, localAgentsDir, process.platform === 'win32' ? 'junction' : 'dir');
-    } catch (error) {
-      if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
-        t.skip('symlink creation is not available on this platform');
-        return;
-      }
-      throw error;
-    }
+    if (!symlinkOrSkip(t, symlinkTarget, localAgentsDir, 'dir')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, localAgentsDir);
+    assert.strictEqual(result.agents_installed, true);
+  });
+
+  test('Codex follows a symlinked agents directory and a symlinked manifest together (#5911)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const sharedRoot = createTempDir('gsd-shared-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    const localAgentsDir = path.join(localConfigDir, 'agents');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(sharedRoot));
+    t.after(() => cleanup(globalHome));
+    createCompleteAgents(path.join(sharedRoot, 'agents'));
+    markLocalGsdInstall(sharedRoot);
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, path.join(sharedRoot, 'agents'), localAgentsDir, 'dir')) return;
+    if (!symlinkOrSkip(t, path.join(sharedRoot, 'gsd-file-manifest.json'), path.join(localConfigDir, 'gsd-file-manifest.json'), 'file')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, localAgentsDir);
+    assert.strictEqual(result.agents_installed, true);
+  });
+
+  test('Codex follows a symlinked manifest next to a real local agents directory (#5911)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const sharedRoot = createTempDir('gsd-shared-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    const localAgentsDir = path.join(localConfigDir, 'agents');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(sharedRoot));
+    t.after(() => cleanup(globalHome));
+    markLocalGsdInstall(sharedRoot);
+    createCompleteAgents(localAgentsDir);
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, path.join(sharedRoot, 'gsd-file-manifest.json'), path.join(localConfigDir, 'gsd-file-manifest.json'), 'file')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, localAgentsDir);
+  });
+
+  test('a symlinked local agents directory without a manifest still does not override global agents (#2602)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    const symlinkTarget = path.join(projectRoot, 'shared-agents');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(globalHome));
+    createCompleteAgents(symlinkTarget);
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, symlinkTarget, path.join(localConfigDir, 'agents'), 'dir')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, path.join(globalHome, 'agents'));
+    assert.strictEqual(result.agents_installed, true);
+  });
+
+  test('a dangling local agents symlink falls back to global agents (#5911)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(globalHome));
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    markLocalGsdInstall(localConfigDir);
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, path.join(projectRoot, 'does-not-exist'), path.join(localConfigDir, 'agents'), 'dir')) return;
 
     const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
     assert.strictEqual(result.agents_dir, path.join(globalHome, 'agents'));
