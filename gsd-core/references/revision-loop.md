@@ -146,21 +146,23 @@ so they restate the operative rules inline; this section is the authority they m
    `required_property` still fails, and that choice belongs to the cap escalation.
    For a `research_resolution` conflict, adopting the alternative means the user rules here: ask
    each question the conflict names, and record each answer under the checker's CONTEXT.md
-   `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`, and commit CONTEXT.md at
-   once (`gsd_run query commit "docs({phase}): record research rulings" --files {context_path}`):
-   the planner's Step 6 commit does not run when the loop escalates. The re-spawned planner cites
-   it in RESEARCH.md and in the `<action>` of the task that implements it. With no CONTEXT.md there
-   is nowhere to record, so the user leaves the loop for `/gsd:discuss-phase`, which writes one;
-   with one, the user may still leave for `/gsd:discuss-phase` or `/gsd:plan-phase --research`.
-   Leaving ends the workflow once it names the command, without `## PLANNING COMPLETE`, and ends
-   any `/gsd:plan-review-convergence` run around it too: that run's reviewers never re-run
-   Dimension 11, so it must stop, never converge over the open question. No re-spawn follows, so
-   close this conflict's line now (Close, below) with
-   ` | resolved: user left the loop for {command}`, and leave the plans on disk as they are. A
-   later checker run raises Dimension 11 again for any question still open. Record only what the
-   user said. Under `--auto` no one is asked, so record no answer and do not re-spawn: the planner
-   could only return the same conflict. Escalate at once, and at that gate stop the workflow rather
-   than proceed, which would ship the plans with this blocker open.
+   `<decisions>`, outside Claude's Discretion, as the next unused `D-NN` in the template's bullet
+   form `- **D-NN:** <ruling>` (the form `gsd-core/templates/context.md` uses, which the step 13a
+   gate reads), and commit CONTEXT.md at once (`gsd_run query commit
+   "docs({phase}): record research rulings" --files {context_path}`): the planner's Step 6 commit
+   does not run when the loop escalates. The re-spawned planner cites it in RESEARCH.md and in the
+   `<action>` of the task that implements it. With no CONTEXT.md there is nowhere to record, so the
+   user leaves the loop for `/gsd:discuss-phase`, which writes one; with one, the user may still
+   leave for `/gsd:discuss-phase` or `/gsd:plan-phase --research`. Leaving ends the workflow once
+   it names the command, without `## PLANNING COMPLETE`, and ends any
+   `/gsd:plan-review-convergence` run around it too: that run's reviewers never re-run Dimension
+   11, so it must stop, never converge over the open question. No re-spawn follows, so close this
+   conflict's line now (Close, below) with ` | resolved: user left the loop for {command}`, and
+   leave the plans on disk as they are. A later checker run raises Dimension 11 again for any
+   question still open. Record only what the user said. Under `--auto` no one is asked, so record
+   no answer and do not re-spawn: the planner could only return the same conflict. Escalate at
+   once, and at that gate stop the workflow rather than proceed, which would ship the plans with
+   this blocker open.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
    open is a live blocker, never a stale artifact.
