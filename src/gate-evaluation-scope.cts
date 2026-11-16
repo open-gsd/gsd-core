@@ -491,34 +491,43 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
   const runner: HistoryGitRunner = execGit ?? execGitSeam;
   // The HEAD listing sets its own `maxBuffer`; the shared `makeGit` and `GitRunner` keep their form.
   try {
-    // The repo that holds the ids answers (the walk of `commitIsAncestor`); the two lists run the same repos in the same order.
+    // Each id is read in the first repo of the walk of `commitIsAncestor` that holds it; the two lists run the same repos in the same order.
     const gits = commitGits(projectDir, runner);
     const unboundedGits = commitGits(projectDir, (args, opts) => runner(args, { ...opts, maxBuffer: Infinity }));
-    const holder = gits.length === 1 ? 0 : gits.findIndex((g) => ids.every((id) => gitOrNo(g, ['rev-parse', '--verify', '--quiet', `${id}^{commit}`]) !== null));
-    if (holder < 0) return null;
-    const git = gits[holder];
-    const unboundedGit = unboundedGits[holder];
-    // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
-    const named = parseHeadLog(git(['log', '--no-walk=unsorted', HEAD_LOG_FORMAT, ...ids, '--']));
-    // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
-    // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
-    // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
-    // twin at limit-1).
-    const times = earliestTimes(git, ids);
-    // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
-    if (times.size < named.length) return null;
-    const since = Math.min(...times.values());
-    // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
-    // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time of each record.
-    const version = parseGitVersion(git(['--version']));
-    const filtered = version !== null && (version.major > 2 || (version.major === 2 && version.minor >= SINCE_AS_FILTER_MIN_MINOR));
-    const listing = unboundedGit(['log', HEAD_LOG_FORMAT, ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--']);
-    const onHead = new Set(parseHeadLog(listing, filtered ? undefined : since).map((c) => c.subject));
-    return named.every((c) => onHead.has(c.subject));
+    const groups = new Map<number, string[]>();
+    for (const id of ids) {
+      const holder = gits.length === 1 ? 0 : gits.findIndex((g) => gitOrNo(g, ['rev-parse', '--verify', '--quiet', `${id}^{commit}`]) !== null);
+      if (holder < 0) return null;
+      groups.set(holder, [...(groups.get(holder) ?? []), id]);
+    }
+    // A subject gone in any repo is a squash; one repo that cannot answer leaves the answer open.
+    const answers = [...groups].map(([holder, held]) => subjectsOccurIn(gits[holder], unboundedGits[holder], held));
+    return answers.includes(false) ? false : answers.includes(null) ? null : true;
   } catch (error) {
     if (error instanceof ScopeUnreadable) return null;
     throw error;
   }
+}
+
+/** `subjectsOccurOnHead` for ids that one repo holds: `git` and `unboundedGit` run in that repo. */
+function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): boolean | null {
+  // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
+  const named = parseHeadLog(git(['log', '--no-walk=unsorted', HEAD_LOG_FORMAT, ...ids, '--']));
+  // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
+  // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
+  // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
+  // twin at limit-1).
+  const times = earliestTimes(git, ids);
+  // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
+  if (times.size < named.length) return null;
+  const since = Math.min(...times.values());
+  // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
+  // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time of each record.
+  const version = parseGitVersion(git(['--version']));
+  const filtered = version !== null && (version.major > 2 || (version.major === 2 && version.minor >= SINCE_AS_FILTER_MIN_MINOR));
+  const listing = unboundedGit(['log', HEAD_LOG_FORMAT, ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--']);
+  const onHead = new Set(parseHeadLog(listing, filtered ? undefined : since).map((c) => c.subject));
+  return named.every((c) => onHead.has(c.subject));
 }
 
 /** Minor of the first git 2.x release with `log --since-as-filter` (#5354). */

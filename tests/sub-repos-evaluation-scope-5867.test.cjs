@@ -604,4 +604,22 @@ describe('#5867 the check evaluation-scope verb and commitIsAncestor', () => {
     commit(ws.repos.app, 'a2.js', 'feat(01-01): add a', 1_700_000_200);
     assert.equal(subjectsOccurOnHead(ws.root, [side]), true);
   });
+
+  test('[boundary] subjectsOccurOnHead reads ids that span two sub-repos per repo and is null for an id no repo holds', () => {
+    const ws = makeWorkspace(['a', 'b']);
+    const sides = ['a', 'b'].map((name, i) => {
+      const repo = ws.repos[name];
+      commit(repo, 'base.js', `chore: base ${name}`, 1_700_000_000);
+      repo.git('checkout', '-q', '-b', 'side');
+      const side = commit(repo, `${name}.js`, `feat(01-01): add ${name}`, 1_700_000_100 + i);
+      repo.git('checkout', '-q', 'main');
+      return side;
+    });
+    assert.equal(subjectsOccurOnHead(ws.root, sides), false);
+    commit(ws.repos.a, 'a2.js', 'feat(01-01): add a', 1_700_000_300);
+    assert.equal(subjectsOccurOnHead(ws.root, sides), false, 'a twin in one repo does not cover the other');
+    commit(ws.repos.b, 'b2.js', 'feat(01-01): add b', 1_700_000_300);
+    assert.equal(subjectsOccurOnHead(ws.root, sides), true);
+    assert.equal(subjectsOccurOnHead(ws.root, [sides[0], 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef']), null);
+  });
 });
