@@ -135,8 +135,8 @@ gsd_run loop render-hooks ship:pre --raw
   closed (exit 127). This matches the runtime's existing bash dependency.
 - **Output is trimmed.** The whole gate `message` (including the
   `command exited N:` prefix) is capped at 2000 chars; for stderr/stdout the
-  last chars are kept. A timeout with empty stderr shows the head of the command
-  instead. Emit a concise diagnostic; don't rely on grepping long output
+  last chars are kept. A timeout with empty or whitespace-only stderr shows the head of the
+  command instead. Emit a concise diagnostic; don't rely on grepping long output
   downstream.
 - **Env is inherited.** The command sees the full GSD process environment. Do
   not put secrets in the command string; read them from env or a file like any

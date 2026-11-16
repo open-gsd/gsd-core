@@ -104,7 +104,7 @@ model".
 |---|---|---|
 | exit 0 | `false` | `command exited 0` |
 | exit N (non-zero) | `true` | `command exited N: <stderr/stdout tail>` (whole message, prefix included, ≤2000 chars) |
-| timeout (SIGTERM) | `true` | `command timed out after <s>s: <stderr tail>` (empty stderr: the command's head) |
+| timeout (SIGTERM) | `true` | `command timed out after <s>s: <stderr tail>` (empty or whitespace-only stderr: the command's head) |
 | `sh` missing (ENOENT, exit 127) | `true` | `command exited 127: sh: not found` |
 
 **Validation errors (throw → check-command failure → Step-1 / `onError`).**
