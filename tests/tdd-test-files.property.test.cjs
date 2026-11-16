@@ -28,8 +28,30 @@ const { isTestFilePath, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd
 const { SAMPLES_BY_GLOB } = require('./helpers/tdd-test-paths.cjs');
 
 // A directory segment that is not a test directory name (`test`, `tests`, `__tests__`).
-const filler = fc.stringMatching(/^[a-z]{1,8}$/).filter((s) => s !== 'test' && s !== 'tests');
+// A name Windows reserves (in any case) cannot be created on disk; no segment may spell one.
+const RESERVED = new Set(['con', 'nul', 'aux', 'prn']);
+const filler = fc.stringMatching(/^[a-z]{1,8}$/).filter((s) => s !== 'test' && s !== 'tests' && !RESERVED.has(s));
 const fillers = fc.array(filler, { maxLength: 4 });
+const recase = (s, mode) => (mode === 'upper' ? s.toUpperCase() : mode === 'cap' ? s[0].toUpperCase() + s.slice(1) : s);
+const caseMode = fc.constantFrom('lower', 'upper', 'cap');
+
+// Paths seeded into one repo by (d). Directories share one case per run, so a case-folding disk
+// (macOS, Windows) never sees one directory spelled two ways; each file name carries its own case,
+// and uniqueness is on the lowercased path, so no two files collide there either.
+const dirNames = fc.oneof(filler, fc.constantFrom('tests', 'test', '__tests__', 'testing', 'mytests', 'a.test.d', 'test_utils'));
+const stems = fc.stringMatching(/^[a-z]{1,6}$/).filter((s) => !RESERVED.has(s));
+const names = fc.tuple(
+  fc.constantFrom('', 'test_'), stems,
+  fc.constantFrom('.js', '.py', '.go', '.test.js', '.spec.ts', '_test.go', '_test.py', '_test.exs', '_spec.rb', '_test.rb'),
+).map((parts) => parts.join(''));
+const seededPaths = fc.tuple(
+  caseMode,
+  fc.uniqueArray(
+    fc.tuple(fc.array(dirNames, { maxLength: 3 }), caseMode, names)
+      .map(([dirs, mode, name]) => ({ dirs, name: recase(name, mode) })),
+    { minLength: 1, maxLength: 25, selector: ({ dirs, name }) => [...dirs, name].join('/').toLowerCase() },
+  ),
+).map(([dirMode, entries]) => entries.map(({ dirs, name }) => [...dirs.map((d) => recase(d, dirMode)), name].join('/')));
 // Every shared sample of every glob, flattened; the owner is tests/helpers/tdd-test-paths.cjs.
 const samples = Object.entries(SAMPLES_BY_GLOB)
   .flatMap(([glob, paths]) => paths.map((path) => [glob, path]));
@@ -61,37 +83,39 @@ describe('#5181 tdd-test-files matcher properties', () => {
     }));
   });
 
-  test('(d) git and isTestFilePath agree on random nested, mixed-case paths', () => {
+  test('(d) git and isTestFilePath agree on random nested, mixed-case paths', (t) => {
     // The #5181 defect: git read the list differently from the router. One repo and one commit per run.
-    const dirNames = fc.oneof(filler, fc.constantFrom('tests', 'test', '__tests__', 'testing', 'mytests', 'a.test.d', 'test_utils'));
-    const stems = fc.stringMatching(/^[a-z]{1,6}$/).filter((s) => !['con', 'nul', 'aux', 'prn'].includes(s));
-    const names = fc.tuple(
-      fc.constantFrom('', 'test_'), stems,
-      fc.constantFrom('.js', '.py', '.go', '.test.js', '.spec.ts', '_test.go', '_test.py', '_test.exs', '_spec.rb', '_test.rb'),
-    ).map((parts) => parts.join(''));
-    const recase = (s, mode) => (mode === 'upper' ? s.toUpperCase() : mode === 'cap' ? s[0].toUpperCase() + s.slice(1) : s);
-    const withCase = (arb) => fc.tuple(arb, fc.constantFrom('lower', 'upper', 'cap')).map(([s, mode]) => recase(s, mode));
-    const pathArb = fc.tuple(fc.array(withCase(dirNames), { maxLength: 3 }), withCase(names))
-      .map(([dirs, name]) => [...dirs, name].join('/'));
-    // Names carry an extension and directories do not, so a file never shadows a directory;
-    // uniqueness is on the lowercased path, so a case-folding disk cannot collide two files.
-    const paths = fc.uniqueArray(pathArb, { minLength: 1, maxLength: 25, selector: (p) => p.toLowerCase() });
-    fc.assert(fc.property(paths, (files) => {
+    const dirs = [];
+    t.after(() => dirs.forEach(cleanup));
+    fc.assert(fc.property(seededPaths, (files) => {
       const dir = createTempGitProject('gsd-5181-agree-');
-      try {
-        for (const rel of files) {
-          const abs = path.join(dir, rel);
-          fs.mkdirSync(path.dirname(abs), { recursive: true });
-          fs.writeFileSync(abs, 'x\n');
-        }
-        gitOrThrow(['add', '-A'], { cwd: dir });
-        gitOrThrow(['commit', '-m', 'test(1-01): seed'], { cwd: dir });
-        const out = gitOrThrow(['log', '--format=', '--name-only', '--', ...TEST_FILE_PATHSPECS], { cwd: dir });
-        const hits = new Set(out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
-        for (const rel of files) assert.equal(hits.has(rel), isTestFilePath(rel), `${rel}: git ${hits.has(rel)} vs router`);
-      } finally {
-        cleanup(dir);
+      dirs.push(dir);
+      for (const rel of files) {
+        const abs = path.join(dir, rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, 'x\n');
       }
+      gitOrThrow(['add', '-A'], { cwd: dir });
+      gitOrThrow(['commit', '-m', 'test(1-01): seed'], { cwd: dir });
+      const out = gitOrThrow(['log', '--format=', '--name-only', '--', ...TEST_FILE_PATHSPECS], { cwd: dir });
+      const hits = new Set(out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+      for (const rel of files) assert.equal(hits.has(rel), isTestFilePath(rel), `${rel}: git ${hits.has(rel)} vs router`);
     }), { numRuns: 25 });
+  });
+
+  test('(d) seeded paths hold on a case-folding disk: one spelling per directory, no reserved name', () => {
+    fc.assert(fc.property(seededPaths, (files) => {
+      const spellings = new Map();
+      for (const rel of files) {
+        const parts = rel.split('/');
+        for (const part of parts) assert.ok(!RESERVED.has(part.split('.')[0].toLowerCase()), `${rel} holds a reserved name`);
+        parts.slice(0, -1).forEach((_, i) => {
+          const dir = parts.slice(0, i + 1).join('/');
+          const seen = spellings.get(dir.toLowerCase());
+          assert.ok(!seen || seen === dir, `${dir} and ${seen} differ only by case`);
+          spellings.set(dir.toLowerCase(), dir);
+        });
+      }
+    }));
   });
 });
