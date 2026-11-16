@@ -53,10 +53,55 @@ describe('capCodeUnits', () => {
         (text, max, keep) => {
           const out = capCodeUnits(text, max, keep);
           assert.ok(out.length <= Math.max(0, max));
+          // A cut drops at most one orphaned surrogate half, so an empty result for a cut input fails.
+          assert.ok(out.length >= Math.min(max, text.length) - 1);
           assert.ok(keep === 'head' ? text.startsWith(out) : text.endsWith(out));
           if (isLoneSurrogateFree(text)) assert.ok(isLoneSurrogateFree(out));
         },
       ),
     );
+  });
+});
+
+// One parity test (#5593 "Related sites"): each caller, fed text whose cut lands inside a surrogate
+// pair, returns what `capCodeUnits` returns. A caller that goes back to an inline cut fails here.
+describe('callers of capCodeUnits agree with it at a surrogate boundary', () => {
+  const { evaluatePredicate, COMMAND_MAX_OUTPUT_CHARS } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
+  const { convertClaudeCommandToPiSkill } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+  const { VerificationStatusError } = require('../gsd-core/bin/lib/verification.cjs');
+  const { formatDiagnosticToken } = require('../gsd-core/bin/lib/io.cjs');
+  const EMOJI = '\u{1F600}';
+  // Pi's skill description cap and the raw-status token cap are private constants of their modules
+  // (tests/pi-workflow-handoff.test.cjs and tests/verification-status.test.cjs pin the same numbers).
+  const PI_DESCRIPTION_MAX = 1024;
+  const RAW_STATUS_TOKEN_LIMIT = 120;
+
+  test('prefixedCap (gate message): the tail cut starts inside a pair', () => {
+    const prefix = 'command exited 1: ';
+    const budget = COMMAND_MAX_OUTPUT_CHARS - prefix.length;
+    const stderr = EMOJI + 'b'.repeat(budget - 1);
+    const res = evaluatePredicate(
+      { kind: 'command-exit-zero', command: 'x' },
+      { cwd: '/proj' },
+      { runBoundedShell: () => ({ exitCode: 1, stdout: '', stderr, signal: null, timedOut: false }) },
+    );
+    assert.equal(res.message, prefix + capCodeUnits(stderr, budget, 'tail'));
+    assert.notEqual(res.message, prefix + stderr.slice(-budget), 'the plain cut would leave a lone low surrogate');
+  });
+
+  test('Pi description cap: the head cut ends inside a pair', () => {
+    const description = `${'a'.repeat(PI_DESCRIPTION_MAX - 1)}${EMOJI}tail`;
+    const skill = convertClaudeCommandToPiSkill(`---\nname: gsd:x\ndescription: ${description}\n---\nbody\n`, 'gsd-x', 'pi', ['x']);
+    const line = skill.split(/\r?\n/).find((l) => l.startsWith('description: '));
+    assert.equal(JSON.parse(line.slice('description: '.length)), capCodeUnits(description, PI_DESCRIPTION_MAX, 'head'));
+  });
+
+  test('raw-status token cap: the head cut ends inside a pair', () => {
+    const raw = `${'a'.repeat(RAW_STATUS_TOKEN_LIMIT - 2)}${EMOJI}tail`;
+    const rendered = formatDiagnosticToken(raw);
+    const kept = capCodeUnits(rendered, RAW_STATUS_TOKEN_LIMIT, 'head');
+    assert.equal(kept.length, RAW_STATUS_TOKEN_LIMIT - 1, 'the pair straddles the limit, so its high half goes');
+    const { message } = new VerificationStatusError(raw, '/p/01-VERIFICATION.md');
+    assert.ok(message.includes(`${kept}…(${rendered.length - kept.length} more)`));
   });
 });
