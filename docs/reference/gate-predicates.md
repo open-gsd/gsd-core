@@ -76,7 +76,8 @@ variable of the same name, so `"${PHASE_DIR}"` expands to the exact value even
 when it holds shell syntax. GSD pastes no value into the command text. Double-quote
 every placeholder in the command: an unquoted value splits at spaces. A placeholder
 inside single quotes makes the evaluator throw (`unevaluable`), because `sh` does
-not expand inside single quotes.
+not expand inside single quotes. The message names the fix: change `'${PHASE_NUMBER}'`
+to `"${PHASE_NUMBER}"` (the same for `PHASE_DIR` and `PHASE_REQ_IDS`).
 
 | Placeholder | Source | Workflow flag |
 |---|---|---|

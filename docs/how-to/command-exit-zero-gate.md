@@ -33,7 +33,7 @@ the project root as its cwd and the inherited process environment.
 node "${GSD_CAP_DIR}/checks/pre-ship.js"
 ```
 
-The command can use three loop-context placeholders. Each is also an environment variable of the same name, so write them double-quoted (`"${PHASE_DIR}"`): an unquoted value splits at spaces.
+The command can use three loop-context placeholders. Each is also an environment variable of the same name, so write them double-quoted (`"${PHASE_DIR}"`): an unquoted value splits at spaces. A manifest that wrote `'${PHASE_NUMBER}'` in single quotes now reports `unevaluable`: change it to `"${PHASE_NUMBER}"`.
 
 | Placeholder | Meaning |
 |---|---|

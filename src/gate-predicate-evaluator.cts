@@ -99,7 +99,7 @@ function assertNoSingleQuotedPlaceholder(command: string): void {
         PLACEHOLDER_AT_RE.lastIndex = i;
         const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
         if (name !== undefined) {
-          throw new Error(`gate command single-quotes \${${name}}, which sh never expands: double-quote the placeholder`);
+          throw new Error(`gate command single-quotes \${${name}}, which sh never expands: write "\${${name}}" in double quotes; sh expands it from the environment`);
         }
       }
     } else if (c === '\\') {

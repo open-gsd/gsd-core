@@ -160,6 +160,6 @@ The Interpolation row above describes the first revision, which pasted the value
 
 GSD pastes no value into the command text; the `${...}` text reaches `sh` unchanged, so a gate double-quotes the placeholder.
 
-`sh` cannot expand a placeholder inside single quotes. The evaluator throws for such a placeholder and the gate takes its `onError` path (`unevaluable`).
+`sh` cannot expand a placeholder inside single quotes. The evaluator throws for such a placeholder and the gate takes its `onError` path (`unevaluable`). The message names the replacement. Migration: `test -n '${PHASE_NUMBER}'` becomes `test -n "${PHASE_NUMBER}"`.
 
 A fifth dispatch site joins the three generic workflow sites listed under Evaluation path: the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase.

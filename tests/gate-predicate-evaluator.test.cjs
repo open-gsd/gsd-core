@@ -195,7 +195,7 @@ describe('evaluatePredicate — interpolation', () => {
     for (const name of INTERPOLATION_VAR_NAMES) {
       const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a', phaseReqIds: 'R-1' };
       const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
-      assert.throws(() => run(`test -n '\${${name}}'`), { message: new RegExp(`single-quotes \\$\\{${name}\\}`) });
+      assert.throws(() => run(`test -n '\${${name}}'`), { message: new RegExp(`single-quotes \\$\\{${name}\\}.*write "\\$\\{${name}\\}" in double quotes`) });
       assert.doesNotThrow(() => run(`test -n "\${${name}}"`));
     }
   });
@@ -214,6 +214,15 @@ describe('evaluatePredicate — interpolation', () => {
     test('a backslash-escaped apostrophe opens no single-quote span', () => {
       assert.doesNotThrow(() => run(`echo \\' "\${PHASE_DIR}" \\'`));
     });
+  });
+
+  test('a double-quoted gate run by the real shell sees the phase values, even with shell syntax in them', () => {
+    const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
+    const phaseDir = '/tmp/x $(touch PWNED) `id` y';
+    const ctx = { cwd: process.cwd(), phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
+    const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
+    assert.equal(run(`test "\${PHASE_NUMBER}" = 07 && test "\${PHASE_DIR}" = '${phaseDir}'`).block, false);
+    assert.equal(run('test "${PHASE_NUMBER}" = 08').block, true);
   });
 
   test('undefined context var => empty string, in the text and in the environment', () => {
