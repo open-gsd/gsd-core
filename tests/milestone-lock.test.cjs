@@ -753,4 +753,15 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
       splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).includes('/we\\[ir]d#dir/.planning/milestone.lock'),
     );
   });
+
+  test('a planning directory the enclosing repo does not own leaves that repo\'s exclude untouched (#5505)', () => {
+    const sub = path.join(tmpDir, 'unowned');
+    fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+    assert.ok(begin(sub).success);
+    assert.deepEqual(
+      splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).filter((l) => l.includes('unowned')),
+      [],
+    );
+  });
 });
