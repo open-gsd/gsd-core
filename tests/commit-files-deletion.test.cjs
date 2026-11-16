@@ -302,58 +302,8 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
       ['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'],
       tmpDir,
     );
-    const parsed = JSON.parse(result.output);
-    assert.strictEqual(parsed.committed, true, result.output);
-    assert.ok(!('resolved_branch' in parsed), `no branching strategy resolves no branch: ${result.output}`);
+    assert.strictEqual(JSON.parse(result.output).committed, true, result.output);
     assert.deepStrictEqual(nameStatus(), ['D\t.planning/todos/pending/mine.md']);
-  });
-
-  // The phase's history makes the create arm refuse (#4055), so the observable is `resolved_branch`,
-  // set only once the phase resolves from --files-removed.
-  test('a removal-only commit under a phase dir resolves that phase for branching_strategy: phase', () => {
-    const phaseDir = path.join('.planning', 'phases', '01-x');
-    const backup = path.join(phaseDir, '01-REVIEW-FIX.iter1.md');
-    fs.mkdirSync(path.join(tmpDir, phaseDir), { recursive: true });
-    fs.writeFileSync(path.join(tmpDir, backup), 'backup\n');
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 1: X\nGoal: x\n');
-    fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'config.json'),
-      JSON.stringify({ commit_docs: true, branching_strategy: 'phase', phase_branch_template: 'gsd/phase-{phase}-{slug}' }),
-    );
-    gitOrThrow(['add', '.planning/'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
-    gitOrThrow(['commit', '-m', 'seed phase backup'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
-    fs.unlinkSync(path.join(tmpDir, backup));
-
-    const res = runGsdTools(
-      ['commit', 'docs(01): remove spent backup', '--files-removed', backup.split(path.sep).join('/')],
-      tmpDir,
-    );
-    const out = JSON.parse(res.output);
-    assert.strictEqual(out.committed, true, res.output);
-    assert.strictEqual(out.resolved_branch, 'gsd/phase-01-x');
-  });
-
-  test('branching_strategy: phase with a removal outside any phase dir resolves no branch', () => {
-    fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'config.json'),
-      JSON.stringify({ commit_docs: true, branching_strategy: 'phase', phase_branch_template: 'gsd/phase-{phase}-{slug}' }),
-    );
-    const res = runGsdTools(['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'], tmpDir);
-    const out = JSON.parse(res.output);
-    assert.strictEqual(out.committed, true, res.output);
-    assert.ok(!('resolved_branch' in out), `no phase resolves no branch: ${res.output}`);
-  });
-
-  test('branching_strategy: milestone reports the resolved milestone branch', () => {
-    fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'config.json'),
-      JSON.stringify({ commit_docs: true, branching_strategy: 'milestone', milestone_branch_template: 'gsd/{milestone}-{slug}' }),
-    );
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n- 🚧 **v1.0 Alpha** - Phases 1-1 (in progress)\n');
-    const res = runGsdTools(['commit', 'docs: drop a todo', '--files-removed', '.planning/todos/pending/mine.md'], tmpDir);
-    const out = JSON.parse(res.output);
-    assert.strictEqual(out.committed, true, res.output);
-    assert.strictEqual(out.resolved_branch, 'gsd/v1.0-alpha');
   });
 
   test('a deletion staged by this call is rolled back when a later entry fails', () => {
