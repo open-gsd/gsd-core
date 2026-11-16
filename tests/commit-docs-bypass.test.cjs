@@ -846,7 +846,7 @@ const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempGitProject, withTempGitProject, captureFdSync } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, interceptGit } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const commands = require('../gsd-core/bin/lib/commands.cjs');
@@ -1322,13 +1322,12 @@ describe('#3587 per-phase commit_docs override', () => {
     // The skip branch of `--files` runs only after `git add` fails. A tracked state.json must never reach it: `check-ignore`
     // exits 1 for a tracked path. The add is failed through the git seam (ADR-3574: no chmod, which root bypasses).
     test('#5505: a failing add of a tracked, ignored state.json fails closed and is never skipped', (t) => {
-      const { interceptGit } = require('./helpers/git-fixture.cjs');
       withTempGitProject((cwd) => {
         const rel = '.planning/state.json';
         fs.writeFileSync(path.join(cwd, rel), '{}\n');
         git(['add', '-f', '--', rel], cwd);
         git(['commit', '-q', '-m', 'track'], cwd);
-        fs.appendFileSync(path.join(cwd, '.git', 'info', 'exclude'), '/state.json\n/.planning/state.json\n');
+        fs.appendFileSync(path.join(cwd, '.git', 'info', 'exclude'), '/.planning/state.json\n');
         fs.appendFileSync(path.join(cwd, rel), '\n');
         interceptGit(t, (args, _opts, fn) => (fn === 'spawnSync' && args[0] === 'add'
           ? { status: 1, signal: null, stdout: '', stderr: 'fatal: index busy', output: [null, '', 'fatal: index busy'], pid: 0 }
