@@ -16,12 +16,18 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { runNode, runGit, runHook } = require('./helpers/process-seam.cjs');
 const { have } = require('./helpers/bash-probe.cjs');
 const { span, runBash } = require('./helpers/doc-bash-span.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+// Every real-git fixture below runs under no developer or system git config (core.hooksPath,
+// status.showUntrackedFiles), so the stub, the fence and the real CLI see the same git settings.
+const GIT_ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+const T6_OPTS = { timeoutMs: PROBE_TIMEOUT_MS, env: GIT_ENV };
 // The fence is POSIX bash: bash on PATH and not win32 (same gate as the property test).
 const { posixBashSkip } = require('./helpers/posix-bash-gate.cjs');
 const BASH_SKIP = posixBashSkip();
@@ -298,7 +304,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   const initRepo = (t, prefix) => {
     const dir = createTempDir(prefix);
     t.after(() => cleanup(dir));
-    const git = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+    const git = (...a) => gitOrThrow(a, { cwd: dir, ...T6_OPTS });
     git('init', '-q');
     git('config', 'user.email', 't@t');
     git('config', 'user.name', 't');
@@ -346,13 +352,13 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       fence,
       post,
     ].join('\n');
-    const res = runHook('-c', [script], { interpreter, timeoutMs: PROBE_TIMEOUT_MS });
+    const res = runHook('-c', [script], { interpreter, ...T6_OPTS });
     assert.strictEqual(res.exitCode, 0, 'the cleanup step must never abort: ' + res.stderr);
     return res;
   };
   const headFiles = (dir) => splitLines(gitOrThrow(
     ['ls-tree', '-r', '--name-only', 'HEAD'],
-    { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS }
+    { cwd: dir, ...T6_OPTS }
   )).filter(Boolean).sort();
   // What gsd_run prints per cmdCommit outcome: T6c drives each mode, T6i checks `skipped` for real.
   const stubs = {
@@ -371,7 +377,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     // defined outcome is driven: `skipped` is a commit_docs policy skip (per-phase override or
     // gitignored .planning; src/commands.cts cmdCommit), `nothing` and `committed` are silent
     // successes, `fail` exits 1.
-    const git = (dir, ...a) => runGit(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+    const git = (dir, ...a) => runGit(a, { cwd: dir, ...T6_OPTS });
 
     // `keep` of the two seeded backups stay on disk (the guard boundary: 0, 1, 2); `planning` adds
     // untracked work under .planning/ that an unscoped commit would sweep in.
@@ -482,7 +488,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         const calls = fs.existsSync(log)
           ? splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean) : [];
         if (calls.length) fs.unlinkSync(log);
-        const git = (...a) => gitOrThrow(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+        const git = (...a) => gitOrThrow(a, { cwd: dir, ...T6_OPTS });
         for (const f of backups) {
           assert.ok(!fs.existsSync(path.join(dir, f)), label + ': ' + f + ' removed');
         }
@@ -644,7 +650,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       if (name) fs.writeFileSync(path.join(dir, name), 'x');
       const script = ['set -euo pipefail', '_pd="' + dir + '"', 'PADDED=01', loop,
         'echo "fix_any=$_fix_any"', '[[ -o NULL_GLOB ]] && echo NG=on || echo NG=off'].join('\n');
-      const res = runHook('-c', [script], { interpreter: 'zsh', timeoutMs: PROBE_TIMEOUT_MS });
+      const res = runHook('-c', [script], { interpreter: 'zsh', ...T6_OPTS });
       assert.strictEqual(res.exitCode, 0, (name || 'no backup') + ': ' + res.stderr);
       assert.match(res.stdout, /NG=off/, 'the caller NULL_GLOB state is restored');
       return /fix_any=(\d)/.exec(res.stdout)[1];
@@ -720,13 +726,13 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       const quoted = args(stub.dir).map((a) => JSON.stringify(a)).join(' ');
       const script = ['cd "' + stub.dir + '"', gsdRunStub(sc.body || REAL_COMMIT_BODY),
         'gsd_run query commit "msg" ' + quoted + ' --raw'].join('\n');
-      const sres = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+      const sres = runHook('-c', [script], { interpreter: 'bash', ...T6_OPTS });
       assert.strictEqual(sres.exitCode, 0, label + ': stub: ' + sres.stderr);
       const real = build(sc);
       const rres = runGsdTools(
         ['query', 'commit', 'msg', ...args(real.dir), '--raw'],
         real.dir,
-        { HOME: real.dir }
+        { HOME: real.dir, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull }
       );
       const state = (x) => ({
         head: splitLines(x.g('ls-tree', '-r', '--name-only', 'HEAD')).filter(Boolean).sort(),
@@ -811,7 +817,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
   test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; ' +
     'only a malformed report stays', { skip: BASH_SKIP }, (t) => {
     const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'commit_fix_report');
-    const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+    const git = (cwd, ...args) => gitOrThrow(args, { cwd, ...T6_OPTS });
     const REVIEW = '.planning/01-REVIEW.md';
     const FIX = '.planning/01-REVIEW-FIX.md';
 
@@ -838,7 +844,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         // Typed seam: the value the dirty-tree warning is gated on, not the warning's wording.
         'printf "\\n@@DIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}"',
       ]);
-      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS, env: GIT_ENV });
       assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
       return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*)@@/.exec(res.stdout)[1] };
     };
