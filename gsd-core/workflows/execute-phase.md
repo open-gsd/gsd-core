@@ -434,7 +434,7 @@ Report:
 IFS= read -r PHASE_NAME <<'GSD_NAME_END'
 {phase_name}
 GSD_NAME_END
-gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "{plan_count}"
+gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name="${PHASE_NAME}" --plans "{plan_count}"
 ```
 This updates Status, Last Activity, Current focus, Current Position and plan counts in STATE.md.
 </step>
