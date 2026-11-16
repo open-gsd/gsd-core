@@ -1041,8 +1041,8 @@ describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () 
     'scoped file absent, project config on over root off': { root: OFF, scoped: null, project: ON },
   };
   for (const [name, layer] of Object.entries(LAYERS)) {
-    for (const scope of SCOPES.filter((s) => s.ws !== null)) {
-      test(`${name} in ${scope.dir.join('/')} agrees with loadConfig`, (t) => {
+    for (const scope of SCOPES) {
+      test(`${name} in ${scope.dir.join('/') || 'the root'} agrees with loadConfig`, (t) => {
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-ladder-'));
         const saved = { ws: process.env.GSD_WORKSTREAM, project: process.env.GSD_PROJECT };
         t.after(() => {
@@ -1060,7 +1060,7 @@ describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () 
         if (scope.project) put(path.join(tmp, '.planning', scope.project), layer.project ?? null);
         put(path.join(tmp, '.planning', ...scope.dir), layer.scoped);
         fs.mkdirSync(path.join(tmp, '.planning', ...scope.dir), { recursive: true });
-        process.env.GSD_WORKSTREAM = scope.ws;
+        if (scope.ws) process.env.GSD_WORKSTREAM = scope.ws; else delete process.env.GSD_WORKSTREAM;
         if (scope.project) process.env.GSD_PROJECT = scope.project; else delete process.env.GSD_PROJECT;
         assert.equal(
           commitDocsOptedOut(tmp, scope.ws, scope.project),
@@ -1069,4 +1069,12 @@ describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () 
       });
     }
   }
+
+  test('a traversal-shaped workstream name opts out of nothing', (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-traversal-'));
+    t.after(() => cleanup(tmp));
+    fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), OFF);
+    assert.equal(commitDocsOptedOut(tmp, '../x', null), false);
+  });
 });
