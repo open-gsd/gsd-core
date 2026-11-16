@@ -96,11 +96,13 @@ function stepRegion(src, name) {
 // (#2014); only --files-removed stages a deletion, and a path there still on disk prints "failed"
 // before any commit (staging_failed); an empty scoped diff prints "nothing"; the commit is scoped
 // to the named paths (-- <paths>), so an unrelated pre-staged file is never swept in (#2112). A
-// stub that `git add`s everything would mask a deletion routed through --files.
-const REAL_COMMIT_BODY = ' local msg="$3"; shift 3; local m="" a=() r=() p=();'
+// stub that `git add`s everything would mask a deletion routed through --files. A call that names
+// no path at all is unscoped and sweeps in all of .planning/, which the fence's guard prevents.
+const REAL_COMMIT_BODY = ' local msg="$3"; shift 3; local m="" n=0 a=() r=() p=();'
   + ' while [ $# -gt 0 ]; do case "$1" in --files) m=a;; --files-removed) m=r;; --raw) m="";;'
-  + ' *) if [ "$m" = a ] && [ -e "$1" ]; then a+=("$1");'
+  + ' *) [ -n "$m" ] && n=1; if [ "$m" = a ] && [ -e "$1" ]; then a+=("$1");'
   + ' elif [ "$m" = r ]; then r+=("$1"); fi;; esac; shift; done;'
+  + ' if [ "$n" = 0 ] && [ -e .planning ]; then a=(.planning/); fi;'
   + ' for f in ${r[@]+"${r[@]}"}; do [ -e "$f" ] && { echo failed; return 0; }; done;'
   + ' if [ ${#a[@]} -gt 0 ]; then git add -- "${a[@]}"; p+=("${a[@]}"); fi;'
   + ' if [ ${#r[@]} -gt 0 ]; then git rm -q --cached --ignore-unmatch -- "${r[@]}";'
@@ -371,8 +373,18 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     // successes, `fail` exits 1.
     const git = (dir, ...a) => runGit(a, { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
 
-    const drive = (commitDocs, status = 'issues_found', mode = 'commit') => {
+    // `keep` of the two seeded backups stay on disk (the guard boundary: 0, 1, 2); `planning` adds
+    // untracked work under .planning/ that an unscoped commit would sweep in.
+    const drive = (commitDocs, status = 'issues_found', mode = 'commit',
+      { keep = 2, planning = false } = {}) => {
       const dir = seedBackupRepo(t, 'gsd-5506-cleanup-', status, false);
+      for (const f of ['01-REVIEW-FIX.iter2.md', '01-REVIEW.iter2.md'].slice(keep)) {
+        fs.unlinkSync(path.join(dir, f));
+      }
+      if (planning) {
+        fs.mkdirSync(path.join(dir, '.planning'));
+        fs.writeFileSync(path.join(dir, '.planning', 'other.md'), 'not a backup');
+      }
       const res = runFence(dir, {
         commitDocs,
         body: ' echo "$*" >> gsd-calls.log;' + (stubs[mode] || REAL_COMMIT_BODY),
@@ -401,6 +413,18 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       ['01-REVIEW-FIX.iter2.md', '01-REVIEW-FIX.md', '01-REVIEW.iter2.md', '01-REVIEW.md'],
       'both backups are recoverable from git');
     assert.doesNotMatch(on.stdout, /^(Warning|Note)/m, 'a hash prints no warning or note');
+
+    // The guard boundary. With no backup, `query commit` must not run at all: given no path it
+    // commits all of .planning/ (src/commands.cts cmdCommit), which the stub models.
+    const none = drive('true', 'issues_found', 'commit', { keep: 0, planning: true });
+    assert.strictEqual(none.calls, '', '0 backups: no commit attempted');
+    assert.strictEqual(none.count, '1', '0 backups: no commit');
+    assert.strictEqual(none.status, '?? .planning/', '0 backups: .planning/ is left alone');
+    const one = drive('true', 'issues_found', 'commit', { keep: 1, planning: true });
+    assert.strictEqual(one.count, '2', '1 backup: one commit');
+    assert.deepStrictEqual(one.tracked,
+      ['01-REVIEW-FIX.iter2.md', '01-REVIEW-FIX.md', '01-REVIEW.md'],
+      '1 backup: the commit holds only that backup');
 
     const off = drive('false');
     assert.strictEqual(
@@ -612,7 +636,21 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       'tracked and unchanged --files': {
         tracked: [A], setup: () => {}, args: ['--files', A], expect: 'nothing',
       },
-      'phase_commit_docs false under .planning/phases': {
+      // The fence passes absolute paths (REVIEW_PATH, FIX_REPORT_PATH), through both flags.
+      'absolute --files paths': {
+        setup: (w) => { w(A); w(B); }, args: (d) => ['--files', path.join(d, A), path.join(d, B)],
+      },
+      'absolute --files-removed path': {
+        tracked: [A], setup: (w, g, d) => { fs.unlinkSync(path.join(d, A)); },
+        args: (d) => ['--files-removed', path.join(d, A)],
+      },
+      // What the fence's guard prevents: no path named, so the commit sweeps in .planning/.
+      'empty --files list': {
+        setup: (w, g, d) => { fs.mkdirSync(path.join(d, '.planning')); w('.planning/x.md'); },
+        args: ['--files'],
+      },
+      // A check on the real CLI only: the stub side is stubs.skipped, a constant.
+      'phase_commit_docs false under .planning/phases (real CLI only)': {
         body: stubs.skipped, args: ['--files', P], expect: 'skipped',
         setup: (w, g, d) => {
           fs.mkdirSync(path.join(d, '.planning/phases/01-x'), { recursive: true });
@@ -634,14 +672,16 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     };
     const cls = (tok) => (/^[0-9a-f]{7,40}$/.test(tok) ? 'hash' : tok);
     for (const [label, sc] of Object.entries(scenarios)) {
+      const args = (d) => (typeof sc.args === 'function' ? sc.args(d) : sc.args);
       const stub = build(sc);
+      const quoted = args(stub.dir).map((a) => JSON.stringify(a)).join(' ');
       const script = ['cd "' + stub.dir + '"', gsdRunStub(sc.body || REAL_COMMIT_BODY),
-        'gsd_run query commit "msg" ' + sc.args.join(' ') + ' --raw'].join('\n');
+        'gsd_run query commit "msg" ' + quoted + ' --raw'].join('\n');
       const sres = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
       assert.strictEqual(sres.exitCode, 0, label + ': stub: ' + sres.stderr);
       const real = build(sc);
       const rres = runGsdTools(
-        ['query', 'commit', 'msg', ...sc.args, '--raw'],
+        ['query', 'commit', 'msg', ...args(real.dir), '--raw'],
         real.dir,
         { HOME: real.dir }
       );
