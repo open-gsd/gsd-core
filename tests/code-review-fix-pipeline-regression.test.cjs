@@ -493,7 +493,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
         if (commitDocs === 'true' && committed) {
           assert.strictEqual(calls.length, 1, label + ': one commit call');
           assert.match(calls[0], /--files-removed/, label + ': the removal is declared');
-          assert.strictEqual(git('rev-list', '--count', 'HEAD').trim(), '2', label + ': one commit');
+          assert.strictEqual(git('rev-list', '--count', 'HEAD').trim(), '2', label + ': 1 commit');
           assert.strictEqual(git('log', '-1', '--format=%s').trim(),
             'docs(01): remove spent code review iteration backups');
           for (const f of backups) {
@@ -501,7 +501,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
           }
         } else {
           assert.deepStrictEqual(calls, [], label + ': no commit attempted');
-          assert.strictEqual(git('rev-list', '--count', 'HEAD').trim(), '1', label + ': no new commit');
+          assert.strictEqual(git('rev-list', '--count', 'HEAD').trim(), '1', label + ': no commit');
         }
       }
     }

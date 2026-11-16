@@ -536,8 +536,8 @@ Only runs if AUTO_MODE is true. If AUTO_MODE is false, skip this step entirely.
 loop.** #3190's rule is unchanged: on convergence the backups are spent scratch and go; on degradation
 they are retained for post-mortem and, when `COMMIT_DOCS` is true, committed so the tree stays
 clean. For the same reason a converged run commits the removal of backups that an earlier degraded
-run committed. The timing of the removal changed, and it was load-bearing. This workflow keeps ONE final
-version of `REVIEW.md` and `REVIEW-FIX.md` rather than per-iteration copies, so the
+run committed. The timing of the removal changed, and it was load-bearing. This workflow keeps ONE
+final version of `REVIEW.md` and `REVIEW-FIX.md` rather than per-iteration copies, so the
 backups are the only surviving record of what an earlier iteration fixed — and the re-review drops a
 finding once it is fixed, so the final review does not carry it either. Deleting them inside the loop
 meant the disposition ledger reached a converged `--auto` run with every early fix already erased, and
