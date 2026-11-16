@@ -217,7 +217,7 @@ elif [ ! -f "$SEAL" ]; then
 else
   # Both git calls are bounded (exit 124 = timed out): a hung git must not stall an unattended ship.
   gsd_run run-with-timeout 10 -- git check-ignore -q "$SEAL" && GI=0 || GI=$?
-  DIRTY=$(gsd_run run-with-timeout 10 -- git status --porcelain -- "$SEAL") && GS=0 || GS=$?
+  DIRTY=$(gsd_run run-with-timeout 10 -- git status --porcelain --untracked-files=all -- "$SEAL") && GS=0 || GS=$?
   if [ "$GI" = 124 ] || [ "$GS" = 124 ]; then
     echo "WARNING: git timed out while checking $SEAL; the seal was not committed and the squash will lose RED/GREEN credit." >&2
   elif [ "$GI" -gt 1 ] || [ "$GS" != 0 ]; then

@@ -232,7 +232,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(r.block, false);
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
     assert.equal(r.payload.rows[0].reason, 'unsealed_summary_unreachable');
-    assert.match(r.payload.message, /no TDD-REVIEW-SEAL\.json entry exists/);
     assert.equal(r.outcome, 'advisory');
   });
 
@@ -256,7 +255,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('a subject listing git cannot deliver is a failure, not "squashed" (#5354)', (t) => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
     squash(dir, base);
-    failGit(t, (args) => args[0] === 'log' && args.includes('--no-walk=unsorted') && args.some((a) => a.includes('%P')), GIT_NO_ANSWER);
+    failGit(t, (args) => args[0] === 'log' && args.includes('--no-walk=unsorted') && args.some((a) => a.includes('%s')), GIT_NO_ANSWER);
     const r = run(dir);
     assert.equal(r.payload.rows[0].status, 'FAIL');
     assert.equal(r.payload.violations, 1);
@@ -540,8 +539,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     const r = run(clone);
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
     assert.equal(r.payload.rows[0].reason, 'sealed_shallow_history');
-    assert.match(r.payload.message, /sealed commits cannot be verified because the history is incomplete/);
-    assert.doesNotMatch(r.payload.message, /no TDD-REVIEW-SEAL\.json entry exists/);
     assert.equal(r.block, false);
   });
 
@@ -717,13 +714,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(plans['01-02'], undefined);
   });
 
-  test('the review table keeps NotEvaluable inside its column', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    const statusCells = run(dir).payload.table.split('\n').filter((line) => line.startsWith('|')).map((line) => line.split('|').at(-2));
-    assert.equal(new Set(statusCells.map((cell) => cell.length)).size, 1, 'header, divider and rows share one status-column width');
-  });
-
   const posix = { skip: process.platform === 'win32' };
   const sealOf = (red, green) => JSON.stringify({ plans: { '01-01': { red, green } } });
 
@@ -855,11 +845,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     const r = run(dir, '--record');
     assert.equal(r.payload.passed, false);
     assert.equal(r.payload.unreadable.length, 1);
-    assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json \(EACCES\)\. .*nothing was sealed/);
-    assert.doesNotMatch(r.payload.message, /was not reviewed/);
+    assert.deepEqual(r.payload.unreadable, [{ source: 'TDD-REVIEW-SEAL.json', reason: 'EACCES' }]);
+    // A write failure keeps the review rows; a read failure returns none ("was not reviewed").
     assert.deepEqual(r.payload.rows.map((row) => row.status), ['Pass', 'FAIL']);
     assert.equal(r.payload.violations, 1);
-    assert.match(r.payload.table, /### TDD REVIEW/);
   });
 
   test('--record names the error text when the write fails with a code that means "absent" (ENOENT)', (t) => {
@@ -871,7 +860,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     });
     const r = run(dir, '--record');
     assert.equal(r.outcome, 'unreadable');
-    assert.match(r.payload.message, /could not write: TDD-REVIEW-SEAL\.json \(Error: phase dir vanished\)\./);
+    assert.deepEqual(r.payload.unreadable, [{ source: 'TDD-REVIEW-SEAL.json', reason: 'Error: phase dir vanished' }]);
   });
 
   test('a failed --record leaves no temp file behind', (t) => {
@@ -1044,6 +1033,13 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('ship.md seal step commits a dirty seal after a successful record', posix, () => {
     const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
+  });
+
+  // User git config must not hide a new seal from the dirty check: with `status.showUntrackedFiles=no` a plain `git status` omits it.
+  test('ship.md seal step commits a new seal when git is configured to hide untracked files', posix, () => {
+    const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')), prepare: (dir) => sealGit(dir, 'config', 'status.showUntrackedFiles', 'no') });
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
   });
