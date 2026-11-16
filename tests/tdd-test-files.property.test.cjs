@@ -25,7 +25,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { isTestFilePath, TEST_FILE_PATHSPECS } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
 const { SAMPLES_BY_GLOB } = require('./helpers/tdd-test-paths.cjs');
 
@@ -97,8 +97,8 @@ describe('#5181 tdd-test-files matcher properties', () => {
         fs.mkdirSync(path.dirname(abs), { recursive: true });
         fs.writeFileSync(abs, 'x\n');
       }
-      gitOrThrow(['add', '-A'], { cwd: dir });
-      gitOrThrow(['commit', '-m', 'test(1-01): seed'], { cwd: dir });
+      gitOrThrow(['add', '-A'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', 'test(1-01): seed'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
       const out = gitOrThrow(['log', '--format=', '--name-only', '--', ...TEST_FILE_PATHSPECS], { cwd: dir });
       const hits = new Set(out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
       for (const rel of files) assert.equal(hits.has(rel), isTestFilePath(rel), `${rel}: git ${hits.has(rel)} vs router`);

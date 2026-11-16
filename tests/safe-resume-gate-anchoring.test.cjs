@@ -24,7 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { resolveEvaluationScope, planSubjectPattern } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 const { isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
 const { SHARED_TEST_PATHS, SHARED_NON_TEST_PATHS } = require('./helpers/tdd-test-paths.cjs');
@@ -269,8 +269,8 @@ describe('#4379 — the TDD RED pathspec is language-agnostic', () => {
     const commitFile = (rel, subject) => {
       fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
       fs.writeFileSync(path.join(dir, rel), 'x\n');
-      gitOrThrow(['add', '-A'], { cwd: dir });
-      gitOrThrow(['commit', '-m', subject], { cwd: dir });
+      gitOrThrow(['add', '-A'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', subject], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
     };
 
     commitFile('crates/core/src/scan.rs', 'feat(1-01): implementation only');
