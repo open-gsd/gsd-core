@@ -15,6 +15,12 @@
 > those terms. That is intentional — it is not being rewritten to match its
 > new status — and it is retained purely as the orchestrator-side reference
 > described above.
+>
+> **#4747 factual update:** the activation gates, the Agent SDK version
+> section, and the shape of the script's return value were corrected to match
+> the code (the SDK-version gate was replaced by Claude Code's documented
+> workflow kill switches; worktree metadata now comes back as schema-validated
+> structured output with a per-plan `error`). Everything else is unchanged.
 
 ## When this contribution is active
 
@@ -25,10 +31,12 @@ when ALL of the following hold:
 2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent
    SDK-specific), AND
 3. `claude_orchestration.execution_backend` resolves to `workflow` — either
-   explicitly, or via `auto` — **and** the Agent SDK version is
-   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK
-   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release
-   or older SDK never activates the preview backend).
+   explicitly, or via `auto` — **and** no Claude Code workflow kill switch is
+   set: `CLAUDE_CODE_DISABLE_WORKFLOWS`, or `disableWorkflows: true` /
+   `enableWorkflows: false` in managed, project-local, project or user settings
+   (fail-closed: an unreadable settings file counts as set). The
+   `claude_orchestration.min_agent_sdk_version` key is deprecated and ignored
+   (#4747).
 
 Detection is fail-closed: any miss degrades to **inline, manual, one-agent-per-
 message dispatch** — exactly today's behaviour. On a non-Claude runtime this
@@ -57,13 +65,8 @@ gsd-tools claude-orchestration resolve-wave-dispatch \
   --phase-dir "$PHASE_DIR" --raw
 ```
 
-`--agent-sdk-version` is no longer passed here (#2590). The router resolves the
-installed Agent SDK version itself; see **Agent SDK version** below. The former
-`${AGENT_SDK_VERSION:+--agent-sdk-version "$AGENT_SDK_VERSION"}` line was also
-**shell-dependent**: zsh does not word-split unquoted parameter expansions, so it
-collapsed to a SINGLE argv element there, `argValue()` never matched, and the run
-failed into `agent_sdk_version_unknown` — indistinguishable from genuinely
-unknown. Pass `--agent-sdk-version <ver>` explicitly only to pin a version.
+No Agent SDK version is passed or resolved (#4747): the router reads Claude
+Code's workflow kill switches itself; see **Workflow availability** below.
 
 This composes `detectWorkflowBackend` (the gate ladder above) with
 `emitWorkflowScript` (the wave→plan mapping below) in ONE call — the pure
@@ -136,27 +139,23 @@ them at this step, from data it already has in-context from `discover_and_group_
      #2285 finding 1). **Never** hardcode `true` — that would force worktree
      isolation on a plan the inline path explicitly keeps out of worktrees.
 
-4. **`$AGENT_SDK_VERSION`** — no longer built here; the router resolves it.
+**Workflow availability (#4747):** the router reads Claude Code's documented
+kill switches itself, so the orchestrator passes nothing for them:
 
-**Agent SDK version:** the orchestrator has no *bash-computable* way to
-introspect the live Agent SDK version — but the router runs in Node, so it
-resolves the version itself (#2590), in this order:
+1. `CLAUDE_CODE_DISABLE_WORKFLOWS` in the environment (any non-empty value other
+   than `0` / `false` turns workflows off);
+2. `disableWorkflows: true` or `enableWorkflows: false` in, highest precedence
+   first, managed settings (`managed-settings.json` plus `managed-settings.d/*.json`),
+   `.claude/settings.local.json`, `.claude/settings.json`, and the user's
+   `settings.json` (under `CLAUDE_CONFIG_DIR` when set, else `~/.claude`).
 
-1. an explicit `--agent-sdk-version <ver>` (pin a version),
-2. `GSD_AGENT_SDK_VERSION`,
-3. the **installed** `@anthropic-ai/claude-agent-sdk` package version, read from
-   its `package.json` on disk by walking `node_modules` up the tree. (Read
-   directly rather than via `require.resolve`: the SDK's `exports` map does not
-   expose `./package.json`, so `require.resolve` throws
-   `ERR_PACKAGE_PATH_NOT_EXPORTED`.)
-
-Previously nothing computed this at all, so gate 5 returned
-`agent_sdk_version_unknown` on **every** automated run and the Workflow backend
-could never activate — while `gsd-tools capability state` still reported the
-capability `active: true`. Fail-closed is preserved: when no version can be
-resolved, gate 5 still declines to `inline`. What changed is that a resolvable
-version is now actually found, so a genuinely-too-old SDK reports
-`agent_sdk_version_below_floor` — the truthful reason — instead of `unknown`.
+A settings file that exists but cannot be read, or sets either key to a
+non-boolean, resolves to `inline` (`workflow_settings_unreadable`). The plan
+tier, the Pro `/config` toggle, `--settings` and non-file managed sources are not
+visible to the router; a session without workflow access can pass detection, and
+the Workflow tool's own refusal then sends dispatch inline. The old Agent SDK
+version gate, its `--agent-sdk-version` flag and `GSD_AGENT_SDK_VERSION` are
+ignored.
 
 **If `backend == "workflow"`:** run the emitted `script` via the Workflow tool
 for THIS wave instead of the per-message `Agent()` loop in step 3. The script
@@ -167,7 +166,7 @@ worktree isolation applied PER PLAN from the manifest's `use_worktree` field
 - **waves → one or more sequential `parallel()` barriers** — each wave is a
   barrier group; when plans within a wave share `files_modified`, they are split
   into separate sequential stages within that wave's barrier.
-- **plans → `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree' })`**
+- **plans → `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree', schema })`**
   when `use_worktree` is not `false`, or `agent(brief, { agentType: 'gsd-executor' })`
   (no isolation) when it is — so the produced `SUMMARY.md` and commits are
   identical to inline dispatch, INCLUDING the inline path's submodule safety
@@ -205,11 +204,13 @@ unchanged:
 
 2. **Invoke the Workflow tool with the emitted script and
    `resumeFromRunId: summary.resumeRunId`.** The script top-level `return`s one entry
-   per dispatched plan: `{ plan, expects_worktree, metadata }`. `metadata` is that
-   plan's executor `<worktree_metadata>` JSON (`{agent_id, worktree_path, branch,
-   expected_base}` — captured by the executor itself per
-   `agents/gsd-executor.md`), or `null` when the agent's result carried none
-   (interrupted agent, resumed-from-cache plan, or a non-worktree plan).
+   per dispatched plan: `{ plan, expects_worktree, metadata, error }`. For a worktree
+   plan the `agent()` call carries a JSON Schema, so the executor returns
+   `{agent_id, worktree_path, branch, expected_base}` as validated structured output
+   (#4747) and `metadata` is that object. `metadata` is `null` when the agent was
+   skipped or died, returned an incomplete object, or failed validation after Claude
+   Code's retries — and always for a non-worktree plan. `error` is the failure text
+   when the agent's call threw, else `null`.
 
 3. **Record every worktree plan** exactly as inline dispatch does at step 3's
    "After each `Agent()` returns" — one `worktree.record-agent` per returned entry
@@ -247,11 +248,13 @@ unchanged:
    `worktree.record-agent` by hand, then re-run cleanup. If the journal cannot be
    recovered either, merge the branch manually after review — never discard it.
 
-5. **Resume (`resumeFromRunId`).** Cached/resumed agents do not re-emit their final
-   messages, so a previously-completed plan can return with `metadata: null`. Recover
-   that plan's metadata from the ORIGINAL run's journal (same hint as above). If it
-   cannot be recovered, fail loudly per rule 4 — a resumed run must never report
-   success over silently-dropped agent work.
+5. **Resume (`resumeFromRunId`).** Resume works only within the same Claude Code
+   session. On relaunch, agents that completed before the first failed one return
+   their cached results; the failed agent and every agent started after it run again.
+   If a resumed plan still comes back with `metadata: null`, recover it from the
+   ORIGINAL run's journal (same hint as above). If it cannot be recovered, fail loudly
+   per rule 4 — a resumed run must never report success over silently-dropped agent
+   work.
 
 6. **Non-worktree plans** (`expects_worktree: false` — `use_worktree: false` in the
    manifest): they ran without isolation; their commits are already on the main working
@@ -271,8 +274,9 @@ like an `inline` result, never as a fatal wave error.
 ## Fallback contract
 
 Detection is fail-closed end-to-end: capability disabled, non-Claude runtime,
-`execution_backend:"inline"`, missing/incapable host descriptor, unknown or
-below-floor Agent SDK version, or an `emitWorkflowScript` failure on a malformed
+`execution_backend:"inline"`, missing/incapable host descriptor, a workflow kill
+switch set or unreadable, or an `emitWorkflowScript` failure on a malformed or
+over-cap
 wave manifest — ANY of these degrades to `backend:"inline"` and execute-phase's
 standard inline dispatch (step 3) runs unmodified. The Workflow backend never
 partially activates; the executor MUST NOT assume parallelism, a shared budget,

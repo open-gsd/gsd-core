@@ -694,6 +694,8 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   commit_docs_guard_not_a_repo: 'UNAVAILABLE',
   commit_docs_guard_foreign_hook: 'UNAVAILABLE',
   commit_docs_guard_hooks_path_set: 'UNAVAILABLE',
+  not_git_repo: 'UNAVAILABLE',
+  outside_worktree: 'FAIL',
   security_scan_failed: 'INTERNAL',
   pick_field_absent: 'UNAVAILABLE',
   pick_output_not_json: 'UNAVAILABLE',
@@ -711,7 +713,7 @@ function expectedErrorCode3912(reasonValue, version) {
   return CODE_FOR_3912.get(outcome);
 }
 
-describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 30-member enum', () => {
+describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 32-member enum', () => {
   afterEach(() => {
     resolveContractVersion({ argv: ['node', 'x'], env: {} }); // restore v1 default
   });

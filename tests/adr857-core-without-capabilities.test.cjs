@@ -64,12 +64,27 @@ const ALL_12_POINTS = [...CANONICAL_POINTS];
  * This gives us a "caps-off" config that passes through the activation resolver as
  * explicitly false rather than relying on missing-key default behaviour.
  *
- * Structure: nested (workflow.* → workflow:{...}, intel.enabled → intel:{enabled:false})
- * because _getNestedConfigValue expects a nested object, not a flat dotted key.
+ * Structure: nested (e.g. workflow.x → workflow:{x:false}, intel.enabled →
+ * intel:{enabled:false}) because _getNestedConfigValue expects a nested
+ * object, not a flat dotted key. Every dotted when-key is set false
+ * generically, so no top-level key needs listing here (#5960: mempalace's
+ * plan:pre step now gates on `mempalace.recall_on_plan`, whose schema
+ * default is true).
  */
+function setNestedFalse(obj, dottedKey) {
+  const segments = dottedKey.split('.');
+  let cursor = obj;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i];
+    if (cursor[seg] === undefined) cursor[seg] = {};
+    if (cursor[seg] === null || typeof cursor[seg] !== 'object' || Array.isArray(cursor[seg])) return;
+    cursor = cursor[seg];
+  }
+  cursor[segments[segments.length - 1]] = false;
+}
+
 function buildAllFalseConfig() {
-  const workflow = {};
-  const intel = {};
+  const config = {};
   for (const point of ALL_12_POINTS) {
     const entry = realRegistry.byLoopPoint[point];
     if (!entry) continue;
@@ -77,17 +92,11 @@ function buildAllFalseConfig() {
       for (const hook of entry[kind] || []) {
         const when = hook.when;
         if (typeof when !== 'string' || !when) continue;
-        if (when.startsWith('workflow.')) {
-          const key = when.slice('workflow.'.length);
-          workflow[key] = false;
-        } else if (when === 'intel.enabled') {
-          intel.enabled = false;
-        }
-        // Any future top-level keys would need extending here.
+        setNestedFalse(config, when);
       }
     }
   }
-  return { workflow, intel };
+  return config;
 }
 
 const ALL_FALSE_CONFIG = buildAllFalseConfig();
@@ -99,7 +108,7 @@ const ALL_FALSE_CONFIG = buildAllFalseConfig();
 function buildTddOnlyConfig() {
   return {
     ...ALL_FALSE_CONFIG,
-    workflow: { ...ALL_FALSE_CONFIG.workflow, tdd_mode: true },
+    workflow: { ...(ALL_FALSE_CONFIG.workflow || {}), tdd_mode: true },
   };
 }
 
@@ -108,8 +117,8 @@ function buildTddOnlyConfig() {
 /**
  * A single gsd-tools.cjs CLI subcommand invocation via execFileSync, no
  * fan-out. Same class as tests/helpers/timeouts.cjs's
- * LOOP_HOOK_POINT_CLI_TIMEOUT_MS, but at half that constant's pre-existing
- * bound -- not equalized without bench data. Kept file-local: this batch's
+ * LOOP_HOOK_POINT_CLI_TIMEOUT_MS (80000ms), but at a lower bound -- not
+ * equalized without bench data. Kept file-local: this batch's
  * only site at this exact class+value.
  */
 const GSD_TOOLS_CLI_TIMEOUT_MS = 30000;
