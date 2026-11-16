@@ -24,7 +24,8 @@
  *   5. Kimi vocabulary (ReadFile / Grep / Shell, `path`) is normalized.
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
- *      blocks as guard-error; any other value allows. The stdin-not-closing
+ *      or a failed reading blocks as guard-error, while an overflow stays
+ *      command-too-complex; any other value allows. The stdin-not-closing
  *      cells hold the hook's stdin pipe open and live in
  *      tests/gsd-secret-read-guard-stdin-timer.test.cjs.
  *
@@ -791,18 +792,19 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash');
   });
 
-  test('opted in: a secret read behind a scanner-overflowing command is never allowed', () => {
-    // What this pins is the host's promise, not a code path. Today 100,000
-    // unclosed substitutions after the read overflow the scanners' stack, and
-    // the RangeError reaches the outer catch: unset, the hook allows the read;
-    // opted in, it blocks as guard-error. Once the scanner stops overflowing
-    // (#5285 reports the shape as command-too-complex) the scan blocks it
-    // instead, so only the block is asserted, never its code. The outer catch
-    // itself is pinned by the malformed-JSON cell above.
-    const command = `cat ${'.e' + 'nv'}; ` + '"$('.repeat(100000);
-    const r = runHook(bash(command), { env: DENY_ENV });
-    assert.equal(r.status, 2, `expected block (exit 2), got exit ${r.status}; stdout=${r.stdout.slice(0, 200)}`);
-    assert.equal(JSON.parse(r.stdout).decision, 'block');
+  test('opted in: a command nested deep enough to overflow the stack is still command-too-complex', () => {
+    // An overflow is a limit, not a hook error (#5255): it is denied as
+    // command-too-complex whatever the host chose, never as guard-error. The
+    // last shape also overflows the debugger-spawn scan, which unwraps
+    // `timeout`; the secret scan reports the overflow first.
+    const deep = (n) => '"$('.repeat(n);
+    for (const [label, cmd] of [
+      ['a read, then 300,000 levels', `cat ${'.e' + 'nv'}; ${deep(300000)}`],
+      ['300,000 levels', `echo ${deep(300000)}`],
+      ['a debugger spawn, then 100,000 levels', `timeout 5 bash -c 'claude --agent gsd-debugger; echo ${deep(100000)}'`],
+    ]) {
+      assertBlocked(runHook(bash(cmd), { env: DENY_ENV }), label, { code: 'command-too-complex', tool: 'Bash', path: '' });
+    }
   });
 
   // The fixture makes the `$'…'` decoders throw on a span holding FAULT, a bug
