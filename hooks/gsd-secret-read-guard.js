@@ -516,16 +516,33 @@ function namesSecret(tok, backslashSeparates = true) {
   return !isExemptSecret(tok);
 }
 
-// A drive prefix (`C:\`) or a UNC prefix (`\\host`): the only Bash operand
-// shapes whose `\` is a path separator. Every other `\` in a Bash word reaches
-// the program literally, so the `\` of a regex escape in a quoted grep pattern
-// (`'migrations/|\.env'`) is not one (#5883).
+// A drive prefix (`C:\`) or a UNC prefix (`\\host`): a Windows path, whose `\`
+// is always a path separator.
 const WINDOWS_SHAPED_RE = /^(?:[A-Za-z]:\\|\\\\)/;
 
-// namesSecret for a word of a Bash command. The Read tool and Grep glob arms
-// call namesSecret directly and keep reading `\` as a separator.
+// Characters that occur in a regular expression but not in a file name. A word
+// carrying one is a pattern, so its `\` is a regex escape (`process\.env` in
+// `'a|process\.env'`) and not a path separator (#5883).
+const REGEX_ONLY_CHAR_RE = /[|()[\]*+?{}^$]/;
+
+// Does a `\` in this whitespace-free word separate path segments? Yes for a
+// Windows path, and for any word that cannot be a regex. A bare `\.env` or
+// `.\.env` is fail-safe denied: it is a Windows relative path as readily as a
+// pattern.
+function backslashSeparates(word) {
+  return WINDOWS_SHAPED_RE.test(word) || !REGEX_ONLY_CHAR_RE.test(word);
+}
+
+// namesSecret for a word of a Bash command. A word with whitespace can be a
+// whole command handed to another interpreter (`powershell -c "type .\.env"`),
+// so each whitespace-separated piece is classified on its own. The Read tool
+// and Grep glob arms call namesSecret directly and keep reading `\` as a
+// separator.
 function namesSecretOperand(tok) {
-  return namesSecret(tok, typeof tok === 'string' && WINDOWS_SHAPED_RE.test(tok));
+  if (typeof tok !== 'string') return false;
+  if (!/\s/.test(tok)) return namesSecret(tok, backslashSeparates(tok));
+  return namesSecret(tok, backslashSeparates(tok))
+    || tok.split(/\s+/).some((w) => w.includes('\\') && namesSecret(w, backslashSeparates(w)));
 }
 
 // ---------------------------------------------------------------------------

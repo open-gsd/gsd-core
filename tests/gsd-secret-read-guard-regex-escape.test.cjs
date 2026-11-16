@@ -60,7 +60,10 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     "grep -n -E 'grep|--exclude|env-file|\\\\\\\\\\.env' tests/x.cjs",
     // Negative control and a lone escaped name: a POSIX word, not a file.
     "grep -E 'migrations/|\\.envx' list.txt",
-    "grep -E '\\.env' list.txt",
+    // A quoted word with a space is not a Windows path: the piece with the
+    // escape carries a regex-only character.
+    "grep -E 'foo bar|\\.env' list.txt",
+    "grep 'x .env' list.txt",
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
@@ -80,6 +83,14 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     "cat < 'C:\\proj\\.env'",
     "source 'C:\\proj\\.env'",
     "grep KEY 'D:\\a\\b\\.secrets'",
+    // Windows relative paths, bare or inside a command string handed to another
+    // interpreter, are not a regex: they stay blocked.
+    "cat '.\\.env'",
+    "cat '..\\.env'",
+    "cat 'config\\.env'",
+    'powershell -c "type .\\.env"',
+    'powershell -NoProfile -Command "Get-Content .\\.env | Select -First 1"',
+    'cmd /c "type config\\.env"',
   ];
   for (const cmd of blocks) {
     test(`still blocks ${JSON.stringify(cmd)}`, () => {
@@ -95,15 +106,13 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     assertBlocked(runHook(grep({ glob: 'config\\.env' })), 'Grep glob config\\.env');
   });
 
-  const META = fc.constantFrom('.', '|', '(', ')', '[', '*', '+', '?', '{', '$', '^');
+  // Regex-only characters never occur in a file name, so a word carrying one is
+  // a pattern and the `\` of its escape is not a separator.
+  const META = fc.constantFrom('|', '(', ')', '[', '*', '+', '?', '{', '$', '^');
   const DIR = fc.constantFrom('migrations/', 'src/', 'a/b/', '');
-  test('property: a backslash before a regex metacharacter in a quoted POSIX operand is never a separator', () => {
-    fc.assert(fc.property(DIR, fc.constantFrom('', 'x', '|', 'data|'), (dir, alt) => {
-      const cmd = `grep -E '${dir}${alt}\\.env' list.txt`;
-      assertAllowed(runHook(bash(cmd)), cmd);
-    }), PROPERTY_RUNS);
-    fc.assert(fc.property(META, (meta) => {
-      const cmd = `grep -E 'a${meta}\\.env' list.txt`;
+  test('property: a backslash escape in a quoted word with a regex-only character is never a separator', () => {
+    fc.assert(fc.property(DIR, META, fc.constantFrom('', 'x', 'data'), (dir, meta, alt) => {
+      const cmd = `grep -E '${dir}${alt}${meta}\\.env' list.txt`;
       assertAllowed(runHook(bash(cmd)), cmd);
     }), PROPERTY_RUNS);
   });
