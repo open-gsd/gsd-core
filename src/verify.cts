@@ -215,15 +215,24 @@ function verifySummaryCore(
   for (const pattern of patterns) {
     let m: RegExpExecArray | null;
     while ((m = pattern.exec(content)) !== null) {
-      const filePath = m[1];
-      if (!filePath || !isProbableProjectFile(filePath)) continue;
+      const capture = m[1];
+      if (!capture) continue;
+      // #6233: one backtick span may name SEVERAL paths ("`src/a.py src/b.py`"),
+      // and the capture is the whole span. Split it on whitespace and keep only
+      // tokens that survive the same isProbableProjectFile filter, so each named
+      // path becomes its own candidate instead of a single whitespace-joined
+      // string no filesystem can hold — which was always reported missing and
+      // consumed the check budget before any real path was reached. Pattern 2's
+      // capture class already excludes whitespace, so this is a no-op there.
+      const filePaths = capture.split(/\s+/).filter(isProbableProjectFile);
+      if (filePaths.length === 0) continue;
       // #2844: skip a backticked path on a future/conditional line — it names a
       // deliverable this phase did NOT produce, so probing it is a false positive.
       const lineStart = content.lastIndexOf('\n', m.index) + 1;
       const lineEnd = content.indexOf('\n', m.index);
       const line = content.slice(lineStart, lineEnd === -1 ? undefined : lineEnd);
       if (isFutureMention(line)) continue;
-      mentionedFiles.add(filePath);
+      for (const filePath of filePaths) mentionedFiles.add(filePath);
     }
   }
 
