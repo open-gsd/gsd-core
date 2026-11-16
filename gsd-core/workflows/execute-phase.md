@@ -78,7 +78,7 @@ Parse `$ARGUMENTS` before loading any context:
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
 
-If `--wave` is absent, execute the phase's incomplete waves; without `--interactive`, step 9 re-reads the plan index at each wave boundary (`execute-phase/steps/wave-refresh.md`, #5966).
+If `--wave` is absent, execute the phase's incomplete waves; without `--interactive`, step 9 re-reads the plan index at each wave boundary (`wave-refresh.md`, #5966).
 </step>
 
 <step name="initialize" priority="first">
