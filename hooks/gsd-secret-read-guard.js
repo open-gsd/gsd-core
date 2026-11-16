@@ -1938,17 +1938,22 @@ const GREP_SPEC = {
   valueLong: new Map([
     ['max-count', 1], ['after-context', 1], ['before-context', 1], ['devices', 1],
     ['directories', 1], ['binary-files', 1], ['label', 1], ['group-separator', 1],
-    ['exclude-from', 1], ['include-dir', 1],
+    // `--include` selects the files to search, so `--include=.env` READS `.env`:
+    // its value stays an ordinary operand, like `--exclude-from`.
+    ['exclude-from', 1], ['include-dir', 1], ['include', 1],
   ]),
   optionalLong: new Set(['color', 'colour']),
   patternLong: new Set(['regexp', 'file']),
-  nameLong: new Set(['exclude', 'exclude-dir', 'include']),
+  nameLong: new Set(['exclude', 'exclude-dir']),
+  negatedLong: new Set(),
   digits: true,
 };
 const RG_SPEC = {
   noShort: new Set('iSsnNlcowxvuUFHIPzabqp0.'),
   valueShort: new Set('mABCjMrtTEd'),
   patternShort: new Set('ef'),
+  // `-g` / `--glob` / `--iglob` take a glob that SELECTS files unless it starts
+  // with `!`, so only a negated value is a name to skip (`rg -g .env` reads it).
   nameShort: new Set('g'),
   noLong: new Set([
     'ignore-case', 'case-sensitive', 'smart-case', 'line-number', 'no-line-number', 'files-with-matches',
@@ -1964,7 +1969,8 @@ const RG_SPEC = {
   ]),
   optionalLong: new Set(['color']),
   patternLong: new Set(['regexp', 'file']),
-  nameLong: new Set(['glob', 'iglob']),
+  nameLong: new Set(),
+  negatedLong: new Set(['glob', 'iglob']),
   digits: false,
 };
 const JQ_SPEC = {
@@ -1985,6 +1991,7 @@ const JQ_SPEC = {
   optionalLong: new Set(),
   patternLong: new Set(['from-file']),
   nameLong: new Set(),
+  negatedLong: new Set(),
   digits: false,
 };
 const SEARCH_TOOLS = new Map([
@@ -2013,6 +2020,15 @@ function searchOperandIndices(spec, operands) {
           if (k + 1 >= operands.length) return new Set();
           exempt.add(++k);
         }
+      } else if (spec.negatedLong.has(name)) {
+        // Exempt only a negated glob; a selecting glob is read like a file operand.
+        if (eq !== -1) {
+          if (t.startsWith('!', eq + 1)) exempt.add(k);
+        } else {
+          if (k + 1 >= operands.length) return new Set();
+          if (operands[k + 1].text.startsWith('!')) exempt.add(k + 1);
+          k++;
+        }
       } else if (spec.patternLong.has(name)) {
         patternSupplied = true;
         if (eq === -1) k++;
@@ -2032,9 +2048,14 @@ function searchOperandIndices(spec, operands) {
         if (spec.patternShort.has(ch)) patternSupplied = true;
         const attached = i + 1 < t.length;
         if (spec.nameShort.has(ch)) {
-          if (attached) exempt.add(k);
-          else if (k + 1 < operands.length) exempt.add(++k);
-          else return new Set();
+          if (attached) {
+            if (t.startsWith('!', i + 1)) exempt.add(k);
+          } else if (k + 1 < operands.length) {
+            if (operands[k + 1].text.startsWith('!')) exempt.add(k + 1);
+            k++;
+          } else {
+            return new Set();
+          }
         } else if (!attached) {
           k++;
         }

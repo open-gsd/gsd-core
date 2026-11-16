@@ -63,18 +63,17 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     // G5: the value of an exclusion option is a name to skip.
     'grep -rn -i token . --exclude=.env',
     'grep -rn -i token . --exclude .env',
-    'grep -rn token . --exclude-dir=.env --include=.env.local',
-    'grep -rn token --include .env.local .',
+    'grep -rn token . --exclude-dir=.env --exclude=.env.local',
     // G6 (maintainer decision on #5884): the jq program is not a file.
     "jq '.env.DISABLE_AUTOUPDATER' settings.json",
     "jq '.env' file.json",
     "jq -r '.env' file.json",
     "jq -n '.env.X'",
     "jq -rc '.env' file.json",
-    // ripgrep: --glob / -g / --iglob values and the pattern positional.
+    // ripgrep: a NEGATED --glob / -g / --iglob value and the pattern positional.
     "rg -g '!.env' token .",
-    "rg --glob=.env token .",
-    "rg --iglob .env token .",
+    "rg --glob='!.env' token .",
+    "rg --iglob '!.env.local' token .",
     "rg '.env.local' src",
     // xargs hands the same sub-command words to the same carve-out.
     'ls | xargs grep -n token --exclude=.env',
@@ -111,6 +110,16 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     'grep --frob .env x',
     'grep -Y .env x',
     'rg --frob token .env',
+    // A selector READS the file it names: `--include` and a non-negated glob
+    // restrict the search to `.env`, so the value is an ordinary operand.
+    "grep -rn '' . --include=.env",
+    'grep -rn token --include .env.local .',
+    'grep -rn token . --include-dir=.env',
+    "rg -g .env '' .",
+    "rg -g.env '' .",
+    "rg --glob=.env '' .",
+    "rg --glob .env '' .",
+    'rg --iglob .env token .',
     // exclude-from reads the file.
     'grep --exclude-from=.env pat f',
     'grep --exclude-from .env pat f',
@@ -131,7 +140,7 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
   }
 
   const NAME = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production');
-  const EXCLUDE_OPT = fc.constantFrom('--exclude', '--exclude-dir', '--include');
+  const EXCLUDE_OPT = fc.constantFrom('--exclude', '--exclude-dir');
   const FORM = fc.constantFrom('=', ' ');
   const SAFE_FLAGS = fc.constantFrom('', '-r ', '-n ', '-rn ', '-i ', '-m 1 ', '-A 2 ');
 
