@@ -319,6 +319,7 @@ Format the JSON into human-readable bullets using these label mappings:
 - `workflow.plan_check` → "Plan Check" (`true` → "Yes", `false` → "No")
 - `workflow.verifier` → "Verifier" (`true` → "Yes", `false` → "No")
 - `plan_review.source_grounding` → "Drift Guard" (`true` → "Yes", `false` → "No")
+- `workflow.agent_hint_routing` → "Executor" (`true` or absent → "Allow installed executors", `false` → "gsd-executor only")
 
 Display above the prompt:
 
@@ -333,6 +334,7 @@ Your saved defaults (~/.gsd/defaults.json):
   • Plan Check: [Yes|No]
   • Verifier: [Yes|No]
   • Drift Guard: [Yes|No]
+  • Executor: [Allow installed executors|gsd-executor only]
 ```
 
 Then ask:
@@ -370,6 +372,7 @@ Which settings do you want to change? (enter numbers, comma-separated)
   7. Plan Check — Currently: [Yes|No]
   8. Verifier — Currently: [Yes|No]
   9. Drift Guard — Currently: [Yes|No]
+  10. Executor — Currently: [Allow installed executors|gsd-executor only]
 ```
 
 **Otherwise** (Claude runtime with AskUserQuestion): use a two-block split
@@ -453,12 +456,22 @@ AskUserQuestion([
       { label: "Yes", description: "Toggle Drift Guard (currently: [Yes|No])" },
       { label: "No", description: "Keep current Drift Guard setting" }
     ]
+  },
+  {
+    question: "Do you want to change the Executor setting (which executors may run plans)?",
+    header: "Executor",
+    multiSelect: false,
+    options: [
+      { label: "Yes", description: "Choose the executor policy (currently: [Allow installed executors|gsd-executor only])" },
+      { label: "No", description: "Keep current Executor setting" }
+    ]
   }
 ])
 ```
 
-For each selected setting across both blocks, ask only that question using the
-option set from Round 1 / Round 2 below. Merge user answers over the saved
+For each selected setting across both blocks (and Drift Guard or Executor when
+answered "Yes"), ask only that question using the option set from Round 1 /
+Round 2 / the AI Models and Executor questions below. Merge user answers over the saved
 defaults — unchanged settings retain their saved values. Then skip to
 **Commit config.json**.
 
@@ -607,6 +620,24 @@ questions: [
 //   Q1 "Standard tier…" + Q2 "Quality"  → model_profile = "quality"
 //   Q1 "Standard tier…" + Q2 "Balanced" → model_profile = "balanced"
 //   Q1 "Standard tier…" + Q2 "Budget"   → model_profile = "budget"
+
+// Executor policy (#6211): always asked, after the model-profile questions and
+// independent of them.
+questions: [
+  {
+    header: "Executor",
+    question: "Executor for plans: use gsd-executor only, or allow other executors installed on this runtime (named by a plan's agent_hint)?",
+    multiSelect: false,
+    options: [
+      { label: "Allow installed executors (Recommended)", description: "A plan whose agent_hint names an executor agent installed on this runtime runs on that agent, with its own model override (else gsd-executor's model) and the same worktree isolation guard. GSD roles such as gsd-verifier are never used as executors. Plans without a hint run on gsd-executor." },
+      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored." }
+    ]
+  }
+]
+
+// Map the Executor answer → workflow.agent_hint_routing:
+//   "Allow installed executors (Recommended)" → true
+//   "gsd-executor only"                       → false
 ```
 
 **PR body onboarding:** Ask which optional PRD-style sections `/gsd:ship` should append to generated PR bodies. Use the same `ship.pr_body_sections` mapping as Step 2a: selected sections get `enabled: true`, seeded-but-unselected sections get `enabled: false`, and selecting none writes an empty list. Prefer lean/agile PRD sections that make user value, acceptance criteria, Definition of Done, and stakeholder traceability explicit.
@@ -622,7 +653,7 @@ Create `.planning/config.json` with all settings (CLI fills in remaining default
 
 ```bash
 mkdir -p .planning
-gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|adaptive|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"compact_content":true|false,"nyquist_validation":[false if granularity=coarse, true otherwise]},"plan_review":{"source_grounding":true|false},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
+gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|adaptive|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"compact_content":true|false,"agent_hint_routing":true|false,"nyquist_validation":[false if granularity=coarse, true otherwise]},"plan_review":{"source_grounding":true|false},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
 ```
 
 **Note:** Run `/gsd:settings` anytime to update model profile, workflow agents, branching strategy, and other preferences.

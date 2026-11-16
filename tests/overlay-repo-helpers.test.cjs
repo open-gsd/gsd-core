@@ -748,3 +748,119 @@ describe('buildOverlayRepo: non-regular files are skipped (#3900)', () => {
     }
   });
 });
+
+// ─── #5848: a directory retired between the parent listing and the recursion ──
+
+describe('buildOverlayRepo: a directory that vanishes mid-walk is skipped (#5848)', () => {
+  // The walker tolerated a retired path at its statSync but not at the
+  // recursive readdirSync, so a directory removed in the window between the two
+  // (a sibling test's temp dir inside the walked tree) threw ENOENT and failed
+  // every suite built on the overlay. Deterministic: the directory is retired
+  // by the stat itself, so no second process or timing is involved.
+  test('ENOENT at the recursive readdirSync is skipped, siblings still overlay', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5848-root-'));
+    const gone = path.join(root, 'gone');
+    fs.mkdirSync(path.join(gone, 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(gone, 'inner', 'f.txt'), 'x');
+    fs.writeFileSync(path.join(root, 'keep.txt'), 'y');
+    const realStat = fs.statSync;
+    let retired = false;
+    fs.statSync = function patchedStat(p, ...rest) {
+      const st = realStat.call(this, p, ...rest);
+      if (p === gone && !retired) {
+        retired = true;
+        cleanup(gone);
+      }
+      return st;
+    };
+    let overlay;
+    const warnings = [];
+    try {
+      assert.doesNotThrow(() => { overlay = buildOverlayRepo({}, { root, warn: (m) => warnings.push(m) }); });
+    } finally {
+      fs.statSync = realStat;
+    }
+    try {
+      assert.equal(retired, true, 'the fixture must actually retire the directory');
+      assert.equal(warnings.length, 1, 'the skip is reported, not silent');
+      assert.equal(fs.existsSync(path.join(overlay, 'keep.txt')), true);
+      assert.equal(fs.existsSync(path.join(overlay, 'gone')), false, 'a retired directory leaves nothing behind');
+    } finally {
+      if (overlay) cleanup(overlay);
+      cleanup(root);
+    }
+  });
+
+  test('a directory an override targets that vanishes still throws (the override is not dropped silently)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5848-ovr-'));
+    const gone = path.join(root, 'gone');
+    fs.mkdirSync(gone);
+    const realStat = fs.statSync;
+    let retired = false;
+    fs.statSync = function patchedStat(p, ...rest) {
+      const st = realStat.call(this, p, ...rest);
+      if (p === gone && !retired) {
+        retired = true;
+        cleanup(gone);
+      }
+      return st;
+    };
+    const realMkdtemp = fs.mkdtempSync;
+    const made = [];
+    fs.mkdtempSync = function patchedMkdtemp(...a) {
+      const dir = realMkdtemp.apply(this, a);
+      made.push(dir);
+      return dir;
+    };
+    try {
+      assert.throws(() => buildOverlayRepo({ 'gone/override.txt': 'z' }, { root }), { code: 'ENOENT' });
+    } finally {
+      fs.statSync = realStat;
+      fs.mkdtempSync = realMkdtemp;
+      cleanup(root);
+    }
+    const overlays = made.filter((d) => path.basename(d).startsWith('gsd-2930-overlay-'));
+    try {
+      assert.equal(overlays.length, 1, 'buildOverlayRepo created exactly one overlay dir');
+      assert.equal(fs.existsSync(overlays[0]), false, 'a throwing walk removes its own overlay dir');
+    } finally {
+      for (const d of overlays) cleanup(d);
+    }
+  });
+
+  test('a non-ENOENT error at the recursive readdirSync still propagates', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5848-eacces-'));
+    const sub = path.join(root, 'sub');
+    fs.mkdirSync(sub);
+    const realReaddir = fs.readdirSync;
+    fs.readdirSync = function patchedReaddir(p, ...rest) {
+      if (p === sub) {
+        const err = new Error('EACCES: permission denied, scandir');
+        err.code = 'EACCES';
+        throw err;
+      }
+      return realReaddir.call(this, p, ...rest);
+    };
+    const realMkdtemp = fs.mkdtempSync;
+    const made = [];
+    fs.mkdtempSync = function patchedMkdtemp(...a) {
+      const dir = realMkdtemp.apply(this, a);
+      made.push(dir);
+      return dir;
+    };
+    try {
+      assert.throws(() => buildOverlayRepo({}, { root }), { code: 'EACCES' });
+    } finally {
+      fs.readdirSync = realReaddir;
+      fs.mkdtempSync = realMkdtemp;
+      cleanup(root);
+    }
+    const overlays = made.filter((d) => path.basename(d).startsWith('gsd-2930-overlay-'));
+    try {
+      assert.equal(overlays.length, 1, 'buildOverlayRepo created exactly one overlay dir');
+      assert.equal(fs.existsSync(overlays[0]), false, 'a throwing walk removes its own overlay dir');
+    } finally {
+      for (const d of overlays) cleanup(d);
+    }
+  });
+});
