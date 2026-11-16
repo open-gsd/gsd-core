@@ -14,11 +14,9 @@ const fc = require('fast-check');
 
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 const { stubEnv } = require('./helpers/env-guard.cjs');
-const { gitOrThrow, interceptGit } = require('./helpers/git-fixture.cjs');
+const { interceptGit, excludeFile } = require('./helpers/git-fixture.cjs');
 const { isGitIgnored, resolveCommitDocsTiers } = require('../gsd-core/bin/lib/config-loader.cjs');
 
-const git = (cwd, ...args) => gitOrThrow(args, { cwd });
-const excludeOf = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
 
 describe('resolveCommitDocsTiers (#5505)', () => {
   test('resolveCommitDocsTiersProperty', () => {
@@ -51,7 +49,7 @@ describe('isGitIgnored (#5505)', () => {
       const tmpDir = createTempGitProject();
       const other = createTempGitProject();
       t.after(() => { cleanup(tmpDir); cleanup(other); });
-      fs.appendFileSync(excludeOf(cwdIgnores ? tmpDir : other), '.planning\n');
+      fs.appendFileSync(excludeFile(cwdIgnores ? tmpDir : other), '.planning\n');
       stubEnv(t, 'GIT_DIR', path.join(other, '.git'));
       assert.strictEqual(isGitIgnored(tmpDir, '.planning'), expected);
     });
@@ -69,7 +67,7 @@ describe('isGitIgnored (#5505)', () => {
       const tmpDir = createTempGitProject();
       t.after(() => cleanup(tmpDir));
       fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(config));
-      if (ignored) fs.appendFileSync(excludeOf(tmpDir), '.planning\n');
+      if (ignored) fs.appendFileSync(excludeFile(tmpDir), '.planning\n');
       const { loadConfig, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
       const explicit = config.commit_docs ?? config.planning?.commit_docs;
       // an explicit value wins as written (no ignore probe); otherwise the resolver decides
@@ -81,7 +79,7 @@ describe('isGitIgnored (#5505)', () => {
   test('aTimedOutCheckIgnoreIsNotCached', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
-    fs.appendFileSync(excludeOf(tmpDir), '.planning\n');
+    fs.appendFileSync(excludeFile(tmpDir), '.planning\n');
     let timeouts = 0;
     interceptGit(t, (args, _opts, fn) => {
       if (timeouts > 0 || fn !== 'spawnSync' || !args.includes('check-ignore')) return undefined;

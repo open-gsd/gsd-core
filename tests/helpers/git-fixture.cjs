@@ -207,9 +207,35 @@ function interceptGit(t, intercept, childProcess = require('node:child_process')
   }
 }
 
+/**
+ * The repo's `info/exclude` path, as git resolves it (worktrees and `GIT_DIR` included), with its
+ * directory created: a repo made without template files has no `info/`, and an append would throw.
+ * @param {string} cwd
+ * @returns {string}
+ */
+function excludeFile(cwd) {
+  const { resolve, dirname } = require('node:path');
+  const file = resolve(cwd, gitOrThrow(['rev-parse', '--git-path', 'info/exclude'], { cwd }).trim());
+  require('node:fs').mkdirSync(dirname(file), { recursive: true });
+  return file;
+}
+
+/**
+ * The text of `info/exclude`, or '' when the file does not exist.
+ * @param {string} cwd
+ * @returns {string}
+ */
+function readExclude(cwd) {
+  const fs = require('node:fs');
+  const file = excludeFile(cwd);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+}
+
 module.exports = {
+  excludeFile,
   gitOrThrow,
   interceptGit,
+  readExclude,
   isFsLegalName,
   throwIfFailed,
   toLegacyResult,

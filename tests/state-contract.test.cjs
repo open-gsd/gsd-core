@@ -51,7 +51,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 
 const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, excludeFile, readExclude } = require('./helpers/git-fixture.cjs');
 
 const { STATE_CONTRACT_VERSION, publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
 
@@ -708,7 +708,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), STATE_MD);
     fs.writeFileSync(path.join(tmpDir, '.planning', 'state.json'), '{}\n');
-    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '!/.planning/state.json\n');
+    fs.appendFileSync(excludeFile(tmpDir), '!/.planning/state.json\n');
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'seed');
     assert.ok(runGsdTools(BEGIN, tmpDir).success);
@@ -723,8 +723,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.ok(r.success, r.error || r.output);
     git(tmpDir, 'check-ignore', '-q', '.planning/state.json');
     git(tmpDir, 'check-ignore', '-q', '.planning/workstreams/ws1/state.json');
-    const exclude = path.join(tmpDir, '.git', 'info', 'exclude');
-    assert.ok(!fs.existsSync(exclude) || !/state\.json/.test(fs.readFileSync(exclude, 'utf8')), 'the rule is committed content, not a per-clone exclude');
+    assert.ok(!/state\.json/.test(readExclude(tmpDir)), 'the rule is committed content, not a per-clone exclude');
     assert.match(fs.readFileSync(path.join(tmpDir, '.planning', '.gitignore'), 'utf8'), /^\/state\.json$/m);
   });
 
@@ -732,7 +731,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     cleanup(path.join(tmpDir, '.planning', 'config.json'));
-    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '.planning\n');
+    fs.appendFileSync(excludeFile(tmpDir), '.planning\n');
     const r = runGsdTools(['config-new-project', '{}'], tmpDir, homeSandboxEnv(tmpDir));
     assert.ok(r.success, r.error || r.output);
     assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', '.gitignore')));
@@ -794,6 +793,24 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(git(tmpDir, 'status', '--porcelain'), '');
   });
 
+  // The skip decision uses the normalized path; `check-ignore` gets the spelling as given. Both must agree.
+  const SPELLINGS = [
+    ['an empty path segment', (p) => p.replace('/state.json', '//state.json')],
+    ['a leading dot segment', (p) => `./${p}`],
+  ];
+  for (const [label, spell] of SPELLINGS) {
+    test(`commit --files skips the ignored state.json spelled with ${label}`, (t) => {
+      const { tmpDir, rel } = boundary(t);
+      fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+      const given = spell(`${rel}/state.json`);
+      const c = runGsdTools(['commit', 'docs: spelling', '--files', given, `${rel}/STATE.md`], tmpDir);
+      const out = JSON.parse(c.output);
+      assert.strictEqual(out.committed, true, c.output);
+      assert.deepStrictEqual(out.skipped_files, [given]);
+      assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), [`${rel}/STATE.md`]);
+    });
+  }
+
   test('commit --files skips another workstream\'s ignored state.json when the env selects none', (t) => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1' });
     fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
@@ -817,7 +834,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     const { tmpDir } = boundary(t);
     fs.mkdirSync(path.join(tmpDir, '.planning', 'intel'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.planning', 'intel', 'state.json'), '{}\n');
-    fs.appendFileSync(path.join(tmpDir, '.git', 'info', 'exclude'), '.planning/intel/\n');
+    fs.appendFileSync(excludeFile(tmpDir), '.planning/intel/\n');
     const out = JSON.parse(runGsdTools(['commit', 'docs: z', '--files', '.planning/intel/state.json'], tmpDir).output);
     assert.strictEqual(out.committed, false);
     assert.strictEqual(out.reason, 'staging_failed');

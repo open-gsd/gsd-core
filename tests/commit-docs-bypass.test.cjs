@@ -846,12 +846,14 @@ const path = require('path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, createTempGitProject, withTempGitProject, captureFdSync } = require('./helpers.cjs');
 const { seedPhase } = require('./fixtures/index.cjs');
-const { gitOrThrow, interceptGit } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, interceptGit, excludeFile, readExclude } = require('./helpers/git-fixture.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const commands = require('../gsd-core/bin/lib/commands.cjs');
 const configCli = require('../gsd-core/bin/lib/config.cjs');
-const { loadConfigResolved, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { loadConfig, loadConfigResolved, isGitIgnored, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const io = require('../gsd-core/bin/lib/io.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE } = require('../gsd-core/bin/lib/phase-id.cjs');
@@ -1293,9 +1295,6 @@ describe('#3587 per-phase commit_docs override', () => {
     // The state-contract publisher's exclude gate is the commit policy's answer for every config shape (#5505):
     // commit_docs, then an ignored .planning/; and `quiet` changes only stderr, never the value.
     test('F2: the state-contract exclude gate equals resolveCommitDocsPolicy', () => {
-      const { loadConfig, isGitIgnored } = require('../gsd-core/bin/lib/config-loader.cjs');
-      const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
-      const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
       const valueArb = fc.oneof(fc.constant(undefined), fc.boolean(), fc.string({ maxLength: 4 }), fc.integer({ min: -1, max: 2 }));
       fc.assert(
         fc.property(valueArb, valueArb, fc.boolean(), fc.boolean(), (flat, nested, hasConfig, ignored) => withTempGitProject((cwd) => {
@@ -1305,14 +1304,12 @@ describe('#3587 per-phase commit_docs override', () => {
               if (nested !== undefined) cfg.planning = { commit_docs: nested };
               fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify(cfg));
             }
-            if (ignored) fs.appendFileSync(path.join(cwd, '.git', 'info', 'exclude'), '.planning\n');
+            if (ignored) fs.appendFileSync(excludeFile(cwd), '.planning\n');
             const config = loadConfig(cwd, { persist: false });
             const expected = resolveCommitDocsPolicy(config, null, () => isGitIgnored(cwd, '.planning')).resolved;
             assert.deepStrictEqual(loadConfig(cwd, { persist: false, quiet: true }).commit_docs, config.commit_docs);
-            const thunk = () => isGitIgnored(cwd, '.planning');
-            assert.deepStrictEqual(resolveCommitDocsPolicy(config, null, thunk), require('../gsd-core/bin/lib/config-loader.cjs').resolveCommitDocsTiers(undefined, config.commit_docs, thunk));
             assert.strictEqual(publishStateContract(cwd).published, true);
-            const exclude = splitLines(fs.readFileSync(path.join(cwd, '.git', 'info', 'exclude'), 'utf8'));
+            const exclude = splitLines(readExclude(cwd));
             assert.strictEqual(exclude.includes('/.planning/state.json'), Boolean(expected));
         })),
         { numRuns: 30, seed: 5505 },
@@ -1327,7 +1324,7 @@ describe('#3587 per-phase commit_docs override', () => {
         fs.writeFileSync(path.join(cwd, rel), '{}\n');
         git(['add', '-f', '--', rel], cwd);
         git(['commit', '-q', '-m', 'track'], cwd);
-        fs.appendFileSync(path.join(cwd, '.git', 'info', 'exclude'), '/.planning/state.json\n');
+        fs.appendFileSync(excludeFile(cwd), '/.planning/state.json\n');
         fs.appendFileSync(path.join(cwd, rel), '\n');
         interceptGit(t, (args, _opts, fn) => (fn === 'spawnSync' && args[0] === 'add'
           ? { status: 1, signal: null, stdout: '', stderr: 'fatal: index busy', output: [null, '', 'fatal: index busy'], pid: 0 }

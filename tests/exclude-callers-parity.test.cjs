@@ -13,16 +13,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
-const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, excludeFile, readExclude } = require('./helpers/git-fixture.cjs');
 const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
 const { excludeFromGit } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
 const { claimMilestonePhase } = require('../gsd-core/bin/lib/milestone-lock.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const git = (cwd, ...args) => gitOrThrow(args, { cwd });
-const excludeOf = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
 const planningDirOf = (cwd) => path.join(cwd, '.planning');
 const fixedDeps = () => ({ now: () => 1_700_000_000_000 });
+
+describe('exclude-file fixture helpers', () => {
+  test('a repo without info/ reads as empty and takes an append', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    cleanup(path.join(tmpDir, '.git', 'info'));
+    assert.strictEqual(readExclude(tmpDir), '');
+    fs.appendFileSync(excludeFile(tmpDir), '.planning\n');
+    assert.strictEqual(readExclude(tmpDir), '.planning\n');
+  });
+});
 
 describe('excludeFromGit callers agree (#5505, #5551)', () => {
   const spellings = ['!state.json', '!.planning/state.json', '!/.planning/state.json'];
@@ -31,7 +41,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     test(`anyNegationSpellingOfTheFileIsRespected:${spelling}`, (t) => {
       const tmpDir = createTempGitProject();
       t.after(() => cleanup(tmpDir));
-      const exclude = excludeOf(tmpDir);
+      const exclude = excludeFile(tmpDir);
       fs.appendFileSync(exclude, `${spelling}\n`);
       const before = fs.readFileSync(exclude, 'utf8');
       publishStateContract(tmpDir, fixedDeps());
@@ -43,7 +53,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     test(`anyNegationSpellingOfTheLockIsRespected:${spelling.replace('state.json', 'milestone.lock')}`, (t) => {
       const tmpDir = createTempGitProject();
       t.after(() => cleanup(tmpDir));
-      const exclude = excludeOf(tmpDir);
+      const exclude = excludeFile(tmpDir);
       fs.appendFileSync(exclude, `${spelling.replace('state.json', 'milestone.lock')}\n`);
       const before = fs.readFileSync(exclude, 'utf8');
       claimMilestonePhase(tmpDir, '1');
@@ -54,9 +64,9 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
   test('aNegationOfAnotherFileNeverSuppressesTheEntry', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
-    fs.appendFileSync(excludeOf(tmpDir), '!other.json\n!*.log\n');
+    fs.appendFileSync(excludeFile(tmpDir), '!other.json\n!*.log\n');
     publishStateContract(tmpDir, fixedDeps());
-    assert.ok(splitLines(fs.readFileSync(excludeOf(tmpDir), 'utf8')).includes('/.planning/state.json'));
+    assert.ok(splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf8')).includes('/.planning/state.json'));
   });
 
   test('anEnclosingRepoThatTracksNothingUnderTheProjectIsLeftAlone', (t) => {
@@ -64,7 +74,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     t.after(() => cleanup(tmpDir));
     const sub = path.join(tmpDir, 'sub');
     fs.mkdirSync(planningDirOf(sub), { recursive: true });
-    const exclude = excludeOf(tmpDir);
+    const exclude = excludeFile(tmpDir);
     const before = fs.readFileSync(exclude, 'utf8');
     assert.strictEqual(publishStateContract(sub, fixedDeps()).published, true);
     assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
@@ -76,7 +86,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     t.after(() => cleanup(tmpDir));
     const sub = path.join(tmpDir, 'sub');
     fs.mkdirSync(planningDirOf(sub), { recursive: true });
-    const exclude = excludeOf(tmpDir);
+    const exclude = excludeFile(tmpDir);
     const before = fs.readFileSync(exclude, 'utf8');
     claimMilestonePhase(sub, '1');
     assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before, 'an enclosing repo tracking nothing under the project is left alone');
@@ -94,7 +104,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     fs.writeFileSync(path.join(sub, 'tracked.txt'), 'x');
     git(tmpDir, 'add', '--', path.join(sub, 'tracked.txt'));
     publishStateContract(sub, fixedDeps());
-    assert.ok(splitLines(fs.readFileSync(excludeOf(tmpDir), 'utf8')).includes('/sub/.planning/state.json'));
+    assert.ok(splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf8')).includes('/sub/.planning/state.json'));
   });
 
   test('aNestedProjectWhoseEnclosingRepoTracksOnlyItsPlanningFilesGetsTheEntry', (t) => {
@@ -106,7 +116,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     fs.writeFileSync(roadmap, '# Roadmap\n');
     git(tmpDir, 'add', '--', roadmap);
     publishStateContract(sub, fixedDeps());
-    assert.ok(splitLines(fs.readFileSync(excludeOf(tmpDir), 'utf8')).includes('/sub/.planning/state.json'));
+    assert.ok(splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf8')).includes('/sub/.planning/state.json'));
   });
 
   test('aProjectRootWithItsOwnGitDirGetsTheEntry', (t) => {
@@ -116,7 +126,7 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     fs.mkdirSync(planningDirOf(sub), { recursive: true });
     git(sub, 'init', '-q');
     publishStateContract(sub, fixedDeps());
-    assert.ok(splitLines(fs.readFileSync(excludeOf(sub), 'utf8')).includes('/.planning/state.json'));
+    assert.ok(splitLines(fs.readFileSync(excludeFile(sub), 'utf8')).includes('/.planning/state.json'));
   });
 
   // Pins the docs: the claim's exclude entry is written whatever commit_docs says.
@@ -125,6 +135,6 @@ describe('excludeFromGit callers agree (#5505, #5551)', () => {
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), JSON.stringify({ planning: { commit_docs: false } }));
     claimMilestonePhase(tmpDir, '1');
-    assert.ok(splitLines(fs.readFileSync(excludeOf(tmpDir), 'utf8')).includes('/.planning/milestone.lock'));
+    assert.ok(splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf8')).includes('/.planning/milestone.lock'));
   });
 });
