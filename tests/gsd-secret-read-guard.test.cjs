@@ -1653,6 +1653,53 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'launch', { code: 'debugger-cli-spawn' });
   });
 
+  // The env -S readings run on the scan budget #5255 sets for the whole command
+  // (scanBashCommand), set once, and a block they find is #5255's `{ code, text }`.
+  // Each row goes through the hook entry.
+  describe('the env -S readings share the command\'s one scan budget, and keep its command-too-complex deny', () => {
+    const { scanBashCommand, scanDebuggerSpawn, workSpent } = require(HOOK_PATH);
+    const runEntry = (command) => {
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(command)),
+        env: { ...process.env, NODE_V8_COVERAGE: '' },
+        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+      });
+      return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+    };
+    const TOO_COMPLEX = { code: 'command-too-complex' };
+
+    // Skipped as the option's value, the string costs the plain reading one word.
+    // Split, it is `sh -c` with 200,000 separators and a heredoc, which the scan and
+    // #5513's two heredoc passes each charge: 600,000, past the 524,288 the command
+    // may spend. The deny is `command-too-complex`, never a read.
+    test('a command that spends the budget only under a splitting reading is denied as command-too-complex', () => {
+      const inner = `sh -c "${'x;'.repeat(200000)}: <<E\\nE"`;
+      assertBlocked(runEntry(`env -S '${inner}'`), 'split reading spends the budget', TOO_COMPLEX);
+      // The same string as the value of an option that does not split is allowed.
+      assertAllowed(runEntry(`env -u '${inner}' ls`), 'the string skipped as -u\'s value');
+    });
+
+    // Split, the `bash -c` body nests `"$(` 100,000 deep, which overflows the
+    // debugger-spawn check's tokenizer (and the secret scan's, which reports it as
+    // `command-too-complex`). The overflow is a deny, never the crash verdict's allow.
+    test('an env -S string whose split command overflows the debugger-spawn tokenizer is denied as command-too-complex', () => {
+      const command = `env -S 'timeout 5 bash -c "claude --agent gsd-debugger; echo ${'\\"\\$('.repeat(100000)}"'`;
+      assert.throws(() => scanDebuggerSpawn(command), RangeError, 'the spawn check overflows on the split command');
+      assertBlocked(runEntry(command), 'split command overflows the spawn check', TOO_COMPLEX);
+    });
+
+    // 200,000 separators after the string: one reading's scan and spawn check charge
+    // 400,002 of the 524,288, so either reading alone fits, and the reading after
+    // the first does not get a budget of its own.
+    test('a command that spends most of the budget under the first reading gets no fresh budget for the next', () => {
+      const command = `env -S true; ${'x;'.repeat(200000)}`;
+      assert.equal(scanBashCommand(command), null);
+      assert.equal(scanDebuggerSpawn(command), null);
+      assert.deepEqual(workSpent(), { scan: command.length, reader: 0, separators: 400002, exhausted: false }, 'one reading fits');
+      assertBlocked(runEntry(command), 'two readings on one budget', TOO_COMPLEX);
+    });
+  });
+
   // The words for the properties below: env options and assignments, an optional
   // wrapper, then a launch, a read, or a command that does neither. The `bash -c` reads
   // hold a quote, a backslash or a TAB, so most of their spellings carry an escape the
