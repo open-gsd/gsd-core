@@ -378,6 +378,7 @@ reviewer prompt rendered no hooks.
 ### Consequences
 
 `into` is validated per step, not per point. A `code-reviewer` contribution declared at another execute
-point (`execute:pre`, `execute:wave:pre`) therefore installs but is not delivered; the reference states
-this. Restricting `into` to a subset of points is a separate contract change and is not made here.
+point (`execute:pre`, `execute:wave:pre`) is rendered there but its `into` target is read only at
+`execute:post`, so it is not delivered to the reviewer; the reference states this.
+Restricting `into` to a subset of points is a separate contract change and is not made here.
 

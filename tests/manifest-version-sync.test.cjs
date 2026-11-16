@@ -433,12 +433,16 @@ describe('A2: .claude-plugin/marketplace.json', () => {
     assert.ok(Array.isArray(manifest.plugins) && manifest.plugins.length > 0, 'plugins must be a non-empty array');
   });
 
-  test('plugins[0] has the gsd-core entry with source "./"', (t) => {
+  test('plugins[0] has the gsd-core entry sourced from the prebuilt plugin ref', (t) => {
     if (!manifest) { t.skip('manifest could not be parsed'); return; }
     const entry = manifest.plugins[0];
     assert.ok(entry && typeof entry === 'object', 'plugins[0] must be an object');
     assert.equal(entry.name, pluginJson.name, `plugins[0].name (${entry && entry.name}) must equal plugin.json name (${pluginJson.name})`);
-    assert.equal(entry.source, './', 'plugins[0].source must be "./" (repo root, same as plugin.json relative refs)');
+    assert.deepEqual(
+      entry.source,
+      { source: 'github', repo: 'open-gsd/gsd-core', ref: 'plugin' },
+      'plugins[0].source must point at the prebuilt `plugin` branch published by release.yml finalize (#5796)',
+    );
     assert.ok(typeof entry.description === 'string' && entry.description.trim().length > 0, 'plugins[0].description must be a non-empty string');
   });
 
