@@ -452,6 +452,12 @@ describe('state contract — call-site wiring (integration, real CLI)', () => {
 // #5505: state.json is a derived cache — publishing it must never dirty the tree.
 describe('state.json never dirties the tree (#5505)', () => {
   const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+  const w031 = (cwd) => {
+    const { output } = runGsdTools(['validate', 'health'], cwd);
+    const { warnings } = JSON.parse(output);
+    assert.ok(Array.isArray(warnings), output);
+    return warnings.find((w) => w.code === 'W031');
+  };
   const BEGIN = ['state', 'begin-phase', '--phase', '2', '--name', 'Hardening', '--plans', '2'];
   const STATE_MD = '# Project State\n\n**Current Phase:** 2\n**Current Phase Name:** Hardening\n**Total Phases:** 3\n**Current Plan:** 0\n**Total Plans in Phase:** 0\n**Status:** Ready to plan\n**Last Activity:** 2024-01-01\n';
 
@@ -744,7 +750,6 @@ describe('state.json never dirties the tree (#5505)', () => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1', preTracked: true, commitDocs: false });
     const p = `${rel}/state.json`;
     assert.match(git(tmpDir, 'status', '--porcelain', '--', p), /M .*state\.json/, 'the boundary left the tracked copy modified');
-    const w031 = (cwd) => JSON.parse(runGsdTools(['validate', 'health'], cwd).output).warnings.find((w) => w.code === 'W031');
     const warning = w031(tmpDir);
     assert.ok(warning, 'validate health must report W031');
     assert.ok(warning.fix.includes(`\`git --literal-pathspecs rm --cached --ignore-unmatch -- ${p}\``), warning.fix);
@@ -763,7 +768,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     fs.writeFileSync(path.join(sub, '.planning', 'state.json'), '{}\n');
     git(tmpDir, 'add', '-A');
     git(tmpDir, 'commit', '-q', '-m', 'seed');
-    const warning = JSON.parse(runGsdTools(['validate', 'health'], sub).output).warnings.find((w) => w.code === 'W031');
+    const warning = w031(sub);
     assert.ok(warning, 'validate health must report W031');
     assert.ok(warning.fix.includes('From the project directory'), warning.fix);
     assert.ok(warning.fix.includes('-- .planning/state.json`'), warning.fix);
