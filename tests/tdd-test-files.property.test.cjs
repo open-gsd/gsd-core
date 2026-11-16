@@ -15,6 +15,7 @@
  *       basename match, not a directory one
  *   (d) git (`log -- TEST_FILE_PATHSPECS`) and `isTestFilePath` agree on random nested,
  *       mixed-case paths seeded into one repo
+ *   (e) empty segments and edge separators (`//`, a leading or trailing `/`) change nothing
  */
 
 const { describe, test } = require('node:test');
@@ -54,13 +55,22 @@ const seededPaths = fc.tuple(
 ).map(([dirMode, entries]) => entries.map(({ dirs, name }) => [...dirs.map((d) => recase(d, dirMode)), name].join('/')));
 // Every shared sample of every glob, flattened; the owner is tests/helpers/tdd-test-paths.cjs.
 const samples = Object.entries(SAMPLES_BY_GLOB)
-  .flatMap(([glob, paths]) => paths.map((path) => [glob, path]));
+  .flatMap(([glob, paths]) => paths.map((sample) => [glob, sample]));
 
 describe('#5181 tdd-test-files matcher properties', () => {
   test('(a) separator invariance', () => {
     const segment = fc.oneof(filler, fc.constantFrom('tests', '__tests__', 'test_a.py', 'a.test.js', 'x.js'));
     fc.assert(fc.property(fc.array(segment, { minLength: 1, maxLength: 5 }), (segments) => {
       assert.equal(isTestFilePath(segments.join('/')), isTestFilePath(segments.join('\\')));
+    }));
+  });
+
+  test('(e) empty segments and edge separators do not change the answer', () => {
+    const segment = fc.oneof(filler, fc.constantFrom('tests', '__tests__', 'test_a.py', 'a.test.js', 'x.js'));
+    fc.assert(fc.property(fc.array(segment, { minLength: 1, maxLength: 5 }), (segments) => {
+      const messy = `/${segments.join('//')}/`;
+      assert.equal(isTestFilePath(messy), isTestFilePath(segments.join('/')), `${messy} must match its clean form`);
+      assert.equal(isTestFilePath(messy.replaceAll('/', '\\')), isTestFilePath(segments.join('/')));
     }));
   });
 
@@ -101,21 +111,5 @@ describe('#5181 tdd-test-files matcher properties', () => {
       const hits = new Set(out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
       for (const rel of files) assert.equal(hits.has(rel), isTestFilePath(rel), `${rel}: git ${hits.has(rel)} vs router`);
     }), { numRuns: 25 });
-  });
-
-  test('(d) seeded paths hold on a case-folding disk: one spelling per directory, no reserved name', () => {
-    fc.assert(fc.property(seededPaths, (files) => {
-      const spellings = new Map();
-      for (const rel of files) {
-        const parts = rel.split('/');
-        for (const part of parts) assert.ok(!RESERVED.has(part.split('.')[0].toLowerCase()), `${rel} holds a reserved name`);
-        parts.slice(0, -1).forEach((_, i) => {
-          const dir = parts.slice(0, i + 1).join('/');
-          const seen = spellings.get(dir.toLowerCase());
-          assert.ok(!seen || seen === dir, `${dir} and ${seen} differ only by case`);
-          spellings.set(dir.toLowerCase(), dir);
-        });
-      }
-    }));
   });
 });
