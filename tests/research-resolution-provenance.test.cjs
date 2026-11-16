@@ -289,6 +289,20 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(resolve(), /With no CONTEXT\.md there is nowhere to record, so the user leaves the loop for `\/gsd:discuss-phase`, which writes one/);
   });
 
+  // Close fires only once a resolution is applied, and plan-phase closes a line only on the revised plans a
+  // re-spawn returns. Leaving the loop has no re-spawn, so without its own close the REVIEWS.md line stays
+  // open and plan-review-convergence counts it until MAX_CYCLES.
+  test('leaving the loop closes the conflict line and ends the workflow, so convergence does not count it for good', () => {
+    assert.match(resolve(), /Leaving ends the workflow once it names the command/);
+    assert.match(resolve(), /close this conflict's line now \(Close, below\) with ` \| resolved: user left the loop for \{command\}`/);
+    assert.match(resolve(), /leave the plans on disk as they are/);
+    assert.match(resolve(), /A later checker run raises Dimension 11 again for any question still open/);
+    const binding = splitLines(read('gsd-core/workflows/plan-phase.md')).find((l) => l.startsWith('- Record channel:'));
+    assert.ok(binding, 'plan-phase must bind the record channel');
+    const rest = read('gsd-core/workflows/plan-phase.md').split(binding)[1].split('\n')[1];
+    assert.match(`${binding} ${rest}`, /plan-phase closes it, on the leave-the-loop exit too \(fence below, then stop\)/);
+  });
+
   test('under --auto nothing is recorded, so the blocker escalates rather than passing on an answer nobody gave', () => {
     assert.match(resolve(), /Record only what the user said: under `--auto`, where no one is asked, record nothing/);
     assert.match(resolve(), /the same conflict returns and the Repeat rule below escalates it/);
