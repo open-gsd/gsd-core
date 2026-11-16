@@ -379,6 +379,8 @@ describe('verify-work\'s gap-closure checker skips Dimension 11, and import\'s d
     const step = span(read('gsd-core/workflows/verify-work.md'), '<step name="verify_gap_plans">', /<\/step>/);
     assert.match(step, skip);
     assert.match(step, /no CONTEXT\.md and has no route to record a user ruling/);
+    // Not "the plans add no research": Dimension 11 checks the phase RESEARCH.md, not research a plan adds.
+    assert.doesNotMatch(step, /add no research/);
   });
 
   // import --from must NOT skip it: /gsd-ultraplan-phase plans from the phase's RESEARCH.md and validates only
@@ -386,12 +388,15 @@ describe('verify-work\'s gap-closure checker skips Dimension 11, and import\'s d
   test('import --from\'s checker prompt does not skip it', () => {
     const step = span(read('gsd-core/workflows/import.md'), '<step name="plan_validate">', /<\/step>/);
     assert.match(step, /subagent_type: "gsd-plan-checker"/);
-    assert.doesNotMatch(step, /Dimension 11/);
+    assert.doesNotMatch(step, /Dimension 11|research.resolution|research question/i,
+      'no wording of a research-resolution skip, not only the dimension number');
   });
 
   test('the checker prompt carries the same scope line', () => {
     const prompt = span(read('gsd-core/workflows/verify-work/detail/elaboration.md'), '<verification_context>', /<\/verification_context>/);
     assert.match(prompt, /\*\*Scope:\*\* Gap-closure plans\. Skip Dimension 11 \(research resolution\)/);
+    assert.match(prompt, /this loop hands you no CONTEXT\.md and records no user ruling/);
+    assert.doesNotMatch(prompt, /add no research/);
   });
 });
 
