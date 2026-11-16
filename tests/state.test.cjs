@@ -5858,9 +5858,9 @@ describe('state planned-phase command', () => {
       ['Plan: 3 of 5 in current phase', '3', 'Plan: 3 of 3 in current phase'],
       ['Plan: 3 of 5 in current phase', '4', 'Plan: 3 of 4 in current phase'],
       // Terminal `Plan: M of M` (advance-plan leaves N = M once the last plan is done).
-      ['Plan: 5 of 5 in current phase', '4', null, 5],
+      ['Plan: 5 of 5 in current phase', '4', null],
       ['Plan: 5 of 5 in current phase', '5', 'Plan: 5 of 5 in current phase'],
-      ['Plan: 1 of 3 in current phase', '0', null, 1],
+      ['Plan: 1 of 3 in current phase', '0', null],
       ['Plan: 0 TBD in current phase', '0', 'Plan: 0 of 0 in current phase'],
     ]) {
       writeTbdPlanFixture(['Phase: 19', line, 'Status: Ready']);
@@ -5930,7 +5930,6 @@ describe('state planned-phase command', () => {
       ['Plan: 2 of 5,', 'Plan: 2 of 8,'],
       ['Plan: 2 of 5)', 'Plan: 2 of 8)'],
       ['Plan: 2 of 5; wave 2', 'Plan: 2 of 8; wave 2'],
-      ['Plan: 2 of 5.5', 'Plan: 2 of 8 of 5.5'],
       ['Plan: 1 of B in current phase', 'Plan: 1 of 8 in current phase'],
       ['Current Plan: 3 (blocked)', 'Current Plan: 3 of 8 (blocked)'],
       ['Plan: 0 TBD in current phase', 'Plan: 0 of 8 in current phase'],
@@ -5943,6 +5942,25 @@ describe('state planned-phase command', () => {
     }
   });
 
+  test('#5320: a total continued by a separator or a glued word is refused before any write, not given a second " of"', () => {
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    for (const line of ['Plan: 2 of 5.5', 'Plan: 2 of 5/7', 'Plan: 2 of 5,6', 'Plan: 2 of 5a', 'Plan: 1 of ?x', 'Plan: 1 of Bx', 'Plan: 2 of', 'Current Plan: 2 of 5.5']) {
+      writeTbdPlanFixture(['Phase: 19', line, 'Status: Ready']);
+      const before = fs.readFileSync(statePath);
+      const r = runGsdTools([...PLAN_CMD, '8', '--json-errors'], tmpDir);
+      assert.strictEqual(r.success, false, `${line} must be refused`);
+      assert.strictEqual(JSON.parse(r.error).reason, ERROR_REASON.PLANS_NO_LINE, line);
+      assert.ok(fs.readFileSync(statePath).equals(before), `${line} must not write`);
+    }
+  });
+
+  test('#5320: --plans is the flag even right after a valueless --name (a flag-shaped token is never a value)', () => {
+    writeTbdPlanFixture(TBD_BODY);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '19', '--name', '--plans', '3'], tmpDir);
+    assert.ok(r.success, r.error);
+    assert.match(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8'), /^Plan: 0 of 3 in current phase$/m);
+  });
+
   test('#5320: plan lines in a CRLF STATE.md are rewritten from a CRLF document', () => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     for (const [line, want] of [['Plan: 2 of 5', 'Plan: 2 of 8'], ['Plan: 2 of 5.', 'Plan: 2 of 8.'], ['Plan: 0 TBD in current phase', 'Plan: 0 of 8 in current phase']]) {
@@ -5950,8 +5968,10 @@ describe('state planned-phase command', () => {
       fs.writeFileSync(statePath, fs.readFileSync(statePath, 'utf8').replaceAll('\n', '\r\n'));
       const r = runGsdTools([...PLAN_CMD, '8'], tmpDir);
       assert.ok(r.success, `${line}: ${r.error}`);
-      const out = fs.readFileSync(statePath, 'utf8').replace(/\r\n/g, '\n');
-      assert.ok(`\n${out}`.includes(`\n${want}\n`), `${line} -> ${want}: ${JSON.stringify(out)}`);
+      // the write seam (platformWriteSync) stores STATE.md with LF endings, so the wanted line is exact and no `\r` survives it
+      const out = fs.readFileSync(statePath, 'utf8');
+      assert.match(out, new RegExp(`^${escapeRegex(want)}$`, 'm'), `${line} -> ${want}: ${JSON.stringify(out)}`);
+      assert.ok(!out.includes('\r'), `${line}: no stray CR: ${JSON.stringify(out)}`);
     }
   });
 

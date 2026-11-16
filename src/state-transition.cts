@@ -1881,6 +1881,16 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
         'Add `Plan: 0 TBD in current phase` under `## Current Position` (or a `Total Plans in Phase:` line) and retry.',
     } };
   }
+  // `N of` with no readable total (`2 of 5.5`, `1 of ?x`, `2 of`): the count has no slot, and rewriting would leave a second " of" in the line.
+  for (const [name, value, pos] of [['Plan', lines.plan, planPos], ['Current Plan', lines.currentPlan, legacy]] as const) {
+    if (pos?.legacy && /^\d+\s+of(?:\s|$)/.test(value ?? '')) {
+      return { error: {
+        reason: ERROR_REASON.PLANS_NO_LINE,
+        message: `state planned-phase: --plans cannot replace the total in \`${name}: ${value}\`. ` +
+          `Write the line as \`${name}: N of M\` (or \`${name}: N of ?\`) and retry.`,
+      } };
+    }
+  }
   if (samePhase) {
     // A recorded position past the safe-integer range (`n` is null) is above every count that can be written.
     if ((legacy && legacy.n === null) || (planPos && planPos.n === null)) {

@@ -5331,13 +5331,15 @@ describe('#5320 plan-count / plan-position owner parity', () => {
   test('planned-phase and advance-plan read and write the same position for generated values (limit-1/limit/limit+1)', () => {
     const rests = ['', ' in current phase', ' - wave 2 done', '.', ',', ')', ';'];
     const spec = fc.record({
-      kind: fc.constantFrom('N', 'NofM', 'NofQ', 'TBD'),
+      kind: fc.constantFrom('N', 'NofM', 'NofQ', 'NofX', 'TBD'),
       n: fc.integer({ min: 0, max: 9 }),
       m: fc.integer({ min: 1, max: 9 }),
+      x: fc.constantFrom('5.5', '5/7', '5a'),
       rest: fc.constantFrom(...rests),
     });
     const render = (s) => {
       if (s.kind === 'TBD') return 'TBD';
+      if (s.kind === 'NofX') return `${s.n} of ${s.x}`; // a total the number continues into: no total to land on
       // punctuation tails (`5.`, `5)`) follow only a numeric total: a bare N needs whitespace after it
       const rest = s.kind === 'NofM' || /^\s|^$/.test(s.rest) ? s.rest : '';
       if (s.kind === 'N') return `${s.n}${rest}`;
@@ -5369,7 +5371,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           fc.pre(count >= 0);
           // independent oracle
           let want = null;
-          if (!plan && !cur && !total) want = 'plans_no_line';
+          if ((!plan && !cur && !total) || [plan, cur].some((s) => s?.kind === 'NofX')) want = 'plans_no_line';
           else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = 'ambiguous_plan_position';
           else if (!newPhase && recorded > count) want = 'plans_below_position';
           const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
@@ -5378,6 +5380,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           // no readable line and a Total line: planned-phase leaves the lines as written and advance-plan refuses them
           if (reads.length === 0 && total) return adv0(r.content).error === true;
           if (readRecordedPlanTotal(r.content) !== count) return false;
+          // a written position names its total once: never `N of M of <old text>`
+          if (plan && plan.kind !== 'TBD' && lineOf(r.content).split(' of ').length !== 2) return false;
           const adv = adv0(r.content);
           const position = newPhase ? 0 : recorded;
           return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
@@ -5413,12 +5417,18 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
   });
 
-  test('plannedPhase property: a lower-case word after `of` is author text and survives behind the new total', () => {
+  // A value that reads `N of` but holds no total is refused with nothing written: the count has no slot, and a second " of" would corrupt the line.
+  const refused = (line) => {
+    const r = planned(line, 6);
+    return r.data?.reason === 'plans_no_line' && r.content === doc(line) && r.updated.length === 0;
+  };
+
+  test('plannedPhase property: a lower-case word after `of` is no total, so the line is refused', () => {
     fc.assert(
       fc.property(
         fc.stringMatching(/^[a-z]{1,8}$/),
         fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()),
-        (word, t) => lineOf(planned(`Plan: 2 of ${word}${t}`, 6).content) === `Plan: 2 of 6 of ${word}${t}`,
+        (word, t) => refused(`Plan: 2 of ${word}${t}`),
       ),
       { seed: 5320, numRuns: 400 },
     );
@@ -5444,16 +5454,19 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     const lf = doc('Plan: 1 of 3.');
     assert.deepStrictEqual(plannedLines(lf.replaceAll('\n', '\r\n'), 'crlf'), ['Plan: 1 of 5.']);
     assert.deepStrictEqual(plannedLines(lf.replace('\n', '\r\n'), 'mixed'), ['Plan: 1 of 5.']);
+    // the transition keeps the document's own endings (the write seam normalises later): assert on the raw output
+    const crlf = transitionCore(lf.replaceAll('\n', '\r\n'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 5 }, deps).content;
+    assert.ok(crlf.split('\r\n').includes('Plan: 1 of 5.'), JSON.stringify(crlf));
+    assert.doesNotMatch(crlf, /(?<!\r)\n/, 'no bare LF in a CRLF document');
   });
 
-  test('plannedPhase property: for any generated tail after the total, a tail that does not continue the number is kept and one that does is never read as a total', () => {
+  test('plannedPhase property: for any generated tail after the total, a tail that does not continue the number is kept and one that does is refused', () => {
     // fast-check generates the tails (strings without line breaks or edge whitespace); the oracle is the stated rule, not the regex
     const continues = (t) => /^[\p{L}\p{N}_]/u.test(t) || /^[^\s\w]\d/u.test(t);
     fc.assert(
       fc.property(fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()), (t) => {
         fc.pre(!/^[0-9]/.test(t)); // ASCII digits extend the total itself
-        const out = lineOf(planned(`Plan: 2 of 5${t}`, 6).content);
-        return continues(t) ? out === `Plan: 2 of 6 of 5${t}` : out === `Plan: 2 of 6${t}`;
+        return continues(t) ? refused(`Plan: 2 of 5${t}`) : lineOf(planned(`Plan: 2 of 5${t}`, 6).content) === `Plan: 2 of 6${t}`;
       }),
       { seed: 5320, numRuns: 400 },
     );
@@ -5465,9 +5478,8 @@ describe('#5320 plan-count / plan-position owner parity', () => {
         fc.constantFrom('?', 'A', 'B', 'I', 'Z'),
         fc.string().filter((t) => !/[\r\n\u2028\u2029\u0085]/.test(t) && t === t.trimEnd()),
         (mark, t) => {
-          const out = lineOf(planned(`Plan: 2 of ${mark}${t}`, 6).content);
           // independent oracle: the mark is a slot only when whitespace or the end of the line follows it
-          return t === '' || /^\s/.test(t) ? out === `Plan: 2 of 6${t}` : out === `Plan: 2 of 6 of ${mark}${t}`;
+          return t === '' || /^\s/.test(t) ? lineOf(planned(`Plan: 2 of ${mark}${t}`, 6).content) === `Plan: 2 of 6${t}` : refused(`Plan: 2 of ${mark}${t}`);
         },
       ),
       { seed: 5320, numRuns: 400 },
@@ -5478,6 +5490,11 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     for (const tail of ['.', ',', ')', ';', ' - wave 1']) {
       assert.strictEqual(lineOf(planned(`Plan: 2 of 5${tail}`, 6).content), `Plan: 2 of 6${tail}`, tail);
     }
+  });
+
+  test('plannedPhase unit: a total continued by a separator or a glued word, or no total at all, is refused', () => {
+    for (const tail of ['5.5', '5/7', '5,6', '5a', '?x', 'Bx', 'five', '']) assert.ok(refused(`Plan: 2 of ${tail}`.trimEnd()), tail);
+    assert.ok(refused('Current Plan: 2 of 5.5'));
   });
 
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
