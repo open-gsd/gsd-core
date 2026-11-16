@@ -5439,6 +5439,19 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(r.data?.reason, 'plans_no_line');
     assert.strictEqual(r.content, fm);
     assert.strictEqual(r.updated.length, 0);
+    // the same holds for a `Current Plan:` line only the frontmatter holds
+    const fmCurrent = `---\nCurrent Plan: 1 of 3\n---\n${doc('Status: Ready')}`;
+    const rc = transitionCore(fmCurrent, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
+    assert.strictEqual(rc.data?.reason, 'plans_no_line');
+    assert.strictEqual(rc.content, fmCurrent);
+  });
+
+  test('plannedPhase unit: a digit-led value that reads no position keeps its recorded progress on a same-phase replan', () => {
+    for (const line of ['Plan: 3/5', 'Plan: 3.', 'Plan: 3:', 'Current Plan: 3/5']) {
+      const r = planned(line, 6);
+      assert.strictEqual(r.data?.error, undefined, line);
+      assert.ok(r.content.split('\n').includes(line), `${line} is left as written`);
+    }
   });
 
   test('plannedPhase property: a lower-case word after `of` is no total, so the line is refused', () => {

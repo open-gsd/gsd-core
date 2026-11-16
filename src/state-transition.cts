@@ -1920,14 +1920,16 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
   }
   const carry = (pos: PlanPosition): string => renderPlanTotal(samePhase ? pos : null, count);
   const fresh = renderPlanTotal(null, count);
+  // A value that starts with digits but reads no position (`3/5`, `3.`) holds recorded progress: leave it as written, as advance-plan does.
+  const digitLed = (v: string | null): boolean => /^\d/.test(v ?? '');
   let currentPlan: string | undefined;
   if (lines.currentPlan !== null) {
     if (legacy?.legacy && totalRecorded) currentPlan = samePhase ? undefined : '0';
     else if (legacy) currentPlan = carry(legacy);
-    else if (!planPos && !totalRecorded) currentPlan = fresh;
+    else if (!planPos && !totalRecorded && !digitLed(lines.currentPlan)) currentPlan = fresh;
   }
   let plan: string | undefined;
-  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy || totalRecorded ? undefined : fresh;
+  if (lines.plan !== null) plan = planPos ? carry(planPos) : legacy || totalRecorded || digitLed(lines.plan) ? undefined : fresh;
   return { plan, currentPlan };
 }
 
