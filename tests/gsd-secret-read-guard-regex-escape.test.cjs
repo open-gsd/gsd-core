@@ -91,6 +91,12 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     'powershell -c "type .\\.env"',
     'powershell -NoProfile -Command "Get-Content .\\.env | Select -First 1"',
     'cmd /c "type config\\.env"',
+    // Fail-safe: a bare escape, or one whose word carries only characters legal
+    // in a Windows name, is a Windows relative path as readily as a pattern.
+    "grep '\\.env' list.txt",
+    "grep -E 'foo\\.env' list.txt",
+    "cat 'config(1)\\.env'",
+    "cat 'a+b\\.env'",
   ];
   for (const cmd of blocks) {
     test(`still blocks ${JSON.stringify(cmd)}`, () => {
@@ -106,16 +112,35 @@ describe('gsd-secret-read-guard: a regex escape in a quoted operand is not a pat
     assertBlocked(runHook(grep({ glob: 'config\\.env' })), 'Grep glob config\\.env');
   });
 
-  // Regex-only characters never occur in a file name, so a word carrying one is
-  // a pattern and the `\` of its escape is not a separator.
-  const META = fc.constantFrom('|', '(', ')', '[', '*', '+', '?', '{', '$', '^');
+  // `|`, `*` and `?` never occur in a Windows file name, so a word carrying one
+  // is a pattern and the `\` of its escape is not a separator. The metacharacter
+  // sits before or after the escape, never between a drive prefix and the name.
+  const META = fc.constantFrom('|', '*', '?');
   const DIR = fc.constantFrom('migrations/', 'src/', 'a/b/', '');
   test('property: a backslash escape in a quoted word with a regex-only character is never a separator', () => {
-    fc.assert(fc.property(DIR, META, fc.constantFrom('', 'x', 'data'), (dir, meta, alt) => {
-      const cmd = `grep -E '${dir}${alt}${meta}\\.env' list.txt`;
+    fc.assert(fc.property(DIR, META, fc.constantFrom('', 'x', 'data'), fc.boolean(), (dir, meta, alt, metaFirst) => {
+      const word = metaFirst ? `${dir}${alt}${meta}\\.env` : `${dir}\\.env${meta}${alt}`;
+      const cmd = `grep -E '${word}' list.txt`;
       assertAllowed(runHook(bash(cmd)), cmd);
     }), PROPERTY_RUNS);
   });
+
+  // Parity table: the SAME path run through each arm. Bash differs from Read
+  // and Grep on purpose for a regex escape, and only for it.
+  const PARITY = [
+    // [name, bash command, Read path or null, Grep glob or null, bash blocks, other arm blocks]
+    ['drive path', "cat 'C:\\proj\\.env'", 'C:\\proj\\.env', 'C:\\proj\\.env', true, true],
+    ['relative escape', "cat 'config\\.env'", 'config\\.env', 'config\\.env', true, true],
+    ['regex escape with alternation', "grep -E 'a|\\.env' f", 'a|\\.env', 'a|\\.env', false, true],
+    ['plain relative', 'cat config/.env', 'config/.env', 'config/.env', true, true],
+  ];
+  for (const [name, cmd, readPath, glob, bashBlocks, otherBlocks] of PARITY) {
+    test(`parity: ${name}`, () => {
+      (bashBlocks ? assertBlocked : assertAllowed)(runHook(bash(cmd)), `Bash ${cmd}`);
+      (otherBlocks ? assertBlocked : assertAllowed)(runHook(read(readPath)), `Read ${readPath}`);
+      (otherBlocks ? assertBlocked : assertAllowed)(runHook(grep({ glob })), `Grep glob ${glob}`);
+    });
+  }
 
   test('property: a Windows-shaped quoted token keeps the backslash split', () => {
     const DRIVE = fc.constantFrom('C', 'D', 'z', 'E');

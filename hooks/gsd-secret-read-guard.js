@@ -520,16 +520,18 @@ function namesSecret(tok, backslashSeparates = true) {
 // is always a path separator.
 const WINDOWS_SHAPED_RE = /^(?:[A-Za-z]:\\|\\\\)/;
 
-// Characters that occur in a regular expression but not in a file name. A word
-// carrying one is a pattern, so its `\` is a regex escape (`process\.env` in
-// `'a|process\.env'`) and not a path separator (#5883).
-const REGEX_ONLY_CHAR_RE = /[|()[\]*+?{}^$]/;
+// Characters that occur in a regular expression but cannot occur in a Windows
+// file name (`|`, `*`, `?`). A word carrying one is a pattern, so its `\` is a
+// regex escape (`process\.env` in `'a|process\.env'`) and not a path separator
+// (#5883). `( ) [ ] { } + ^ $` are legal in a Windows name, so they do not make
+// a word a pattern: `config(1)\.env` stays a path.
+const REGEX_ONLY_CHAR_RE = /[|*?]/;
 
 // Does a `\` in this whitespace-free word separate path segments? Yes for a
 // Windows path, and for any word that cannot be a regex. A bare `\.env` or
 // `.\.env` is fail-safe denied: it is a Windows relative path as readily as a
 // pattern.
-function backslashSeparates(word) {
+function wordBackslashIsSeparator(word) {
   return WINDOWS_SHAPED_RE.test(word) || !REGEX_ONLY_CHAR_RE.test(word);
 }
 
@@ -540,9 +542,9 @@ function backslashSeparates(word) {
 // separator.
 function namesSecretOperand(tok) {
   if (typeof tok !== 'string') return false;
-  if (!/\s/.test(tok)) return namesSecret(tok, backslashSeparates(tok));
-  return namesSecret(tok, backslashSeparates(tok))
-    || tok.split(/\s+/).some((w) => w.includes('\\') && namesSecret(w, backslashSeparates(w)));
+  const named = (w) => namesSecret(w, wordBackslashIsSeparator(w));
+  if (!/\s/.test(tok)) return named(tok);
+  return named(tok) || tok.split(/\s+/).some((w) => w.includes('\\') && named(w));
 }
 
 // ---------------------------------------------------------------------------
