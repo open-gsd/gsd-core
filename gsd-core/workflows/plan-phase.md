@@ -1176,6 +1176,7 @@ Revision prompt:
 <required_reading>
 - {PHASE_DIR}/*-PLAN.md (Existing plans)
 - {context_path} (USER DECISIONS from /gsd:discuss-phase)
+- {research_path} (Technical Research)
 </required_reading>
 
 ${AGENT_SKILLS_PLANNER}
