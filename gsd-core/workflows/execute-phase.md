@@ -431,7 +431,7 @@ Report:
 
 **Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** Every all-filtered arm above has already exited or jumped to `aggregate_results` / `update_roadmap`; reaching here means the post-filter list is non-empty. A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
 ```bash
-PHASE_NAME=$(gsd_run query init.execute-phase "{phase_number}" --pick phase_name)
+PHASE_NAME=$(gsd_run query init.execute-phase "{phase_number}" --pick phase_name) || exit 1
 gsd_run query state.begin-phase --phase "{phase_number}" --name="${PHASE_NAME}" --plans "{plan_count}"
 ```
 </step>

@@ -295,7 +295,7 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: begin-phase takes --name and --plans from the init JSON', () => {
     assert.ok(
       workflow().includes(
-        "PHASE_NAME=$(gsd_run query init.execute-phase \"{phase_number}\" --pick phase_name)\ngsd_run query state.begin-phase --phase \"{phase_number}\" --name=\"${PHASE_NAME}\" --plans \"{plan_count}\""
+        "PHASE_NAME=$(gsd_run query init.execute-phase \"{phase_number}\" --pick phase_name) || exit 1\ngsd_run query state.begin-phase --phase \"{phase_number}\" --name=\"${PHASE_NAME}\" --plans \"{plan_count}\""
       ),
       'begin-phase records phase_name (re-read from init.execute-phase in the block itself, so no phase text is spliced into the shell and no earlier shell is needed) and plan_count from the init JSON'
     );
@@ -323,6 +323,19 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
       fc.property(fc.string().filter(n => !/[\n\0]/.test(n)), (name) => { check(name); }),
       { numRuns: 25 }
     );
+  });
+
+  test('#5843 row 6: a failed init.execute-phase name read stops the block before begin-phase runs', () => {
+    const block = span('gsd-core/workflows/execute-phase.md', 'PHASE_NAME=', 'gsd_run query state.begin-phase');
+    // Not under `set -e`: only the block's own `|| exit 1` can stop it.
+    const stub = `gsd_run() { if [ "$2 $3 $4 $5" = "init.execute-phase 7 --pick phase_name" ]; then return 1; else printf 'begin-phase ran'; fi; }`;
+    const r = runBash(
+      block.map(l => l.replace(/\{phase_number\}/g, '7').replace('{plan_count}', '3')),
+      { stdout: '', rc: 0 },
+      { setE: false, preamble: [stub] }
+    );
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, '', 'begin-phase must not run after a failed name read');
   });
 
   test('#5843 row 6: init.execute-phase --pick phase_name returns the ROADMAP name byte for byte, and prints nothing for an unknown phase', () => {
