@@ -603,7 +603,7 @@ describe('state.json never dirties the tree (#5505)', () => {
           assert.deepStrictEqual(committed, [`${rel}/STATE.md`], 'the user\'s staged lines stay out of the commit');
         }
       },
-    ), { numRuns: 12, examples: [[[], true, '\n', []], [['scratch/'], true, '\n', ['', 'mine/', 'x  ']]] });
+    ), { seed: 5550, numRuns: 12, examples: [[[], true, '\n', []], [['scratch/'], true, '\n', ['', 'mine/', 'x  ']]] });
   });
 
   test('tracked modified state.json migrates for a workstream copy too', (t) => {
