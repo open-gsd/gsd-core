@@ -593,6 +593,7 @@ if [ "$AUTO_MODE" = "true" ]; then
     fi
     BACKUP_ACTION="remove spent"; BACKUP_FLAG=--files-removed
     BACKUP_HINT="the files are already deleted, so commit the removal yourself (git add -u -- <the listed files>)"
+    BACKUP_SKIP_HINT=" — $BACKUP_HINT"
   else
     echo "Iteration backups retained (final review status: ${FINAL_STATUS}) — post-mortem trail."
     if [ "$COMMIT_DOCS" = "true" ] && [ "${#BACKUP_FILES[@]}" -gt 0 ]; then
@@ -600,6 +601,7 @@ if [ "$AUTO_MODE" = "true" ]; then
     fi
     BACKUP_ACTION="retain"; BACKUP_FLAG=--files
     BACKUP_HINT="a rejected commit can leave them staged (git restore --staged)"
+    BACKUP_SKIP_HINT=""
   fi
   # The guard is load-bearing: `query commit` given no path commits all of .planning/.
   if [ "${#COMMIT_BACKUPS[@]}" -gt 0 ]; then
@@ -612,7 +614,7 @@ if [ "$AUTO_MODE" = "true" ]; then
       nothing|committed) ;; # unchanged, or committed without a hash
       skipped)
         echo "Note: commit skipped by the commit_docs policy (per-phase override or" \
-          "gitignored .planning); iteration backups not committed: ${COMMIT_BACKUPS[*]}" ;;
+          "gitignored .planning); iteration backups not committed: ${COMMIT_BACKUPS[*]}${BACKUP_SKIP_HINT}" ;;
       ''|*[!0-9a-f]*)
         echo "Warning: iteration backup commit failed (${BACKUP_COMMIT:-no output});" \
           "${BACKUP_HINT}: ${COMMIT_BACKUPS[*]}" ;;

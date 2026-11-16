@@ -462,6 +462,7 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
       /staged/,
       'a skip stages nothing, so it must not advise unstaging'
     );
+    assert.doesNotMatch(phaseOff.stdout, /already deleted/, 'a retained backup is not deleted');
 
     // A failed commit (non-zero exit, or a rejecting hook) commits nothing and never aborts the
     // step.
@@ -520,6 +521,12 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     assert.match(failed.stdout, /commit the removal yourself/);
     assert.doesNotMatch(failed.stdout, /git restore --staged/);
     assert.match(failed.stdout, /git add -u -- <the listed files>/, 'the hint names the paths');
+
+    // A policy-skipped removal commit leaves the deletion uncommitted: the note says so, too.
+    const skipDir = seedBackupRepo(t, 'gsd-5506-converged-skip-', 'clean', true);
+    const skipped = runFence(skipDir, { commitDocs: 'true', body: stubs.skipped });
+    assert.match(skipped.stdout, /skipped by the commit_docs policy/);
+    assert.match(skipped.stdout, /commit the removal yourself/);
 
     // One tracked and one untracked backup: only the tracked one is declared (the real CLI refuses
     // an untracked path in --files-removed), and the untracked one is still deleted.
