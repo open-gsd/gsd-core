@@ -373,12 +373,20 @@ describe('plan-phase\'s no-context option names the Dimension 11 consequence (#5
 // handler has no route to record a user ruling. Dimension 11 would block every research question there with
 // no way to clear it, so the loop scopes the dimension out. The spine states it because a compact-content run
 // never reads the detail file; the detail file states it because that is the prompt a full run sends.
-describe('verify-work\'s gap-closure checker skips Dimension 11 (#5438)', () => {
+describe('verify-work\'s gap-closure checker skips Dimension 11, and import\'s does not (#5438)', () => {
   const skip = /Skip Dimension 11 \(research resolution\)/i;
   test('the spine tells the checker to skip it, so a compact-content run does too', () => {
     const step = span(read('gsd-core/workflows/verify-work.md'), '<step name="verify_gap_plans">', /<\/step>/);
     assert.match(step, skip);
     assert.match(step, /no CONTEXT\.md and has no route to record a user ruling/);
+  });
+
+  // import --from must NOT skip it: /gsd-ultraplan-phase plans from the phase's RESEARCH.md and validates only
+  // through import, so a skip there would pass an open research question silently.
+  test('import --from\'s checker prompt does not skip it', () => {
+    const step = span(read('gsd-core/workflows/import.md'), '<step name="plan_validate">', /<\/step>/);
+    assert.match(step, /subagent_type: "gsd-plan-checker"/);
+    assert.doesNotMatch(step, /Dimension 11/);
   });
 
   test('the checker prompt carries the same scope line', () => {
