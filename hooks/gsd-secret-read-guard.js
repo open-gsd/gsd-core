@@ -1899,7 +1899,181 @@ function nameOnlyOperandIndices(base, operands) {
   if (CONTAINER_RUNTIMES.has(base)) return envFileValueIndices(operands);
   if (base === 'git') return gitPathspecIndices(operands);
   if (base === 'cp' || base === 'mv') return copyDestinationIndices(operands);
+  if (SEARCH_TOOLS.has(base)) return searchOperandIndices(SEARCH_TOOLS.get(base), operands);
+  if (base === 'xargs') return xargsSearchIndices(operands);
   return new Set();
+}
+
+// #5884: grep-family, ripgrep and jq command lines. Their pattern or program
+// (the first positional when no option supplied one), and the value of an
+// exclusion option, are a regular expression, code, or a name to skip, never a
+// file the command opens. Each spec is the command's own option vocabulary
+// (grep(1) GNU and BSD, rg(1), jq(1)): an option in none of its sets withdraws
+// the whole carve-out for the segment, because an unknown option may take a
+// value, and an option value mistaken for the pattern would turn the real
+// pattern, or a file, into the exempt operand.
+//   noShort / valueShort / patternShort: short option letters without a value,
+//     with a value, and with a value that IS the pattern or program (`-e`, `-f`).
+//   nameShort: short letters whose value is a name to skip (`rg -g`).
+//   noLong / valueLong (name -> operand count) / patternLong / nameLong: the
+//     same for long options; optionalLong may carry `=value` or none.
+//   digits: grep's `-NUM` context count may be bundled in a short cluster.
+// A pattern FILE (`-f`, `--file`, `--from-file`) is read by the command, so its
+// value is never exempt: it is classified as an ordinary operand.
+const GREP_SPEC = {
+  noShort: new Set('EFGPiyvwxcLloqsbHhnTZzaIrRUuVOpS'),
+  // `-C` / `--context` are not listed: BSD grep (macOS) takes an OPTIONAL
+  // number, so `grep -C 3 .env` there reads `.env` with pattern `3`, and a
+  // required-value reading would exempt `.env` as the pattern.
+  valueShort: new Set('mABdD'),
+  patternShort: new Set('ef'),
+  nameShort: new Set(),
+  noLong: new Set([
+    'extended-regexp', 'fixed-strings', 'basic-regexp', 'perl-regexp', 'ignore-case', 'no-ignore-case',
+    'invert-match', 'word-regexp', 'line-regexp', 'count', 'files-without-match', 'files-with-matches',
+    'only-matching', 'quiet', 'silent', 'no-messages', 'byte-offset', 'with-filename', 'no-filename',
+    'initial-tab', 'null', 'null-data', 'text', 'recursive', 'dereference-recursive', 'line-number',
+    'line-buffered', 'unix-byte-offsets', 'no-group-separator', 'help', 'version', 'binary', 'mmap',
+  ]),
+  valueLong: new Map([
+    ['max-count', 1], ['after-context', 1], ['before-context', 1], ['devices', 1],
+    ['directories', 1], ['binary-files', 1], ['label', 1], ['group-separator', 1],
+    ['exclude-from', 1], ['include-dir', 1],
+  ]),
+  optionalLong: new Set(['color', 'colour']),
+  patternLong: new Set(['regexp', 'file']),
+  nameLong: new Set(['exclude', 'exclude-dir', 'include']),
+  digits: true,
+};
+const RG_SPEC = {
+  noShort: new Set('iSsnNlcowxvuUFHIPzabqp0.'),
+  valueShort: new Set('mABCjMrtTEd'),
+  patternShort: new Set('ef'),
+  nameShort: new Set('g'),
+  noLong: new Set([
+    'ignore-case', 'case-sensitive', 'smart-case', 'line-number', 'no-line-number', 'files-with-matches',
+    'files-without-match', 'count', 'only-matching', 'word-regexp', 'line-regexp', 'invert-match',
+    'fixed-strings', 'hidden', 'no-ignore', 'unrestricted', 'text', 'binary', 'multiline', 'heading',
+    'no-heading', 'with-filename', 'no-filename', 'column', 'json', 'no-messages', 'quiet', 'stats',
+    'vimgrep', 'null', 'follow', 'pcre2', 'pretty', 'trim', 'help', 'version', 'no-config',
+  ]),
+  valueLong: new Map([
+    ['max-count', 1], ['after-context', 1], ['before-context', 1], ['context', 1], ['threads', 1],
+    ['max-columns', 1], ['replace', 1], ['type', 1], ['type-not', 1], ['encoding', 1], ['max-depth', 1],
+    ['sort', 1], ['sortr', 1], ['colors', 1], ['path-separator', 1], ['ignore-file', 1], ['pre', 1],
+  ]),
+  optionalLong: new Set(['color']),
+  patternLong: new Set(['regexp', 'file']),
+  nameLong: new Set(['glob', 'iglob']),
+  digits: false,
+};
+const JQ_SPEC = {
+  noShort: new Set('nrjascCMSeRhV'),
+  valueShort: new Set('L'),
+  patternShort: new Set('f'),
+  nameShort: new Set(),
+  noLong: new Set([
+    'null-input', 'raw-input', 'slurp', 'compact-output', 'raw-output', 'join-output', 'ascii-output',
+    'color-output', 'monochrome-output', 'sort-keys', 'tab', 'exit-status', 'seq', 'stream',
+    'stream-errors', 'unbuffered', 'binary', 'args', 'jsonargs', 'help', 'version', 'raw-output0',
+  ]),
+  // `--arg NAME VALUE` takes two operands; `--slurpfile` / `--rawfile` read the
+  // file named by the second, which stays an ordinary operand.
+  valueLong: new Map([
+    ['indent', 1], ['library-path', 1], ['arg', 2], ['argjson', 2], ['slurpfile', 2], ['rawfile', 2],
+  ]),
+  optionalLong: new Set(),
+  patternLong: new Set(['from-file']),
+  nameLong: new Set(),
+  digits: false,
+};
+const SEARCH_TOOLS = new Map([
+  ['grep', GREP_SPEC], ['egrep', GREP_SPEC], ['fgrep', GREP_SPEC], ['rg', RG_SPEC], ['jq', JQ_SPEC],
+]);
+
+// The operand indices that are a pattern, program or exclusion value; the empty
+// set when any option is outside the spec (see above).
+function searchOperandIndices(spec, operands) {
+  const exempt = new Set();
+  let patternSupplied = false;
+  let firstPositional = -1;
+  let endOfOptions = false;
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    if (endOfOptions || !t.startsWith('-') || t === '-') {
+      if (firstPositional === -1) firstPositional = k;
+    } else if (t === '--') {
+      endOfOptions = true;
+    } else if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t.slice(2) : t.slice(2, eq);
+      if (spec.nameLong.has(name)) {
+        exempt.add(k);
+        if (eq === -1) {
+          if (k + 1 >= operands.length) return new Set();
+          exempt.add(++k);
+        }
+      } else if (spec.patternLong.has(name)) {
+        patternSupplied = true;
+        if (eq === -1) k++;
+      } else if (spec.valueLong.has(name)) {
+        if (eq === -1) k += spec.valueLong.get(name);
+      } else if (spec.optionalLong.has(name) || (eq === -1 && spec.noLong.has(name))) {
+        // no operand of its own
+      } else {
+        return new Set();
+      }
+    } else {
+      for (let i = 1; i < t.length; i++) {
+        const ch = t[i];
+        if (spec.noShort.has(ch) || (spec.digits && /[0-9]/.test(ch))) continue;
+        const known = spec.valueShort.has(ch) || spec.patternShort.has(ch) || spec.nameShort.has(ch);
+        if (!known) return new Set();
+        if (spec.patternShort.has(ch)) patternSupplied = true;
+        const attached = i + 1 < t.length;
+        if (spec.nameShort.has(ch)) {
+          if (attached) exempt.add(k);
+          else if (k + 1 < operands.length) exempt.add(++k);
+          else return new Set();
+        } else if (!attached) {
+          k++;
+        }
+        break;
+      }
+    }
+    if (k >= operands.length) return new Set(); // an option ran off the end of the words
+  }
+  if (!patternSupplied && firstPositional !== -1) exempt.add(firstPositional);
+  return exempt;
+}
+
+// `xargs <sub-command words>`: the word index of the sub-command, or -1.
+// `argFile` is true when `-a`/`--arg-file` replaces stdin.
+function xargsSubCommand(operands) {
+  let argFile = false;
+  for (let m = 0; m < operands.length; m++) {
+    const t = operands[m].text;
+    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
+    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
+    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
+    if (t.startsWith('--') && t.includes('=')) continue;
+    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
+    return { subIdx: m, argFile };
+  }
+  return { subIdx: -1, argFile };
+}
+
+// The carve-out for a search sub-command run by xargs, shifted to xargs's own
+// operand indices. Only the search tools: the words xargs appends from stdin
+// follow the sub-command's own, so they never turn the pattern into a file,
+// whereas `xargs cp src .env` would make `.env` a source.
+function xargsSearchIndices(operands) {
+  const { subIdx } = xargsSubCommand(operands);
+  if (subIdx === -1) return new Set();
+  const sub = lastSegment(operands[subIdx].text).toLowerCase();
+  if (!SEARCH_TOOLS.has(sub)) return new Set();
+  const inner = searchOperandIndices(SEARCH_TOOLS.get(sub), operands.slice(subIdx + 1));
+  return new Set([...inner].map((i) => i + subIdx + 1));
 }
 
 // #4639: the `--env-file` word, plus the next operand for the bare flag
@@ -2643,18 +2817,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
 // mode c whether or not a pipe feeds it.
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
-  let argFile = false;
-  let subIdx = -1;
-  for (let m = 0; m < operands.length; m++) {
-    const t = operands[m].text;
-    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
-    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
-    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
-    if (t.startsWith('--') && t.includes('=')) continue;
-    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
-    subIdx = m;
-    break;
-  }
+  const { subIdx, argFile } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
   const subBase = lastSegment(operands[subIdx].text).toLowerCase();

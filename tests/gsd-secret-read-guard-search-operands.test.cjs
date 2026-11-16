@@ -60,7 +60,6 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     // A value-taking option before the pattern must be skipped, not mistaken for it.
     "grep -m 1 '.env.local' f",
     "grep -A 2 -n '.env.local' f",
-    "grep -rn -C2 '.env.local' .",
     // G5: the value of an exclusion option is a name to skip.
     'grep -rn -i token . --exclude=.env',
     'grep -rn -i token . --exclude .env',
@@ -105,7 +104,10 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     'grep -e pat .env',
     'grep --regexp=pat .env',
     'rg -e pat .env',
-    // An unknown option withdraws the carve-out for the segment.
+    // An unknown option withdraws the carve-out for the segment. `-C` is one:
+    // BSD grep's optional number would make `.env` a file there.
+    'grep -C 3 .env',
+    'grep --context 3 .env',
     'grep --frob .env x',
     'grep -Y .env x',
     'rg --frob token .env',
