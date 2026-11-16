@@ -24,7 +24,8 @@
  * - `planner-revision.md` carries the same route as a `research_resolution` strategy row, ending
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
  *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
- *   so the blocker clears inside the loop; with no CONTEXT.md, or under `--auto`, nothing is recorded.
+ *   so the blocker clears inside the loop. With no CONTEXT.md the user leaves the loop for discuss-phase;
+ *   under `--auto` no answer is recorded, the planner is not re-spawned, and the workflow stops at the escalation.
  * - verify-work's gap-closure checker skips Dimension 11: that loop has no CONTEXT.md and no route
  *   to record a ruling, so the spine and the checker prompt both scope the dimension out.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
@@ -349,7 +350,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   test('under --auto nothing is recorded and nothing re-spawns: the blocker escalates at once and the workflow stops', () => {
     assert.match(resolve(), /Record only what the user said\. Under `--auto` no one is asked, so record no answer and do not re-spawn/);
     assert.match(resolve(), /Escalate at once, and at that gate stop the workflow rather than proceed/);
-    assert.doesNotMatch(resolve(), /the Repeat rule below escalates it/, 'the --auto route no longer spends a planner run to reach the Repeat rule');
+    assert.doesNotMatch(resolve(), /Repeat rule/, 'the --auto route no longer spends a planner run to reach the Repeat rule, in any wording');
     // The section's closing rule must agree, or "asking is the route everywhere" contradicts the --auto clause.
     const route = read('gsd-core/references/revision-loop.md').replace(/\s+/g, ' ');
     assert.match(route, /Asking the user is the route everywhere but `--auto`, where a `research_resolution` conflict escalates and stops/);
@@ -428,7 +429,7 @@ describe('researcher never resolves its own questions (#5438)', () => {
     assert.doesNotMatch(log, /discuss-phase[\s>]+confirms/, 'discuss-phase runs before research and confirms no assumption');
     assert.doesNotMatch(log, /decisions\s+that\s+need\s+user\s+confirmation/, 'the log header must not call its rows pending decisions');
     assert.match(fence().after, /`\[ASSUMED\]`\s+fact\s+stays\s+in\s+the\s+Assumptions\s+Log,\s+even\s+awaiting\s+confirmation/);
-    assert.match(fence().after, /when\s+an\s+error\s+in\s+it\s+would\s+change\s+the\s+plan,\s+also\s+list\s+the\s+question\s+it\s+raises\s+there/);
+    assert.match(fence().after, /when\s+an\s+error\s+in\s+it\s+would\s+change\s+the\s+plan,\s+also\s+list\s+the\s+question\s+it\s+raises\s+under\s+Open\s+Questions/);
   });
 
   test('the rule after the RESEARCH.md template forbids self-resolution and the section-heading suffix', () => {
