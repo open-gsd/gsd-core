@@ -1019,4 +1019,54 @@ describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () 
       });
     }
   }
+
+  // Hostile and layered shapes (CONTRIBUTING.md:830): the answer must equal `!loadConfig(...).commit_docs` for the
+  // same scope, whatever the files hold. Each file is a raw string so an unparseable body is a fixture too.
+  const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+  const OFF = '{"commit_docs":false}';
+  const ON = '{"commit_docs":true}';
+  const LAYERS = {
+    'scoped planning null': { root: ON, scoped: '{"planning":null}' },
+    'scoped planning string': { root: '{"planning":{"commit_docs":false}}', scoped: '{"planning":"x"}' },
+    'scoped planning array': { root: '{"planning":{"commit_docs":false}}', scoped: '{"planning":[]}' },
+    'scoped planning null over root flat off': { root: OFF, scoped: '{"planning":null}' },
+    'unparseable scoped file': { root: OFF, scoped: '{not json' },
+    'unparseable root file': { root: '{not json', scoped: OFF },
+    'nested scoped over flat root': { root: ON, scoped: '{"planning":{"commit_docs":false}}' },
+    'flat scoped over nested root': { root: '{"planning":{"commit_docs":false}}', scoped: ON },
+    'scoped empty falls to the root value': { root: OFF, scoped: '{}' },
+    'scoped file absent': { root: OFF, scoped: null },
+    'both absent': { root: null, scoped: null },
+    'scoped file absent, project config off over root on': { root: ON, scoped: null, project: OFF },
+    'scoped file absent, project config on over root off': { root: OFF, scoped: null, project: ON },
+  };
+  for (const [name, layer] of Object.entries(LAYERS)) {
+    for (const scope of SCOPES.filter((s) => s.ws !== null)) {
+      test(`${name} in ${scope.dir.join('/')} agrees with loadConfig`, (t) => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-ladder-'));
+        const saved = { ws: process.env.GSD_WORKSTREAM, project: process.env.GSD_PROJECT };
+        t.after(() => {
+          for (const [key, value] of [['GSD_WORKSTREAM', saved.ws], ['GSD_PROJECT', saved.project]]) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+          }
+          cleanup(tmp);
+        });
+        const put = (dir, body) => {
+          if (body === null) return;
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, 'config.json'), body);
+        };
+        put(path.join(tmp, '.planning'), layer.root);
+        if (scope.project) put(path.join(tmp, '.planning', scope.project), layer.project ?? null);
+        put(path.join(tmp, '.planning', ...scope.dir), layer.scoped);
+        fs.mkdirSync(path.join(tmp, '.planning', ...scope.dir), { recursive: true });
+        process.env.GSD_WORKSTREAM = scope.ws;
+        if (scope.project) process.env.GSD_PROJECT = scope.project; else delete process.env.GSD_PROJECT;
+        assert.equal(
+          commitDocsOptedOut(tmp, scope.ws, scope.project),
+          !loadConfig(tmp, { persist: false, quiet: true }).commit_docs,
+        );
+      });
+    }
+  }
 });
