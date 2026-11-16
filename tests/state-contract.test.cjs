@@ -52,7 +52,6 @@ const fc = require('fast-check');
 
 const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { stubEnv } = require('./helpers/env-guard.cjs');
 
 const { STATE_CONTRACT_VERSION } = require('../gsd-core/bin/lib/state-contract.cjs');
 
@@ -636,6 +635,27 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.match(git(tmpDir, 'diff', '--cached', '--', `${rel}/.gitignore`), /\+mine\//, 'the user\'s staged edit is still staged');
   });
 
+  // The carry makes the commit unscoped, so a path the user staged outside a project nested in its repo must turn it off.
+  test('a file staged outside a nested project is not carried into a scoped commit beside the migration', (t) => {
+    const tmpDir = createTempGitProject();
+    t.after(() => cleanup(tmpDir));
+    const sub = path.join(tmpDir, 'sub');
+    fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), STATE_MD);
+    fs.writeFileSync(path.join(sub, '.planning', 'state.json'), '{}\n');
+    git(tmpDir, 'add', '-A');
+    git(tmpDir, 'commit', '-q', '-m', 'seed');
+    assert.ok(runGsdTools(BEGIN, sub).success);
+    assert.match(git(tmpDir, 'diff', '--cached', '--name-only'), /sub\/\.planning\/\.gitignore/, 'the boundary staged the migration');
+    fs.writeFileSync(path.join(tmpDir, 'outside.txt'), 'mine\n');
+    git(tmpDir, 'add', 'outside.txt');
+    fs.appendFileSync(path.join(sub, '.planning', 'STATE.md'), '\nedited\n');
+    const c = runGsdTools(['commit', 'docs: final', '--files', '.planning/STATE.md'], sub);
+    assert.ok(c.success, `final commit must succeed: ${c.error}`);
+    assert.deepStrictEqual(git(tmpDir, 'show', '--name-only', '--format=', 'HEAD').trim().split('\n'), ['sub/.planning/STATE.md']);
+    assert.match(git(tmpDir, 'diff', '--cached', '--name-only'), /outside\.txt/, 'the user\'s staged file is still staged');
+  });
+
   test('a user negation keeps a tracked state.json tracked', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
@@ -822,43 +842,5 @@ describe('state.json never dirties the tree (#5505)', () => {
     assert.strictEqual(out.committed, false);
     assert.strictEqual(out.reason, 'nothing_to_commit');
     assert.deepStrictEqual(out.skipped_files, [`${rel}/state.json`]);
-  });
-});
-
-// Whatever the publisher writes, isStateJsonPublishPath must recognise (W031 and `commit --files` rely on it).
-describe('publisher output satisfies isStateJsonPublishPath (#5505)', () => {
-  const { publishStateContract } = require('../gsd-core/bin/lib/state-contract.cjs');
-  const { isStateJsonPublishPath } = require('../gsd-core/bin/lib/core-utils.cjs');
-  const scopes = {
-    none: {},
-    project: { project: 'proj', projectDoc: true },
-    workstream: { ws: 'ws1' },
-    'project+workstream': { project: 'proj', ws: 'ws1', projectDoc: true },
-    'workstreams-only project': { project: 'proj', ws: 'ws1' },
-  };
-  for (const [name, { project, ws, projectDoc }] of Object.entries(scopes)) {
-    test(`publisherOutputIsAPublishPath:${name}`, (t) => {
-      const tmpDir = createTempProject();
-      t.after(() => cleanup(tmpDir));
-      stubEnv(t, 'GSD_PROJECT', project);
-      stubEnv(t, 'GSD_WORKSTREAM', ws);
-      const base = path.join(tmpDir, '.planning', ...(project ? [project] : []));
-      fs.mkdirSync(path.join(base, ...(ws ? ['workstreams', ws] : [])), { recursive: true });
-      if (projectDoc) fs.writeFileSync(path.join(base, 'STATE.md'), '# State\n');
-      assert.strictEqual(publishStateContract(tmpDir).published, true);
-      const written = path.join(base, ...(ws ? ['workstreams', ws] : []), 'state.json');
-      assert.ok(fs.existsSync(written), 'publisher wrote state.json');
-      assert.strictEqual(isStateJsonPublishPath(tmpDir, path.relative(tmpDir, written)), true);
-    });
-  }
-
-  test('aStateJsonNextToNoProjectFilesOrInGsdsOwnDirectoryIsNotAPublishPath', (t) => {
-    const tmpDir = createTempProject();
-    t.after(() => cleanup(tmpDir));
-    fs.mkdirSync(path.join(tmpDir, '.planning', 'intel'), { recursive: true });
-    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'workstreams'), { recursive: true });
-    for (const rel of ['.planning/intel/state.json', '.planning/workstreams/state.json']) {
-      assert.strictEqual(isStateJsonPublishPath(tmpDir, rel), false, rel);
-    }
   });
 });

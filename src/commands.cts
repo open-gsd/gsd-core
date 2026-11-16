@@ -2408,7 +2408,12 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
           return diff.exitCode === 0 && changed.length === 1 && changed[0] === `+${ignoreRuleLine('state.json')}`;
         })
     : [];
-  const carried = [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
+  // `preStaged` is `--relative`: it never lists a path staged outside `cwd` (a project nested in its repo), and the carry makes the commit
+  // unscoped, so it also needs the index to hold no path outside `cwd` (the whole index lists those, the `--relative` one does not).
+  const stagedCount = (...relative: string[]): number =>
+    execGit(['diff', '--cached', '--name-only', '-z', ...relative], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).stdout.split('\0').filter(Boolean).length;
+  const nothingOutsideCwd = migrationStaged.length === 0 || stagedCount() === stagedCount('--relative');
+  const carried = nothingOutsideCwd && [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
   stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));
 
   // #4208: caller-declared removals -- see stageDeclaredRemovals.

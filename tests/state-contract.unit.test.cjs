@@ -1929,3 +1929,40 @@ describe('state contract — milestone-prefixed phase ids (#5626)', () => {
     assert.deepStrictEqual(numbers, ['3', '10', '3', '3', '2.1', '4']);
   });
 });
+
+// Whatever the publisher writes, isStateJsonPublishPath must recognise (W031 and `commit --files` rely on it).
+describe('publisher output satisfies isStateJsonPublishPath (#5505)', () => {
+  const { isStateJsonPublishPath } = require('../gsd-core/bin/lib/core-utils.cjs');
+  const scopes = {
+    none: {},
+    project: { project: 'proj', projectDoc: true },
+    workstream: { ws: 'ws1' },
+    'project+workstream': { project: 'proj', ws: 'ws1', projectDoc: true },
+    'workstreams-only project': { project: 'proj', ws: 'ws1' },
+  };
+  for (const [name, { project, ws, projectDoc }] of Object.entries(scopes)) {
+    test(`publisherOutputIsAPublishPath:${name}`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      stubEnv(t, 'GSD_PROJECT', project);
+      stubEnv(t, 'GSD_WORKSTREAM', ws);
+      const base = path.join(tmpDir, '.planning', ...(project ? [project] : []));
+      fs.mkdirSync(path.join(base, ...(ws ? ['workstreams', ws] : [])), { recursive: true });
+      if (projectDoc) fs.writeFileSync(path.join(base, 'STATE.md'), '# State\n');
+      assert.strictEqual(publishStateContract(tmpDir).published, true);
+      const written = path.join(base, ...(ws ? ['workstreams', ws] : []), 'state.json');
+      assert.ok(fs.existsSync(written), 'publisher wrote state.json');
+      assert.strictEqual(isStateJsonPublishPath(tmpDir, path.relative(tmpDir, written)), true);
+    });
+  }
+
+  test('aStateJsonNextToNoProjectFilesOrInGsdsOwnDirectoryIsNotAPublishPath', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'intel'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'workstreams'), { recursive: true });
+    for (const rel of ['.planning/intel/state.json', '.planning/workstreams/state.json']) {
+      assert.strictEqual(isStateJsonPublishPath(tmpDir, rel), false, rel);
+    }
+  });
+});
