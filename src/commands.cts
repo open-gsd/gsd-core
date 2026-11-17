@@ -1544,7 +1544,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
 }
 
 /**
- * Detect the phase number for a commit from its declared path list (`--files` plus `--files-removed`).
+ * Detect the phase number for a commit from its `--files` path list.
  *
  * #2539: the extraction is anchored to the directory segment immediately under
  * `.planning/phases/` or `.planning/milestones/<version>-phases/`, then run
@@ -2112,8 +2112,6 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     sanitizedMessage = sanitizeForPrompt(sanitizedMessage);
   }
 
-  // A removal-only commit (--files-removed) still names its phase dir: resolve the tier from both lists.
-  const phaseFiles = declaredPaths(files, filesRemoved);
   const config = loadConfig(cwd);
 
   // Check commit_docs config — #3587: resolved through the tier 1
@@ -2124,7 +2122,8 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // and improvising raw git fallbacks (#3678).
   const commitDocsPolicy = resolveCommitDocsPolicy(
     config,
-    detectPhaseNumberFromFiles(phaseFiles),
+    // A removal-only commit (--files-removed) still names its phase dir: resolve the tier from both lists.
+    detectPhaseNumberFromFiles(declaredPaths(files, filesRemoved)),
     () => isGitIgnored(cwd, '.planning'),
   );
   if (!commitDocsPolicy.resolved) {
@@ -2173,7 +2172,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // token parsing (it is the single owner shared by the other 6 call sites
       // — see #2528 for the parallel drift problem in phase-locator/phase),
       // so this is the canonical path-segment-bound read, not a fourth copy.
-      const phaseNum = detectPhaseNumberFromFiles(phaseFiles);
+      const phaseNum = detectPhaseNumberFromFiles(files);
       // #3734: a 999.x/0.x backlog sentinel is a parking-lot entry, not a real
       // phase — the phase arm must never branch-mutate for it (isSentinelPhaseId
       // is the invariant's single owner, src/phase-id.cts).
