@@ -2786,8 +2786,10 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     fs.writeFileSync(realHooksJson, JSON.stringify({ hooks: {} }, null, 2) + '\n', 'utf8');
     fs.unlinkSync(hooksJsonPath(codexHome));
     fs.symlinkSync(realHooksJson, hooksJsonPath(codexHome));
+    const { SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
 
-    assert.throws(() => runCodexInstall(codexHome), /symlink/i);
+    assert.throws(() => runCodexInstall(codexHome),
+      (err) => err instanceof Error && err.code === SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED);
 
     assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isSymbolicLink(),
       'the symlink itself must survive an aborted install — never replaced by a plain file');
@@ -2869,6 +2871,22 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
       assert.ok(!fs.lstatSync(configTomlPath()).isSymbolicLink());
       assert.match(fs.readFileSync(configTomlPath(), 'utf8'), /\[agents[.\]]/);
     });
+  });
+
+  test('a dangling hooks.json link is replaced by the write, not refused (#5037)', () => {
+    // reconcileCodexHooksJsonEvent only applies the symlink policy when
+    // existsSync sees hooks.json, and existsSync reports false for a dangling
+    // link, so the write replaces it as it did before #5037. writeSettings
+    // refuses a dangling link instead; #5037 leaves hooks.json's handling as it was.
+    runCodexInstall(codexHome);
+    const missingTarget = path.join(codexHome, 'missing-hooks.json');
+    fs.unlinkSync(hooksJsonPath(codexHome));
+    fs.symlinkSync(missingTarget, hooksJsonPath(codexHome));
+
+    assert.doesNotThrow(() => runCodexInstall(codexHome));
+
+    assert.ok(fs.lstatSync(hooksJsonPath(codexHome)).isFile(), 'the dangling link is replaced by a regular hooks.json');
+    assert.strictEqual(fs.existsSync(missingTarget), false, 'nothing is created at the missing target');
   });
 
   test('cleanupOrphanedCodexContextMonitorScript keeps the hooks.json deregistration when script deletion fails', () => {

@@ -5481,3 +5481,285 @@ describe('#5179 direct hooks destination resolution', () => {
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// resolveSymlinkedLeafWritePath (#5037): the symlinked-file policy shared by
+// writeSettings and the Codex hooks.json writer
+// ---------------------------------------------------------------------------
+
+describe('resolveSymlinkedLeafWritePath (#5037)', () => {
+  const { resolveSymlinkedLeafWritePath, SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const LABEL = 'test writer: file';
+  // Each refusal carries its own code, so a test names the one it expects and
+  // fails if a different refusal, or any other error, is thrown.
+  const refusedWith = (code) => (err) => err instanceof Error && err.code === code;
+
+  test('SYMLINKED_LEAF_REFUSAL is frozen and holds exactly the four refusals', () => {
+    assert.ok(Object.isFrozen(SYMLINKED_LEAF_REFUSAL), 'the codes must be frozen');
+    assert.deepStrictEqual(Object.keys(SYMLINKED_LEAF_REFUSAL).sort(),
+      ['NOT_FOLLOWABLE', 'NOT_TRUSTED', 'TARGET_MISSING', 'TARGET_NOT_WRITABLE']);
+    assert.strictEqual(new Set(Object.values(SYMLINKED_LEAF_REFUSAL)).size, 4, 'each code must be distinct');
+  });
+
+  let savedOptIn;
+  beforeEach(() => {
+    savedOptIn = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = savedOptIn;
+  });
+
+  function setOptIn(value) {
+    if (value === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = value;
+  }
+
+  // An install root holding `file.json`, optionally a link into a separate
+  // dir. Returns null when this platform or account cannot create symlinks.
+  function layout(t, { link = false, targetExists = true } = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-outside-'));
+    t.after(() => {
+      cleanup(root);
+      cleanup(outside);
+    });
+    const filePath = path.join(root, 'file.json');
+    const targetPath = path.join(outside, 'file.json');
+    if (!link) {
+      if (targetExists) fs.writeFileSync(filePath, '{}\n');
+      return { root, filePath, targetPath };
+    }
+    if (targetExists) fs.writeFileSync(targetPath, '{}\n');
+    try {
+      fs.symlinkSync(targetPath, filePath, 'file');
+    } catch {
+      return null;
+    }
+    return { root, filePath, targetPath };
+  }
+
+  for (const optIn of [undefined, '1']) {
+    const mode = `GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'}`;
+
+    test(`a plain file is returned unchanged (${mode})`, (t) => {
+      setOptIn(optIn);
+      const { root, filePath } = layout(t);
+      assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), filePath);
+    });
+
+    test(`a missing file is returned unchanged (${mode})`, (t) => {
+      setOptIn(optIn);
+      const { root, filePath } = layout(t, { targetExists: false });
+      assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), filePath);
+    });
+
+    // Without the opt-in too, the refusal is "target does not exist", not a
+    // request for the opt-in, which would not help.
+    test(`a dangling link is refused and left in place (${mode})`, (t) => {
+      setOptIn(optIn);
+      const l = layout(t, { link: true, targetExists: false });
+      if (!l) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
+        refusedWith(SYMLINKED_LEAF_REFUSAL.TARGET_MISSING));
+      assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the dangling link must survive');
+      assert.strictEqual(fs.existsSync(l.targetPath), false, 'nothing may be created at the missing target');
+    });
+  }
+
+  test('a chain of links is refused without the opt-in, and resolves to the final real file with it', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-chain-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-chain-outside-'));
+    t.after(() => {
+      cleanup(root);
+      cleanup(outside);
+    });
+    const finalTarget = path.join(outside, 'real.json');
+    const middleLink = path.join(outside, 'middle.json');
+    const filePath = path.join(root, 'file.json');
+    fs.writeFileSync(finalTarget, '{}\n');
+    try {
+      fs.symlinkSync(finalTarget, middleLink, 'file');
+      fs.symlinkSync(middleLink, filePath, 'file');
+    } catch {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+
+    setOptIn(undefined);
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL), refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED));
+
+    setOptIn('1');
+    assert.strictEqual(resolveSymlinkedLeafWritePath(root, filePath, LABEL), fs.realpathSync(finalTarget));
+    assert.strictEqual(fs.readlinkSync(filePath), middleLink, 'resolving must not touch the first link');
+    assert.strictEqual(fs.readlinkSync(middleLink), finalTarget, 'resolving must not touch the middle link');
+  });
+
+  for (const optIn of [undefined, '1']) {
+    test(`a link loop is refused and left in place (GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'})`, (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-loop-'));
+      t.after(() => cleanup(root));
+      const filePath = path.join(root, 'file.json');
+      try {
+        fs.symlinkSync(filePath, filePath, 'file');
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      setOptIn(optIn);
+      assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL),
+        refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE));
+      assert.strictEqual(fs.readlinkSync(filePath), filePath, 'the link must be left alone');
+    });
+  }
+
+  test('a link whose target is the install root itself is refused even with the opt-in', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-rootlink-'));
+    t.after(() => cleanup(root));
+    const filePath = path.join(root, 'file.json');
+    try {
+      fs.symlinkSync(root, filePath, 'dir');
+    } catch {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+
+    // The opt-in never relaxes this case: a write there would land on the
+    // install root. So the refusal says so either way, rather than asking for it.
+    setOptIn(undefined);
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL),
+      refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE));
+
+    setOptIn('1');
+    assert.throws(() => resolveSymlinkedLeafWritePath(root, filePath, LABEL),
+      refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE));
+    assert.strictEqual(fs.readlinkSync(filePath), root, 'the link must be left alone');
+  });
+
+  test('a symlinked file is refused without the opt-in, and the link is left alone', (t) => {
+    setOptIn(undefined);
+    const l = layout(t, { link: true });
+    if (!l) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
+      refusedWith(SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED));
+    assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'the link must survive');
+    assert.strictEqual(fs.readlinkSync(l.filePath), l.targetPath, 'the link must still point at the same target');
+  });
+
+  test("with GSD_ALLOW_SYMLINKED_DEST=1 a symlinked file resolves to the link's real target", (t) => {
+    setOptIn('1');
+    const l = layout(t, { link: true });
+    if (!l) {
+      t.skip('symlink creation unsupported on this platform/privilege');
+      return;
+    }
+    assert.strictEqual(resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), fs.realpathSync(l.targetPath));
+    assert.ok(fs.lstatSync(l.filePath).isSymbolicLink(), 'resolving must not touch the link');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5037 parity: two resolvers decide where a write to a possibly symlinked file
+// lands. bin/install.js's resolveSymlinkWriteTarget (#5301) serves the Codex
+// config.toml writers; install-engine's resolveSymlinkedLeafWritePath serves
+// writeSettings and the Codex hooks.json writer. resolveSymlinkWriteTarget
+// never refuses: it relies on installCodexConfig's install-root guard
+// (hasExistingSymlinkBetween), which runs before both config.toml writes in
+// every install that stages agents. resolveSymlinkedLeafWritePath runs that
+// same check itself. So wherever the guard allows the write the two must
+// return the same path, and wherever it refuses resolveSymlinkedLeafWritePath
+// must refuse. The table pins which layouts the guard refuses and what
+// resolveSymlinkWriteTarget returns for each, so a change to either shows up.
+// ---------------------------------------------------------------------------
+
+describe('the config.toml and settings.json symlink resolvers agree (#5037)', () => {
+  const { resolveSymlinkedLeafWritePath, hasExistingSymlinkBetween, SYMLINKED_LEAF_REFUSAL } = require('../gsd-core/bin/lib/install-engine.cjs');
+  const { resolveSymlinkWriteTarget } = require('../bin/install.js');
+  const LABEL = 'parity: file';
+
+  let savedOptIn;
+  beforeEach(() => {
+    savedOptIn = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+  afterEach(() => {
+    if (savedOptIn === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = savedOptIn;
+  });
+
+  function setOptIn(value) {
+    if (value === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    else process.env.GSD_ALLOW_SYMLINKED_DEST = value;
+  }
+
+  // An install root and a separate dir, plus `file.toml` in the root built by
+  // `make`. Returns null when this platform or account cannot create symlinks.
+  function build(t, make) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-parity-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5037-parity-outside-'));
+    t.after(() => {
+      cleanup(root);
+      cleanup(outside);
+    });
+    const filePath = path.join(root, 'file.toml');
+    try {
+      make({ root, outside, filePath });
+    } catch {
+      return null;
+    }
+    return { root, outside, filePath };
+  }
+
+  const unchanged = (l) => l.filePath;
+  const outsideTarget = (l) => fs.realpathSync(path.join(l.outside, 'real.toml'));
+  const installRoot = (l) => fs.realpathSync(l.root);
+
+  // [layout, build it, per opt-in state: [the guard refuses it, what
+  // resolveSymlinkWriteTarget returns, the code resolveSymlinkedLeafWritePath
+  // refuses it with]]
+  const CASES = [
+    ['a plain file', ({ filePath }) => fs.writeFileSync(filePath, ''),
+      { unset: [false, unchanged], optIn: [false, unchanged] }],
+    ['a missing file', () => {},
+      { unset: [false, unchanged], optIn: [false, unchanged] }],
+    ['a link to a file outside the root', ({ outside, filePath }) => {
+      fs.writeFileSync(path.join(outside, 'real.toml'), '');
+      fs.symlinkSync(path.join(outside, 'real.toml'), filePath, 'file');
+    }, { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_TRUSTED], optIn: [false, outsideTarget] }],
+    ['a dangling link', ({ outside, filePath }) => fs.symlinkSync(path.join(outside, 'missing.toml'), filePath, 'file'),
+      { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.TARGET_MISSING], optIn: [true, unchanged, SYMLINKED_LEAF_REFUSAL.TARGET_MISSING] }],
+    ['a link loop', ({ filePath }) => fs.symlinkSync(filePath, filePath, 'file'),
+      { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE], optIn: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE] }],
+    ['a link to the install root itself', ({ root, filePath }) => fs.symlinkSync(root, filePath, 'dir'),
+      { unset: [true, unchanged, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE], optIn: [true, installRoot, SYMLINKED_LEAF_REFUSAL.NOT_FOLLOWABLE] }],
+  ];
+
+  for (const [name, make, byOptIn] of CASES) {
+    for (const optIn of [undefined, '1']) {
+      const [guarded, configTomlTarget, refusalCode] = optIn ? byOptIn.optIn : byOptIn.unset;
+      const outcome = guarded ? 'the guard refuses it and so does the settings.json resolver' : 'both resolvers return the same path';
+      test(`${name}: ${outcome} (GSD_ALLOW_SYMLINKED_DEST=${optIn ?? 'unset'})`, (t) => {
+        const l = build(t, make);
+        if (!l) {
+          t.skip('symlink creation unsupported on this platform/privilege');
+          return;
+        }
+        setOptIn(optIn);
+        assert.strictEqual(hasExistingSymlinkBetween(l.root, l.filePath, { allowOptInFollow: optIn === '1' }), guarded,
+          'the check installCodexConfig runs before the config.toml writes decides this layout');
+        assert.strictEqual(resolveSymlinkWriteTarget(l.filePath), configTomlTarget(l));
+        if (guarded) {
+          assert.throws(() => resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL),
+            (err) => err instanceof Error && err.code === refusalCode);
+        } else {
+          assert.strictEqual(resolveSymlinkedLeafWritePath(l.root, l.filePath, LABEL), configTomlTarget(l));
+        }
+      });
+    }
+  }
+});
