@@ -1155,6 +1155,20 @@ function scanMilestonePhaseIdSets(
 ): { ids: Set<string>; qualifiedIds: Set<string> } {
   const ids = new Set<string>();
   const qualifiedIds = new Set<string>();
+  // #5895: one phase is one member, whatever its zero-padding. The heading,
+  // bullet and table scans each see their own spelling (`02.1`, `2.1`), so a
+  // token joins `ids` only when its canonical form is new; the first-seen
+  // spelling is the member. Only a token that FULLY matches the numeric grammar
+  // is canonicalized: normalizePhaseName reads a numeric prefix, so it would
+  // fold the distinct custom ids `2fa` and `2fb` into one. Every other token
+  // (custom, bracket, sentinel) is its own key.
+  const declared = new Set<string>();
+  const addId = (token: string): void => {
+    const key = NUMERIC_PHASE_ID_RE.test(token) ? phaseIdModule.normalizePhaseName(token) : token;
+    if (declared.has(key)) return;
+    declared.add(key);
+    ids.add(token);
+  };
   // Use tokenizeHeadings (fence-aware) instead of stripFencedLines + regex.
   // T4 seam migration: phase headings inside fences are excluded automatically.
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
@@ -1177,7 +1191,7 @@ function scanMilestonePhaseIdSets(
     // This scan's legacy contract excludes only the 999 icebox range. Keep the
     // narrower rule so real decimal phase 00.1 is not swallowed as milestone 0.
     if (/^999\b/.test(token)) continue;
-    ids.add(token);
+    addId(token);
     if (bracketId && !token.includes('-')) qualifiedIds.add(`${bracketId}-${token}`);
   }
   // #2199: also count bullet/checkbox phase entries (`- [ ] **Phase N — name**`)
@@ -1187,13 +1201,17 @@ function scanMilestonePhaseIdSets(
   const scanner = new RegExp(BULLET_PHASE_LINE_PATTERN.source, 'gim');
   const unfenced = stripFencedCode(window).text;
   while ((bm = scanner.exec(unfenced)) !== null) {
-    if (!/^999\b/.test(bm[1])) ids.add(bm[1]);
+    if (!/^999\b/.test(bm[1])) addId(bm[1]);
   }
   // #3577: table-declared ids join the same membership set — the milestone
   // filter must not collapse a table-house-style window to zero-count.
-  for (const tr of collectTablePhaseRows(window)) ids.add(tr.id);
+  for (const tr of collectTablePhaseRows(window)) addId(tr.id);
   return { ids, qualifiedIds };
 }
+
+// A phase token made only of the numeric phase grammar: `2`, `02`, `2.1`, `12A`,
+// `1-2`, `01-02.1`. Defined beside its one reader (scanMilestonePhaseIdSets).
+const NUMERIC_PHASE_ID_RE = /^\d+(?:-\d+)*[A-Za-z]?(?:\.\d+)*$/;
 
 /**
  * Public #3262 owner contract: the declared-id Set remains directly iterable.

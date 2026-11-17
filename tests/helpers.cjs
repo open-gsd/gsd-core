@@ -8,7 +8,7 @@ const os = require('os');
 const path = require('path');
 const { createFixture } = require('./fixtures/index.cjs');
 const processSeam = require('./helpers/process-seam.cjs');
-const { SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { LOOP_HOOK_POINT_CLI_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -227,7 +227,7 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
     return processSeam.runNode([TOOLS_PATH, ...argv], {
       cwd,
       env: childEnv,
-      timeoutMs: SEAM_DEFAULT_TIMEOUT_MS,
+      timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
     });
   }
 
@@ -279,8 +279,8 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
       // `isKilled(err)` true and triggered a retry. The new seam classifies
       // overflow as its own BUFFER_OVERFLOW outcome specifically so it stops
       // being conflated with a kill — the child ran fine and produced too
-      // much output, so retrying wastes 60s and fails identically every
-      // time.
+      // much output, so retrying wastes a full LOOP_HOOK_POINT_CLI_TIMEOUT_MS
+      // and fails identically every time.
       //
       // exitCode is coerced to 1 here — RETRACTED claim from an earlier
       // revision of this comment that it was "never coerced to exitCode:1,

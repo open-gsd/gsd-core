@@ -481,7 +481,7 @@ For each artifact: "What must be CONNECTED for this to function?"
 **Step 5: Identify Key Links**
 "Where is this most likely to break?" Key links = critical connections where breakage causes cascading failures.
 
-See @~/.claude/gsd-core/references/planner-guidance.md for a worked example and the `must_haves` YAML format.
+See @~/.claude/gsd-core/references/planner-guidance.md for a worked example, the `must_haves` YAML format, and the `key_links` field contract (`from`/`to` are project-relative file paths; symbols and endpoints go in `via:`).
 
 </goal_backward>
 
