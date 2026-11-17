@@ -8740,7 +8740,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       path.join(targetDir, 'copilot-instructions.md'),
     ].filter((candidate) => {
       if (!isRefusedCopilotInstructionsSymlink(candidate) || !fs.existsSync(candidate)) return false;
-      const content = fs.readFileSync(candidate, 'utf8');
+      let content;
+      // A link to something unreadable (a directory) is still a link we will not touch.
+      try { content = fs.readFileSync(candidate, 'utf8'); } catch (_) { return true; }
       return stripGsdFromCopilotInstructions(content) !== content;
     });
     if (refused.length > 0) {
@@ -11435,6 +11437,19 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Preflight's role gate and _stageAgents use the same resolved profile;
   // core's agent roles follow #5503's profile-derived selection too.
   preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, options.installerMigrations);
+
+  // #5946: the Copilot instructions destinations sit outside the install-root symlink
+  // preflight above (AGENTS.md is at the repo root), so refuse a symlinked one HERE, before
+  // the first file of this install is written, rather than mid-install at the merge.
+  if (plan.installSurface === 'copilot-instructions') {
+    const linked = [
+      path.join(targetDir, 'copilot-instructions.md'),
+      ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
+    ].filter(isRefusedCopilotInstructionsSymlink);
+    if (linked.length > 0) {
+      throw new Error(linked.map(copilotInstructionsSymlinkRefusal).join('\n'));
+    }
+  }
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and

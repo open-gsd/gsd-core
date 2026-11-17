@@ -1913,8 +1913,12 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     savedEnv = {
       HOME: process.env.HOME,
       USERPROFILE: process.env.USERPROFILE,
+      COPILOT_CONFIG_DIR: process.env.COPILOT_CONFIG_DIR,
+      COPILOT_HOME: process.env.COPILOT_HOME,
       GSD_ALLOW_SYMLINKED_DEST: process.env.GSD_ALLOW_SYMLINKED_DEST,
     };
+    delete process.env.COPILOT_CONFIG_DIR;
+    delete process.env.COPILOT_HOME;
     savedExitCode = process.exitCode;
     process.chdir(project);
     process.env.HOME = home;
@@ -1993,9 +1997,11 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
       if (isGlobal && process.platform === 'win32') { t.skip('HOME does not relocate the global config dir on Windows'); return; }
       const files = linked(t, where(), MIXED);
       if (!files) return;
-      runUninstall(isGlobal);
+      const output = runUninstall(isGlobal);
       assert.ok(fs.lstatSync(files.link).isSymbolicLink());
       assert.strictEqual(fs.readFileSync(files.target, 'utf8'), MIXED);
+      assert.ok(output.includes('GSD_ALLOW_SYMLINKED_DEST=1'), `the refusal must name the opt-in: ${output}`);
+      assert.strictEqual(process.exitCode, 1);
     });
 
     test(`${label}: with the opt-in a GSD-only target is emptied and the link is kept`, (t) => {
@@ -2006,7 +2012,7 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
       runUninstall(isGlobal);
       assert.ok(fs.lstatSync(files.link).isSymbolicLink(), 'the link must be kept');
       assert.strictEqual(fs.existsSync(files.target), true, 'the target must still exist');
-      assert.ok(!fs.readFileSync(files.target, 'utf8').includes(GSD_COPILOT_INSTRUCTIONS_MARKER), 'no GSD block may remain');
+      assert.strictEqual(fs.readFileSync(files.target, 'utf8'), '', 'a GSD-only target is emptied, not deleted');
     });
 
     test(`${label}: with the opt-in a mixed target loses only the GSD block`, (t) => {
@@ -2032,6 +2038,49 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     assert.strictEqual(fs.existsSync(only), false, 'a regular GSD-only AGENTS.md is removed');
     const cleaned = fs.readFileSync(instructions, 'utf8');
     assert.ok(cleaned.includes('my own notes') && !cleaned.includes(GSD_COPILOT_INSTRUCTIONS_MARKER));
+  });
+
+  test('a refused uninstall changes nothing: a linked AGENTS.md leaves a regular GSD-only copilot-instructions.md alone', (t) => {
+    const files = linked(t, { base: project, rel: 'AGENTS.md' }, GSD_ONLY);
+    if (!files) return;
+    const instructions = path.join(project, '.github', 'copilot-instructions.md');
+    fs.mkdirSync(path.dirname(instructions), { recursive: true });
+    fs.writeFileSync(instructions, GSD_ONLY);
+    runUninstall(false);
+    assert.strictEqual(fs.readFileSync(instructions, 'utf8'), GSD_ONLY, 'the regular file must be untouched');
+    assert.strictEqual(fs.readFileSync(files.target, 'utf8'), GSD_ONLY);
+    assert.strictEqual(process.exitCode, 1);
+  });
+
+  test('a symlink to a directory is refused without a crash', (t) => {
+    const dirTarget = path.join(project, 'a-directory');
+    fs.mkdirSync(dirTarget);
+    try {
+      fs.symlinkSync(dirTarget, path.join(project, 'AGENTS.md'), 'dir');
+    } catch (error) {
+      if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) { t.skip('symlink creation is not available'); return; }
+      throw error;
+    }
+    const output = runUninstall(false);
+    assert.ok(output.includes('GSD_ALLOW_SYMLINKED_DEST=1'), output);
+    assert.strictEqual(process.exitCode, 1);
+  });
+
+  test('install refuses a linked AGENTS.md before writing anything', (t) => {
+    const { spawnSync } = require('node:child_process');
+    const files = linked(t, { base: project, rel: 'AGENTS.md' }, 'user content\n');
+    if (!files) return;
+    const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
+    delete env.GSD_ALLOW_SYMLINKED_DEST;
+    delete env.COPILOT_CONFIG_DIR;
+    delete env.COPILOT_HOME;
+    const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'install.js'), '--copilot', '--local'], {
+      cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
+    });
+    assert.notStrictEqual(result.status, 0, 'a refused install must not exit 0');
+    assert.match(`${result.stdout}${result.stderr}`, /GSD_ALLOW_SYMLINKED_DEST=1/);
+    assert.strictEqual(fs.readFileSync(files.target, 'utf8'), 'user content\n', 'the target must be untouched');
+    assert.strictEqual(fs.existsSync(path.join(project, '.github')), false, 'nothing may be written before the refusal');
   });
 
   test('mergeCopilotInstructions refuses a symlinked destination without the opt-in', (t) => {
