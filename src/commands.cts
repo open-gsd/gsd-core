@@ -1678,6 +1678,24 @@ const COMMIT_DOCS_SKIP_REASON: Record<Exclude<CommitDocsSource, 'default'>, stri
   gitignore: 'skipped_gitignored',
 };
 
+/**
+ * Canonical form of an absolute path: realpath of the longest EXISTING prefix,
+ * with the absent tail re-appended (macOS /var <-> /private/var, Windows 8.3
+ * short names like RUNNER~1). `followLeaf: false` keeps the last component
+ * lexical, because git adds a symlink itself, not its target. One owner for
+ * the three commit-path comparisons below.
+ */
+function canonicalPath(abs: string, followLeaf = true): string {
+  let cur = followLeaf ? abs : path.dirname(abs);
+  const tail: string[] = followLeaf ? [] : [path.basename(abs)];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch { /* absent: climb */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) return path.join(cur, ...tail);
+    tail.unshift(path.basename(cur)); cur = parent;
+  }
+}
+
 type DeclaredRemoval = { path: string; mode: string; sha: string };
 type StagingFailure = { file: string; error: string; timed_out: boolean };
 
@@ -1872,15 +1890,7 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
     // hold a symlinked spelling — macOS `/var` → `/private/var` is the live
     // instance (CI, this PR's own test) — so a resolve-only compare still
     // took the directory polarity there.
-    const canon = (p: string): string => {
-      let cur = path.resolve(cwd, p); const tail: string[] = [];
-      for (;;) {
-        try { return path.join(fs.realpathSync.native(cur), ...tail); } catch { /* absent: climb */ }
-        const parent = path.dirname(cur);
-        if (parent === cur) return path.join(cur, ...tail);
-        tail.unshift(path.basename(cur)); cur = parent;
-      }
-    };
+    const canon = (p: string): string => canonicalPath(path.resolve(cwd, p));
     const namesItself = (p: string): boolean => p === entryRel || path.resolve(cwd, p) === entryAbs || canon(p) === canon(entry);
     const inHeadPaths = new Set<string>();
     if (headExists) {
@@ -2048,23 +2058,6 @@ function commitRefusal(
       return p;
     }
   };
-  // Nearest existing ancestor directory of an absolute path, realpath'd, with
-  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var,
-  // Windows 8.3 short names like RUNNER~1).
-  const canonicalAbsolute = (abs: string): string => {
-    const rest: string[] = [path.basename(abs)];
-    let ancestor = path.dirname(abs);
-    for (;;) {
-      try {
-        return path.join(fs.realpathSync.native(ancestor), ...rest);
-      } catch {
-        const parent = path.dirname(ancestor);
-        if (parent === ancestor) return abs;
-        rest.unshift(path.basename(ancestor));
-        ancestor = parent;
-      }
-    }
-  };
   const norm = (p: string): string => {
     const slashed = p.replace(/\\/g, '/');
     return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
@@ -2076,7 +2069,7 @@ function commitRefusal(
   const targets = declared.length > 0 ? declared : ['.planning/'];
   // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
   const resolveTarget = (t: string): string =>
-    path.isAbsolute(t) ? canonicalAbsolute(path.resolve(t)) : path.resolve(realCwd, t);
+    path.isAbsolute(t) ? canonicalPath(path.resolve(t), false) : path.resolve(realCwd, t);
   const escaping = !inside(realCwd, worktreeRoot)
     ? realCwd
     : targets.map(resolveTarget).find((abs) => !inside(abs, worktreeRoot));
@@ -2381,7 +2374,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         explicitFiles &&
         // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
         // Both sides are canonical (git resolves the path the same way): an absolute spelling through a symlink or a Windows 8.3 name stays inside the project.
-        isStateJsonPublishPath(cwd, path.relative(fs.realpathSync.native(cwd), path.join(fs.realpathSync.native(path.dirname(fullPath)), path.basename(fullPath)))) &&
+        isStateJsonPublishPath(cwd, path.relative(canonicalPath(cwd), canonicalPath(fullPath, false))) &&
         execGit(['check-ignore', '-q', '--', file], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).exitCode === 0
       ) {
         // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing

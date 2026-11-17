@@ -811,7 +811,12 @@ describe('state.json never dirties the tree (#5505)', () => {
     ['a leading dot segment', (p) => `./${p}`],
     ['a parent segment', (p) => p.replace('/state.json', `/../${path.basename(path.dirname(p))}/state.json`)],
     ['an absolute path', (p, tmpDir) => path.join(fs.realpathSync.native(tmpDir), p)],
-    ['a symlinked absolute path', (p, tmpDir) => { const l = `${tmpDir}-link`; fs.symlinkSync(tmpDir, l); return path.join(l, p); }],
+    // null: the host forbids symlinks (unprivileged Windows raises EPERM); the test skips.
+    ['a symlinked absolute path', (p, tmpDir) => {
+      const l = `${tmpDir}-link`;
+      try { fs.symlinkSync(tmpDir, l, process.platform === 'win32' ? 'junction' : 'dir'); } catch (e) { if (e.code === 'EPERM') return null; throw e; }
+      return path.join(l, p);
+    }],
   ];
   for (const [label, spell] of SPELLINGS) {
     test(`commit --files skips the ignored state.json spelled with ${label}`, (t) => {
@@ -819,6 +824,7 @@ describe('state.json never dirties the tree (#5505)', () => {
       t.after(() => cleanup(`${tmpDir}-link`));
       fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
       const given = spell(`${rel}/state.json`, tmpDir);
+      if (given === null) return t.skip('symlinks are not permitted on this host');
       const c = runGsdTools(['commit', 'docs: spelling', '--files', given, `${rel}/STATE.md`], tmpDir);
       const out = JSON.parse(c.output);
       assert.strictEqual(out.committed, true, c.output);
