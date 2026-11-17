@@ -3300,6 +3300,48 @@ function stripKimiHooksTomlBlock(content: string): string | null {
 }
 
 /**
+ * #5949: the path a Kimi config.toml read or write must target. `atomicWriteFileSync` ends in
+ * a rename(2) that REPLACES a symlink at the destination and `unlinkSync` removes it, so a
+ * dotfiles-managed `config.toml -> ~/dotfiles/kimi.toml` was destroyed unasked. Same policy as
+ * the Codex hooks.json writer (`resolveCodexHooksJsonDestination`): refuse a symlink without
+ * GSD_ALLOW_SYMLINKED_DEST, with it resolve to the real target. A dangling link has no target
+ * to follow, so it is refused whatever the opt-in says rather than replaced or created through.
+ */
+function resolveKimiConfigDestination(configPath: string): string {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(configPath);
+  } catch {
+    return configPath;
+  }
+  if (!stat.isSymbolicLink()) return configPath;
+  if (!_installEngineSymlinkGuard().isSymlinkedDestOptIn()) {
+    throw new Error(
+      `Kimi config.toml at "${configPath}" is a symlink — refusing to read or write it. ` +
+        'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.',
+    );
+  }
+  if (!fs.existsSync(configPath)) {
+    throw new Error(
+      `Kimi config.toml at "${configPath}" is a dangling symlink — refusing to replace it or write through it.`,
+    );
+  }
+  return fs.realpathSync(configPath);
+}
+
+/**
+ * A GSD-only config.toml is removed when it is a regular file; behind a symlink its target is
+ * emptied instead, because unlinking the link path would delete the user's link (#5949).
+ */
+function removeOrEmptyKimiConfig(configPath: string, writePath: string): void {
+  if (writePath !== configPath) {
+    atomicWriteFileSync(writePath, '', 'utf8');
+  } else if (fs.existsSync(configPath)) {
+    fs.unlinkSync(configPath);
+  }
+}
+
+/**
  * Idempotently (re)write kimi's GSD-owned [[hooks]] block into its native
  * config.toml at `configPath` (resolved by the caller via
  * resolveKimiHooksTomlDir). No-ops (`{changed:false}`) when the computed
@@ -3320,7 +3362,10 @@ function writeKimiHooksToml(
       configuredEntrypoints,
     },
   };
-  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  // #5949: a symlinked config.toml is refused without the opt-in; with it every read and
+  // write below lands on the link's real target and the link itself is never replaced.
+  const writePath = resolveKimiConfigDestination(configPath);
+  const existing = fs.existsSync(writePath) ? fs.readFileSync(writePath, 'utf8') : '';
   const stripped = stripKimiHooksTomlBlock(existing) ?? '';
   const block = buildKimiHooksTomlBlock(targetDir, trackedOpts);
   const entryCount = block ? (block.match(/\[\[hooks\]\]/g) || []).length : 0;
@@ -3328,10 +3373,10 @@ function writeKimiHooksToml(
   if (!block) {
     if (stripped === existing) return { changed: false, path: configPath, entryCount: 0, configuredEntrypoints };
     if (stripped.trim() === '') {
-      if (fs.existsSync(configPath)) fs.unlinkSync(configPath);
+      removeOrEmptyKimiConfig(configPath, writePath);
     } else {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      atomicWriteFileSync(configPath, stripped, 'utf8');
+      fs.mkdirSync(path.dirname(writePath), { recursive: true });
+      atomicWriteFileSync(writePath, stripped, 'utf8');
     }
     return { changed: true, path: configPath, entryCount: 0, configuredEntrypoints };
   }
@@ -3340,8 +3385,8 @@ function writeKimiHooksToml(
   const next = stripped.trim() === '' ? `${block}\n` : `${stripped}${separator}${block}\n`;
   if (next === existing) return { changed: false, path: configPath, entryCount, configuredEntrypoints };
 
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  atomicWriteFileSync(configPath, next, 'utf8');
+  fs.mkdirSync(path.dirname(writePath), { recursive: true });
+  atomicWriteFileSync(writePath, next, 'utf8');
   return { changed: true, path: configPath, entryCount, configuredEntrypoints };
 }
 
@@ -3350,14 +3395,18 @@ function writeKimiHooksToml(
  * deletes the file if nothing but GSD's own block was ever in it.
  */
 function removeKimiHooksToml(configPath: string): { changed: boolean } {
+  // A dangling link has no content to strip: existsSync follows links and is false for it.
   if (!fs.existsSync(configPath)) return { changed: false };
-  const existing = fs.readFileSync(configPath, 'utf8');
+  // #5949: refused without the opt-in when config.toml is a symlink; with it the strip lands
+  // on the link's real target and the link is kept (a GSD-only target is emptied, not unlinked).
+  const writePath = resolveKimiConfigDestination(configPath);
+  const existing = fs.readFileSync(writePath, 'utf8');
   const stripped = stripKimiHooksTomlBlock(existing);
   if (stripped === existing) return { changed: false };
   if (stripped === null || stripped.trim() === '') {
-    fs.unlinkSync(configPath);
+    removeOrEmptyKimiConfig(configPath, writePath);
   } else {
-    atomicWriteFileSync(configPath, stripped, 'utf8');
+    atomicWriteFileSync(writePath, stripped, 'utf8');
   }
   return { changed: true };
 }
