@@ -695,6 +695,70 @@ describe('runner — antigravity handler (#2073 / #2176)', () => {
   });
 });
 
+describe('#5491 — antigravity proves it read each plan', () => {
+  const PROMPT = `${RUN}/gsd-review-prompt.md`;
+  const PLAN_PATH = '.planning/p/12.6-01-PLAN.md';
+  const PLAN_BODY = '---\nwave: 1\ndepends_on: []\nrequirements: [REQ-01]\n---\n<task type="auto">t</task>\n';
+  const RESTATED = 'READ-CHECK 12.6-01: requirements=[REQ-01]; wave=1; depends_on=[]; tasks=1\nsee src/a.ts:3';
+  const laneFiles = () => ({ [PROMPT]: `#### ${PLAN_PATH}\n${PLAN_BODY}`, [`${ROOT}/${PLAN_PATH}`]: PLAN_BODY });
+
+  test('the agy prompt asks for the READ-CHECK line', async () => {
+    const d = deps({ files: laneFiles(), spawn: (_bin, argv) => { d.spawns.push({ argv }); return { status: 0, stdout: RESTATED, stderr: '' }; } });
+    await runLane(plan('antigravity'), d, { repoRoot: ROOT });
+    assert.ok(d.spawns.some((s) => s.argv.some((a) => a.includes('READ-CHECK <plan id>:'))));
+  });
+
+  test('no restatement → review stamped [incomplete-read] and readCheck in the result', async () => {
+    const p = plan('antigravity');
+    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });
+    const r = await runLane(p, d, { repoRoot: ROOT });
+    assert.ok(d.files[p.reviewPath].startsWith('> [incomplete-read]'));
+    assert.deepEqual(r.readCheck, { complete: false, truncated: false, compacted: false, missing: ['12.6-01'], mismatched: {} });
+  });
+
+  test('a correct restatement → no stamp, complete readCheck', async () => {
+    const p = plan('antigravity');
+    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: RESTATED, stderr: '' }) });
+    const r = await runLane(p, d, { repoRoot: ROOT });
+    assert.ok(!d.files[p.reviewPath].includes('[incomplete-read]'));
+    assert.equal(r.readCheck.complete, true);
+  });
+
+  describe('compaction (a CHECKPOINT in this run\'s transcript)', () => {
+    const CACHE = '/home/u/.gemini/antigravity-cli/cache/last_conversations.json';
+    const TX = '/home/u/.gemini/antigravity-cli/brain/c1/.system_generated/logs/transcript.jsonl';
+    const CHECKPOINT = JSON.stringify({ type: 'CHECKPOINT', content: 'summary' });
+    const run = async (before, during) => {
+      const p = plan('antigravity');
+      const files = { ...laneFiles(), [CACHE]: JSON.stringify({ [ROOT]: 'c1' }), [TX]: before.join('\n') };
+      const d = deps({ files, spawn: () => { files[TX] = [...before, ...during].join('\n'); return { status: 0, stdout: RESTATED, stderr: '' }; } });
+      const r = await runLane(p, d, { repoRoot: ROOT });
+      return { r, review: d.files[p.reviewPath] };
+    };
+
+    test('a compaction during this run flags the lane even with a correct restatement', async () => {
+      const { r, review } = await run(['{"type":"USER_INPUT"}'], [CHECKPOINT, 'null', '{"type":"PLANNER_RESPONSE"}']);
+      assert.equal(r.readCheck.compacted, true);
+      assert.equal(r.readCheck.complete, false);
+      assert.ok(review.startsWith('> [incomplete-read]'));
+    });
+
+    test('a checkpoint from a PRIOR run in the same session does not', async () => {
+      const { r } = await run([CHECKPOINT], ['{"type":"PLANNER_RESPONSE"}']);
+      assert.equal(r.readCheck.compacted, false);
+      assert.equal(r.readCheck.complete, true);
+    });
+  });
+
+  test('other lanes are not checked', async () => {
+    const p = plan('cursor');
+    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });
+    const r = await runLane(p, d, { repoRoot: ROOT });
+    assert.equal(r.readCheck, undefined);
+    assert.ok(!d.files[p.reviewPath].includes('[incomplete-read]'));
+  });
+});
+
 describe('runner — openai-compatible handler', () => {
   test('the configured model is used and discovery is skipped', async () => {
     const p = plan('ollama', { 'review.models.ollama': 'pinned' });
