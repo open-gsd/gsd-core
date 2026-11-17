@@ -383,9 +383,18 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
   });
 
   test('a listed file is silent while it carries a copy and reports stale once it does not', async () => {
-    const listed = Object.keys(JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8')))[0];
-    assert.deepStrictEqual(await ruleMessages(COPIES, listed), []);
-    assert.deepStrictEqual(await ruleMessages(CLEAN, listed), ['staleAllowlistEntry']);
+    // A synthetic entry, so the row holds once the drain waves empty the real list.
+    const listed = 'tests/adhoc-env-isolation-listed-6035.test.cjs';
+    const listedEslint = new ESLint({
+      cwd: REPO_ROOT,
+      overrideConfig: { files: ['tests/**/*.cjs'], rules: { [RULE_ID]: ['error', { allowlist: [listed] }] } },
+    });
+    async function listedMessages(text) {
+      const [result] = await listedEslint.lintText(text, { filePath: path.join(REPO_ROOT, listed) });
+      return result.messages.filter((m) => m.ruleId === RULE_ID).map((m) => m.messageId);
+    }
+    assert.deepStrictEqual(await listedMessages(COPIES), []);
+    assert.deepStrictEqual(await listedMessages(CLEAN), ['staleAllowlistEntry']);
   });
 });
 
