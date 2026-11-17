@@ -2791,8 +2791,8 @@ const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // and a subscripted `NAME[sub]=value` / `NAME[sub]+=value` in front of a command
 // and run the command. A subscript may hold brackets (`a[b[1]]=x`), so the
 // bracket span is greedy; one word, so the span ends inside it. bash keeps a
-// subscript's blanks in the word (`a[x y]=1`): the tokenizer joins those under
-// this reading (subscriptAssignmentEnd).
+// subscript's blanks in the word (`a[x y]=1`): the tokenizer's `[` branch
+// joins those under this reading (subscriptClose).
 const FURTHER_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\[[\s\S]*\])?\+?=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
