@@ -798,7 +798,7 @@ describe('state.json never dirties the tree (#5505)', () => {
     ['an empty path segment', (p) => p.replace('/state.json', '//state.json')],
     ['a leading dot segment', (p) => `./${p}`],
     ['a parent segment', (p) => p.replace('/state.json', `/../${path.basename(path.dirname(p))}/state.json`)],
-    ['an absolute path', (p, tmpDir) => path.join(tmpDir, p)],
+    ['an absolute path', (p, tmpDir) => path.join(fs.realpathSync.native(tmpDir), p)],
   ];
   for (const [label, spell] of SPELLINGS) {
     test(`commit --files skips the ignored state.json spelled with ${label}`, (t) => {

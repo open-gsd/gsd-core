@@ -46,6 +46,8 @@ const { gitOrThrow, isFsLegalName } = require('../helpers/git-fixture.cjs');
 const { runHook, OUTCOME } = require('../helpers/process-seam.cjs');
 const { GIT_TIMEOUT_MS } = require('../helpers/timeouts.cjs');
 
+const fc = require('fast-check');
+const { PLANNING_PROJECT_MARKERS, STATE_JSON_PATHSPECS, isStateJsonPublishPath } = require('../../gsd-core/bin/lib/core-utils.cjs');
 const configValidation = require('../../gsd-core/bin/lib/health-diagnostic-rules/config-validation.cjs');
 const { RULES } = configValidation;
 
@@ -954,8 +956,6 @@ describe('W031 — derived state.json still tracked by git', () => {
   // exactly when `<name>` holds a marker file or directory from the owner's own export (a workstream
   // directory is itself the `workstreams` marker); the matcher has no reserved-name list to drift.
   test('W031 property: publish-path matcher over the owner\'s markers', (t) => {
-    const fc = require('fast-check');
-    const { PLANNING_PROJECT_MARKERS } = require('../../gsd-core/bin/lib/core-utils.cjs');
     const cwd = createTempGitProject('gsd-5505-w031-prop-');
     t.after(() => cleanup(cwd));
     fc.assert(
@@ -1012,8 +1012,6 @@ describe('W031 — derived state.json still tracked by git', () => {
   // STATE_JSON_PATHSPECS exactly when the owner's matcher accepts it (every possible project directory
   // holds a marker, so only the path shape decides); the pathspecs and the matcher are one grammar.
   test('W031 property: STATE_JSON_PATHSPECS and the matcher accept the same paths (one scope list)', (t) => {
-    const fc = require('fast-check');
-    const { STATE_JSON_PATHSPECS, isStateJsonPublishPath } = require('../../gsd-core/bin/lib/core-utils.cjs');
     const names = ['p', 'workstreams', 'w'];
     const shapes = [[]];
     for (let depth = 1; depth <= 3; depth++) {
@@ -1045,7 +1043,6 @@ describe('W031 — derived state.json still tracked by git', () => {
   });
 
   test('W031 grammar: a directory GSD owns is never a project, however many markers it holds', (t) => {
-    const { isStateJsonPublishPath } = require('../../gsd-core/bin/lib/core-utils.cjs');
     const cwd = createTempDir('gsd-5505-w031-reserved-');
     t.after(() => cleanup(cwd));
     for (const dir of ['workstreams', 'phases']) fs.mkdirSync(path.join(cwd, '.planning', dir, 'phases'), { recursive: true });
@@ -1058,7 +1055,6 @@ describe('W031 — derived state.json still tracked by git', () => {
   // Property: the quoted remedy argument is read back by bash as exactly the tracked name
   // (U+0080-U+009F as the UTF-8 bytes git tracks, C0/DEL, quotes and backslashes included).
   test('W031 property: quoted remedy round-trips through bash', (t) => {
-    const fc = require('fast-check');
     const bash = (script) => runHook('-s', [], { interpreter: 'bash', input: script, timeoutMs: GIT_TIMEOUT_MS });
     if (bash('true').exitCode !== 0) { t.skip('bash unavailable'); return; }
     const alphabet = ['a', 'Z', '0', ' ', "'", '\\', '"', '$', '\n', '\t', '\x1b', '\x7f', '\u0080', '\u0085', '\u009f', '\x01', 'é', '-', '/', '`', String.fromCodePoint(0x202e), String.fromCodePoint(0x200d), String.fromCodePoint(0x2028)];

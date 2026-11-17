@@ -1234,6 +1234,8 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   const interceptGit = (t, intercept) => interceptGitIn(t, intercept, require('node:child_process'));
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const { excludeFromGit, GIT_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+  const { resolveCommitDocsPolicy } = require('../gsd-core/bin/lib/commands.cjs');
+  const { planningPaths } = require('../gsd-core/bin/lib/planning-workspace.cjs');
   const { loadConfig, isGitIgnored, loadConfigResolved } = require('../gsd-core/bin/lib/config-loader.cjs');
   const git = (cwd, ...args) => gitOrThrow(args, { cwd });
   const lines = (cwd) => splitLines(readExclude(cwd));
@@ -1544,11 +1546,10 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
         if (shape.noOwnConfig) fs.mkdirSync(wsDir, { recursive: true });
         else put(path.join(wsDir, 'config.json'), shape.own, shape.ownRaw);
       }
-      const { resolveCommitDocsPolicy } = require('../gsd-core/bin/lib/commands.cjs');
       const expected = resolveCommitDocsPolicy(loadConfig(tmpDir, { persist: false }), null, () => isGitIgnored(tmpDir, '.planning')).resolved;
       publishStateContract(tmpDir, fixedDeps());
       // The entry is derived from the path the publisher itself writes; with no workstream directory it writes nothing.
-      const published = path.join(require('../gsd-core/bin/lib/planning-workspace.cjs').planningPaths(tmpDir).planning, 'state.json');
+      const published = path.join(planningPaths(tmpDir).planning, 'state.json');
       const entry = '/' + path.relative(tmpDir, published).replace(/\\/g, '/');
       assert.deepStrictEqual(lines(tmpDir).filter((l) => l.endsWith('state.json')), expected && fs.existsSync(published) ? [entry] : []);
     });
