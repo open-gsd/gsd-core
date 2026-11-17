@@ -763,7 +763,7 @@ describe('auto-update', () => {
       assert.strictEqual(status?.status, 'ok', 'the mock rebuild must finish successfully');
     });
 
-    for (const gate of ['auto_update=false', 'enabled=false', 'non-default branch', 'live lock']) {
+    for (const gate of ['auto_update=false', 'enabled=false', 'non-default branch', 'live lock', 'CI set', 'graphify binary absent']) {
       test(`the onboarding commit respects ${gate}`, async (t) => {
         const tmpDir = createTempGitRepo({
           config: { graphify: { enabled: gate !== 'enabled=false', auto_update: gate !== 'auto_update=false' } },
@@ -779,7 +779,11 @@ describe('auto-update', () => {
           fs.writeFileSync(lockPath, String(process.pid));
         }
         const mockBin = makeMockGraphifyBin(tmpDir);
-        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: onboardingCommit(tmpDir) } }, { pathPrepend: mockBin });
+        // The binary-absent row leaves the mock graphify off PATH; the CI row sets CI; the others keep it on.
+        const options = gate === 'graphify binary absent'
+          ? {}
+          : { pathPrepend: mockBin, ...(gate === 'CI set' ? { env: { CI: 'true' } } : {}) };
+        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: onboardingCommit(tmpDir) } }, options);
         assert.strictEqual(result.status, 0);
         assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
           `${gate} must suppress the rebuild for the onboarding commit`);
