@@ -44,6 +44,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md) — bring an agent's completion contract, read-tag gate, or deleted-file test reference back into agreement with the registry
 - [Resolve unreachable-guard findings](how-to/resolve-unreachable-guard-findings.md) — fix shell guards whose fallback arm cannot run, and tell "nothing to report" apart from "could not look"
 - [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md) — terminate a GSD hook with `allow`/`deny`/`crash`, declare its `ON_CRASH` policy, and tell a hook's own crash apart from a check that could not run at all
+- [Declare a flag on a gsd-tools command](how-to/declare-a-gsd-tools-flag.md) — add a flag or a command through the CLI surface registry, regenerate the manifest, and let the parity test check dispatch against it
 - [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md) — capture a gate verb's status safely under `set -e` and tell a failing verdict from a gate that could not look
 - [Resolve a skipped capability probe](how-to/resolve-a-skipped-capability-probe.md) — act on a coverage gate that held your phase for an unestablished scope, or a planning checkpoint that reported `skipped` instead of a verdict
 - [Diagnose which gsd-tools is running](how-to/diagnose-a-foreign-gsd-tools.md) — tell this package's tool apart from the predecessor's colliding binary and from a gsd-core too old to identify itself
@@ -70,6 +71,8 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Handle quick and fast tasks](how-to/handle-quick-and-fast-tasks.md) — use `/gsd-quick` and `/gsd-fast` for ad-hoc work outside the phase loop
 - [Batch quick tasks](how-to/batch-quick-tasks.md) — run several `/gsd-quick`-shaped tasks together with `/gsd-quick-batch`, understand capacity/isolation, and recover a failed or interrupted batch
 - [Configure model profiles](how-to/configure-model-profiles.md) — switch between quality, balanced, and budget model tiers
+- [Choose which executors run your plans](how-to/choose-the-executor-policy.md) — answer the Executor question at new-project or in `/gsd-settings`: `gsd-executor` only, or allow installed executors named by `agent_hint:`
+- [Route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md) — send one plan to your own executor agent with `agent_hint:`, pick its model, and read the routing output
 - [Control which host runtime GSD reports](how-to/control-the-reported-host-runtime.md) — read the `agent_runtime` ladder, understand what host detection looks at, and pin the runtime when detection is not what you want
 - [Set up cross-AI review](how-to/set-up-cross-ai-review.md) — configure a second AI to review code produced by the primary agent
 - [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) — escalate `/gsd-code-review` to `deep` for sensitive directories while the rest of the repo stays at the default depth
@@ -136,6 +139,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Context engineering](explanation/context-engineering.md) — how context rot forms and how GSD Core prevents it
 - [The phase loop](explanation/the-phase-loop.md) — design rationale for the Discuss → Plan → Execute → Verify → Ship cycle
 - [Multi-agent orchestration](explanation/multi-agent-orchestration.md) — how subagents are spawned, scoped, and coordinated
+- [Executor identity](explanation/executor-identity.md) — why a plan's routed executor is recorded with its dispatch identity and checked by the isolation guards
 - [Security model](explanation/security-model.md) — trust boundaries, permissions, and safe automation
 - [How GSD runs on Pi](explanation/how-gsd-runs-on-pi.md) — how commands, agent roles and guards map onto Pi's skills, tools and events, and the limits that leaves
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox

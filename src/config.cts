@@ -476,6 +476,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
       context_guard_mode: 'warn',
       text_mode: false,
       compact_content: false,
+      agent_hint_routing: true, // #6211: parity with the defaults manifest is tested
       research_before_questions: false,
       discuss_mode: 'discuss',
       skip_discuss: false,
