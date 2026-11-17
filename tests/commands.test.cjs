@@ -6722,6 +6722,51 @@ describe('record-dispatch-isolation keyed per-dispatch records (#5682)', () => {
     assert.equal(fs.existsSync(youngTmp), true, 'young temp kept');
   });
 
+  test('#6213: prune removes an aged upper-case .JSON or long-s .jſon stray and keeps a young one', () => {
+    const { AGED_NONE_MAX_MS } = require('../hooks/lib/isolation-sentinel.js');
+    const now = Date.now();
+    recordAt(now, ['--phase', '21', '--plan', '21-01']);
+    const keyed = path.join(project, KEYED_DIR);
+    const oldUpper = path.join(keyed, '40--40-01.JSON');
+    const youngUpper = path.join(keyed, '41--41-01.JSON');
+    const oldLongS = path.join(keyed, '42--42-02.jſon');
+    const youngLongS = path.join(keyed, '43--43-03.jſon');
+    fs.writeFileSync(oldUpper, '{}');
+    fs.writeFileSync(youngUpper, '{}');
+    fs.writeFileSync(oldLongS, '{}');
+    fs.writeFileSync(youngLongS, '{}');
+    aged(oldUpper, now, AGED_NONE_MAX_MS + 1);
+    aged(youngUpper, now, AGED_NONE_MAX_MS - 1);
+    aged(oldLongS, now, AGED_NONE_MAX_MS + 1);
+    aged(youngLongS, now, AGED_NONE_MAX_MS - 1);
+    recordAt(now, ['--phase', '21', '--plan', '21-02']);
+    assert.equal(fs.existsSync(oldUpper), false, 'aged .JSON stray removed');
+    assert.equal(fs.existsSync(youngUpper), true, 'young .JSON stray kept');
+    assert.equal(fs.existsSync(oldLongS), false, 'aged .jſon stray removed');
+    assert.equal(fs.existsSync(youngLongS), true, 'young .jſon stray kept');
+  });
+
+  test('#6213: a fresh record written by a second orchestrator is not deleted by the first orchestrator\'s next write', () => {
+    const now = Date.now();
+    recordAt(now, ['--phase', '21', '--plan', '21-01']);
+    recordAt(now, ['--phase', '22', '--plan', '22-01']);
+    recordAt(now, ['--phase', '21', '--plan', '21-02']);
+    const keyed = path.join(project, KEYED_DIR);
+    assert.deepEqual(fs.readdirSync(keyed).sort(), ['21--21-01.json', '21--21-02.json', '22--22-01.json']);
+  });
+
+  test('#6213: the writer prunes by age only: a record file dated an hour in the future survives a write', () => {
+    const now = Date.now();
+    recordAt(now, ['--phase', '21', '--plan', '21-01']);
+    const keyed = path.join(project, KEYED_DIR);
+    const future = path.join(keyed, '32--32-01.json');
+    fs.writeFileSync(future, '{not json');
+    const when = new Date(now + 3600000);
+    fs.utimesSync(future, when, when);
+    recordAt(now, ['--phase', '21', '--plan', '21-02']);
+    assert.equal(fs.existsSync(future), true, 'a future-dated file is not pruned');
+  });
+
   test('#5682: gitignore covers keyed dir', () => {
     fs.mkdirSync(path.join(project, '.gsd'), { recursive: true });
     fs.writeFileSync(path.join(project, '.gsd', '.gitignore'), 'user-rule/\n');

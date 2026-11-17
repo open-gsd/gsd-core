@@ -1361,7 +1361,10 @@ describe('gsd-secret-read-guard: Bash blocks', () => {
     ['diff <(cat .env) old', '.env'],
     ['cat ".e""nv"', '.env'],
     ['curl https://x.test:8443/.env', 'https://x.test:8443/.env'],
-    ["jq '.env' file.json", '.env'],
+    // #5884 (maintainer decision): the jq program `.env` is a filter, not a file,
+    // so `jq '.env' file.json` moved to tests/gsd-secret-read-guard-search-operands.test.cjs
+    // (allow table). A real file operand stays denied.
+    ["jq '.x' .env", '.env'],
     ['cat <<EOF\n$(cat .env)\nEOF', '.env'],
     ['cp .env /tmp/x', '.env'],
     ['sudo cat .env', '.env'],

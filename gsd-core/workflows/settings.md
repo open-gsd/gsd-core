@@ -62,6 +62,7 @@ Parse current values (default to `true` if not present):
 - `git.repo_tagging` — milestone tagging mode: `"single"` (one `v[X.Y]` tag, default) or `"per_repo"` (record a release map and tag each `planning.sub_repos` repository separately; set via `gsd_run query config-set git.repo_tagging per_repo`, #3628)
 - `workflow.use_worktrees` — whether parallel executor agents run in worktree isolation (honored when the runtime declares a `dispatch.isolation` primitive — `harness-worktree` or `orchestrator-worktree`; runtimes declaring `none` default it to `false` and fail closed on an explicit `true` — #1521, #2486, #2584)
 - `workflow.compact_content` — load token-minimized instruction variants where they exist, trading rarely-needed elaboration for a smaller always-loaded instruction window (default: false if absent; #4139)
+- `workflow.agent_hint_routing` — executor policy: `true` lets a plan's `agent_hint:` pick an installed executor agent (GSD roles refused); `false` runs every plan on `gsd-executor` (default: true if absent; #6211)
 - `model_policy.provider` — provider slug for model policy (default: `null`; known values: anthropic, openai, google, qwen; set via /gsd:config --advanced)
 - `model_policy.budget` — budget level for model policy (default: `null`; known values: high, medium, low; set via /gsd:config --advanced)
 - `model_policy.high` — model ID for high-cost tier (default: `null`; set via /gsd:config --advanced)
@@ -121,7 +122,7 @@ Section layout:
 Research, Plan Checker, Drift Guard, Pattern Mapper, Nyquist, UI Phase, UI Gate, AI Phase
 
 ### Execution
-Verifier, TDD Mode, Code Review, Code Review Depth _(conditional — only when code_review=on)_, UI Review
+Verifier, TDD Mode, Code Review, Code Review Depth _(conditional — only when code_review=on)_, UI Review, Executor
 
 ### Docs & Output
 Commit Docs, Skip Discuss, Worktrees
@@ -298,6 +299,15 @@ AskUserQuestion([
     options: [
       { label: "Yes (Recommended)", description: "Run visual quality audit after phase execution in autonomous mode." },
       { label: "No", description: "Skip the UI audit step. Good for backend-only projects." }
+    ]
+  },
+  {
+    question: "Executor for plans: use gsd-executor only, or allow other executors installed on this runtime (named by a plan's agent_hint)?",
+    header: "Executor",
+    multiSelect: false,
+    options: [
+      { label: "Allow installed executors (Recommended)", description: "A plan's agent_hint may name an executor agent installed on this runtime; it gets its model override (else gsd-executor's) and the same worktree guard. GSD roles are never executors." },
+      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored." }
     ]
   },
   {
@@ -487,7 +497,8 @@ Merge new settings into existing config.json:
     "discuss_mode": "discuss" | "assumptions",
     "skip_discuss": true/false,
     "use_worktrees": true/false,  // never written as true when the runtime's dispatch.isolation is none; omitted entirely when the user chose "Leave unchanged" (#2486)
-    "compact_content": true/false
+    "compact_content": true/false,
+    "agent_hint_routing": true/false
   },
   "plan_review": {
     "source_grounding": true/false
@@ -544,7 +555,7 @@ Merge new settings into existing config.json:
 
   `code_review_depth` is written only if the `code_review` question was answered `on`; otherwise leave the existing value in place.
 
-- **Non-capability keys** (`model_profile`, `commit_docs`, `workflow.plan_check`, `workflow.verifier`, `workflow.auto_advance`, `workflow.text_mode`, `workflow.compact_content`, `workflow.research_before_questions`, `workflow.discuss_mode`, `workflow.skip_discuss`, `workflow.use_worktrees`, `plan_review.source_grounding`, `graphify.auto_update`, `git.*`, `hooks.*`, `model_policy.*`): write via `gsd_run query config-set <key.path> <value>` as before.
+- **Non-capability keys** (`model_profile`, `commit_docs`, `workflow.plan_check`, `workflow.verifier`, `workflow.auto_advance`, `workflow.text_mode`, `workflow.compact_content`, `workflow.agent_hint_routing`, `workflow.research_before_questions`, `workflow.discuss_mode`, `workflow.skip_discuss`, `workflow.use_worktrees`, `plan_review.source_grounding`, `graphify.auto_update`, `git.*`, `hooks.*`, `model_policy.*`): write via `gsd_run query config-set <key.path> <value>` as before.
 
 `model_profile` is written on Q1 "Adaptive (Recommended)" (→ adaptive) or Q1 "Inherit" (→ inherit) immediately; for Q1 "Standard tier…", `model_profile` is written from Q2's answer. If Q1 = "Standard tier…" but Q2 is cancelled, leave the existing `model_profile` value unchanged — do not write any new value.
 
@@ -599,7 +610,8 @@ Write `${GSD_HOME:-$HOME}/.gsd/defaults.json` with:
     "code_review_depth": <current>,
     "ui_review": <current>,
     "skip_discuss": <current>,
-    "compact_content": <current>
+    "compact_content": <current>,
+    "agent_hint_routing": <current>
   },
   "plan_review": {
     "source_grounding": <current>
@@ -646,6 +658,7 @@ Display:
 | Skip Discuss         | {On/Off} |
 | Context Warnings     | {On/Off} |
 | Compact Content      | {On/Off} |
+| Executor             | {Allow installed executors/gsd-executor only} |
 | Saved as Defaults    | {Yes/No} |
 
 These settings apply to future /gsd:plan-phase and /gsd:execute-phase runs.
@@ -664,7 +677,7 @@ Quick commands:
 
 <success_criteria>
 - [ ] Current config read
-- [ ] User presented with 25 settings (profile + workflow toggles + features + git branching + git tagging + ctx warnings + compact content), grouped into six sections: Planning, Execution, Docs & Output, Features, Model & Pipeline, Misc. `code_review_depth` is conditional on `code_review=on`. Model profile uses a two-question split (Q1: Adaptive / Standard tier / Inherit; Q2: Quality / Balanced / Budget — only when Standard tier chosen) to stay within the 4-option AskUserQuestion cap while exposing all 5 valid profiles (#3784). Drift Guard (`plan_review.source_grounding`) is in the Planning section.
+- [ ] User presented with 27 settings (profile + workflow toggles + features + git branching + git tagging + ctx warnings + compact content + executor policy; Review Depth and Graph auto-update are conditional), grouped into six sections: Planning, Execution, Docs & Output, Features, Model & Pipeline, Misc. `code_review_depth` is conditional on `code_review=on`. Model profile uses a two-question split (Q1: Adaptive / Standard tier / Inherit; Q2: Quality / Balanced / Budget — only when Standard tier chosen) to stay within the 4-option AskUserQuestion cap while exposing all 5 valid profiles (#3784). Drift Guard (`plan_review.source_grounding`) is in the Planning section.
 - [ ] Config updated with model_profile, workflow, and git sections
 - [ ] User offered to save as global defaults (~/.gsd/defaults.json)
 - [ ] Changes confirmed to user
