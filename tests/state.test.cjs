@@ -23852,7 +23852,7 @@ describe('legacy phase-heading counting reads real headings only (#5880)', () =>
       '---', 'gsd_state_version: 1.0', 'milestone: v1.0', 'status: executing', '---', '',
       '# Project State', '', '**Phase:** 01', '', '**Progress:** [░░░░░░░░░░] 0%', '',
     ].join('\n'));
-    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'x'], dir, { HOME: dir, USERPROFILE: dir });
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'x'], dir);
     assert.ok(result.success, `state record-session failed: ${result.error}`);
     const match = /total_phases:\s*(\d+)/.exec(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf8'));
     assert.ok(match, 'record-session wrote progress.total_phases');
