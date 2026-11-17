@@ -117,8 +117,8 @@ function buildTddOnlyConfig() {
 /**
  * A single gsd-tools.cjs CLI subcommand invocation via execFileSync, no
  * fan-out. Same class as tests/helpers/timeouts.cjs's
- * LOOP_HOOK_POINT_CLI_TIMEOUT_MS, but at half that constant's pre-existing
- * bound -- not equalized without bench data. Kept file-local: this batch's
+ * LOOP_HOOK_POINT_CLI_TIMEOUT_MS (80000ms), but at a lower bound -- not
+ * equalized without bench data. Kept file-local: this batch's
  * only site at this exact class+value.
  */
 const GSD_TOOLS_CLI_TIMEOUT_MS = 30000;

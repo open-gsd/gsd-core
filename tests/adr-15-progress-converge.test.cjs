@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } =require('./helpers/timeouts.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const COMMAND_PATH = path.join(REPO_ROOT, 'commands', 'gsd', 'progress.md');
@@ -143,7 +143,7 @@ describe('ADR-15: /gsd:progress --next --auto --converge (#1190)', () => {
 
     // Behavioral coverage: prove the roster the workflow derives from actually
     // yields the flags this test used to hardcode, so the derivation is not vacuous.
-    const laneFlagsResult = runNode([TOOLS, 'review-lane', 'flags'], { timeoutMs: PROBE_TIMEOUT_MS });
+    const laneFlagsResult = runNode([TOOLS, 'review-lane', 'flags'], { timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS });
     throwIfFailed(laneFlagsResult, `node ${TOOLS} review-lane flags`);
     const laneFlags = laneFlagsResult.stdout.split('\n').filter(Boolean);
     for (const flag of formerlyHardcodedLaneFlags) {

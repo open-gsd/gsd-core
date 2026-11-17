@@ -29,6 +29,10 @@ const {
   httpsGetFollowingRedirects,
   MAX_REDIRECTS,
   DOWNLOAD_TIMEOUT_MS,
+  DOWNLOAD_ATTEMPTS,
+  DOWNLOAD_BACKOFF_MS,
+  isTransientDownloadError,
+  downloadWithRetry,
 } = require(path.join(__dirname, '..', 'scripts', 'lib', 'shellcheck-fetch.cjs'));
 
 // --- test-only fixture builders --------------------------------------------
@@ -343,6 +347,210 @@ describe('httpsGetFollowingRedirects', () => {
     await assert.rejects(
       promise,
       new RegExp(`timed out after ${DOWNLOAD_TIMEOUT_MS}ms fetching https://example\\.invalid/stalls`),
+    );
+  });
+});
+
+describe('#6095 download retry', () => {
+  const URL_ = 'https://example.invalid/shellcheck.tar.gz';
+
+  function httpError(status) {
+    const err = new Error(`unexpected HTTP ${status} fetching ${URL_}`);
+    err.status = status;
+    return err;
+  }
+
+  /** Scripted getFn: each step is a status number (rejects with that HTTP error), 200 (resolves), or an Error. */
+  function makeGetFn(steps) {
+    const calls = [];
+    const getFn = async (url) => {
+      calls.push(url);
+      const step = steps[Math.min(calls.length - 1, steps.length - 1)];
+      if (step === 200) return Buffer.from('body');
+      if (step instanceof Error) throw step;
+      throw httpError(step);
+    };
+    return { getFn, calls };
+  }
+
+  function makeSleep() {
+    const sleeps = [];
+    return { sleep: async (ms) => { sleeps.push(ms); }, sleeps };
+  }
+
+  test('pins the policy: 3 attempts, backoff [2000, 5000]', () => {
+    assert.equal(DOWNLOAD_ATTEMPTS, 3);
+    assert.deepEqual(DOWNLOAD_BACKOFF_MS, [2000, 5000]);
+  });
+
+  test('row 1: 504 then 200 resolves the body after 2 calls and one backoff sleep', async () => {
+    const { getFn, calls } = makeGetFn([504, 200]);
+    const { sleep, sleeps } = makeSleep();
+    const body = await downloadWithRetry(URL_, { getFn, sleep });
+    assert.equal(body.toString('utf8'), 'body');
+    assert.equal(calls.length, 2);
+    assert.deepEqual(sleeps, [DOWNLOAD_BACKOFF_MS[0]]);
+  });
+
+  test('row 2: 503, 502, 200 succeeds on the last allowed attempt', async () => {
+    const { getFn, calls } = makeGetFn([503, 502, 200]);
+    const { sleep, sleeps } = makeSleep();
+    const body = await downloadWithRetry(URL_, { getFn, sleep });
+    assert.equal(body.toString('utf8'), 'body');
+    assert.equal(calls.length, 3);
+    assert.deepEqual(sleeps, [2000, 5000]);
+  });
+
+  test('row 3: 5xx on every attempt rejects after exactly 3 calls, naming every attempt', async () => {
+    const { getFn, calls } = makeGetFn([504, 503, 502]);
+    const { sleep } = makeSleep();
+    await assert.rejects(downloadWithRetry(URL_, { getFn, sleep }), (err) => {
+      assert.match(err.message, /attempt 1: .*HTTP 504/);
+      assert.match(err.message, /attempt 2: .*HTTP 503/);
+      assert.match(err.message, /attempt 3: .*HTTP 502/);
+      return true;
+    });
+    assert.equal(calls.length, 3);
+  });
+
+  for (const attempts of [DOWNLOAD_ATTEMPTS - 1, DOWNLOAD_ATTEMPTS, DOWNLOAD_ATTEMPTS + 1]) {
+    test(`row 4: attempts=${attempts} (limit${attempts === DOWNLOAD_ATTEMPTS ? '' : attempts < DOWNLOAD_ATTEMPTS ? '-1' : '+1'}) with always-503 makes exactly ${attempts} calls`, async () => {
+      const { getFn, calls } = makeGetFn([503]);
+      const { sleep, sleeps } = makeSleep();
+      await assert.rejects(downloadWithRetry(URL_, { attempts, getFn, sleep }), /attempt 1: /);
+      assert.equal(calls.length, attempts);
+      assert.equal(sleeps.length, attempts - 1);
+    });
+  }
+
+  test('row 5: 404 rejects after 1 call with no sleep', async () => {
+    const { getFn, calls } = makeGetFn([404]);
+    const { sleep, sleeps } = makeSleep();
+    await assert.rejects(downloadWithRetry(URL_, { getFn, sleep }), /unexpected HTTP 404/);
+    assert.equal(calls.length, 1);
+    assert.equal(sleeps.length, 0);
+  });
+
+  for (const status of [408, 429]) {
+    test(`row 6: ${status} is retried`, async () => {
+      const { getFn, calls } = makeGetFn([status, 200]);
+      const { sleep } = makeSleep();
+      await downloadWithRetry(URL_, { getFn, sleep });
+      assert.equal(calls.length, 2);
+    });
+  }
+
+  for (const [label, err] of [
+    ['network error with no status', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })],
+    ['request timeout', new Error(`timed out after ${DOWNLOAD_TIMEOUT_MS}ms fetching ${URL_}`)],
+  ]) {
+    test(`row 7: ${label} is retried`, async () => {
+      const { getFn, calls } = makeGetFn([err, 200]);
+      const { sleep } = makeSleep();
+      await downloadWithRetry(URL_, { getFn, sleep });
+      assert.equal(calls.length, 2);
+    });
+  }
+
+  test('row 8: "too many redirects" is not retried', async () => {
+    const tooMany = Object.assign(new Error(`too many redirects fetching ${URL_}`), { code: 'TOO_MANY_REDIRECTS' });
+    const { getFn, calls } = makeGetFn([tooMany]);
+    const { sleep, sleeps } = makeSleep();
+    await assert.rejects(downloadWithRetry(URL_, { getFn, sleep }), (err) => {
+      assert.equal(err.code, 'TOO_MANY_REDIRECTS');
+      assert.match(err.message, /too many redirects/);
+      return true;
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(sleeps.length, 0);
+  });
+
+  test('row 9: the non-200 rejection of httpsGetFollowingRedirects carries err.status and an unchanged message', async () => {
+    const requestFn = (_url, _options, callback) => {
+      const req = new EventEmitter();
+      req.destroy = () => {};
+      process.nextTick(() => {
+        const res = new EventEmitter();
+        res.statusCode = 504;
+        res.headers = {};
+        res.resume = () => {};
+        callback(res);
+      });
+      return req;
+    };
+    await assert.rejects(
+      httpsGetFollowingRedirects('https://example.invalid/asset', MAX_REDIRECTS, requestFn),
+      (err) => {
+        assert.equal(err.status, 504);
+        assert.equal(err.message, 'unexpected HTTP 504 fetching https://example.invalid/asset');
+        return true;
+      },
+    );
+  });
+
+  test('isTransientDownloadError classifies the status boundaries', () => {
+    const withStatus = (status) => Object.assign(new Error('x'), { status });
+    for (const s of [407, 409, 428, 430, 499, 404, 403]) assert.equal(isTransientDownloadError(withStatus(s)), false, `${s}`);
+    for (const s of [408, 429, 500, 599]) assert.equal(isTransientDownloadError(withStatus(s)), true, `${s}`);
+    assert.equal(isTransientDownloadError(withStatus(600)), false);
+    assert.equal(isTransientDownloadError(new Error('socket hang up')), true);
+    assert.equal(
+      isTransientDownloadError(Object.assign(new Error('too many redirects fetching x'), { code: 'TOO_MANY_REDIRECTS' })),
+      false,
+    );
+  });
+
+  test('row 8b: the too-many-redirects rejection of httpsGetFollowingRedirects carries code TOO_MANY_REDIRECTS and an unchanged message', async () => {
+    const steps = Array.from({ length: MAX_REDIRECTS + 1 }, (_, n) => ({
+      status: 302,
+      headers: { location: `https://example.invalid/hop-${n + 1}` },
+    }));
+    let i = 0;
+    const requestFn = (_url, _options, callback) => {
+      const req = new EventEmitter();
+      req.destroy = () => {};
+      const step = steps[i++];
+      process.nextTick(() => {
+        const res = new EventEmitter();
+        res.statusCode = step.status;
+        res.headers = step.headers;
+        res.resume = () => {};
+        callback(res);
+      });
+      return req;
+    };
+    await assert.rejects(
+      httpsGetFollowingRedirects('https://example.invalid/start', MAX_REDIRECTS, requestFn),
+      (err) => {
+        assert.equal(err.code, 'TOO_MANY_REDIRECTS');
+        assert.match(err.message, /^too many redirects fetching /);
+        assert.equal(isTransientDownloadError(err), false);
+        return true;
+      },
+    );
+  });
+
+  // row 10
+  test('property: calls = index of first 200 or first non-transient, +1, capped at attempts; resolves iff 200 comes first and within attempts', async () => {
+    const statusArb = fc.constantFrom(200, 404, 408, 429, 500, 502, 503, 504);
+    await fc.assert(
+      fc.asyncProperty(fc.array(statusArb, { minLength: 1, maxLength: 6 }), fc.integer({ min: 1, max: 5 }), async (statuses, attempts) => {
+        const { getFn, calls } = makeGetFn(statuses.concat([503]));
+        const { sleep } = makeSleep();
+        let expectedCalls = 0;
+        let expectOk = false;
+        for (let i = 0; i < attempts; i++) {
+          expectedCalls = i + 1;
+          const s = i < statuses.length ? statuses[i] : 503;
+          if (s === 200) { expectOk = true; break; }
+          if (![408, 429].includes(s) && !(s >= 500 && s <= 599)) break;
+        }
+        let ok = true;
+        try { await downloadWithRetry(URL_, { attempts, getFn, sleep }); } catch { ok = false; }
+        assert.equal(calls.length, expectedCalls);
+        assert.equal(ok, expectOk);
+      }),
+      { seed: 6095 },
     );
   });
 });

@@ -29,7 +29,7 @@ const LIB_DIR = path.join(REPO_ROOT, 'gsd-core', 'bin', 'lib');
 const HEAVY = ['state.cjs', 'phase.cjs', 'roadmap.cjs', 'config.cjs', 'init.cjs', 'verify.cjs', 'commands.cjs', 'milestone.cjs'];
 
 // The requires gsd-tools.cjs keeps eager: main() uses each before it dispatches.
-const EAGER = ['cli-exit.cjs', 'io.cjs', 'project-root.cjs', 'cli-skew-check.cjs', 'active-workstream-store.cjs'];
+const EAGER = ['cli-exit.cjs', 'io.cjs', 'project-root.cjs', 'project-context.cjs', 'cli-skew-check.cjs', 'active-workstream-store.cjs', 'cli-surface.cjs'];
 
 // A --require probe that writes the ./lib modules in require.cache, as paths relative
 // to bin/lib, to the file named by GSD_LAZY_LOAD_PROBE_OUT when the process exits.

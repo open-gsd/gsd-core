@@ -1620,6 +1620,8 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 - REQ-MULTIREPO-02: System MUST resolve project root across repository boundaries
 - REQ-MULTIREPO-03: Executor MUST record per-repo commit hashes in multi-repo mode
 
+**Root resolution:** One resolver, `resolveProjectContext`, answers every "which directory is the project" question. It finds the `.planning` store by walking up from the start directory (or from `--project-dir`), applies the `planning.sub_repos` workspace layout when the checkout sits inside a workspace, and, for a linked git worktree that has no `.planning` of its own, falls back to the main checkout's. It also reports the git facts behind that answer (worktree top level, main checkout, common git dir) and a provenance record, printed by `gsd-tools query project-context`. Inside a linked worktree of a `planning.sub_repos` workspace, GSD resolves the workspace's `.planning` rather than the repository's main checkout. `gsd-tools commit` commits only in the checkout it runs in: it refuses with `outside_worktree` when the working directory, a declared path, or the planning project it would write to lies outside that checkout, and with `not_git_repo` outside a git repository. See [Resolve the project root in a worktree](how-to/resolve-the-project-root-in-a-worktree.md).
+
 ---
 
 ### 48. Discussion Audit Trail
@@ -3314,7 +3316,9 @@ including license notices, so installed runtimes need no `node_modules`.
 - `enabled: false` (default) — feature is off; all agents use the precedence chain unchanged.
 - `enabled: true` — the resolver picks `tier_models[default_tier]` for the first spawn and escalates one tier up on orchestrator-detected soft failure, capped by `max_escalations`.
 
-**Composition:** `model_overrides` always wins; `dynamic_routing.tier_models[<tier>]` resolves above `models.<phase_type>` and `model_profile`.
+**Composition:** `model_overrides` always wins; `dynamic_routing.tier_models[<tier>]` resolves above `models.<phase_type>` and `model_profile`. On the first spawn, and on any respawn that does not move the tier, a `model_policy` preset, a non-Claude runtime's tier map, and a `model_profile_overrides.claude` pin also outrank `tier_models`. So `resolve-execution --attempt 0` reports the same model as `resolve-model` (#6214).
+
+Under an explicit project `resolve_model_ids: "omit"` on Claude Code, routing still picks and escalates the tier, but the resolver returns that tier's alias (`haiku` / `sonnet` / `opus`) rather than the `tier_models` value (#3703). On a runtime without native tier aliases or a tier map, an applied `"omit"` stays blank on every attempt. `provider_escalation` is skipped on Claude Code and wherever the `"omit"` left the model blank.
 
 **Requirements:**
 - REQ-DYNROUTE-01: `dynamic_routing.enabled` acts as a master switch; when `false` or block is absent, zero behavior change.

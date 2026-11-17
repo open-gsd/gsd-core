@@ -77,8 +77,8 @@ If yes, spawn a research agent:
 
 Resolve the researcher's **tier** and its model before dispatching. `--pick tier` returns the effective
 tier GSD resolved (`opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`) and is what arms the tier-floor
-guard below. `--pick model` answers a different question — which model id to hand `Agent()` — and is
-**not** a tier signal: it is blank on runtimes installed with `resolve_model_ids: "omit"`, and a
+guard below. `--pick model` answers which model id to hand `Agent()`, and is
+**not** a tier signal: it is blank under `resolve_model_ids: "omit"` without native tier aliases or a tier map, and a
 runtime-substituted name (`gpt-5.6-luna` on codex) where a tier map exists. `--raw` would drop both:
 
 ```bash

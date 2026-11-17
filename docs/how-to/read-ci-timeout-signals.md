@@ -114,7 +114,7 @@ A bounded child that runs to its timeout used to fail as `null !== 0`. Every spa
 slow or killed spawn leaves a line in the uploaded `test-timings-<os>-job<n>` artifact.
 
 1. Open the artifact's `.jsonl` and find lines with `"type":"seam:spawn-stall"`. A spawn is
-   recorded when it took 2 s or longer (`GSD_SEAM_SLOW_SPAWN_MS` changes the bound) or was killed.
+   recorded when it took 2 s or longer (`GSD_SEAM_SLOW_SPAWN_MS` changes the bound), was killed, or used at least half of its own timeout (a near-miss). Every shared bound is 5 s or more, so with the default threshold a near-miss adds no records; it adds the fields below to records already written, and adds records only for a bound under 4 s or a raised `GSD_SEAM_SLOW_SPAWN_MS`. Each record carries `boundFraction` (duration divided by timeout, floored to three decimals) and `nearMiss`. A class creeping toward its bound shows as a rising `boundFraction`.
 2. Read `file` (the test file), `command` and `argv` (first three arguments), `outcome`
    (`timed_out`, `killed`, `exited`), `signal`, `durationMs`, `timeoutMs`, `pid`, and the UTC
    `startedAt`/`endedAt`.
@@ -125,3 +125,28 @@ slow or killed spawn leaves a line in the uploaded `test-timings-<os>-job<n>` ar
 
 Tests that assert on a seam result can use `assertSeamExit(assert, result, 0)`, which names the
 outcome, signal and duration in its failure message, or put `result.summary` in their own message.
+
+## Reproduce the evidence numbers
+
+The CI figures in `tests/helpers/timeouts.cjs` `TIMEOUT_EVIDENCE` (observed max, p50, p99, samples, lanes, unseen sites) come from the `seam:spawn-stall` records above. `scripts/timeout-evidence-from-ci.cjs` recomputes them from the repository and the downloaded artifacts. Downloading is a separate step; the script never contacts the network.
+
+1. List the successful `test.yml` runs of the `push` and `merge_group` events created after the window start, then download each run's timing artifacts into `<dir>/<run id>/`:
+
+   ```sh
+   gh run list --workflow test.yml --event push --status success --created ">=2026-10-25" --limit 400 --json databaseId,createdAt
+   gh run download <run id> --pattern 'test-timings-*' --dir <dir>/<run id>
+   ```
+
+   `2026-10-25` is the window start in `CI_WINDOW` (`tests/helpers/timeouts.cjs`).
+
+   Repeat the list with `--event merge_group`. `gh run download --help` states that when only a single artifact is specified it is extracted into the target directory itself, and otherwise one folder per artifact name is created. The script reads both layouts, `<dir>/<run id>/<artifact name>/*.jsonl` and `<dir>/<run id>/*.jsonl`, and takes the platform from the artifact folder name or, failing that, the file name (`ubuntu`, `windows` or `macos`). It exits 2 when it finds no lane file or a lane whose platform it cannot determine. Expired artifacts cannot be downloaded and are skipped.
+
+2. Run the script from the repository root:
+
+   ```sh
+   node scripts/timeout-evidence-from-ci.cjs --artifacts <dir> --format md
+   ```
+
+   `--format json` prints the full figures, and `--repo <root>` points it at another checkout. `--raw-sites` prints the call sites that spawn outside the process seam, grouped by constant, as `- [ ] tests/x.test.cjs:LINE (CONSTANT)` lines.
+
+A record is credited to a constant by call site: the record's test file (or a helper it requires) has a seam call site of that constant, the record's `timeoutMs` equals the constant's value, and its command matches the site's callee. A site reached only through a shared helper must also show one of its own string literals in the record's argv, otherwise the record stays unmatched. A record that still matches two constants after narrowing by argv is credited to neither and counted as ambiguous. The script reports any call site it could not classify (`unresolvedSites`) and any manual resolution that matched nothing (`unusedResolutions`); resolve either in `MANUAL_RESOLUTIONS` in the script.
