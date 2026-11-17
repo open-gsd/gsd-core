@@ -2380,7 +2380,8 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       } else if (
         explicitFiles &&
         // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
-        isStateJsonPublishPath(cwd, path.relative(cwd, fullPath)) &&
+        // Both sides are canonical (git resolves the path the same way): an absolute spelling through a symlink or a Windows 8.3 name stays inside the project.
+        isStateJsonPublishPath(cwd, path.relative(fs.realpathSync.native(cwd), path.join(fs.realpathSync.native(path.dirname(fullPath)), path.basename(fullPath)))) &&
         execGit(['check-ignore', '-q', '--', file], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).exitCode === 0
       ) {
         // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing
