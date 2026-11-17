@@ -159,11 +159,12 @@ test('#5934: quick-batch gives every orchestrator-worktree placeholder a value o
   for (const name of substitutedPlaceholders()) {
     const mention = bullet.split('\n').find((line) => line.includes(`{${name}}`));
     assert.ok(mention, `the quick-batch step never names {${name}}, which the reused fragment substitutes`);
-    assert.match(
-      bullet,
-      new RegExp(`\`\\{${name}\\}\`[^\\n]*?(?:=|→|not applicable)|not applicable[^\\n]*\`\\{${name}\\}\``),
-      `{${name}} is named but has no value or "not applicable" stated for a quick item`,
-    );
+    // Either an explicit mapping (`{name}` = `value`) or named in a sentence that says it is not applicable.
+    const mapped = new RegExp(`\`\\{${name}\\}\`\\s*=\\s*\`[^\`\\n]{1,80}\``).test(bullet);
+    const notApplicable = bullet
+      .split('\n')
+      .some((line) => line.includes(`\`{${name}}\``) && /\b(?:is|are) not applicable\b/.test(line));
+    assert.ok(mapped || notApplicable, `{${name}} is named but has neither a mapped value nor a stated "not applicable" for a quick item`);
   }
 });
 
