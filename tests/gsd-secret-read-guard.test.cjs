@@ -769,7 +769,7 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     // git rejects these aliases (unclosed quote, trailing backslash) and
     // runs nothing.
     "git -c alias.x='-c core.fsmonitor=\"cat .env status' x",
-    "git -c alias.x='-c core.fsmonitor=cat .env\\' x",
+    "git -c alias.x='-c core.fsmonitor=cat .env status\\' x",
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => {
