@@ -64,6 +64,7 @@ module.exports = {
   "tests/config-schema.property.test.cjs",
   "tests/config.test.cjs",
   "tests/contributor-standards.test.cjs",
+  "tests/copilot-install.test.cjs",
   "tests/core-utils.test.cjs",
   "tests/criterion-replay.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
