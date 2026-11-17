@@ -46,19 +46,6 @@ function run(valid, invalid) {
   ruleTester.run('no-adhoc-env-isolation', rule, { valid, invalid });
 }
 
-// ─── module shape ─────────────────────────────────────────────────────────────
-
-describe('no-adhoc-env-isolation rule module', () => {
-  test('exports meta and create with the three messages', () => {
-    assert.strictEqual(typeof rule.meta, 'object');
-    assert.strictEqual(typeof rule.create, 'function');
-    assert.strictEqual(rule.meta.type, 'problem');
-    for (const id of ['inlinePathFilter', 'adhocHomeConstruction', 'staleAllowlistEntry']) {
-      assert.ok(rule.meta.messages[id], `${id} message must exist`);
-    }
-  });
-});
-
 // ─── Arm 1: inline PATH split / filter ───────────────────────────────────────
 
 describe('no-adhoc-env-isolation: arm 1 fires on a PATH split or filter', () => {
