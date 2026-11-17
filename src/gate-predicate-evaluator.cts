@@ -49,8 +49,10 @@ const ENV_CONTEXT_KEYS = Object.freeze({ GSD_PHASE_NUMBER: 'phaseNumber', GSD_PH
 /** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
 const INTERPOLATION_VAR_NAMES = Object.freeze(Object.keys(ENV_CONTEXT_KEYS));
 
-/** The pre-#5482 spellings. They collide with ordinary shell variables, so a command that uses one is refused. */
+/** The prefix of every GSD environment name. */
 const ENV_PREFIX = 'GSD_';
+
+/** The pre-#5482 spellings. They collide with ordinary shell variables, so a command that uses one is refused. */
 const LEGACY_VAR_NAMES = Object.freeze(INTERPOLATION_VAR_NAMES.map((name) => name.slice(ENV_PREFIX.length)));
 
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
@@ -103,36 +105,94 @@ function assertNoLegacyPlaceholder(command: string): void {
   }
 }
 
+/** Throw when `command[i]` starts a placeholder in a span `sh` never expands (single quotes, `$'...'`, a quoted here-document). */
+function assertNotLiteralPlaceholder(command: string, i: number): void {
+  PLACEHOLDER_AT_RE.lastIndex = i;
+  const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
+  if (name !== undefined) {
+    throw new Error(`gate command single-quotes \${${name}}, which sh never expands: write "\${${name}}" in double quotes`);
+  }
+}
+
+// A here-document opener: `<<`, optional `-`, then the delimiter word (quoted: the body is literal).
+const HEREDOC_OPEN_RE = /<<(-?)[ \t]*(?:'([^'\n]*)'|"([^"\n]*)"|\\?([A-Za-z_]\w*))/y;
+
+interface QuoteCtx {
+  kind: 'none' | 'sub' | 'tick' | 'double' | 'single' | 'ansi' | 'heredoc' | 'literal-heredoc';
+  delimiter?: string;
+  stripTabs?: boolean;
+}
+
+/** The end index of the line starting at `i` when it is the delimiter line of here-document `top`; -1 otherwise. */
+function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
+  const eol = command.indexOf('\n', i);
+  const end = eol === -1 ? command.length : eol;
+  const line = command.slice(i, end);
+  return (top.stripTabs ? line.replace(/^\t+/, '') : line) === top.delimiter ? end : -1;
+}
+
 /**
- * Throw when a placeholder sits in the single-quote state of the command: `sh` never expands inside single
- * quotes, so the gate would test the literal text `${GSD_PHASE_DIR}` and pass on a path that does not exist. The
- * throw is the gate's existing "unevaluable" path (a `usage` failure). The walk follows the POSIX quote states
- * (single, double, backslash, comment), so an apostrophe inside double quotes or a `#` comment pairs with nothing.
+ * Throw when a placeholder sits where `sh` never expands it: the gate would test the literal text
+ * `${GSD_PHASE_DIR}` and pass on a path that does not exist. The throw is the gate's existing "unevaluable"
+ * path (a `usage` failure). One walk follows every shell quoting state with a stack: single and double quotes,
+ * `$'...'`, backslash, `#` comments, `$(...)`, `(...)`, backticks and here-documents (a quoted delimiter makes
+ * the body literal). A quote character pairs only inside its own state, so an apostrophe in a comment, a
+ * double-quoted string or an unquoted here-document body pairs with nothing.
  */
 function assertNoSingleQuotedPlaceholder(command: string): void {
-  let state: 'none' | 'single' | 'double' = 'none';
+  const stack: QuoteCtx[] = [{ kind: 'none' }];
+  const pending: QuoteCtx[] = [];
+  let dollarAt = -2;
   for (let i = 0; i < command.length; i++) {
+    const top = stack[stack.length - 1];
     const c = command[i];
-    if (state === 'single') {
-      if (c === "'") {
-        state = 'none';
-      } else if (c === '$') {
-        PLACEHOLDER_AT_RE.lastIndex = i;
-        const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
-        if (name !== undefined) {
-          throw new Error(`gate command single-quotes \${${name}}, which sh never expands: write "\${${name}}" in double quotes`);
-        }
+    const prev = command[i - 1] ?? '';
+    if ((top.kind === 'heredoc' || top.kind === 'literal-heredoc') && prev === '\n') {
+      const end = endsHeredoc(command, i, top);
+      if (end !== -1) {
+        stack.pop();
+        i = end - 1;
+        continue;
       }
+    }
+    if (top.kind === 'single' || top.kind === 'ansi' || top.kind === 'literal-heredoc') {
+      if (c === "'" && top.kind !== 'literal-heredoc') stack.pop();
+      else if (c === '\\' && top.kind === 'ansi') i++;
+      else if (c === '$') assertNotLiteralPlaceholder(command, i);
     } else if (c === '\\') {
       i++;
-    } else if (c === '#' && state === 'none' && (i === 0 || /[\s;&|()]/.test(command[i - 1] ?? ''))) {
+    } else if (c === '`') {
+      if (top.kind === 'tick') stack.pop();
+      else stack.push({ kind: 'tick' });
+    } else if (c === '$' && command[i + 1] === '(') {
+      stack.push({ kind: 'sub' });
+      i++;
+    } else if (top.kind === 'double' || top.kind === 'heredoc') {
+      if (c === '"' && top.kind === 'double') stack.pop();
+    } else if (c === '$') {
+      dollarAt = i;
+    } else if (c === '#' && (i === 0 || /[\s;&|()]/.test(prev))) {
       const eol = command.indexOf('\n', i);
       if (eol === -1) return;
-      i = eol;
-    } else if (c === "'" && state === 'none') {
-      state = 'single';
+      i = eol - 1;
+    } else if (c === "'") {
+      stack.push({ kind: dollarAt === i - 1 ? 'ansi' : 'single' });
     } else if (c === '"') {
-      state = state === 'none' ? 'double' : 'none';
+      stack.push({ kind: 'double' });
+    } else if (c === '(') {
+      stack.push({ kind: 'sub' });
+    } else if (c === ')') {
+      if (top.kind === 'sub') stack.pop();
+    } else if (c === '<' && command[i + 1] === '<' && prev !== '<') {
+      HEREDOC_OPEN_RE.lastIndex = i;
+      const m = HEREDOC_OPEN_RE.exec(command);
+      if (m) {
+        const literal = m[2] !== undefined || m[3] !== undefined;
+        pending.push({ kind: literal ? 'literal-heredoc' : 'heredoc', delimiter: m[2] ?? m[3] ?? m[4], stripTabs: m[1] === '-' });
+        i += m[0].length - 1;
+      }
+    } else if (c === '\n' && pending.length > 0) {
+      stack.push(pending.shift() as QuoteCtx);
     }
   }
 }

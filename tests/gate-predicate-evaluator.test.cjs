@@ -239,6 +239,39 @@ describe('evaluatePredicate — interpolation', () => {
     });
     test('a # inside a word starts no comment', () => {
       assert.throws(() => run(`echo a#b; test -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`echo $# "\${GSD_PHASE_DIR}" '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`echo 'a'#b '\${GSD_PHASE_DIR}'`), quoted);
+    });
+    test('a # after ; & | ( starts a comment; a # inside double quotes does not', () => {
+      for (const lead of ['echo ok;', 'echo ok &', 'echo ok |', '(']) {
+        assert.doesNotThrow(() => run(`${lead}# don't\ntest -d "\${GSD_PHASE_DIR}"`), lead);
+      }
+      assert.throws(() => run(`echo "a # b"; test -d '\${GSD_PHASE_DIR}'`), quoted);
+    });
+    test('a backslash-escaped double quote inside double quotes does not end the string', () => {
+      assert.throws(() => run(`echo "a\\"b'c"; test -d '\${GSD_PHASE_DIR}'`), quoted);
+    });
+    test('an ANSI-C $\'...\' span: an escaped apostrophe pairs with nothing, its body is literal', () => {
+      assert.doesNotThrow(() => run(`echo $'it\\'s'; test -d "\${GSD_PHASE_DIR}"`));
+      assert.throws(() => run(`test -d $'\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`echo $'x'; test -d '\${GSD_PHASE_DIR}'`), quoted);
+    });
+    test('here-documents: an unquoted body pairs no apostrophe, a quoted body is literal, <<< is no here-document', () => {
+      assert.doesNotThrow(() => run(`cat <<EOF\nit's \${GSD_PHASE_DIR}\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.doesNotThrow(() => run(`cat <<-EOF\n\tit's\n\tEOF\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.doesNotThrow(() => run(`cat <<EOF\nEOFX it's\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.throws(() => run(`cat <<'EOF'\n\${GSD_PHASE_DIR}\nEOF`), quoted);
+      assert.throws(() => run(`cat <<EOF\nit's\nEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`cat <<<EOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`cat <<-EOF\n\tx\n\tEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.doesNotThrow(() => run(`cat <<EOF\nsay "hi it's\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
+    });
+    test('quotes inside $(...), (...) and backticks follow the same states', () => {
+      assert.throws(() => run(`echo "$(test -d '\${GSD_PHASE_DIR}')"`), quoted);
+      assert.throws(() => run(`echo "$(echo "it's")"; test -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`echo $(echo "it's" '\${GSD_PHASE_DIR}')`), quoted);
+      assert.doesNotThrow(() => run("echo `echo 'x'`; test -d \"${GSD_PHASE_DIR}\""));
+      assert.doesNotThrow(() => run(`(echo 'x'); test -d "\${GSD_PHASE_DIR}"`));
     });
   });
 
