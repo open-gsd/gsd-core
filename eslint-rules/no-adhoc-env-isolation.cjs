@@ -44,12 +44,16 @@ const path = require('path');
  * ## Exempt file and allowlist
  *
  * `tests/helpers/isolated-env.cjs` is the implementation and is excluded in
- * `eslint.config.mjs`. `allowlist` (repo-relative POSIX paths, resolved against
- * the lint cwd, so lint runs from the repository root) holds the files that
- * still carry a copy: an allowlisted file's violations are counted but not
- * reported, and a listed file with zero violations reports
- * `staleAllowlistEntry` so its entry is deleted. The allowlist only ratchets
- * down. The rule has no marker comment of its own; an `eslint-disable`
+ * `eslint.config.mjs`. The `allowlist` option (repo-relative POSIX paths,
+ * resolved against the lint cwd, so lint runs from the repository root) names
+ * the files that still carry a copy: an allowlisted file's violations are
+ * counted but not reported, and a listed file with zero violations reports
+ * `staleAllowlistEntry` so its entry is deleted. `eslint.config.mjs` passes the
+ * keys of `no-adhoc-env-isolation.allowlist.json`, which maps each listed file
+ * to its site count. `tests/no-adhoc-env-isolation.rule.test.cjs` lints every
+ * file under `tests/` with the allowlist emptied, and fails when a listed
+ * file's count rises or falls, or an unlisted file has a site, so the counts
+ * only fall. The rule has no marker comment of its own; an `eslint-disable`
  * comment naming it still suppresses it, as it does any rule.
  *
  * ## Known gaps (the ratchet is deliberately narrow)

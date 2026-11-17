@@ -709,12 +709,14 @@ An in-process assignment spelled `process.env.HOME = …` is not flagged; that c
 (`eslint-rules/no-adhoc-env-isolation.cjs`, "Known gaps") lists the shapes it does not see, such
 as a `HOME=` inside a shell script string.
 
-`eslint-rules/no-adhoc-env-isolation.allowlist.json` lists the files that still carry a copy.
-The waves of #4635 drain it in sorted order and then delete it. It only ratchets down: a listed
-file with no copy left reports its own entry as stale, so delete the line when you migrate a
-file. A new copy in a file the list does not name fails lint. Never add a file to the list. Build
-the env with the helper instead. Entries are repository-relative, so run lint from the repository
-root, as `npm run lint` does.
+`eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
+and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
+A count may only fall. A new copy in a file the list does not name fails lint, and
+`tests/no-adhoc-env-isolation.rule.test.cjs` counts every file under `tests/`: it fails when a
+listed file holds more copies than its count, or fewer. When you migrate copies, lower the count,
+and delete the entry when it reaches zero (lint then reports the entry as stale). Never add a file
+to the list or raise a count. Build the env with the helper instead. Entries are
+repository-relative, so run lint from the repository root, as `npm run lint` does.
 
 ### Test Structure
 

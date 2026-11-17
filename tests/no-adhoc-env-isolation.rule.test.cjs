@@ -11,8 +11,12 @@
  * - The allowlist ratchet (a listed file with no copy left reports itself stale).
  * - A red demonstration through the repository's own eslint.config.mjs: a
  *   reintroduced copy in a file the allowlist does not name fails `npm run lint`.
- * - Structural guards on eslint-rules/no-adhoc-env-isolation.allowlist.json, each
- *   driven against a synthetic violation so the guard itself is shown able to fail.
+ * - The per-file site counts: every file under tests/ is linted with the
+ *   allowlist emptied, and its count must equal the one
+ *   eslint-rules/no-adhoc-env-isolation.allowlist.json records (scripts/lib/
+ *   allowlist-ratchet.cjs `assertFileBaseline`, #597).
+ * - Structural guards on the allowlist, each driven against a synthetic
+ *   violation so the guard itself is shown able to fail.
  */
 
 const { test, describe } = require('node:test');
@@ -20,6 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { RuleTester, ESLint } = require('eslint');
+const { assertFileBaseline } = require('../scripts/lib/allowlist-ratchet.cjs');
 
 const rule = require('../eslint-rules/no-adhoc-env-isolation.cjs');
 
@@ -27,10 +32,6 @@ const REPO_ROOT = path.join(__dirname, '..');
 const ALLOWLIST_PATH = path.join(REPO_ROOT, 'eslint-rules', 'no-adhoc-env-isolation.allowlist.json');
 const RULE_ID = 'local/no-adhoc-env-isolation';
 const EXEMPT_FILE = 'tests/helpers/isolated-env.cjs';
-
-// The allowlist only ratchets DOWN: this is its length when the rule landed
-// (119 files after Phase 2). Each drain wave lowers it; it must never grow.
-const BASELINE = 119;
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -250,66 +251,102 @@ describe('no-adhoc-env-isolation: wired into eslint.config.mjs', () => {
   });
 
   test('a listed file is silent while it carries a copy and reports stale once it does not', async () => {
-    const listed = JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8'))[0];
+    const listed = Object.keys(JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8')))[0];
     assert.deepStrictEqual(await ruleMessages(COPIES, listed), []);
     assert.deepStrictEqual(await ruleMessages(CLEAN, listed), ['staleAllowlistEntry']);
   });
 });
 
-// ─── allowlist structure ─────────────────────────────────────────────────────
+// ─── allowlist structure and per-file site counts ────────────────────────────
+
+function readAllowlistText() {
+  return fs.readFileSync(ALLOWLIST_PATH, 'utf8');
+}
 
 function readAllowlist() {
-  return JSON.parse(fs.readFileSync(ALLOWLIST_PATH, 'utf8'));
+  return JSON.parse(readAllowlistText());
 }
 
-function findDeadEntries(list, root) {
-  return list.filter((entry) => !fs.existsSync(path.join(root, entry)));
+/** The allowlist's one accepted spelling: a key-sorted map, two-space indent, trailing newline. */
+function canonicalText(map) {
+  const sorted = Object.fromEntries(Object.keys(map).sort().map((k) => [k, map[k]]));
+  return JSON.stringify(sorted, null, 2) + '\n';
 }
 
-function findMisplacedEntries(list) {
-  return list.filter((entry) => entry.includes('\\') || !entry.startsWith('tests/') || !entry.endsWith('.cjs'));
+function findDeadEntries(files, root) {
+  return files.filter((entry) => !fs.existsSync(path.join(root, entry)));
 }
 
-function isSorted(list) {
-  return JSON.stringify(list) === JSON.stringify([...list].sort());
+function findMisplacedEntries(files) {
+  return files.filter((entry) => entry.includes('\\') || !entry.startsWith('tests/') || !entry.endsWith('.cjs'));
 }
 
-function findDuplicates(list) {
-  const seen = new Set();
-  const dupes = [];
-  for (const entry of list) {
-    if (seen.has(entry)) dupes.push(entry);
-    seen.add(entry);
+function findBadCounts(map) {
+  return Object.keys(map).filter((k) => !Number.isInteger(map[k]) || map[k] < 1);
+}
+
+function toRel(file) {
+  return path.relative(REPO_ROOT, file).split(path.sep).join('/');
+}
+
+/**
+ * The site count of every file under tests/: the rule runs with an empty
+ * allowlist, so it reports every site rather than counting listed files
+ * silently. The exempt helper stays out, as it does in eslint.config.mjs.
+ */
+async function measureSiteCounts() {
+  const eslint = new ESLint({
+    cwd: REPO_ROOT,
+    overrideConfig: {
+      files: ['tests/**/*.cjs'],
+      ignores: [EXEMPT_FILE],
+      rules: { [RULE_ID]: ['error', { allowlist: [] }] },
+    },
+    ruleFilter: ({ ruleId }) => ruleId === RULE_ID,
+  });
+  const results = await eslint.lintFiles(['tests/**/*.cjs']);
+  const unparsed = results.filter((r) => r.fatalErrorCount > 0).map((r) => toRel(r.filePath));
+  const counts = {};
+  for (const r of results) {
+    const n = r.messages.filter((m) => m.ruleId === RULE_ID).length;
+    if (n > 0) counts[toRel(r.filePath)] = n;
   }
-  return dupes;
+  return { counts, unparsed };
 }
+
+/** The four ways measured counts can differ from the recorded ones (#597's per-file form). */
+function ratchetDiff(current, baseline) {
+  const { grown, shrunk, added, removed } = assertFileBaseline({
+    label: 'no-adhoc-env-isolation',
+    current,
+    baseline,
+    fail: () => {},
+  });
+  return { grown, shrunk, added, removed };
+}
+
+const CLEAN_DIFF = { grown: [], shrunk: [], added: [], removed: [] };
 
 describe('no-adhoc-env-isolation allowlist: structure', () => {
-  test('is a sorted, duplicate-free array of tests/**/*.cjs paths with / separators', () => {
-    const list = readAllowlist();
-    assert.ok(Array.isArray(list), 'the allowlist must parse to an array');
-    assert.ok(isSorted(list), 'entries must be sorted: the drain waves take them in order');
-    assert.deepStrictEqual(findDuplicates(list), []);
-    assert.deepStrictEqual(findMisplacedEntries(list), []);
+  test('is a key-sorted, duplicate-free map of tests/**/*.cjs paths to positive site counts', () => {
+    const text = readAllowlistText();
+    const map = JSON.parse(text);
+    assert.ok(map && typeof map === 'object' && !Array.isArray(map), 'the allowlist must parse to an object');
+    assert.strictEqual(text, canonicalText(map), 'keys must be sorted and unique, in canonical JSON: the drain waves take them in order');
+    assert.deepStrictEqual(findMisplacedEntries(Object.keys(map)), []);
+    assert.deepStrictEqual(findBadCounts(map), []);
   });
 
-  test('every entry names a file that exists', () => {
-    assert.deepStrictEqual(findDeadEntries(readAllowlist(), REPO_ROOT), []);
-  });
-
-  test('never lists the exempt helper, and never grows past its baseline', () => {
-    const list = readAllowlist();
-    assert.ok(!list.includes(EXEMPT_FILE), `${EXEMPT_FILE} is exempt in eslint.config.mjs, not allowlisted`);
-    assert.ok(
-      list.length <= BASELINE,
-      `the allowlist grew to ${list.length} entries, past its baseline of ${BASELINE}. ` +
-        'It only ratchets down: migrate the new copy onto tests/helpers/isolated-env.cjs instead.',
-    );
+  test('every entry names a file that exists, and never the exempt helper', () => {
+    const files = Object.keys(readAllowlist());
+    assert.deepStrictEqual(findDeadEntries(files, REPO_ROOT), []);
+    assert.ok(!files.includes(EXEMPT_FILE), `${EXEMPT_FILE} is exempt in eslint.config.mjs, not allowlisted`);
   });
 
   test('each structural check flags a synthetic violation', () => {
-    assert.strictEqual(isSorted(['tests/b.test.cjs', 'tests/a.test.cjs']), false);
-    assert.deepStrictEqual(findDuplicates(['tests/a.cjs', 'tests/b.cjs', 'tests/a.cjs']), ['tests/a.cjs']);
+    assert.notStrictEqual(canonicalText({ 'tests/b.test.cjs': 1, 'tests/a.test.cjs': 1 }), '{\n  "tests/b.test.cjs": 1,\n  "tests/a.test.cjs": 1\n}\n');
+    const duplicated = '{\n  "tests/a.test.cjs": 1,\n  "tests/a.test.cjs": 2\n}\n';
+    assert.notStrictEqual(canonicalText(JSON.parse(duplicated)), duplicated);
     assert.deepStrictEqual(
       findMisplacedEntries(['tests\\a.test.cjs', 'src/a.cts', 'tests/a.md', 'tests/ok.test.cjs']),
       ['tests\\a.test.cjs', 'src/a.cts', 'tests/a.md'],
@@ -317,6 +354,44 @@ describe('no-adhoc-env-isolation allowlist: structure', () => {
     assert.deepStrictEqual(
       findDeadEntries(['tests/does-not-exist-6035.test.cjs', 'tests/no-adhoc-env-isolation.rule.test.cjs'], REPO_ROOT),
       ['tests/does-not-exist-6035.test.cjs'],
+    );
+    assert.deepStrictEqual(findBadCounts({ 'tests/a.cjs': 0, 'tests/b.cjs': 1.5, 'tests/c.cjs': '2', 'tests/d.cjs': 2 }), [
+      'tests/a.cjs',
+      'tests/b.cjs',
+      'tests/c.cjs',
+    ]);
+  });
+
+  test('the count comparison flags each boundary: count-1, count, count+1, an added file and a removed file', () => {
+    const baseline = { 'tests/listed.test.cjs': 3 };
+    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 2 }, baseline), {
+      ...CLEAN_DIFF,
+      shrunk: [{ name: 'tests/listed.test.cjs', from: 3, to: 2, delta: 1 }],
+    });
+    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 3 }, baseline), CLEAN_DIFF);
+    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 4 }, baseline), {
+      ...CLEAN_DIFF,
+      grown: [{ name: 'tests/listed.test.cjs', from: 3, to: 4, delta: 1 }],
+    });
+    assert.deepStrictEqual(ratchetDiff({ 'tests/listed.test.cjs': 3, 'tests/new.test.cjs': 1 }, baseline), {
+      ...CLEAN_DIFF,
+      added: ['tests/new.test.cjs'],
+    });
+    assert.deepStrictEqual(ratchetDiff({}, baseline), { ...CLEAN_DIFF, removed: ['tests/listed.test.cjs'] });
+  });
+});
+
+describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
+  test('every file under tests/ carries exactly the sites the allowlist records', async () => {
+    const { counts, unparsed } = await measureSiteCounts();
+    assert.deepStrictEqual(unparsed, [], 'a file ESLint cannot parse has no measured count');
+    const diff = ratchetDiff(counts, readAllowlist());
+    assert.deepStrictEqual(
+      diff,
+      CLEAN_DIFF,
+      'The allowlist records each file\'s count of hand-written env-isolation copies, and a count may only fall. ' +
+        'grown/added: migrate the new copy onto tests/helpers/isolated-env.cjs instead. ' +
+        'shrunk/removed: lower the count in eslint-rules/no-adhoc-env-isolation.allowlist.json, or delete the entry at zero.',
     );
   });
 });

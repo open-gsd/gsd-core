@@ -834,9 +834,11 @@ export default tseslint.config(
   // ── tests/** — no-adhoc-env-isolation (#6035, epic #4635 Phase 3) ─────────
   // Its own block so the one exempt file can be excluded by exact path:
   // tests/helpers/isolated-env.cjs IS the implementation the rule points to. The
-  // allowlist holds the files that still carry a hand-written copy; Phases 4-7
-  // drain it in sorted order and Phase 8 deletes it. A listed file with no copy
-  // left reports its own entry as stale, so the list only ratchets down.
+  // allowlist records each file that still carries a hand-written copy and how
+  // many it carries; the rule takes only the file names. Phases 4-7 drain it in
+  // sorted order and Phase 8 deletes it. A listed file with no copy left reports
+  // its own entry as stale, and tests/no-adhoc-env-isolation.rule.test.cjs holds
+  // every file to its recorded count, so the counts only fall.
   {
     files: ['tests/**/*.cjs'],
     ignores: ['tests/helpers/isolated-env.cjs'],
@@ -844,7 +846,7 @@ export default tseslint.config(
       local: localPlugin,
     },
     rules: {
-      'local/no-adhoc-env-isolation': ['error', { allowlist: adhocEnvIsolationAllowlist }],
+      'local/no-adhoc-env-isolation': ['error', { allowlist: Object.keys(adhocEnvIsolationAllowlist) }],
     },
   },
 
