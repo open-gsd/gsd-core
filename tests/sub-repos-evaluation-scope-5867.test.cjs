@@ -622,4 +622,28 @@ describe('#5867 the check evaluation-scope verb and commitIsAncestor', () => {
     assert.equal(subjectsOccurOnHead(ws.root, sides), true);
     assert.equal(subjectsOccurOnHead(ws.root, [sides[0], 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef']), null);
   });
+
+  test('[boundary] subjectsOccurOnHead: a subject gone in one repo is false even when another repo cannot answer; true plus unanswered is null', () => {
+    const ws = makeWorkspace(['a', 'b']);
+    const sides = ['a', 'b'].map((name, i) => {
+      const repo = ws.repos[name];
+      commit(repo, 'base.js', `chore: base ${name}`, 1_700_000_000);
+      repo.git('checkout', '-q', '-b', 'side');
+      const side = commit(repo, `${name}.js`, `feat(01-01): add ${name}`, 1_700_000_100 + i);
+      repo.git('checkout', '-q', 'main');
+      return side;
+    });
+    const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+    // Repo `name` reports no commit times (the call that asks for `%ct` and `%at`): that repo's answer is null.
+    const unansweredIn = (name) => (args, opts) => {
+      const result = execGit(args, opts);
+      const silent = args.some((arg) => String(arg).includes('%ct%x1f%at')) && fs.realpathSync(opts.cwd) === fs.realpathSync(ws.repos[name].dir);
+      return silent ? { ...result, stdout: '' } : result;
+    };
+    // Repo a lost its subject, repo b cannot answer.
+    assert.equal(subjectsOccurOnHead(ws.root, sides, unansweredIn('b')), false);
+    // Repo a kept its subject, repo b cannot answer.
+    commit(ws.repos.a, 'a2.js', 'feat(01-01): add a', 1_700_000_300);
+    assert.equal(subjectsOccurOnHead(ws.root, sides, unansweredIn('b')), null);
+  });
 });

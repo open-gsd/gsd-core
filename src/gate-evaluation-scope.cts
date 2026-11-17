@@ -512,7 +512,7 @@ export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], 
 /** `subjectsOccurOnHead` for ids that one repo holds: `git` and `unboundedGit` run in that repo. */
 function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): boolean | null {
   // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
-  const named = parseHeadLog(git(['log', '--no-walk=unsorted', HEAD_LOG_FORMAT, ...ids, '--']));
+  const named = parseHeadLog(git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, HEAD_LOG_FORMAT, ...ids, '--']));
   // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
   // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
   // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
@@ -525,7 +525,7 @@ function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): b
   // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time of each record.
   const version = parseGitVersion(git(['--version']));
   const filtered = version !== null && (version.major > 2 || (version.major === 2 && version.minor >= SINCE_AS_FILTER_MIN_MINOR));
-  const listing = unboundedGit(['log', HEAD_LOG_FORMAT, ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--']);
+  const listing = unboundedGit(['log', NO_SHOW_SIGNATURE, HEAD_LOG_FORMAT, ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--']);
   const onHead = new Set(parseHeadLog(listing, filtered ? undefined : since).map((c) => c.subject));
   return named.every((c) => onHead.has(c.subject));
 }
@@ -534,10 +534,30 @@ function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): b
 const SINCE_AS_FILTER_MIN_MINOR = 37;
 /** One record per commit: sha, committer time, subject; `%x1e` frames the record so an empty or space-edged subject survives the runner's trim. */
 const HEAD_LOG_FORMAT = '--format=%H%x1f%ct%x1f%s%x1e';
+/** The single-repo path keeps the user's git config, so a `git log` whose records are parsed turns signature lines off. */
+const NO_SHOW_SIGNATURE = '--no-show-signature';
 
 /** The one reader of a unix-seconds field (`%ct`, `%at`) of a git log record; null when it is not all digits. */
 function unixSeconds(field: string | undefined): number | null {
   return field !== undefined && /^[0-9]+$/.test(field.trim()) ? Number(field) : null;
+}
+
+/**
+ * The one walk over the time fields (`ct` committer, `at` author) of `shas`, in the order asked. A sha whose
+ * line lacks one of the fields is left out. `--no-show-signature` keeps a user's `log.showSignature` from
+ * putting gpg lines into the records.
+ */
+function logTimes(git: Git, shas: readonly string[], fields: readonly ('ct' | 'at')[]): Map<string, number[]> {
+  const format = `--format=%H${fields.map((f) => `%x1f%${f}`).join('')}`;
+  const times = new Map<string, number[]>();
+  for (const group of chunk(shas, SHA_CHUNK)) {
+    for (const line of git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, format, ...group, '--']).split('\n')) {
+      const [sha, ...raw] = line.split('\x1f');
+      const parsed = raw.map(unixSeconds);
+      if (sha && parsed.length === fields.length && parsed.every((time) => time !== null)) times.set(sha, parsed);
+    }
+  }
+  return times;
 }
 
 /** The records of a `HEAD_LOG_FORMAT` log; with `since`, a record committed before it is skipped. A record without a numeric time is no answer. */
@@ -557,15 +577,7 @@ function parseHeadLog(out: string, since?: number): { sha: string; subject: stri
 
 /** The earlier of the committer and the author time per sha (a rewrite keeps the author time). */
 function earliestTimes(git: Git, shas: readonly string[]): Map<string, number> {
-  const times = new Map<string, number>();
-  for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct%x1f%at', ...group, '--']).split('\n')) {
-      const [sha, committed, authored] = line.split('\x1f');
-      const commit = unixSeconds(committed);
-      if (sha && commit !== null) times.set(sha, Math.min(commit, unixSeconds(authored) ?? Infinity));
-    }
-  }
-  return times;
+  return new Map([...logTimes(git, shas, ['ct', 'at'])].map(([sha, times]) => [sha, Math.min(...times)]));
 }
 
 // ─── The resolver ─────────────────────────────────────────────────────────────
@@ -691,14 +703,7 @@ const withPrefix = (prefix: string, file: string): string => (prefix === '' ? fi
 
 /** Committer time (unix seconds) per sha, for ordering commits that come from different repos. */
 function commitTimes(git: Git, shas: readonly string[]): Map<string, number> {
-  const times = new Map<string, number>();
-  for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct', ...group]).split('\n')) {
-      const [sha, time] = line.split('\x1f');
-      if (sha && time !== undefined && /^[0-9]+$/.test(time)) times.set(sha, Number(time));
-    }
-  }
-  return times;
+  return new Map([...logTimes(git, shas, ['ct'])].map(([sha, times]) => [sha, times[0]]));
 }
 
 interface SinceSplit {

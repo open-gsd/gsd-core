@@ -1724,6 +1724,35 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [a, a.slice(0, 10)]), true);
   });
 
+  test('[hostile] log.showSignature never puts gpg lines into the records of a signed commit', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell script fixture'); return; }
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-gpg-'));
+    dirs.push(scratch);
+    const program = path.join(scratch, 'fake-gpg.sh');
+    fs.writeFileSync(program, '#!/bin/sh\necho "gpg: fake verdict" >&2\nexit 1\n', { mode: 0o755 });
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    // A commit object carrying a gpgsig header: `git log` with showSignature prints the gpg output before its record.
+    const signedAt = (subject) => {
+      const raw = `tree ${repo.git('rev-parse', `${base}^{tree}`)}\nparent ${base}\nauthor T <t@t.io> ${T} +0000\ncommitter T <t@t.io> ${T} +0000\n`
+        + `gpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\n${subject}\n`;
+      const file = path.join(scratch, 'signed-commit.txt');
+      fs.writeFileSync(file, raw);
+      return repo.git('hash-object', '-t', 'commit', '-w', file);
+    };
+    repo.git('config', 'log.showSignature', 'true');
+    repo.git('config', 'gpg.program', program);
+    const signed = signedAt('feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03): squashed phase');
+    assert.equal(subjectsOccurOnHead(repo.dir, [signed]), false, 'a signed original is read, so its dropped subject is a squash');
+    repo.git('reset', '--hard', base);
+    const original = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    repo.git('reset', '--hard', signedAt('feat(03-01): a'));
+    assert.equal(subjectsOccurOnHead(repo.dir, [original]), true, 'a signed twin is read, so the rewrite is found');
+  });
+
   test('[boundary] one date window on git 2.36 (no flag, filtered in code) and git 2.37 (`--since-as-filter`); the probe reads `git --version`', () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
