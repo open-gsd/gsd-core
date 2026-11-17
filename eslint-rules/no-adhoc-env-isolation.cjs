@@ -182,11 +182,9 @@ const rule = {
     const options = context.options[0] || {};
     const allowlist = Array.isArray(options.allowlist) ? options.allowlist : [];
 
-    const filename = context.filename || context.getFilename();
-    const cwd = context.cwd || (context.getCwd ? context.getCwd() : process.cwd());
-    const rel = path.relative(cwd, filename).split(path.sep).join('/');
+    const rel = path.relative(context.cwd, context.filename).split(path.sep).join('/');
     const allowlisted = allowlist.includes(rel);
-    const sourceCode = context.sourceCode || context.getSourceCode();
+    const sourceCode = context.sourceCode;
 
     let violations = 0;
     function violation(node, messageId, data) {
