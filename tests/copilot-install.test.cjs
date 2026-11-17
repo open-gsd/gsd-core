@@ -2074,6 +2074,8 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     delete env.GSD_ALLOW_SYMLINKED_DEST;
     delete env.COPILOT_CONFIG_DIR;
     delete env.COPILOT_HOME;
+    // bin/install.js runs its CLI main block only when GSD_TEST_MODE is unset (the test runner sets it).
+    delete env.GSD_TEST_MODE;
     const result = runNode([path.join(__dirname, '..', 'bin', 'install.js'), '--copilot', '--local'], { cwd: project, env });
     const seen = `exitCode=${result.exitCode} signal=${result.signal}\n${result.stdout}\n${result.stderr}`.slice(-1500);
     assert.ok(result.exitCode !== 0 && result.exitCode !== null, `a refused install must exit non-zero:\n${seen}`);
