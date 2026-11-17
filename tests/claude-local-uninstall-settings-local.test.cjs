@@ -63,7 +63,7 @@ describe('local Claude uninstall cleans settings.local.json (#5952)', () => {
   }
 
   function managedCommands(settings) {
-    const { isManagedHookCommand } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const { isManagedHookCommand } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     return hookCommands(settings).filter((command) => isManagedHookCommand(command, { surface: 'settings-json' }));
   }
 
