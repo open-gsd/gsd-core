@@ -7,7 +7,8 @@
  * `tests/pr-branch-matcher.property.test.cjs`. Besides the planning-path
  * filter it exports `extractDeclarationLines` (one-line declarations) and
  * `extractFunction` (a multi-line function) so tests run the shipped text, and
- * `runBashFile`, the one runner of a shipped recipe from a file.
+ * `runBashFile`, the one runner of a shipped recipe from a file. It also
+ * exports `LOCALE_STRICT_TR`, the locale-strict `tr` stand-in for tests.
  *
  * The workflow (`gsd-core/workflows/pr-branch.md`) is the single source of
  * truth for which `.planning/` subdirectories are "transient" (excluded from
