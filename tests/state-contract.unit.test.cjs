@@ -1229,12 +1229,14 @@ describe('state contract — write mechanics', () => {
 
 describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
   const { createTempGitProject, withTempGitProject } = require('./helpers.cjs');
-  const { gitOrThrow, excludeFile, interceptGit: interceptGitIn, isFsLegalName } = require('./helpers/git-fixture.cjs');
+  const { gitOrThrow, excludeFile, readExclude, interceptGit: interceptGitIn, isFsLegalName } = require('./helpers/git-fixture.cjs');
   // this file runs real git and has Windows-only branches: it passes its own child_process so the conformance tier keeps it
   const interceptGit = (t, intercept) => interceptGitIn(t, intercept, require('node:child_process'));
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const { excludeFromGit, GIT_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+  const { loadConfig, isGitIgnored, loadConfigResolved } = require('../gsd-core/bin/lib/config-loader.cjs');
   const git = (cwd, ...args) => gitOrThrow(args, { cwd });
-  const lines = (f) => splitLines(fs.readFileSync(f, 'utf8'));
+  const lines = (cwd) => splitLines(readExclude(cwd));
   // A project nested in an enclosing repo is edited only when that repo tracks a file under it.
   const trackUnder = (repo, sub) => { fs.writeFileSync(path.join(sub, 'tracked.txt'), 'x'); git(repo, '--literal-pathspecs', 'add', '--', path.join(sub, 'tracked.txt')); };
 
@@ -1243,9 +1245,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     t.after(() => cleanup(tmpDir));
     publishStateContract(tmpDir, fixedDeps());
     const exclude = excludeFile(tmpDir);
-    fs.writeFileSync(exclude, fs.readFileSync(exclude, 'utf8').replace(/\r?\n/g, '\r\n'));
+    fs.writeFileSync(exclude, readExclude(tmpDir).replace(/\r?\n/g, '\r\n'));
     publishStateContract(tmpDir, fixedDeps());
-    assert.strictEqual(lines(exclude).filter((l) => l === '/.planning/state.json').length, 1);
+    assert.strictEqual(lines(tmpDir).filter((l) => l === '/.planning/state.json').length, 1);
   });
 
   test('linkedWorktreeWritesTheCommonExclude', (t) => {
@@ -1255,7 +1257,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     git(tmpDir, 'worktree', 'add', '-q', '-b', 'wt', wt);
     fs.mkdirSync(planningDirOf(wt), { recursive: true });
     publishStateContract(wt, fixedDeps());
-    assert.ok(lines(excludeFile(tmpDir)).includes('/.planning/state.json'));
+    assert.ok(lines(tmpDir).includes('/.planning/state.json'));
     git(wt, 'check-ignore', '-q', '.planning/state.json');
   });
 
@@ -1290,26 +1292,25 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   test('aNewlineInThePlanningPathIsRejected', { skip: !isFsLegalName('a\nb') }, (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
-    const exclude = excludeFile(tmpDir);
-    const before = fs.readFileSync(exclude, 'utf8');
+    const before = readExclude(tmpDir);
     const sub = path.join(tmpDir, 'a\nb');
     fs.mkdirSync(planningDirOf(sub), { recursive: true });
     trackUnder(tmpDir, sub);
     assert.strictEqual(publishStateContract(sub, fixedDeps()).published, true);
     // gitignore cannot express a newline in a pattern: the path is rejected, no truncated entry is written.
-    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 
   test('ignoresInheritedGitDirEnv', (t) => {
     const tmpDir = createTempGitProject();
     const other = createTempGitProject();
     t.after(() => { cleanup(tmpDir); cleanup(other); });
-    const before = fs.readFileSync(excludeFile(other), 'utf8');
+    const before = readExclude(other);
     const restoreGitDir = stubEnv(t, 'GIT_DIR', path.join(other, '.git'));
     publishStateContract(tmpDir, fixedDeps());
     restoreGitDir();
-    assert.ok(lines(excludeFile(tmpDir)).includes('/.planning/state.json'));
-    assert.strictEqual(fs.readFileSync(excludeFile(other), 'utf8'), before);
+    assert.ok(lines(tmpDir).includes('/.planning/state.json'));
+    assert.strictEqual(readExclude(other), before);
   });
 
   // The commit_docs gate must also read the cwd repo: an inherited GIT_DIR must not flip it.
@@ -1320,13 +1321,13 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
       t.after(() => { cleanup(tmpDir); cleanup(other); });
       fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), '{}'); // no config at all skips the ignore tier, as loadConfig does
       fs.appendFileSync(excludeFile(cwdIgnores ? tmpDir : other), '.planning\n');
-      const before = fs.readFileSync(excludeFile(tmpDir), 'utf8');
+      const before = readExclude(tmpDir);
       const restoreGitDir = stubEnv(t, 'GIT_DIR', path.join(other, '.git'));
       publishStateContract(tmpDir, fixedDeps());
       restoreGitDir();
       // .planning ignored in the cwd repo means commit_docs is off: its exclude stays untouched.
-      assert.strictEqual(lines(excludeFile(tmpDir)).includes('/.planning/state.json'), !cwdIgnores);
-      if (cwdIgnores) assert.strictEqual(fs.readFileSync(excludeFile(tmpDir), 'utf8'), before);
+      assert.strictEqual(lines(tmpDir).includes('/.planning/state.json'), !cwdIgnores);
+      if (cwdIgnores) assert.strictEqual(readExclude(tmpDir), before);
     });
   }
 
@@ -1334,6 +1335,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     const exclude = excludeFile(tmpDir);
+    fs.writeFileSync(exclude, '');
     fs.unlinkSync(exclude);
     fs.mkdirSync(exclude, { recursive: true });
     assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
@@ -1405,7 +1407,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     publishStateContract(tmpDir, fixedDeps());
     publishStateContract(linked, fixedDeps());
     git(linked, 'check-ignore', '-q', '.planning/state.json');
-    assert.strictEqual(lines(excludeFile(tmpDir)).filter((l) => l === '/.planning/state.json').length, 1);
+    assert.strictEqual(lines(tmpDir).filter((l) => l === '/.planning/state.json').length, 1);
   });
 
   // The read-check-append is not atomic across linked worktrees: a racing second append leaves a duplicate line, which git reads as one rule.
@@ -1415,7 +1417,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     fs.appendFileSync(excludeFile(tmpDir), '/.planning/state.json\n/.planning/state.json\n');
     publishStateContract(tmpDir, fixedDeps());
     git(tmpDir, 'check-ignore', '-q', '.planning/state.json');
-    assert.strictEqual(lines(excludeFile(tmpDir)).filter((l) => l === '/.planning/state.json').length, 2);
+    assert.strictEqual(lines(tmpDir).filter((l) => l === '/.planning/state.json').length, 2);
   });
 
   // Grammar: the prefix alphabet (every gitignore-significant character) crossed with every spelling of a
@@ -1440,7 +1442,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
         const exclude = excludeFile(repo);
         if (negation) fs.appendFileSync(exclude, `${negation}\n`);
         publishStateContract(sub, fixedDeps());
-        const written = lines(exclude).includes(`/${rel}`);
+        const written = lines(repo).includes(`/${rel}`);
         assert.strictEqual(written, negation === null);
         const target = `${name ? `${name}/` : ''}.planning/state.json`;
         let ignored = true;
@@ -1454,9 +1456,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     t.after(() => cleanup(tmpDir));
     const exclude = excludeFile(tmpDir);
     fs.appendFileSync(exclude, '!/.planning/state.json\n');
-    const before = fs.readFileSync(exclude, 'utf8');
+    const before = readExclude(tmpDir);
     publishStateContract(tmpDir, fixedDeps());
-    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 
   test('bothExcludeCallersHonourAnExplicitNegation', (t) => {
@@ -1464,10 +1466,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     t.after(() => cleanup(tmpDir));
     const exclude = excludeFile(tmpDir);
     fs.appendFileSync(exclude, '!/.planning/x\n');
-    const before = fs.readFileSync(exclude, 'utf8');
-    const { excludeFromGit } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+    const before = readExclude(tmpDir);
     assert.strictEqual(excludeFromGit(tmpDir, planningDirOf(tmpDir), 'x'), false);
-    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 
   test('aNegationAfterOurOwnExcludeEntryStillWins', (t) => {
@@ -1475,10 +1476,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     t.after(() => cleanup(tmpDir));
     const exclude = excludeFile(tmpDir);
     fs.appendFileSync(exclude, '/.planning/x\n!/.planning/x\n');
-    const before = fs.readFileSync(exclude, 'utf8');
-    const { excludeFromGit } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
+    const before = readExclude(tmpDir);
     assert.strictEqual(excludeFromGit(tmpDir, planningDirOf(tmpDir), 'x'), false);
-    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 
   test('planningRootIsTheGitRoot', (t) => {
@@ -1487,7 +1487,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const planning = planningDirOf(tmpDir);
     git(planning, 'init', '-q');
     publishStateContract(tmpDir, fixedDeps());
-    assert.ok(lines(excludeFile(planning)).includes('/state.json'));
+    assert.ok(lines(planning).includes('/state.json'));
     git(planning, 'check-ignore', '-q', 'state.json');
   });
 
@@ -1495,10 +1495,9 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), JSON.stringify({ planning: { commit_docs: false } }));
-    const exclude = excludeFile(tmpDir);
-    const before = fs.readFileSync(exclude, 'utf8');
+    const before = readExclude(tmpDir);
     assert.strictEqual(publishStateContract(tmpDir, fixedDeps()).published, true);
-    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 
   // Parity: the publisher's exclude gate must agree with loadConfig's commit_docs for every
@@ -1545,19 +1544,17 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
         if (shape.noOwnConfig) fs.mkdirSync(wsDir, { recursive: true });
         else put(path.join(wsDir, 'config.json'), shape.own, shape.ownRaw);
       }
-      const cfg = require('../gsd-core/bin/lib/config-loader.cjs');
       const { resolveCommitDocsPolicy } = require('../gsd-core/bin/lib/commands.cjs');
-      const expected = resolveCommitDocsPolicy(cfg.loadConfig(tmpDir, { persist: false }), null, () => cfg.isGitIgnored(tmpDir, '.planning')).resolved;
+      const expected = resolveCommitDocsPolicy(loadConfig(tmpDir, { persist: false }), null, () => isGitIgnored(tmpDir, '.planning')).resolved;
       publishStateContract(tmpDir, fixedDeps());
       // The entry is derived from the path the publisher itself writes; with no workstream directory it writes nothing.
       const published = path.join(require('../gsd-core/bin/lib/planning-workspace.cjs').planningPaths(tmpDir).planning, 'state.json');
       const entry = '/' + path.relative(tmpDir, published).replace(/\\/g, '/');
-      assert.deepStrictEqual(lines(excludeFile(tmpDir)).filter((l) => l.endsWith('state.json')), expected && fs.existsSync(published) ? [entry] : []);
+      assert.deepStrictEqual(lines(tmpDir).filter((l) => l.endsWith('state.json')), expected && fs.existsSync(published) ? [entry] : []);
     });
   }
 
   test('aBoundaryCommandSpawnsAtMostTheDocumentedGitCalls', (t) => {
-    const { GIT_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(path.join(planningDirOf(tmpDir), 'STATE.md'), '# State\n');
@@ -1607,7 +1604,6 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   });
 
   test('aNestedProjectOwnershipProbeIsBounded', (t) => {
-    const { GIT_PROBE_TIMEOUT_MS } = require('../gsd-core/bin/lib/git-info-exclude.cjs');
     assert.ok(GIT_PROBE_TIMEOUT_MS > 0 && GIT_PROBE_TIMEOUT_MS <= 5_000);
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
@@ -1636,7 +1632,6 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
   // read afterwards proves the fixture reaches its guard and that the quiet read did not consume the
   // once-per-process dedupe slot of a later loud read.
   describe('quietReadStaysSilentAtEveryGuard', () => {
-    const { loadConfigResolved } = require('../gsd-core/bin/lib/config-loader.cjs');
     const put = (file, value) => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value));
@@ -1706,18 +1701,18 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.appendFileSync(excludeFile(tmpDir), '!/.planning/*.json\n');
-    const before = fs.readFileSync(excludeFile(tmpDir), 'utf8');
+    const before = readExclude(tmpDir);
     publishStateContract(tmpDir, fixedDeps());
-    assert.strictEqual(fs.readFileSync(excludeFile(tmpDir), 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 
   test('aCommittedRuleThatAlreadyHidesTheFileAddsNoExcludeEntry', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     fs.writeFileSync(path.join(planningDirOf(tmpDir), '.gitignore'), '/state.json\n');
-    const before = fs.readFileSync(excludeFile(tmpDir), 'utf8');
+    const before = readExclude(tmpDir);
     publishStateContract(tmpDir, fixedDeps());
-    assert.strictEqual(fs.readFileSync(excludeFile(tmpDir), 'utf8'), before);
+    assert.strictEqual(readExclude(tmpDir), before);
   });
 });
 

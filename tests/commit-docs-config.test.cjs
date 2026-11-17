@@ -15,7 +15,7 @@ const fc = require('fast-check');
 const { createTempGitProject, cleanup } = require('./helpers.cjs');
 const { stubEnv } = require('./helpers/env-guard.cjs');
 const { interceptGit, excludeFile } = require('./helpers/git-fixture.cjs');
-const { isGitIgnored, resolveCommitDocsTiers } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { isGitIgnored, resolveCommitDocsTiers, loadConfig, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 
 describe('resolveCommitDocsTiers (#5505)', () => {
@@ -68,7 +68,6 @@ describe('isGitIgnored (#5505)', () => {
       t.after(() => cleanup(tmpDir));
       fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify(config));
       if (ignored) fs.appendFileSync(excludeFile(tmpDir), '.planning\n');
-      const { loadConfig, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
       const explicit = config.commit_docs ?? config.planning?.commit_docs;
       // an explicit value wins as written (no ignore probe); otherwise the resolver decides
       const expected = explicit !== undefined ? explicit : resolveCommitDocsTiers(undefined, CONFIG_DEFAULTS.commit_docs, () => isGitIgnored(tmpDir, '.planning/')).resolved;

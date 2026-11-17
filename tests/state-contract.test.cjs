@@ -797,12 +797,14 @@ describe('state.json never dirties the tree (#5505)', () => {
   const SPELLINGS = [
     ['an empty path segment', (p) => p.replace('/state.json', '//state.json')],
     ['a leading dot segment', (p) => `./${p}`],
+    ['a parent segment', (p) => p.replace('/state.json', `/../${path.basename(path.dirname(p))}/state.json`)],
+    ['an absolute path', (p, tmpDir) => path.join(tmpDir, p)],
   ];
   for (const [label, spell] of SPELLINGS) {
     test(`commit --files skips the ignored state.json spelled with ${label}`, (t) => {
       const { tmpDir, rel } = boundary(t);
       fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
-      const given = spell(`${rel}/state.json`);
+      const given = spell(`${rel}/state.json`, tmpDir);
       const c = runGsdTools(['commit', 'docs: spelling', '--files', given, `${rel}/STATE.md`], tmpDir);
       const out = JSON.parse(c.output);
       assert.strictEqual(out.committed, true, c.output);

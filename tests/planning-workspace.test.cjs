@@ -8,6 +8,7 @@ const { cleanup, toPosixPath } = require('./helpers.cjs');
 const { makeFakeClock } = require('./helpers/clock.cjs');
 
 const planningWorkspaceDirect = require('../gsd-core/bin/lib/planning-workspace.cjs');
+const { resolveCommitDocsTiers, loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 const {
   createPlanningWorkspace,
@@ -991,7 +992,6 @@ describe('planning-workspace: the phase SPEC predicate (#5629)', () => {
 // as off exactly when the commit policy's own resolver (resolveCommitDocsTiers) does, for every value shape and scope.
 describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () => {
   const { commitDocsOptedOut } = planningWorkspaceDirect;
-  const { resolveCommitDocsTiers } = require('../gsd-core/bin/lib/config-loader.cjs');
   const VALUES = [false, 0, null, '', true, 1, 'no', 'false'];
   const SCOPES = [
     { ws: null, project: null, dir: [] },
@@ -1022,7 +1022,6 @@ describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () 
 
   // Hostile and layered shapes (CONTRIBUTING.md:830): the answer must equal `!loadConfig(...).commit_docs` for the
   // same scope, whatever the files hold. Each file is a raw string so an unparseable body is a fixture too.
-  const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
   const OFF = '{"commit_docs":false}';
   const ON = '{"commit_docs":true}';
   const LAYERS = {
