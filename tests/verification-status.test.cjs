@@ -5950,6 +5950,75 @@ describe('#5931: a project-coded or unpadded phase dir resolves the scaffolder-w
     assert.strictEqual(resolveUatFile(['04-UAT.md'], optionsFor('XR-03-demo')), null);
   });
 
+  test('XR-03-demo: a literal XR-03-VERIFICATION.md still wins over 03-VERIFICATION.md', () => {
+    assert.strictEqual(
+      resolveVerificationFile(['03-VERIFICATION.md', 'XR-03-VERIFICATION.md', '03-CORRECTION-VERIFICATION.md'], optionsFor('XR-03-demo')),
+      'XR-03-VERIFICATION.md',
+    );
+  });
+
+  test('XR-03-demo: a cross-phase stray 04-VERIFICATION.md stays excluded', () => {
+    assert.strictEqual(
+      resolveVerificationFile(['04-VERIFICATION.md', '03-CORRECTION-VERIFICATION.md'], optionsFor('XR-03-demo')),
+      '03-CORRECTION-VERIFICATION.md',
+    );
+    assert.strictEqual(resolveVerificationFile(['04-VERIFICATION.md'], optionsFor('XR-03-demo')), null);
+  });
+
+  // End to end through readVerificationStatus: a passed phase must not read as another report's status
+  // because a sibling sorts first. Same file set with and without a project code gives the same answer.
+  for (const dirName of ['XR-03-demo', '03-demo', '5-demo']) {
+    test(`readVerificationStatus: ${dirName} reads its own passed report, not the correction sibling`, () => {
+      const dir = mkPhaseDir('5931-status', dirName);
+      try {
+        const written = phaseId.normalizePhaseName(phaseId.extractPhaseToken(dirName));
+        writeVerificationMd(dir, `${written}-VERIFICATION.md`, 'passed');
+        writeVerificationMd(dir, `${written}-CORRECTION-VERIFICATION.md`, 'gaps_found');
+        const result = readVerificationStatus(dir);
+        assert.equal(result.status, 'passed');
+        assert.equal(result.next_command, '');
+      } finally {
+        cleanup(path.dirname(dir));
+      }
+    });
+  }
+
+  // PARITY against the real scaffolder: `scaffold uat|verification` writes the file, and the resolver
+  // selects exactly that file over a sibling that sorts first, for a project-coded and an unpadded dir.
+  for (const [dirName, projectCode] of [['XR-03-demo', 'XR'], ['03-demo', null], ['3-demo', null]]) {
+    test(`parity (real scaffold): dir ${dirName}, scaffold --phase 3 writes the file the resolver selects`, () => {
+      const { runGsdTools } = require('./helpers.cjs');
+      const project = createTempGitProject();
+      try {
+        if (projectCode) {
+          fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ project_code: projectCode }));
+        }
+        const phaseDir = path.join(project, '.planning', 'phases', dirName);
+        fs.mkdirSync(phaseDir, { recursive: true });
+        const scaffold = (kind) => {
+          const result = runGsdTools(['scaffold', kind, '--phase', '3'], project);
+          assert.ok(result.success, `scaffold ${kind} failed: ${result.error}`);
+          return JSON.parse(result.output).path;
+        };
+        const writtenUat = scaffold('uat');
+        const writtenVerification = scaffold('verification');
+        // Siblings of the SAME phase that sort ahead of the scaffolded names, built from the prefix
+        // the scaffolder itself wrote (so they belong to the phase under every spelling).
+        const prefix = path.basename(writtenUat).replace(/-UAT\.md$/, '');
+        assert.notStrictEqual(prefix, path.basename(writtenUat), 'the scaffolder wrote an NN-UAT.md name');
+        fs.writeFileSync(path.join(phaseDir, `${prefix}-HUMAN-UAT.md`), '# sibling\n');
+        fs.writeFileSync(path.join(phaseDir, `${prefix}-CORRECTION-VERIFICATION.md`), '# sibling\n');
+        const written = fs.readdirSync(phaseDir);
+        const uat = resolveUatFile(written, optionsFor(dirName));
+        const verification = resolveVerificationFile(written, optionsFor(dirName));
+        assert.ok(path.basename(writtenUat) === uat, `resolver picked ${uat}, scaffolder wrote ${path.basename(writtenUat)}`);
+        assert.ok(path.basename(writtenVerification) === verification, `resolver picked ${verification}, scaffolder wrote ${path.basename(writtenVerification)}`);
+      } finally {
+        cleanup(project);
+      }
+    });
+  }
+
   // PARITY: for every directory spelling, the name the scaffolder writes (`normalizePhaseName` of the
   // phase argument, `src/commands.cts` cmdScaffold) is the one the resolver selects over a sibling.
   for (const [dirName, phaseArg] of [
