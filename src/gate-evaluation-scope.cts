@@ -522,15 +522,14 @@ function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): b
   const since = Math.min(...times.values());
   // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
   // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time of each record.
-  const version = parseGitVersion(git(['--version']));
-  const filtered = version !== null && (version.major > 2 || (version.major === 2 && version.minor >= SINCE_AS_FILTER_MIN_MINOR));
+  const filtered = gitVersionAtLeast(git(['--version']), SINCE_AS_FILTER_MIN_GIT);
   const listing = unboundedGit(['log', NO_SHOW_SIGNATURE, HEAD_LOG_FORMAT, ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--']);
   const onHead = new Set(parseHeadLog(listing, filtered ? undefined : since).map((c) => c.subject));
   return named.every((c) => onHead.has(c.subject));
 }
 
-/** Minor of the first git 2.x release with `log --since-as-filter` (#5354). */
-const SINCE_AS_FILTER_MIN_MINOR = 37;
+/** First git release with `log --since-as-filter` (#5354). */
+const SINCE_AS_FILTER_MIN_GIT: readonly [number, number] = [2, 37];
 /** One record per commit: sha, committer time, subject; `%x1e` frames the record so an empty or space-edged subject survives the runner's trim. */
 const HEAD_LOG_FORMAT = '--format=%H%x1f%ct%x1f%s%x1e';
 /** The single-repo path keeps the user's git config, so a `git log` whose records are parsed turns signature lines off. */
@@ -563,12 +562,10 @@ function parseHeadLog(out: string, since?: number): { sha: string; subject: stri
  */
 function earliestTimes(git: Git, shas: readonly string[]): Map<string, number> {
   const times = new Map<string, number>();
-  for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, '--format=%H%x1f%ct%x1f%at', ...group, '--']).split('\n')) {
-      const [sha, committed, authored] = line.split('\x1f');
-      const [ct, at] = [unixSeconds(committed), unixSeconds(authored)];
-      if (sha && ct !== null && at !== null) times.set(sha, Math.min(ct, at));
-    }
+  for (const line of git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, '--format=%H%x1f%ct%x1f%at', ...shas, '--']).split('\n')) {
+    const [sha, committed, authored] = line.split('\x1f');
+    const [ct, at] = [unixSeconds(committed), unixSeconds(authored)];
+    if (sha && ct !== null && at !== null) times.set(sha, Math.min(ct, at));
   }
   return times;
 }
@@ -917,12 +914,16 @@ export function parseGitVersion(output: string): { major: number; minor: number 
   return match ? { major: Number(match[1]), minor: Number(match[2]) } : null;
 }
 
-/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
-export function remergeDiffSupported(output: string): boolean {
+/** Whether `git --version` output names a git at least `min` (`[major, minor]`); unparseable reads as no. */
+function gitVersionAtLeast(output: string, min: readonly [number, number]): boolean {
   const version = parseGitVersion(output);
   if (version === null) return false;
-  return version.major > REMERGE_DIFF_MIN_GIT[0]
-    || (version.major === REMERGE_DIFF_MIN_GIT[0] && version.minor >= REMERGE_DIFF_MIN_GIT[1]);
+  return version.major > min[0] || (version.major === min[0] && version.minor >= min[1]);
+}
+
+/** Whether `git --version` output names a git that has `show --remerge-diff`; unparseable reads as no. */
+export function remergeDiffSupported(output: string): boolean {
+  return gitVersionAtLeast(output, REMERGE_DIFF_MIN_GIT);
 }
 
 /** Per-resolve cache of the `git --version` probe, keyed by the bound git function. */
