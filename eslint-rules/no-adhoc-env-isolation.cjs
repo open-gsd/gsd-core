@@ -72,9 +72,28 @@ const path = require('path');
  *     it. Only a direct `process.env.PATH` read, through `||` / `??` / `&&`,
  *     `?:`, an optional chain, a one-argument `String(...)` or one `const`
  *     hop, is followed.
- *   - A PATH filter written as a loop, or over a split held in a variable,
- *     whose receiver is not such a read is not flagged: only a split consumed
- *     directly by `.filter(...)` is.
+ *   - A PATH filter written as a loop, over a split held in a variable, over
+ *     a spread or `.map(...)` of the split, or over a split by a regular
+ *     expression, whose receiver is not such a read is not flagged: only a
+ *     split consumed directly by `.filter(...)` is.
+ *   - A filtered split by a string literal or a variable delimiter is not
+ *     flagged when its receiver is not such a read: `basePath.split(':')
+ *     .filter(...)`, or `const SEP = isWin ? ';' : ':'; parts.split(SEP)
+ *     .filter(...)`. Only a `*.delimiter` member or a bare `delimiter`
+ *     identifier counts as a path delimiter.
+ *   - A PATH set or assembled without a split is not flagged: a `PATH` key
+ *     (`{ ...process.env, PATH: dir }`), an assignment to `env.PATH`, or a
+ *     prepend by concatenation, template literal or `[...].join(delimiter)`
+ *     around a `process.env.PATH` read.
+ *   - Removing HOME or USERPROFILE is not flagged: `delete env.HOME`,
+ *     `delete env.USERPROFILE` or `Reflect.deleteProperty(env, 'HOME')` on a
+ *     spread env is neither an assignment nor an object key.
+ *   - HOME or USERPROFILE set by a destructuring assignment
+ *     (`[env.HOME, env.USERPROFILE] = [tmp, tmp]`, `({ home: env.HOME } = o)`)
+ *     or by a class field spread into an env (`class E { HOME = tmp }`,
+ *     `{ ...process.env, ...new E() }`) is not flagged.
+ *   - Windows' other home variables are not flagged: `HOMEDRIVE` / `HOMEPATH`
+ *     keys, which `os.homedir()` falls back to when USERPROFILE is unset.
  *   - A split of a direct `process.env.PATH` read is flagged whatever it is
  *     for, a diagnostic that only counts its entries included; and any
  *     `*.delimiter` argument counts as a path delimiter. The rule cannot tell a
@@ -86,7 +105,9 @@ const path = require('path');
  *   - An object spread of the process env, `{ ...process.env }`, with no
  *     HOME/USERPROFILE key and no PATH filter is not flagged; any object with a
  *     `HOME` key is, whatever it is for.
- *   - Key names match exactly: `Home` or `userprofile` keys are not flagged.
+ *   - Key names match exactly: `Home` or `userprofile` keys are not flagged,
+ *     and a `process.env.path` read is not followed (Windows env names are
+ *     case-insensitive; only `PATH` and `Path` are read).
  */
 
 const HOME_KEYS = new Set(['HOME', 'USERPROFILE']);

@@ -244,6 +244,54 @@ describe('no-adhoc-env-isolation: the header\'s known gaps are not flagged', () 
     ], []);
   });
 
+  test('a filtered split by a literal or variable delimiter, receiver not a process.env.PATH read', () => {
+    run([
+      { code: "basePath.split(':').filter(keep);", filename: FILE },
+      { code: "const SEP = isWin ? ';' : ':'; parts.split(SEP).filter(keep);", filename: FILE },
+    ], []);
+  });
+
+  test('a PATH set or assembled without a split', () => {
+    run([
+      { code: 'const e = { ...process.env, PATH: dir };', filename: FILE },
+      { code: 'env.PATH = dir;', filename: FILE },
+      { code: 'env.PATH = bin + path.delimiter + process.env.PATH;', filename: FILE },
+      { code: 'env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;', filename: FILE },
+      { code: 'env.PATH = [bin, process.env.PATH].join(path.delimiter);', filename: FILE },
+    ], []);
+  });
+
+  test('a split filtered through a spread, a .map, or a regular-expression delimiter', () => {
+    run([
+      { code: '[...basePath.split(path.delimiter)].filter(keep);', filename: FILE },
+      { code: 'basePath.split(path.delimiter).map(norm).filter(Boolean);', filename: FILE },
+      { code: 'basePath.split(/[;:]/).filter(keep);', filename: FILE },
+    ], []);
+  });
+
+  test('HOME set by a destructuring assignment or a class field', () => {
+    run([
+      { code: 'const env = { ...process.env }; [env.HOME, env.USERPROFILE] = [tmp, tmp];', filename: FILE },
+      { code: 'const env = { ...process.env }; ({ home: env.HOME } = o);', filename: FILE },
+      { code: 'class E { HOME = tmp; } const env = { ...process.env, ...new E() };', filename: FILE },
+    ], []);
+  });
+
+  test("Windows' HOMEDRIVE / HOMEPATH keys, and a lowercase process.env.path read", () => {
+    run([
+      { code: "const env = { ...process.env, HOMEDRIVE: 'C:', HOMEPATH: tmp };", filename: FILE },
+      { code: "process.env.path.split(':');", filename: FILE },
+    ], []);
+  });
+
+  test('removing HOME or USERPROFILE from a spread env', () => {
+    run([
+      { code: 'const env = { ...process.env }; delete env.HOME;', filename: FILE },
+      { code: 'const env = { ...process.env }; delete env.USERPROFILE;', filename: FILE },
+      { code: "const env = { ...process.env }; Reflect.deleteProperty(env, 'HOME');", filename: FILE },
+    ], []);
+  });
+
   test('HOME built without a static key', () => {
     run([
       { code: 'env[key] = x;', filename: FILE },
