@@ -56,6 +56,7 @@ const fc = require('fast-check');
 
 const { createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 const { stubEnv } = require('./helpers/env-guard.cjs');
+const { interceptGit } = require('./helpers/git-fixture.cjs');
 
 const {
   buildStateContract,
@@ -1222,6 +1223,76 @@ describe('state contract — write mechanics', () => {
     assert.strictEqual(published.phases[0].name, 'Workstream Only');
     assert.notStrictEqual(published.phases[0].name, 'Foundation');
     assert.notStrictEqual(published.phases[0].name, 'Hardening');
+  });
+});
+
+// ─── 14b. Exclude and untrack branches with git faked (#5505) ─────────────────
+// The real-git band lives in tests/state-contract.test.cjs, which the Stryker shard excludes. These cases
+// answer every git call from a table instead of spawning, so the shard still kills mutants in the new branches.
+
+describe('state contract — exclude and untrack branches, git faked (#5505)', () => {
+  const answer = (stdout, status = 0) => ({ status, signal: null, stdout, stderr: '', output: [null, stdout, ''], pid: 0 });
+  // A project whose `.git` exists; `tracked` is the NUL-separated `ls-files` answer, `rm` the exit status of `git rm`.
+  const fakeRepo = (t, { tracked = '', rm = 0, config } = {}) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    fs.mkdirSync(path.join(tmpDir, '.git'));
+    if (config) fs.writeFileSync(path.join(planningDirOf(tmpDir), 'config.json'), JSON.stringify(config));
+    const calls = [];
+    interceptGit(t, (args) => {
+      calls.push(args);
+      if (args[0] === 'rev-parse') return answer('../.git/info/exclude\n.planning/\n');
+      if (args[0] === 'ls-files') return answer(tracked);
+      if (args.includes('rm')) return answer('', rm);
+      return answer('', args[0] === 'add' ? 0 : 1); // check-ignore: no rule speaks, nothing is ignored
+    });
+    return { tmpDir, calls, exclude: path.join(tmpDir, '.git', 'info', 'exclude') };
+  };
+  const ruleFile = (tmpDir) => path.join(planningDirOf(tmpDir), '.gitignore');
+
+  test('appendsTheAnchoredEntryToTheRepoExclude', (t) => {
+    const { tmpDir, exclude } = fakeRepo(t);
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    assert.strictEqual(fs.readFileSync(exclude, 'utf8'), '/.planning/state.json\n');
+  });
+
+  test('aCommitDocsOffConfigWritesNoEntryAndAsksGitNothing', (t) => {
+    const { tmpDir, calls, exclude } = fakeRepo(t, { config: { commit_docs: false } });
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    assert.ok(!fs.existsSync(exclude));
+    assert.ok(!calls.some((args) => args[0] === 'ls-files' || args[0] === 'rev-parse'));
+  });
+
+  test('aTrackedCopyIsUntrackedAndGetsItsRuleStaged', (t) => {
+    const { tmpDir, calls } = fakeRepo(t, { tracked: '.planning/state.json\0' });
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    assert.deepStrictEqual(calls.find((args) => args.includes('rm')),
+      ['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', '.planning/state.json']);
+    assert.deepStrictEqual(calls.find((args) => args.includes('add')), ['--literal-pathspecs', 'add', '--', ruleFile(tmpDir)]);
+    assert.strictEqual(fs.readFileSync(ruleFile(tmpDir), 'utf8'), '/state.json\n');
+  });
+
+  test('aNegatedRuleKeepsTheCopyTracked', (t) => {
+    const { tmpDir, calls } = fakeRepo(t, { tracked: '.planning/state.json\0' });
+    fs.writeFileSync(ruleFile(tmpDir), '!/state.json\n');
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    assert.ok(!calls.some((args) => args.includes('rm')));
+    assert.strictEqual(fs.readFileSync(ruleFile(tmpDir), 'utf8'), '!/state.json\n');
+  });
+
+  test('aCopyOutsideTheCommitPolicyOfItsScopeStaysTracked', (t) => {
+    const { tmpDir, calls } = fakeRepo(t, { tracked: '.planning/workstreams/ws/state.json\0', config: { commit_docs: true } });
+    fs.mkdirSync(path.join(planningDirOf(tmpDir), 'workstreams', 'ws'), { recursive: true });
+    fs.writeFileSync(path.join(planningDirOf(tmpDir), 'workstreams', 'ws', 'config.json'), JSON.stringify({ commit_docs: false }));
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    assert.ok(!calls.some((args) => args.includes('rm')));
+  });
+
+  test('aFailedRemovalStagesNoRuleFile', (t) => {
+    const { tmpDir, calls } = fakeRepo(t, { tracked: '.planning/state.json\0', rm: 1 });
+    assert.strictEqual(publishStateContract(tmpDir).published, true);
+    assert.ok(calls.some((args) => args.includes('rm')));
+    assert.ok(!calls.some((args) => args.includes('add')));
   });
 });
 
