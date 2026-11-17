@@ -1090,7 +1090,7 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
 // the SCOPED phases dir (init `phases_dir`) and must never touch the root
 // project's .planning/phases. The fence is EXECUTED with the real
 // init.new-milestone output, as the workflow does. The archive destination is
-// read from init's `phase_archive_path`, which #5858 (same PR) scopes.
+// read from init's `phase_archive_path`, which is scoped the same way as `phases_dir`.
 // ────────────────────────────────────────────────────────────────────────
 describe('new-milestone reset-phase-safety: archives the scoped phases dir, never root .planning/phases (#5860)', () => {
   const stepPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone', 'steps', 'reset-phase-safety.md');
@@ -1127,11 +1127,12 @@ describe('new-milestone reset-phase-safety: archives the scoped phases dir, neve
       assert.ok(result.success, `init new-milestone failed: ${result.error}`);
       const init = JSON.parse(result.output);
       assert.strictEqual(init.phase_dir_count, 1);
+      assert.ok(init.phase_archive_path, 'a scope that shipped v2.0 reports a phase_archive_path');
 
       const run = runHookSeam('-c', [resetFence], {
         interpreter: 'bash',
         cwd: tmpDir,
-        env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path ?? '' },
+        env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path },
       });
       throwIfFailed(run, 'bash <reset-phase-safety fence>');
 
@@ -1143,6 +1144,36 @@ describe('new-milestone reset-phase-safety: archives the scoped phases dir, neve
         `the scoped phase dir must land in phase_archive_path (${init.phase_archive_path})`);
     });
   }
+
+  test('named project with several phase dirs (limit+1): every scoped phase dir is archived and the root\'s stay', () => {
+    const rootPlanning = path.join(tmpDir, '.planning');
+    const scoped = path.join(rootPlanning, 'beta');
+    fs.writeFileSync(path.join(rootPlanning, 'MILESTONES.md'), '# Milestones\n\n## v1.0 Root Ship (Shipped: 2026-01-01)\n');
+    fs.mkdirSync(path.join(rootPlanning, 'phases', '01-root-live'), { recursive: true });
+    fs.mkdirSync(path.join(rootPlanning, 'phases', '02-root-live'), { recursive: true });
+    for (const name of ['01-scoped-a', '02-scoped-b']) fs.mkdirSync(path.join(scoped, 'phases', name), { recursive: true });
+    fs.writeFileSync(path.join(scoped, 'MILESTONES.md'), '# Milestones\n\n## v2.0 Scoped Ship (Shipped: 2026-02-01)\n');
+
+    const result = runGsdTools(['init', 'new-milestone', '--reset-phase-numbers'], tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: 'beta' });
+    assert.ok(result.success, `init new-milestone failed: ${result.error}`);
+    const init = JSON.parse(result.output);
+    assert.strictEqual(init.phase_dir_count, 2);
+
+    const run = runHookSeam('-c', [resetFence], {
+      interpreter: 'bash',
+      cwd: tmpDir,
+      env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path },
+    });
+    throwIfFailed(run, 'bash <reset-phase-safety fence>');
+
+    for (const name of ['01-scoped-a', '02-scoped-b']) {
+      assert.ok(!fs.existsSync(path.join(scoped, 'phases', name)), `${name} must leave the scoped phases dir`);
+      assert.ok(fs.existsSync(path.join(init.phase_archive_path, name)), `${name} must land in phase_archive_path`);
+    }
+    for (const name of ['01-root-live', '02-root-live']) {
+      assert.ok(fs.existsSync(path.join(rootPlanning, 'phases', name)), `the root's ${name} must not move`);
+    }
+  });
 
   test('flat project (no scope): archives root .planning/phases into the root milestone archive, as before', () => {
     const rootPlanning = path.join(tmpDir, '.planning');
