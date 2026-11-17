@@ -54,7 +54,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup, createTempGitProject, withTempGitProject } = require('./helpers.cjs');
 const { stubEnv } = require('./helpers/env-guard.cjs');
 
 const {
@@ -1228,7 +1228,6 @@ describe('state contract — write mechanics', () => {
 // ─── 14b. Git-ignore of the derived cache (#5505) ─────────────────────────────
 
 describe('state contract — state.json is git-ignored via info/exclude (#5505)', () => {
-  const { createTempGitProject, withTempGitProject } = require('./helpers.cjs');
   const { gitOrThrow, excludeFile, readExclude, interceptGit: interceptGitIn, isFsLegalName } = require('./helpers/git-fixture.cjs');
   // this file runs real git and has Windows-only branches: it passes its own child_process so the conformance tier keeps it
   const interceptGit = (t, intercept) => interceptGitIn(t, intercept, require('node:child_process'));
