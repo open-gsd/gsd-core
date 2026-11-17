@@ -26,11 +26,18 @@ const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const QUICK_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
 
 /**
- * Bound for every subprocess in this file: git plumbing against small mkdtemp
- * fixture repos, plus the Step 2.5 bash-script run below — both orders of
- * magnitude under this. #3144.
+ * Bound for every git plumbing subprocess in this file (small mkdtemp fixture
+ * repos, including a bare clone and a working clone): 13 argv shapes through the
+ * one `git(cwd, ...args)` helper. It is its own constant rather than a
+ * tests/helpers/timeouts.cjs class because it bounds only this file's fixture
+ * git plumbing. The Step 2.5 bash-script run in runStep() is not bounded by this
+ * constant; HOOK_FANOUT_TIMEOUT_MS (./helpers/timeouts.cjs, 60000ms) bounds it. #3144.
+ *
+ * Evidence: worst observed 89.28ms on darwin (p50 9.72ms, p99 33.05ms), margin 224.01x;
+ * harness, 13 call sites x 50 runs (1950 spawns) per platform on darwin (node v26.13.0)
+ * and linux (node:24 in docker), 2026-11-08; win32 not measured.
  */
-const GIT_TIMEOUT_MS = 20000;
+const QUICK_BRANCHING_GIT_TIMEOUT_MS = 20000;
 
 const GIT_ENV = Object.freeze({
   ...process.env,
@@ -41,7 +48,7 @@ const GIT_ENV = Object.freeze({
 });
 
 function git(cwd, ...args) {
-  return gitOrThrow(args, { cwd, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS }).trim();
+  return gitOrThrow(args, { cwd, env: GIT_ENV, timeoutMs: QUICK_BRANCHING_GIT_TIMEOUT_MS }).trim();
 }
 
 /**
@@ -149,7 +156,9 @@ function runStep(bash, cwd, branchName) {
   try {
     // Step 2.5's script is a bash FAN-OUT (multiple git commands in sequence
     // under one `bash` interpreter), not a single git plumbing call — the
-    // wrong class for GIT_TIMEOUT_MS. CI hit exactly this at 15000ms on PR
+    // wrong class for a git-plumbing bound such as QUICK_BRANCHING_GIT_TIMEOUT_MS
+    // (20000ms here). CI hit exactly this at the shared PROBE_TIMEOUT_MS class norm
+    // (15000ms, ./helpers/timeouts.cjs) on PR
     // #3787 run 32668773524 (`full test (windows-latest, 24, shard 3/3)`,
     // `new quick-task branch branches off origin/main (#2916)`): SIGTERM,
     // outcome=timed_out exitCode=null. See HOOK_FANOUT_TIMEOUT_MS in

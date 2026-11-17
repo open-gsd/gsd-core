@@ -406,3 +406,24 @@ an assertion, not inside C4.
 - The child issues do not exist yet; C1–C5 are proposed boundaries, and each needs its own approval.
 - Decision 4 freezes raw output (ruled 2026-09-20). A lossless raw mode would reverse a decision
   recorded here and needs its own issue before C2 is planned.
+
+## Amendment — 2026-11-08: C2 (#6029) deviations ruled by the owner
+
+C2 delivers Decisions 3 and 4 with two owner-ruled deviations, recorded here so a later child does
+not read them as drift:
+
+- **The shared parser is not byte-for-byte the setter's.** Decision 3 says the parser is extracted
+  "verbatim" and shared "unchanged". Its numeric branch used `Number()`, which retypes `' '` as
+  `0`, `' 5'` as `5` and `'0x10'` as `16`. `parseConfigArgValue` now accepts only a decimal literal
+  (optional sign, digits with an optional fraction, optional exponent, no surrounding whitespace,
+  no radix prefix) that is finite, so that text stays a string in both `config-set` and
+  `config-get --default`. Every other branch, and every decimal result, is unchanged.
+- **Raw `--default` bytes follow the value policy.** Decision 4 freezes raw output. Two raw cells
+  on the `--default` arm change because the encoder now applies the existing per-key policy to the
+  parsed value rather than to the argv text: a secret key's `--raw --default null` prints `(unset)`
+  (it masked the four characters `null` as `****`, so an unset key read as set), and
+  `planner.stall_detection_enabled --raw --default false` prints `false` (the string `"false"`
+  failed the #4570 boolean check and read as `true`). Every other raw byte is unchanged and
+  pinned by tests.
+
+The child issues now exist: C1 #5096, C2 #6029, C3 #6030, C4 #6031, C5 #6032.

@@ -31,6 +31,7 @@ const { execFileSync } = require('node:child_process');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   selectCommitsByDeclaredScope,
@@ -256,8 +257,8 @@ describe('gsd-tools.cjs query select-revert-commits: CLI boundary', () => {
     tmpDir = createTempDir('undo-commit-selection-');
     // #4906/local/no-unbounded-spawn: every git fixture call below is bounded
     // (DEFECT.UNBOUNDED-SUBPROCESS) — a hung fixture setup must fail loudly,
-    // not hang the run silently.
-    const GIT_TIMEOUT_MS = 15_000;
+    // not hang the run silently. Uses the shared GIT_TIMEOUT_MS norm
+    // (./helpers/timeouts.cjs), which is this same 15s bound.
     execFileSync('git', ['init', '-q'], { cwd: tmpDir, timeout: GIT_TIMEOUT_MS });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir, timeout: GIT_TIMEOUT_MS });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpDir, timeout: GIT_TIMEOUT_MS });

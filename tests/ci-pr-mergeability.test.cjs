@@ -930,16 +930,16 @@ describe('ci-pr-mergeability: workflow wiring', () => {
 });
 
 // ---------------------------------------------------------------------------
-// F. ci-test-scope ripple — the preflight workflow must never be marked inert.
+// F. ci-test-scope ripple — the preflight workflow stays in the protected registry.
 // ---------------------------------------------------------------------------
 
 describe('ci-pr-mergeability: ci-test-scope protection', () => {
   const scope = require('../scripts/ci-test-scope.cjs');
 
-  test('the preflight workflow is protected from being marked inert', () => {
+  test('the preflight workflow is registered as a protected gating workflow', () => {
     assert.ok(
       scope.PROTECTED_WORKFLOWS.has(PREFLIGHT_WORKFLOW),
-      'a workflow that gates every compute lane must never be demoted to the inert lane',
+      'a workflow that gates every compute lane must stay in the protected-workflow registry',
     );
   });
 
