@@ -9418,11 +9418,23 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 6. Clean up settings.json (remove GSD hooks and statusline)
-  const settingsPath = path.join(targetDir, 'settings.json');
+  // #5952: a local install of a runtime with a per-scope settings file (local Claude, #338)
+  // registered its hooks in that file (settings.local.json), not settings.json, so both are
+  // cleaned: settings.json still holds the entries of an install that predates the routing.
+  const _localSettingsFile = !isGlobal
+    ? ((_resolvedUninstallScope && _resolvedUninstallScope.settingsFile)
+      || (hostBehaviorsFor(runtime).settingsFileByScope || {}).local
+      || null)
+    : null;
+  const _uninstallSettingsFiles = _localSettingsFile && _localSettingsFile !== 'settings.json'
+    ? ['settings.json', _localSettingsFile]
+    : ['settings.json'];
+  for (const _settingsFileName of _uninstallSettingsFiles) {
+  const settingsPath = path.join(targetDir, _settingsFileName);
   if (fs.existsSync(settingsPath)) {
     let settings = readSettings(settingsPath);
     if (settings === null) {
-      console.log(`  ${yellow}i${reset} Skipping settings.json cleanup — file could not be parsed`);
+      console.log(`  ${yellow}i${reset} Skipping ${_settingsFileName} cleanup — file could not be parsed`);
       settings = {}; // prevent downstream crashes, but don't write back
     }
     let settingsModified = false;
@@ -9518,7 +9530,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       }
       if (permissionsModified) {
         settingsModified = true;
-        console.log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
+        console.log(`  ${green}✓${reset} Removed GSD permissions from ${_settingsFileName}`);
       }
     }
 
@@ -9567,6 +9579,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       writeSettings(settingsPath, settings);
       removedCount++;
     }
+  }
   }
 
   // 6. For OpenCode, clean up permissions and the companion MCP entry from opencode.json or opencode.jsonc
