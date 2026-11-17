@@ -2068,6 +2068,7 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
 
   test('install refuses a linked AGENTS.md before writing anything', (t) => {
     const { spawnSync } = require('node:child_process');
+    const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
     const files = linked(t, { base: project, rel: 'AGENTS.md' }, 'user content\n');
     if (!files) return;
     const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
@@ -2075,7 +2076,7 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     delete env.COPILOT_CONFIG_DIR;
     delete env.COPILOT_HOME;
     const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'install.js'), '--copilot', '--local'], {
-      cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
+      cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS,
     });
     assert.notStrictEqual(result.status, 0, 'a refused install must not exit 0');
     assert.match(`${result.stdout}${result.stderr}`, /GSD_ALLOW_SYMLINKED_DEST=1/);
