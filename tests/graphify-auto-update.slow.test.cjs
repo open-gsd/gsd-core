@@ -726,6 +726,60 @@ describe('auto-update', () => {
     });
   });
 
+  describe('hook — the onboarding commit as the workflow issues it (#5935)', {
+    skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false,
+  }, () => {
+    // allow-test-rule: source-text-is-the-product the onboarding workflow's commit step is runtime-loaded text (#5935)
+    const onboard = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/onboard.md'), 'utf8');
+    /** The commit command the onboarding workflow tells the orchestrator to run, with its root substituted. */
+    const onboardingCommit = (root) => {
+      const step = onboard.match(/If `commit_docs` is true, commit only the summary path[^\n]{0,120}\n\n```bash\n([^\n]{1,400})\n```/);
+      assert.ok(step, 'the onboarding commit step must exist');
+      return step[1].split('$ONBOARDING_ROOT').join(root);
+    };
+
+    test('the onboarding commit uses no global flag between the launcher and the verb', () => {
+      const command = onboardingCommit('/tmp/onboarding-root');
+      assert.match(command, /gsd_run query commit /, 'the commit must be the unflagged gsd_run query commit form');
+      assert.doesNotMatch(command, /gsd_run\s+--/, 'a global flag makes the hook skip the call (#5332)');
+    });
+
+    test('dispatches the gated rebuild for the commit run from the onboarding root', async (t) => {
+      const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir);
+      const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: onboardingCommit(tmpDir) } }, { pathPrepend: mockBin });
+      assert.strictEqual(result.status, 0);
+      const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
+      assert.ok(fs.existsSync(statusPath), 'the onboarding commit must dispatch a rebuild');
+      const status = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.strictEqual(status?.status, 'ok', 'the mock rebuild must finish successfully');
+    });
+
+    for (const gate of ['auto_update=false', 'enabled=false', 'non-default branch', 'live lock']) {
+      test(`the onboarding commit respects ${gate}`, async (t) => {
+        const tmpDir = createTempGitRepo({
+          config: { graphify: { enabled: gate !== 'enabled=false', auto_update: gate !== 'auto_update=false' } },
+        });
+        const lockPath = path.join(tmpDir, '.planning/graphs/.rebuild.lock');
+        t.after(async () => {
+          if (gate === 'live lock') fs.unlinkSync(lockPath);
+          await cleanupHookRepo(tmpDir);
+        });
+        if (gate === 'non-default branch') gitOrThrow(['checkout', '-b', 'worktree-agent-probe'], { cwd: tmpDir });
+        if (gate === 'live lock') {
+          fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+          fs.writeFileSync(lockPath, String(process.pid));
+        }
+        const mockBin = makeMockGraphifyBin(tmpDir);
+        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: onboardingCommit(tmpDir) } }, { pathPrepend: mockBin });
+        assert.strictEqual(result.status, 0);
+        assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+          `${gate} must suppress the rebuild for the onboarding commit`);
+      });
+    }
+  });
+
   describe('hook — runtime query commit recognition (#5332)', {
     skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false,
   }, () => {
