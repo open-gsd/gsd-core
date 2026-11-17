@@ -180,6 +180,90 @@ describe('no-adhoc-env-isolation: arm 2 leaves alone what it does not own', () =
   });
 });
 
+// ─── the header's documented boundary ────────────────────────────────────────
+// eslint-rules/no-adhoc-env-isolation.cjs lists what each arm flags and its
+// "Known gaps". Each claim has a row here, so a refactor of isProcessEnv,
+// readsEnvPath or the key match that moves the boundary fails a row instead of
+// changing documented behaviour silently.
+
+describe('no-adhoc-env-isolation: the header\'s flagged claims', () => {
+  const home = { messageId: 'adhocHomeConstruction' };
+  const pathFilter = { messageId: 'inlinePathFilter' };
+
+  test('in-process mutation spelled other than process.env.HOME = x is flagged', () => {
+    run([], [
+      { code: 'globalThis.process.env.HOME = x;', filename: FILE, errors: [home] },
+      { code: 'const env = process.env; env.HOME = x;', filename: FILE, errors: [home] },
+      { code: 'Object.assign(process.env, { HOME: x });', filename: FILE, errors: [home] },
+    ]);
+  });
+
+  test('a PATH read through either arm of ?:, &&, an optional chain or process[\'env\'] is followed', () => {
+    run([], [
+      { code: "(cond ? '' : process.env.PATH).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(process.env.PATH && extra).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(process.env?.PATH).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "process['env'].PATH.split(':');", filename: FILE, errors: [pathFilter] },
+    ]);
+  });
+
+  test('process[\'env\'] is the process env, so assigning HOME on it is in-process and not flagged', () => {
+    run([
+      { code: "process['env'].HOME = x;", filename: FILE },
+      // String(...) is followed only with exactly one argument.
+      { code: "String(process.env.PATH, extra).split(':');", filename: FILE },
+    ], []);
+  });
+
+  test('a split of a direct process.env.PATH read is flagged whatever it is for, and any *.delimiter counts', () => {
+    run([], [
+      { code: 'const n = process.env.PATH.split(path.delimiter).length;', filename: FILE, errors: [pathFilter] },
+      { code: 'csv.split(csv.delimiter).filter(Boolean);', filename: FILE, errors: [pathFilter] },
+    ]);
+  });
+
+  test('any object with a HOME key is flagged, whatever it is for', () => {
+    run([], [{ code: 'const fixture = { HOME: "/home/someone" };', filename: FILE, errors: [home] }]);
+  });
+});
+
+describe('no-adhoc-env-isolation: the header\'s known gaps are not flagged', () => {
+  test('a PATH read the alias hop does not follow, unfiltered', () => {
+    run([
+      { code: "const { PATH } = process.env; PATH.split(':');", filename: FILE },
+      { code: "const env = process.env; env.PATH.split(':');", filename: FILE },
+      { code: "globalThis.process.env.PATH.split(':');", filename: FILE },
+      { code: "`${process.env.PATH}`.split(':');", filename: FILE },
+    ], []);
+  });
+
+  test('a PATH filter written as a loop, or over a split held in a variable', () => {
+    run([
+      { code: 'for (const d of dirs.split(path.delimiter)) { if (keep(d)) out.push(d); }', filename: FILE },
+      { code: 'const parts = basePath.split(path.delimiter); parts.filter(keep);', filename: FILE },
+    ], []);
+  });
+
+  test('HOME built without a static key', () => {
+    run([
+      { code: 'env[key] = x;', filename: FILE },
+      { code: "const e = Object.fromEntries([['HOME', x]]);", filename: FILE },
+      { code: "Object.defineProperty(env, 'HOME', { value: x });", filename: FILE },
+      { code: "Reflect.set(env, 'HOME', x);", filename: FILE },
+      { code: "const entries = ['HOME=' + x];", filename: FILE },
+      { code: 'execSync(`export HOME=${x}; run`);', filename: FILE },
+    ], []);
+  });
+
+  test('a spread of the process env with no HOME key, and keys that differ in case', () => {
+    run([
+      { code: 'const e = { ...process.env };', filename: FILE },
+      { code: 'const e = { ...process.env, Home: x };', filename: FILE },
+      { code: 'const e = { ...process.env, userprofile: x };', filename: FILE },
+    ], []);
+  });
+});
+
 // ─── allowlist ratchet ───────────────────────────────────────────────────────
 
 describe('no-adhoc-env-isolation: allowlist', () => {

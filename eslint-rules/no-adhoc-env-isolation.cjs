@@ -18,9 +18,10 @@ const path = require('path');
  * Flags two shapes:
  *
  *   - `X.split(...)` of any argument, where `X` reads `process.env.PATH` (or
- *     `process.env.Path`, the key Windows enumerates) directly, through
- *     `||` / `??` / `?:`, through `String(...)`, or through a single `const`
- *     alias hop. This is #4411's `makeIsolatedPath`, which split the full
+ *     `process.env.Path`, the key Windows enumerates; `process['env']` too)
+ *     directly, through either side of `||` / `??` / `&&`, either arm of
+ *     `?:`, an optional chain, a one-argument `String(...)`, or a single
+ *     `const` alias hop. This is #4411's `makeIsolatedPath`, which split the full
  *     system PATH, prepended a directory and re-joined it — isolating nothing
  *     — without ever calling `.filter`.
  *   - `X.split(<delimiter>).filter(...)`, whatever `X` is, where
@@ -68,8 +69,9 @@ const path = require('path');
  *   - A PATH read the alias hop does not follow is not flagged unless its split
  *     is filtered: `const { PATH } = process.env`, `const env = process.env;
  *     env.PATH`, `globalThis.process.env.PATH`, and a template literal around
- *     it. Only a direct `process.env.PATH` read, through `||` / `??` / `?:`,
- *     `String(...)` or one `const` hop, is followed.
+ *     it. Only a direct `process.env.PATH` read, through `||` / `??` / `&&`,
+ *     `?:`, an optional chain, a one-argument `String(...)` or one `const`
+ *     hop, is followed.
  *   - A PATH filter written as a loop, or over a split held in a variable,
  *     whose receiver is not such a read is not flagged: only a split consumed
  *     directly by `.filter(...)` is.
