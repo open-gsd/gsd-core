@@ -537,27 +537,9 @@ const HEAD_LOG_FORMAT = '--format=%H%x1f%ct%x1f%s%x1e';
 /** The single-repo path keeps the user's git config, so a `git log` whose records are parsed turns signature lines off. */
 const NO_SHOW_SIGNATURE = '--no-show-signature';
 
-/** The one reader of a unix-seconds field (`%ct`, `%at`) of a git log record; null when it is not all digits. */
+/** The reader of a unix-seconds field (`%ct`, `%at`) of a `subjectsOccurOnHead` git log record; null when it is not all digits. */
 function unixSeconds(field: string | undefined): number | null {
   return field !== undefined && /^[0-9]+$/.test(field.trim()) ? Number(field) : null;
-}
-
-/**
- * The one walk over the time fields (`ct` committer, `at` author) of `shas`, in the order asked. A sha whose
- * line lacks one of the fields is left out. `--no-show-signature` keeps a user's `log.showSignature` from
- * putting gpg lines into the records.
- */
-function logTimes(git: Git, shas: readonly string[], fields: readonly ('ct' | 'at')[]): Map<string, number[]> {
-  const format = `--format=%H${fields.map((f) => `%x1f%${f}`).join('')}`;
-  const times = new Map<string, number[]>();
-  for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, format, ...group, '--']).split('\n')) {
-      const [sha, ...raw] = line.split('\x1f');
-      const parsed = raw.map(unixSeconds);
-      if (sha && parsed.length === fields.length && parsed.every((time) => time !== null)) times.set(sha, parsed);
-    }
-  }
-  return times;
 }
 
 /** The records of a `HEAD_LOG_FORMAT` log; with `since`, a record committed before it is skipped. A record without a numeric time is no answer. */
@@ -575,9 +557,21 @@ function parseHeadLog(out: string, since?: number): { sha: string; subject: stri
   return commits;
 }
 
-/** The earlier of the committer and the author time per sha (a rewrite keeps the author time). */
+/**
+ * The earlier of the committer and the author time per sha (a rewrite keeps the author time). A sha whose line
+ * lacks a numeric time is left out. `--no-show-signature` keeps a user's `log.showSignature` from putting gpg
+ * lines into the records.
+ */
 function earliestTimes(git: Git, shas: readonly string[]): Map<string, number> {
-  return new Map([...logTimes(git, shas, ['ct', 'at'])].map(([sha, times]) => [sha, Math.min(...times)]));
+  const times = new Map<string, number>();
+  for (const group of chunk(shas, SHA_CHUNK)) {
+    for (const line of git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, '--format=%H%x1f%ct%x1f%at', ...group, '--']).split('\n')) {
+      const [sha, committed, authored] = line.split('\x1f');
+      const [ct, at] = [unixSeconds(committed), unixSeconds(authored)];
+      if (sha && ct !== null && at !== null) times.set(sha, Math.min(ct, at));
+    }
+  }
+  return times;
 }
 
 // ─── The resolver ─────────────────────────────────────────────────────────────
@@ -703,7 +697,14 @@ const withPrefix = (prefix: string, file: string): string => (prefix === '' ? fi
 
 /** Committer time (unix seconds) per sha, for ordering commits that come from different repos. */
 function commitTimes(git: Git, shas: readonly string[]): Map<string, number> {
-  return new Map([...logTimes(git, shas, ['ct'])].map(([sha, times]) => [sha, times[0]]));
+  const times = new Map<string, number>();
+  for (const group of chunk(shas, SHA_CHUNK)) {
+    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct', ...group]).split('\n')) {
+      const [sha, time] = line.split('\x1f');
+      if (sha && time !== undefined && /^[0-9]+$/.test(time)) times.set(sha, Number(time));
+    }
+  }
+  return times;
 }
 
 interface SinceSplit {
