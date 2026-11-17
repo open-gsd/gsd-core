@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { runNode, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 
 // #5219 (ADR-5057 §4 arm C): the context-drift gate is its own module; the check router formats its result.
 const GATE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'gate-context-drift.cjs');
@@ -370,21 +371,19 @@ describe('verify context-drift CLI', () => {
   // verb's non-blocking arm is reached by calling the command function directly in a child
   // process (planningDir is what throws on '../x').
   function runVerbDirect(env) {
-    const { spawnSync } = require('node:child_process');
     const { TEST_ENV_BASE } = require('./helpers.cjs');
     const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
     const script = routeContextDriftStatement(tmp, '01-setup');
-    return spawnSync(process.execPath, ['-e', script], {
+    return runNode(['-e', script], {
       cwd: tmp,
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
       env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '', ...env },
     });
   }
 
   test('an invalid GSD_WORKSTREAM is the non-blocking skip payload, exit 0 (planningDir throws)', () => {
     const r = runVerbDirect({ GSD_WORKSTREAM: '../x' });
-    assert.strictEqual(r.status, 0, r.stderr);
+    assertSeamExit(assert, r);
     const data = JSON.parse(r.stdout);
     assert.strictEqual(data.block, false);
     assert.strictEqual(data.skipped, true);
@@ -398,7 +397,7 @@ describe('verify context-drift CLI', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, '01-CONTEXT.md'), '# context\n');
     const r = runVerbDirect({ GSD_WORKSTREAM: 'ws1' });
-    assert.strictEqual(r.status, 0, r.stderr);
+    assertSeamExit(assert, r);
     const data = JSON.parse(r.stdout);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'no-upstream-artifacts');
@@ -438,7 +437,6 @@ describe('verify context-drift CLI', () => {
   });
 
   test('a phases tree that exists but cannot be examined is unreadable, not a skip (#5170)', () => {
-    const { spawnSync } = require('node:child_process');
     const { TEST_ENV_BASE } = require('./helpers.cjs');
     const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
     const phasesDir = path.join(tmp, '.planning', 'phases');
@@ -451,12 +449,12 @@ describe('verify context-drift CLI', () => {
       `fs.statSync = function (p, ...rest) { if (String(p) === ${JSON.stringify(phasesDir)}) { throw Object.assign(new Error('EACCES: injected'), { code: 'EACCES' }); } return real.call(fs, p, ...rest); };`,
       routeContextDriftStatement(tmp, '01'),
     ].join('\n');
-    const r = spawnSync(process.execPath, ['-e', script], {
+    const r = runNode(['-e', script], {
       cwd: tmp,
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
       env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: '' },
     });
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
     const data = JSON.parse(r.stdout);
     assert.strictEqual(data.skipped, true);
     assert.strictEqual(data.reason, 'phases-dir-unreadable', 'the unreadable arm, not the documented skip (no-phases-directory)');
@@ -471,7 +469,6 @@ describe('verify context-drift CLI', () => {
 // NOTHING to stderr; and config is workstream-aware through the resolver `config-get` shares: with
 // GSD_WORKSTREAM the workstream's config.json is read first, then the project root's.
 describe('verify context-drift: workflow.context_drift_action through the gate-config reader (#5139)', () => {
-  const { spawnSync } = require('node:child_process');
   const { TEST_ENV_BASE } = require('./helpers.cjs');
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -496,13 +493,12 @@ describe('verify context-drift: workflow.context_drift_action through the gate-c
   }
 
   function drift(workstream) {
-    const r = spawnSync(process.execPath, [TOOLS, 'verify', 'context-drift', '03-feature'], {
+    const r = runNode([TOOLS, 'verify', 'context-drift', '03-feature'], {
       cwd: tmp,
-      encoding: 'utf-8',
-      timeout: PROBE_TIMEOUT_MS,
+      timeoutMs: PROBE_TIMEOUT_MS,
       env: { ...process.env, ...TEST_ENV_BASE, HOME: tmp, USERPROFILE: tmp, GSD_HOME: tmp, GSD_WORKSTREAM: workstream ?? '' },
     });
-    assert.equal(r.status, 0, `verify context-drift failed: ${r.stderr}`);
+    assertSeamExit(assert, r, 0, 'verify context-drift failed');
     return { data: JSON.parse(r.stdout), stderr: r.stderr };
   }
 

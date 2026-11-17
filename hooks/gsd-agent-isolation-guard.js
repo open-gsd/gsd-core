@@ -20,8 +20,11 @@
 // inert):
 //   1. this is a GSD project (`.planning/config.json` exists under cwd),
 //   2. the project's resolved dispatch isolation is `harness-worktree`,
-//   3. the dispatch target is an executor (`subagent_type === "gsd-executor"`;
-//      no other executor-shaped subagent type exists in agents/ today).
+//   3. the dispatch target is an executor dispatch (`isExecutorDispatch`,
+//      hooks/lib/isolation-sentinel.js: `subagent_type === "gsd-executor"`, a type a
+//      recorded dispatch decision names as its routed executor, or a dispatch whose
+//      prompt carries the canonical `[gsd:dispatch ...]` marker and whose type is
+//      not a GSD role, #6213; a GSD role returns before the record scan).
 //
 // Fail-closed exception (#3050 lesson: a guard that cannot verify must not
 // answer "safe"): if the project IS a GSD project but the hook cannot read
@@ -49,7 +52,7 @@
 // gated additionally by `workflow.use_worktrees` — read directly, in-process,
 // no subprocess spawn.
 //
-// Triggers on: Agent/Task tool calls with subagent_type === "gsd-executor"
+// Triggers on: Agent/Task tool calls that isExecutorDispatch classifies as an executor dispatch
 //   (both names accepted — #3045 MAJOR 1: only Agent was previously matched,
 //   silently inert on any host/version whose subagent tool is named Task).
 // Action: BLOCK (exit 2) when isolation should be enforced and is not
@@ -71,7 +74,7 @@ if (require.main === module && !process.env.NODE_V8_COVERAGE) {
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readSentinel, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
+const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
 const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 const { readConfigFileBounded } = require('./lib/config-read.js');
@@ -100,11 +103,8 @@ const ON_CRASH = HOOK_ON_CRASH.ALLOW;
 // ./lib, so requiring it here is always safe.
 const { ensureRuntimeBuild, RuntimeBuildError } = require('../gsd-core/bin/ensure-runtime-build.cjs');
 
-// No other executor-shaped subagent_type exists in agents/ today
-// (verified: only agents/gsd-executor.md). A Set, not a bare string compare,
-// so a future sibling executor role can be added here without touching the
-// matching logic below.
-const EXECUTOR_SUBAGENT_TYPES = new Set(['gsd-executor']);
+// EXECUTOR_SUBAGENT_TYPES (the executor-name Set) is imported above from
+// hooks/lib/isolation-sentinel.js, the single definition shared with the Cursor hook.
 
 /**
  * Parse a registry `harnessIsolationFlag` of the shape `key="value"` (the
@@ -410,7 +410,7 @@ function resolveRegistryIsolation(cwd, configPath) {
  * the conservative registry+config fallback below) rather than trusted —
  * "a mismatch is 'no applicable sentinel', not an allow" (#3045 review).
  */
-function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
+function resolveIsolationState(cwd, { clock = Date, dispatchIds = null, sentinel: preRead = null, subagentType = null } = {}) {
   const configPath = path.join(cwd, '.planning', 'config.json');
   let projectExists;
   try {
@@ -423,7 +423,9 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
     return { gsdProject: false, isolation: null, harnessFlag: null, error: null, sentinelDiscarded: null };
   }
 
-  const sentinel = readSentinel(cwd, { clock, dispatchIds });
+  // #6213: a caller that already read the record (the hinted-executor pre-check) passes that read
+  // through, so the match decision and the enforcement below use the same record.
+  const sentinel = preRead || readSentinel(cwd, { clock, dispatchIds, subagentType });
   // Hoisted so the "sentinel was present/fresh but did not apply" case below
   // (#4594 row 15 — Postel's-Law finding) can distinguish itself from
   // "absent"/"stale" without re-deriving applicability.
@@ -505,7 +507,8 @@ function resolveIsolationState(cwd, { clock = Date, dispatchIds = null } = {}) {
  * (`{now(): number}`) directly per the repo's clock-seam convention, instead
  * of racing real `Date.now()` across a spawned subprocess boundary.
  *
- * Returns `{ action: 'allow' } | { action: 'block', reason: string }`.
+ * Returns `{ action: 'allow' } | { action: 'block', reason: string, agentName: string }`; `agentName` is the
+ * `displayAgentName` of the dispatched type (internal only: `main()` prints a fixed set of fields).
  */
 function evaluateDispatch(data, { clock = Date } = {}) {
   if (!data || typeof data !== 'object') return { action: 'allow' };
@@ -517,9 +520,7 @@ function evaluateDispatch(data, { clock = Date } = {}) {
 
   const toolInput = (data.tool_input && typeof data.tool_input === 'object') ? data.tool_input : {};
   const subagentType = toolInput.subagent_type;
-  if (typeof subagentType !== 'string' || !EXECUTOR_SUBAGENT_TYPES.has(subagentType)) {
-    return { action: 'allow' };
-  }
+  if (typeof subagentType !== 'string') return { action: 'allow' };
 
   const cwd = data.cwd || process.cwd();
   // #3045 SECURITY F2 / #4594: best-effort plan/phase extraction from this
@@ -532,7 +533,25 @@ function evaluateDispatch(data, { clock = Date } = {}) {
   // `description` is kept only as a fallback for a marker/prose match that
   // exists solely in it.
   const dispatchIds = extractDispatchIdentifiers(toolInput.prompt, toolInput.description);
-  const state = resolveIsolationState(cwd, { clock, dispatchIds });
+  let preReadSentinel = null;
+  if (!EXECUTOR_SUBAGENT_TYPES.has(subagentType)) {
+    // #6213: a plan's `agent_hint` routes it to a hinted executor. isExecutorDispatch classifies it
+    // (a record naming the type, or the canonical dispatch marker); once classified it follows
+    // gsd-executor's enforcement path below. Every other non-executor stays allowed.
+    // A GSD role (gsd-verifier, gsd-planner, ...) is never an executor dispatch: skip the record scan.
+    if (isGsdRoleName(subagentType)) return { action: 'allow' };
+    try {
+      fs.accessSync(path.join(cwd, '.planning', 'config.json'), fs.constants.F_OK);
+    } catch {
+      return { action: 'allow' };
+    }
+    preReadSentinel = readSentinel(cwd, { clock, dispatchIds });
+    if (!isExecutorDispatch(subagentType, preReadSentinel, dispatchIds, { clock })) {
+      return { action: 'allow' };
+    }
+  }
+
+  const state = resolveIsolationState(cwd, { clock, dispatchIds, sentinel: preReadSentinel, subagentType });
 
   if (!state.gsdProject) return { action: 'allow' };
 
@@ -548,17 +567,17 @@ function evaluateDispatch(data, { clock = Date } = {}) {
     const reason = isBuildFailure
       ? `Agent isolation guard: cannot resolve this project's dispatch-isolation ` +
         `configuration because the GSD runtime library failed to self-build. ` +
-        `${state.error.message} Refusing to dispatch subagent_type="${subagentType}" until ` +
+        `${state.error.message} Refusing to dispatch subagent_type="${displayAgentName(subagentType)}" until ` +
         `the runtime library is built — a guard that cannot verify must not answer "safe" ` +
         `(#3050).`
       : `Agent isolation guard: could not read or resolve this project's dispatch-isolation ` +
         `configuration ('.planning/config.json' under '${cwd}'). Refusing to dispatch ` +
-        `subagent_type="${subagentType}" without being able to verify whether isolation is ` +
+        `subagent_type="${displayAgentName(subagentType)}" without being able to verify whether isolation is ` +
         `required — a guard that cannot verify must not answer "safe" (#3050). Retry once the ` +
         `project configuration is readable.`;
     const reasonCode = isBuildFailure ? REASON_CODE.RUNTIME_BUILD_FAILED : REASON_CODE.CONFIG_UNREADABLE;
     const fullReason = state.sentinelDiscarded ? reason + describeSentinelDiscard(state.sentinelDiscarded) : reason;
-    return { action: 'block', reason: fullReason, reasonCode, sentinelDiscarded: state.sentinelDiscarded };
+    return { action: 'block', reason: fullReason, reasonCode, sentinelDiscarded: state.sentinelDiscarded, agentName: displayAgentName(subagentType) };
   }
 
   if (state.isolation !== 'harness-worktree') return { action: 'allow' };
@@ -570,12 +589,12 @@ function evaluateDispatch(data, { clock = Date } = {}) {
 
   let reason =
     `Agent isolation guard: this project's dispatch isolation resolves to "harness-worktree", ` +
-    `but the Agent() dispatch for subagent_type="${subagentType}" is missing ` +
+    `but the Agent() dispatch for subagent_type="${displayAgentName(subagentType)}" is missing ` +
     `${parsed.param}="${parsed.value}". Add ${parsed.param}="${parsed.value}" to the Agent() ` +
     `call so the executor runs in an isolated worktree instead of the primary checkout ` +
     `(gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`;
   if (state.sentinelDiscarded) reason += describeSentinelDiscard(state.sentinelDiscarded);
-  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded };
+  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded, agentName: displayAgentName(subagentType) };
 }
 
 /* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
