@@ -95,7 +95,8 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     // rename below lands, so a temp file beside it would show as untracked after a
     // hard kill (no `finally` runs on SIGKILL or power loss). Stage the content in
     // a directory whose own `.gitignore` ignores everything, itself included, so
-    // git sees nothing at any point of the window. `mkdir` without `recursive`
+    // git sees nothing at any point of the window except the one syscall pair
+    // between creating that inner file and writing `*` into it. `mkdir` without `recursive`
     // and `wx` creates fail closed on a planted entry, and `stageDir` is assigned
     // only after this process created the directory, so cleanup never touches an
     // entry it did not create.
