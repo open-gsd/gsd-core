@@ -3397,8 +3397,9 @@ function scanDebuggerSpawn(command) {
 // can add a denial and cannot lose one. It runs once without bash's subscript
 // joins and, only when that pass saw a place a join could start, once more with
 // them. Its verdict is a block or null:
-//   - a stack overflow is `command-too-complex`, as for the plain scans: the
-//     line is nested deeper than the guard can read;
+//   - a stack overflow is `command-too-complex`, as for the plain scans:
+//     findSecretRead returns that block for its own, and one in the spawn scan
+//     is thrown, as from scanDebuggerSpawn, for main to deny;
 //   - a spent budget is null, so next's verdict stands, which next reached on
 //     the same budget: the budget bounds the work on a command, and the plain
 //     scans spent their share first;
@@ -3421,7 +3422,7 @@ function scanFurtherReading(command) {
     }
     return null;
   } catch (e) {
-    if (e instanceof RangeError) return { code: 'command-too-complex', text: '' };
+    if (e instanceof RangeError) throw e;
     if (e !== SCAN_BUDGET_SPENT && readingBug === null) readingBug = e;
     return null;
   } finally {
