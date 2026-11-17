@@ -726,6 +726,71 @@ describe('auto-update', () => {
     });
   });
 
+  describe('hook — the onboarding commit as the workflow issues it (#5935)', {
+    skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false,
+  }, () => {
+    // The onboarding workflow's commit step is runtime-loaded text: the command the orchestrator runs is
+    // read from it, so the test follows the workflow instead of restating the command (#5935).
+    const onboard = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/onboard.md'), 'utf8');
+    /** The commit command the onboarding workflow tells the orchestrator to run, with its root substituted. */
+    const onboardingCommit = (root) => {
+      const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+      const lines = splitLines(onboard);
+      const at = lines.findIndex((line) => line.startsWith('If `commit_docs` is true, commit only the summary path'));
+      assert.notStrictEqual(at, -1, 'the onboarding commit step must exist');
+      const fence = lines.findIndex((line, i) => i > at && line === '```bash');
+      assert.ok(fence !== -1 && fence - at <= 3, 'the commit step must be followed by a bash fence');
+      const command = lines[fence + 1];
+      assert.ok(command && command !== '```', 'the bash fence must hold the commit command');
+      return command.split('$ONBOARDING_ROOT').join(root);
+    };
+
+    test('the onboarding commit uses no global flag between the launcher and the verb', () => {
+      const command = onboardingCommit('/tmp/onboarding-root');
+      assert.match(command, /gsd_run query commit /, 'the commit must be the unflagged gsd_run query commit form');
+      assert.doesNotMatch(command, /gsd_run\s+--/, 'a global flag makes the hook skip the call (#5332)');
+    });
+
+    test('dispatches the gated rebuild for the commit run from the onboarding root', async (t) => {
+      const tmpDir = createTempGitRepo({ config: { graphify: { enabled: true, auto_update: true } } });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir);
+      const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: onboardingCommit(tmpDir) } }, { pathPrepend: mockBin });
+      assert.strictEqual(result.status, 0);
+      const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
+      assert.ok(fs.existsSync(statusPath), 'the onboarding commit must dispatch a rebuild');
+      const status = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.strictEqual(status?.status, 'ok', 'the mock rebuild must finish successfully');
+    });
+
+    for (const gate of ['auto_update=false', 'enabled=false', 'non-default branch', 'live lock', 'CI set', 'graphify binary absent']) {
+      test(`the onboarding commit respects ${gate}`, async (t) => {
+        const tmpDir = createTempGitRepo({
+          config: { graphify: { enabled: gate !== 'enabled=false', auto_update: gate !== 'auto_update=false' } },
+        });
+        const lockPath = path.join(tmpDir, '.planning/graphs/.rebuild.lock');
+        t.after(async () => {
+          if (gate === 'live lock') fs.unlinkSync(lockPath);
+          await cleanupHookRepo(tmpDir);
+        });
+        if (gate === 'non-default branch') gitOrThrow(['checkout', '-b', 'worktree-agent-probe'], { cwd: tmpDir });
+        if (gate === 'live lock') {
+          fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+          fs.writeFileSync(lockPath, String(process.pid));
+        }
+        const mockBin = makeMockGraphifyBin(tmpDir);
+        // The binary-absent row leaves the mock graphify off PATH; the CI row sets CI; the others keep it on.
+        const options = gate === 'graphify binary absent'
+          ? {}
+          : { pathPrepend: mockBin, ...(gate === 'CI set' ? { env: { CI: 'true' } } : {}) };
+        const result = runHook(tmpDir, { tool_name: 'Bash', tool_input: { command: onboardingCommit(tmpDir) } }, options);
+        assert.strictEqual(result.status, 0);
+        assert.ok(!fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+          `${gate} must suppress the rebuild for the onboarding commit`);
+      });
+    }
+  });
+
   describe('hook — runtime query commit recognition (#5332)', {
     skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false,
   }, () => {

@@ -18,7 +18,8 @@
 #      `query commit` via gsd_run, gsd-tools, or gsd-tools.cjs, including a
 #      quoted Node entrypoint after the launcher preamble — see #3653/#5332).
 #      Global-flag forms are intentionally excluded because this hook cannot
-#      resolve their target checkout; the onboarding `--cwd` call is #5935.
+#      resolve their target checkout; the onboarding workflow therefore commits
+#      through the unflagged form from the onboarding root instead (#5935).
 #   3. Inside a git repo
 #   4. Current branch == default branch (git.base_branch override, else main/master/trunk)
 #   5. .planning/config.json sets graphify.enabled=true AND graphify.auto_update=true
