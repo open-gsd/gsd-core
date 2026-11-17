@@ -6701,13 +6701,13 @@ function resolveSymlinkWriteTarget(filePath) {
  * AGENTS.md above all) sit outside the install-root symlink guard, so the policy is
  * applied at their writers. lstat classifies the path once; a dangling link counts.
  */
-function isRefusedCopilotInstructionsSymlink(filePath) {
+function isRefusedSymlinkedDest(filePath) {
   let stat;
   try { stat = fs.lstatSync(filePath); } catch (_) { return false; }
   return stat.isSymbolicLink() && !isSymlinkedDestOptIn();
 }
 
-function copilotInstructionsSymlinkRefusal(filePath) {
+function symlinkedDestRefusal(filePath) {
   return `${filePath} is a symlink; refusing to change it. ` +
     'Re-run with GSD_ALLOW_SYMLINKED_DEST=1 to edit the file it points at (the link is kept).';
 }
@@ -7029,8 +7029,8 @@ function hasEnabledCodexHooksFeature(configContent) {
 function mergeCopilotInstructions(filePath, gsdContent) {
   // #5946: a symlinked destination is refused without the opt-in; with it the write
   // lands on the link's target and the link itself is kept.
-  if (isRefusedCopilotInstructionsSymlink(filePath)) {
-    throw new Error(copilotInstructionsSymlinkRefusal(filePath));
+  if (isRefusedSymlinkedDest(filePath)) {
+    throw new Error(symlinkedDestRefusal(filePath));
   }
   filePath = resolveSymlinkWriteTarget(filePath);
   const gsdBlock = GSD_COPILOT_INSTRUCTIONS_MARKER + '\n' +
@@ -8739,7 +8739,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
       path.join(targetDir, 'copilot-instructions.md'),
     ].filter((candidate) => {
-      if (!isRefusedCopilotInstructionsSymlink(candidate) || !fs.existsSync(candidate)) return false;
+      if (!isRefusedSymlinkedDest(candidate) || !fs.existsSync(candidate)) return false;
       let content;
       // A link to something unreadable (a directory) is still a link we will not touch.
       try { content = fs.readFileSync(candidate, 'utf8'); } catch (_) { return true; }
@@ -8747,7 +8747,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     });
     if (refused.length > 0) {
       for (const candidate of refused) {
-        console.error(`  ${yellow}⚠${reset} ${copilotInstructionsSymlinkRefusal(candidate)}`);
+        console.error(`  ${yellow}⚠${reset} ${symlinkedDestRefusal(candidate)}`);
       }
       console.error('  Nothing was uninstalled.\n');
       process.exitCode = 1;
@@ -8993,14 +8993,24 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
         if (fs.existsSync(agentsPath)) {
           const content = fs.readFileSync(agentsPath, 'utf8');
           const cleaned = stripGsdFromAgentsMd(content);
-          if (cleaned === null) {
-            fs.unlinkSync(agentsPath);
-            removedCount++;
-            console.log(`  ${green}✓${reset} Removed ~/.agents/AGENTS.md (was GSD-only)`);
-          } else if (cleaned !== content) {
-            fs.writeFileSync(agentsPath, cleaned);
-            removedCount++;
-            console.log(`  ${green}✓${reset} Cleaned GSD section from ~/.agents/AGENTS.md`);
+          // #5947: a symlinked AGENTS.md follows the symlinked-destination policy: without the
+          // opt-in it is left alone (and said so); with it the link is kept and its target edited.
+          if (cleaned !== content && isRefusedSymlinkedDest(agentsPath)) {
+            console.log(`  ${yellow}⚠${reset} Skipped ~/.agents/AGENTS.md: ${symlinkedDestRefusal(agentsPath)}`);
+          } else {
+            const writePath = resolveSymlinkWriteTarget(agentsPath);
+            const throughLink = writePath !== agentsPath;
+            if (cleaned === null) {
+              // A link's target is emptied, never deleted: deleting it would leave a dangling link.
+              if (throughLink) fs.writeFileSync(writePath, '');
+              else fs.unlinkSync(agentsPath);
+              removedCount++;
+              console.log(`  ${green}✓${reset} ${throughLink ? 'Emptied ~/.agents/AGENTS.md target, symlink kept' : 'Removed ~/.agents/AGENTS.md'} (was GSD-only)`);
+            } else if (cleaned !== content) {
+              fs.writeFileSync(writePath, cleaned);
+              removedCount++;
+              console.log(`  ${green}✓${reset} Cleaned GSD section from ~/.agents/AGENTS.md`);
+            }
           }
         }
       } catch { /* best-effort */ }
@@ -11458,9 +11468,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     const linked = [
       path.join(targetDir, 'copilot-instructions.md'),
       ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
-    ].filter(isRefusedCopilotInstructionsSymlink);
+    ].filter(isRefusedSymlinkedDest);
     if (linked.length > 0) {
-      throw new Error(linked.map(copilotInstructionsSymlinkRefusal).join('\n'));
+      throw new Error(linked.map(symlinkedDestRefusal).join('\n'));
     }
   }
 

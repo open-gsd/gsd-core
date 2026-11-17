@@ -45,6 +45,7 @@ module.exports = {
   "tests/claude-orchestration-4747.test.cjs",
   "tests/cli-surface-host-router-locks.test.cjs",
   "tests/cline-install.test.cjs",
+  "tests/cline-uninstall-symlinked-agents-md.test.cjs",
   "tests/close-phase-todos-padded-resolves.test.cjs",
   "tests/code-review-cicd.test.cjs",
   "tests/code-review-fix-pipeline-regression.test.cjs",
