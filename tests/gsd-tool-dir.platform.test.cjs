@@ -11,6 +11,7 @@
  * - "#5757: throws when .gsd is a symlink" - creates a real directory symlink; creation needs privilege on Windows (symlink-keyword)
  * - "#5757: throws when .gsd/.gitignore is a symlink" - creates a real file symlink (symlink-keyword)
  * - "#5757 case 13: parity" - both writers refuse a symlinked .gsd and run real git (symlink-keyword, raw-child-process)
+ * - "#5857: a FIFO at .gsd/.gitignore" and "#5857: a FIFO at the fork-probe cache path" - create a real FIFO with mkfifo, which does not exist on Windows (skipped there) (raw-child-process)
  * - "observeHarnessForkFromHead default cache writer" - the fork-probe cache rows (1-6): real symlinks (symlink-keyword) and a real git repo with a linked worktree (raw-child-process); kept in this one platform file so the conformance tier grows by one file, not two
  */
 
@@ -23,6 +24,7 @@ const { execFileSync } = require('node:child_process');
 
 const { cleanup, runGsdTools } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runHook, runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { ensureToolOwnedGsdDir } = require(
   path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'gsd-tool-dir.cjs'),
@@ -46,6 +48,13 @@ function git(cwd, args) {
     '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false',
     ...args,
   ], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_TIMEOUT_MS }).trim();
+}
+
+/** Create a FIFO through the process seam (a bounded spawn), failing the test on any error. */
+function makeFifo(file) {
+  const made = runHook(file, [], { interpreter: 'mkfifo' });
+  assert.strictEqual(made.outcome, OUTCOME.EXITED, `mkfifo did not run: ${made.outcome}`);
+  assert.strictEqual(made.exitCode, 0, made.stderr);
 }
 
 function freshRepo() {
@@ -207,7 +216,7 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
     t.after(() => cleanup(root));
     fs.mkdirSync(path.join(root, '.gsd'));
     const fifo = path.join(root, '.gsd', '.gitignore');
-    execFileSync('mkfifo', [fifo], { stdio: 'ignore', timeout: GIT_TIMEOUT_MS });
+    makeFifo(fifo);
     const result = sentinel(root);
     assert.strictEqual(result.recorded, true);
     assert.ok(fs.existsSync(path.join(root, '.gsd', 'dispatch-isolation-sentinel.json')));
@@ -237,6 +246,27 @@ describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
     assert.ok(fs.existsSync(path.join(root, '.gsd', 'harness-fork-probe.json')));
     assert.ok(fs.existsSync(path.join(root, '.gsd', '.gitignore')));
     assert.deepStrictEqual(gsdStatusLines(root), []);
+  });
+
+  test('#5857: a FIFO at the fork-probe cache path does not hang the probe and counts as no cache', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on win32');
+      return;
+    }
+    const { root, head } = makeProject();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    makeFifo(path.join(root, '.gsd', 'harness-fork-probe.json'));
+    // A child process: with the bug present the cache read blocks forever, and an in-process call would hang the runner.
+    const script = [
+      `const { observeHarnessForkFromHead } = require(${JSON.stringify(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-base-ref.cjs'))});`,
+      `process.stdout.write(JSON.stringify(observeHarnessForkFromHead({ cwd: ${JSON.stringify(root)}, headSha: ${JSON.stringify(head)} })));`,
+    ].join('\n');
+    const ran = runNode(['-e', script], { cwd: root });
+    assert.strictEqual(ran.outcome, OUTCOME.EXITED, `the probe did not return: ${ran.outcome}`);
+    const verdict = JSON.parse(ran.stdout);
+    assert.strictEqual(verdict.confirmed, true);
+    assert.strictEqual(verdict.source, 'probe');
   });
 
   test('#5757: a symlinked .gsd is never written through; the verdict still returns (case 2)', (t) => {
