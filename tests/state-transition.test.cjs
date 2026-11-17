@@ -24,6 +24,8 @@ const {
   sliceCurrentPositionSection,
   stateReplaceProgressPercent,
   isStatePastPhase,
+  readPlanPosition,
+  readRecordedPlanTotal,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
 const { stateExtractField, computeProgressPercent, toFiniteNumber } = require('../gsd-core/bin/lib/state-document.cjs');
 const { SCOPE } = require('../gsd-core/bin/lib/planning-scope.cjs');
@@ -5393,5 +5395,126 @@ describe('#5676: isStatePastPhase under milestone-prefixed', () => {
       assert.equal(isStatePastPhase(fm('4'), '3', undefined, c), true);
     }
     assert.equal(isStatePastPhase(fm('3-02'), '3-01'), false);
+  });
+});
+
+describe('#5786: readPlanPosition reads the recorded plan total', () => {
+  const total = (...lines) => {
+    const position = readPlanPosition(lines.join('\n'));
+    return position === null ? null : position.total;
+  };
+
+  test('#5786 compound `Plan: N of M` yields M', () => {
+    assert.equal(total('Plan: 1 of 5'), 5);
+    assert.deepEqual(readPlanPosition('Plan: 2 of 7'), { current: 2, total: 7 });
+  });
+
+  test('#5786 hybrid `Current Plan: N of M` yields M', () => {
+    assert.equal(total('Current Plan: 1 of 5'), 5);
+  });
+
+  test('#5786 legacy pair takes the total from `Total Plans in Phase`', () => {
+    assert.equal(total('Current Plan: 1', 'Total Plans in Phase: 5'), 5);
+    assert.equal(total('Current Plan: 1 of 9', 'Total Plans in Phase: 5'), 5);
+  });
+
+  test('#5786 explicit Total beats an `of M` in the Plan field', () => {
+    assert.equal(total('Current Plan: 1', 'Total Plans in Phase: 2', 'Plan: 1 of 5'), 2);
+  });
+
+  test('#5786 unreadable totals and absent fields yield no position', () => {
+    assert.equal(readPlanPosition('Plan: 1 of ?'), null);
+    assert.equal(readPlanPosition('Total Plans in Phase: TBD'), null);
+    assert.equal(readPlanPosition('Current Plan: 1'), null);
+    assert.equal(readPlanPosition('nothing here'), null);
+  });
+
+  test('#5786 trailing prose after the total is tolerated', () => {
+    assert.equal(total('Plan: 1 of 5 in current phase'), 5);
+  });
+
+  test('#5786 property: `Plan: N of M` yields M; an explicit Total T beside Current Plan N wins', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      (n, m, t) => {
+        assert.equal(total(`Plan: ${n} of ${m}`), m);
+        assert.equal(total(`Current Plan: ${n}`, `Total Plans in Phase: ${t}`, `Plan: ${n} of ${m}`), t);
+      },
+    ));
+  });
+});
+
+describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase', () => {
+  const recorded = (...lines) => readRecordedPlanTotal(lines.join('\n'));
+
+  test('#5786 explicit Total (2) beats `Plan: 1 of 5` with no Current Plan line', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 2'), 2);
+  });
+
+  test('#5786 explicit Total (5) beats `Plan: 1 of 2` with no Current Plan line', () => {
+    assert.equal(recorded('Plan: 1 of 2', 'Total Plans in Phase: 5'), 5);
+  });
+
+  test('#5786 explicit Total beats `Current Plan: N of M`', () => {
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 2'), 2);
+  });
+
+  test('#5786 an unreadable Total falls back to the `of M` total', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: TBD'), 5);
+    assert.equal(recorded('Plan: 1 of 5'), 5);
+  });
+
+  test('#5786 a `?` or empty Total falls back to the `of M` total', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: ?'), 5);
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase:'), 5);
+  });
+
+  test('#5786 a Total of 0 is readable and wins over the `of M` total', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 0'), 0);
+  });
+
+  test('#5786 Total at the safe-integer bound: limit-1 and limit are read, limit+1 and beyond fall back to `of M`', () => {
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 9007199254740990'), 9007199254740990);
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 9007199254740991'), 9007199254740991);
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 9007199254740992'), 5);
+    assert.equal(recorded('Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'), 5);
+  });
+
+  test('#5786 Total at the safe-integer bound beside `Current Plan: N of M`: limit-1 and limit are read, limit+1 and beyond fall back to M', () => {
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740990'), 9007199254740990);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740991'), 9007199254740991);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740992'), 5);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: 9007199254740993'), 5);
+    assert.equal(recorded('Current Plan: 1 of 5', 'Total Plans in Phase: ?'), 5);
+  });
+
+  test('#5786 `Current Plan: N of M` wins over `Plan: N of M` when the Total is unreadable', () => {
+    assert.equal(recorded('Current Plan: 1 of 5', 'Plan: 1 of 7', 'Total Plans in Phase: TBD'), 5);
+  });
+
+  test('#5786 an unconvertible `Current Plan` M falls through to `Plan`\'s M per field', () => {
+    assert.equal(recorded('Current Plan: 1 of 9007199254740993', 'Plan: 2 of 7'), 7);
+    assert.equal(recorded('Current Plan: 1 of 9007199254740993'), null);
+  });
+
+  test('#5786 a lone Total and no fields keep their reads', () => {
+    assert.equal(recorded('Total Plans in Phase: 5'), 5);
+    assert.equal(recorded('nothing here'), null);
+  });
+
+  test('#5786 property: an explicit Total T wins over `Plan: N of M`, with or without a Current Plan line', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      fc.integer({ min: 1, max: 999 }),
+      fc.boolean(),
+      (n, m, t, withCurrentPlan) => {
+        const lines = [`Plan: ${n} of ${m}`, `Total Plans in Phase: ${t}`];
+        if (withCurrentPlan) lines.unshift(`Current Plan: ${n}`);
+        assert.equal(recorded(...lines), t);
+      },
+    ));
   });
 });

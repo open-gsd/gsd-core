@@ -361,7 +361,7 @@ function resolveLoopHooks(input: ResolveLoopHooksInput): ResolveLoopHooksResult 
  * Pure renderer: given a resolved result, returns a deterministic markdown string.
  *
  * Empty active set → returns a "no active hooks" placeholder line.
- * Steps: heading with ordinal + skill ref + capId, produces/consumes lines.
+ * Steps: heading with ordinal + invocable skill id + capId, produces/consumes lines.
  * Contributions: labeled block.
  * Gates: check name, blocking flag, onError.
  */
@@ -379,7 +379,7 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
     if (hook.kind === 'step') {
       stepOrdinal += 1;
       const refStr = hook.ref?.skill
-        ? `skill:${hook.ref.skill}`
+        ? `skill:gsd-${hook.ref.skill}`
         : hook.ref?.agent
           ? `agent:${hook.ref.agent}`
           : JSON.stringify(hook.ref ?? {});

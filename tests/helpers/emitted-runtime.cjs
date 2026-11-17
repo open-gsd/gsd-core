@@ -231,8 +231,18 @@ function reconcileFamilies({
 
 /** Bounded git invocation. CLAUDE.md → KNOWN DEFECTS: every git subprocess needs a
  *  timeout (5-30s); an unbounded execFileSync is an indefinite hang, and it is how
- *  macOS CI silently stops reporting. */
-const GIT_TIMEOUT_MS = 30_000;
+ *  macOS CI silently stops reporting.
+ *
+ *  Bounds `git()` and the `ackTrailerGit` / `readAckTrailers` default (11 argv
+ *  shapes: diff, rev-parse, rev-parse --verify, merge-base, ls-tree, show,
+ *  log, interpret-trailers) against the REAL repository root, not a fixture. It
+ *  is its own constant rather than a tests/helpers/timeouts.cjs class because
+ *  it bounds whole-repository history reads whose cost scales with the repo.
+ *  Evidence: worst observed 184.05ms on darwin (p50 53.59ms, p99 97.93ms), margin 162.99x;
+ *  harness, 11 call sites x 50 runs (550 spawns) per platform on darwin (node v26.13.0)
+ *  and linux (node:24 in docker), 2026-11-08; win32 not measured.
+ *  Reproduction caveat: the harness base ref was HEAD~100 (origin/next absent). */
+const EMITTED_RUNTIME_GIT_TIMEOUT_MS = 30_000;
 
 /**
  * Prepend `-c safe.directory=<dir>` to a git argv.
@@ -263,7 +273,7 @@ function git(args, { cwd = REPO_ROOT } = {}) {
   return execFileSync('git', [...safeDirArgs(cwd), ...args], {
     cwd,
     encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
+    timeout: EMITTED_RUNTIME_GIT_TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -590,7 +600,19 @@ const BUILD_LIB_TIMEOUT_MS = 180_000;
 // the remote runner so the in-job build returns to being the rare fallback
 // ADR-2719 §5 describes; that is a gsd-test-runner change, not one this repo can
 // make.
-const BUILD_TIMEOUT_MS = 360_000;
+//
+// Bounds the one `scripts/gen-emitted-baseline.cjs` spawn in `buildBaselineAtRef`
+// (1 call site); the worktree add/remove and build:lib steps have their own
+// constants. It is its own constant rather than a tests/helpers/timeouts.cjs class
+// because its bound is derived from `CHUNK_TIMEOUT_CEILING_MS` (see above).
+// Evidence: worst observed 12749.57ms on darwin (p50 12282.91ms, p99 12749.57ms), margin 28.23x;
+// harness, 1 call site x 5 runs (5 spawns) per platform on darwin (node v26.13.0)
+// and linux (node:24 in docker), 2026-11-08; win32 not measured.
+// Reproduction caveat: the harness ran the generator with --dir at the repo root
+// (deps and lib built), not in a throwaway git worktree, so it excludes
+// worktree-checkout and cold-install cost; the CI history above is the loaded-machine
+// evidence.
+const EMITTED_RUNTIME_BUILD_TIMEOUT_MS = 360_000;
 // Mirrors `scripts/run-tests.cjs:973`'s default. Duplicated deliberately and
 // narrowly: the bounds here must be checkable against it, and the alternative is
 // reading that script's source, which `local/no-source-grep` bans. The lock test
@@ -624,7 +646,7 @@ function buildBaselineAtRef(ref, { cwd = REPO_ROOT } = {}) {
       ].filter(Boolean).join('\n  ');
       err.message =
         `${step} failed after ${elapsed}s (bounds: worktree ${WORKTREE_TIMEOUT_MS}ms, ` +
-        `build:lib ${BUILD_LIB_TIMEOUT_MS}ms, generator ${BUILD_TIMEOUT_MS}ms). ` +
+        `build:lib ${BUILD_LIB_TIMEOUT_MS}ms, generator ${EMITTED_RUNTIME_BUILD_TIMEOUT_MS}ms). ` +
         `Step timings: ${timings.join(' ')}. ${err.message}` +
         (partial ? `\n  ${partial}` : '');
       throw err;
@@ -653,7 +675,7 @@ function buildBaselineAtRef(ref, { cwd = REPO_ROOT } = {}) {
       execFileSync(
         process.execPath,
         [path.join(cwd, 'scripts', 'gen-emitted-baseline.cjs'), '--dir', worktreeDir, '--out', outFile],
-        { cwd, encoding: 'utf8', timeout: BUILD_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
+        { cwd, encoding: 'utf8', timeout: EMITTED_RUNTIME_BUILD_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
       ));
 
     return timed('read-artifact', () => JSON.parse(fs.readFileSync(outFile, 'utf8')));
@@ -837,11 +859,11 @@ function currentSizes({ repoRoot = REPO_ROOT } = {}) {
  * Bounded git invocation for the #3942 commit-trailer ack reader, built on the
  * never-throws process seam (`runGit`) rather than `git()` above: `readAckTrailers` must
  * honor a PER-CALL `timeoutMs` (row 24's hostile-timeout row), and `git()` pins
- * `GIT_TIMEOUT_MS` at import time with no per-call override. Throws on anything but a
+ * `EMITTED_RUNTIME_GIT_TIMEOUT_MS` at import time with no per-call override. Throws on anything but a
  * clean exit — same "a git failure is a hard error, never an empty result" law as
  * `resolveChangedPaths` above.
  */
-function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS, input } = {}) {
+function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS, input } = {}) {
   const spawnOpts = { cwd, timeoutMs };
   if (input !== undefined) spawnOpts.input = input;
   const result = runGit([...safeDirArgs(cwd), ...args], spawnOpts);
@@ -1016,7 +1038,7 @@ const ACK_TRAILER_VALUE_SEP = '\x1d'; // between multiple values of the SAME tra
  * @param {{baseRef: string, headRef?: string, cwd?: string, timeoutMs?: number}} opts
  * @returns {{hash: Map<string, {reason: string}>, growth: Map<string, {reason: string}>, errors: string[]}}
  */
-function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS } = {}) {
   let mergeBaseOut;
   try {
     mergeBaseOut = ackTrailerGit(['merge-base', baseRef, headRef], { cwd, timeoutMs });
@@ -1157,7 +1179,7 @@ module.exports = {
   FAMILY_REASON,
   touchesRuntimeRegistry,
   reconcileFamilies,
-  GIT_TIMEOUT_MS,
+  EMITTED_RUNTIME_GIT_TIMEOUT_MS,
   safeDirArgs,
   git,
   resolveChangedPaths,
@@ -1178,6 +1200,6 @@ module.exports = {
   readAckTrailers,
   WORKTREE_TIMEOUT_MS,
   BUILD_LIB_TIMEOUT_MS,
-  BUILD_TIMEOUT_MS,
+  EMITTED_RUNTIME_BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 };

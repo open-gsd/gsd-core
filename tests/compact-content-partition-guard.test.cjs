@@ -46,7 +46,7 @@ const fc = require('fast-check');
 const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { runGit, OUTCOME } = require('./helpers/process-seam.cjs');
-const { REPO_ROOT, GIT_TIMEOUT_MS, safeDirArgs, resolveBase } = require('./helpers/emitted-runtime.cjs');
+const { REPO_ROOT, EMITTED_RUNTIME_GIT_TIMEOUT_MS, safeDirArgs, resolveBase } = require('./helpers/emitted-runtime.cjs');
 const { ACK_TRAILER_DELIM } = require('./helpers/emitted-diff.cjs');
 const {
   DEFAULT_WORKFLOWS_DIR,
@@ -74,7 +74,7 @@ function toRepoRelative(absPath) {
 function computeMergeBaseSha(baseRef) {
   const result = runGit([...safeDirArgs(REPO_ROOT), 'merge-base', baseRef, 'HEAD'], {
     cwd: REPO_ROOT,
-    timeoutMs: GIT_TIMEOUT_MS,
+    timeoutMs: EMITTED_RUNTIME_GIT_TIMEOUT_MS,
   });
   if (result.outcome !== OUTCOME.EXITED || result.exitCode !== 0) return null;
   const sha = result.stdout.trim();
@@ -88,7 +88,7 @@ function computeMergeBaseSha(baseRef) {
 function diffNameStatusForWorkflows(mergeBaseSha) {
   const result = runGit(
     [...safeDirArgs(REPO_ROOT), 'diff', '--name-status', `${mergeBaseSha}...HEAD`, '--', 'gsd-core/workflows'],
-    { cwd: REPO_ROOT, timeoutMs: GIT_TIMEOUT_MS },
+    { cwd: REPO_ROOT, timeoutMs: EMITTED_RUNTIME_GIT_TIMEOUT_MS },
   );
   if (result.outcome !== OUTCOME.EXITED || result.exitCode !== 0) return null;
   return result.stdout
@@ -106,7 +106,7 @@ function diffNameStatusForWorkflows(mergeBaseSha) {
 function showAtRefOrNull(ref, relPath) {
   const result = runGit([...safeDirArgs(REPO_ROOT), 'show', `${ref}:${relPath}`], {
     cwd: REPO_ROOT,
-    timeoutMs: GIT_TIMEOUT_MS,
+    timeoutMs: EMITTED_RUNTIME_GIT_TIMEOUT_MS,
   });
   return result.outcome === OUTCOME.EXITED && result.exitCode === 0 ? result.stdout : null;
 }

@@ -21,7 +21,7 @@ function createFixture(options = {}) {
     projectDoc = git,
   } = options;
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const tmpDir = fs.mkdtempSync(path.join(path.resolve(os.tmpdir()), prefix));
 
   if (planning) {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });
@@ -40,7 +40,11 @@ function createFixture(options = {}) {
     // plumbing read — each of `init`/`commit` writes dozens of files, and on
     // Windows every spawn is Defender-scanned (#3323).
     const gitOpts = { cwd: tmpDir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS };
-    gitOrThrow(['init'], gitOpts);
+    // #5913: pin the initial branch. A plain `git init` follows the host's
+    // `init.defaultBranch` (Apple's Command Line Tools git sets `main` system-wide), so a test that
+    // asks about `master` failed locally and passed on CI, where the setting is unset and git reads
+    // it as `master`. `master` is what every fixture user already sees on CI.
+    gitOrThrow(['init', '--initial-branch=master'], gitOpts);
     gitOrThrow(['config', 'user.email', 'test@test.com'], gitOpts);
     gitOrThrow(['config', 'user.name', 'Test'], gitOpts);
     gitOrThrow(['config', 'commit.gpgsign', 'false'], gitOpts);

@@ -12,7 +12,7 @@ import os from 'node:os';
 import { execGit, platformWriteSync, platformReadSync, toNativePath, posixNormalize } from './shell-command-projection.cjs';
 import { realClock } from './clock.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryRegExp } from './phase-entry-grammar.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { collectSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
@@ -46,7 +46,7 @@ import { maskIfSecret } from './secrets.cjs';
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-document.cjs is an export= CommonJS module
 import planDocument = require('./plan-document.cjs');
-import { stateExtractField } from './state-document.cjs';
+import { readRecordedPlanTotal } from './state-transition.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
 import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
@@ -675,7 +675,9 @@ function detectHasPriorPhases(cwd: string, phaseInfo: Record<string, unknown> | 
  */
 function readConfigJsonBoolean(cwd: string, keyPath: readonly string[]): boolean {
   try {
-    const raw = fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8');
+    // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to false below.
+    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    if (raw === null) return false;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
       if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return false;
@@ -710,7 +712,9 @@ function readNonEmptyFileOrNull(filePath: string): string | null {
  */
 function readConfigJsonValue(cwd: string, keyPath: readonly string[]): unknown {
   try {
-    const raw = fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8');
+    // Bounded read (#5759): a FIFO/device/oversized config throws and degrades to undefined below.
+    const raw = configLoader.readConfigFileBounded(path.join(planningDir(cwd), 'config.json'));
+    if (raw === null) return undefined;
     let cursor: unknown = JSON.parse(raw);
     for (const segment of keyPath) {
       if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined;
@@ -1250,8 +1254,7 @@ function cmdInitExecutePhase(
         const stateWarnings: string[] = [];
         if (phaseInfo?.['directory'] && fs.existsSync(path.join(cwd, phaseInfo['directory'] as string))) {
           const diskPlans = listPhasePlanFiles(path.join(cwd, phaseInfo['directory'] as string)).length;
-          const totalPlansRaw = stateExtractField(stateContent, 'Total Plans in Phase');
-          const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
+          const totalPlansInPhase = readRecordedPlanTotal(stateContent);
           if (totalPlansInPhase !== null && diskPlans !== totalPlansInPhase) {
             stateWarnings.push(
               `Plan count mismatch: STATE.md says ${totalPlansInPhase}, disk has ${diskPlans}`,
@@ -1514,8 +1517,7 @@ function cmdInitPlanPhase(
       if (stateContent !== null) {
         const stateWarnings: string[] = [];
         result['state_validation_ran'] = true;
-        const totalPlansRaw = stateExtractField(stateContent, 'Total Plans in Phase');
-        const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
+        const totalPlansInPhase = readRecordedPlanTotal(stateContent);
         if (
           totalPlansInPhase !== null &&
           phaseInfo &&
@@ -3067,9 +3069,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const bracketId = capturesBracketId ? match[1] : undefined;
     const phaseNum = capturesBracketId ? match[2] : match[1];
     if (bracketId) bracketIdsByPhaseNumber.set(phaseNum, bracketId);
-    const phaseName = (capturesBracketId ? match[3] : match[2])
-      .replace(/\(INSERTED\)/i, '')
-      .trim();
+    const phaseName = stripInsertedMarker(capturesBracketId ? match[3] : match[2]);
     let displayId: string | undefined;
     if (bracketId) {
       try {
@@ -3979,7 +3979,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     let hm: RegExpExecArray | null;
     while ((hm = headingPattern.exec(roadmapContent)) !== null) {
       roadmapPhaseNums.add(hm[hNumGroup]);
-      roadmapPhaseNames.set(hm[hNumGroup], hm[hNameGroup].replace(/\(INSERTED\)/i, '').trim());
+      roadmapPhaseNames.set(hm[hNumGroup], stripInsertedMarker(hm[hNameGroup]));
     }
     // #4906 Phase 5 (#4984): NOT migrated onto phaseHeadingPrefixSrcFor — same
     // out-of-scope reasoning as roadmapPhaseMatchesExactPrefix/detectPhaseMvpMode

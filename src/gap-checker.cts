@@ -21,7 +21,10 @@ import path from 'node:path';
 import io = require('./io.cjs');
 const { output, error, formatDiagnosticToken } = io;
 import { escapeRegex } from './pattern.cjs';
-import { readTextEvidence, readPlanSetEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
+import { readTextEvidence, readPlanSetEvidence, evidenceFound, evidenceNone, evidenceFromError } from './gate-evidence.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 import type { Evidence } from './gate-evidence.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -227,7 +230,14 @@ function parseJsonEvidence(text: string, span: string): Evidence<unknown> {
  */
 function readGate(cwd: string): { enabled: boolean; unreadable: UnreadableRead[] } {
   const cfgPath = path.join(planningDir(cwd), 'config.json');
-  const text = readTextEvidence(cfgPath);
+  // Bounded read (#5759): a FIFO/device/oversized config is `unreadable` (reported), never waited on.
+  let text: Evidence<string>;
+  try {
+    const raw = readConfigFileBounded(cfgPath);
+    text = raw === null ? evidenceNone<string>() : evidenceFound(raw);
+  } catch (err) {
+    text = evidenceFromError<string>(err, cfgPath);
+  }
   if (text.kind === 'none') return { enabled: true, unreadable: [] };
   if (text.kind === 'unreadable') return { enabled: true, unreadable: [{ reason: text.reason, span: cfgPath }] };
   const parsed = parseJsonEvidence(text.value, cfgPath);

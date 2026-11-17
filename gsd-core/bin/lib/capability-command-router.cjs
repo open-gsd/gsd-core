@@ -88,10 +88,14 @@ async function routeCapabilityCommand({ args, cwd, raw }) {
     } catch {
       return undefined; // cannot even resolve the project config dir — permissive default
     }
-    if (!fs.existsSync(cfgPath)) return undefined; // no project config — permissive default
     let cfg;
     try {
-      cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+      // #5759: bounded regular-file read — a FIFO/device/oversized config throws (fails closed
+      // below) instead of blocking; null is an absent file.
+      const { readConfigFileBounded } = require('./config-file-read.cjs');
+      const rawCfg = readConfigFileBounded(cfgPath);
+      if (rawCfg === null) return undefined; // no project config — permissive default
+      cfg = JSON.parse(rawCfg);
     } catch {
       // Config is PRESENT but unreadable/unparseable: a security policy must not silently
       // downgrade to permissive. Fail CLOSED — lockdown ([]) blocks external installs (local

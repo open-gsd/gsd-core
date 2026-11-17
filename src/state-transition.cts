@@ -1750,6 +1750,109 @@ function planNumberFrom(digits: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
+/** Everything the plan-position grammar extracts from one STATE.md document. */
+interface PlanFields {
+  legacyPlan: string | null;
+  planField: string | null;
+  legacyNMatch: RegExpExecArray | null;
+  legacyNofMMatch: RegExpExecArray | null;
+  planNofMMatch: RegExpExecArray | null;
+  planNMatch: RegExpExecArray | null;
+  current: number | null;
+  total: number | null;
+}
+
+/**
+ * The one plan-position parse: legacy pair first, then the hybrid, then
+ * compound. `advancePlanCore` and `readPlanPosition` both consume it, so the
+ * precedence is decided in exactly one place (#5786).
+ *
+ * These branches decide ONE thing: which numbers the position is read from.
+ * They deliberately do not record which FIELD supplied them, because the
+ * advance write path writes every spelling back from its own raw text (#3791
+ * review round 6, B1/M1).
+ *
+ * Every branch reads its numbers out of an ANCHORED match's capture groups.
+ * Nothing here calls parseInt on a raw field value, so a value the grammar
+ * does not fully describe cannot half-parse into a plausible number.
+ */
+function parsePlanFields(content: string): PlanFields {
+  const legacyPlan = stateExtractField(content, 'Current Plan');
+  const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
+  const planField = stateExtractField(content, 'Plan');
+
+  const legacyNMatch = legacyPlan ? PLAN_SHAPE_N.exec(legacyPlan) : null;
+  const legacyNofMMatch = legacyPlan ? PLAN_SHAPE_N_OF_M.exec(legacyPlan) : null;
+  const totalNMatch = legacyTotal ? PLAN_SHAPE_N.exec(legacyTotal) : null;
+  const planNofMMatch = planField ? PLAN_SHAPE_N_OF_M.exec(planField) : null;
+  const planNMatch = planField ? PLAN_SHAPE_N.exec(planField) : null;
+
+  let current: number | null = null;
+  let total: number | null = null;
+
+  if (legacyPlan && legacyTotal && (legacyNMatch || legacyNofMMatch) && totalNMatch) {
+    // Legacy pair wins whenever both fields are present and both are readable,
+    // even if the Current Plan value also carries an "of M" — the explicit
+    // sibling field is the stated intent, so it supplies the total.
+    current = planNumberFrom((legacyNMatch ?? legacyNofMMatch)![1]);
+    total = planNumberFrom(totalNMatch[1]);
+  } else if (legacyNofMMatch) {
+    // Hybrid: legacy field name, compound value, no readable Total Plans
+    // sibling. Written by hand (and by agents) often enough to be worth
+    // reading — #3784.
+    current = planNumberFrom(legacyNofMMatch[1]);
+    total = planNumberFrom(legacyNofMMatch[2]);
+  } else if (planNofMMatch) {
+    current = planNumberFrom(planNofMMatch[1]);
+    total = planNumberFrom(planNofMMatch[2]);
+  }
+  // No branch for a bare `Plan: N` paired with a `Total Plans in Phase: M`
+  // sibling and no `Current Plan` at all (#3791 review round 6, M2). A revision
+  // of this PR accepted it; base did not (its `else if (planField)` arm had no
+  // `of M` match and errored via NaN), and it is out of #3784's scope, which is
+  // the hybrid `Current Plan: N of M`. It cannot be given the schema-row +
+  // forcing-test coupling the other shapes have, either: `Plan` is body-only,
+  // `buildStateFrontmatter` never reads it into frontmatter, so there is no
+  // `current_*` key to hang a row on. An accepted shape with no schema row and
+  // no forcing test is exactly the drift this diff is otherwise built to
+  // prevent, so the shape is refused and named in the error instead.
+
+  return { legacyPlan, planField, legacyNMatch, legacyNofMMatch, planNofMMatch, planNMatch, current, total };
+}
+
+/**
+ * Read the recorded plan position out of a STATE.md document through the one
+ * plan-position grammar, or `null` when no readable position is recorded
+ * (`Plan: 1 of ?`, `Total Plans in Phase: TBD`, no field at all). #5786.
+ */
+export function readPlanPosition(content: string): { current: number; total: number } | null {
+  const { current, total } = parsePlanFields(content);
+  return current === null || total === null ? null : { current, total };
+}
+
+/**
+ * The plan total a STATE.md document records, for the `init --validate`
+ * plan-count check: a readable `Total Plans in Phase` first, else the
+ * of-M total read straight from the plan fields: `Current Plan`'s of-M is
+ * tried first, then `Plan`'s, and convertibility is checked per field (an
+ * unconvertible `Current Plan` M falls through to `Plan`'s M), unlike
+ * `parsePlanFields`, which commits to the first matching field. The fallback
+ * does not go through the legacy pair, so an unconvertible `Total Plans in
+ * Phase` beside `Current Plan: N of M` still yields M. `null` when neither
+ * yields a convertible M. #5786.
+ */
+export function readRecordedPlanTotal(content: string): number | null {
+  // An explicit `Total Plans in Phase` wins over an `of M` in either plan field.
+  const raw = stateExtractField(content, 'Total Plans in Phase');
+  const match = raw ? PLAN_SHAPE_N.exec(raw) : null;
+  const t = match ? planNumberFrom(match[1]) : null;
+  if (t !== null) return t;
+  const { legacyNofMMatch, planNofMMatch } = parsePlanFields(content);
+  const fromCurrentPlan = legacyNofMMatch ? planNumberFrom(legacyNofMMatch[2]) : null;
+  if (fromCurrentPlan !== null) return fromCurrentPlan;
+  return planNofMMatch ? planNumberFrom(planNofMMatch[2]) : null;
+}
+
 /**
  * Advance the leading integer of a written plan value, preserving everything
  * the author wrote around it: the zero-padding width ("04" -> "05") and any
@@ -1975,48 +2078,10 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   // `planSourceField`/`planRawValue` pair here and then wrote the OTHER
   // spelling from this one's numbers, which is precisely how a field ended up
   // holding a value nothing had derived for it.
-  const legacyPlan = stateExtractField(content, 'Current Plan');
-  const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
-  const planField = stateExtractField(content, 'Plan');
-
-  // Every branch below reads its numbers out of an ANCHORED match's capture
-  // groups. Nothing here calls parseInt on a raw field value, so a value the
-  // grammar does not fully describe cannot half-parse into a plausible number.
-  const legacyNMatch = legacyPlan ? PLAN_SHAPE_N.exec(legacyPlan) : null;
-  const legacyNofMMatch = legacyPlan ? PLAN_SHAPE_N_OF_M.exec(legacyPlan) : null;
-  const totalNMatch = legacyTotal ? PLAN_SHAPE_N.exec(legacyTotal) : null;
-  const planNofMMatch = planField ? PLAN_SHAPE_N_OF_M.exec(planField) : null;
-  const planNMatch = planField ? PLAN_SHAPE_N.exec(planField) : null;
-
-  let parsedCurrent: number | null = null;
-  let parsedTotal: number | null = null;
-
-  if (legacyPlan && legacyTotal && (legacyNMatch || legacyNofMMatch) && totalNMatch) {
-    // Legacy pair wins whenever both fields are present and both are readable,
-    // even if the Current Plan value also carries an "of M" — the explicit
-    // sibling field is the stated intent, so it supplies the total.
-    parsedCurrent = planNumberFrom((legacyNMatch ?? legacyNofMMatch)![1]);
-    parsedTotal = planNumberFrom(totalNMatch[1]);
-  } else if (legacyNofMMatch) {
-    // Hybrid: legacy field name, compound value, no readable Total Plans
-    // sibling. Written by hand (and by agents) often enough to be worth
-    // reading — #3784.
-    parsedCurrent = planNumberFrom(legacyNofMMatch[1]);
-    parsedTotal = planNumberFrom(legacyNofMMatch[2]);
-  } else if (planNofMMatch) {
-    parsedCurrent = planNumberFrom(planNofMMatch[1]);
-    parsedTotal = planNumberFrom(planNofMMatch[2]);
-  }
-  // No branch for a bare `Plan: N` paired with a `Total Plans in Phase: M`
-  // sibling and no `Current Plan` at all (#3791 review round 6, M2). A revision
-  // of this PR accepted it; base did not (its `else if (planField)` arm had no
-  // `of M` match and errored via NaN), and it is out of #3784's scope, which is
-  // the hybrid `Current Plan: N of M`. It cannot be given the schema-row +
-  // forcing-test coupling the other shapes have, either: `Plan` is body-only,
-  // `buildStateFrontmatter` never reads it into frontmatter, so there is no
-  // `current_*` key to hang a row on. An accepted shape with no schema row and
-  // no forcing test is exactly the drift this diff is otherwise built to
-  // prevent, so the shape is refused and named in the error instead.
+  const {
+    legacyPlan, planField, legacyNMatch, legacyNofMMatch, planNofMMatch, planNMatch,
+    current: parsedCurrent, total: parsedTotal,
+  } = parsePlanFields(content);
 
   if (parsedCurrent === null || parsedTotal === null) {
     return { content: reassemble(body), updated: [], data: { error: true } };

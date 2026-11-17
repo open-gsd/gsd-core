@@ -85,6 +85,7 @@
     "hooks.context_critical_threshold",
     "hooks.workflow_guard",
     "hooks.commit_types",
+    "hooks.secret_read_exempt",
     "hooks.community",
     "workflow.context_coverage_gate",
     "statusline.show_last_command",
