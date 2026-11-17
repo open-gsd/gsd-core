@@ -515,8 +515,7 @@ function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): b
   const named = parseHeadLog(git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, HEAD_LOG_FORMAT, ...ids, '--']));
   // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
   // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
-  // still listed. A rewrite whose own committer clock is behind that time reads as a squash (test: the `[boundary]`
-  // twin at limit-1).
+  // still listed.
   const times = earliestTimes(git, ids);
   // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
   if (times.size < named.length) return null;
