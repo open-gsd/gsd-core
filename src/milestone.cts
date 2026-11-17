@@ -619,7 +619,7 @@ function findBlockingShipGates(cwd: string, phasesDir: string, phaseDirs: string
         if (hook.onError === 'halt') blocked.push({ cap_id: hook.capId, phase, reason: 'unevaluable', gate_message: detail, details: null });
         else warnings.push({ kind: 'skipped_phase', cap_id: hook.capId, phase, detail });
       };
-      // gate-args reads a `--`-prefixed value as the next flag, so the gate would run with an empty PHASE_NUMBER.
+      // gate-args reads a `--`-prefixed value as the next flag, so the gate would run with an empty GSD_PHASE_NUMBER.
       if (phase.startsWith('--')) {
         failGate(`phase token "${phase}" starts with "--" and cannot be passed as a flag value`);
         continue;

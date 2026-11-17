@@ -1636,7 +1636,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.equal(r.success, true, r.error);
   });
 
-  test('G18b a phase dir named like a flag is unevaluable, not a gate run with an empty PHASE_NUMBER', () => {
+  test('G18b a phase dir named like a flag is unevaluable, not a gate run with an empty GSD_PHASE_NUMBER', () => {
     // The truncated window with --force gates every dir on disk (G15), so the flag-like dir is reached.
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n## v1.0 MVP\n\nNotes.\n\n## v2.0 Next\n\n### Phase 1: Foundation\n**Goal:** Setup\n');

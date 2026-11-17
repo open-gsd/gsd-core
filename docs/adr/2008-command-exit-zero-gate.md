@@ -154,7 +154,7 @@ hiding the mechanism.
 - `src/gate-predicate-evaluator.cts`, `src/check-command-router.cts`
 - Diátaxis docs: `docs/reference/gate-predicates.md`, `docs/how-to/command-exit-zero-gate.md`
 
-## Amendment (2026-11-07): placeholders are environment values (#5482)
+## Amendment (2026-11-16): placeholders are environment values (#5482)
 
 The Interpolation row above describes the first revision, which pasted the values into the command text. A directory name that held shell syntax then ran as a command. The gate shell now receives `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS` as environment values, in addition to the inherited process environment (the Environment row). The `GSD_` prefix keeps them apart from ordinary user shell variables. This follows the maintainer ruling on #5318.
 

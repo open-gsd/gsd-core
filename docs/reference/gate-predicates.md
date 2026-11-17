@@ -122,7 +122,7 @@ model".
 - `command` longer than 4096 chars.
 - `timeout` present but not a positive finite number.
 - A phase variable inside single quotes.
-- A pre-#5482 name (`PHASE_NUMBER`, `PHASE_DIR`, `PHASE_REQ_IDS`) in any quoting form.
+- A pre-#5482 name (`PHASE_NUMBER`, `PHASE_DIR`, `PHASE_REQ_IDS`) in the braced form (`${PHASE_DIR}`), in any quoting. A bare `$PHASE_DIR` is the gate's own shell variable.
 - Unknown `kind`.
 
 ### `artifact-frontmatter-equals`
