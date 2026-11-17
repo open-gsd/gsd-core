@@ -6695,6 +6695,23 @@ function resolveSymlinkWriteTarget(filePath) {
   try { return fs.realpathSync(filePath); } catch (_) { return filePath; }
 }
 
+/**
+ * #5946: true when `filePath` is a symlink the installer must refuse to edit, i.e. a
+ * link without GSD_ALLOW_SYMLINKED_DEST. The Copilot instructions files (the repo-root
+ * AGENTS.md above all) sit outside the install-root symlink guard, so the policy is
+ * applied at their writers. lstat classifies the path once; a dangling link counts.
+ */
+function isRefusedCopilotInstructionsSymlink(filePath) {
+  let stat;
+  try { stat = fs.lstatSync(filePath); } catch (_) { return false; }
+  return stat.isSymbolicLink() && !isSymlinkedDestOptIn();
+}
+
+function copilotInstructionsSymlinkRefusal(filePath) {
+  return `${filePath} is a symlink; refusing to change it. ` +
+    'Re-run with GSD_ALLOW_SYMLINKED_DEST=1 to edit the file it points at (the link is kept).';
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
   // #5301: the write lands on the symlink's target, never replaces the link.
   configPath = resolveSymlinkWriteTarget(configPath);
@@ -7010,6 +7027,12 @@ function hasEnabledCodexHooksFeature(configContent) {
  * @param {string} gsdContent - Template content (without markers)
  */
 function mergeCopilotInstructions(filePath, gsdContent) {
+  // #5946: a symlinked destination is refused without the opt-in; with it the write
+  // lands on the link's target and the link itself is kept.
+  if (isRefusedCopilotInstructionsSymlink(filePath)) {
+    throw new Error(copilotInstructionsSymlinkRefusal(filePath));
+  }
+  filePath = resolveSymlinkWriteTarget(filePath);
   const gsdBlock = GSD_COPILOT_INSTRUCTIONS_MARKER + '\n' +
     gsdContent.trim() + '\n' +
     GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER;
@@ -8709,16 +8732,42 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // which writes this same repo-root AGENTS.md only for local ('!isGlobal')
   // installs — 'copilot-instructions' is unique to copilot's descriptor, so
   // this is byte-parity.
+  if (resolveInstallPlan(runtime).installSurface === 'copilot-instructions') {
+    // #5946: refuse a symlinked instructions file before ANY change, so a refused run
+    // leaves the link, its target and every other GSD file exactly as they were.
+    const refused = [
+      ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
+      path.join(targetDir, 'copilot-instructions.md'),
+    ].filter((candidate) => {
+      if (!isRefusedCopilotInstructionsSymlink(candidate) || !fs.existsSync(candidate)) return false;
+      let content;
+      // A link to something unreadable (a directory) is still a link we will not touch.
+      try { content = fs.readFileSync(candidate, 'utf8'); } catch (_) { return true; }
+      return stripGsdFromCopilotInstructions(content) !== content;
+    });
+    if (refused.length > 0) {
+      for (const candidate of refused) {
+        console.error(`  ${yellow}⚠${reset} ${copilotInstructionsSymlinkRefusal(candidate)}`);
+      }
+      console.error('  Nothing was uninstalled.\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
   if (resolveInstallPlan(runtime).installSurface === 'copilot-instructions' && !isGlobal) {
     const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
     if (fs.existsSync(agentsMdPath)) {
       const content = fs.readFileSync(agentsMdPath, 'utf8');
       const cleaned = stripGsdFromCopilotInstructions(content);
+      const writePath = resolveSymlinkWriteTarget(agentsMdPath);
+      const throughLink = writePath !== agentsMdPath;
       if (cleaned === null) {
-        fs.unlinkSync(agentsMdPath);
-        console.log(`  ${green}✓${reset} Removed AGENTS.md (was GSD-only)`);
+        // A link's target is emptied, never deleted: deleting it would leave a dangling link.
+        if (throughLink) fs.writeFileSync(writePath, '');
+        else fs.unlinkSync(agentsMdPath);
+        console.log(`  ${green}✓${reset} ${throughLink ? 'Emptied AGENTS.md target, symlink kept' : 'Removed AGENTS.md'} (was GSD-only)`);
       } else if (cleaned !== content) {
-        fs.writeFileSync(agentsMdPath, cleaned);
+        fs.writeFileSync(writePath, cleaned);
         console.log(`  ${green}✓${reset} Cleaned GSD section from AGENTS.md`);
       }
     }
@@ -8874,12 +8923,16 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     if (fs.existsSync(instructionsPath)) {
       const content = fs.readFileSync(instructionsPath, 'utf8');
       const cleaned = stripGsdFromCopilotInstructions(content);
+      const writePath = resolveSymlinkWriteTarget(instructionsPath);
+      const throughLink = writePath !== instructionsPath;
       if (cleaned === null) {
-        fs.unlinkSync(instructionsPath);
+        // A link's target is emptied, never deleted: deleting it would leave a dangling link.
+        if (throughLink) fs.writeFileSync(writePath, '');
+        else fs.unlinkSync(instructionsPath);
         removedCount++;
-        console.log(`  ${green}✓${reset} Removed copilot-instructions.md (was GSD-only)`);
+        console.log(`  ${green}✓${reset} ${throughLink ? 'Emptied copilot-instructions.md target, symlink kept' : 'Removed copilot-instructions.md'} (was GSD-only)`);
       } else if (cleaned !== content) {
-        fs.writeFileSync(instructionsPath, cleaned);
+        fs.writeFileSync(writePath, cleaned);
         removedCount++;
         console.log(`  ${green}✓${reset} Cleaned GSD section from copilot-instructions.md`);
       }
@@ -11384,6 +11437,19 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Preflight's role gate and _stageAgents use the same resolved profile;
   // core's agent roles follow #5503's profile-derived selection too.
   preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, options.installerMigrations);
+
+  // #5946: the Copilot instructions destinations sit outside the install-root symlink
+  // preflight above (AGENTS.md is at the repo root), so refuse a symlinked one HERE, before
+  // the first file of this install is written, rather than mid-install at the merge.
+  if (plan.installSurface === 'copilot-instructions') {
+    const linked = [
+      path.join(targetDir, 'copilot-instructions.md'),
+      ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
+    ].filter(isRefusedCopilotInstructionsSymlink);
+    if (linked.length > 0) {
+      throw new Error(linked.map(copilotInstructionsSymlinkRefusal).join('\n'));
+    }
+  }
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
