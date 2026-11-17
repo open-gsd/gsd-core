@@ -43,8 +43,11 @@ const COMMAND_MAX_LENGTH = 4096;
 /** Predicate kinds this evaluator recognises (extensible — add to KIND_TABLE). */
 const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatter-equals']);
 
+/** The env name behind each PredicateContext key: the one place a placeholder name meets its value. */
+const ENV_CONTEXT_KEYS = Object.freeze({ GSD_PHASE_NUMBER: 'phaseNumber', GSD_PHASE_DIR: 'phaseDir', GSD_PHASE_REQ_IDS: 'phaseReqIds' } as const);
+
 /** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
-const INTERPOLATION_VAR_NAMES = Object.freeze(['GSD_PHASE_NUMBER', 'GSD_PHASE_DIR', 'GSD_PHASE_REQ_IDS']);
+const INTERPOLATION_VAR_NAMES = Object.freeze(Object.keys(ENV_CONTEXT_KEYS));
 
 /** The pre-#5482 spellings. They collide with ordinary shell variables, so a command that uses one is refused. */
 const LEGACY_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
@@ -163,7 +166,7 @@ function evaluateCommandExitZero(
   }
 
   // GSD pastes nothing into the command text: every value reaches `sh` as an environment value (unset => '').
-  const env = { GSD_PHASE_NUMBER: ctx.phaseNumber ?? '', GSD_PHASE_DIR: ctx.phaseDir ?? '', GSD_PHASE_REQ_IDS: ctx.phaseReqIds ?? '' };
+  const env = Object.fromEntries(Object.entries(ENV_CONTEXT_KEYS).map(([name, key]) => [name, ctx[key] ?? '']));
   assertNoLegacyPlaceholder(command);
   assertNoSingleQuotedPlaceholder(command);
   const res = deps.runBoundedShell({ command, cwd: ctx.cwd, timeoutMs, env });
