@@ -52,8 +52,8 @@ const path = require('path');
  * `staleAllowlistEntry` so its entry is deleted. `eslint.config.mjs` passes the
  * keys of `no-adhoc-env-isolation.allowlist.json`, which maps each listed file
  * to its site count. `tests/no-adhoc-env-isolation.rule.test.cjs` lints every
- * file under `tests/` with the allowlist emptied and inline config off, and
- * fails when a listed file's count rises or falls, or an unlisted file has a
+ * `.cjs` file under `tests/` with the allowlist emptied and inline config off,
+ * and fails when a listed file's count rises or falls, or an unlisted file has a
  * site, so the counts only fall. The rule has no marker comment of its own. An
  * `eslint-disable` comment naming it hides a copy from lint output, but not
  * from that count, so it exempts nothing.

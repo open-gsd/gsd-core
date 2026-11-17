@@ -701,8 +701,9 @@ copies under `tests/`:
 
 - a split of `process.env.PATH`, or any `X.split(path.delimiter).filter(...)`, which is the copy
   `isolatedPath()` replaces;
-- an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` on any
-  object other than `process.env`, which is the copy `isolatedEnv()` replaces.
+- an object literal with a `HOME` or `USERPROFILE` key, or an assignment to `env.HOME` or
+  `env.USERPROFILE` on any object other than `process.env`, which is the copy `isolatedEnv()`
+  replaces.
 
 An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
 `sandboxHome()`, above. `tests/helpers/isolated-env.cjs` is the one exempt file. The rule's header
@@ -712,9 +713,9 @@ as a `HOME=` inside a shell script string.
 `eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
 and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
 A count may only fall. A new copy in a file the list does not name fails lint, and
-`tests/no-adhoc-env-isolation.rule.test.cjs` counts every file under `tests/`: it fails when a
+`tests/no-adhoc-env-isolation.rule.test.cjs` counts every `tests/**/*.cjs` file: it fails when a
 listed file holds more copies than its count, or fewer. When you migrate copies, lower the count,
-and delete the entry when it reaches zero (lint then reports the entry as stale). Never add a file
+and delete the entry when it reaches zero (until you do, lint reports the entry as stale). Never add a file
 to the list or raise a count. Build the env with the helper instead. An `eslint-disable` comment
 for this rule does not exempt a copy: the count runs with inline config off and still sees it.
 Entries are repository-relative, so run lint from the repository root, as `npm run lint` does.
