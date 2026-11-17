@@ -23888,6 +23888,10 @@ describe('legacy phase-heading counting reads real headings only (#5880)', () =>
     assert.strictEqual(totalPhasesFor(t, `${HEAD}## Phase 1: A\n\n#### Phase 2: B\n`), 2);
   });
 
+  test('#5880: an indented code line (four spaces) is not a heading', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n    ### Phase 6: Indented code\n`), 2);
+  });
+
   test('sentinel phases 0 and 999.1 stay excluded', (t) => {
     assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n### Phase 0: Sentinel\n\n### Phase 999.1: Icebox\n`), 2);
   });
