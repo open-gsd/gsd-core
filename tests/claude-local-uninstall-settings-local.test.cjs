@@ -126,12 +126,16 @@ describe('local Claude uninstall cleans settings.local.json (#5952)', () => {
     assert.ok(notice, `the skip notice must name settings.local.json:\n${result.stdout}`);
   });
 
-  test('global uninstall never touches a project settings.local.json', () => {
+  test('global uninstall cleans the global settings.json and never touches a project settings.local.json', () => {
     installer(['--local']);
+    installer(['--global']);
+    const globalSettings = path.join(home, '.claude', 'settings.json');
+    assert.ok(managedCommands(readJson(globalSettings)).length > 0, 'the global install must register GSD hooks in settings.json');
     const before = fs.readFileSync(localSettingsPath(), 'utf8');
 
     installer(['--global', '--uninstall']);
 
+    assert.deepStrictEqual(managedCommands(readJson(globalSettings)), [], 'the global uninstall still cleans settings.json');
     assert.strictEqual(fs.readFileSync(localSettingsPath(), 'utf8'), before);
   });
 });
