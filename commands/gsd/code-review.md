@@ -23,7 +23,7 @@ Spawns the gsd-code-reviewer agent to analyze code at the specified depth level.
 
 Arguments:
 - Phase number (required) — which phase's changes to review (e.g., "2" or "02")
-- `--depth=quick|standard|deep` (optional) — review depth level, overrides workflow.code_review_depth config
+- `--depth=quick|standard|deep` (or `--depth quick|standard|deep`) (optional) — review depth level, overrides workflow.code_review_depth config
   - quick: Pattern-matching only (~2 min)
   - standard: Per-file analysis with language-specific checks (~5-15 min, default)
   - deep: Cross-file analysis including import graphs and call chains (~15-30 min)
@@ -44,7 +44,7 @@ Output: {padded_phase}-REVIEW.md in phase directory + inline summary of findings
 Phase: the `<arguments>` block (first positional argument is phase number)
 
 Optional flags parsed from the `<arguments>` block:
-- `--depth=VALUE` — Depth override (quick|standard|deep). If provided, overrides workflow.code_review_depth config.
+- `--depth=VALUE` / `--depth VALUE` — Depth override (quick|standard|deep; both forms accepted). If provided, overrides workflow.code_review_depth config.
 - `--files file1,file2,...` / `--files=file1,file2,...` — Explicit file list override (both forms accepted). Has highest precedence for file scoping per D-08. When provided, workflow skips SUMMARY.md extraction and git diff fallback entirely.
 
 Context files (CLAUDE.md, SUMMARY.md, phase state) are resolved inside the workflow via `gsd-tools query init.phase-op` and delegated to agent via `<required_reading>` blocks.

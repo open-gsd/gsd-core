@@ -95,6 +95,42 @@ describe('parseCodeReviewFlags', () => {
     );
   });
 
+  // #6240 triage: `--depth` has the same shape and the same question — a bare
+  // `--depth deep` was dropped the same way, silently keeping the default tier.
+  // The space-separated form must parse identically to the `=` form, and a
+  // bare `--depth` must be refused, never silently ignored.
+  test('--depth deep (space form, #6240) sets depth like the = form', () => {
+    const flags = parseCodeReviewFlags(['184', '--depth', 'deep']);
+    assert.strictEqual(flags.depth, 'deep');
+  });
+
+  test('--depth space form produces the same IR as the = form (#6240)', () => {
+    assert.deepStrictEqual(
+      parseCodeReviewFlags(['3', '--fix', '--all', '--depth', 'deep', '--files', 'src/x.ts']),
+      parseCodeReviewFlags(['3', '--fix', '--all', '--depth=deep', '--files', 'src/x.ts']),
+    );
+  });
+
+  test('--depth space form consumes exactly its value token (#6240)', () => {
+    const flags = parseCodeReviewFlags(['--depth', 'deep', '--fix']);
+    assert.strictEqual(flags.depth, 'deep');
+    assert.strictEqual(flags.fix, true);
+  });
+
+  test('bare --depth at end of argv is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--depth']),
+      /Missing value for --depth \(use --depth=<value> or --depth <value>\)/,
+    );
+  });
+
+  test('bare --depth followed by another flag is refused naming the accepted forms (#6240)', () => {
+    assert.throws(
+      () => parseCodeReviewFlags(['184', '--depth', '--fix']),
+      /Missing value for --depth \(use --depth=<value> or --depth <value>\)/,
+    );
+  });
+
   test('first positional argument (phase number) is ignored', () => {
     const flags = parseCodeReviewFlags(['2', '--fix']);
     assert.strictEqual(flags.fix, true);
