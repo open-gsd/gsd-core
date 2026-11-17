@@ -3509,6 +3509,54 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     ), PROPERTY_RUNS);
   });
 
+  // #5255's three rules hold for these readings too: a block is `{ code, text }`, every
+  // reading draws on the command's one budget, and a bug in one never changes the verdict.
+  describe("on #5255's scan", () => {
+    const { scanBashCommand, workSpent } = require(HOOK_PATH);
+    const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
+    const need = (cmd) => {
+      scanBashCommand(cmd, 2 ** 40, 2 ** 40);
+      return workSpent().scan;
+    };
+
+    test('a read only a reading finds is a `{ code, text }` block', () => {
+      assert.deepEqual(scanBashCommand('{cat .env}'), { code: 'secret-read', text: '.env' });
+      assert.deepEqual(scanBashCommand('\r#;cat .env'), { code: 'secret-read', text: '.env' });
+    });
+
+    test('the readings draw on the command\'s one budget', () => {
+      // No read: the plain reading, then the zsh grouping reading, each scan the command once.
+      const cmd = `{echo ${'a'.repeat(1000)}}`;
+      const whole = need(cmd);
+      assert.equal(whole, 2 * cmd.length);
+      assert.equal(scanBashCommand(cmd, whole), null, 'on the whole need');
+      assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
+    });
+
+    // The fixture makes the spans reading throw on a backtick body holding FAULT.
+    const faulty = (command) => {
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(command)),
+        env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-span-reading.cjs')}` },
+        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+      });
+      return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+    };
+
+    test('a bug in a reading is reported on stderr, and the command is allowed as before', () => {
+      const r = faulty('echo `\\$FAULT`; ls');
+      assertAllowed(r, 'a faulty reading, no read');
+      const { DIAGNOSTIC } = require(HOOK_PATH);
+      assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'span reading bug' });
+    });
+
+    test('a bug in a reading costs no denial', () => {
+      assertBlocked(faulty('echo `\\$FAULT`; cat .env'), 'a faulty reading, then a read', { tool: 'Bash', path: '.env' });
+      assertBlocked(faulty('{cat .env}; echo `\\$FAULT`'), 'a read only the zsh reading finds', { tool: 'Bash', path: '.env' });
+      assertBlocked(faulty('echo `\\$FAULT`; claude --agent gsd-debugger -p hi'), 'a faulty reading, then a debugger spawn', { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+  });
+
   describe('with a project exemption (#4432)', () => {
     const fs = require('node:fs');
     const { gitOrThrow: fixtureGit } = require('./helpers/git-fixture.cjs');
@@ -3536,11 +3584,24 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
       assertAllowed(run(`cat ${absq()}`), 'cat <exempt>');
     });
 
-    // The zsh reading meets the exempt file first and sees a read-only line; the spans reading sees the
-    // `mv` that `$$` hides from it. Each reading judges the line itself, so the read is denied.
+    // The `mv` that `$$` hides from the plain reading is seen by #5255's readings of `$${` too.
     test('denies an exempt read when a later reading sees a command an earlier one hid (bash, dash)', () => {
       const cmd = '{cat ' + absq() + '};cat $' + '${x; mv /tmp/a /tmp/b; cat ' + absq() + ' }';
       assertBlocked(run(cmd), '{cat <exempt>};cat $${x; mv a b; cat <exempt> }', { tool: 'Bash' });
+    });
+
+    // The plain reading takes `\r#` as a comment and judges the line read-only; only the CR reading
+    // sees the `mv`. Each reading judges the line itself, so the read is denied.
+    test('denies an exempt read when only a #5523 reading sees the other command (bash, dash, zsh)', () => {
+      const cmd = 'cat ' + absq() + ' \r#;mv /tmp/a /tmp/b; cat ' + absq();
+      assertBlocked(run(cmd), 'cat <exempt> CR#;mv a b; cat <exempt>', { tool: 'Bash' });
+    });
+
+    // The CR reading scans with the plain reading alone, where `$'\''` opens a quote that hides the
+    // `mv`; its read-only check still reads the line under #5255's readings, which see it.
+    test('denies an exempt read when a $\'…\' span hides the other command from the scan (bash)', () => {
+      const cmd = "cat x\r#;cat $'\\''; mv /tmp/a " + absq() + " #'\ncat " + absq();
+      assertBlocked(run(cmd), "cat x CR#;cat $'\\''; mv a <exempt> #' <newline> cat <exempt>", { tool: 'Bash' });
     });
   });
 });
