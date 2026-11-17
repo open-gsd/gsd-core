@@ -4424,7 +4424,9 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
   for (const [label, arg] of [['not valid JSON', '{"model_profile":'], ['empty', ''], ['whitespace only', '   '], ['flag-like', '--weird']]) {
     test(`a settings argument that is ${label} is a usage error`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);
-      assertRefused(run([arg]), 'usage');
+      const result = run([arg]);
+      assertRefused(result, 'usage');
+      assert.ok(JSON.parse(result.error).message.startsWith('Invalid JSON for config-save-defaults: '), result.error);
       assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
     });
   }
@@ -4440,7 +4442,11 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
   for (const args of [[], ['{}', '{}']]) {
     test(`${args.length} positionals is a usage error`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);
-      assertRefused(run(args), 'usage');
+      const result = run(args);
+      assertRefused(result, 'usage');
+      if (args.length === 0) {
+        assert.strictEqual(JSON.parse(result.error).message, 'Usage: config-save-defaults <settings-json>');
+      }
       assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
     });
   }
