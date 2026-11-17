@@ -243,7 +243,12 @@ const otherPlanningPaths = (files, opts) => {
   );
 };
 
+// BSD tr stops on a byte its locale rejects (a non-UTF-8 path under a UTF-8 locale); GNU tr never does, so stand in for it:
+// only the shipped `LC_ALL=C tr '\0' ...` prefix satisfies it (`unset` keeps a host LC_ALL=C from doing so).
+const LOCALE_STRICT_TR = `unset LC_ALL\ntr() { [ "$1" != '\\0' ] || [ "\${LC_ALL:-}" = C ] || { echo 'tr: Illegal byte sequence' >&2; return 1; }; command tr "$@"; }`;
+
 module.exports = {
+  LOCALE_STRICT_TR,
   WORKFLOW_PATH,
   parseWorkflow,
   readWorkflow,

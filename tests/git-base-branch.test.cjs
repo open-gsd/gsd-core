@@ -43,6 +43,7 @@ const {
   FILTER_PATHS_MARKER,
   PRECONDITIONS_MARKER,
   runBashFile,
+  LOCALE_STRICT_TR,
 } = require('./helpers/pr-branch-filter.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
@@ -2798,12 +2799,10 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
   });
 
-  // BSD tr stops on a byte its locale rejects (a non-UTF-8 path under a UTF-8 locale); GNU tr never does, so stand in for it:
-  // the shipped path split must run under LC_ALL=C or this `tr` fails and verify stops on a good branch.
+  // the shipped path split must run under LC_ALL=C or the locale-strict `tr` fails and verify stops on a good branch.
   test('verify splits its NUL path lists under LC_ALL=C, so a locale-strict tr does not stop it', (t) => {
     const { repo } = leakedPhaseRepo(t, 'gsd-3679-verify-tr-locale-');
-    const strictTr = `tr() { [ "$1" != '\\0' ] || [ "\${LC_ALL:-}" = C ] || { echo 'tr: Illegal byte sequence' >&2; return 1; }; command tr "$@"; }`;
-    const { out, exitCode } = runVerify(repo, `_to() { "$@"; }\n${strictTr}`);
+    const { out, exitCode } = runVerify(repo, `_to() { "$@"; }\n${LOCALE_STRICT_TR}`);
     assert.doesNotMatch(out, /Cannot read/, out.slice(0, 400));
     assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
     assert.notEqual(exitCode, 1, 'the run was not stopped by the path read');

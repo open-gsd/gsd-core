@@ -25,7 +25,7 @@ const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { readWorkflowText, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, runBashFile, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
+const { readWorkflowText, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, runBashFile, classifyCommit, readWorkflow, LOCALE_STRICT_TR } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
 const lazy = (f) => { let v; return () => (v === undefined ? (v = f()) : v); };
@@ -185,9 +185,8 @@ function verdicts(lists, strict) {
   return splitLines(runBash('gsd-prpicked-', files, [
     `PR_STRICT=${strict}`,
     `STRUCTURAL_RE='${structuralRe}'`,
-    // BSD tr stops on a byte its locale rejects (a non-UTF-8 path under a UTF-8 locale); GNU tr never does, so stand in for it:
     // the shipped path split must run under LC_ALL=C or this `tr` fails and picked picks the commit.
-    `tr() { [ "\${LC_ALL:-}" = C ] || { echo 'tr: Illegal byte sequence' >&2; return 1; }; command tr "$@"; }`,
+    LOCALE_STRICT_TR,
     pickedFn(),
     `for i in $(seq 0 ${lists.length - 1}); do`,
     // A read without -z prints each name quoted, as git does for a non-ASCII path, so dropping -z from a shipped read fails.
