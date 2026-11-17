@@ -108,6 +108,7 @@ describe('Cline global uninstall and a symlinked ~/.agents/AGENTS.md (#5947)', (
     runUninstall();
     assert.ok(fs.lstatSync(agentsPath).isSymbolicLink(), 'the link must be kept');
     assert.strictEqual(fs.readFileSync(target, 'utf8'), '', 'a GSD-only target is emptied, not deleted');
+    assert.ok(!process.exitCode, 'the exit code is unchanged');
   });
 
   test('mixed: with the opt-in only the GSD block is removed and the link is kept', (t) => {
@@ -119,6 +120,7 @@ describe('Cline global uninstall and a symlinked ~/.agents/AGENTS.md (#5947)', (
     const after = fs.readFileSync(target, 'utf8');
     assert.ok(after.includes('keep me'), 'user text must be kept');
     assert.ok(!after.includes(GSD_AGENTS_MD_MARKER), 'the GSD block must be gone');
+    assert.ok(!process.exitCode, 'the exit code is unchanged');
   });
 
   for (const optIn of [undefined, '1']) {
@@ -132,6 +134,7 @@ describe('Cline global uninstall and a symlinked ~/.agents/AGENTS.md (#5947)', (
       if (optIn !== undefined) process.env.GSD_ALLOW_SYMLINKED_DEST = optIn;
       assert.doesNotThrow(() => runUninstall());
       assert.ok(fs.lstatSync(agentsPath).isSymbolicLink(), 'the dangling link must remain');
+      assert.strictEqual(fs.existsSync(path.join(home, 'gone')), false, 'nothing may be created through the dangling link');
     });
   }
 
