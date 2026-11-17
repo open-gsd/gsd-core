@@ -148,6 +148,7 @@ module.exports = {
   "tests/isolation-sentinel.test.cjs",
   "tests/issue-version-gate.test.cjs",
   "tests/kilo-upgrades.test.cjs",
+  "tests/kimi-config-toml-symlink.test.cjs",
   "tests/kimi-upgrades.test.cjs",
   "tests/launcher-homes-derivation.test.cjs",
   "tests/lint-docs-command-form.test.cjs",
