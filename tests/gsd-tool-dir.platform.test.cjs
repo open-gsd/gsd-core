@@ -314,27 +314,23 @@ describe('#5856: the ignore-file owner leaves nothing untracked when it dies mid
     fs.mkdirSync(path.join(root, '.gsd'));
     fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
     const realRename = fs.renameSync;
-    const realUnlink = fs.unlinkSync;
-    const realRmdir = fs.rmdirSync;
-    const realRm = fs.rmSync;
     // A SIGKILL runs no `finally`: fail the rename onto .gitignore and make every
-    // cleanup primitive a no-op for the duration, then restore them.
-    fs.renameSync = function renameSync(from, to) {
-      if (String(to).endsWith(`${path.sep}.gitignore`)) throw new Error('simulated kill');
-      return realRename.apply(this, arguments);
-    };
-    fs.unlinkSync = () => {};
-    fs.rmdirSync = () => {};
-    fs.rmSync = () => {};
-    try {
-      ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
-    } finally {
-      fs.renameSync = realRename;
-      fs.unlinkSync = realUnlink;
-      fs.rmdirSync = realRmdir;
-      fs.rmSync = realRm;
-    }
-    // Residue may stay on disk after a kill; git must not list it.
+    // cleanup primitive a no-op until the mocks are restored right after the call.
+    const mocks = [
+      t.mock.method(fs, 'renameSync', function renameSync(from, to) {
+        if (String(to).endsWith(`${path.sep}.gitignore`)) throw new Error('simulated kill');
+        return realRename.apply(this, arguments);
+      }),
+      t.mock.method(fs, 'unlinkSync', () => {}),
+      t.mock.method(fs, 'rmdirSync', () => {}),
+      t.mock.method(fs, 'rmSync', () => {}),
+    ];
+    ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
+    for (const m of mocks) m.mock.restore();
+    // The staging residue stays on disk after a kill (so the test exercises it);
+    // git must not list it.
+    const residue = fs.readdirSync(path.join(root, '.gsd')).filter((n) => n.startsWith('.gitignore.tmp-'));
+    assert.strictEqual(residue.length, 1, 'the killed merge left its staging directory behind');
     assert.deepStrictEqual(gsdStatusLines(root).filter((l) => l.includes('.gitignore.tmp')), []);
   });
 

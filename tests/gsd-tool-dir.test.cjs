@@ -52,7 +52,7 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
     t.after(() => cleanup(root));
     const ignorePath = path.join(root, '.gsd', '.gitignore');
     fs.mkdirSync(path.join(root, '.gsd'));
-    const body = `user-rule\n${MARKER}\n${ALL_RULES.join('\n')}\n`;
+    const body = `user-rule\n${MARKER}\n${RULES.join('\n')}\n`;
     fs.writeFileSync(ignorePath, body);
     const before = fs.statSync(ignorePath);
     ensureToolOwnedGsdDir(root, OPTIONS);
@@ -104,9 +104,13 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
       ensureToolOwnedGsdDir(root, OPTIONS);
       const twice = fs.readFileSync(ignorePath, 'utf8');
       const lines = splitLines(once);
+      // The owner rule rides along whenever the merge writes; a text that already
+      // carried every caller rule is left alone (no write, so no owner rule added).
+      const wrote = once !== userText;
       return once.startsWith(userText) &&
         once === twice &&
-        ALL_RULES.every((rule) => lines.includes(rule));
+        RULES.every((rule) => lines.includes(rule)) &&
+        (!wrote || lines.includes(OWNER_RULE));
     }));
   });
 
