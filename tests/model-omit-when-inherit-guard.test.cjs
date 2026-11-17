@@ -666,3 +666,74 @@ test('#3602: spawn coverage detection is CRLF-safe', () => {
     'CRLF input must yield the same verdicts as LF',
   );
 });
+
+// ---------------------------------------------------------------------------
+// #6206 — example values for the Agent tool's model= parameter.
+//
+// Claude Code's Agent tool takes a model ALIAS (sonnet | opus | haiku | fable),
+// not a full model ID; the resolver already returns aliases on Claude for that
+// reason (src/model-resolver.cts, #1569/#2297). Workflow prose is read by the
+// orchestrator model on every run, so an example that shows a bare full Claude
+// ID as a model= value teaches it the opposite of what the resolver does.
+// Provider-prefixed IDs (e.g. `anthropic/claude-sonnet-5`) are what other
+// runtimes take, so they are deliberately not matched.
+// ---------------------------------------------------------------------------
+
+/** A bare full Claude model ID such as claude-sonnet-5 or claude-opus-4-8. */
+const BARE_CLAUDE_MODEL_ID = /(?<![\w/.-])claude-(?:opus|sonnet|haiku|fable)-\d[\w.-]*/g;
+
+/** Paragraphs that talk about the model= parameter and also name a bare full Claude ID. */
+function fullIdModelExamples(content) {
+  return content
+    .split(/\r?\n[ \t]*\r?\n/)
+    .filter((para) => /model=/.test(para))
+    .flatMap((para) => para.match(BARE_CLAUDE_MODEL_ID) || []);
+}
+
+test('#6206: no workflow shows a full Claude model ID as a model= example', () => {
+  const files = fs.readdirSync(WORKFLOWS).filter((f) => f.endsWith('.md'));
+  // Non-vacuity: the scan must actually see the model= prose it guards.
+  const withModelParam = files.filter((f) =>
+    /model=/.test(readWorkflowCombined(path.join(WORKFLOWS, f))),
+  );
+  assert.ok(
+    withModelParam.length >= 19,
+    `expected >=19 workflows that mention model=, found ${withModelParam.length}`,
+  );
+
+  const offenders = [];
+  for (const file of withModelParam) {
+    const ids = fullIdModelExamples(readWorkflowCombined(path.join(WORKFLOWS, file)));
+    if (ids.length > 0) offenders.push(`${file}: ${[...new Set(ids)].join(', ')}`);
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    'these workflows give a full Claude model ID next to the model= parameter (#6206):\n  ' +
+      `${offenders.join('\n  ')}\n` +
+      'Claude Code\'s Agent tool takes an alias (sonnet, opus, haiku, fable), not a full ID. ' +
+      'Use an alias in the example.',
+  );
+});
+
+test('#6206: full-ID example detection', () => {
+  // The wording #6206 reported is caught.
+  const reported =
+    'Only set `model=` when `executor_model` is an explicit model name ' +
+    '(e.g., `"claude-sonnet-5"`, `"claude-opus-4-8"`).';
+  assert.deepEqual(fullIdModelExamples(reported), ['claude-sonnet-5', 'claude-opus-4-8']);
+
+  // Aliases are what the Agent tool takes.
+  const aliases = 'Only set `model=` to the resolved alias (e.g., `"sonnet"`, `"opus"`).';
+  assert.deepEqual(fullIdModelExamples(aliases), []);
+
+  // A provider-prefixed ID belongs to a runtime that takes full IDs; not flagged.
+  assert.deepEqual(fullIdModelExamples('opencode: model="anthropic/claude-sonnet-5"'), []);
+
+  // A full ID in a paragraph that never mentions model= is out of scope.
+  const unrelated = 'Pick a model such as `claude-sonnet-5`.\n\nAgent(model="{planner_model}")';
+  assert.deepEqual(fullIdModelExamples(unrelated), []);
+
+  // CRLF paragraph breaks split the same way as LF.
+  assert.deepEqual(fullIdModelExamples(unrelated.replace(/\n/g, '\r\n')), []);
+});
