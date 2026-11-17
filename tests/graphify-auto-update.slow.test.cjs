@@ -733,9 +733,15 @@ describe('auto-update', () => {
     const onboard = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/onboard.md'), 'utf8');
     /** The commit command the onboarding workflow tells the orchestrator to run, with its root substituted. */
     const onboardingCommit = (root) => {
-      const step = onboard.match(/If `commit_docs` is true, commit only the summary path[^\n]{0,120}\n\n```bash\n([^\n]{1,400})\n```/);
-      assert.ok(step, 'the onboarding commit step must exist');
-      return step[1].split('$ONBOARDING_ROOT').join(root);
+      const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+      const lines = splitLines(onboard);
+      const at = lines.findIndex((line) => line.startsWith('If `commit_docs` is true, commit only the summary path'));
+      assert.notStrictEqual(at, -1, 'the onboarding commit step must exist');
+      const fence = lines.findIndex((line, i) => i > at && line === '```bash');
+      assert.ok(fence !== -1 && fence - at <= 3, 'the commit step must be followed by a bash fence');
+      const command = lines[fence + 1];
+      assert.ok(command && command !== '```', 'the bash fence must hold the commit command');
+      return command.split('$ONBOARDING_ROOT').join(root);
     };
 
     test('the onboarding commit uses no global flag between the launcher and the verb', () => {
