@@ -814,6 +814,13 @@ describe('#5354 tdd review checkpoint seal', () => {
     });
   }
 
+  // The cap alone bounds the id lists of the three `git log` calls of the subject check, so the limit must pass through them with ids git knows.
+  test(`SUMMARY with ${REFS_CAP} real task commits that a squash dropped -> NotEvaluable`, () => {
+    const { dir, base } = fixture(Array.from({ length: REFS_CAP }, (_, i) => `chore: task ${i + 1}`), { refs: true });
+    squash(dir, base);
+    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
+  });
+
   test('a duplicated SUMMARY hash counts once against the cap', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const rows = Array.from({ length: REFS_CAP + 1 }, (_, i) => `${i + 1}. **Task ${i + 1}: x** - \`${'e'.repeat(40)}\``);
