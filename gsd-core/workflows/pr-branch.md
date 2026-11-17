@@ -527,9 +527,9 @@ files would be overwritten by merge"*, and every remaining commit is silently dr
 # `$VAR` word-splits under bash but not zsh, collapsing every element onto
 # one iteration there.
 for HASH in $(printf '%s' "$INCLUDED_COMMITS"); do
-  # A modify/delete conflict on a filtered path is EXPECTED and is resolved below — the
-  # filtered path is absent from HEAD by construction. Do not treat it as a failure here.
-  git cherry-pick --no-commit "$HASH" || true
+  # A modify/delete conflict on a filtered path is EXPECTED and resolved below. A pick that
+  # fails with no unmerged path is a failure and halts below.
+  git cherry-pick --no-commit "$HASH" || [ -n "$(git diff --name-only --diff-filter=U)" ] || PICK_FAILED=1
 
   # One path per LINE, not per space (#4605) — a discovered `<milestone>-phases/`
   # directory can contain a space, so `for P in $(printf ...)` would word-split it
@@ -597,11 +597,10 @@ FILTER_PATHS_EOF
 $UNMERGED_PATHS
 UNMERGED_PATHS_EOF
 
-  # A REAL conflict (unmerged paths outside the filter) or a failed commit: halt, never continue,
-  # which would drop the queue. Unwind first, or the user's checkout is stranded mid-pick. Nothing
-  # staged (a planning-only pick) skips the commit.
-  if [ -n "$(git diff --name-only --diff-filter=U)" ] || { ! git diff --cached --quiet && ! git commit -q -C "$HASH"; }; then
-    echo "Conflict outside the .planning/ filter, or a failed commit, while picking $HASH:" >&2
+  # A real conflict, a failed pick or a failed commit: unwind and halt, or the user's checkout is
+  # stranded mid-pick. Nothing staged (a planning-only pick) skips the commit.
+  if [ -n "${PICK_FAILED:-}" ] || [ -n "$(git diff --name-only --diff-filter=U)" ] || { ! git diff --cached --quiet && ! git commit -q -C "$HASH"; }; then
+    echo "Conflict outside the .planning/ filter, or a failed pick or commit, while picking $HASH:" >&2
     git diff --name-only --diff-filter=U >&2
     # Order matters. `--quit` drops the sequencer state but leaves the unmerged index
     # in place, and an unmerged index makes `git checkout` refuse — so reset first.
@@ -618,7 +617,7 @@ UNMERGED_PATHS_EOF
       echo "Could not return to $CURRENT_BRANCH; you are still on $PR_BRANCH." >&2
       echo "Run: git checkout $(shq "$CURRENT_BRANCH") && git branch -D $(shq "$PR_BRANCH")" >&2
     fi
-    echo "Resolve the conflict against $TARGET, then re-run /gsd:pr-branch. If it came from replaying commits already published, re-anchor instead: see the WARNING above." >&2
+    echo "Fix the cause (a conflict with $TARGET, or the git error seen above), then re-run /gsd:pr-branch. If it came from replaying commits already published, re-anchor instead: see the WARNING above." >&2
     exit 1
   fi
 
@@ -674,7 +673,7 @@ When both gates pass, record the built tip as pending (`$TIP`, never HEAD) and t
 beside it; the next run promotes pending to published once that tip is merged. A failed write warns; it never aborts:
 
 ```bash
-if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ] && [ "${PR_COMMITS:-0}" -gt 0 ]; then
+if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ]; then
   git update-ref "$PR_TIP_REF" "$(TO=60 _to git rev-parse "refs/heads/$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PR_TIP_REF or $PENDING_REF; next run will replay commits." >&2
 fi
 ```

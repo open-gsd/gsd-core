@@ -292,26 +292,30 @@ describe('#5469 pr-branch published marker (real git): failures', () => {
     fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
     const r = publish(dir);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /Conflict outside the \.planning\/ filter, or a failed commit, while picking /);
+    assert.match(r.stderr, /Conflict outside the \.planning\/ filter, or a failed pick or commit, while picking /);
     assert.match(r.stderr, /Restored feature and removed the partial feature-pr\./);
     assert.equal(git(dir, 'branch', '--show-current'), 'feature');
     assert.equal(refOf(dir, 'refs/heads/feature-pr'), '');
     noRefs(dir);
   });
 
-  // The pick fails without a conflict (an untracked file is in the way), so no commit is made and the -pr holds nothing.
-  test('picks that all fail without a conflict record no pending ref', () => {
+  // The pick fails without a conflict (an untracked file is in the way) while a later commit picks cleanly:
+  // the dropped commit must not be recorded as built, or the next run would never pick it again.
+  test('a pick that fails without a conflict unwinds to the working branch and records no pending ref', () => {
     const dir = repo();
     write(dir, 'x.txt', 'x\n');
     commitAll(dir, 'feat: add x');
     git(dir, 'rm', '-q', 'x.txt');
     commitAll(dir, 'feat: drop x');
-    write(dir, 'x.txt', 'untracked\n');
+    write(dir, 'y.txt', 'y\n');
+    commitAll(dir, 'feat: add y');
+    write(dir, 'x.txt', 'untracked\n'); // the first pick would overwrite it
     const r = publish(dir);
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(git(dir, 'rev-list', '--count', 'main..feature-pr'), '0', 'every pick was dropped');
-    assert.equal(pendingOf(dir), '');
-    assert.equal(builtOf(dir), '');
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Conflict outside the \.planning\/ filter, or a failed pick or commit, while picking /);
+    assert.match(r.stderr, /Restored feature and removed the partial feature-pr\./);
+    assert.equal(refOf(dir, 'refs/heads/feature-pr'), '');
+    noRefs(dir);
   });
 
   test('a failed pick-list lookup stops the run with exit 1 and changes no ref', () => {
