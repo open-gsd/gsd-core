@@ -2067,19 +2067,17 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
   });
 
   test('install refuses a linked AGENTS.md before writing anything', (t) => {
-    const { spawnSync } = require('node:child_process');
-    const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+    const { runNode } = require('./helpers/process-seam.cjs');
     const files = linked(t, { base: project, rel: 'AGENTS.md' }, 'user content\n');
     if (!files) return;
     const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
     delete env.GSD_ALLOW_SYMLINKED_DEST;
     delete env.COPILOT_CONFIG_DIR;
     delete env.COPILOT_HOME;
-    const result = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'install.js'), '--copilot', '--local'], {
-      cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: INSTALL_TIMEOUT_MS,
-    });
-    assert.notStrictEqual(result.status, 0, 'a refused install must not exit 0');
-    assert.match(`${result.stdout}${result.stderr}`, /GSD_ALLOW_SYMLINKED_DEST=1/);
+    const result = runNode([path.join(__dirname, '..', 'bin', 'install.js'), '--copilot', '--local'], { cwd: project, env });
+    const seen = `status=${result.status} signal=${result.signal}\n${result.stdout}\n${result.stderr}`.slice(-1500);
+    assert.notStrictEqual(result.status, 0, `a refused install must not exit 0:\n${seen}`);
+    assert.match(`${result.stdout}${result.stderr}`, /GSD_ALLOW_SYMLINKED_DEST=1/, seen);
     assert.strictEqual(fs.readFileSync(files.target, 'utf8'), 'user content\n', 'the target must be untouched');
     assert.strictEqual(fs.existsSync(path.join(project, '.github')), false, 'nothing may be written before the refusal');
   });
