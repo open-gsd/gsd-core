@@ -1910,10 +1910,15 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     project = createTempDir('gsd-5946-project-');
     home = createTempDir('gsd-5946-home-');
     savedCwd = process.cwd();
-    savedEnv = { HOME: process.env.HOME, GSD_ALLOW_SYMLINKED_DEST: process.env.GSD_ALLOW_SYMLINKED_DEST };
+    savedEnv = {
+      HOME: process.env.HOME,
+      USERPROFILE: process.env.USERPROFILE,
+      GSD_ALLOW_SYMLINKED_DEST: process.env.GSD_ALLOW_SYMLINKED_DEST,
+    };
     savedExitCode = process.exitCode;
     process.chdir(project);
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     delete process.env.GSD_ALLOW_SYMLINKED_DEST;
     process.exitCode = undefined;
   });
