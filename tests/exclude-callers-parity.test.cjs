@@ -24,7 +24,7 @@ const planningDirOf = (cwd) => path.join(cwd, '.planning');
 const fixedDeps = () => ({ now: () => 1_700_000_000_000 });
 
 describe('exclude-file fixture helpers', () => {
-  test('a repo without info/ reads as empty and takes an append', (t) => {
+  test('aRepoWithoutInfoDirReadsAsEmptyAndTakesAnAppend', (t) => {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
     cleanup(path.join(tmpDir, '.git', 'info'));

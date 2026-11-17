@@ -30,6 +30,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { excludeFile, readExclude } = require('./helpers/git-fixture.cjs');
 const helpers = require('./helpers.cjs');
 const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, captureFdSync } = helpers;
 const processSeam = require('./helpers/process-seam.cjs');
@@ -661,9 +662,8 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   const git = (cwd, ...args) =>
     execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
   const status = (cwd) => git(cwd, 'status', '--porcelain', '--untracked-files=all');
-  const excludeFile = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
   const entries = (cwd) =>
-    splitLines(fs.existsSync(excludeFile(cwd)) ? fs.readFileSync(excludeFile(cwd), 'utf-8') : '').filter(
+    splitLines(readExclude(cwd)).filter(
       (l) => l === ENTRY,
     );
   const begin = (cwd, phase = '1') =>
@@ -698,7 +698,6 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   });
 
   test('an exclude file without a trailing newline keeps its last line intact', () => {
-    fs.mkdirSync(path.dirname(excludeFile(tmpDir)), { recursive: true });
     fs.writeFileSync(excludeFile(tmpDir), '*.keep-me');
     assert.ok(begin(tmpDir).success);
     const lines = splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8'));
@@ -760,7 +759,7 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
     fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
     assert.ok(begin(sub).success);
     assert.deepEqual(
-      splitLines(fs.existsSync(excludeFile(tmpDir)) ? fs.readFileSync(excludeFile(tmpDir), 'utf-8') : '').filter((l) =>
+      splitLines(readExclude(tmpDir)).filter((l) =>
         l.includes('unowned'),
       ),
       [],

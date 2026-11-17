@@ -37,6 +37,8 @@
  * underneath.
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { runGit, OUTCOME } = require('./process-seam.cjs');
 
 /**
@@ -198,7 +200,7 @@ function interceptGit(t, intercept, childProcess = require('node:child_process')
   for (const fn of ['spawnSync', 'execFileSync']) {
     const real = childProcess[fn];
     t.mock.method(childProcess, fn, function (cmd, args, opts, ...rest) {
-      if (require('node:path').basename(String(cmd)).replace(/\.exe$/, '') === 'git') {
+      if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git') {
         const fake = intercept(args, opts, fn);
         if (fake !== undefined) return fake;
       }
@@ -214,9 +216,8 @@ function interceptGit(t, intercept, childProcess = require('node:child_process')
  * @returns {string}
  */
 function excludeFile(cwd) {
-  const { resolve, dirname } = require('node:path');
-  const file = resolve(cwd, gitOrThrow(['rev-parse', '--git-path', 'info/exclude'], { cwd }).trim());
-  require('node:fs').mkdirSync(dirname(file), { recursive: true });
+  const file = path.resolve(cwd, gitOrThrow(['rev-parse', '--git-path', 'info/exclude'], { cwd }).trim());
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   return file;
 }
 
@@ -226,7 +227,6 @@ function excludeFile(cwd) {
  * @returns {string}
  */
 function readExclude(cwd) {
-  const fs = require('node:fs');
   const file = excludeFile(cwd);
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 }
