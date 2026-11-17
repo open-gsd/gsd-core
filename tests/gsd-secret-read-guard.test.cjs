@@ -77,6 +77,14 @@ function assertBlocked(r, label, { code = 'secret-read', tool, path: expectedPat
   return out;
 }
 
+// The Bash verdict main() gives, in process: the scanners the hook exports, in
+// main's order, the first block winning. scanFurtherReading is #5779's further
+// reading, which main runs last.
+function bashVerdict(cmd) {
+  const { scanBashCommand, scanDebuggerSpawn, scanFurtherReading } = require(HOOK_PATH);
+  return scanBashCommand(cmd) || scanDebuggerSpawn(cmd) || scanFurtherReading(cmd);
+}
+
 describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
   // Oracle: #5045 requires the two reported command strings to get the same
   // secret-read verdict as a direct shell script. Adjacent syntax comes from
@@ -3683,6 +3691,9 @@ describe('gsd-secret-read-guard: a file named inside a curl option value (#5779)
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
     });
   }
+  test('in process: every row above blocks through the exported scanners', () => {
+    for (const [cmd, expectedPath] of DENIED) assert.deepEqual(bashVerdict(cmd), { code: 'secret-read', text: expectedPath }, cmd);
+  });
 
   // An attached value whose file name holds an `=` is not read as `name@file`,
   // and no reading of the value finds it; its last path segment is the word's,
@@ -4019,6 +4030,9 @@ describe('gsd-secret-read-guard: a command behind a shell keyword (#5779)', () =
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
     });
   }
+  test('in process: every row above blocks through the exported scanners', () => {
+    for (const [cmd, expectedPath] of DENIED) assert.deepEqual(bashVerdict(cmd), { code: 'secret-read', text: expectedPath }, cmd);
+  });
 
   // The plain reading takes the keyword as the command and checks its operands,
   // so these stay denied, whether or not the word behind the keyword reads the
@@ -4190,6 +4204,9 @@ describe("gsd-secret-read-guard: a wrapper's own assignments (#5779)", () => {
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
     });
   }
+  test('in process: every row above blocks through the exported scanners', () => {
+    for (const [cmd, expectedPath] of DENIED) assert.deepEqual(bashVerdict(cmd), { code: 'secret-read', text: expectedPath }, cmd);
+  });
 
   // The plain reading stops at the assignment and checks what follows it, so
   // these stay denied.
@@ -4344,6 +4361,9 @@ describe('gsd-secret-read-guard: a command behind a wider prefix assignment or a
       assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: expectedPath });
     });
   }
+  test('in process: every row above blocks through the exported scanners', () => {
+    for (const [cmd, expectedPath] of DENIED) assert.deepEqual(bashVerdict(cmd), { code: 'secret-read', text: expectedPath }, cmd);
+  });
 
   const ALLOWED = [
     'A+=b curl -d@notes.txt x.test',
