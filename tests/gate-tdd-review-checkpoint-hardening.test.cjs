@@ -27,6 +27,7 @@ const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 const { SUMMARY_REFS_MAX, REPO_TEXT_MAX_BYTES } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
 const { evaluateTddReviewCheckpoint, TDD_ROW_REASON } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
@@ -238,7 +239,6 @@ describe('#5354 tdd review checkpoint seal', () => {
   // A git call that gives no answer is not "squashed": the plan stays an ordinary failure.
   const GIT_NO_ANSWER = { exitCode: 128, stdout: '', stderr: 'fatal', signal: null, error: null, timedOut: false };
   function failGit(t, matches, result) {
-    const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     const real = shell.execGit;
     t.mock.method(shell, 'execGit', (args, opts) => (matches(args) ? result : real(args, opts)));
   }
@@ -281,7 +281,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     w(dir, `${PHASE}/01-01-SUMMARY.md`, fake('a'));
     w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
     w(dir, `${PHASE}/01-02-SUMMARY.md`, fake('b'));
-    const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     const real = shell.execGit;
     let probes = 0;
     t.mock.method(shell, 'execGit', (args, opts) => {

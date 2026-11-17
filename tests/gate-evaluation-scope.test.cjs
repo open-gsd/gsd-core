@@ -1768,6 +1768,11 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const current = [];
     assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
     assert.ok(current.find(isHeadListing).includes(`--since-as-filter=@${T}`));
+    for (const [version, flagged] of [['2.38.1', true], ['3.0.0', true], ['garbled', false]]) {
+      const seen = [];
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion(version, seen)), false, `git ${version}`);
+      assert.equal(seen.find(isHeadListing).includes(`--since-as-filter=@${T}`), flagged, `git ${version}: flag ${flagged ? 'sent' : 'withheld'}`);
+    }
   });
 
   test('[boundary] an original committed before its author time opens the window at the committer time (limit-1, limit, limit+1)', () => {

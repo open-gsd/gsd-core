@@ -538,6 +538,7 @@ function sinceAsFilterSupported(output: string): boolean {
   return version.major > SINCE_AS_FILTER_MIN_GIT[0]
     || (version.major === SINCE_AS_FILTER_MIN_GIT[0] && version.minor >= SINCE_AS_FILTER_MIN_GIT[1]);
 }
+
 /** One record per commit: sha, committer time, subject; `%x1e` frames the record so an empty or space-edged subject survives the runner's trim. */
 const HEAD_LOG_FORMAT = '--format=%H%x1f%ct%x1f%s%x1e';
 /** The single-repo path keeps the user's git config, so a `git log` whose records are parsed turns signature lines off. */
