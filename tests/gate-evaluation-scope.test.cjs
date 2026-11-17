@@ -12,11 +12,10 @@
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 const { gitOrThrow, growHistoryFastImport } = require('./helpers/git-fixture.cjs');
 const {
   resolveEvaluationScope,
@@ -48,7 +47,7 @@ function write(dir, rel, content) {
 }
 
 function makeRepo({ deferScaffold = false } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
+  const dir = createTempDir('gsd-scope-');
   dirs.push(dir);
   const gitWith = (env, ...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY, ...env } }).trim();
   const git = (...args) => gitWith({}, ...args);
@@ -1196,7 +1195,7 @@ describe('resolveEvaluationScope — failure is never an empty scope', () => {
   });
 
   test('[negative] a directory that is not a repository is unresolvable', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-nogit-'));
+    const dir = createTempDir('gsd-scope-nogit-');
     dirs.push(dir);
     const scope = resolveEvaluationScope(dir, { kind: 'plan', planId: '03-01' });
     assert.equal(scope.status, 'unresolvable');
@@ -1418,7 +1417,7 @@ describe('resolveEvaluationScope — what a scope says when it finds little', ()
   });
 
   test('[boundary] a phase directory that arrived with the root commit still includes the root commit\'s files', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-root-'));
+    const dir = createTempDir('gsd-scope-root-');
     dirs.push(dir);
     const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
     git('init', '--initial-branch=main');
@@ -1441,7 +1440,7 @@ describe('check evaluation-scope — the CLI surface for a coded plan id (#5271)
   const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 
   function codedRepo() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-cli-'));
+    const dir = createTempDir('gsd-scope-cli-');
     dirs.push(dir);
     const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
     git('init', '--initial-branch=main');
@@ -1726,7 +1725,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
 
   test('[hostile] log.showSignature never puts gpg lines into the records of a signed commit', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX shell script fixture'); return; }
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-gpg-'));
+    const scratch = createTempDir('gsd-scope-gpg-');
     dirs.push(scratch);
     const program = path.join(scratch, 'fake-gpg.sh');
     fs.writeFileSync(program, '#!/bin/sh\necho "gpg: fake verdict" >&2\nexit 1\n', { mode: 0o755 });
