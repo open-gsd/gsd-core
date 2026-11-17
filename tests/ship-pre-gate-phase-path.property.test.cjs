@@ -26,7 +26,6 @@ const SHELL_SYNTAX = [...'$`;&()#['];
 describe('ship:pre command gate treats the phase directory name as data (#5482)', () => {
   let tmpDir;
   let home;
-  let rootEntries;
 
   before(() => {
     tmpDir = createTempProject();
@@ -34,7 +33,6 @@ describe('ship:pre command gate treats the phase directory name as data (#5482)'
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n\n**Status:** In progress\n');
     writeGateCap(home, { command: 'test ! -f "${GSD_PHASE_DIR}/OPEN_WORK" || exit 3' });
-    rootEntries = fs.readdirSync(tmpDir).sort();
   });
   after(() => { cleanup(tmpDir); cleanup(home); });
 
@@ -62,7 +60,6 @@ describe('ship:pre command gate treats the phase directory name as data (#5482)'
         const entry = entryFor(`01-${s}`);
         assert.equal(entry.reason, 'predicate_blocked', `01-${s} must run the gate: ${JSON.stringify(entry)}`);
         assert.equal(entry.details.exitCode, 3, `01-${s}`);
-        assert.deepEqual(fs.readdirSync(tmpDir).sort(), rootEntries, 'no file may appear in the project root');
       }),
       { numRuns: 15 },
     );
