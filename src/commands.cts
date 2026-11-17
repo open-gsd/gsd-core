@@ -1683,7 +1683,11 @@ const COMMIT_DOCS_SKIP_REASON: Record<Exclude<CommitDocsSource, 'default'>, stri
  * with the absent tail re-appended (macOS /var <-> /private/var, Windows 8.3
  * short names like RUNNER~1). `followLeaf: false` keeps the last component
  * lexical, because git adds a symlink itself, not its target. One owner for
- * the three commit-path comparisons below.
+ * the three commit-path comparisons below. It is not `security.cts`'s
+ * resolution engine on purpose: that engine is unexported and answers
+ * containment (null outside the root), while these comparisons need the
+ * canonical spelling of a path that may lie outside the project (the refusal
+ * message names it) and of a leaf that is a symlink.
  */
 function canonicalPath(abs: string, followLeaf = true): string {
   let cur = followLeaf ? abs : path.dirname(abs);

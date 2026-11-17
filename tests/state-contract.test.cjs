@@ -833,6 +833,21 @@ describe('state.json never dirties the tree (#5505)', () => {
     });
   }
 
+  // git adds a symlink itself, not its target, so the leaf stays lexical: a state.json that links outside the project is still the publish path.
+  test('commit --files skips an ignored state.json that is a symlink to a file outside the project', (t) => {
+    const { tmpDir, rel } = boundary(t);
+    const outside = `${tmpDir}-outside.json`;
+    t.after(() => cleanup(outside));
+    fs.writeFileSync(outside, '{}\n');
+    const link = path.join(tmpDir, rel, 'state.json');
+    cleanup(link);
+    try { fs.symlinkSync(outside, link, 'file'); } catch (e) { if (e.code === 'EPERM') return t.skip('symlinks are not permitted on this host'); throw e; }
+    fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
+    const out = JSON.parse(runGsdTools(['commit', 'docs: link', '--files', `${rel}/state.json`, `${rel}/STATE.md`], tmpDir).output);
+    assert.strictEqual(out.committed, true, JSON.stringify(out));
+    assert.deepStrictEqual(out.skipped_files, [`${rel}/state.json`]);
+  });
+
   test('commit --files skips another workstream\'s ignored state.json when the env selects none', (t) => {
     const { tmpDir, rel } = boundary(t, { wsName: 'ws1' });
     fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
