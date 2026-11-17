@@ -66,7 +66,9 @@ const RUN_LANE_COMMON = ['run-dir', 'repo-root', 'selected'];
 
 export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // ─── resolve / config ──────────────────────────────────────────────────────
-  'resolve-model': { positionals: 2 },
+  // #6213: `--fallback-agent` resolves a hinted agent with no model_overrides entry and no catalog tier as that agent.
+  // A flag without a value (last token, flag-shaped next token, or an empty value) is `Missing value`, never ignored.
+  'resolve-model': { positionals: 1, freePositionals: true, valueFlags: ['fallback-agent'], nonEmptyFlags: ['fallback-agent'] },
   // The phase-type positional may sit before or after --granularity, so words past the boundary are free.
   'resolve-granularity': { positionals: 1, freePositionals: true, valueFlags: ['granularity'] },
   // Positional agent type may interleave with the hand-parsed flags. A flag without a next token (or with a
@@ -183,12 +185,13 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   // form `--harness-flag --worktree` reads no value and the stray `--worktree` is tolerated.
   'record-dispatch-isolation': {
     positionals: 1,
-    valueFlags: ['harness-flag', 'isolation', 'phase', 'plan'],
+    valueFlags: ['executor-type', 'harness-flag', 'isolation', 'phase', 'plan'],
     eqFlags: ['harness-flag'],
     booleanFlags: ['json', 'worktree'],
   },
   'resolve-dispatch-type': { positionals: 1, valueFlags: ['requested'], booleanFlags: JSON_FLAG },
-  'resolve-agent': { positionals: 1, valueFlags: ['name'], booleanFlags: JSON_FLAG },
+  // #6213: `--plan` (with an optional `--phase`) resolves the plan's own agent_hint, the resolution the dispatch-isolation record uses.
+  'resolve-agent': { positionals: 1, valueFlags: ['name', 'phase', 'plan'], booleanFlags: JSON_FLAG },
   // The agent type is a free word: `agent-skills --json <type>` and `agent-skills <type> --json` both work.
   'agent-skills': {
     positionals: 1,

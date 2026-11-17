@@ -689,8 +689,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // arrive via the destructured context.
 
   function routeResolveModel({ args, cwd, raw }) {
-    parseNamedArgsOrExit(args, specFor('resolve-model'), error);
-    commands.cmdResolveModel(cwd, args[1], raw);
+    const spec = specFor('resolve-model');
+    const parsed = parseNamedArgsOrExit(args, spec, error);
+    // A repeated value flag (--fallback-agent) has no defined winner (the parser keeps the first), so it is a usage error (#6213).
+    for (const flag of spec.valueFlags ?? []) {
+      if (args.filter((token) => token === `--${flag}`).length > 1) error(`Duplicate --${flag}: pass it once`, ERROR_REASON.USAGE);
+    }
+    // The agent type is the one free word, whichever side of --fallback-agent it sits on (#6213).
+    const positionals = positionalWords(args, spec);
+    if (positionals.length > 1) error('resolve-model takes one agent type', ERROR_REASON.USAGE);
+    commands.cmdResolveModel(cwd, positionals[0], raw, parsed['fallback-agent'] ?? undefined);
   }
 
   function routeResolveGranularity({ args, cwd, raw }) {
@@ -2389,15 +2397,26 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
+    let truncatedRecord = false;
     try {
-      writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase: phaseArg, plan: planArg });
+      const written = writeDispatchIsolationSentinel(cwd, {
+        isolation, harnessFlag, phase: phaseArg, plan: planArg,
+        // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
+        // (no plan) names every routable hinted executor of its phase (`executor_types`).
+        executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
+        executorTypes: planArg ? null : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
+      });
+      truncatedRecord = !!written.droppedExecutorTypes;
+      if (written.droppedExecutorTypes) {
+        process.stderr.write(`warning: dispatch-isolation phase ${phaseArg}: executor_types capped at 64 names or did not fit the record; names left out: ${written.droppedExecutorTypes.join(', ')} (#6213)\n`);
+      }
     } catch {
       // writeDispatchIsolationSentinel already swallows its own errors into
       // a { recorded: false } result; this catch is defense in depth only.
     }
 
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      output({ runtime: runtimeId, isolation, exec, harnessFlag, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2867,7 +2886,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const nodeFs = require('fs');
     try {
       const {
-        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS,
+        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS, hasJsonSuffix,
       } = require('../../hooks/lib/isolation-sentinel.js');
       // A plan-scoped decision lands at <phase>--<plan>.json; a plan-less one (the phase-level
       // degrade) at <phase>.json, so concurrent phase-level orchestrators keep separate records.
@@ -2894,7 +2913,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const cutoff = clock.now() - AGED_NONE_MAX_MS;
       const written = nodePath.basename(keyedFile);
       for (const name of nodeFs.readdirSync(keyedDir)) {
-        if (name === written || !(name.endsWith('.json') || name.includes('.json.tmp-'))) continue;
+        if (name === written || !(hasJsonSuffix(name) || name.includes('.json.tmp-'))) continue;
         try {
           const file = nodePath.join(keyedDir, name);
           if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
@@ -2913,7 +2932,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2923,8 +2942,40 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
+      // #6213: a type the guards would refuse to read back is recorded as null (resolved just below).
+      executor_type: null,
       written_at: clock.now(),
     };
+    let droppedExecutorTypes = [];
+    // A validator that fails to load records no executor type; it never prevents the rest of the
+    // record from being written (this function's contract is: never throw).
+    try {
+      const executorTypeLib = require('./lib/executor-type.cjs');
+      if (executorTypeLib.isValidExecutorType(executorType)) payload.executor_type = executorType;
+      // #6213: a phase-level record (executorTypes an array) also names every routable hinted
+      // executor of its phase as `executor_types` (sorted, de-duplicated, at most 64 valid names).
+      // The reader refuses a record over SENTINEL_MAX_BYTES, so entries that would push the
+      // serialized record past it are dropped from the end of the list rather than the record.
+      if (Array.isArray(executorTypes)) {
+        const sentinelLib = require('../../hooks/lib/isolation-sentinel.js');
+        const maxBytes = sentinelLib.SENTINEL_MAX_BYTES;
+        // The uncapped list: the entry cap is applied here so names capped out are reported too.
+        const types = executorTypeLib.uniqueExecutorTypes(executorTypes);
+        payload.executor_types = executorTypeLib.normalizeExecutorTypes(executorTypes);
+        if (types.length > payload.executor_types.length) payload.executor_types_truncated = true;
+        if (Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
+          // Visible, not silent: the record says it was truncated and the caller reports the
+          // dropped names. The reader treats a fresh applicable truncated record as unable to rule a
+          // type out (isExecutorDispatch fails closed for a valid non-GSD-role name), and their
+          // plan-scoped records still guard them.
+          payload.executor_types_truncated = true;
+          while (payload.executor_types.length > 0 && Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
+            payload.executor_types = payload.executor_types.slice(0, -1);
+          }
+        }
+        droppedExecutorTypes = types.slice(payload.executor_types.length);
+      }
+    } catch (_) { /* executor_type stays null */ }
     let tmpPath = null;
     try {
       // #5757: the shared tool-owned .gsd owner refuses a project-supplied
@@ -2971,7 +3022,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
       tmpPath = null;
       writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
-      return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
+      return {
+        recorded: true,
+        path: '.gsd/dispatch-isolation-sentinel.json',
+        ...(droppedExecutorTypes.length > 0 ? { droppedExecutorTypes } : {}),
+      };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
     } finally {
@@ -3004,7 +3059,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     if (!VALID_ISOLATION.has(isolation)) {
       error(
         'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
-        '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>]',
+        '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>] [--executor-type <agent>]',
         ERROR_REASON.USAGE,
       );
       return;
@@ -3028,7 +3083,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const phase = parsed.phase || null;
     const plan = parsed.plan || null;
 
-    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan });
+    // #6213: a GSD non-executor role is never recorded as the executor (it would hold that role to the
+    // worktree rule); refuse it the way resolve-agent refuses it as a hint.
+    let executorType = parsed['executor-type'] || null;
+    if (isGsdNonExecutorRole(executorType)) {
+      warnRefusedExecutorType(executorType);
+      executorType = null;
+    }
+    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan, executorType });
     output(result, raw);
   }
 
@@ -3078,29 +3140,38 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
            // unvalidated name, which would make Agent() error and block the wave.
            //
            // Output:
+           //   --plan <id> [--phase <p>] (no --name): the plan's own agent_hint resolved as the
+           //   dispatch-isolation record resolves it (#6213); --json adds phase and plan, `requested`
+           //   is the hint (null when none), `fallback` is true when the hint was not found or not used
            //   --raw (default) -> prints the resolved type (the hint, or 'gsd-executor')
            //   --json          -> prints { runtime, requested, resolved, fallback }
     const FALLBACK = 'gsd-executor';
     try {
-      const requested = parsed.name ?? '';
       const { resolveRuntime } = require('./lib/runtime-slash.cjs');
       const runtimeId = resolveRuntime(cwd);
-      const { resolveAgentHint } = require('./lib/agent-install-check.cjs');
-      let resolved = FALLBACK;
-      let resolvedOk = false; // true only when resolveAgentHint returned a hit
-      if (requested && !requested.startsWith('-')) {
-        const hit = resolveAgentHint(requested, runtimeId, cwd);
-        if (hit !== null) {
-          resolved = hit;
-          resolvedOk = true;
+      // #6213: `--plan` (no `--name`) resolves the plan's OWN agent_hint on disk through
+      // deriveRecordedExecutor, the resolution the dispatch-isolation record uses (routing toggle
+      // included), so the dispatched type and the recorded type come from one read.
+      if (!parsed.name && parsed.plan) {
+        const { resolved, refused, hit, hint } = deriveRecordedExecutor(cwd, parsed.phase || null, parsed.plan);
+        if (refused) warnRefusedHint(hint, FALLBACK);
+        if (parsed.json) {
+          // `requested` is the plan's agent_hint (null when none); `fallback` is `!hit`, as in --name mode.
+          output({ runtime: runtimeId, phase: parsed.phase || null, plan: parsed.plan, requested: hint || null, resolved, fallback: !hit, ...(refused ? { refused: 'non-executor-role' } : {}) }, raw);
+        } else {
+          process.stdout.write(String(resolved));
         }
+        return;
       }
+      const requested = parsed.name ?? '';
+      const { resolved, refused, hit } = resolveRoutedExecutor(requested, runtimeId, cwd);
+      if (refused) warnRefusedHint(requested, FALLBACK);
       // `fallback` = we did NOT honor a resolvable hint (absent/flag-shaped name,
       // the named agent did not resolve, or resolution errored). Requesting
       // gsd-executor explicitly and resolving to it is NOT a fallback.
-      const fellBack = !resolvedOk;
+      const fellBack = !hit;
       if (parsed.json) {
-        output({ runtime: runtimeId, requested: requested || null, resolved, fallback: fellBack }, raw);
+        output({ runtime: runtimeId, requested: requested || null, resolved, fallback: fellBack, ...(refused ? { refused: 'non-executor-role' } : {}) }, raw);
       } else {
         process.stdout.write(String(resolved));
       }
@@ -3108,6 +3179,114 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // Fail-closed: degrade to the legacy executor on any error so dispatch
       // never blocks on resolution.
       process.stdout.write(FALLBACK);
+    }
+  }
+
+  /** #6213: the stderr warning for a hint that names a GSD non-executor role (resolve-agent). */
+  function warnRefusedHint(hint, fallback) {
+    process.stderr.write(`warning: agent_hint "${String(hint).trim()}" names a GSD non-executor role; dispatching ${fallback} instead (#6213)\n`);
+  }
+
+  /** #6213: the stderr warning for record-dispatch-isolation --executor-type naming a GSD non-executor role (nothing is dispatched; no executor is recorded). */
+  function warnRefusedExecutorType(name) {
+    process.stderr.write(`warning: --executor-type "${String(name).trim()}" names a GSD non-executor role; recording no executor (#6213)\n`);
+  }
+
+  // #6213: a GSD role other than gsd-executor (the MODEL_PROFILES keys), trimmed and case-folded. The one
+  // predicate behind both the resolve-agent hint refusal and the record-dispatch-isolation refusal.
+  function isGsdNonExecutorRole(name) {
+    if (typeof name !== 'string') return false;
+    const { MODEL_PROFILES: gsdRoles } = require('./lib/model-profiles.cjs');
+    const folded = name.trim().toLowerCase();
+    return folded !== 'gsd-executor' && Object.keys(gsdRoles).some((k) => k.toLowerCase() === folded);
+  }
+
+  /**
+   * #6213: the ONE resolution of a plan's `agent_hint` to the executor an Agent() call dispatches,
+   * shared by `resolve-agent` and the `dispatch-isolation` recorder so the executor the workflow
+   * dispatches and the executor the isolation record names cannot diverge.
+   *
+   * The name is trimmed and case-folded before it is compared with GSD's own roles: a hint naming
+   * a GSD non-executor role (gsd-verifier, gsd-planner, ...) is refused whatever its spacing or
+   * case and resolves to gsd-executor. `hit` is true only when an installed hinted agent (or
+   * gsd-executor itself) resolved. Never throws past its callers' try/catch.
+   */
+  function resolveRoutedExecutor(hint, runtimeId, cwd) {
+    const FALLBACK = 'gsd-executor';
+    const trimmed = typeof hint === 'string' ? hint.trim() : '';
+    if (!trimmed || trimmed.startsWith('-')) return { resolved: FALLBACK, refused: false, hit: false };
+    const folded = trimmed.toLowerCase();
+    if (isGsdNonExecutorRole(trimmed)) return { resolved: FALLBACK, refused: true, hit: false };
+    // A name the record could not carry (and the guards would refuse to read back) is never
+    // routed to, so the printed executor and the recorded executor always satisfy one grammar.
+    if (!require('./lib/executor-type.cjs').isValidExecutorType(trimmed)) return { resolved: FALLBACK, refused: false, hit: false };
+    const { resolveAgentHint } = require('./lib/agent-install-check.cjs');
+    // gsd-executor in any casing resolves as the canonical name, never as the caller's spelling.
+    const lookup = folded === FALLBACK ? FALLBACK : trimmed;
+    const found = resolveAgentHint(lookup, runtimeId, cwd);
+    if (found === null) return { resolved: FALLBACK, refused: false, hit: false };
+    return { resolved: found, refused: false, hit: true };
+  }
+
+  /** `workflow.agent_hint_routing` is off when it is boolean `false` or the string "false" (trimmed, any case). */
+  function agentHintRoutingOff(cwd) {
+    const { readScopedConfigValue } = require('./lib/planning-workspace.cjs');
+    const routing = readScopedConfigValue(cwd, ['workflow', 'agent_hint_routing']);
+    if (!routing.present) return false;
+    if (routing.value === false) return true;
+    return typeof routing.value === 'string' && routing.value.trim().toLowerCase() === 'false';
+  }
+
+  /**
+   * #6213: the executor type a plan-scoped `dispatch-isolation` record names, derived from the
+   * plan's OWN `agent_hint` (the parser `phase-plan-index` uses) under the SAME resolution
+   * `resolve-agent` applies, so the recorder never depends on a shell value carried across tool
+   * calls. With a phase, the plan is looked up in that phase; with no phase (`--plan` only) the plan
+   * id is looked up across every phase directory and used only when exactly one plan carries it
+   * (zero or several resolve to gsd-executor). `workflow.agent_hint_routing` off, a missing plan,
+   * an absent hint, or any lookup failure gives 'gsd-executor'. A record with no plan gives
+   * 'gsd-executor' (the phase-level list is deriveRecordedExecutorTypes). Returns the full
+   * `{ resolved, refused, hit, hint }` so resolve-agent can report a refusal; never throws.
+   */
+  function deriveRecordedExecutor(cwd, phaseArg, planArg) {
+    const FALLBACK = 'gsd-executor';
+    const none = { resolved: FALLBACK, refused: false, hit: false, hint: null };
+    try {
+      if (!planArg) return none;
+      if (agentHintRoutingOff(cwd)) return none;
+      const phaseLib = require('./lib/phase.cjs');
+      const hint = phaseArg
+        ? phaseLib.resolvePlanAgentHint(cwd, phaseArg, planArg)
+        : phaseLib.resolvePlanAgentHintAcrossPhases(cwd, planArg).hint;
+      if (hint === null) return none;
+      const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+      return { ...resolveRoutedExecutor(hint, resolveRuntime(cwd), cwd), hint };
+    } catch {
+      return none;
+    }
+  }
+
+  /**
+   * #6213: the `executor_types` a PHASE-LEVEL record (phase set, no plan) names: the sorted,
+   * de-duplicated routed executors, other than gsd-executor, of every canonical plan in that phase
+   * (same resolution as deriveRecordedExecutor), each a valid executor type, NOT capped here (the
+   * record writer caps at MAX_EXECUTOR_TYPES and reports what it drops). A plan-scoped record, routing off, or any failure gives []. A record with no phase and no
+   * plan names the executors of every milestone phase directory. Never throws.
+   */
+  function deriveRecordedExecutorTypes(cwd, phaseArg, planArg) {
+    try {
+      if (planArg) return [];
+      if (agentHintRoutingOff(cwd)) return [];
+      const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+      const runtimeId = resolveRuntime(cwd);
+      const phaseLib = require('./lib/phase.cjs');
+      const routed = (phaseArg ? phaseLib.listPhaseAgentHints(cwd, phaseArg) : phaseLib.listAllPhaseAgentHints(cwd))
+        .map((hint) => resolveRoutedExecutor(hint, runtimeId, cwd).resolved)
+        .filter((type) => type !== 'gsd-executor');
+      // Uncapped: writeDispatchIsolationSentinel applies the cap and reports the names it drops.
+      return require('./lib/executor-type.cjs').uniqueExecutorTypes(routed);
+    } catch {
+      return [];
     }
   }
 
