@@ -423,7 +423,7 @@ function buildPhaseCompletionProjection(
 }
 
 function getLatestCompletedMilestone(cwd: string): { version: string; name: string } | null {
-  const milestonesPath = path.join(planningRoot(cwd), 'MILESTONES.md');
+  const milestonesPath = path.join(planningDir(cwd), 'MILESTONES.md');
   const content = platformReadSync(milestonesPath);
   if (content === null) return null;
 
@@ -1680,7 +1680,8 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     // workstream-aware planningDir(cwd), matching the established,
     // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
-    research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
+    // null drops the workstream: research is project-level, shared by a project's workstreams like PROJECT.md.
+    research_dir: toPosixPath(path.join(planningDir(cwd, null), 'research')),
   };
 
   // #2992 (Phase 6.1): additive, optional field — degrades to null, never throws.
@@ -1725,7 +1726,7 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
     phase_archive_path: latestCompleted
       ? toPosixPath(
-          path.join(planningRoot(cwd), 'milestones', `${latestCompleted.version}-phases`),
+          path.join(planningDir(cwd), 'milestones', `${latestCompleted.version}-phases`),
         )
       : null,
 
@@ -1755,7 +1756,8 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
     // workstream-aware planningDir(cwd), matching the established,
     // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
-    research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
+    // null drops the workstream: research is project-level, shared by a project's workstreams like PROJECT.md.
+    research_dir: toPosixPath(path.join(planningDir(cwd, null), 'research')),
     milestones_path: toPosixPath(path.join(planningDir(cwd), 'MILESTONES.md')),
     // #4456: new-milestone.md's Step 6 stages the phase-archive move
     // (`git add .planning/milestones/ .planning/phases/`) — both
