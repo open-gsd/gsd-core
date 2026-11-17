@@ -588,6 +588,8 @@ describe('state.json never dirties the tree (#5505)', () => {
   // textconv rewrites the diff text too: a user `diff=<driver>` attribute on the rule file must not reach the parsed text.
   test('the migration is carried under a user textconv driver on the rule file', (t) => {
     const { tmpDir, rel } = boundary(t, { preTracked: true, priorIgnore: 'scratch/\n' });
+    // a repo made from a user init.templateDir may have no info/ (same guard as excludeFile)
+    fs.mkdirSync(path.join(tmpDir, '.git', 'info'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.git', 'info', 'attributes'), '.gitignore diff=scrub\n');
     git(tmpDir, 'config', 'diff.scrub.textconv', 'echo scrubbed #');
     fs.appendFileSync(path.join(tmpDir, rel, 'STATE.md'), '\nedited\n');
@@ -1120,7 +1122,7 @@ describe('state contract — state.json is git-ignored via info/exclude (#5505)'
     const chars = fc.constantFrom('\\', '*', '?', '[', ']', '#', '!', ' ', 'a', 'b');
     // Windows strips a trailing space from a directory name and rejects the glob characters; POSIX keeps every case (isFsLegalName).
     const legal = isFsLegalName;
-    // 0, 1, 6 and 7 characters: the project at the repo root, and the bounds of the name length
+    // Samples the generator: the project at the repo root (empty), a one-character prefix and longer prefixes. The module caps no name length.
     const names = fc.oneof(
       fc.constant(''),
       ...[1, 6, 7].map((n) => fc.array(chars, { minLength: n - 1, maxLength: n - 1 }).map((cs) => `d${cs.join('')}`).filter(legal)),
