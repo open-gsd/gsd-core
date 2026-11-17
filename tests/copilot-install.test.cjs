@@ -2075,8 +2075,8 @@ describe('Copilot instructions files and symlinks (#5946)', () => {
     delete env.COPILOT_CONFIG_DIR;
     delete env.COPILOT_HOME;
     const result = runNode([path.join(__dirname, '..', 'bin', 'install.js'), '--copilot', '--local'], { cwd: project, env });
-    const seen = `status=${result.status} signal=${result.signal}\n${result.stdout}\n${result.stderr}`.slice(-1500);
-    assert.notStrictEqual(result.status, 0, `a refused install must not exit 0:\n${seen}`);
+    const seen = `exitCode=${result.exitCode} signal=${result.signal}\n${result.stdout}\n${result.stderr}`.slice(-1500);
+    assert.ok(result.exitCode !== 0 && result.exitCode !== null, `a refused install must exit non-zero:\n${seen}`);
     assert.match(`${result.stdout}${result.stderr}`, /GSD_ALLOW_SYMLINKED_DEST=1/, seen);
     assert.strictEqual(fs.readFileSync(files.target, 'utf8'), 'user content\n', 'the target must be untouched');
     assert.strictEqual(fs.existsSync(path.join(project, '.github')), false, 'nothing may be written before the refusal');
