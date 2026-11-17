@@ -308,31 +308,56 @@ describe('#5856: the ignore-file owner leaves nothing untracked when it dies mid
     return git(root, ['status', '--porcelain', '-uall']).split('\n').filter((l) => l.includes('.gsd'));
   }
 
-  test('#5856: a kill at the ignore-file rename leaves no untracked file in git status', (t) => {
-    const root = freshRepo();
-    t.after(() => cleanup(root));
-    fs.mkdirSync(path.join(root, '.gsd'));
-    fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
-    const realRename = fs.renameSync;
-    // A SIGKILL runs no `finally`: fail the rename onto .gitignore and make every
-    // cleanup primitive a no-op until the mocks are restored right after the call.
-    const mocks = [
-      t.mock.method(fs, 'renameSync', function renameSync(from, to) {
-        if (String(to).endsWith(`${path.sep}.gitignore`)) throw new Error('simulated kill');
-        return realRename.apply(this, arguments);
+  // A SIGKILL runs no `finally`: each row fails one step of the staged merge and
+  // makes every cleanup primitive a no-op until the mocks are restored right
+  // after the call, so the residue a real kill would leave stays on disk.
+  const KILL_POINTS = [
+    {
+      name: 'right after the staging directory is created',
+      patch: (t, real) => t.mock.method(fs, 'writeFileSync', function writeFileSync(file) {
+        if (String(file).includes(`${path.sep}.gitignore.tmp-`) && String(file).endsWith(`${path.sep}.gitignore`)) {
+          throw new Error('simulated kill');
+        }
+        return real.writeFileSync.apply(this, arguments);
       }),
-      t.mock.method(fs, 'unlinkSync', () => {}),
-      t.mock.method(fs, 'rmdirSync', () => {}),
-      t.mock.method(fs, 'rmSync', () => {}),
-    ];
-    ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
-    for (const m of mocks) m.mock.restore();
-    // The staging residue stays on disk after a kill (so the test exercises it);
-    // git must not list it.
-    const residue = fs.readdirSync(path.join(root, '.gsd')).filter((n) => n.startsWith('.gitignore.tmp-'));
-    assert.strictEqual(residue.length, 1, 'the killed merge left its staging directory behind');
-    assert.deepStrictEqual(gsdStatusLines(root).filter((l) => l.includes('.gitignore.tmp')), []);
-  });
+    },
+    {
+      name: 'after the staged ignore file is written',
+      patch: (t, real) => t.mock.method(fs, 'openSync', function openSync(file) {
+        if (String(file).endsWith(`${path.sep}content`)) throw new Error('simulated kill');
+        return real.openSync.apply(this, arguments);
+      }),
+    },
+    {
+      name: 'at the ignore-file rename',
+      patch: (t, real) => t.mock.method(fs, 'renameSync', function renameSync(from, to) {
+        if (String(to).endsWith(`${path.sep}.gitignore`)) throw new Error('simulated kill');
+        return real.renameSync.apply(this, arguments);
+      }),
+    },
+  ];
+
+  for (const point of KILL_POINTS) {
+    test(`#5856: a kill ${point.name} leaves no untracked file in git status`, (t) => {
+      const root = freshRepo();
+      t.after(() => cleanup(root));
+      fs.mkdirSync(path.join(root, '.gsd'));
+      fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
+      const real = { writeFileSync: fs.writeFileSync, openSync: fs.openSync, renameSync: fs.renameSync };
+      const mocks = [
+        point.patch(t, real),
+        t.mock.method(fs, 'unlinkSync', () => {}),
+        t.mock.method(fs, 'rmdirSync', () => {}),
+        t.mock.method(fs, 'rmSync', () => {}),
+      ];
+      ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
+      for (const m of mocks) m.mock.restore();
+      const residue = fs.readdirSync(path.join(root, '.gsd')).filter((n) => n.startsWith('.gitignore.tmp-'));
+      assert.strictEqual(residue.length, 1, 'the killed merge left its staging directory behind');
+      assert.deepStrictEqual(gsdStatusLines(root).filter((l) => l.includes('.gitignore.tmp')), []);
+      assert.strictEqual(fs.readFileSync(path.join(root, '.gsd', '.gitignore'), 'utf8'), 'user-rule/\n');
+    });
+  }
 
   test('#5856: the merged ignore file ignores the owner temp name', (t) => {
     const root = freshRepo();
