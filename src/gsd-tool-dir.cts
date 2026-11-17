@@ -54,11 +54,15 @@ function hasLine(text: string, line: string): boolean {
  */
 export function ignoreAdditions(current: string, { marker, rules }: ToolOwnedGsdDirOptions): string {
   if (hasLine(current, '*')) return '';
-  // #5856: the owner's own staging name is covered for every caller, whatever
-  // rules the caller passes.
-  const wanted = [...rules, ...OWNER_RULES.filter((rule) => !rules.includes(rule))];
-  const missing = wanted.filter((rule) => !hasLine(current, rule));
-  if (missing.length === 0) return '';
+  const callerMissing = rules.filter((rule) => !hasLine(current, rule));
+  // A file that already carries every caller rule is left as it is.
+  if (callerMissing.length === 0) return '';
+  // #5856: whenever the merge writes, the owner's own staging name is covered too,
+  // whatever rules the caller passes.
+  const missing = [
+    ...callerMissing,
+    ...OWNER_RULES.filter((rule) => !rules.includes(rule) && !hasLine(current, rule)),
+  ];
   const lead = current === '' || current.endsWith('\n') ? '' : '\n';
   const markerLine = current.includes(marker) ? '' : `${marker}\n`;
   return `${lead}${markerLine}${missing.join('\n')}\n`;
@@ -73,6 +77,7 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
   let fd: number | undefined;
   let tmpPath: string | null = null;
   let stageDir: string | null = null;
+  let stageIgnore: string | null = null;
   try {
     if (fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error(SYMLINK_IGNORE_MESSAGE);
     // Read through an fd opened without following links where supported
@@ -97,10 +102,20 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     const candidateStage = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
     fs.mkdirSync(candidateStage);
     stageDir = candidateStage;
-    fs.writeFileSync(path.join(stageDir, '.gitignore'), '*\n', { flag: 'wx' });
+    // Each file is recorded for cleanup only once its exclusive create succeeded.
+    const innerIgnore = path.join(stageDir, '.gitignore');
+    // One create-and-write call keeps the window where this file is empty (and so
+    // visible to git) to a single syscall pair.
+    fs.writeFileSync(innerIgnore, '*\n', { flag: 'wx' });
+    stageIgnore = innerIgnore;
     const stagedContent = path.join(stageDir, 'content');
-    fs.writeFileSync(stagedContent, current + additions, { flag: 'wx' });
+    const tmpFd = fs.openSync(stagedContent, 'wx');
     tmpPath = stagedContent;
+    try {
+      fs.writeFileSync(tmpFd, current + additions);
+    } finally {
+      fs.closeSync(tmpFd);
+    }
     if (fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error(SYMLINK_IGNORE_MESSAGE);
     retryRenameSync(tmpPath, ignorePath);
     tmpPath = null;
@@ -111,7 +126,7 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
     if (stageDir) {
-      for (const leftover of [tmpPath, path.join(stageDir, '.gitignore')]) {
+      for (const leftover of [tmpPath, stageIgnore]) {
         if (leftover) {
           try { fs.unlinkSync(leftover); } catch { /* best-effort cleanup */ }
         }
