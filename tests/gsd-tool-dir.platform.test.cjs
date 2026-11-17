@@ -197,6 +197,22 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
     assert.match(sentinel(ignoreRoot).error, /sentinel ignore file is a symlink/);
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'precious\n');
   });
+
+  test('#5857: a FIFO at .gsd/.gitignore does not hang the sentinel writer and is left alone', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on win32');
+      return;
+    }
+    const root = freshRepo();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    const fifo = path.join(root, '.gsd', '.gitignore');
+    execFileSync('mkfifo', [fifo], { stdio: 'ignore', timeout: GIT_TIMEOUT_MS });
+    const result = sentinel(root);
+    assert.strictEqual(result.recorded, true);
+    assert.ok(fs.existsSync(path.join(root, '.gsd', 'dispatch-isolation-sentinel.json')));
+    assert.ok(fs.lstatSync(fifo).isFIFO(), 'the FIFO is neither replaced nor read');
+  });
 });
 
 describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
