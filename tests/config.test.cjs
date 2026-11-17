@@ -4259,6 +4259,7 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
         research: false, plan_check: false, verifier: false, auto_advance: true, nyquist_validation: false,
         pattern_mapper: false, ui_phase: false, ui_safety_gate: false, ai_integration_phase: false, tdd_mode: true,
         code_review: false, code_review_depth: 'deep', ui_review: false, skip_discuss: true, compact_content: true,
+        agent_hint_routing: false,
       },
       plan_review: { source_grounding: false },
       intel: { enabled: true },

@@ -30,7 +30,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # canonical, so it must not carry the older collapsing shape. Both outcomes fail
 # closed, which is right, but only one of them may claim the host declared no
 # primitive (#2652 review).
-_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" 2>/dev/null)
+_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}")
 _ISOLATION_RC=$?
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
   ISOLATION=none
