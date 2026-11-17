@@ -139,7 +139,7 @@ const quickContent = fs.readFileSync(QUICK_STEP, 'utf8');
 
 /** The placeholders the fragment itself says the orchestrator substitutes ("Substitute this plan's ... placeholders"). */
 function substitutedPlaceholders() {
-  const sentence = content.match(/Substitute this plan's([\s\S]*?)placeholders/);
+  const sentence = content.match(/Substitute this plan's([\s\S]{0,400}?)placeholders/);
   assert.ok(sentence, 'the fragment must state its substitution list');
   const names = [...sentence[1].matchAll(/\{([a-z][a-z_]*)\}/g)].map((m) => m[1]);
   assert.ok(names.length >= 7, `the fragment's substitution list must name at least the 7 known placeholders, saw ${names.length}`);
