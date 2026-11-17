@@ -300,3 +300,52 @@ describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
     assert.strictEqual(fs.existsSync(path.join(root, '.gsd')), false);
   });
 });
+
+describe('#5856: the ignore-file owner leaves nothing untracked when it dies mid-merge', () => {
+  const MERGE_OPTIONS = { marker: '# gsd-core test owner', rules: ['/thing.json', '/.gitignore'] };
+
+  function gsdStatusLines(root) {
+    return git(root, ['status', '--porcelain', '-uall']).split('\n').filter((l) => l.includes('.gsd'));
+  }
+
+  test('#5856: a kill at the ignore-file rename leaves no untracked file in git status', (t) => {
+    const root = freshRepo();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
+    const realRename = fs.renameSync;
+    const realUnlink = fs.unlinkSync;
+    const realRmdir = fs.rmdirSync;
+    const realRm = fs.rmSync;
+    // A SIGKILL runs no `finally`: fail the rename onto .gitignore and make every
+    // cleanup primitive a no-op for the duration, then restore them.
+    fs.renameSync = function renameSync(from, to) {
+      if (String(to).endsWith(`${path.sep}.gitignore`)) throw new Error('simulated kill');
+      return realRename.apply(this, arguments);
+    };
+    fs.unlinkSync = () => {};
+    fs.rmdirSync = () => {};
+    fs.rmSync = () => {};
+    try {
+      ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
+    } finally {
+      fs.renameSync = realRename;
+      fs.unlinkSync = realUnlink;
+      fs.rmdirSync = realRmdir;
+      fs.rmSync = realRm;
+    }
+    // Residue may stay on disk after a kill; git must not list it.
+    assert.deepStrictEqual(gsdStatusLines(root).filter((l) => l.includes('.gitignore.tmp')), []);
+  });
+
+  test('#5856: the merged ignore file ignores the owner temp name', (t) => {
+    const root = freshRepo();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
+    ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
+    const probe = '.gsd/.gitignore.tmp-4242-abcdef012345';
+    fs.writeFileSync(path.join(root, probe), 'x');
+    assert.strictEqual(git(root, ['check-ignore', probe]), probe);
+  });
+});
