@@ -668,6 +668,90 @@ describe('Bug #1660: frontmatter set of an object-list field fails closed instea
 // undefined, cmdFrontmatterSet errors `file, field, and value required`, and
 // the status/updated writes are silently skipped — so closing a thread never
 // marked it status: resolved and resuming never marked it status: in_progress.
+// ─── #6278: a dotted --field over an existing map ──────────────────────────────
+
+describe('#6278: frontmatter set/merge refuses a dotted field whose prefix is an existing map', () => {
+  const DOTTED_FIELD_OVER_MAP = 'FRONTMATTER_DOTTED_FIELD_OVER_MAP';
+  // The reporter's file, verbatim.
+  const REPORTED_DOC = [
+    '---',
+    'progress:',
+    '  total_phases: 2',
+    '  completed_phases: 1',
+    '  percent: 50',
+    '---',
+    '# body',
+    '',
+  ].join('\n');
+
+  test('set --field progress.percent is refused and the file stays byte-identical', () => {
+    const file = writeTempFile(REPORTED_DOC);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress.percent', '--value', '100']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.code, DOTTED_FIELD_OVER_MAP, result.output);
+    assert.strictEqual(parsed.field, 'progress.percent');
+    assert.strictEqual(parsed.updated, undefined);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), REPORTED_DOC);
+  });
+
+  test('a deeper dotted name under an existing map is refused too', () => {
+    const file = writeTempFile(REPORTED_DOC);
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress.detail.percent', '--value', '100']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).code, DOTTED_FIELD_OVER_MAP, result.output);
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), REPORTED_DOC);
+  });
+
+  test('merge with a dotted key over an existing map is refused in the same shape and writes nothing', () => {
+    const file = writeTempFile(REPORTED_DOC);
+    const result = runGsdTools(['frontmatter', 'merge', file, '--data', JSON.stringify({ status: 'done', 'progress.percent': 100 })]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.code, DOTTED_FIELD_OVER_MAP, result.output);
+    assert.strictEqual(parsed.field, 'progress.percent');
+    assert.strictEqual(fs.readFileSync(file, 'utf-8'), REPORTED_DOC);
+  });
+
+  test('control: setting the whole map still updates the nested value', () => {
+    const file = writeTempFile(REPORTED_DOC);
+    const value = JSON.stringify({ total_phases: 2, completed_phases: 1, percent: 100 });
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'progress', '--value', value]);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+    const got = JSON.parse(runGsdTools(['frontmatter', 'get', file, '--field', 'progress']).output);
+    assert.deepStrictEqual(got.progress, { total_phases: '2', completed_phases: '1', percent: '100' });
+  });
+
+  // --field is a literal key: a dotted name is still written when no prefix is an existing map.
+  for (const [label, doc, field] of [
+    ['no key named by the prefix', '---\nstatus: t\n---\nbody\n', 'release.notes'],
+    ['a scalar prefix', '---\nversion: 1\n---\nbody\n', 'version.minor'],
+    ['a list prefix', '---\ntags:\n  - a\n---\nbody\n', 'tags.extra'],
+    ['a __proto__ prefix and no such key', '---\nstatus: t\n---\nbody\n', '__proto__.x'],
+  ]) {
+    test(`control: a dotted field with ${label} is written as a literal key`, () => {
+      const file = writeTempFile(doc);
+      const result = runGsdTools(['frontmatter', 'set', file, '--field', field, '--value', 'v']);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+      const reread = JSON.parse(runGsdTools(['frontmatter', 'get', file]).output);
+      assert.ok(Object.prototype.hasOwnProperty.call(reread, field), JSON.stringify(reread));
+      assert.strictEqual(Object.getOwnPropertyDescriptor(reread, field).value, 'v');
+    });
+  }
+
+  test('control: an existing top-level "a.b" beside map "a" stays settable', () => {
+    const file = writeTempFile('---\na:\n  b: 1\na.b: 3\n---\nbody\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'a.b', '--value', '4']);
+    assert.ok(result.success, `command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).updated, true, result.output);
+    const reread = JSON.parse(runGsdTools(['frontmatter', 'get', file]).output);
+    assert.deepStrictEqual(reread.a, { b: '1' });
+    assert.strictEqual(reread['a.b'], '4');
+  });
+});
+
 describe('#1778: thread workflow uses the 1.6 named-flag frontmatter.set form', () => {
   test('behavioral: named-flag form writes the field; positional form errors and does not mutate', () => {
     // 1.6 named-flag form — must succeed and write status: resolved.
