@@ -102,7 +102,7 @@ absolute is not a synonym for escaping. The `GSD_PHASE_DIR` value is always the
 value — a command relying on `${GSD_PHASE_DIR}` staying relative must not assume
 that.
 
-**Sandbox.** cwd = project root; env = inherited from the GSD process plus `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS`; killed
+**Sandbox.** cwd = project root; env = inherited from the GSD process plus `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS`; killed
 (SIGTERM) on timeout. The command runs as the user, on the user's machine —
 there is no sandbox boundary vs. the user's own shell. See ADR-2008 "Trust
 model".

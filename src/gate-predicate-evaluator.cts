@@ -100,7 +100,7 @@ function assertNoLegacyPlaceholder(command: string): void {
 
 /**
  * Throw when a placeholder sits in the single-quote state of the command: `sh` never expands inside single
- * quotes, so the gate would test the literal text `${PHASE_DIR}` and pass on a path that does not exist. The
+ * quotes, so the gate would test the literal text `${GSD_PHASE_DIR}` and pass on a path that does not exist. The
  * throw is the gate's existing "unevaluable" path (a `usage` failure). The walk follows the POSIX quote states
  * (single, double, backslash), so an apostrophe inside double quotes pairs with nothing.
  */

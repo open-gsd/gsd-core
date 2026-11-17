@@ -19,6 +19,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 
 const {
   evaluatePredicate,
@@ -195,7 +196,7 @@ describe('evaluatePredicate — interpolation', () => {
     const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a', phaseReqIds: 'R-1' };
     const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
     for (const name of ['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']) {
-      const named = { message: new RegExp(`uses \\$\\{${name}\\}.*write "\\$\\{GSD_${name}\\}"`) };
+      const named = { message: new RegExp(`uses \\$\\{${escapeRegex(name)}\\}.*write "\\$\\{GSD_${escapeRegex(name)}\\}"`) };
       for (const form of [`'\${${name}}'`, `"\${${name}}"`, `\${${name}}`, `"$${name}"`]) {
         assert.throws(() => run(`test -n ${form}`), named, form);
       }
@@ -207,7 +208,11 @@ describe('evaluatePredicate — interpolation', () => {
     for (const name of INTERPOLATION_VAR_NAMES) {
       const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a', phaseReqIds: 'R-1' };
       const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
-      assert.throws(() => run(`test -n '\${${name}}'`), { message: new RegExp(`single-quotes \\$\\{${name}\\}.*write "\\$\\{${name}\\}" in double quotes`) });
+      const single = { message: new RegExp(`single-quotes \\$\\{${escapeRegex(name)}\\}.*write "\\$\\{${escapeRegex(name)}\\}" in double quotes`) };
+      assert.throws(() => run(`test -n '\${${name}}'`), single);
+      assert.throws(() => run(`test -n '$${name}'`), single);
+      assert.doesNotThrow(() => run(`test -n '\${${name}_X}'`));
+      assert.doesNotThrow(() => run(`test -n '$${name}X'`));
       assert.doesNotThrow(() => run(`test -n "\${${name}}"`));
     }
   });

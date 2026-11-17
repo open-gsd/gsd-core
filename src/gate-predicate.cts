@@ -37,7 +37,7 @@ import { execTool, platformReadSync } from './shell-command-projection.cjs';
 /**
  * Production subprocess binding for the gate-predicate evaluator. Wraps the
  * bounded `execTool` seam (shell-command-projection) as a `runBoundedShell`
- * the pure evaluator consumes. `sh -c` runs the command and expands `${PHASE_*}` from `env`; the
+ * the pure evaluator consumes. `sh -c` runs the command and expands `${GSD_PHASE_*}` from `env`; the
  * subprocess inherits the process env (ADR-2008) plus those three values and is killed (SIGTERM) on timeout.
  *
  * `timedOut` is derived from the kill signal: spawnSync sets `signal: 'SIGTERM'`
